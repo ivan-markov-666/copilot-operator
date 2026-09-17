@@ -6,9 +6,9 @@ Copilot decides what to do, the bot does it and reports back, and the two keep g
 Copilot says the task is finished. The bot drives the real Copilot web app in a real Edge
 browser, so it needs no API licence and no admin consent.
 
-> **Status: in design and early implementation.** The transport and orchestrator are not
-> written yet. What exists is documented below, with the parts that are verified marked as
-> such.
+> **Status: feature complete, not yet run end to end against a live tenant.** Every piece is
+> implemented and every piece has a check. What has not happened is one full run through a
+> real Copilot session, because that needs a signed-in machine. Expect to find things.
 
 ## What it does
 
@@ -41,11 +41,27 @@ recommended.
 
 ```bash
 npm install
-npm run login      # opens Edge, you sign in once, the profile is saved
+npx tsx src/cli.ts login                    # sign in once; the Edge profile is reused
+npx tsx src/cli.ts doctor run.yaml          # check the machine
+cp run.example.yaml run.yaml                # then edit it
+npx tsx src/cli.ts run run.yaml
 ```
 
-The bot never types credentials. It waits for the chat to appear and stores nothing but the
-browser profile.
+The bot never types credentials. `login` opens Edge, waits for the chat to appear, and stores
+nothing but the browser profile.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `cop login` | opens Edge with the bot profile and waits for you to sign in |
+| `cop doctor [run.yaml]` | checks Node, Edge, PowerShell, the Desktop, the config |
+| `cop dirs <projectRoot>` | lists the directories you can select for the mirror |
+| `cop mirror <run.yaml>` | refreshes the Desktop folder without touching the chat |
+| `cop run <run.yaml>` | the loop; `--unattended` skips the per-step prompt |
+| `cop chat [run.yaml]` | prints the last run's conversation name and link |
+
+Before it is built, run them as `npx tsx src/cli.ts <command>`.
 
 ## How it works
 
@@ -58,7 +74,13 @@ browser profile.
 | Desktop folder resolution and guard rails | `src/context/contextFiles.ts` | implemented, checked |
 | Project mirror, flattened names, incremental | `src/context/projectMirror.ts` | implemented, checked |
 | Pacing, send cap, backoff | `src/util/pacing.ts` | implemented, checked |
-| Playwright transport, orchestrator, CLI | — | not written yet |
+| Playwright transport | `src/transport/copilotTransport.ts` | implemented; selectors verified live |
+| Reply parser and the JSON contract | `src/protocol/parser.ts`, `replySchema.ts` | implemented, checked |
+| Report file, splitting, redaction | `src/exec/reportFile.ts` | implemented, checked |
+| Deny list and the confirm gate | `src/exec/policy.ts` | implemented, checked |
+| Config schema and loader | `src/config/schema.ts` | implemented |
+| The loop | `src/orchestrator/machine.ts` | implemented, not yet run live |
+| CLI | `src/cli.ts` | implemented |
 
 Design and findings:
 
@@ -81,16 +103,18 @@ These cost real investigation and are worth knowing before touching the code.
   part of the protocol rather than decoration.
 - **Uploads go through the user's OneDrive.** The chat says so, and the attachment id carries
   an `SPO_` prefix. That prefix is also the most reliable "upload finished" signal.
+- **`lastChatMessage` is not the whole answer.** It is the answer body; the copy button is
+  its sibling. A wait built on `[data-testid="lastChatMessage"] [data-testid="CopyButtonTestId"]`
+  never completes. The anchor is the last `copilot-message-div`.
 
 ## Checks
 
 ```bash
-npm run check:runner
-npm run check:mirror
-npm run check:chat
-npm run check:context
-npm run check:pacing
+npm run check          # all of them
 ```
+
+Each one prints what it exercised rather than asserting silently, so a failure is readable.
+There is no live-tenant test: that is the part that needs a human and a signed-in browser.
 
 ## Related
 

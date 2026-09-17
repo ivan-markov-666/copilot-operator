@@ -10,17 +10,24 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "probe": "tsx scripts/probe-locators.ts",
     "login": "tsx scripts/login.ts",
     "check:pacing": "tsx test/pacing.check.ts",
     "check:runner": "tsx test/runner.check.ts",
     "check:chat": "tsx test/chat.check.ts",
     "check:context": "tsx test/context.check.ts",
-    "check:mirror": "tsx test/mirror.check.ts"
+    "check:mirror": "tsx test/mirror.check.ts",
+    "cop": "tsx src/cli.ts",
+    "check:parser": "tsx test/parser.check.ts",
+    "check:report": "tsx test/report.check.ts",
+    "check": "npm run check:parser && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:chat && npm run check:context && npm run check:pacing",
+    "probe": "tsx scripts/probe-locators.ts"
   },
   "dependencies": {
+    "commander": "^15.0.0",
     "ignore": "^7.0.9",
-    "playwright": "^1.63.0"
+    "playwright": "^1.63.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -30,5 +37,16 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ivan-markov-666/copilot-operator.git"
-  }
+  },
+  "bin": {
+    "cop": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "prompts",
+    "run.example.yaml",
+    "README.md",
+    "LICENSE"
+  ]
 }

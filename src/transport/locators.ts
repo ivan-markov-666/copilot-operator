@@ -110,11 +110,22 @@ export const Signal = {
   /** Generation is running while a button with this label exists anywhere. */
   streamingButtonLabel: Label.stopGenerating,
   /**
-   * Generation has finished when the last message exposes its copy button.
-   * `[data-testid="loading-message"]` is NOT a reliable indicator: it stays in the
-   * DOM after streaming ends.
+   * Generation has finished when the newest answer exposes its copy button.
+   *
+   * Two traps here, both found by checking against the live DOM rather than assuming:
+   *
+   * 1. `[data-testid="loading-message"]` is NOT a busy flag. It stays in the DOM after
+   *    streaming ends.
+   * 2. The copy button is **not** inside `lastChatMessage`. `lastChatMessage` is the answer
+   *    body (its DOM id is `response-id_...`); the copy button lives in a toolbar that is a
+   *    sibling of it. Both sit inside `copilot-message-div`, which is therefore the anchor
+   *    for anything that has to see the whole answer.
+   *
+   * There is no CSS for "the last element with this test id" across separate containers, so
+   * the check is done in JS: take the last `copilot-message-div` and look inside it.
    */
-  finishedMarker: `[data-testid="${TestId.lastMessage}"] [data-testid="${TestId.copyResponse}"]`,
+  answerWrapper: `[data-testid="${TestId.assistantMessage}"]`,
+  copyButtonInAnswer: `[data-testid="${TestId.copyResponse}"]`,
 } as const;
 
 /** Chat URL. Microsoft is consolidating this to copilot.cloud.microsoft. */

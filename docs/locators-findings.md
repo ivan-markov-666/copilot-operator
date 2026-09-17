@@ -47,7 +47,28 @@ Counting turns is therefore `getByTestId('m365-chat-llm-web-ui-chat-message').co
 - When complete, the last message exposes `button[aria-label="Copy Response"]` (`data-testid="CopyButtonTestId"`).
 - **`[data-testid="loading-message"]` is a trap.** It stayed in the DOM after generation finished, so it must not be used as a busy flag.
 
-Recommended wait: turn count increased, then `Stop generating` absent, then `Copy Response` present inside `lastChatMessage`, then text unchanged for ~1.5 s.
+**`lastChatMessage` is not the whole answer.** It is the answer *body*, with a DOM id of
+`response-id_...`. The toolbar holding `Copy Response` is its **sibling**, not its child.
+Both live inside `copilot-message-div`. So a selector like
+
+```
+[data-testid="lastChatMessage"] [data-testid="CopyButtonTestId"]
+```
+
+matches nothing, and a wait built on it never completes. This was caught by evaluating the
+selector against the live page rather than trusting the earlier DOM walk. The anchor for
+anything that needs the whole answer is the last `copilot-message-div`, and since CSS cannot
+express "the last element with this test id" across separate containers, the check runs in
+JavaScript:
+
+```js
+const wrappers = document.querySelectorAll('[data-testid="copilot-message-div"]');
+const last = wrappers[wrappers.length - 1];
+const done = !stopGeneratingExists && !!last?.querySelector('[data-testid="CopyButtonTestId"]');
+```
+
+Recommended wait: turn count increased, then `Stop generating` absent, then the copy button
+present in the last `copilot-message-div`, then text unchanged for ~1.5 s.
 
 ## Code blocks are virtualized: do not parse the DOM
 

@@ -1,0 +1,75 @@
+# Copy to run.yaml and edit. Everything except openingMessages has a safe default,
+# so the shortest useful config is the three opening messages and a task.
+
+copilot:
+  # url: https://m365.cloud.microsoft/chat
+  # profileDir: ~/AppData/Local/copilot-operator/edge-profile
+  # Short label that goes into the chat name: op/<runId>/<label>
+  label: windows-update
+  # The word Copilot writes when the task is finished.
+  stopMarker: Край
+
+# Sent in order at the start of the run. Only the reply to the LAST one starts the loop.
+openingMessages:
+  - file: prompts/01-persona.md
+  - file: prompts/02-format.md
+  - text: |
+      Task: check the state of Windows Update on this machine, report what is
+      pending, and suggest what to do about it. Do not install anything.
+
+execution:
+  # confirm shows every step and waits for a keypress. unattended does not ask.
+  mode: confirm
+  defaultShell: pwsh
+  # Where the commands run. Point it at a scratch folder, not at a real project.
+  cwd: ~/copilot-operator-work
+  # "fast" steps, the default
+  commandTimeoutSec: 300
+  idleTimeoutSec: 60
+  # steps Copilot marks "expect": "long", e.g. a test suite: allowed to run for hours
+  # as long as they keep printing something
+  longCommandTimeoutSec: 14400
+  longIdleTimeoutSec: 900
+  stopOnFailure: false
+  # Extra patterns are added to the built-in deny list, they do not replace it.
+  # denyPatterns: []
+
+report:
+  # The terminal output always travels as an attached file, never as message text.
+  fileName: iteration-{n}.txt
+  maxReportBytes: 8388608
+  maxOutputChars: 200000
+  # Regexes replaced with [REDACTED] before the report leaves the machine.
+  # Uploads land in the user's OneDrive, so this is worth using.
+  redactPatterns: []
+
+# Optional: mirror parts of a project into a flat Desktop folder so the chat can see it.
+# Selecting a directory takes everything beneath it. Only changed files are rewritten.
+projectMirror:
+  enabled: false
+  rootDir: C:/Projects/my-app
+  includeDirs:
+    - src
+    - tests
+  excludeDirs:
+    - src/generated
+  # Defaults to <Desktop>/copilot-operator-context
+  # targetDir: ~/Desktop/copilot-operator-context
+  separator: '--' # src/test/a.spec.ts -> src--test--a.spec.ts.txt
+  txtMode: append # append | replace | none
+  respectGitignore: true
+  includeEnvFiles: false
+  attachToFirstMessage: true
+  maxAttachedFiles: 20
+
+pacing:
+  enabled: true
+  settleMs: 1000
+  maxMessagesPerHour: 60
+
+limits:
+  maxIterations: 30
+  maxRunMinutes: 120
+  maxFormatRetries: 2
+
+runsDir: ./runs
