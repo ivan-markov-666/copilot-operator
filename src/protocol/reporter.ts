@@ -1,0 +1,91 @@
+/**
+ * Builds what goes back to Copilot after a set of steps has run.
+ *
+ * Two artefacts, and they are not interchangeable:
+ *
+ *   the report file     the whole terminal output, uncut, uploaded as .txt
+ *   the covering text   a short message that travels with the attachment
+ *
+ * The covering text is not decoration. **A message consisting only of an attachment cannot
+ * be sent**: the composer keeps the Send button disabled until there is text. So the bot
+ * must always write something, and since it has to write something anyway, it may as well
+ * carry the information Copilot needs to decide whether to open the file: which iteration
+ * this is, how many steps ran, and how each one ended.
+ */
+import type { RunResult } from '../exec/runner.js';
+
+/** Never send an attachment without text. This is the fallback if everything else is empty. */
+export const MINIMUM_COVERING_TEXT = 'Ето отговора от терминала. Файлът е прикачен.';
+
+export type CoveringMessageInput = {
+  iteration: number;
+  results: RunResult[];
+  /** File names actually attached, in order. */
+  attachments: string[];
+  /** Set when the report had to be split. */
+  parts?: number;
+};
+
+function outcomeSummary(r: RunResult): string {
+  switch (r.outcome) {
+    case 'completed':
+      return `step ${r.id} exit ${r.exitCode}`;
+    case 'hard-timeout':
+      return `step ${r.id} hit its time limit`;
+    case 'idle-timeout':
+      return `step ${r.id} produced no output and was stopped`;
+    case 'aborted':
+      return `step ${r.id} aborted by the operator`;
+    case 'spawn-error':
+      return `step ${r.id} could not be started`;
+  }
+}
+
+/**
+ * The covering message. Deliberately short: it can never approach the roughly 120 000
+ * character limit of the composer, because the output it describes is in the attachment.
+ */
+export function buildCoveringMessage(input: CoveringMessageInput): string {
+  const { iteration, results, attachments, parts } = input;
+
+  if (attachments.length === 0) {
+    // Should not happen, but an empty message is unsendable, so never return one.
+    return `${MINIMUM_COVERING_TEXT} (iteration ${iteration}, no file was produced)`;
+  }
+
+  const lines: string[] = [];
+  lines.push(
+    `Terminal output for iteration ${iteration}: ${results.length} step(s), ` +
+      `${results.map(outcomeSummary).join('; ')}.`,
+  );
+
+  if (parts && parts > 1) {
+    lines.push(
+      `The output is split across ${parts} attached files: ${attachments.join(', ')}. ` +
+        `Read all of them, in order, before deciding the next steps.`,
+    );
+  } else {
+    lines.push(
+      `The full output is in the attached file ${attachments[0]}. ` +
+        `Read the whole file before deciding the next steps.`,
+    );
+  }
+
+  const stopped = results.filter((r) => r.outcome === 'idle-timeout' || r.outcome === 'hard-timeout');
+  if (stopped.length > 0) {
+    lines.push(
+      `Note: ${stopped.map((r) => `step ${r.id}`).join(', ')} was stopped by the runner, not by the command itself.`,
+    );
+  }
+
+  return lines.join(' ');
+}
+
+/** Guard used right before clicking Send. Throws rather than sending an unsendable message. */
+export function assertSendable(text: string, attachments: string[]): void {
+  if (text.trim().length === 0) {
+    throw new Error(
+      `Refusing to send: the composer requires text, and ${attachments.length} attachment(s) alone cannot be sent.`,
+    );
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "copilot-operator",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Automates a Microsoft 365 Copilot chat: sends prompts, extracts commands, runs them, reports back.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "probe": "tsx scripts/probe-locators.ts",
+    "login": "tsx scripts/login.ts",
+    "check:pacing": "tsx test/pacing.check.ts",
+    "check:runner": "tsx test/runner.check.ts",
+    "check:chat": "tsx test/chat.check.ts",
+    "check:context": "tsx test/context.check.ts",
+    "check:mirror": "tsx test/mirror.check.ts"
+  },
+  "dependencies": {
+    "ignore": "^7.0.9",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ivan-markov-666/copilot-operator.git"
+  }
+}

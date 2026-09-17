@@ -1,0 +1,183 @@
+# Copilot web UI: locator findings
+
+Captured live on 2026-09-17 from a signed-in tenant at `https://m365.cloud.microsoft/chat`.
+The machine-readable version lives in `src/transport/locators.ts`.
+
+## What is stable and what is not
+
+- **Stable:** `data-testid` attributes and `aria-label` values. Use `getByTestId` / `getByRole` / `getByLabel`.
+- **Not stable:** every Fluent UI class hash (`f1c21dwh`, `___7qar2c0`, `OGl5QnhL`, `dWN4Rlhx`). They are build-generated. Never select on them.
+- **Exception:** the code-block widget has no test id, so `.scriptor-component-code-block` is the only handle. It is a semantic class name, so it is acceptable.
+- The UI text is English in this tenant. A localized tenant would need a locale map for the `aria-label` values.
+
+## Composer and sending
+
+| What | Locator |
+|---|---|
+| Composer | `#m365-chat-editor-target-element`, role `textbox`, aria-label `Message Copilot` |
+| Send button | `button[aria-label="Send"]` |
+
+The composer is a **contenteditable `SPAN`**, not a textarea, part of the Fluent editor. Two consequences:
+
+- `fill()` is preferred over keystrokes for long prompts.
+- Pressing Enter did **not** submit in this test; clicking the Send button did. The bot should click Send and treat Enter only as a fallback.
+- The Send button does not exist until the composer has content, so wait for it after filling.
+
+## Turn structure
+
+```
+[data-testid="MessageListContainer"]
+  [data-testid="m365-chat-llm-web-ui-chat-message"]   one turn, id=chatMessageContainer_<hash>
+     [data-testid="chatQuestion"]                     the user's message
+     [data-testid="chatOutput"]                       the Copilot answer
+        [data-testid="copilot-message-div"]           id=chatMessageResponse-<hash>
+           [data-testid="copilot-message-reply-div"]
+              div[role="article"].fai-CopilotMessage
+                 [data-testid="markdown-reply"]       rendered markdown
+                 toolbar: Copy Response / feedback / Try Again
+  ...
+  [data-testid="lastChatMessage"]                     marks the newest answer
+```
+
+Counting turns is therefore `getByTestId('m365-chat-llm-web-ui-chat-message').count()`.
+
+## Detecting the end of streaming
+
+- While generating, a `button[aria-label="Stop generating"]` exists. It disappears when the answer is complete.
+- When complete, the last message exposes `button[aria-label="Copy Response"]` (`data-testid="CopyButtonTestId"`).
+- **`[data-testid="loading-message"]` is a trap.** It stayed in the DOM after generation finished, so it must not be used as a busy flag.
+
+Recommended wait: turn count increased, then `Stop generating` absent, then `Copy Response` present inside `lastChatMessage`, then text unchanged for ~1.5 s.
+
+## Code blocks are virtualized: do not parse the DOM
+
+A code block renders as `div.scriptor-component-code-block.scriptor-codeblock-virtualized`. Two problems:
+
+1. **Line numbers are text nodes interleaved with the code.** `innerText` of a 120-line PowerShell block came back as `PowerShell\n1\nWrite-Output 1\n2\nWrite-Output 2\n...` — 242 lines for 120 lines of code. Any regex over this is guaranteed to corrupt the script.
+2. **Long blocks collapse** behind a `Show more lines` button and the widget is explicitly virtualized, so a long script may not be fully present in the DOM at all.
+
+**Chosen extraction strategy:** click the message-level `Copy Response` button and read the clipboard. It copies the whole answer as raw markdown, fences and language tags intact, which is exactly what the parser wants. Playwright grants clipboard access with:
+
+```ts
+await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+  origin: 'https://m365.cloud.microsoft',
+});
+const markdown = await page.evaluate(() => navigator.clipboard.readText());
+```
+
+Per-block `Copy code` (aria-label `Copy code`) is the fallback when only one block is needed.
+
+**Evidence that DOM reading is unsafe.** A reply whose JSON was valid came back from
+`innerText` as:
+
+```
+{"status":"continue","steps":[{"id":1,...,"cmd":"$os=Get-ComputerInfo; ..."}s":"report Windows version and C drive free space"}
+```
+
+The substring `}],"note` was simply missing from the DOM text: the widget had not rendered
+that part of the wrapped line. The JSON on screen was correct; the JSON we could read was
+not. This is not a parser bug we can work around, it is missing data.
+
+Verified in the browser pane: clipboard read is denied without that grant, so the permission call is mandatory, not optional.
+
+## Downloads: solved
+
+This was the part the user expected to be hard. It is not. A file Copilot generates renders as an ordinary anchor inside the markdown:
+
+```html
+<a href="blob:https://m365.cloud.microsoft/a297bdcf-..."
+   download="probe-long.ps1"
+   aria-label="probe-long.ps1"
+   target="_blank">probe-long.ps1</a>
+```
+
+That explains the reported behaviour: the href is a `blob:` URL created in the page, so hovering shows nothing useful, and only the click materializes the file.
+
+For the bot:
+
+- Locate by `a[download]` inside the last message, match on the `download` attribute for the file name.
+- Register `page.waitForEvent('download')` **before** clicking, then `download.saveAs(...)`.
+- Because the anchor carries `target="_blank"`, also listen on the context for a new page, so a download that gets attributed to a popup is not missed.
+
+Observed in the same reply: Copilot showed a `Coding and executing` chip, meaning the tenant has the code interpreter enabled. That is what produces downloadable files.
+
+## Uploading the results file: solved without a dialog
+
+The chat composer keeps a hidden file input in the DOM at all times:
+
+```html
+<input type="file" id="upload-file-button" multiple accept=".doc,...,.txt,text/plain,...">
+```
+
+Playwright can call `setInputFiles('#upload-file-button', reportPath)` on it directly. The
+"+" menu never has to be opened and no native Windows file dialog is involved, which removes
+the only place where OS-level automation would still have been needed.
+
+`.txt`, `.log`, `.csv`, `.md`, `.json`, `.xml` and `.yml` are all in the accept list.
+`.ps1` is **not**, so a downloaded script cannot be handed straight back to the chat; it
+would have to be renamed to `.txt` first.
+
+Once the file is set, a chip appears in the composer:
+
+```html
+<div class="fx-AttachmentList" aria-label="Attachments">
+  <div class="fx-Attachment" aria-label="iteration-1.txt" id="SPO_YWM2N2Y4YWEt...">
+```
+
+Two things follow. The chip's `aria-label` is the file name, so it is easy to wait for. Its
+DOM id gets an `SPO_` prefix, and that prefix is the real "upload finished" signal, because
+`SPO` is SharePoint. There is also a `button[aria-label="Remove attachment <file>"]` for
+taking an attachment back.
+
+### Uploads go through the user's OneDrive
+
+The composer shows this notice while an attachment is pending:
+
+> Uploading from device will send a copy to OneDrive (work/school).
+
+This is a real consequence, not a cosmetic warning. Every terminal report the bot sends is
+stored as a file in the user's OneDrive for Business. It must be stated in the README and in
+the confirm-mode prompt, because terminal output can contain host names, paths, user names
+and occasionally secrets. Options to offer: a retention setting that deletes old report
+files, and a redaction pass before upload.
+
+### Validated end to end
+
+A 274-byte report file was attached and sent in the live chat. Copilot opened it and quoted
+back both a token from the middle of the file and the exact stderr line, inside the required
+JSON block:
+
+```json
+{"status":"continue","steps":[],"notes":"MAGIC_TOKEN=ZX9-QUARTZ-7781 ; The system cannot find the path specified."}
+```
+
+So the file transport works, Copilot reads attachments reliably, and the format contract
+survives a message that carries an attachment.
+
+## Other controls seen
+
+| Control | Locator | Note |
+|---|---|---|
+| New chat | `a[aria-label="New chat"]`, href `/chat?es=SSR&redirfrom=cosmicRingCookie` | It is an anchor, so navigating to the chat URL is equivalent. |
+| Model selector | `button#gptModeSwitcher[aria-label="Model Selector"]`, showed `Auto` | Worth pinning to a fixed model later for reproducibility. |
+| Add sources | `button[data-testid="PlusMenuButton"]` | File upload path, not needed for v1. |
+| Temporary chat | `button[aria-label="Temporary chat"]` | Could be useful to avoid polluting chat history. |
+
+## Not yet verified
+
+1. That a real Playwright-launched Edge with its own profile passes this tenant's Conditional Access. The sign-in used for this probe happened in a different browser.
+2. That `download.saveAs()` actually receives the blob file. The anchor shape makes it very likely, but it needs one run.
+3. Clipboard read after `grantPermissions` on this origin.
+4. Whether Copilot holds the JSON contract over many turns.
+
+## Contract validated live
+
+The persona in `prompts/01-persona.md` plus the contract in `prompts/02-format.md` were
+tested in a fresh chat on the same day, in a condensed form.
+
+- The handshake reply was exactly `{"status":"continue","steps":[],"notes":"ready"}` in a
+  single `json` block.
+- The first real task produced a well-formed `command` step with `shell: "pwsh"` and a
+  single-line command, no prose outside the block.
+
+So the format holds at least for the opening turns. Endurance over 20+ turns is still open.
