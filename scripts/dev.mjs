@@ -38,6 +38,40 @@ function log(tag, line) {
   process.stdout.write(`[${tag}] ${line}\n`);
 }
 
+// 0. Refuse to start on top of something that already holds a port, and say what it is.
+//    A previous run of this project can survive as orphans (the API and Next.js's own
+//    start-server child outlive a starter that died abruptly), and then a fresh start fails
+//    with EADDRINUSE after the build has already taken ten seconds. If the holder is one of
+//    ours it is stopped here; anything else is reported and left alone.
+if (isWin) {
+  const script = `
+    $ports = 4000, 3210
+    $conns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }
+    foreach ($c in $conns) {
+      $p = Get-CimInstance Win32_Process -Filter "ProcessId = $($c.OwningProcess)"
+      $cmd = if ($p) { $p.CommandLine } else { '' }
+      Write-Output ("{0}|{1}|{2}" -f $c.LocalPort, $c.OwningProcess, $cmd)
+    }`;
+  const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+  const lines = (res.stdout ?? '').split(/\r?\n/).filter((l) => l.includes('|'));
+  let blocked = false;
+  for (const line of lines) {
+    const [port, pid, cmd = ''] = line.split('|');
+    const ours = cmd.replace(/\\/g, '/').toLowerCase().includes(root.replace(/\\/g, '/').toLowerCase());
+    if (ours) {
+      log('start', `port ${port} is held by a previous run of this project (pid ${pid}); stopping it`);
+      spawnSync('taskkill', ['/pid', pid, '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    } else {
+      log('start', `port ${port} is in use by pid ${pid}: ${cmd.slice(0, 100) || '(unknown)'}`);
+      blocked = true;
+    }
+  }
+  if (blocked) {
+    log('start', 'stop whatever holds the port, or set COP_API_PORT / change the web port, then run again');
+    process.exit(1);
+  }
+}
+
 // 1. Build the API. Nest needs decorator metadata, which only tsc emits.
 log('build', 'tsc -p tsconfig.json');
 const build = spawnSync(process.execPath, [bin('typescript/bin/tsc'), '-p', 'tsconfig.json'], {
