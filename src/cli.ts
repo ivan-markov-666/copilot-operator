@@ -48,12 +48,17 @@ program
       onEvent: (e) => process.stdout.write(`  ${e}\n`),
     });
     await transport.open();
-    console.log('Sign in to Microsoft 365 Copilot in the Edge window that just opened.');
-    console.log('If a human-verification box appears, complete it yourself; the bot will not.');
-    console.log('The bot never types credentials. Waiting for the chat to appear...');
-    await transport.ensureSignedIn();
-    console.log(`Signed in to Microsoft 365 Copilot. The profile is saved at ${opts.profile}`);
-    await transport.close();
+    try {
+      console.log('Sign in to Microsoft 365 Copilot in the Edge window that just opened.');
+      console.log('If a human-verification box appears, complete it yourself; the bot will not.');
+      console.log('The bot never types credentials. Waiting for the chat to appear...');
+      await transport.ensureSignedIn();
+      console.log(`Signed in to Microsoft 365 Copilot. The profile is saved at ${opts.profile}`);
+    } finally {
+      // Always close. A left-open Edge keeps the profile locked, and the next run would
+      // then fail with a message about a closed browser that explains nothing.
+      await transport.close();
+    }
   });
 
 program
