@@ -1,0 +1,51 @@
+# Step 8 of docs/testing.md: the project mirror.
+#
+#   npx tsx src/cli.ts mirror run.mirror.yaml     refresh the Desktop folder only
+#   npx tsx src/cli.ts run run.mirror.yaml        mirror, then hand the files to the chat
+#
+# Run the mirror command twice before the run command. The second time must report
+# 0 added, 0 updated, 0 deleted: that is the incremental behaviour working.
+#
+# Note before running: attaching files uploads a copy to the user's OneDrive. This config
+# deliberately mirrors only the two prompt files, which contain nothing private, so the test
+# costs nothing to get wrong. Point rootDir and includeDirs at real code once it works.
+
+copilot:
+  label: mirror
+  stopMarker: Край
+
+projectMirror:
+  enabled: true
+  rootDir: .
+  includeDirs:
+    - prompts
+  # Defaults to <Desktop>/copilot-operator-context
+  # targetDir: ~/Desktop/copilot-operator-context
+  separator: '--'
+  txtMode: append
+  respectGitignore: true
+  includeEnvFiles: false
+  attachToFirstMessage: true
+  maxAttachedFiles: 20
+
+openingMessages:
+  - file: prompts/01-persona.md
+  - file: prompts/02-format.md
+  - text: |
+      Task: two files were attached to the first message of this conversation. Open them and
+      confirm you can read them, then answer one question from their contents: what is the
+      exact word that signals the end of a run, and in which of the two files is it defined?
+
+      Answer in the notes field and finish. No commands are needed for this.
+
+execution:
+  mode: confirm
+  defaultShell: pwsh
+  cwd: .
+
+limits:
+  maxIterations: 4
+  maxRunMinutes: 20
+  maxFormatRetries: 2
+
+runsDir: ./runs

@@ -6,10 +6,13 @@ Copilot decides what to do, the bot does it and reports back, and the two keep g
 Copilot says the task is finished. The bot drives the real Copilot web app in a real Edge
 browser, so it needs no API licence and no admin consent.
 
-> **Status: working.** A full loop has run against a live Microsoft 365 Copilot tenant:
-> opening messages, chat naming, reply parsing, a refused command, a corrected retry, the
-> results file uploaded, and a `done` verdict with the right answer. The download path, long
-> steps and the project mirror have their own checks but have not yet been exercised live.
+> **Status: working, verified against a live Microsoft 365 Copilot tenant.** A full loop
+> runs: opening messages, chat naming, reply parsing, command execution, the results file
+> uploaded and read back, and a `done` verdict. Long steps are confirmed, a step printing for
+> 92 s survived while a silent one was stopped at its idle limit. The download path is
+> confirmed, a script Copilot generated was downloaded, hashed, executed and its output read
+> back. The project mirror is confirmed on disk; handing those files to the chat is the one
+> part not yet exercised end to end.
 
 ## What it does
 

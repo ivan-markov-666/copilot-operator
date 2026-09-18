@@ -169,6 +169,10 @@ npx tsx src/cli.ts run run.download.yaml
 **Expect:** the console prints `downloaded hello.ps1 (sha256 ...)`, the file appears in
 `runs/<runId>/artifacts/`, and the step runs it.
 
+Verified live once the contract stopped suppressing attachments: a 27-byte `hello.ps1` was
+downloaded, hashed, saved to the run's artifacts folder, executed with exit 0, and its output
+read back by Copilot from the report file.
+
 **If Copilot says it cannot attach files, the contract is probably the reason.** That is
 what happened here, twice, on a surface where a real blob download had been produced the day
 before. The saved reply settles it: the message contained the json block and nothing else,
@@ -210,24 +214,36 @@ rather than the command failing.
 
 ## 8. Test the project mirror
 
+`run.mirror.yaml` is ready and deliberately small: it mirrors only the two prompt files, so
+nothing private is involved while the mechanism is being proved.
+
+```bash
+npx tsx src/cli.ts mirror run.mirror.yaml
+npx tsx src/cli.ts mirror run.mirror.yaml
+```
+
+**Expect:** the first says `2 added`, the second says `0 added, 0 updated, 0 deleted,
+2 unchanged`. That is the incremental behaviour. The folder on the Desktop holds
+`prompts--01-persona.md.txt` and `prompts--02-format.md.txt`: the path is in the name and
+`.txt` is appended, because the chat rejects most source extensions.
+
+Then hand them to the chat:
+
+```bash
+npx tsx src/cli.ts run run.mirror.yaml
+```
+
+The task asks Copilot to read the attached files and answer a question only their contents
+can answer, so a plausible-sounding guess is not enough to pass.
+
+**Attaching uploads a copy to the user's OneDrive.** That is worth knowing before pointing
+this at real code. Use `report.redactPatterns`, or mirror a narrower set of directories.
+
+To see what a project offers before choosing:
+
 ```bash
 npx tsx src/cli.ts dirs C:\Projects\your-app
 ```
-
-Pick the directories you want the chat to see, put them in a config under `projectMirror`,
-then:
-
-```bash
-npx tsx src/cli.ts mirror run.yaml
-```
-
-**Expect:** a folder on your Desktop with flattened names like
-`src--test--example-test.spec.ts.txt`, and a summary line saying how many were added.
-
-Run it a second time without editing anything: it should say `0 added, 0 updated, 0 deleted`
-and the rest unchanged. Edit one file and run again: exactly one `updated`.
-
-Only then set `attachToFirstMessage: true` and do a run that hands those files to the chat.
 
 ---
 
