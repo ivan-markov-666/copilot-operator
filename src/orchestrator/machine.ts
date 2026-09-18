@@ -8,7 +8,7 @@
  * a way that would make continuing dishonest.
  */
 import { createHash } from 'node:crypto';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
@@ -67,7 +67,29 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
 
   const artifactsDir = log.path('artifacts');
   const reportsDir = log.path('reports');
+  const repliesDir = log.path('replies');
   await mkdir(artifactsDir, { recursive: true });
+  await mkdir(repliesDir, { recursive: true });
+
+  /**
+   * Keeps every reply exactly as it arrived, plus the on-screen version of its code blocks.
+   *
+   * Without this a defect in what the chat hands over is invisible: the transcript only
+   * recorded how many characters came back, which is not enough to tell a mangled command
+   * from one Copilot wrote badly.
+   */
+  let replySeq = 0;
+  const saveReply = async (label: string, reply: { markdown: string; degraded: boolean; codeBlocksDom: string[] }): Promise<void> => {
+    replySeq += 1;
+    const base = join(repliesDir, `${String(replySeq).padStart(2, '0')}-${label}`);
+    await writeFile(`${base}.md`, reply.markdown, 'utf8').catch(() => undefined);
+    if (reply.codeBlocksDom.length > 0) {
+      const rendered = reply.codeBlocksDom
+        .map((b, i) => ['--- code block ' + (i + 1) + ' as rendered ---', b].join('\n'))
+        .join('\n\n');
+      await writeFile(`${base}.onscreen.txt`, rendered, 'utf8').catch(() => undefined);
+    }
+  };
 
   log.event('run-started', { runId, config: cfg.configPath, mode: cfg.execution.mode },
     `run ${runId} starting in ${cfg.execution.mode} mode`);
@@ -164,6 +186,7 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
       const reply = await transport.waitForReply(before);
       lastMarkdown = reply.markdown;
       lastAttachments = reply.attachments;
+      await saveReply(`opening-${index + 1}`, reply);
       log.event('opening-reply', { index, chars: reply.markdown.length, degraded: reply.degraded });
       await pacer.settle();
 
@@ -216,6 +239,7 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
           formatErrorMessage(parsed, formatRetries, cfg.limits.maxFormatRetries),
         );
         const again = await transport.waitForReply(before);
+        await saveReply(`format-retry-${formatRetries}`, again);
         lastMarkdown = again.markdown;
         lastAttachments = again.attachments;
         continue;
@@ -347,6 +371,7 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
           await pacer.throttleSend();
           const before = await transport.sendAndConfirm(covering, report.paths);
           const next = await transport.waitForReply(before);
+          await saveReply(`iteration-${iterations}`, next);
           lastMarkdown = next.markdown;
           lastAttachments = next.attachments;
           sent = true;

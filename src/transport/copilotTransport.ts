@@ -38,6 +38,15 @@ export type ReplyCapture = {
   degraded: boolean;
   /** File names Copilot attached to this answer. */
   attachments: string[];
+  /**
+   * What each code block looks like in the DOM, gutter numbers and all.
+   *
+   * Kept purely so the clipboard text can be compared against what is on screen. A live run
+   * produced a PowerShell command where `[math]::Round` arrived as `:Round`, and without
+   * both copies of the same answer there is no way to tell whether Copilot wrote it that
+   * way or something between Copilot and the parser dropped it.
+   */
+  codeBlocksDom: string[];
 };
 
 const ORIGIN = 'https://m365.cloud.microsoft';
@@ -593,14 +602,16 @@ Current URL: ${url}`);
     }
 
     const attachments = await this.lastMessageAttachmentNames();
+    const codeBlocksDom = await this.lastAnswerCodeBlocks();
     const { markdown, degraded } = await this.copyLastReply();
     this.emit('reply-received', {
       chars: markdown.length,
       degraded,
       attachments: attachments.length,
+      codeBlocks: codeBlocksDom.length,
       waitedMs: Date.now() - startedAt,
     });
-    return { markdown, degraded, attachments };
+    return { markdown, degraded, attachments, codeBlocksDom };
   }
 
   /**
@@ -617,6 +628,17 @@ Current URL: ${url}`);
 
   private async lastMessageText(): Promise<string> {
     return (await this.lastAnswer().innerText().catch(() => '')) ?? '';
+  }
+
+  /** The on-screen text of each code block in the newest answer, for comparison only. */
+  async lastAnswerCodeBlocks(): Promise<string[]> {
+    const blocks = this.lastAnswer().locator(Css.codeBlock);
+    const n = await blocks.count().catch(() => 0);
+    const out: string[] = [];
+    for (let i = 0; i < n; i += 1) {
+      out.push((await blocks.nth(i).innerText().catch(() => '')) ?? '');
+    }
+    return out;
   }
 
   async lastMessageAttachmentNames(): Promise<string[]> {

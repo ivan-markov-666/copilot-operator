@@ -137,7 +137,12 @@ Inside `runs/<runId>/` you should find:
 | `reports/iteration-1.txt` | the full terminal output that was attached to the chat |
 | `steps/1-1.log` | the raw stream of one step, uncut |
 | `chat.json` | the conversation id and name, for reattaching later |
+| `replies/NN-*.md` | every Copilot reply exactly as it arrived |
+| `replies/NN-*.onscreen.txt` | the same reply's code blocks as rendered on screen |
 | `failures/` | only if something broke: a screenshot and an HTML dump |
+
+The two `replies` files are there to be compared. If a command the bot ran does not match
+what the chat shows, they say which side lost it.
 
 Open `reports/iteration-1.txt`. It should contain the real command output, and the header
 should name the run, the iteration and the step count.
@@ -280,6 +285,15 @@ genuinely safe, relax `denyPatterns` in your config, but read the command first.
 **The upload never finishes.** The bot waits for the attachment chip's id to carry the `SPO_`
 prefix, which means the file reached SharePoint. A slow or broken OneDrive can stall this. It
 retries, then falls back to sending truncated output as text.
+
+**A command ran mangled.** A live run executed `:Round(...)` where the answer should have
+said `[math]::Round(...)`, three times in a row, and Copilot kept blaming its own syntax.
+Compare `replies/NN-*.md` (what we received) with `replies/NN-*.onscreen.txt` (what the chat
+displayed) for that iteration:
+
+- both mangled: Copilot really wrote it that way, and the prompt is the place to fix it,
+- on screen correct, received mangled: the copy path is losing characters, which is a bug in
+  this project and worth reporting with both files.
 
 **Everything worked but the answers are poor.** That is the prompt, not the bot.
 `prompts/01-persona.md` is meant to be edited.
