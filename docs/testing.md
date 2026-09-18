@@ -169,8 +169,14 @@ npx tsx src/cli.ts run run.download.yaml
 **Expect:** the console prints `downloaded hello.ps1 (sha256 ...)`, the file appears in
 `runs/<runId>/artifacts/`, and the step runs it.
 
-If Copilot answers with the script as text instead of a file, the tenant may not have the
-code interpreter enabled. Say so and we will adjust the contract to inline scripts instead.
+**If Copilot says it cannot attach files, do not believe it on the first try.** It said
+exactly that here, on a surface where the same account had produced a real blob download the
+day before. The trigger is the wording: "attach a file" gets a refusal, "create the file and
+give me a download link" runs the code interpreter and produces one. The task in
+`run.download.yaml` now uses the second form and tells it not to refuse untried.
+
+If it still refuses after that, the tenant's code interpreter is genuinely not producing
+files, and the contract needs a step type that carries the script inline instead.
 
 ---
 
@@ -184,12 +190,13 @@ npx tsx src/cli.ts run run.long.yaml
 ```
 
 **Expect:** the console prints a heartbeat roughly every 30 seconds, saying how long the step
-has been running, how long since it last printed, and the last line it printed. The step is
-**not** killed, because it keeps producing output.
+has been running, how long since it last printed, and the last line it printed.
 
-To see the other half of the behaviour, ask for a step that sleeps silently for longer than
-`idleTimeoutSec`. It should be killed and reported as `idle-timeout`, not as a failure of the
-command itself.
+Verified live: the talkative step ran for 92.1 s and finished with exit 0, printing `tick 1`
+through `tick 90`, with heartbeats at 31 s, 61 s and 91 s and never killed. The silent step
+was stopped at 21.1 s as `idle-timeout` with exit -1. Copilot then read the report file and
+described both outcomes correctly, including that `idle-timeout` was the runner stopping it
+rather than the command failing.
 
 ---
 

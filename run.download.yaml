@@ -1,15 +1,15 @@
 # Step 6 of docs/testing.md: the download path.
 #
-# This is the part that looked hardest at the start. Copilot generates a file, attaches it
-# to the chat as a blob download, and the bot clicks it, saves it, hashes it and runs it.
-#
 #   npx tsx src/cli.ts run run.download.yaml
 #
 # Expect: "downloaded hello.ps1 (sha256 ...)" on the console, the file in
 # runs/<runId>/artifacts/, and a step that runs it.
 #
-# If Copilot answers with the script as text instead of attaching a file, this tenant's
-# code interpreter is not producing downloads and the contract needs inlined scripts instead.
+# The wording of the task matters more than it should. Asked to "attach" a file, Copilot
+# replied that it had no way to attach files and gave up. Asked to "create" one and "give it
+# to me as a downloadable file", the same surface ran its code interpreter and produced a
+# real blob download. So the task below uses the phrasing that is known to work, and says
+# outright that the code interpreter is the way to do it.
 
 copilot:
   label: download
@@ -19,10 +19,16 @@ openingMessages:
   - file: prompts/01-persona.md
   - file: prompts/02-format.md
   - text: |
-      Task: write a PowerShell script named hello.ps1 that prints the current date and the
-      computer name, and nothing else. Attach it to this chat as a downloadable file, and
-      send a single download step with "file": "hello.ps1" and "run": true so the runner
-      saves it and executes it. When you have its output, finish.
+      Task: create a PowerShell script named hello.ps1 that prints the current date and the
+      computer name, and nothing else.
+
+      Give it to me as a downloadable file in this reply. Use your code interpreter to write
+      the file if that is what it takes; a link I can click to download hello.ps1 is what the
+      runner needs. Do not say you are unable to before you have tried it.
+
+      In the same reply, send a single download step with "file": "hello.ps1" and
+      "run": true, so the runner saves the file and executes it. When you have its output,
+      report what it printed and finish.
 
 execution:
   mode: confirm
@@ -30,7 +36,6 @@ execution:
   cwd: .
   commandTimeoutSec: 120
   idleTimeoutSec: 60
-  # hello.ps1 is a PowerShell script, which is already in the default allow list.
   allowedScriptExtensions: ['.ps1', '.cmd', '.bat']
 
 limits:

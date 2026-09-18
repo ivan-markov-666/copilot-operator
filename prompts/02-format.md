@@ -127,10 +127,18 @@ the report rather than executing something you did not write.
 
 ## Rules for downloads
 
-When a step has `type: "download"`, you must actually generate that file in the same reply
-and make it downloadable, and the `file` value must match its file name character for
-character. A `download` step that points at a file you did not attach is an error and the
-run will stop.
+When a step has `type: "download"`, you must actually produce that file in the same reply as
+something the runner can click and download, and the `file` value must match its file name
+character for character. A `download` step naming a file that is not there is an error.
+
+You can do this. Use your code interpreter to write the file, then offer it as a download
+link. This has been verified working on this surface: a request to create a PowerShell
+script and "give it to me as a downloadable file" produced a real download. If you answer
+that you have no way to attach files, you are mistaken, and the run stops for no reason.
+
+The phrasing that matters is "create the file and give me a download link", not "attach".
+Use a download step for anything longer than a couple of lines; pasting a long script into
+`cmd` is how quoting gets mangled.
 
 ## What you get back
 
