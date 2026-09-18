@@ -125,3 +125,44 @@ export function formatErrorMessage(fail: ParseFail, attempt: number, maxAttempts
     'status, steps and notes, and nothing else tagged json in the reply.',
   ].join(' ');
 }
+
+/**
+ * Spots a command that arrived damaged rather than badly written.
+ *
+ * Copilot's own output pipeline eats a `[label]:` sequence, apparently reading it the way
+ * markdown reads a link-reference definition. PowerShell writes static calls as
+ * `[math]::Round(...)`, which contains exactly that sequence, so what reaches the runner is
+ * `:Round(...)`. Observed live three iterations in a row, and confirmed from the chat itself:
+ * the mangled form was already on screen, and Copilot's own notes complained that ":Round"
+ * had been emitted instead of "[math]::".
+ *
+ * The damage is not repairable here, because the type name is gone and guessing it would run
+ * a command nobody wrote. So it is detected, refused, and explained back to Copilot.
+ */
+export function findLikelyDamage(command: string): string | null {
+  // A method call whose type literal has been eaten: `{:Round(`, `= :Round(`, `+ ::Round(`.
+  // `]` and `$name` before the colons are the intact forms, `[math]::Round` and `$m::Round`,
+  // so they must not match.
+  const eaten = /(^|[^\w.$:\]]):{1,2}[A-Za-z_]\w*\s*\(/.exec(command);
+  if (eaten) {
+    return (
+      `"${eaten[0].trim()}" looks like a .NET static call whose type was lost in transit: ` +
+      '`[math]::Round(...)` arrives as `:Round(...)` because the chat consumes `[label]:`'
+    );
+  }
+  return null;
+}
+
+/** What to tell Copilot when a command arrived damaged, with alternatives that survive. */
+export function damageGuidance(): string {
+  return [
+    'A command you sent arrived with its type literal missing: `[math]::Round(...)` reached',
+    'the runner as `:Round(...)`. Anything of the form `[name]:` is consumed before it gets',
+    'here, so .NET static calls written that way cannot survive. Use one of these instead,',
+    'all of which are verified to work in PowerShell:',
+    '  $m = [math]; $m::Round($x, 2)',
+    '  "{0:N2}" -f $x',
+    '  $x.ToString("N2")',
+    'Putting a space before `::` does not work and is a syntax error.',
+  ].join(' ');
+}

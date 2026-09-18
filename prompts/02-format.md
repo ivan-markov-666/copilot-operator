@@ -102,6 +102,29 @@ A `download` step:
 
 **`notes`** — free text for a human. The runner ignores it. Keep it under three sentences.
 
+## One thing the chat destroys: `[name]:`
+
+Any sequence of the form `[something]:` is eaten before your reply reaches the runner. This
+is not hypothetical: `[math]::Round($x, 2)` arrives as `:Round($x, 2)`, which is a syntax
+error, and it has happened three iterations in a row while you kept blaming your own syntax.
+
+So never write a .NET static call in that form. These three are verified to work in
+PowerShell and survive the trip:
+
+```
+$m = [math]; $m::Round($x, 2)
+"{0:N2}" -f $x
+$x.ToString("N2")
+```
+
+Putting a space before the colons does not help; `[math] :: Round(...)` is a syntax error.
+
+Type literals on their own are fine, because the damage needs the colon: `[pscustomobject]@{...}`
+and `[double]$x` both arrive intact.
+
+The runner detects a command that arrived this way, refuses to run it, and tells you so in
+the report rather than executing something you did not write.
+
 ## Rules for downloads
 
 When a step has `type: "download"`, you must actually generate that file in the same reply

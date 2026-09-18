@@ -19,8 +19,9 @@
     "cop": "tsx src/cli.ts",
     "check:parser": "tsx test/parser.check.ts",
     "check:report": "tsx test/report.check.ts",
-    "check": "npm run check:parser && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:chat && npm run check:context && npm run check:pacing",
-    "probe": "tsx scripts/probe-locators.ts"
+    "check": "npm run check:parser && npm run check:damage && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:chat && npm run check:context && npm run check:pacing",
+    "probe": "tsx scripts/probe-locators.ts",
+    "check:damage": "tsx test/damage.check.ts"
   },
   "dependencies": {
     "commander": "^15.0.0",

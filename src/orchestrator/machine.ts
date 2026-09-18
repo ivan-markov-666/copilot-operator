@@ -20,7 +20,7 @@ import {
   loadPointer,
   type ChatPointer,
 } from '../transport/chatSession.js';
-import { parseReply, formatErrorMessage } from '../protocol/parser.js';
+import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import type { Step } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
@@ -282,6 +282,18 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
               stderr: '',
               stdout: `Saved to ${scriptPath}\n`,
             });
+            continue;
+          }
+        }
+
+        // A command whose type literal was eaten in transit is not a command Copilot wrote,
+        // so running it would be running something nobody intended. Refuse and explain.
+        if (step.type === 'command') {
+          const damage = findLikelyDamage(step.cmd);
+          if (damage) {
+            log.event('step-damaged', { id: step.id, cmd: step.cmd, damage },
+              `step ${step.id} arrived damaged: ${damage}`, 'warn');
+            results.push(refusedResult(step, `${damage}. ${damageGuidance()}`));
             continue;
           }
         }

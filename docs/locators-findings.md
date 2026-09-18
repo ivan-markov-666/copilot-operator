@@ -202,3 +202,28 @@ tested in a fresh chat on the same day, in a condensed form.
   single-line command, no prose outside the block.
 
 So the format holds at least for the opening turns. Endurance over 20+ turns is still open.
+
+## Copilot destroys `[name]:` in its own output
+
+Found while running the first successful loop. A PowerShell command containing
+`[math]::Round($x, 2)` reached the runner as `:Round($x, 2)`, three iterations in a row.
+
+It is not this project's copy path. Feeding that exact command through `extractFencedBlocks`,
+`stripLineNumbers` and `parseReply` returns it byte for byte. And the mangled form was
+already on screen in the chat: the rendered JSON block showed `Expression={:Round(...)}`,
+and Copilot's own `notes` field said that `':Round'` had been emitted instead of `'[math]::'`.
+
+The pattern is specific. In the same replies, `[pscustomobject]@{...}` and `[double]$c`
+survived untouched. What they lack is the colon: `[label]:` is what a markdown parser reads
+as a link-reference definition, and something in Copilot's output pipeline consumes it,
+taking one of the two colons with it. It happens even inside a fenced code block.
+
+Consequences for this project:
+
+- `prompts/01-persona.md` and `prompts/02-format.md` forbid `[type]::Method(...)` and give
+  three alternatives that are verified to work in PowerShell: a type in a variable
+  (`$m = [math]; $m::Round($x, 2)`), the format operator (`"{0:N2}" -f $x`), and a method on
+  the value (`$x.ToString("N2")`). A space before the colons is a syntax error, not a fix.
+- `findLikelyDamage()` in `src/protocol/parser.ts` recognises the wreckage and the runner
+  refuses the step rather than executing a command nobody wrote. The damage cannot be
+  repaired here, because the type name is gone and guessing it would be worse than failing.
