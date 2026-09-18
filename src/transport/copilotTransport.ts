@@ -42,6 +42,31 @@ export type ReplyCapture = {
 
 const ORIGIN = 'https://m365.cloud.microsoft';
 
+/**
+ * What the blocker detector saw, and why it thinks so.
+ *
+ * The reason is carried rather than thrown away because a detector that can only say "yes"
+ * is impossible to debug. The first live failure was logged as "verification" with no
+ * evidence of what matched, which left a guess where a fact was needed.
+ */
+export type BlockerFinding = {
+  kind: 'verification' | 'error-banner' | 'none';
+  reason: string;
+};
+
+/**
+ * The chat refused the message: it never became a turn, so no reply is coming.
+ *
+ * Distinct from a timeout on purpose. A timeout means "it is taking too long"; this means
+ * "it will never arrive", and the caller can retry the send instead of waiting.
+ */
+export class SendRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SendRejectedError';
+  }
+}
+
 export class CopilotTransport {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
@@ -150,19 +175,23 @@ Current URL: ${url}`);
    * what it sees and waits for the human, which is the difference between a run that pauses
    * with a clear instruction and one that times out with a confusing error.
    */
-  async detectBlocker(): Promise<'verification' | 'error-banner' | 'none'> {
+  async detectBlocker(): Promise<BlockerFinding> {
     try {
       const text = (await this.p.locator('body').innerText({ timeout: 5_000 }).catch(() => '')) ?? '';
-      if (Blocker.verificationText.some((t) => text.includes(t))) return 'verification';
+
+      const phrase = Blocker.verificationText.find((t) => text.includes(t));
+      if (phrase) return { kind: 'verification', reason: `page text contains "${phrase}"` };
 
       const frames = this.p.frames().map((f) => f.url());
-      if (frames.some((u) => Blocker.challengeFrameHosts.some((h) => u.includes(h)))) return 'verification';
+      const frame = frames.find((u) => Blocker.challengeFrameHosts.some((h) => u.includes(h)));
+      if (frame) return { kind: 'verification', reason: `challenge iframe: ${frame.slice(0, 120)}` };
 
-      if (Blocker.errorBannerText.some((t) => text.includes(t))) return 'error-banner';
+      const banner = Blocker.errorBannerText.find((t) => text.includes(t));
+      if (banner) return { kind: 'error-banner', reason: `page text contains "${banner}"` };
     } catch {
       /* a closed or navigating page is handled by the caller */
     }
-    return 'none';
+    return { kind: 'none', reason: '' };
   }
 
   /**
@@ -171,22 +200,27 @@ Current URL: ${url}`);
    * Returns true when the page became usable again. The checkbox is deliberately left
    * untouched: completing a human-verification check is the human's part of this.
    */
-  async handleBlocker(kind: 'verification' | 'error-banner'): Promise<boolean> {
+  async handleBlocker(found: BlockerFinding): Promise<boolean> {
+    const { kind, reason } = found;
+    // Evidence first: whatever happens next, there is a picture of what the page looked like.
+    await this.dumpFailure(join(this.opts.downloadsDir, '..', 'failures'), `blocker-${kind}-${Date.now()}`)
+      .catch(() => undefined);
+
     if (kind === 'error-banner') {
-      this.emit('error-banner', { action: 'reloading' });
+      this.emit('error-banner', { action: 'reloading', reason });
       const refresh = this.p.getByRole('button', { name: Blocker.refreshLabel, exact: true });
       if ((await refresh.count()) > 0) await refresh.first().click().catch(() => undefined);
       else await this.p.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
       await this.p.waitForTimeout(3_000);
-      return (await this.detectBlocker()) === 'none';
+      return (await this.detectBlocker()).kind === 'none';
     }
 
     const waitMs = this.opts.humanWaitMs ?? 15 * 60_000;
-    this.emit('verification-required', { waitMs });
+    this.emit('verification-required', { waitMs, reason });
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       await this.p.waitForTimeout(3_000);
-      if ((await this.detectBlocker()) === 'none') {
+      if ((await this.detectBlocker()).kind === 'none') {
         this.emit('verification-cleared');
         return true;
       }
@@ -197,11 +231,11 @@ Current URL: ${url}`);
   /** Detects a blocker and waits it out. Throws when it is still there after the wait. */
   private async clearBlockers(): Promise<void> {
     for (let i = 0; i < 3; i += 1) {
-      const kind = await this.detectBlocker();
-      if (kind === 'none') return;
-      const cleared = await this.handleBlocker(kind);
+      const found = await this.detectBlocker();
+      if (found.kind === 'none') return;
+      const cleared = await this.handleBlocker(found);
       if (cleared) return;
-      if (kind === 'verification') {
+      if (found.kind === 'verification') {
         throw new Error(
           'The chat is showing a human-verification challenge and it was not cleared in time. ' +
             'Complete it in the open Edge window, then start the run again. ' +
@@ -317,6 +351,64 @@ Current URL: ${url}`);
   }
 
   /**
+   * Sends and confirms the message was actually accepted.
+   *
+   * Clicking Send is not the same as the message arriving. A rejected request leaves the
+   * text sitting in the composer and shows an error banner, and the old code then waited
+   * fifteen minutes for a reply that could never come. Acceptance is defined as the turn
+   * count going up, which is the only thing that really means "the chat took it".
+   *
+   * On a verification challenge the human clears it and the message is sent again, because
+   * the rejected one was never delivered. The bot does not attempt the challenge itself.
+   */
+  async sendAndConfirm(text: string, attachments: string[] = [], maxAttempts = 3): Promise<number> {
+    let lastProblem = '';
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const before = await this.turnCount();
+      await this.send(text, attachments);
+
+      const accepted = await this.waitForAccepted(before, 30_000);
+      if (accepted) return before;
+
+      const found = await this.detectBlocker();
+      lastProblem = found.kind === 'none' ? 'the message did not appear in the chat' : `${found.kind}: ${found.reason}`;
+      this.emit('send-not-accepted', { attempt, problem: lastProblem });
+
+      if (found.kind !== 'none') {
+        const cleared = await this.handleBlocker(found);
+        if (!cleared) {
+          throw new SendRejectedError(
+            `The chat is blocking messages (${lastProblem}) and it was not cleared in time. ` +
+              'If this is a human-verification challenge, complete it in the Edge window and run again.',
+          );
+        }
+      }
+      // Clear whatever is left in the composer before trying again.
+      await this.composer().fill('').catch(() => undefined);
+      await this.p.waitForTimeout(2_000);
+    }
+
+    throw new SendRejectedError(
+      `The chat did not accept the message after ${maxAttempts} attempts (${lastProblem}).`,
+    );
+  }
+
+  /** True once a new turn exists, i.e. the chat really took the message. */
+  private async waitForAccepted(previousTurns: number, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.p.isClosed()) return false;
+      const now = await this.turnCount().catch(() => previousTurns);
+      if (now > previousTurns) return true;
+      const found = await this.detectBlocker();
+      if (found.kind !== 'none') return false;
+      await this.p.waitForTimeout(1_000);
+    }
+    return false;
+  }
+
+  /**
    * Uploads files through the hidden input the composer keeps in the DOM, so no native
    * Windows file dialog is ever involved. Waits until each chip's id carries the `SPO_`
    * prefix, which is the signal that the upload actually finished.
@@ -409,9 +501,17 @@ Current URL: ${url}`);
       // Only look for blockers while nothing is streaming, so the check stays cheap.
       if (!last.streaming) {
         const blocker = await this.detectBlocker();
-        if (blocker !== 'none') {
-          this.emit('blocker-during-reply', { blocker });
+        if (blocker.kind !== 'none') {
+          this.emit('blocker-during-reply', { blocker: blocker.kind, reason: blocker.reason });
           await this.clearBlockers();
+          // The request that triggered the blocker was rejected, so no reply is coming.
+          // Say so instead of waiting out the whole timeout.
+          if (!sawNewTurn) {
+            throw new SendRejectedError(
+              `The chat blocked the request (${blocker.kind}: ${blocker.reason}). ` +
+                'The message was not accepted, so no reply will arrive.',
+            );
+          }
         }
       }
 

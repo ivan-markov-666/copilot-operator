@@ -215,10 +215,26 @@ already using the bot profile, so the new launch hands off to it and exits. Chro
 are single-writer. `cop doctor` now checks for this and prints the exact `Stop-Process` line.
 Close every Edge window on the bot profile and run again.
 
-**A "Verify you are human" box appears.** The run pauses and prints an instruction. Complete
-the check yourself in the open Edge window; it continues on its own within a few seconds. The
-bot deliberately does not touch verification challenges. If this happens on every run, check
-the next item first.
+**A "Verify you are human" box appears, or "Your request couldn't be completed".** The run
+pauses, records a screenshot in `runs/<runId>/failures/`, and prints what matched and why.
+Complete the check yourself in the open Edge window. The message that triggered it was never
+delivered, so the bot sends it again afterwards rather than waiting for a reply that cannot
+come. It never attempts the challenge itself.
+
+If this happens on every send, find out whether it is the automation or the browser profile:
+
+```bash
+npx tsx src/cli.ts open
+```
+
+That opens the bot's own Edge and profile and hands it to you, with nothing automated. Type
+a long message by hand and send it.
+
+- It fails for you too: the challenge is attached to that browser profile or that session,
+  not to how the bot types. Signing in again, or using the profile normally for a while,
+  sometimes settles it.
+- It works for you: the difference is in the automation, and the transcript now records what
+  the detector matched, which is where to start.
 
 **The chat looks wrong: `Shop`, `Play`, a different composer.** That is the **consumer**
 Copilot, not Microsoft 365 Copilot. `m365.cloud.microsoft` redirects there when the profile is

@@ -156,9 +156,8 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
           ? mirrorFiles
           : [];
 
-      const before = await transport.turnCountNow();
       await pacer.throttleSend();
-      await transport.send(message, attach);
+      const before = await transport.sendAndConfirm(message, attach);
       log.event('opening-message-sent', { index, chars: message.length, attached: attach.length },
         `opening message ${index + 1}/${cfg.resolved.openingMessages.length} sent`);
 
@@ -212,9 +211,10 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
           await transport.dumpFailure(log.path('failures'), 'format-error');
           return await finish('failed', `Copilot did not keep the output contract: ${parsed.detail}`);
         }
-        const before = await transport.turnCountNow();
         await pacer.throttleSend();
-        await transport.send(formatErrorMessage(parsed, formatRetries, cfg.limits.maxFormatRetries));
+        const before = await transport.sendAndConfirm(
+          formatErrorMessage(parsed, formatRetries, cfg.limits.maxFormatRetries),
+        );
         const again = await transport.waitForReply(before);
         lastMarkdown = again.markdown;
         lastAttachments = again.attachments;
@@ -344,9 +344,8 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
       let sent = false;
       for (let attempt = 0; attempt <= cfg.report.uploadRetries && !sent; attempt += 1) {
         try {
-          const before = await transport.turnCountNow();
           await pacer.throttleSend();
-          await transport.send(covering, report.paths);
+          const before = await transport.sendAndConfirm(covering, report.paths);
           const next = await transport.waitForReply(before);
           lastMarkdown = next.markdown;
           lastAttachments = next.attachments;
@@ -359,9 +358,8 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
             const body = await readFile(report.paths[0], 'utf8');
             const text = `${covering}\n\nThe upload failed, so here is the output as text, truncated:\n\n` +
               body.slice(0, cfg.limits.maxMessageChars - covering.length - 200);
-            const before = await transport.turnCountNow();
             await pacer.throttleSend();
-            await transport.send(text);
+            const before = await transport.sendAndConfirm(text);
             const next = await transport.waitForReply(before);
             lastMarkdown = next.markdown;
             lastAttachments = next.attachments;

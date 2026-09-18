@@ -13,6 +13,8 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
 
 import { loadConfig, expandPath } from './config/schema.js';
 import { CopilotTransport } from './transport/copilotTransport.js';
@@ -57,6 +59,40 @@ program
     } finally {
       // Always close. A left-open Edge keeps the profile locked, and the next run would
       // then fail with a message about a closed browser that explains nothing.
+      await transport.close();
+    }
+  });
+
+program
+  .command('open')
+  .description("open the bot's own browser and leave it to you, for testing by hand")
+  .option('-p, --profile <dir>', 'profile directory', DEFAULT_PROFILE)
+  .option('--url <url>', 'chat url', Url.chat)
+  .action(async (opts: { profile: string; url: string }) => {
+    const transport = new CopilotTransport({
+      profileDir: opts.profile,
+      downloadsDir: join(opts.profile, '_downloads'),
+      chatUrl: opts.url,
+      channel: 'msedge',
+      headless: false,
+      replyTimeoutMs: 60_000,
+      signInTimeoutMs: 15 * 60_000,
+      humanWaitMs: 15 * 60_000,
+      onEvent: (e, d) => process.stdout.write(`  ${e}${d && Object.keys(d).length ? ' ' + JSON.stringify(d) : ''}
+`),
+    });
+    await transport.open();
+    try {
+      await transport.ensureSignedIn();
+      console.log('');
+      console.log("This is the bot's own browser and profile. Nothing is automated from here.");
+      console.log('Use it to test by hand whether the chat behaves differently for you than');
+      console.log('it does for the bot: type a long message yourself and send it.');
+      console.log('');
+      const rl = createInterface({ input: stdin, output: stdout });
+      await rl.question('Press Enter here when you are done, to close the browser... ');
+      rl.close();
+    } finally {
       await transport.close();
     }
   });
