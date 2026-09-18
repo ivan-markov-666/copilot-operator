@@ -10,7 +10,7 @@
  */
 import { Command } from 'commander';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
@@ -37,7 +37,30 @@ program
   .description('open Edge with the bot profile and wait for you to sign in')
   .option('-p, --profile <dir>', 'profile directory', DEFAULT_PROFILE)
   .option('--url <url>', 'chat url', Url.chat)
-  .action(async (opts: { profile: string; url: string }) => {
+  .option(
+    '-a, --account <upn>',
+    'the account to sign in as, e.g. 155676@365kit.org. Signs out first and asks for this one.',
+  )
+  .option('--fresh', 'delete the bot profile first, so nothing is remembered from before')
+  .action(async (opts: { profile: string; url: string; account?: string; fresh?: boolean }) => {
+    if (opts.fresh) {
+      if (existsSync(opts.profile)) {
+        console.log(`This will delete the bot's browser profile:\n  ${opts.profile}`);
+        console.log('It only contains the bot\'s own browser session. Your normal Edge is untouched.');
+        const rl = createInterface({ input: stdin, output: stdout });
+        const answer = (await rl.question('Delete it? [y/N] ')).trim().toLowerCase();
+        rl.close();
+        if (answer !== 'y' && answer !== 'yes') {
+          console.log('Left it alone. Run without --fresh to keep the existing profile.');
+          return;
+        }
+        await rm(opts.profile, { recursive: true, force: true });
+        console.log('Profile deleted.');
+      } else {
+        console.log('No existing profile to delete.');
+      }
+    }
+
     const transport = new CopilotTransport({
       profileDir: opts.profile,
       downloadsDir: join(opts.profile, '_downloads'),
@@ -51,11 +74,41 @@ program
     });
     await transport.open();
     try {
+      if (opts.account) {
+        // Edge on a Windows machine will sign the profile in with whatever account the OS
+        // knows, which is how the wrong user ends up in the chat without anyone choosing.
+        // Signing out first, then asking for this specific account, is what stops that.
+        console.log(`Signing out first, then asking for ${opts.account}.`);
+        await transport.signOut();
+        await transport.gotoChatAs(opts.account, opts.url);
+      }
       console.log('Sign in to Microsoft 365 Copilot in the Edge window that just opened.');
+      if (opts.account) {
+        console.log(`Use ${opts.account}. If Edge offers a different account, choose`);
+        console.log('"Use another account" and type this one.');
+      }
       console.log('If a human-verification box appears, complete it yourself; the bot will not.');
       console.log('The bot never types credentials. Waiting for the chat to appear...');
-      await transport.ensureSignedIn();
-      console.log(`Signed in to Microsoft 365 Copilot. The profile is saved at ${opts.profile}`);
+      await transport.ensureSignedIn(opts.account ? undefined : opts.url);
+
+      const accounts = await transport.findAccountsInPage();
+      if (opts.account) {
+        const wanted = opts.account.toLowerCase();
+        const match = accounts.some((a) => a.toLowerCase() === wanted);
+        if (match) {
+          console.log(`Signed in as ${opts.account}.`);
+        } else if (accounts.length > 0) {
+          throw new Error(
+            `Signed in, but not as ${opts.account}. The page shows: ${accounts.join(', ')}.\n` +
+              'Run "cop login --account <upn> --fresh" to wipe the profile and start clean.',
+          );
+        } else {
+          console.log(`Signed in. Could not read the account from the page, so ${opts.account} is unverified.`);
+        }
+      } else if (accounts.length > 0) {
+        console.log(`Signed in. The page shows: ${accounts.join(', ')}`);
+      }
+      console.log(`Profile saved at ${opts.profile}`);
     } finally {
       // Always close. A left-open Edge keeps the profile locked, and the next run would
       // then fail with a message about a closed browser that explains nothing.

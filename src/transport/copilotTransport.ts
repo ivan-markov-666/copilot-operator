@@ -151,6 +151,60 @@ export class CopilotTransport {
     return 'unknown';
   }
 
+  /**
+   * Email addresses visible in the page, as a way to tell which account is signed in.
+   *
+   * There is no supported API for "who is signed in to this web app", and the account
+   * flyout's markup is not something to depend on, so this scrapes the rendered HTML for
+   * address-shaped strings. It is a diagnostic, not a security check: it exists so that
+   * signing in as the wrong user is caught immediately instead of three failures later.
+   */
+  async findAccountsInPage(): Promise<string[]> {
+    return await this.p
+      .evaluate(() => {
+        const html = document.documentElement.innerHTML;
+        const found = html.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? [];
+        const junk = /(\.png|\.jpg|\.svg|\.gif|@2x|@3x|sentry|example\.com|microsoft\.com$)/i;
+        return [...new Set(found.filter((e) => !junk.test(e)))].slice(0, 10);
+      })
+      .catch(() => [] as string[]);
+  }
+
+  /**
+   * Signs the browser out of Microsoft, so the next visit cannot silently reuse a session.
+   *
+   * Needed because Edge on a domain-joined machine will happily sign the profile in with
+   * whatever account Windows knows about, which is how the wrong user ends up in the chat
+   * without anyone choosing it.
+   */
+  async signOut(): Promise<void> {
+    this.emit('signing-out');
+    await this.p
+      .goto('https://login.microsoftonline.com/common/oauth2/v2.0/logout', {
+        waitUntil: 'domcontentloaded',
+        timeout: 60_000,
+      })
+      .catch(() => undefined);
+    await this.p.waitForTimeout(3_000);
+    await this.context?.clearCookies().catch(() => undefined);
+    this.emit('signed-out');
+  }
+
+  /**
+   * Opens the chat asking for a specific account.
+   *
+   * `login_hint` tells Microsoft which account to use and `prompt=select_account` stops it
+   * picking one for you. Neither is a guarantee, so the caller still verifies afterwards.
+   */
+  async gotoChatAs(upn: string | undefined, url = this.opts.chatUrl): Promise<void> {
+    const target = new URL(url);
+    if (upn) {
+      target.searchParams.set('login_hint', upn);
+      target.searchParams.set('prompt', 'select_account');
+    }
+    await this.p.goto(target.toString(), { waitUntil: 'domcontentloaded' });
+  }
+
   /** Throws with an explanation when the profile is not on the work Copilot. */
   async assertWorkSurface(): Promise<void> {
     const where = await this.surface();

@@ -63,6 +63,27 @@ An Edge window opens on the Copilot chat, in a profile that belongs to the bot a
 separate from your own Edge. Sign in there yourself. The bot never types credentials; it
 waits for the chat composer to appear and then exits.
 
+**Edge may sign you in as the wrong account without asking.** On a Windows machine it will
+happily reuse whatever account the operating system knows about, so the chat can end up
+belonging to someone other than the user you meant to test with. Name the account you want:
+
+```bash
+npx tsx src/cli.ts login --account 155676@365kit.org
+```
+
+That signs the browser out first, clears its cookies, then asks Microsoft for that specific
+account and refuses to report success if a different one ends up signed in. If Edge still
+insists, wipe the profile and start clean:
+
+```bash
+npx tsx src/cli.ts login --account 155676@365kit.org --fresh
+```
+
+`--fresh` deletes only the bot's own profile folder and asks before doing it. Your normal
+Edge is untouched. If even that keeps picking the wrong account, the machine has Edge's
+implicit sign-in turned on; an administrator can disable it with the `ImplicitSignInEnabled`
+policy, which is a machine-wide setting and therefore their call, not this tool's.
+
 **Expect:** `Signed in. The profile is saved at ...`
 
 **This is the one step that can fail for reasons outside the code.** If your tenant enforces
