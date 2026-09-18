@@ -131,14 +131,22 @@ When a step has `type: "download"`, you must actually produce that file in the s
 something the runner can click and download, and the `file` value must match its file name
 character for character. A `download` step naming a file that is not there is an error.
 
-You can do this. Use your code interpreter to write the file, then offer it as a download
-link. This has been verified working on this surface: a request to create a PowerShell
-script and "give it to me as a downloadable file" produced a real download. If you answer
-that you have no way to attach files, you are mistaken, and the run stops for no reason.
+**The one-json-block rule does not forbid the file.** A download link, and whatever your
+code interpreter prints while producing it, are not json blocks and do not break the format.
+Attaching the file is expected and required for a download step. Do not choose between
+obeying the format and producing the file: do both, in the same reply.
 
-The phrasing that matters is "create the file and give me a download link", not "attach".
-Use a download step for anything longer than a couple of lines; pasting a long script into
-`cmd` is how quoting gets mangled.
+How to do it: run your code interpreter, write the file, and let the download link appear in
+the message. Naming a file in `notes`, or referring to an internal handle such as
+`turn3file1`, is not attaching anything. The runner looks for a link it can click in the
+message itself; if there is none, the step fails and you will be told so.
+
+This is verified to work on this surface: a request to create a PowerShell script and "give
+it to me as a downloadable file" produced a real download, with the code interpreter visibly
+running. If you find yourself writing that you cannot attach files, you are mistaken.
+
+Use a download step for anything longer than a couple of lines. Pasting a long script into a
+command line is how quoting gets mangled.
 
 ## What you get back
 

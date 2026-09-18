@@ -169,14 +169,22 @@ npx tsx src/cli.ts run run.download.yaml
 **Expect:** the console prints `downloaded hello.ps1 (sha256 ...)`, the file appears in
 `runs/<runId>/artifacts/`, and the step runs it.
 
-**If Copilot says it cannot attach files, do not believe it on the first try.** It said
-exactly that here, on a surface where the same account had produced a real blob download the
-day before. The trigger is the wording: "attach a file" gets a refusal, "create the file and
-give me a download link" runs the code interpreter and produces one. The task in
-`run.download.yaml` now uses the second form and tells it not to refuse untried.
+**If Copilot says it cannot attach files, the contract is probably the reason.** That is
+what happened here, twice, on a surface where a real blob download had been produced the day
+before. The saved reply settles it: the message contained the json block and nothing else,
+`notes` said `Download file: turn3file1`, which is the code interpreter's internal handle,
+and the transcript recorded `attachments: 0`. So Copilot had a file in its sandbox and never
+put a link in the message.
 
-If it still refuses after that, the tenant's code interpreter is genuinely not producing
-files, and the contract needs a step type that carries the script inline instead.
+The cause was this project's own contract. "Exactly one json block, a short sentence at
+most" reads as a ban on the extra content a code-interpreter run produces, so the model kept
+the format and dropped the file. The contract now says outright that a download link is not
+a json block, that attaching is required rather than optional, and that a name in `notes` is
+not a file.
+
+The downloader also stopped being brittle about names: if the reply carries exactly one
+downloadable file under a different name, it uses it and says so, rather than failing on a
+string mismatch and reporting "nothing attached" when something clearly was.
 
 ---
 

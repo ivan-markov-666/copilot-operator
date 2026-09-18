@@ -679,11 +679,34 @@ Current URL: ${url}`);
    * has to be registered before the click, and the popup case is covered too.
    */
   async downloadAttachment(fileName: string, saveAs: string): Promise<string> {
-    const link = this.lastAnswer()
+    const exact = this.lastAnswer()
       .locator(`${Css.downloadLink}[download="${fileName.replace(/"/g, '\\"')}"]`)
       .first();
-    if ((await link.count()) === 0) {
-      throw new Error(`Copilot did not attach a file named "${fileName}" to its last reply.`);
+
+    let link = exact;
+    if ((await exact.count()) === 0) {
+      // A name that does not match is not the same as nothing being there. The code
+      // interpreter names its own files, so the link can be called something else entirely,
+      // and refusing on a string mismatch would waste a file that is sitting right there.
+      const present = await this.lastMessageAttachmentNames();
+      const ci = present.findIndex((n) => n.toLowerCase() === fileName.toLowerCase());
+
+      if (ci >= 0) {
+        link = this.lastAnswer().locator(Css.downloadLink).nth(ci);
+        this.emit('download-name-case-differs', { asked: fileName, found: present[ci] });
+      } else if (present.length === 1) {
+        link = this.lastAnswer().locator(Css.downloadLink).first();
+        this.emit('download-name-differs', { asked: fileName, using: present[0] });
+      } else {
+        throw new Error(
+          present.length === 0
+            ? `No downloadable file is present in that reply at all, so "${fileName}" could ` +
+              'not be fetched. Produce the file with your code interpreter so a download link ' +
+              'appears in the message itself; a file name in the notes is not a file.'
+            : `That reply offers ${present.join(', ')}, but the step asked for "${fileName}". ` +
+              'Use the exact name of a file you actually attached.',
+        );
+      }
     }
 
     const fromPage = this.p.waitForEvent('download', { timeout: 120_000 });
