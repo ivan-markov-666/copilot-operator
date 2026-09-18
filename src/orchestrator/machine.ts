@@ -367,7 +367,7 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
         redactPatterns: cfg.report.redactPatterns,
       });
       log.event('report-written', { iteration: iterations, files: report.names, bytes: report.bytes },
-        `report: ${report.names.join(', ')} (${(report.bytes / 1024).toFixed(0)} KB)`);
+        `report: ${report.names.join(', ')} (${report.bytes < 1024 ? `${report.bytes} bytes` : `${(report.bytes / 1024).toFixed(1)} KB`})`);
 
       const covering = buildCoveringMessage({
         iteration: iterations,

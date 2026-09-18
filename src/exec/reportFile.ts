@@ -29,6 +29,22 @@ export type WrittenReport = {
   parts: number;
 };
 
+/**
+ * Removes terminal colour codes.
+ *
+ * `NO_COLOR` covers the shells this runs, but a program that colours unconditionally would
+ * otherwise fill the report Copilot reads with escape sequences. Belt as well as braces,
+ * because the cost of a stray escape is a confused model.
+ */
+// The escape character is what makes this safe. Without it the pattern would match a
+// plain `[`, and PowerShell output is full of `[pscustomobject]` and `[double]`, so the
+// cleanup would quietly eat real characters.
+const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;?]*[ -/]*[@-~]', 'g');
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI, '');
+}
+
 /** Replaces anything the user asked to keep off the wire. Applied to the whole report. */
 export function redact(text: string, patterns: string[]): string {
   let out = text;

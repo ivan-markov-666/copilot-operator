@@ -6,9 +6,10 @@ Copilot decides what to do, the bot does it and reports back, and the two keep g
 Copilot says the task is finished. The bot drives the real Copilot web app in a real Edge
 browser, so it needs no API licence and no admin consent.
 
-> **Status: feature complete, not yet run end to end against a live tenant.** Every piece is
-> implemented and every piece has a check. What has not happened is one full run through a
-> real Copilot session, because that needs a signed-in machine. Expect to find things.
+> **Status: working.** A full loop has run against a live Microsoft 365 Copilot tenant:
+> opening messages, chat naming, reply parsing, a refused command, a corrected retry, the
+> results file uploaded, and a `done` verdict with the right answer. The download path, long
+> steps and the project mirror have their own checks but have not yet been exercised live.
 
 ## What it does
 
@@ -83,7 +84,7 @@ ordered so the risk climbs slowly, starting with checks that need no account at 
 | Report file, splitting, redaction | `src/exec/reportFile.ts` | implemented, checked |
 | Deny list and the confirm gate | `src/exec/policy.ts` | implemented, checked |
 | Config schema and loader | `src/config/schema.ts` | implemented |
-| The loop | `src/orchestrator/machine.ts` | implemented, not yet run live |
+| The loop | `src/orchestrator/machine.ts` | implemented, run live end to end |
 | CLI | `src/cli.ts` | implemented |
 
 Design and findings:
@@ -108,6 +109,11 @@ These cost real investigation and are worth knowing before touching the code.
   part of the protocol rather than decoration.
 - **Uploads go through the user's OneDrive.** The chat says so, and the attachment id carries
   an `SPO_` prefix. That prefix is also the most reliable "upload finished" signal.
+- **Copilot destroys `[name]:` in its own output.** `[math]::Round($x, 2)` reaches the
+  runner as `:Round($x, 2)`, even inside a fenced code block, because `[label]:` is markdown
+  for a link reference. `[pscustomobject]` and `[double]$x` survive, since the damage needs
+  the colon. The prompts forbid that form and the runner refuses a command that arrives
+  wrecked rather than executing something nobody wrote.
 - **`lastChatMessage` is not the whole answer.** It is the answer body; the copy button is
   its sibling. A wait built on `[data-testid="lastChatMessage"] [data-testid="CopyButtonTestId"]`
   never completes. The anchor is the last `copilot-message-div`.

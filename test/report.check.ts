@@ -1,4 +1,4 @@
-import { writeReport, clip } from '../src/exec/reportFile.js';
+import { writeReport, clip, stripAnsi } from '../src/exec/reportFile.js';
 import { staticCheck, describeStep } from '../src/exec/policy.js';
 import type { RunResult } from '../src/exec/runner.js';
 import type { Step } from '../src/protocol/replySchema.js';
@@ -28,6 +28,15 @@ const mk = (
 });
 
 const dir = join(tmpdir(), 'cop-report-check');
+
+console.log('--- ANSI stripping ---');
+const ESC = String.fromCharCode(27);
+const coloured = ESC + '[32;1mWindowsEdition : ' + ESC + '[0mWindows 10 Pro';
+console.log('coloured    :', JSON.stringify(coloured));
+console.log('stripped    :', JSON.stringify(stripAnsi(coloured)));
+const psText = '[pscustomobject]@{A=1}; [double]$x; [math]::Round($x,2)';
+console.log('powershell  :', stripAnsi(psText) === psText ? 'untouched (correct)' : 'DAMAGED: ' + stripAnsi(psText));
+
 await rm(dir, { recursive: true, force: true });
 
 const one = await writeReport(

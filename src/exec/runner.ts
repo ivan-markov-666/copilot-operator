@@ -127,9 +127,12 @@ export async function runStep(
     let lastOutputAt = Date.now();
     let settled = false;
 
+    // PowerShell colours its output with ANSI escapes, which then travel to Copilot inside
+    // the report as `ESC[32;1m` noise around every value. NO_COLOR is honoured by
+    // PowerShell 7 and by most modern tools, and was verified to produce clean output here.
     const child = spawn(file, args, {
       cwd: req.cwd,
-      env: req.env ?? process.env,
+      env: { NO_COLOR: '1', TERM: 'dumb', ...(req.env ?? process.env) },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
