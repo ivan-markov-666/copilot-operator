@@ -13,7 +13,8 @@
 import { chromium, type BrowserContext, type Page, type Download, type Locator } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Css, Label, Rename, Sidebar, Signal, TestId, Upload, Url } from './locators.js';
+import { Blocker, Css, Label, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
+import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
 
 export type TransportOptions = {
@@ -24,6 +25,8 @@ export type TransportOptions = {
   headless: boolean;
   replyTimeoutMs: number;
   signInTimeoutMs: number;
+  /** How long to wait for a human to clear a verification challenge. */
+  humanWaitMs?: number;
   /** Called with human-readable progress, so the CLI can show what is happening. */
   onEvent?: (event: string, detail?: Record<string, unknown>) => void;
 };
@@ -42,6 +45,7 @@ const ORIGIN = 'https://m365.cloud.microsoft';
 export class CopilotTransport {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
+  private lock: LockHandle | null = null;
 
   constructor(private readonly opts: TransportOptions) {}
 
@@ -55,6 +59,9 @@ export class CopilotTransport {
   }
 
   async open(): Promise<void> {
+    // Fails loudly when another Edge holds the profile, instead of letting Playwright
+    // report a closed browser with no explanation.
+    this.lock = acquireProfileLock(this.opts.profileDir);
     await mkdir(this.opts.profileDir, { recursive: true });
     await mkdir(this.opts.downloadsDir, { recursive: true });
 
@@ -81,6 +88,8 @@ export class CopilotTransport {
     await this.context?.close().catch(() => undefined);
     this.context = null;
     this.page = null;
+    this.lock?.release();
+    this.lock = null;
   }
 
   /** True when the composer is visible, i.e. we are signed in and the chat is usable. */
@@ -98,16 +107,126 @@ export class CopilotTransport {
   }
 
   /**
+   * Which Copilot we actually landed on.
+   *
+   * `m365.cloud.microsoft` silently redirects to the consumer Copilot when the profile is
+   * not signed in with a work account. Both have a message box, so "the composer is visible"
+   * is not proof. It matters because the consumer surface runs human verification and the
+   * work surface does not, so ending up there looks exactly like being detected as a bot
+   * when it is really a sign-in problem.
+   */
+  async surface(): Promise<'work' | 'consumer' | 'sign-in' | 'unknown'> {
+    const url = this.p.url();
+    if (url.includes(Signal.loginHost)) return 'sign-in';
+    if (Surface.consumerHosts.some((h) => url.includes(h))) return 'consumer';
+    if (url.includes(Surface.workHost)) {
+      const hasWorkComposer = (await this.p.locator(Surface.workMarkers[0]).count()) > 0;
+      return hasWorkComposer ? 'work' : 'unknown';
+    }
+    return 'unknown';
+  }
+
+  /** Throws with an explanation when the profile is not on the work Copilot. */
+  async assertWorkSurface(): Promise<void> {
+    const where = await this.surface();
+    if (where === 'work') return;
+    const url = this.p.url();
+    const explain: Record<string, string> = {
+      consumer:
+        'This is the consumer Copilot, not Microsoft 365 Copilot. The profile is signed in ' +
+        'with a personal account, or not signed in with a work account at all. Run ' +
+        '"cop login" and sign in with the work or school account.',
+      'sign-in': 'The profile is signed out. Run "cop login".',
+      unknown: 'The page is not the Microsoft 365 Copilot chat.',
+    };
+    throw new Error(`${explain[where] ?? explain.unknown}
+Current URL: ${url}`);
+  }
+
+  /**
+   * Something in the page that only a person can clear.
+   *
+   * The bot never clicks a verification checkbox and never attempts a challenge. It reports
+   * what it sees and waits for the human, which is the difference between a run that pauses
+   * with a clear instruction and one that times out with a confusing error.
+   */
+  async detectBlocker(): Promise<'verification' | 'error-banner' | 'none'> {
+    try {
+      const text = (await this.p.locator('body').innerText({ timeout: 5_000 }).catch(() => '')) ?? '';
+      if (Blocker.verificationText.some((t) => text.includes(t))) return 'verification';
+
+      const frames = this.p.frames().map((f) => f.url());
+      if (frames.some((u) => Blocker.challengeFrameHosts.some((h) => u.includes(h)))) return 'verification';
+
+      if (Blocker.errorBannerText.some((t) => text.includes(t))) return 'error-banner';
+    } catch {
+      /* a closed or navigating page is handled by the caller */
+    }
+    return 'none';
+  }
+
+  /**
+   * Waits for a human to clear a challenge, or clears a transient error banner itself.
+   *
+   * Returns true when the page became usable again. The checkbox is deliberately left
+   * untouched: completing a human-verification check is the human's part of this.
+   */
+  async handleBlocker(kind: 'verification' | 'error-banner'): Promise<boolean> {
+    if (kind === 'error-banner') {
+      this.emit('error-banner', { action: 'reloading' });
+      const refresh = this.p.getByRole('button', { name: Blocker.refreshLabel, exact: true });
+      if ((await refresh.count()) > 0) await refresh.first().click().catch(() => undefined);
+      else await this.p.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+      await this.p.waitForTimeout(3_000);
+      return (await this.detectBlocker()) === 'none';
+    }
+
+    const waitMs = this.opts.humanWaitMs ?? 15 * 60_000;
+    this.emit('verification-required', { waitMs });
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      await this.p.waitForTimeout(3_000);
+      if ((await this.detectBlocker()) === 'none') {
+        this.emit('verification-cleared');
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Detects a blocker and waits it out. Throws when it is still there after the wait. */
+  private async clearBlockers(): Promise<void> {
+    for (let i = 0; i < 3; i += 1) {
+      const kind = await this.detectBlocker();
+      if (kind === 'none') return;
+      const cleared = await this.handleBlocker(kind);
+      if (cleared) return;
+      if (kind === 'verification') {
+        throw new Error(
+          'The chat is showing a human-verification challenge and it was not cleared in time. ' +
+            'Complete it in the open Edge window, then start the run again. ' +
+            'The bot does not attempt verification challenges by design.',
+        );
+      }
+    }
+    throw new Error('The chat kept reporting an error after several reloads.');
+  }
+
+  /**
    * Opens the chat and, if the tenant has signed us out, waits for the human. The bot never
    * types credentials; it only waits for the composer to appear.
    */
   async ensureSignedIn(url = this.opts.chatUrl): Promise<void> {
     await this.p.goto(url, { waitUntil: 'domcontentloaded' });
-    if (await this.isChatReady(15_000)) return;
 
-    this.emit('sign-in-required', { url: this.p.url() });
-    await this.composer().waitFor({ state: 'visible', timeout: this.opts.signInTimeoutMs });
-    this.emit('signed-in');
+    if (!(await this.isChatReady(15_000))) {
+      this.emit('sign-in-required', { url: this.p.url() });
+      await this.composer().waitFor({ state: 'visible', timeout: this.opts.signInTimeoutMs });
+      this.emit('signed-in');
+    }
+
+    await this.clearBlockers();
+    await this.assertWorkSurface();
   }
 
   async newChat(): Promise<void> {
@@ -184,6 +303,7 @@ export class CopilotTransport {
     if (text.trim().length === 0) {
       throw new Error('Refusing to send an empty message: the composer requires text.');
     }
+    await this.clearBlockers();
     if (attachments.length > 0) await this.attach(attachments);
 
     const composer = this.composer();
@@ -221,50 +341,111 @@ export class CopilotTransport {
     }
   }
 
-  /** Waits for the answer to finish streaming, then returns its raw markdown. */
+  /**
+   * Waits for the answer to finish streaming, then returns its raw markdown.
+   *
+   * This polls rather than using one long `waitForFunction`, for three reasons that all
+   * showed up in practice:
+   *
+   *   - a human-verification challenge can appear mid-wait, and the run should pause with an
+   *     instruction rather than time out fifteen minutes later,
+   *   - if the browser window is closed, Playwright's message is
+   *     "Target page, context or browser has been closed", which explains nothing,
+   *   - a stalled reply is worth reporting with how long it waited and what it saw.
+   */
   async waitForReply(previousTurns: number): Promise<ReplyCapture> {
-    const deadline = Date.now() + this.opts.replyTimeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + this.opts.replyTimeoutMs;
 
-    // 1. A new turn appears.
-    await this.p.waitForFunction(
-      ({ testId, n }) => document.querySelectorAll(`[data-testid="${testId}"]`).length > n,
-      { testId: TestId.turn, n: previousTurns },
-      { timeout: this.opts.replyTimeoutMs },
-    );
+    const state = async (): Promise<{ turns: number; streaming: boolean; finished: boolean }> =>
+      await this.p.evaluate(
+        ({ turnSel, stopLabel, wrapperSel, copySel }) => {
+          const turns = document.querySelectorAll(turnSel).length;
+          const streaming = Array.from(document.querySelectorAll('button')).some(
+            (b) => b.getAttribute('aria-label') === stopLabel,
+          );
+          const wrappers = document.querySelectorAll(wrapperSel);
+          const last = wrappers[wrappers.length - 1];
+          return { turns, streaming, finished: !streaming && !!last && !!last.querySelector(copySel) };
+        },
+        {
+          turnSel: `[data-testid="${TestId.turn}"]`,
+          stopLabel: Label.stopGenerating,
+          wrapperSel: Signal.answerWrapper,
+          copySel: Signal.copyButtonInAnswer,
+        },
+      );
 
-    // 2. Streaming ends: the Stop button disappears and the newest answer exposes its copy
-    //    button. The copy button is NOT inside `lastChatMessage` (that is only the answer
-    //    body); both live inside `copilot-message-div`, so that is the anchor. And
-    //    `[data-testid="loading-message"]` is not usable at all: it stays in the DOM.
-    await this.p.waitForFunction(
-      ({ stopLabel, wrapperSel, copySel }) => {
-        const streaming = Array.from(document.querySelectorAll('button')).some(
-          (b) => b.getAttribute('aria-label') === stopLabel,
+    let sawNewTurn = false;
+    let last = { turns: previousTurns, streaming: false, finished: false };
+
+    while (Date.now() < deadline) {
+      if (this.p.isClosed()) {
+        throw new Error(
+          'The browser window was closed while waiting for a reply. If you did not close it, ' +
+            'another Edge process was probably already using the bot profile; ' +
+            'close every Edge window on that profile and run again.',
         );
-        const wrappers = document.querySelectorAll(wrapperSel);
-        const last = wrappers[wrappers.length - 1];
-        return !streaming && !!last && !!last.querySelector(copySel);
-      },
-      {
-        stopLabel: Label.stopGenerating,
-        wrapperSel: Signal.answerWrapper,
-        copySel: Signal.copyButtonInAnswer,
-      },
-      { timeout: Math.max(5_000, deadline - Date.now()) },
-    );
+      }
 
-    // 3. Let the text settle: the widget re-renders briefly after the stream ends.
-    let previous = '';
+      try {
+        last = await state();
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (msg.includes('closed')) {
+          throw new Error(
+            'The browser closed while waiting for a reply. Close any other Edge window using ' +
+              'the bot profile, then run again.',
+          );
+        }
+        // A navigation can make one poll fail; try again.
+        await this.p.waitForTimeout(1_000);
+        continue;
+      }
+
+      if (last.turns > previousTurns) sawNewTurn = true;
+      if (sawNewTurn && last.finished) break;
+
+      // Only look for blockers while nothing is streaming, so the check stays cheap.
+      if (!last.streaming) {
+        const blocker = await this.detectBlocker();
+        if (blocker !== 'none') {
+          this.emit('blocker-during-reply', { blocker });
+          await this.clearBlockers();
+        }
+      }
+
+      await this.p.waitForTimeout(1_000);
+    }
+
+    if (!sawNewTurn || !last.finished) {
+      await this.dumpFailure(join(this.opts.downloadsDir, '..', 'failures'), 'reply-timeout').catch(
+        () => undefined,
+      );
+      throw new Error(
+        `Copilot did not finish a reply within ${Math.round(this.opts.replyTimeoutMs / 1000)}s ` +
+          `(new turn seen: ${sawNewTurn}, still streaming: ${last.streaming}). ` +
+          'A screenshot and an HTML dump are in the run folder.',
+      );
+    }
+
+    // Let the text settle: the widget re-renders briefly after the stream ends.
+    let previousText = '';
     for (let i = 0; i < 20; i += 1) {
       const now = await this.lastMessageText();
-      if (now === previous && now.length > 0) break;
-      previous = now;
+      if (now === previousText && now.length > 0) break;
+      previousText = now;
       await this.p.waitForTimeout(400);
     }
 
     const attachments = await this.lastMessageAttachmentNames();
     const { markdown, degraded } = await this.copyLastReply();
-    this.emit('reply-received', { chars: markdown.length, degraded, attachments: attachments.length });
+    this.emit('reply-received', {
+      chars: markdown.length,
+      degraded,
+      attachments: attachments.length,
+      waitedMs: Date.now() - startedAt,
+    });
     return { markdown, degraded, attachments };
   }
 
@@ -348,13 +529,34 @@ export class CopilotTransport {
     return await this.turnCount();
   }
 
-  /** Screenshot plus HTML dump, for when a locator stops matching. */
+  /**
+   * Screenshot plus HTML dump, for when a locator stops matching.
+   *
+   * When the page is already gone the dump would be an empty file, which is worse than
+   * nothing because it looks like evidence. In that case a note is written instead.
+   */
   async dumpFailure(dir: string, tag: string): Promise<void> {
     await mkdir(dir, { recursive: true });
+    const { writeFile } = await import('node:fs/promises');
+
+    if (!this.page || this.page.isClosed()) {
+      await writeFile(
+        join(dir, `${tag}.txt`),
+        'The page was already closed when the failure was recorded, so there is nothing to ' +
+          'capture. This usually means the browser window was closed, or another Edge process ' +
+          'was using the same profile.',
+        'utf8',
+      ).catch(() => undefined);
+      this.emit('failure-dump-empty', { dir, tag });
+      return;
+    }
+
     await this.p.screenshot({ path: join(dir, `${tag}.png`), fullPage: true }).catch(() => undefined);
     const html = await this.p.content().catch(() => '');
-    const { writeFile } = await import('node:fs/promises');
-    await writeFile(join(dir, `${tag}.html`), html, 'utf8').catch(() => undefined);
-    this.emit('failure-dumped', { dir, tag });
+    if (html.length > 0) {
+      await writeFile(join(dir, `${tag}.html`), html, 'utf8').catch(() => undefined);
+    }
+    await writeFile(join(dir, `${tag}.url.txt`), this.p.url(), 'utf8').catch(() => undefined);
+    this.emit('failure-dumped', { dir, tag, url: this.p.url() });
   }
 }

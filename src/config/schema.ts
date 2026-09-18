@@ -37,6 +37,8 @@ export const RunConfigSchema = z.object({
       replyTimeoutSec: z.number().int().positive().default(900),
       /** How long to wait for the human to sign in. */
       signInTimeoutSec: z.number().int().positive().default(900),
+      /** How long to wait for a human to clear a verification challenge. */
+      humanWaitSec: z.number().int().positive().default(900),
       headless: z.boolean().default(false),
     })
     .prefault({}),

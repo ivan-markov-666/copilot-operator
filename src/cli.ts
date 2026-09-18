@@ -20,6 +20,7 @@ import { runLoop, reopenLastChat } from './orchestrator/machine.js';
 import { mirrorProject, describeMirror, listSelectableDirs } from './context/projectMirror.js';
 import { defaultExportDir, desktopIsSynced, resolveDesktopDir } from './context/contextFiles.js';
 import { Url } from './transport/locators.js';
+import { findEdgeUsingProfile } from './transport/profileLock.js';
 
 const program = new Command();
 program
@@ -43,13 +44,15 @@ program
       headless: false,
       replyTimeoutMs: 60_000,
       signInTimeoutMs: 15 * 60_000,
+      humanWaitMs: 15 * 60_000,
       onEvent: (e) => process.stdout.write(`  ${e}\n`),
     });
     await transport.open();
     console.log('Sign in to Microsoft 365 Copilot in the Edge window that just opened.');
+    console.log('If a human-verification box appears, complete it yourself; the bot will not.');
     console.log('The bot never types credentials. Waiting for the chat to appear...');
     await transport.ensureSignedIn();
-    console.log(`Signed in. The profile is saved at ${opts.profile}`);
+    console.log(`Signed in to Microsoft 365 Copilot. The profile is saved at ${opts.profile}`);
     await transport.close();
   });
 
@@ -87,6 +90,21 @@ program
           ? `Windows PowerShell (${winps.stdout.trim()}); pwsh not found`
           : 'no PowerShell found',
     );
+
+    const edgeUsers = findEdgeUsingProfile(DEFAULT_PROFILE);
+    if (Array.isArray(edgeUsers) && edgeUsers.length > 0) {
+      const pids = edgeUsers.map((u) => u.pid);
+      say(
+        false,
+        `Edge is already running with the bot profile (${pids.length} process(es)). A run would ` +
+          `fail with "Target page, context or browser has been closed". Close that Edge window, or:`,
+      );
+      console.log(`          Stop-Process -Id ${pids.join(',')} -Force`);
+    } else if (edgeUsers === 'unknown') {
+      console.log('  note  could not check whether Edge is holding the bot profile');
+    } else {
+      console.log('  ok    no Edge process is holding the bot profile');
+    }
 
     const desktop = resolveDesktopDir();
     say(existsSync(desktop), `Desktop at ${desktop}`);

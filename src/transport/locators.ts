@@ -128,6 +128,42 @@ export const Signal = {
   copyButtonInAnswer: `[data-testid="${TestId.copyResponse}"]`,
 } as const;
 
+/**
+ * Things that stop the chat from working and that only a human can clear.
+ *
+ * The bot **detects** these and waits. It never clicks the verification checkbox and never
+ * tries to get past a challenge: that is the human's job, by design and on purpose. The
+ * value here is that the run pauses with a clear message instead of timing out with a
+ * confusing one.
+ */
+export const Blocker = {
+  /** Text seen on the human-verification dialog. */
+  verificationText: ['Verification required', 'Verify you are human'],
+  /** Transient failure banner; a reload usually clears it. */
+  errorBannerText: ["Your request couldn't be completed", 'Refresh to try again'],
+  refreshLabel: 'Refresh',
+  /** Challenge widgets are iframed from these hosts. */
+  challengeFrameHosts: ['challenges.cloudflare.com', 'hcaptcha.com', 'recaptcha.net', 'google.com/recaptcha'],
+} as const;
+
+/**
+ * Telling the work Copilot apart from the consumer one.
+ *
+ * `m365.cloud.microsoft` redirects to the consumer Copilot when the profile is not signed in
+ * with a work or school account. Both surfaces have a message box, so "a textbox is visible"
+ * is not proof of being in the right place. The consumer surface also runs bot protection,
+ * which the work surface does not, so landing there looks exactly like being detected as a
+ * bot when it is really a sign-in problem.
+ */
+export const Surface = {
+  workHost: 'm365.cloud.microsoft',
+  /** Only the work surface has this composer id and these test ids. */
+  workMarkers: ['#m365-chat-editor-target-element'],
+  consumerHosts: ['copilot.microsoft.com', 'www.bing.com', 'bing.com'],
+  /** Chips that only the consumer surface shows. */
+  consumerMarkers: ['Shop', 'Play'],
+} as const;
+
 /** Chat URL. Microsoft is consolidating this to copilot.cloud.microsoft. */
 export const Url = {
   chat: 'https://m365.cloud.microsoft/chat',

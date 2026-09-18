@@ -80,7 +80,20 @@ export async function runLoop(cfg: ResolvedConfig): Promise<RunOutcome> {
     headless: cfg.copilot.headless,
     replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
     signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
-    onEvent: (event, detail) => log.event(`browser:${event}`, detail ?? {}),
+    humanWaitMs: cfg.copilot.humanWaitSec * 1000,
+    onEvent: (event, detail) => {
+      // Most browser events belong only in the transcript. These four need a human to see
+      // them while the run is waiting, so they are printed as well.
+      const spoken: Record<string, string> = {
+        'sign-in-required': 'The chat is asking you to sign in. Do it in the open Edge window; the run is waiting.',
+        'verification-required':
+          'The chat is showing a human-verification challenge. Complete it in the open Edge window. ' +
+          'The bot will not touch it and is waiting for you.',
+        'verification-cleared': 'Verification cleared, continuing.',
+        'error-banner': 'The chat reported a transient error; reloading the page.',
+      };
+      log.event(`browser:${event}`, detail ?? {}, spoken[event], event === 'verification-required' ? 'warn' : 'info');
+    },
   });
 
   const startedAt = Date.now();

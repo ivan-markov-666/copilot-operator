@@ -210,6 +210,23 @@ boundary.
 
 ## When something goes wrong
 
+**`Target page, context or browser has been closed`.** Almost always another Edge process is
+already using the bot profile, so the new launch hands off to it and exits. Chromium profiles
+are single-writer. `cop doctor` now checks for this and prints the exact `Stop-Process` line.
+Close every Edge window on the bot profile and run again.
+
+**A "Verify you are human" box appears.** The run pauses and prints an instruction. Complete
+the check yourself in the open Edge window; it continues on its own within a few seconds. The
+bot deliberately does not touch verification challenges. If this happens on every run, check
+the next item first.
+
+**The chat looks wrong: `Shop`, `Play`, a different composer.** That is the **consumer**
+Copilot, not Microsoft 365 Copilot. `m365.cloud.microsoft` redirects there when the profile is
+not signed in with a work or school account, and the consumer surface runs bot protection that
+the work surface does not. So this looks exactly like being detected as a bot while really
+being a sign-in problem. `cop login` now refuses to report success unless it actually lands on
+the work chat. Sign in with the work account.
+
 **It hangs waiting for a reply.** The wait needs the `Stop generating` button to disappear
 and the copy button to appear on the newest answer. If Microsoft has changed either, this is
 where it shows. Look at `runs/<runId>/failures/` for the screenshot, then at
