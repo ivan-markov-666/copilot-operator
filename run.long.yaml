@@ -15,20 +15,20 @@ copilot:
   # A long step means a long gap between messages; give the reply wait room.
   replyTimeoutSec: 900
 
-openingMessages:
-  - file: prompts/01-persona.md
-  - file: prompts/02-format.md
-  - text: |
-      Task: prove that long-running steps work, in two steps in the same reply.
+# Level 1 (the contract with the runner) is prompts/level1.md and is sent automatically.
+# Level 2 is your project and team instructions; leave it out if there are none.
+level2: ""
+task: |
+  Task: prove that long-running steps work, in two steps in the same reply.
 
-      Step 1: a pwsh command that prints one line per second for about 90 seconds, so it is
-      slow but never silent. Mark it "expect": "long".
+  Step 1: a pwsh command that prints one line per second for about 90 seconds, so it is
+  slow but never silent. Mark it "expect": "long".
 
-      Step 2: a pwsh command that sleeps silently for 60 seconds and prints nothing at all,
-      with "idleTimeoutSec": 20, so the runner should stop it as hung.
+  Step 2: a pwsh command that sleeps silently for 60 seconds and prints nothing at all,
+  with "idleTimeoutSec": 20, so the runner should stop it as hung.
 
-      Step 1 should finish normally. Step 2 should come back as idle-timeout. Report both
-      outcomes and finish.
+  Step 1 should finish normally. Step 2 should come back as idle-timeout. Report both
+  outcomes and finish.
 
 execution:
   mode: confirm

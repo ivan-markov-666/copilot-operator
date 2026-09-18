@@ -1,9 +1,9 @@
 /**
- * The run configuration: `run.yaml`.
+ * The run configuration: `run.yaml` for the terminal, `data/settings.json` for the API.
  *
- * Everything the bot does for one run comes from here. Defaults are chosen so that a
- * minimal file (a project root, a task and nothing else) already produces a safe run:
- * confirm mode on, env files excluded, destructive commands denied.
+ * Both are the same shape. Defaults are chosen so that a minimal file (a task and nothing
+ * else) already produces a safe run: confirm mode on, env files excluded, destructive
+ * commands denied.
  */
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
@@ -11,39 +11,38 @@ import { parse as parseYaml } from 'yaml';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-/** Expands a leading `~` and resolves relative paths against the config file's folder. */
+/** Expands a leading `~` and resolves relative paths against a base directory. */
 export function expandPath(p: string, baseDir: string): string {
   const expanded = p.startsWith('~') ? join(homedir(), p.slice(1).replace(/^[\\/]/, '')) : p;
   return isAbsolute(expanded) ? resolve(expanded) : resolve(baseDir, expanded);
 }
 
-const OpeningMessage = z.union([
-  z.object({ text: z.string().min(1) }),
-  z.object({ file: z.string().min(1) }),
-]);
+/** Text given inline or as a file path. */
+const TextOrFile = z.union([z.string(), z.object({ file: z.string().min(1) })]);
 
 export const RunConfigSchema = z.object({
   copilot: z
     .object({
       url: z.string().default('https://m365.cloud.microsoft/chat'),
       profileDir: z.string().default('~/AppData/Local/copilot-operator/edge-profile'),
-      /** Chromium channel. `msedge` uses the installed Edge. */
       channel: z.enum(['msedge', 'chrome', 'chromium']).default('msedge'),
-      /** Word that ends the loop when Copilot writes it. */
+      /** Word that ends a task when Copilot writes it. */
       stopMarker: z.string().default('Край'),
-      /** Short label that goes into the chat name. */
+      /** Short label; becomes the session name when run from the terminal. */
       label: z.string().default('run'),
-      /** How long to wait for one reply to finish streaming. */
       replyTimeoutSec: z.number().int().positive().default(900),
-      /** How long to wait for the human to sign in. */
       signInTimeoutSec: z.number().int().positive().default(900),
-      /** How long to wait for a human to clear a verification challenge. */
       humanWaitSec: z.number().int().positive().default(900),
       headless: z.boolean().default(false),
     })
     .prefault({}),
 
-  openingMessages: z.array(OpeningMessage).min(1),
+  /** Level 1: the contract with the runner. Shipped with the project; editable in the UI. */
+  level1File: z.string().default('prompts/level1.md'),
+  /** Level 2: the user's project, domain and team instructions for this task. */
+  level2: TextOrFile.optional(),
+  /** The task. Required for a terminal run; the API supplies it per task. */
+  task: TextOrFile.optional(),
 
   execution: z
     .object({
@@ -54,7 +53,6 @@ export const RunConfigSchema = z.object({
       idleTimeoutSec: z.number().int().positive().default(60),
       longCommandTimeoutSec: z.number().int().positive().default(14_400),
       longIdleTimeoutSec: z.number().int().positive().default(900),
-      /** Ceiling on whatever Copilot asks for. */
       maxStepTimeoutSec: z.number().int().positive().default(28_800),
       stopOnFailure: z.boolean().default(false),
       allowedScriptExtensions: z.array(z.string()).default(['.ps1', '.cmd', '.bat']),
@@ -79,11 +77,14 @@ export const RunConfigSchema = z.object({
       maxReportBytes: z.number().int().positive().default(8 * 1024 * 1024),
       maxOutputChars: z.number().int().positive().default(200_000),
       uploadRetries: z.number().int().nonnegative().default(2),
-      /** Regexes replaced with [REDACTED] before the report leaves the machine. */
       redactPatterns: z.array(z.string()).default([]),
     })
     .prefault({}),
 
+  /**
+   * Defaults for the project mirror. Which project and which directories is a property of a
+   * session; these are the mechanics shared by all of them.
+   */
   projectMirror: z
     .object({
       enabled: z.boolean().default(false),
@@ -97,7 +98,6 @@ export const RunConfigSchema = z.object({
       ignoreDirs: z.array(z.string()).default([]),
       includeEnvFiles: z.boolean().default(false),
       maxFileBytes: z.number().int().positive().default(2 * 1024 * 1024),
-      /** Attach the mirrored files to the first message of the run. */
       attachToFirstMessage: z.boolean().default(true),
       maxAttachedFiles: z.number().int().positive().default(20),
     })
@@ -121,11 +121,12 @@ export const RunConfigSchema = z.object({
     .prefault({}),
 
   runsDir: z.string().default('./runs'),
+  /** Sessions, level-2 presets and the edited level-1 contract live here. */
+  dataDir: z.string().default('./data'),
 });
 
 export type RunConfig = z.infer<typeof RunConfigSchema>;
 
-/** A config with every path already absolute, which is what the rest of the code wants. */
 export type ResolvedConfig = RunConfig & {
   configPath: string;
   baseDir: string;
@@ -133,37 +134,25 @@ export type ResolvedConfig = RunConfig & {
     profileDir: string;
     cwd: string;
     runsDir: string;
+    dataDir: string;
+    level1Path: string;
+    level2Text: string;
+    taskText: string;
     mirrorRootDir?: string;
     mirrorTargetDir?: string;
-    openingMessages: string[];
   };
 };
 
-export async function loadConfig(configPath: string): Promise<ResolvedConfig> {
-  const abs = resolve(configPath);
-  const raw = await readFile(abs, 'utf8');
-  const parsed = RunConfigSchema.safeParse(parseYaml(raw));
+async function textOf(value: z.infer<typeof TextOrFile> | undefined, baseDir: string): Promise<string> {
+  if (value === undefined) return '';
+  if (typeof value === 'string') return value;
+  return await readFile(expandPath(value.file, baseDir), 'utf8');
+}
 
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
-      .join('\n');
-    throw new Error(`${abs} is not a valid run config:\n${issues}`);
-  }
-
-  const cfg = parsed.data;
-  const baseDir = dirname(abs);
-
-  const openingMessages: string[] = [];
-  for (const m of cfg.openingMessages) {
-    if ('text' in m) openingMessages.push(m.text);
-    else openingMessages.push(await readFile(expandPath(m.file, baseDir), 'utf8'));
-  }
-
+/** Turns parsed config plus a base directory into absolute paths and loaded texts. */
+export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir: string): Promise<ResolvedConfig> {
   if (cfg.projectMirror.enabled) {
-    if (!cfg.projectMirror.rootDir) {
-      throw new Error('projectMirror.enabled is true but projectMirror.rootDir is missing.');
-    }
+    if (!cfg.projectMirror.rootDir) throw new Error('projectMirror.enabled is true but projectMirror.rootDir is missing.');
     if (cfg.projectMirror.includeDirs.length === 0) {
       throw new Error(
         'projectMirror.enabled is true but includeDirs is empty, so nothing would be copied. ' +
@@ -171,22 +160,40 @@ export async function loadConfig(configPath: string): Promise<ResolvedConfig> {
       );
     }
   }
-
   return {
     ...cfg,
-    configPath: abs,
+    configPath,
     baseDir,
     resolved: {
       profileDir: expandPath(cfg.copilot.profileDir, baseDir),
       cwd: expandPath(cfg.execution.cwd, baseDir),
       runsDir: expandPath(cfg.runsDir, baseDir),
-      mirrorRootDir: cfg.projectMirror.rootDir
-        ? expandPath(cfg.projectMirror.rootDir, baseDir)
-        : undefined,
-      mirrorTargetDir: cfg.projectMirror.targetDir
-        ? expandPath(cfg.projectMirror.targetDir, baseDir)
-        : undefined,
-      openingMessages,
+      dataDir: expandPath(cfg.dataDir, baseDir),
+      level1Path: expandPath(cfg.level1File, baseDir),
+      level2Text: await textOf(cfg.level2, baseDir),
+      taskText: await textOf(cfg.task, baseDir),
+      mirrorRootDir: cfg.projectMirror.rootDir ? expandPath(cfg.projectMirror.rootDir, baseDir) : undefined,
+      mirrorTargetDir: cfg.projectMirror.targetDir ? expandPath(cfg.projectMirror.targetDir, baseDir) : undefined,
     },
   };
+}
+
+function formatIssues(issues: z.ZodIssue[]): string {
+  return issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n');
+}
+
+/** Loads a YAML run config from disk. */
+export async function loadConfig(configPath: string): Promise<ResolvedConfig> {
+  const abs = resolve(configPath);
+  const raw = await readFile(abs, 'utf8');
+  const parsed = RunConfigSchema.safeParse(parseYaml(raw) ?? {});
+  if (!parsed.success) throw new Error(`${abs} is not a valid run config:\n${formatIssues(parsed.error.issues)}`);
+  return await resolveConfig(parsed.data, abs, dirname(abs));
+}
+
+/** Loads settings from a plain object, as the API does from `data/settings.json`. */
+export async function loadConfigObject(value: unknown, baseDir: string, label = 'settings'): Promise<ResolvedConfig> {
+  const parsed = RunConfigSchema.safeParse(value ?? {});
+  if (!parsed.success) throw new Error(`${label} is not valid:\n${formatIssues(parsed.error.issues)}`);
+  return await resolveConfig(parsed.data, label, baseDir);
 }

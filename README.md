@@ -15,15 +15,22 @@ browser, so it needs no API licence and no admin consent.
 
 ## What it does
 
-1. Sends the opening messages the user configured: a persona, an output contract and the task.
-2. Reads Copilot's reply and parses a strict JSON block out of it.
-3. Downloads any script Copilot attached to the chat.
-4. Runs the commands in PowerShell or `cmd`, in order, capturing stdout, stderr and exit codes.
-5. Writes the whole terminal output to a `.txt` file and attaches it to the chat.
-6. Repeats until Copilot reports it is done.
+1. Opens a conversation and sends **level 1**, the contract with the runner: phases, json
+   format, stop word, the final summary, the rules nothing else can override.
+2. Sends **level 2**, the user's instructions for the project and the team, together with
+   the **task**.
+3. Reads Copilot's reply and parses a strict JSON block out of it. A reply that does not
+   match is sent back with the reason.
+4. Downloads any script Copilot attached to the chat.
+5. Runs the commands in PowerShell or `cmd`, in order, capturing stdout, stderr and exit codes.
+6. Writes the whole terminal output to a `.txt` file and attaches it to the chat.
+7. Repeats until Copilot finishes with a **summary** of what it did and what the result is.
+8. Runs the next queued task in the same conversation.
 
-Selected parts of a project can be mirrored to a Desktop folder that OneDrive syncs, so the
-chat can see the code it is being asked about.
+A **session** is one conversation with a queue of tasks. Selected parts of a project can be
+mirrored to a Desktop folder and attached, so the chat can see the code it is asked about.
+
+There is a web UI for all of this, and a terminal command for a single task.
 
 ## Safety
 
@@ -43,15 +50,30 @@ recommended.
 ## Getting started
 
 ```bash
-npm install
-npx tsx src/cli.ts login                    # sign in once; the Edge profile is reused
-npx tsx src/cli.ts doctor run.yaml          # check the machine
+npm install                                          # root and the web workspace
+npx tsx src/cli.ts login --account you@tenant.org    # sign in once; the Edge profile is reused
+npx tsx src/cli.ts doctor                            # check the machine
+```
+
+The bot never types credentials. `login` opens Edge, waits for the chat to appear, checks
+that the right account is signed in, and stores nothing but the browser profile.
+
+### The web UI
+
+```bash
+npm run api      # NestJS on http://127.0.0.1:4000/api
+npm run web      # Next.js on http://localhost:3210, in a second terminal
+```
+
+Create a session, add tasks with their level 2 instructions, press Run, approve each step
+from the page, read the summary when it finishes. See [`docs/ui.md`](docs/ui.md).
+
+### The terminal, for one task
+
+```bash
 cp run.example.yaml run.yaml                # then edit it
 npx tsx src/cli.ts run run.yaml
 ```
-
-The bot never types credentials. `login` opens Edge, waits for the chat to appear, and stores
-nothing but the browser profile.
 
 ### Commands
 
@@ -61,7 +83,7 @@ nothing but the browser profile.
 | `cop doctor [run.yaml]` | checks Node, Edge, PowerShell, the Desktop, the config |
 | `cop dirs <projectRoot>` | lists the directories you can select for the mirror |
 | `cop mirror <run.yaml>` | refreshes the Desktop folder without touching the chat |
-| `cop run <run.yaml>` | the loop; `--unattended` skips the per-step prompt |
+| `cop run <run.yaml>` | one task as a new session; `--unattended` skips the per-step prompt |
 | `cop chat [run.yaml]` | prints the last run's conversation name and link |
 
 Before it is built, run them as `npx tsx src/cli.ts <command>`.
@@ -86,11 +108,15 @@ ordered so the risk climbs slowly, starting with checks that need no account at 
 | Report file, splitting, redaction | `src/exec/reportFile.ts` | implemented, checked |
 | Deny list and the confirm gate | `src/exec/policy.ts` | implemented, checked |
 | Config schema and loader | `src/config/schema.ts` | implemented |
-| The loop | `src/orchestrator/machine.ts` | implemented, run live end to end |
+| The loop, per task and per session | `src/orchestrator/taskRunner.ts` | run live end to end |
+| Sessions, tasks, level 2 presets on disk | `src/session/` | implemented, checked |
+| API | `src/api/` (NestJS) | implemented, exercised over HTTP |
+| Web UI | `web/` (Next.js) | implemented |
 | CLI | `src/cli.ts` | implemented |
 
 Design and findings:
 
+- [`docs/ui.md`](docs/ui.md) — the web UI, the API and the session model
 - [`docs/testing.md`](docs/testing.md) — how to test it the first time, step by step
 - [`docs/architecture.md`](docs/architecture.md) — the whole design
 - [`docs/locators-findings.md`](docs/locators-findings.md) — what the live Copilot DOM looks like and why

@@ -11,13 +11,13 @@ copilot:
   label: smoke
   stopMarker: Край
 
-openingMessages:
-  - file: prompts/01-persona.md
-  - file: prompts/02-format.md
-  - text: |
-      Task: report the Windows edition and build, and the free space on drive C, of the
-      machine the runner is on. Use read-only commands only. Two steps at most. When you
-      have both answers, summarise them in notes and finish.
+# Level 1 (the contract with the runner) is prompts/level1.md and is sent automatically.
+# Level 2 is your project and team instructions; leave it out if there are none.
+level2: ""
+task: |
+  Task: report the Windows edition and build, and the free space on drive C, of the
+  machine the runner is on. Use read-only commands only. Two steps at most. When you
+  have both answers, put them in the summary and finish.
 
 execution:
   mode: confirm

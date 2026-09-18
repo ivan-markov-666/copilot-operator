@@ -1,9 +1,9 @@
 /**
  * The contract Copilot must answer in, as a schema.
  *
- * The prose version the user pastes into the chat lives in `prompts/02-format.md`. This file
- * is the enforcement: anything that does not validate here is rejected and Copilot is asked
- * to resend. Being strict is deliberate. A half-understood reply that still parses is worse
+ * The prose version the user pastes into the chat lives in `prompts/level1.md`. This file is
+ * the enforcement: anything that does not validate here is rejected and Copilot is asked to
+ * resend. Being strict is deliberate. A half-understood reply that still parses is worse
  * than a rejected one, because it runs commands nobody intended.
  */
 import { z } from 'zod';
@@ -35,16 +35,32 @@ const DownloadStep = z.object({
 
 export const StepSchema = z.discriminatedUnion('type', [CommandStep, DownloadStep]);
 
+/**
+ * The shortest `summary` that counts as an explanation. Below this it is a label, not the
+ * deliverable the user asked for, and the reply is sent back.
+ */
+export const MIN_SUMMARY_CHARS = 40;
+
 export const ReplySchema = z
   .object({
     status: z.enum(['continue', 'done']),
     steps: z.array(StepSchema).default([]),
     notes: z.string().optional(),
+    /**
+     * Required when `status` is `done`: what was done, in what order, what the result is,
+     * and what the user should know. Shown in the UI as the outcome of the task.
+     */
+    summary: z.string().optional(),
   })
   .refine((r) => r.status === 'done' || r.steps.length > 0, {
     message:
       'status "continue" with an empty steps array would stall the run. ' +
       'Send at least one step, or set status to "done".',
+  })
+  .refine((r) => r.status !== 'done' || (r.summary ?? '').trim().length >= MIN_SUMMARY_CHARS, {
+    message:
+      'status "done" requires a real summary: several sentences explaining what was done, ' +
+      'what the result is, and what the user should know. Put it in the "summary" field.',
   });
 
 export type Step = z.infer<typeof StepSchema>;

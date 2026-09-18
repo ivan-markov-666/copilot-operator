@@ -28,15 +28,15 @@ projectMirror:
   attachToFirstMessage: true
   maxAttachedFiles: 20
 
-openingMessages:
-  - file: prompts/01-persona.md
-  - file: prompts/02-format.md
-  - text: |
-      Task: two files were attached to the first message of this conversation. Open them and
-      confirm you can read them, then answer one question from their contents: what is the
-      exact word that signals the end of a run, and in which of the two files is it defined?
+# Level 1 (the contract with the runner) is prompts/level1.md and is sent automatically.
+# Level 2 is your project and team instructions; leave it out if there are none.
+level2: ""
+task: |
+  Task: a file was attached to the first message of this task. Open it and confirm you can
+  read it, then answer two questions from its contents only: what is the exact stop word,
+  and what is the name of the field that must be filled in when a task is done?
 
-      Answer in the notes field and finish. No commands are needed for this.
+  Put both answers in the summary and finish. No commands are needed for this.
 
 execution:
   mode: confirm

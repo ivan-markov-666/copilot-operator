@@ -15,20 +15,20 @@ copilot:
   label: download
   stopMarker: Край
 
-openingMessages:
-  - file: prompts/01-persona.md
-  - file: prompts/02-format.md
-  - text: |
-      Task: create a PowerShell script named hello.ps1 that prints the current date and the
-      computer name, and nothing else.
+# Level 1 (the contract with the runner) is prompts/level1.md and is sent automatically.
+# Level 2 is your project and team instructions; leave it out if there are none.
+level2: ""
+task: |
+  Task: create a PowerShell script named hello.ps1 that prints the current date and the
+  computer name, and nothing else.
 
-      Give it to me as a downloadable file in this reply. Use your code interpreter to write
-      the file if that is what it takes; a link I can click to download hello.ps1 is what the
-      runner needs. Do not say you are unable to before you have tried it.
+  Give it to me as a downloadable file in this reply. Use your code interpreter to write
+  the file if that is what it takes; a link I can click to download hello.ps1 is what the
+  runner needs. Do not say you are unable to before you have tried it.
 
-      In the same reply, send a single download step with "file": "hello.ps1" and
-      "run": true, so the runner saves the file and executes it. When you have its output,
-      report what it printed and finish.
+  In the same reply, send a single download step with "file": "hello.ps1" and
+  "run": true, so the runner saves the file and executes it. When you have its output,
+  report what it printed and finish.
 
 execution:
   mode: confirm

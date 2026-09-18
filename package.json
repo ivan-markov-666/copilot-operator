@@ -19,35 +19,49 @@
     "cop": "tsx src/cli.ts",
     "check:parser": "tsx test/parser.check.ts",
     "check:report": "tsx test/report.check.ts",
-    "check": "npm run check:parser && npm run check:damage && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:chat && npm run check:context && npm run check:pacing",
+    "check": "npm run check:parser && npm run check:damage && npm run check:session && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:chat && npm run check:context && npm run check:pacing",
     "probe": "tsx scripts/probe-locators.ts",
-    "check:damage": "tsx test/damage.check.ts"
+    "check:damage": "tsx test/damage.check.ts",
+    "api": "npm run build && node dist/src/api/main.js",
+    "api:start": "node dist/src/api/main.js",
+    "web": "npm run dev --workspace web",
+    "web:build": "npm run build --workspace web",
+    "check:session": "tsx test/session.check.ts"
   },
   "dependencies": {
+    "@nestjs/common": "^12.0.3",
+    "@nestjs/core": "^12.0.3",
+    "@nestjs/platform-express": "^12.0.3",
     "commander": "^15.0.0",
     "ignore": "^7.0.9",
     "playwright": "^1.63.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "5.9"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ivan-markov-666/copilot-operator.git"
   },
   "bin": {
-    "cop": "dist/cli.js"
+    "cop": "dist/src/cli.js"
   },
-  "main": "dist/cli.js",
+  "main": "dist/src/cli.js",
   "files": [
     "dist",
     "prompts",
     "run.example.yaml",
     "README.md",
     "LICENSE"
+  ],
+  "workspaces": [
+    "web"
   ]
 }

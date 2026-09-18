@@ -18,7 +18,10 @@ import { stdin, stdout } from 'node:process';
 
 import { loadConfig, expandPath } from './config/schema.js';
 import { CopilotTransport } from './transport/copilotTransport.js';
-import { runLoop, reopenLastChat } from './orchestrator/machine.js';
+import { runSession } from './orchestrator/taskRunner.js';
+import { SessionStore } from './session/store.js';
+import { EventBus } from './session/events.js';
+import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { mirrorProject, describeMirror, listSelectableDirs } from './context/projectMirror.js';
 import { defaultExportDir, desktopIsSynced, resolveDesktopDir } from './context/contextFiles.js';
 import { Url } from './transport/locators.js';
@@ -280,36 +283,83 @@ program
 
 program
   .command('run')
-  .description('run the Copilot loop')
+  .description('run one task from a run.yaml: creates a session, runs it, prints the summary')
   .argument('<config>', 'path to run.yaml')
   .option('--unattended', 'do not ask before each step (dangerous)')
   .action(async (configPath: string, opts: { unattended?: boolean }) => {
     const cfg = await loadConfig(configPath);
     if (opts.unattended) cfg.execution.mode = 'unattended';
-
+    if (!cfg.resolved.taskText.trim()) {
+      throw new Error(`${cfg.configPath} has no "task". Add one, inline or as { file: ... }.`);
+    }
     if (cfg.execution.mode === 'unattended') {
       console.log('UNATTENDED: commands written by Copilot will run without asking.');
     }
-    const outcome = await runLoop(cfg);
+
+    const store = new SessionStore(cfg.resolved.dataDir, cfg.resolved.level1Path);
+    await store.init();
+    const session = await store.createSession(cfg.copilot.label, {
+      enabled: cfg.projectMirror.enabled,
+      rootDir: cfg.resolved.mirrorRootDir ?? '',
+      includeDirs: cfg.projectMirror.includeDirs,
+      excludeDirs: cfg.projectMirror.excludeDirs,
+    });
+    const task = await store.addTask(session.id, {
+      title: cfg.copilot.label,
+      level2: cfg.resolved.level2Text,
+      prompt: cfg.resolved.taskText,
+    });
+
+    const bus = new EventBus();
+    // Task-level events are already printed by the run log; session-level ones are not.
+    bus.subscribe(session.id, (e) => {
+      if (!e.taskId && e.message) console.log(`  ${e.message}`);
+    });
+
+    const policy = {
+      mode: cfg.execution.mode,
+      denyPatterns: cfg.execution.denyPatterns,
+      allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
+    };
+    const authorizer =
+      cfg.execution.mode === 'unattended'
+        ? unattendedAuthorizer(policy)
+        : terminalAuthorizer(policy, (line) => console.log(line));
+
+    await runSession(session.id, { cfg, store, bus, authorizer });
+
+    const final = await store.getSession(session.id);
+    const done = final?.tasks.find((t) => t.id === task.id);
     console.log('');
-    console.log(`run ${outcome.runId}: ${outcome.status} after ${outcome.iterations} iteration(s)`);
-    if (outcome.reason) console.log(outcome.reason);
-    if (outcome.chat) console.log(`chat: ${outcome.chat.name} — ${outcome.chat.url}`);
-    process.exitCode = outcome.status === 'done' ? 0 : 1;
+    console.log(`task "${done?.title}": ${done?.status} after ${done?.iterations ?? 0} iteration(s)`);
+    if (done?.summary) console.log(`
+Summary:
+${done.summary}`);
+    if (done?.reason) console.log(`
+Reason: ${done.reason}`);
+    if (final?.chat) console.log(`
+chat: ${final.chat.name} — ${final.chat.url}`);
+    if (done?.runId) console.log(`log: ${join(cfg.resolved.runsDir, done.runId, 'task-log.txt')}`);
+    process.exitCode = done?.status === 'done' ? 0 : 1;
   });
 
 program
   .command('chat')
-  .description("print the last run's conversation")
+  .description("print the most recent session's conversation")
   .argument('[config]', 'path to run.yaml', 'run.yaml')
   .action(async (configPath: string) => {
     const cfg = await loadConfig(configPath);
-    const pointer = await reopenLastChat(cfg);
-    if (!pointer) {
-      console.log('No chat has been recorded yet.');
+    const store = new SessionStore(cfg.resolved.dataDir, cfg.resolved.level1Path);
+    const sessions = await store.listSessions();
+    const withChat = sessions.find((s) => s.chat);
+    if (!withChat?.chat) {
+      console.log('No session has a conversation yet.');
       return;
     }
-    console.log(`${pointer.name}\n${pointer.url}\nrun ${pointer.runId}, created ${pointer.createdAt}`);
+    const c = withChat.chat;
+    console.log(`${c.name}
+${c.url}
+session ${withChat.id}, ${withChat.tasks.length} task(s), created ${c.createdAt}`);
   });
 
 program.parseAsync(process.argv).catch((e: unknown) => {

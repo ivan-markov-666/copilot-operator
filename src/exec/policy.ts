@@ -12,8 +12,6 @@
  * suggestion that would wipe a folder. Real isolation is a separate account or a sandbox,
  * which the README recommends.
  */
-import { createInterface } from 'node:readline/promises';
-import { stdin, stdout } from 'node:process';
 import { extname } from 'node:path';
 import type { Step } from '../protocol/replySchema.js';
 
@@ -72,37 +70,4 @@ export function staticCheck(step: Step, cfg: PolicyConfig): PolicyDecision | nul
     if (bad) return { action: 'skip', reason: bad };
   }
   return null;
-}
-
-/**
- * The full gate. In unattended mode the static rules decide alone. In confirm mode the human
- * sees the step and answers: Enter runs it, `s` skips, `q` aborts the run.
- */
-export async function authorizeStep(
-  step: Step,
-  cfg: PolicyConfig,
-  opts: { scriptPath?: string; print?: (s: string) => void } = {},
-): Promise<PolicyDecision> {
-  const print = opts.print ?? ((s: string) => stdout.write(s + '\n'));
-
-  const blocked = staticCheck(step, cfg);
-  if (blocked) {
-    print(`  refused: ${describeStep(step, opts.scriptPath)}`);
-    if (blocked.action !== 'run') print(`           ${blocked.reason}`);
-    return blocked;
-  }
-
-  if (cfg.mode === 'unattended') return { action: 'run' };
-
-  print('');
-  print(`  step ${step.id}: ${describeStep(step, opts.scriptPath)}`);
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    const answer = (await rl.question('  [Enter] run  [s] skip  [q] abort > ')).trim().toLowerCase();
-    if (answer === 'q') return { action: 'abort', reason: 'aborted by the operator' };
-    if (answer === 's') return { action: 'skip', reason: 'skipped by the operator' };
-    return { action: 'run' };
-  } finally {
-    rl.close();
-  }
 }

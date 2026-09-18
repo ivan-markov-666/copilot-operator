@@ -58,6 +58,12 @@ function findJsonCandidates(markdown: string): string[] {
   return out;
 }
 
+/** Removes Copilot's 【n-hash】 citation markers and the whitespace they leave behind. */
+export function stripCitations(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  return text.replace(/\s*【[^】]*】/g, '').replace(/[ 	]+$/gm, '').trim();
+}
+
 export type ParseOptions = {
   /** The word that ends the run when Copilot writes it. */
   stopMarker: string;
@@ -95,13 +101,21 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       }
 
       const reply = result.data;
+      // Copilot appends citation markers such as 【1-8313d0】 to prose it grounded in a file.
+      // They mean nothing outside the chat and would otherwise end up in the UI and the log.
+      reply.notes = stripCitations(reply.notes);
+      reply.summary = stripCitations(reply.summary);
       const steps = reply.steps.map<Step>((s) => ({ ...s, shell: s.shell ?? opts.defaultShell }));
       const markerHit = markdown.includes(opts.stopMarker);
+      const hasSummary = (reply.summary ?? '').trim().length > 0;
 
+      // The stop word alone is not enough to end a task any more: the summary is the
+      // deliverable, and a marker without one would let a task close with nothing to show.
+      // status "done" already guarantees a summary through the schema.
       return {
         ok: true,
         reply: { ...reply, steps },
-        done: reply.status === 'done' || markerHit,
+        done: reply.status === 'done' || (markerHit && hasSummary),
         json: text.trim(),
       };
     }

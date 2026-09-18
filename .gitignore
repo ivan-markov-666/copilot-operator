@@ -1,6 +1,11 @@
-node_modules/
-dist/
-runs/
-artifacts/
-profile/
 *.log
+artifacts/
+data/
+dist/
+node_modules/
+profile/
+runs/
+web/.next/
+web/next-env.d.ts
+web/node_modules/
+web/tsconfig.tsbuildinfo

@@ -10,12 +10,12 @@ copilot:
   stopMarker: Край
 
 # Sent in order at the start of the run. Only the reply to the LAST one starts the loop.
-openingMessages:
-  - file: prompts/01-persona.md
-  - file: prompts/02-format.md
-  - text: |
-      Task: check the state of Windows Update on this machine, report what is
-      pending, and suggest what to do about it. Do not install anything.
+# Level 1 (the contract with the runner) is prompts/level1.md and is sent automatically.
+# Level 2 is your project and team instructions; leave it out if there are none.
+level2: ""
+task: |
+  Task: check the state of Windows Update on this machine, report what is
+  pending, and suggest what to do about it. Do not install anything.
 
 execution:
   # confirm shows every step and waits for a keypress. unattended does not ask.
