@@ -63,6 +63,10 @@ nothing but the browser profile.
 
 Before it is built, run them as `npx tsx src/cli.ts <command>`.
 
+**Testing it for the first time:** follow [`docs/testing.md`](docs/testing.md). Nine steps,
+ordered so the risk climbs slowly, starting with checks that need no account at all.
+`run.smoke.yaml` is a ready-made read-only first run.
+
 ## How it works
 
 | Piece | File | State |
@@ -84,6 +88,7 @@ Before it is built, run them as `npx tsx src/cli.ts <command>`.
 
 Design and findings:
 
+- [`docs/testing.md`](docs/testing.md) — how to test it the first time, step by step
 - [`docs/architecture.md`](docs/architecture.md) — the whole design
 - [`docs/locators-findings.md`](docs/locators-findings.md) — what the live Copilot DOM looks like and why
 - [`docs/tech-stack-research.md`](docs/tech-stack-research.md) — why Playwright and not the alternatives

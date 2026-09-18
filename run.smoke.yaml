@@ -1,0 +1,36 @@
+# Smoke test. The smallest run that exercises the whole loop.
+#
+# The task is read-only on purpose: it asks Copilot to report facts about the machine and
+# nothing else. Run this first, in confirm mode, before trusting the bot with real work.
+#
+#   npx tsx src/cli.ts run run.smoke.yaml
+#
+# Edit `cwd` to a scratch folder you do not mind commands running in.
+
+copilot:
+  label: smoke
+  stopMarker: Край
+
+openingMessages:
+  - file: prompts/01-persona.md
+  - file: prompts/02-format.md
+  - text: |
+      Task: report the Windows edition and build, and the free space on drive C, of the
+      machine the runner is on. Use read-only commands only. Two steps at most. When you
+      have both answers, summarise them in notes and finish.
+
+execution:
+  mode: confirm
+  defaultShell: pwsh
+  # A scratch folder. Change this.
+  cwd: .
+  commandTimeoutSec: 120
+  idleTimeoutSec: 60
+
+limits:
+  # Deliberately small: a smoke test that loops twenty times is a bug, not a feature.
+  maxIterations: 4
+  maxRunMinutes: 20
+  maxFormatRetries: 2
+
+runsDir: ./runs
