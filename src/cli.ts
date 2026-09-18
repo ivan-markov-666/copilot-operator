@@ -84,10 +84,16 @@ program
     await transport.open();
     try {
       await transport.ensureSignedIn();
+      const where = await transport.surface();
       console.log('');
-      console.log("This is the bot's own browser and profile. Nothing is automated from here.");
-      console.log('Use it to test by hand whether the chat behaves differently for you than');
-      console.log('it does for the bot: type a long message yourself and send it.');
+      console.log("This is the bot's own browser. Nothing is automated from here.");
+      console.log(`  profile : ${opts.profile}`);
+      console.log(`  surface : ${where === 'work' ? 'Microsoft 365 Copilot (work)' : where}`);
+      console.log('  windows : this profile has no extensions, so if you can see a Grammarly');
+      console.log('            or similar icon, you are looking at a different Edge window.');
+      console.log('');
+      console.log('Type a long message here by hand and send it. That tells us whether the');
+      console.log('chat treats the bot differently from you, in the same browser.');
       console.log('');
       const rl = createInterface({ input: stdin, output: stdout });
       await rl.question('Press Enter here when you are done, to close the browser... ');
