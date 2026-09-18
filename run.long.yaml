@@ -1,0 +1,49 @@
+# Step 7 of docs/testing.md: a long-running step.
+#
+# The point is to see the two clocks behave differently. A command that keeps printing may
+# run as long as it likes; a command that goes silent is treated as hung and killed.
+#
+#   npx tsx src/cli.ts run run.long.yaml
+#
+# Expect: a heartbeat on the console roughly every 30 seconds giving elapsed time, time since
+# the last output, and the last line printed. The talkative step must NOT be killed. The
+# silent one must be killed and reported as idle-timeout, which is not the same as failing.
+
+copilot:
+  label: long
+  stopMarker: Край
+  # A long step means a long gap between messages; give the reply wait room.
+  replyTimeoutSec: 900
+
+openingMessages:
+  - file: prompts/01-persona.md
+  - file: prompts/02-format.md
+  - text: |
+      Task: prove that long-running steps work, in two steps in the same reply.
+
+      Step 1: a pwsh command that prints one line per second for about 90 seconds, so it is
+      slow but never silent. Mark it "expect": "long".
+
+      Step 2: a pwsh command that sleeps silently for 60 seconds and prints nothing at all,
+      with "idleTimeoutSec": 20, so the runner should stop it as hung.
+
+      Step 1 should finish normally. Step 2 should come back as idle-timeout. Report both
+      outcomes and finish.
+
+execution:
+  mode: confirm
+  defaultShell: pwsh
+  cwd: .
+  # Deliberately short defaults, so the difference between the two clocks is visible.
+  commandTimeoutSec: 300
+  idleTimeoutSec: 30
+  longCommandTimeoutSec: 600
+  longIdleTimeoutSec: 120
+  stopOnFailure: false
+
+limits:
+  maxIterations: 5
+  maxRunMinutes: 30
+  maxFormatRetries: 2
+
+runsDir: ./runs

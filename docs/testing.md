@@ -160,14 +160,10 @@ exchange as a human.
 
 ## 6. Test the download path
 
-This is the part that was expected to be hard. Copy `run.smoke.yaml` to `run.download.yaml`
-and replace the task with:
+This is the part that was expected to be hard. The config is ready:
 
-```yaml
-  - text: |
-      Task: generate a PowerShell script named hello.ps1 that prints the current date and
-      the computer name, attach it to the chat as a downloadable file, and give me a
-      download step that runs it. Then finish.
+```bash
+npx tsx src/cli.ts run run.download.yaml
 ```
 
 **Expect:** the console prints `downloaded hello.ps1 (sha256 ...)`, the file appears in
@@ -180,12 +176,11 @@ code interpreter enabled. Say so and we will adjust the contract to inline scrip
 
 ## 7. Test a long-running step
 
-Copy the smoke config again and use a task like:
+The config is ready, and it asks for both halves in one reply: a talkative step that must
+survive, and a silent one that must be stopped.
 
-```yaml
-  - text: |
-      Task: run a command that prints one line per second for about ninety seconds, so I can
-      confirm long-running steps work. Mark it "expect": "long". Then finish.
+```bash
+npx tsx src/cli.ts run run.long.yaml
 ```
 
 **Expect:** the console prints a heartbeat roughly every 30 seconds, saying how long the step
