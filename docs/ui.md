@@ -105,9 +105,16 @@ bot never handles credentials: `npx tsx src/cli.ts login --account <upn>`.
 
 ```bash
 npm install           # once; installs the web workspace too
-npm run api           # builds, then serves on 127.0.0.1:4000
-npm run web           # in another terminal; Next.js dev server on :3210
+npm start             # builds the API, then runs API and UI together; Ctrl+C stops both
+npm run dev           # the same, and opens http://localhost:3210 in the browser
 ```
+
+Separately, if you prefer two terminals: `npm run api` and `npm run web`.
+
+`scripts/dev.mjs` is the starter. It builds first because Nest needs the decorator metadata
+only `tsc` emits, prefixes each process's output with `[api]` or `[web]`, and stops both when
+either exits or on Ctrl+C. On Windows it does that with `taskkill /T`, because a plain kill
+reaches only the npm wrapper and leaves the real server holding its port.
 
 The API is bound to `127.0.0.1` and the UI to `localhost`. They must stay that way: this
 process drives the operator's own signed-in browser and runs commands on this machine.

@@ -26,7 +26,9 @@
     "api:start": "node dist/src/api/main.js",
     "web": "npm run dev --workspace web",
     "web:build": "npm run build --workspace web",
-    "check:session": "tsx test/session.check.ts"
+    "check:session": "tsx test/session.check.ts",
+    "start": "node scripts/dev.mjs",
+    "dev": "node scripts/dev.mjs --open"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",

@@ -61,9 +61,12 @@ that the right account is signed in, and stores nothing but the browser profile.
 ### The web UI
 
 ```bash
-npm run api      # NestJS on http://127.0.0.1:4000/api
-npm run web      # Next.js on http://localhost:3210, in a second terminal
+npm start        # builds the API, then runs it and the UI together; Ctrl+C stops both
 ```
+
+Then open http://localhost:3210. `npm run dev` does the same and opens the browser for you.
+The two can also run separately: `npm run api` (NestJS on 127.0.0.1:4000) and `npm run web`
+(Next.js on localhost:3210).
 
 Create a session, add tasks with their level 2 instructions, press Run, approve each step
 from the page, read the summary when it finishes. See [`docs/ui.md`](docs/ui.md).
