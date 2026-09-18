@@ -236,6 +236,10 @@ npx tsx src/cli.ts run run.mirror.yaml
 The task asks Copilot to read the attached files and answer a question only their contents
 can answer, so a plausible-sounding guess is not enough to pass.
 
+Verified live: Copilot answered that the end-of-run word is `Край` and named
+`prompts--02-format.md.txt` as the file defining it, which is correct and could only come
+from reading the attachment. The mirror reported `2 unchanged`, so nothing was re-uploaded.
+
 **Attaching uploads a copy to the user's OneDrive.** That is worth knowing before pointing
 this at real code. Use `report.redactPatterns`, or mirror a narrower set of directories.
 

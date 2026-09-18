@@ -6,13 +6,12 @@ Copilot decides what to do, the bot does it and reports back, and the two keep g
 Copilot says the task is finished. The bot drives the real Copilot web app in a real Edge
 browser, so it needs no API licence and no admin consent.
 
-> **Status: working, verified against a live Microsoft 365 Copilot tenant.** A full loop
-> runs: opening messages, chat naming, reply parsing, command execution, the results file
-> uploaded and read back, and a `done` verdict. Long steps are confirmed, a step printing for
-> 92 s survived while a silent one was stopped at its idle limit. The download path is
-> confirmed, a script Copilot generated was downloaded, hashed, executed and its output read
-> back. The project mirror is confirmed on disk; handing those files to the chat is the one
-> part not yet exercised end to end.
+> **Status: working, every part verified against a live Microsoft 365 Copilot tenant.**
+> The loop, chat naming, reply parsing, command execution and the results file are confirmed.
+> A step printing for 92 s survived while a silent one was stopped at its idle limit. A script
+> Copilot generated was downloaded, hashed, executed and its output read back. Project files
+> mirrored to the Desktop were attached and answered questions from. Unattended mode is the
+> one thing still untried, deliberately.
 
 ## What it does
 
