@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { api, fmtTime, type Approval, type Preset, type Session, type SessionEvent, type Task } from '../../../lib/api';
+import { api, type Approval, type Preset, type Session, type SessionEvent, type Task } from '../../../lib/api';
+import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 
 // ---------------------------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------------------------
 
 export default function SessionPage() {
+  const { t } = useT();
   const { id } = useParams<{ id: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [events, setEvents] = useState<SessionEvent[]>([]);
@@ -59,14 +61,14 @@ export default function SessionPage() {
   }, [id, reload, scheduleReload]);
 
   if (err && !session) return <div className="panel err">{err}</div>;
-  if (!session) return <div className="panel muted">Loading…</div>;
+  if (!session) return <div className="panel muted">{t('home.loading')}</div>;
 
-  const queued = session.tasks.filter((t) => t.status === 'queued').length;
+  const queued = session.tasks.filter((x) => x.status === 'queued').length;
 
   return (
     <>
       <div className="crumbs">
-        <Link href="/">Sessions</Link> / {session.name}
+        <Link href="/">{t('session.crumb')}</Link> / {session.name}
       </div>
 
       <Header session={session} queued={queued} onChange={reload} />
@@ -80,14 +82,11 @@ export default function SessionPage() {
       <MirrorPanel session={session} onChange={reload} />
 
       <div className="panel">
-        <h2>Tasks</h2>
-        <p className="muted small">
-          Run in this order, in the same conversation. When one finishes with a summary, the next queued one starts. A
-          task that ends any other way stops the run and leaves the rest queued.
-        </p>
-        {session.tasks.length === 0 && <div className="muted">No tasks yet. Add one below.</div>}
-        {session.tasks.map((t, i) => (
-          <TaskCard key={t.id} session={session} task={t} index={i + 1} presets={presets} onChange={reload} />
+        <h2>{t('tasks.title')}</h2>
+        <p className="muted small">{t('tasks.hint')}</p>
+        {session.tasks.length === 0 && <div className="muted">{t('tasks.none')}</div>}
+        {session.tasks.map((task, i) => (
+          <TaskCard key={task.id} session={session} task={task} index={i + 1} presets={presets} onChange={reload} />
         ))}
       </div>
 
@@ -103,19 +102,20 @@ export default function SessionPage() {
 // ---------------------------------------------------------------------------------------
 
 function Header({ session, queued, onChange }: { session: Session; queued: number; onChange: () => void }) {
+  const { t } = useT();
   const [msg, setMsg] = useState('');
   const [name, setName] = useState(session.name);
   useEffect(() => setName(session.name), [session.name]);
 
   const start = async (mode: 'confirm' | 'unattended') => {
-    if (mode === 'unattended' && !confirm('Unattended: commands written by Copilot will run without asking. Continue?')) return;
+    if (mode === 'unattended' && !confirm(t('session.unattendedConfirm'))) return;
     const r = await api.start(session.id, mode);
-    setMsg(r.started ? `started (${mode})` : `not started: ${r.reason}`);
+    setMsg(r.started ? t('session.started', { mode }) : t('session.notStarted', { reason: r.reason ?? '' }));
     onChange();
   };
   const stop = async () => {
     await api.stop(session.id);
-    setMsg('stopping after the current step');
+    setMsg(t('session.stopping'));
     onChange();
   };
   const rename = async () => {
@@ -123,35 +123,37 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
     onChange();
   };
 
+  const stateLabel = session.running ? t('state.running') : t(`state.${session.status}` as Key);
+
   return (
     <div className="panel">
       <div className="row">
         <input type="text" className="grow" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => void rename()} />
-        <span className={`badge ${session.running ? 'running' : ''}`}>{session.running ? 'running' : session.status}</span>
+        <span className={`badge ${session.running ? 'running' : ''}`}>{stateLabel}</span>
       </div>
       <div className="row" style={{ marginTop: 10 }}>
         {!session.running ? (
           <>
             <button className="primary" onClick={() => void start('confirm')} disabled={queued === 0}>
-              Run {queued} queued task{queued === 1 ? '' : 's'} (confirm each step)
+              {t('session.run', { n: queued })}
             </button>
             <button onClick={() => void start('unattended')} disabled={queued === 0}>
-              Run unattended
+              {t('session.runUnattended')}
             </button>
           </>
         ) : (
           <button className="danger" onClick={() => void stop()}>
-            Stop after current step
+            {t('session.stop')}
           </button>
         )}
         <span className="muted small">{msg}</span>
         <span className="grow" />
         {session.chat ? (
           <a href={session.chat.url} target="_blank" rel="noreferrer" className="small">
-            open chat: {session.chat.name}
+            {t('session.openChat', { name: session.chat.name })}
           </a>
         ) : (
-          <span className="muted small">no conversation yet; the first run opens one</span>
+          <span className="muted small">{t('session.noChat')}</span>
         )}
       </div>
     </div>
@@ -163,6 +165,8 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
 // ---------------------------------------------------------------------------------------
 
 function ApprovalBar({ approval, onDecided }: { approval: Approval; onDecided: () => void }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
   const [busy, setBusy] = useState(false);
   const decide = async (action: 'run' | 'skip' | 'abort') => {
     setBusy(true);
@@ -176,19 +180,19 @@ function ApprovalBar({ approval, onDecided }: { approval: Approval; onDecided: (
   return (
     <div className="approval">
       <div className="row">
-        <strong>Step {approval.stepId} is waiting for you</strong>
+        <strong>{t('approval.title', { n: approval.stepId })}</strong>
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
       <div className="row">
         <button className="primary" disabled={busy} onClick={() => void decide('run')}>
-          Run
+          {t('approval.run')}
         </button>
         <button disabled={busy} onClick={() => void decide('skip')}>
-          Skip
+          {t('approval.skip')}
         </button>
         <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
-          Abort task
+          {t('approval.abort')}
         </button>
       </div>
     </div>
@@ -200,24 +204,24 @@ function ApprovalBar({ approval, onDecided }: { approval: Approval; onDecided: (
 // ---------------------------------------------------------------------------------------
 
 function Level1Panel({ level1, sent }: { level1: { content: string; customised: boolean } | null; sent: boolean }) {
+  const { t } = useT();
   return (
     <div className="panel">
       <div className="row">
         <h2 className="grow" style={{ margin: 0 }}>
-          Level 1: the contract with the runner
+          {t('l1.title')}
         </h2>
-        <span className="badge">{sent ? 'sent in this conversation' : 'sent with the first task'}</span>
+        <span className="badge">{sent ? t('l1.sent') : t('l1.notSent')}</span>
         <Link href="/level1" className="small">
-          edit
+          {t('l1.edit')}
         </Link>
       </div>
       <p className="muted small" style={{ marginBottom: 6 }}>
-        Has priority over the level 2 instructions of every task below. Defines the phases, the json format, the
-        stop word and the final summary.
-        {level1?.customised ? ' Using your customised copy.' : ''}
+        {t('l1.hint')}
+        {level1?.customised ? ` ${t('l1.customised')}` : ''}
       </p>
       <details>
-        <summary>show the contract</summary>
+        <summary>{t('l1.show')}</summary>
         <pre className="tall">{level1?.content ?? '…'}</pre>
       </details>
     </div>
@@ -229,6 +233,7 @@ function Level1Panel({ level1, sent }: { level1: { content: string; customised: 
 // ---------------------------------------------------------------------------------------
 
 function MirrorPanel({ session, onChange }: { session: Session; onChange: () => void }) {
+  const { t } = useT();
   const [enabled, setEnabled] = useState(session.mirror.enabled);
   const [rootDir, setRootDir] = useState(session.mirror.rootDir);
   const [include, setInclude] = useState(session.mirror.includeDirs.join('\n'));
@@ -249,7 +254,7 @@ function MirrorPanel({ session, onChange }: { session: Session; onChange: () => 
       await api.updateSession(session.id, {
         mirror: { enabled, rootDir: rootDir.trim(), includeDirs: lines(include), excludeDirs: lines(exclude) },
       });
-      setMsg('saved');
+      setMsg(t('mirror.saved'));
       onChange();
     } catch (e) {
       setMsg((e as Error).message);
@@ -265,39 +270,35 @@ function MirrorPanel({ session, onChange }: { session: Session; onChange: () => 
 
   return (
     <div className="panel">
-      <h2>Project files for the chat</h2>
-      <p className="muted small">
-        Selected directories are copied to one flat folder on the Desktop with the path in the file name (
-        <code>src--test--a.spec.ts.txt</code>), only changed files are rewritten, and the files are attached to the first
-        message of each task. Attaching uploads a copy to your OneDrive.
-      </p>
+      <h2>{t('mirror.title')}</h2>
+      <p className="muted small">{t('mirror.hint', { example: 'src--test--a.spec.ts.txt' })}</p>
       <label>
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> attach project files
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> {t('mirror.enable')}
       </label>
-      <label>Project root</label>
+      <label>{t('mirror.root')}</label>
       <div className="row">
         <input type="text" className="grow" value={rootDir} onChange={(e) => setRootDir(e.target.value)} placeholder="C:\Projects\my-app" />
         <button onClick={() => void listDirs()} disabled={!rootDir.trim()}>
-          List directories
+          {t('mirror.listDirs')}
         </button>
       </div>
       {dirs && (
         <div className="small muted" style={{ margin: '6px 0' }}>
-          {dirs.length === 0 ? 'no selectable directories' : dirs.join(' · ')}
+          {dirs.length === 0 ? t('mirror.noDirs') : dirs.join(' · ')}
         </div>
       )}
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="grow">
-          <label>Include (one per line; a directory includes everything beneath it)</label>
+          <label>{t('mirror.include')}</label>
           <textarea value={include} onChange={(e) => setInclude(e.target.value)} placeholder={'src\ntests'} style={{ minHeight: 80 }} />
         </div>
         <div className="grow">
-          <label>Exclude (one per line)</label>
+          <label>{t('mirror.exclude')}</label>
           <textarea value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder={'src/generated'} style={{ minHeight: 80 }} />
         </div>
       </div>
       <div className="row" style={{ marginTop: 8 }}>
-        <button onClick={() => void save()}>Save</button>
+        <button onClick={() => void save()}>{t('mirror.save')}</button>
         <span className="muted small">{msg}</span>
       </div>
     </div>
@@ -319,13 +320,14 @@ function Level2Editor({
   presets: Preset[];
   onPresetsChanged?: () => void;
 }) {
+  const { t } = useT();
   const [msg, setMsg] = useState('');
   const saveAs = async () => {
-    const name = prompt('Save these level 2 instructions as a preset named:');
+    const name = prompt(t('l2.saveAsPrompt'));
     if (!name) return;
     try {
       await api.savePreset(name, value);
-      setMsg(`saved as "${name}"`);
+      setMsg(t('l2.savedAs', { name }));
       onPresetsChanged?.();
     } catch (e) {
       setMsg((e as Error).message);
@@ -335,7 +337,7 @@ function Level2Editor({
     <>
       <div className="row">
         <label className="grow" style={{ margin: 0 }}>
-          Level 2: project, domain and team instructions for this task
+          {t('l2.label')}
         </label>
         <select
           value=""
@@ -344,7 +346,7 @@ function Level2Editor({
             if (p) onChange(p.content);
           }}
         >
-          <option value="">load a preset…</option>
+          <option value="">{t('l2.loadPreset')}</option>
           {presets.map((p) => (
             <option key={p.name} value={p.name}>
               {p.name}
@@ -352,16 +354,10 @@ function Level2Editor({
           ))}
         </select>
         <button onClick={() => void saveAs()} disabled={!value.trim()}>
-          Save as preset
+          {t('l2.saveAs')}
         </button>
       </div>
-      <textarea
-        className="prose"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={'What the runner cannot know: the project, its layout, how tests run, the conventions, what never to touch.\nLeave empty if there is nothing to add. Level 1 always wins over anything here.'}
-        style={{ minHeight: 140 }}
-      />
+      <textarea className="prose" value={value} onChange={(e) => onChange(e.target.value)} placeholder={t('l2.placeholder')} style={{ minHeight: 140 }} />
       {msg && <div className="muted small">{msg}</div>}
     </>
   );
@@ -382,6 +378,7 @@ function TaskForm({
   onAdded: () => void;
   onPresetsChanged: () => void;
 }) {
+  const { t } = useT();
   const last = [...session.tasks].reverse()[0];
   const [title, setTitle] = useState('');
   const [level2, setLevel2] = useState(last?.level2 ?? '');
@@ -393,7 +390,7 @@ function TaskForm({
       await api.addTask(session.id, { title, level2, prompt: promptText });
       setTitle('');
       setPromptText('');
-      setMsg('queued');
+      setMsg(t('form.queued'));
       onAdded();
     } catch (e) {
       setMsg((e as Error).message);
@@ -402,27 +399,24 @@ function TaskForm({
 
   return (
     <div className="panel">
-      <h2>Add a task</h2>
-      <p className="muted small">
-        Goes to the end of the queue. If the session is running it will be picked up after the current tasks; if it
-        is idle, press Run above. Level 2 is prefilled from the previous task so a series of tasks shares it.
-      </p>
-      <label>Title</label>
-      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="short name, e.g. run the unit tests" />
+      <h2>{t('form.title')}</h2>
+      <p className="muted small">{t('form.hint')}</p>
+      <label>{t('form.titleLabel')}</label>
+      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('form.titlePlaceholder')} />
       <div style={{ marginTop: 10 }}>
         <Level2Editor value={level2} onChange={setLevel2} presets={presets} onPresetsChanged={onPresetsChanged} />
       </div>
-      <label>Task</label>
+      <label>{t('form.taskLabel')}</label>
       <textarea
         className="prose"
         value={promptText}
         onChange={(e) => setPromptText(e.target.value)}
-        placeholder="What to do, what the result should be, what is out of bounds."
+        placeholder={t('form.taskPlaceholder')}
         style={{ minHeight: 140 }}
       />
       <div className="row" style={{ marginTop: 10 }}>
         <button className="primary" onClick={() => void add()} disabled={!promptText.trim()}>
-          Add to queue
+          {t('form.add')}
         </button>
         <span className="muted small">{msg}</span>
       </div>
@@ -447,6 +441,8 @@ function TaskCard({
   presets: Preset[];
   onChange: () => void;
 }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [level2, setLevel2] = useState(task.level2);
@@ -464,7 +460,7 @@ function TaskCard({
     }
   };
   const remove = async () => {
-    if (!confirm(`Delete queued task "${task.title}"?`)) return;
+    if (!confirm(t('task.deleteConfirm', { title: task.title }))) return;
     await api.deleteTask(session.id, task.id);
     onChange();
   };
@@ -472,40 +468,52 @@ function TaskCard({
     if (!files) setFiles(await api.taskFiles(session.id, task.id));
   };
 
+  const fileLinks = (label: Key, kind: 'reports' | 'artifacts' | 'replies', names: string[]) =>
+    names.length > 0 && (
+      <div>
+        <span className="muted">{t(label)} </span>
+        {names.map((n) => (
+          <a key={n} href={api.taskFileUrl(session.id, task.id, kind, n)} target="_blank" rel="noreferrer" style={{ marginRight: 10 }}>
+            {n}
+          </a>
+        ))}
+      </div>
+    );
+
   return (
     <div className={`task ${task.status}`}>
       <div className="row">
         <h4 className="grow">
           {index}. {task.title}
         </h4>
-        <span className={`badge ${task.status}`}>{task.status}</span>
-        {task.iterations > 0 && <span className="muted small">{task.iterations} iteration{task.iterations === 1 ? '' : 's'}</span>}
+        <span className={`badge ${task.status}`}>{t(`status.${task.status}` as Key)}</span>
+        {task.iterations > 0 && <span className="muted small">{t('task.iterations', { n: task.iterations })}</span>}
         {task.status === 'queued' && !session.running && (
           <>
-            <button onClick={() => setEditing((v) => !v)}>{editing ? 'Cancel' : 'Edit'}</button>
+            <button onClick={() => setEditing((v) => !v)}>{editing ? t('task.cancel') : t('task.edit')}</button>
             <button className="danger" onClick={() => void remove()}>
-              Delete
+              {t('task.delete')}
             </button>
           </>
         )}
       </div>
       <div className="muted small">
-        {task.startedAt ? `started ${fmtTime(task.startedAt)}` : `added ${fmtTime(task.createdAt)}`}
-        {task.finishedAt ? ` · finished ${fmtTime(task.finishedAt)}` : ''}
+        {task.startedAt ? t('task.started', { t: fmtTime(task.startedAt) }) : t('task.added', { t: fmtTime(task.createdAt) })}
+        {task.finishedAt ? ` · ${t('task.finished', { t: fmtTime(task.finishedAt) })}` : ''}
       </div>
 
       {editing ? (
         <div style={{ marginTop: 8 }}>
-          <label>Title</label>
+          <label>{t('form.titleLabel')}</label>
           <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
           <div style={{ marginTop: 8 }}>
             <Level2Editor value={level2} onChange={setLevel2} presets={presets} />
           </div>
-          <label>Task</label>
+          <label>{t('form.taskLabel')}</label>
           <textarea className="prose" value={promptText} onChange={(e) => setPromptText(e.target.value)} />
           <div className="row" style={{ marginTop: 8 }}>
             <button className="primary" onClick={() => void save()}>
-              Save
+              {t('task.save')}
             </button>
             <span className="err">{msg}</span>
           </div>
@@ -514,7 +522,7 @@ function TaskCard({
         <>
           {task.summary && (
             <div className="summary">
-              <strong>What was done</strong>
+              <strong>{t('task.whatWasDone')}</strong>
               <div>{task.summary}</div>
             </div>
           )}
@@ -525,64 +533,37 @@ function TaskCard({
           )}
 
           <details>
-            <summary>task prompt and level 2</summary>
+            <summary>{t('task.promptAndL2')}</summary>
             {task.level2.trim() && (
               <>
-                <div className="muted small">level 2</div>
+                <div className="muted small">{t('task.l2')}</div>
                 <pre>{task.level2}</pre>
               </>
             )}
-            <div className="muted small">task</div>
+            <div className="muted small">{t('task.prompt')}</div>
             <pre>{task.prompt}</pre>
           </details>
 
           {task.firstMessage && (
             <details>
-              <summary>the exact first message that opened this task</summary>
+              <summary>{t('task.firstMessage')}</summary>
               <pre className="tall">{task.firstMessage}</pre>
             </details>
           )}
 
           {task.runId && (
             <details onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && void loadFiles()}>
-              <summary>everything executed, and the files</summary>
+              <summary>{t('task.files')}</summary>
               <div className="row small" style={{ margin: '6px 0' }}>
                 <a href={api.taskLogUrl(session.id, task.id)} target="_blank" rel="noreferrer">
-                  task-log.txt: the whole task as text
+                  {t('task.log')}
                 </a>
               </div>
               {files && (
                 <div className="small">
-                  {files.reports.length > 0 && (
-                    <div>
-                      <span className="muted">reports sent to Copilot: </span>
-                      {files.reports.map((n) => (
-                        <a key={n} href={api.taskFileUrl(session.id, task.id, 'reports', n)} target="_blank" rel="noreferrer" style={{ marginRight: 10 }}>
-                          {n}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  {files.artifacts.length > 0 && (
-                    <div>
-                      <span className="muted">downloaded files: </span>
-                      {files.artifacts.map((n) => (
-                        <a key={n} href={api.taskFileUrl(session.id, task.id, 'artifacts', n)} target="_blank" rel="noreferrer" style={{ marginRight: 10 }}>
-                          {n}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  {files.replies.length > 0 && (
-                    <div>
-                      <span className="muted">raw replies: </span>
-                      {files.replies.map((n) => (
-                        <a key={n} href={api.taskFileUrl(session.id, task.id, 'replies', n)} target="_blank" rel="noreferrer" style={{ marginRight: 10 }}>
-                          {n}
-                        </a>
-                      ))}
-                    </div>
-                  )}
+                  {fileLinks('task.reports', 'reports', files.reports)}
+                  {fileLinks('task.artifacts', 'artifacts', files.artifacts)}
+                  {fileLinks('task.replies', 'replies', files.replies)}
                 </div>
               )}
             </details>
@@ -590,7 +571,7 @@ function TaskCard({
 
           {task.finalReply && (
             <details>
-              <summary>the last message Copilot sent</summary>
+              <summary>{t('task.finalReply')}</summary>
               <pre className="tall">{task.finalReply}</pre>
             </details>
           )}
@@ -605,15 +586,16 @@ function TaskCard({
 // ---------------------------------------------------------------------------------------
 
 function EventLog({ events }: { events: SessionEvent[] }) {
+  const { t } = useT();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [events.length]);
   return (
     <div className="panel">
-      <h2>Live</h2>
+      <h2>{t('live.title')}</h2>
       <div className="log" ref={ref}>
-        {events.length === 0 && <div className="muted">Nothing yet. Events appear here while a run is in progress.</div>}
+        {events.length === 0 && <div className="muted">{t('live.none')}</div>}
         {events.map((e, i) => (
           <div key={i} className={e.level}>
             <span className="time">{new Date(e.at).toLocaleTimeString(undefined, { hour12: false })}</span>

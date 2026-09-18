@@ -111,6 +111,11 @@ npm run dev           # the same, and opens http://localhost:3210 in the browser
 
 Separately, if you prefer two terminals: `npm run api` and `npm run web`.
 
+Do not run `npm run web:build` while `npm start` (or `npm run web`) is running. Both use
+`web/.next`, and a production build overwrites the chunks the dev server is serving, which
+shows up as "Cannot find module './NNN.js'" in the browser. Stop the dev server, build, start
+again; or just delete `web/.next` and reload.
+
 `scripts/dev.mjs` is the starter. It builds first because Nest needs the decorator metadata
 only `tsc` emits, prefixes each process's output with `[api]` or `[web]`, and stops both when
 either exits or on Ctrl+C. On Windows it does that with `taskkill /T`, because a plain kill
