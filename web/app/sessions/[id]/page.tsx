@@ -1645,6 +1645,19 @@ function TaskCard({
                   </ul>
                 </details>
               )}
+              {/* Pointed out to the model once and left in place, so a person should look. */}
+              {(task.vcs.suspicious?.length ?? 0) > 0 && (
+                <div className="err small" style={{ marginTop: 4 }}>
+                  {t('vcs.suspicious', { n: task.vcs.suspicious?.length ?? 0 })}
+                  <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+                    {(task.vcs.suspicious ?? []).map((s) => (
+                      <li key={s.path}>
+                        <code>{s.path}</code> — {s.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           )}
         </div>

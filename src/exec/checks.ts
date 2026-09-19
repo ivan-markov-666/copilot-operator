@@ -18,7 +18,17 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runStep, type RunResult, type Shell } from './runner.js';
+import { repoState, workingTreePaths } from '../vcs/git.js';
+import { findSuspicious, suspiciousDetail } from '../vcs/commitHygiene.js';
 import type { TaskCheck } from '../session/model.js';
+
+/**
+ * The check the runner adds on its own whenever it is about to commit.
+ *
+ * It is a constant rather than something a plan writes because it is not a claim about the
+ * work: it is what a commit should never carry, whatever the task was.
+ */
+export const COMMIT_CLEAN_CHECK: TaskCheck = { name: 'nothing installed, built, logged or secret is committed', expect: 'commit-clean' };
 
 /** What a check turned out to be, with enough detail to act on when it failed. */
 export type CheckOutcome = {
@@ -40,6 +50,8 @@ export type CheckRunOptions = {
   timeoutMs?: number;
   /** Refuses a command before it runs, the same gate the steps go through. */
   deny?: (command: string) => string | null;
+  /** The repository whose working tree `commit-clean` looks at. Absent means the check passes. */
+  repoDir?: string;
 };
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -66,6 +78,19 @@ function needsCommand(check: TaskCheck): boolean {
 export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOptions): Promise<CheckOutcome> {
   const fail = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => ({ check, passed: false, detail, ...extra });
   const pass = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => ({ check, passed: true, detail, ...extra });
+
+  if (check.expect === 'commit-clean') {
+    const dir = (opts.repoDir ?? '').trim();
+    if (!dir) return pass('no repository is set for this session, so nothing is committed');
+    const state = await repoState(dir).catch(() => null);
+    if (!state?.isRepo) return pass(`${dir} is not a git repository, so nothing is committed`);
+    // File by file, not folder by folder: a new `api/` with node_modules inside is one line to
+    // `git status` and thousands of files to a commit.
+    const found = findSuspicious(await workingTreePaths(dir));
+    return found.length === 0
+      ? pass('nothing in the working tree looks like tool output or secrets')
+      : fail(suspiciousDetail(found), { output: found.map((s) => `${s.path}\t${s.reason}`).join('\n') });
+  }
 
   if (needsCommand(check)) {
     const command = (check.run ?? '').trim();
@@ -171,7 +196,7 @@ export async function runChecks(checks: TaskCheck[], opts: CheckRunOptions): Pro
 
 /** A short line per check, for the live log and the task record. */
 export function describeCheck(check: TaskCheck): string {
-  const what = needsCommand(check) ? (check.run ?? '') : (check.file ?? '');
+  const what = check.expect === 'commit-clean' ? "the repository's uncommitted files" : needsCommand(check) ? (check.run ?? '') : (check.file ?? '');
   return `${check.name}: ${check.expect}${check.value ? ` "${check.value}"` : ''} — ${what}`;
 }
 
@@ -187,7 +212,7 @@ export function failureMessage(outcomes: CheckOutcome[], round: number, maxRound
   const lines = [
     '## The task is not finished yet',
     '',
-    `You reported the task as done, but ${failed.length} of the ${outcomes.length} checks the operator set for it did not pass.`,
+    `You reported the task as done, but ${failed.length} of the ${outcomes.length} checks set for it did not pass.`,
     'These checks are run by the runner, not by you, and they are what decides whether this task is over.',
     '',
   ];
@@ -195,7 +220,11 @@ export function failureMessage(outcomes: CheckOutcome[], round: number, maxRound
   for (const [i, o] of failed.entries()) {
     lines.push(`### ${i + 1}. ${o.check.name}`);
     lines.push('');
-    lines.push(`- What was required: \`${o.check.expect}\`${o.check.value ? ` of "${o.check.value}"` : ''}`);
+    lines.push(
+      o.check.expect === 'commit-clean'
+        ? '- What was required: nothing in the commit that is installed, built, logged or secret'
+        : `- What was required: \`${o.check.expect}\`${o.check.value ? ` of "${o.check.value}"` : ''}`,
+    );
     if (o.check.run) lines.push(`- Command: \`${o.check.run}\``);
     if (o.check.file) lines.push(`- File: \`${o.check.file}\``);
     lines.push(`- What happened: ${o.detail}`);

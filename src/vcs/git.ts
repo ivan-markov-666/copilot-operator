@@ -77,6 +77,26 @@ export async function repoState(dir: string): Promise<RepoState> {
   };
 }
 
+/**
+ * Every path that would go into the next commit, file by file.
+ *
+ * `repoState` reads `git status --porcelain`, which folds a new folder into one line: a task
+ * that creates `web/` and installs into it shows as `?? web/`, and nothing under it is named.
+ * That is fine for "is the tree dirty" and useless for "what is in it" — the first task of
+ * every plan creates a folder, and what it contains is exactly what a commit-hygiene check
+ * has to see. `--untracked-files=all` lists each file; renames are reported by their new name.
+ */
+export async function workingTreePaths(dir: string, limit = 20_000): Promise<string[]> {
+  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all']);
+  if (!status.ok || !status.stdout) return [];
+  return status.stdout
+    .split('\n')
+    .map((l) => l.slice(3).trim())
+    .map((p) => (p.includes(' -> ') ? p.slice(p.indexOf(' -> ') + 4) : p))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
 /** Is git usable at all on this machine? */
 export async function gitAvailable(): Promise<string | null> {
   const r = await git(process.cwd(), ['--version'], 10_000);

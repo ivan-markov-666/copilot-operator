@@ -14,6 +14,8 @@ import { SessionStore } from '../src/session/store.js';
 import { EventBus } from '../src/session/events.js';
 import { git, repoState, commitAll, branchNameFrom } from '../src/vcs/git.js';
 import { prepareForTask, commitTaskResult, commitMessage } from '../src/vcs/taskVcs.js';
+import { looksGenerated, findSuspicious } from '../src/vcs/commitHygiene.js';
+import { runCheck, COMMIT_CLEAN_CHECK } from '../src/exec/checks.js';
 import type { Session, Task } from '../src/session/model.js';
 
 const repo = await mkdtemp(join(tmpdir(), 'cop-vcs-repo-'));
@@ -135,6 +137,88 @@ console.log(branchNameFrom(['..bad..', '  ']));
 
 console.log('\n--- events ---');
 console.log(events.filter((e) => e.startsWith('vcs')).slice(0, 8).join('\n'));
+
+/*
+ * What a commit should not carry.
+ *
+ * A plan wrote its .gitignore exactly as dictated and a later build still put
+ * `tsconfig.tsbuildinfo` into the history, past a reviewer with the path in front of it and an
+ * audit that looked only for the folders the plan had thought of. The runner now looks: the
+ * pure rule first, then the check against a real working tree, then the mark on the record.
+ */
+console.log('\n--- what looks like tool output or secrets, and what does not ---');
+for (const p of [
+  'web/tsconfig.tsbuildinfo',
+  'api/node_modules/',
+  'api/node_modules/zod/index.js',
+  'dist/',
+  'web/.next/BUILD_ID',
+  'npm-debug.log',
+  '.env',
+  '.env.local',
+  '.env.example',
+  'web/next-env.d.ts',
+  'src/build.ts',
+  'api/package-lock.json',
+  'README.md',
+]) {
+  const hit = looksGenerated(p);
+  console.log(`  ${p.padEnd(30)} ${hit ? `${hit.reason}  → reported as ${hit.key}` : '(work)'}`);
+}
+console.log('found out of a list       :', findSuspicious(['src/app.ts', 'dist/', '.env']).map((s) => s.path).join(', '), '(expect dist/, .env)');
+console.log(
+  'a folder is reported once :',
+  findSuspicious(['api/node_modules/a.js', 'api/node_modules/b/c.js', 'api/src/ok.ts']).map((s) => s.path).join(', '),
+  '(expect api/node_modules/)',
+);
+
+console.log('\n--- the check, against a real working tree ---');
+// The machine's own global excludes must not decide this test: an operator who ignores
+// node_modules everywhere would make the check look blind here when it is not.
+await writeFile(join(data, 'no-excludes'), '');
+await git(repo, ['config', 'core.excludesFile', join(data, 'no-excludes')]);
+await mkdir(join(repo, 'web', 'node_modules', 'left'), { recursive: true });
+await writeFile(join(repo, 'web', 'node_modules', 'left', 'index.js'), 'module.exports = 1;\n');
+await writeFile(join(repo, 'web', 'tsconfig.tsbuildinfo'), '{}\n');
+await writeFile(join(repo, '.env'), 'SECRET=1\n');
+await writeFile(join(repo, 'honest.ts'), 'export const honest = true;\n');
+const logs = join(data, 'check-logs');
+await mkdir(logs, { recursive: true });
+const dirtyTree = await runCheck(COMMIT_CLEAN_CHECK, 0, { cwd: repo, logDir: logs, repoDir: repo });
+console.log('passed                    :', dirtyTree.passed, '(expect false)');
+console.log('names the files           :', ['tsconfig.tsbuildinfo', 'node_modules', '.env'].every((s) => dirtyTree.detail.includes(s)) ? 'yes' : 'NO');
+console.log('detail                    :', dirtyTree.detail.slice(0, 220));
+console.log('leaves the work alone     :', !dirtyTree.detail.includes('honest.ts') ? 'yes' : 'NO');
+console.log('no repository: passes     :', (await runCheck(COMMIT_CLEAN_CHECK, 0, { cwd: repo, logDir: logs })).passed, '(expect true — nothing will be committed)');
+await rm(join(repo, 'web', 'node_modules'), { recursive: true, force: true });
+await rm(join(repo, 'web', 'tsconfig.tsbuildinfo'), { force: true });
+await rm(join(repo, '.env'), { force: true });
+const cleanTree = await runCheck(COMMIT_CLEAN_CHECK, 0, { cwd: repo, logDir: logs, repoDir: repo });
+console.log('after ignoring/removing   :', cleanTree.passed, '(expect true)');
+await rm(join(repo, 'honest.ts'), { force: true });
+
+console.log('\n--- left in place, it is committed and marked ---');
+// The build state appears while the task runs — after its branch is cut, as it would for
+// real — and is still there when the runner commits.
+const marked = await store.addTask(session.id, { title: 'leaves build state behind', level2: '', prompt: 'p' });
+await reload();
+const markedPrep = await prepareForTask(session, session.tasks.find((x) => x.id === marked.id) as Task, bus, save);
+await store.updateTask(session.id, marked.id, (t) => {
+  t.vcs = markedPrep.vcs;
+});
+console.log('branch for it             :', markedPrep.vcs.branch ?? `(none: ${markedPrep.vcs.problem})`);
+await writeFile(join(repo, 'honest-two.ts'), 'export const two = 2;\n');
+await writeFile(join(repo, 'web', 'tsconfig.tsbuildinfo'), '{}\n');
+await reload();
+const markedAfter = await commitTaskResult(session, session.tasks.find((x) => x.id === marked.id) as Task, { status: 'done', summary: 'left build state behind' }, bus);
+await store.updateTask(session.id, marked.id, (t) => {
+  t.vcs = markedAfter;
+});
+const markedTask = (await store.getSession(session.id))?.tasks.find((x) => x.id === marked.id);
+console.log('committed                 :', markedTask?.vcs?.commit ? 'yes' : 'NO');
+console.log('marked as suspicious      :', (markedTask?.vcs?.suspicious ?? []).map((s) => `${s.path} (${s.reason})`).join('; ') || '(nothing)');
+console.log('the honest file is not    :', !(markedTask?.vcs?.suspicious ?? []).some((s) => s.path.includes('honest')) ? 'yes' : 'NO');
+console.log('event                     :', events.find((e) => e.startsWith('vcs-suspicious'))?.slice(0, 90) ?? '(none)');
 
 await rm(repo, { recursive: true, force: true });
 await rm(data, { recursive: true, force: true });

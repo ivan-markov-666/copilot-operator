@@ -18,6 +18,7 @@
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
+import { findSuspicious } from './commitHygiene.js';
 import { branchNameFrom, commitAll, commitFiles, commitsBetween, createBranch, checkoutExisting, freeBranchName, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
@@ -218,7 +219,18 @@ export async function commitTaskResult(
       `${files.length} file(s) — push it yourself when you are ready`,
     data: { branch: current.branch, commit: result.commit, files: files.length } });
 
-  return { ...current, commit: result.commit, commits, files };
+  // What went in that should not have. Read from the commit itself rather than from the check
+  // that pointed it out, so the record is what happened and not what was noticed.
+  const suspicious = findSuspicious(files.map((f) => f.path));
+  if (suspicious.length > 0) {
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-suspicious', level: 'warn',
+      message:
+        `${suspicious.length} committed file(s) look like tool output or secrets: ` +
+        suspicious.map((s) => `${s.path} (${s.reason})`).join('; '),
+      data: { commit: result.commit, suspicious } });
+  }
+
+  return { ...current, commit: result.commit, commits, files, ...(suspicious.length > 0 ? { suspicious } : {}) };
 }
 
 /**

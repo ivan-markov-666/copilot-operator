@@ -170,6 +170,8 @@ export type TaskVcs = {
   commits?: string[];
   /** The files that commit touched. -1 for either count means a binary file. */
   files?: Array<{ path: string; added: number; removed: number }>;
+  /** Committed files that look like tool output or secrets, pointed out once and left in place. */
+  suspicious?: Array<{ path: string; reason: string }>;
   problem?: string;
 };
 

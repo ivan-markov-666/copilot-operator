@@ -159,6 +159,12 @@ the operator set for this task. If any of them fail you will get a report of exa
 ones and why, and the task is not over: fix what is failing and continue. That report is not
 a new task, and it is not a discussion — it is the same task, still open.
 
+One check is always on when the runner commits your work: files in the tree that look like
+tool output — `node_modules`, `dist`, `.next`, `*.tsbuildinfo`, logs — or like secrets
+(`.env`) are pointed out once, before they are committed. Add them to `.gitignore`, or, if one
+truly belongs in the repository, leave it and say why in your summary; it is then committed
+and marked for the person reading the task.
+
 ## The format
 
 Every reply contains **exactly one** fenced code block tagged `json`, and nothing else in the

@@ -21,7 +21,7 @@ import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from
 import { isDownloadStep, mergeDeviations, describeDeviations, type Step, type Deviation } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
-import { runChecks, failureMessage, failureReport, type CheckOutcome } from '../exec/checks.js';
+import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, type ReviewFinding } from '../protocol/reviewSchema.js';
@@ -36,7 +36,7 @@ import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskRunGroup, TaskReview, TaskStatus } from '../session/model.js';
 import { mirrorProject, describeMirror } from '../context/projectMirror.js';
-import { prepareForTask, commitTaskResult } from '../vcs/taskVcs.js';
+import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
 import { defaultExportDir } from '../context/contextFiles.js';
 
 export type TaskOutcome = {
@@ -379,6 +379,9 @@ export async function runTask(
           `branch : ${vcsAfter.branch}`,
           `commit : ${vcsAfter.commit ?? '(nothing was committed)'}`,
           vcsAfter.problem ? `problem: ${vcsAfter.problem}` : '',
+          (vcsAfter.suspicious?.length ?? 0) > 0
+            ? `suspicious: ${vcsAfter.suspicious?.map((s) => `${s.path} (${s.reason})`).join('; ')}`
+            : '',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -554,6 +557,16 @@ export async function runTask(
     // before the checks ran and the reason would come out empty.
     let lastOutcomes: CheckOutcome[] = [];
     const maxCheckRounds = Math.max(1, cfg.limits.maxCheckRounds ?? 3);
+    /*
+     * The runner's own check, when there is going to be a commit.
+     *
+     * Whatever the task's checks say, a commit should not carry what is installed, built,
+     * logged or secret. Pointed out once and then let through: the second time round the
+     * files are committed and marked, because refusing would leave the tree dirty and the next
+     * task refusing to start over it.
+     */
+    const willCommit = !!(session.vcs?.enabled && session.vcs.commitOnFinish && repoDirOf(session));
+    let generatedPointedOut = false;
 
     /**
      * Whether "done" is accepted, decided by the operator's checks rather than by the reply.
@@ -565,19 +578,30 @@ export async function runTask(
      * about itself.
      */
     const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up'> => {
-      const checks = task.checks ?? [];
+      const checks = [...(task.checks ?? []), ...(willCommit ? [COMMIT_CLEAN_CHECK] : [])];
       if (checks.length === 0) return 'accept';
 
       checkRounds += 1;
       sink.event('checks-started', { round: checkRounds, count: checks.length },
-        `checking the task against ${checks.length} condition(s) the operator set`);
+        `checking the task against ${checks.length} condition(s)`);
 
       const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
         cwd: work.cwd,
         logDir: log.path('checks'),
         signal: deps.signal,
         deny: (command) => matchDenyPattern(command, cfg.execution.denyPatterns),
+        repoDir: willCommit ? repoDirOf(session) : undefined,
       }));
+
+      for (const o of outcomes) {
+        if (o.check.expect !== 'commit-clean' || o.passed) continue;
+        if (generatedPointedOut) {
+          o.passed = true;
+          o.detail = `still there after being pointed out once; committed and marked as suspicious on the task — ${o.detail}`;
+        } else {
+          generatedPointedOut = true;
+        }
+      }
 
       await setTask((t) => {
         t.checkResults = outcomes.map((o) => ({ name: o.check.name, passed: o.passed, detail: o.detail }));

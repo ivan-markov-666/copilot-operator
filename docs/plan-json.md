@@ -161,6 +161,16 @@ carries on. After `limits.maxCheckRounds` rounds (3 by default) the task is clos
 with the failing checks named in its reason. A check's `cwd` is optional: without it the
 command runs in the session's project folder, the same place the model's own steps run.
 
+One check is not written by the plan: whenever the runner is going to commit a task's work, it
+adds `commit-clean` itself, which fails once if the working tree holds files that look like tool
+output (`node_modules`, `dist`, `.next`, `*.tsbuildinfo`, logs) or secrets (`.env`). The task is
+told to ignore them or to say why they belong; a second `done` with them still there commits
+them and marks them on the task card. The reason it exists: a plan wrote its `.gitignore` exactly
+as dictated, nine entries, and a later build turned on `incremental` in a `tsconfig.json` the
+plan had also dictated — so `tsconfig.tsbuildinfo` went into the history, past a reviewer that
+had the path in front of it and past an audit that looked only for the three folders the plan
+had thought of.
+
 ```jsonc
 "checks": [
   { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\Projects\app" },

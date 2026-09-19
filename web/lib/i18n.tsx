@@ -196,6 +196,7 @@ const dict = {
     'vcs.taskBase': 'started from {commit}',
     'vcs.taskProblem': 'version control did not run: {problem}',
     'vcs.taskFiles': '{n} file(s) changed',
+    'vcs.suspicious': 'Committed although it looks like tool output or secrets ({n}) — pointed out once and left in place:',
     'vcs.taskNoFiles': 'nothing was committed — the task changed no files',
     'vcs.taskBinary': 'binary',
 
@@ -938,6 +939,7 @@ const dict = {
     'vcs.taskBase': 'тръгнала от {commit}',
     'vcs.taskProblem': 'контролът на версиите не се изпълни: {problem}',
     'vcs.taskFiles': '{n} променени файла',
+    'vcs.suspicious': 'Комитнато, макар да прилича на изход на инструмент или на тайни ({n}) — посочено веднъж и оставено:',
     'vcs.taskNoFiles': 'нищо не беше комитнато — задачата не промени файлове',
     'vcs.taskBinary': 'двоичен',
     'mirror.title': 'Файлове на проекта за чата',

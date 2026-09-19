@@ -177,7 +177,13 @@ export type TaskCheck = {
     | 'output-matches'
     | 'file-exists'
     | 'file-missing'
-    | 'file-contains';
+    | 'file-contains'
+    /**
+     * Nothing in the working tree that looks like tool output or secrets. Added by the runner
+     * itself whenever it is going to commit; not offered to plans, because it is not a claim
+     * about the work but a fact about what a commit should not carry. See `commitHygiene.ts`.
+     */
+    | 'commit-clean';
   /** The command, for the exit-code and output kinds. */
   run?: string;
   shell?: 'pwsh' | 'powershell' | 'cmd';
@@ -365,6 +371,11 @@ export type TaskVcs = {
    * a binary file, which git counts in neither direction.
    */
   files?: Array<{ path: string; added: number; removed: number }>;
+  /**
+   * Committed files that look like tool output or secrets, each with why it looks that way.
+   * They were pointed out to the model once and left in place, so a person should look.
+   */
+  suspicious?: Array<{ path: string; reason: string }>;
   /** Set when version control was on but could not do its part, with the reason. */
   problem?: string;
 };
