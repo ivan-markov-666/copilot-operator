@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
+import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
@@ -1754,6 +1754,7 @@ function TaskCard({
               <RichText text={task.summary} />
             </div>
           )}
+          {(task.deviations?.length ?? 0) > 0 && <Deviations items={task.deviations ?? []} />}
           {task.reason && (
             <div className="reason small" style={{ margin: '6px 0' }}>
               {task.reason}
@@ -1997,6 +1998,36 @@ function ChecksEditor({ checks, onChange }: { checks: TaskCheck[]; onChange: (ne
 }
 
 /**
+ * Instructions the model could not follow as written, on the task card.
+ *
+ * A block of its own rather than a line in the summary, because it is the one part of the
+ * outcome that is a decision the operator did not make: the task said X, the machine refused,
+ * and the model chose Y. That belongs in front of whoever wrote the task, not inside an account
+ * of how well it went.
+ */
+function Deviations({ items }: { items: TaskDeviation[] }) {
+  const { t } = useT();
+  return (
+    <div className="summary">
+      <strong>{t('task.deviations', { n: items.length })}</strong>
+      <ol style={{ margin: '6px 0', paddingLeft: 20 }}>
+        {items.map((d, i) => (
+          <li key={i} style={{ marginBottom: 6 }}>
+            <div>{d.instruction}</div>
+            <div className="muted">
+              {t('task.deviationDid')}: {d.did}
+            </div>
+            <div className="muted">
+              {t('task.deviationWhy')}: {d.why}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
  * What the independent review concluded, on the task it reviewed.
  *
  * Shown above the summary rather than below it, and deliberately so: the summary is the
@@ -2027,7 +2058,19 @@ function ReviewVerdict({ review }: { review?: TaskReview }) {
           <ol style={{ margin: '6px 0', paddingLeft: 20 }}>
             {(review.findings ?? []).map((f, i) => (
               <li key={i} style={{ marginBottom: 8 }}>
-                <div>{f.what}</div>
+                <div>
+                  {f.what}
+                  {f.about === 'task' && (
+                    <span className="chip" style={{ marginLeft: 6 }}>
+                      {t('review.aboutTask')}
+                    </span>
+                  )}
+                  {f.repeated && (
+                    <span className="chip" style={{ marginLeft: 6 }}>
+                      {t('review.repeated')}
+                    </span>
+                  )}
+                </div>
                 {f.where && <div className="muted">{f.where}</div>}
                 <div className="muted">
                   {t('review.evidence')}: {f.evidence}

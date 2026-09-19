@@ -24,6 +24,7 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { describeFindings, type ReviewFinding } from '../protocol/reviewSchema.js';
+import type { Deviation } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { describeStep } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
@@ -56,17 +57,40 @@ export type ReviewDeps = {
   round: number;
   /** The files the task changed, as version control recorded them. */
   changedFiles: string[];
+  /** Instructions the implementer says it could not follow as written. Claims, not facts. */
+  deviations: Deviation[];
+  /** What the round before this one found, when there was one. */
+  previous?: PreviousRound;
   event: (type: string, data?: Record<string, unknown>, human?: string, level?: 'info' | 'warn' | 'error') => void;
   record: (heading: string, body: string) => Promise<void>;
 };
+
+/** The findings of the round before this one, as they were sent back to the implementer. */
+export type PreviousRound = { round: number; findings: Array<ReviewFinding & { repeated?: boolean }> };
 
 /**
  * What the reviewer is told about the work.
  *
  * Everything here is either the instruction the implementer was given or an observable fact
- * about the repository. Nothing is the implementer's account of itself.
+ * about the repository — with one deliberate exception. The implementer's declared deviations
+ * are its own account, and they are passed on anyway, framed as claims to test rather than
+ * facts to rely on: "this instruction cannot be followed on this machine" is falsifiable by
+ * running things, and it is exactly the input the `about: task` verdict was missing. In the
+ * run that motivated this the reviewer wrote in its own evidence that the build rewrites the
+ * required value, and still filed the finding as the work's fault, twice.
+ *
+ * The previous round's findings are process facts, not the implementer's account: what another
+ * reviewer found, and that a fix was reported. The new reviewer is asked to verify them afresh
+ * and, if one is still there, to decide whose problem it is instead of raising it a third time.
  */
-function reviewBrief(session: Session, task: Task, changedFiles: string[], cfg: ResolvedConfig): string {
+export function reviewBrief(
+  session: Session,
+  task: Task,
+  changedFiles: string[],
+  cfg: ResolvedConfig,
+  deviations: Deviation[] = [],
+  previous?: PreviousRound,
+): string {
   const repo = session.vcs?.enabled ? session.vcs.repoDir?.trim() : '';
   const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
 
@@ -86,6 +110,44 @@ function reviewBrief(session: Session, task: Task, changedFiles: string[], cfg: 
     '',
     'Files this task changed:',
     files,
+    ...(deviations.length > 0
+      ? [
+          '',
+          '## What the implementer says could not be done as written',
+          '',
+          'The implementer declared that these instructions could not be followed literally, and says',
+          'what it did instead. These are claims, not facts, and you are given them for one reason: to',
+          'test them. For each, establish whether the instruction really cannot be satisfied on this',
+          'machine, with these tools, inside the project instructions. If it cannot, the task asks for',
+          'something impossible and that is a finding with `"about": "task"`. If it can, the work',
+          'deviated for no good reason and that is a finding with `"about": "work"`. Do not take the',
+          "implementer's word either way; the work is still judged against the task as written.",
+          '',
+          deviations
+            .map((d, i) => `${i + 1}. Instruction: ${d.instruction}\n   Did instead: ${d.did}\n   Claimed reason: ${d.why}`)
+            .join('\n\n'),
+        ]
+      : []),
+    ...(previous
+      ? [
+          '',
+          `## What review round ${previous.round} found`,
+          '',
+          'A previous reviewer, in another conversation, failed this work with the findings below. They',
+          'were sent to the implementer, which reports having fixed them, and the checks passed again.',
+          'You are not bound by that verdict: verify each one afresh, by running things. If one is still',
+          'there, do not simply raise it again. Decide, and say in `about`, whether fixing the work can',
+          'resolve it at all — a finding that survives a reported fix is often one the task itself made',
+          'unsatisfiable: an instruction a tool overwrites, a setting a version removed.',
+          '',
+          previous.findings
+            .map(
+              (f, i) =>
+                `${i + 1}. ${f.what}${f.where ? ` (${f.where})` : ''}${f.repeated ? ' — raised in more than one round already' : ''}`,
+            )
+            .join('\n'),
+        ]
+      : []),
     '',
     '## Your job',
     '',
@@ -134,7 +196,7 @@ export async function runReview(
     await transport.waitForReply(before);
 
     await pacer.throttleSend();
-    before = await transport.sendAndConfirm(reviewBrief(session, task, deps.changedFiles, cfg));
+    before = await transport.sendAndConfirm(reviewBrief(session, task, deps.changedFiles, cfg, deps.deviations, deps.previous));
     let markdown = (await transport.waitForReply(before)).markdown;
     await saveReply('00-opening', markdown);
 
@@ -302,8 +364,16 @@ function refused(id: number, reason: string, command = '(not run)'): RunResult {
   };
 }
 
-/** The message that carries a review's findings back to the conversation that did the work. */
-export function findingsMessage(outcome: ReviewOutcome, round: number, maxRounds: number): string {
+/**
+ * The message that carries a review's findings back to the conversation that did the work.
+ *
+ * `repeated` are the findings an earlier round already raised. They get a paragraph of their
+ * own, because fixing the same thing the same way a second time is the loop this exists to
+ * break: the implementer is asked to decide whether the fix did not hold or the instruction
+ * cannot be kept, and to declare the second case in `deviations`, where it reaches the reviewer
+ * and the person who wrote the task.
+ */
+export function findingsMessage(outcome: ReviewOutcome, round: number, maxRounds: number, repeated: ReviewFinding[] = []): string {
   return [
     `An independent review of your work found ${outcome.findings.length} problem(s). The reviewer is a`,
     'separate conversation that was given the task and the files you changed, ran the work itself, and',
@@ -311,14 +381,24 @@ export function findingsMessage(outcome: ReviewOutcome, round: number, maxRounds
     '',
     outcome.summary ? `What it checked: ${outcome.summary}` : '',
     '',
-    describeFindings(outcome.findings),
+    describeFindings(outcome.findings, (f) => repeated.includes(f)),
     '',
+    ...(repeated.length > 0
+      ? [
+          `${repeated.length} of these ${repeated.length === 1 ? 'was' : 'were'} raised in the previous round as well: you reported a fix,`,
+          'and a fresh reviewer found the same thing at the same place. Before fixing it the same way again,',
+          'decide which of two things is true. Either the fix did not hold — then fix it differently, and show',
+          'in the summary what you ran that proves it holds after the exact verification the task requires.',
+          'Or the instruction cannot be satisfied as written — a tool rewrites the file, a version removed the',
+          'option — then say so in `deviations`: the instruction, what you did instead, and why. That is the',
+          'honest answer, and it is the only one that reaches the person who wrote the task.',
+          '',
+        ]
+      : []),
     `Fix these, then verify as usual and close the task again. This is review round ${round} of ${maxRounds};`,
     'after that the task is closed as blocked with whatever is still outstanding.',
     '',
     'If you believe a finding is wrong, say so in your summary with the evidence that shows it —',
     'do not change the thing the reviewer looked at in order to make the objection go away.',
-  ]
-    .filter((line) => line !== '' || true)
-    .join('\n');
+  ].join('\n');
 }

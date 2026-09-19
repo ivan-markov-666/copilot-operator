@@ -32,6 +32,9 @@ export type TaskStatus =
 
 export type SessionStatus = 'idle' | 'running' | 'stopping';
 
+/** One instruction not followed as written: which, what was done instead, and why. */
+export type TaskDeviation = { instruction: string; did: string; why: string };
+
 export type Task = {
   id: string;
   title: string;
@@ -54,6 +57,12 @@ export type Task = {
   finalReply?: string;
   /** Why the task ended, when it did not end with `done`. */
   reason?: string;
+  /**
+   * Instructions the model could not follow as written, with what it did instead and why.
+   * Declared by the model in its replies and kept here, because a decision taken in a chat
+   * and written only in a note is a decision nobody made.
+   */
+  deviations?: TaskDeviation[];
   /** Path of the consolidated text log of everything executed, relative to the run folder. */
   logFile?: string;
   /**
@@ -211,7 +220,15 @@ export type TaskReview = {
   /** How many commands the last reviewer ran. A pass with none is refused before it gets here. */
   stepsRun: number;
   summary?: string;
-  findings?: Array<{ what: string; evidence: string; where?: string }>;
+  findings?: Array<{
+    what: string;
+    evidence: string;
+    where?: string;
+    /** Whose problem it is: the work, or the task that asked for it. */
+    about?: 'work' | 'task';
+    /** An earlier round raised the same finding at the same place, and it came back. */
+    repeated?: boolean;
+  }>;
   /** Set when the review itself could not be carried out, which is not the work's fault. */
   problem?: string;
   /** What the review actually ran on, when it differed from the session's model. */
@@ -256,6 +273,8 @@ export type TaskAttempt = {
   iterations: number;
   summary?: string;
   reason?: string;
+  /** What this attempt declared it could not do as written. */
+  deviations?: TaskDeviation[];
   /**
    * What this attempt actually ran with.
    *

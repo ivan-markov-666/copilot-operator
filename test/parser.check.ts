@@ -1,4 +1,5 @@
 import { parseReply, extractFencedBlocks, stripLineNumbers } from '../src/protocol/parser.js';
+import { mergeDeviations, describeDeviations } from '../src/protocol/replySchema.js';
 
 const opts = { stopMarker: 'Край', defaultShell: 'pwsh' as const };
 const show = (label: string, md: string): void => {
@@ -81,3 +82,43 @@ console.log('\n--- default shell applied ---');
 const r = parseReply(block({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'Get-Date' }] }), opts);
 if (r.ok) console.log('shell =', r.reply.steps[0].shell);
 console.log('fenced blocks found in a mixed reply:', extractFencedBlocks('```ts\na\n```\n```json\n{}\n```').map((b) => b.lang).join(', '));
+
+/*
+ * Deviations: an instruction not followed as written, as data.
+ *
+ * Two product decisions were taken by a model in one run — an older TypeScript pinned so a
+ * removed option would still parse, a tsconfig value restored after every build because the
+ * build rewrote it — and both were recorded only in `notes`, which nothing reads. The field is
+ * where such a decision goes so that the commit, the register and the reviewer all see it.
+ */
+console.log('\n--- deviations: what could not be done as written, as data ---');
+const deviation = {
+  instruction: 'tsconfig.json with moduleResolution node',
+  did: 'moduleResolution bundler',
+  why: 'TS5108: moduleResolution=node10 has been removed; TypeScript 6.0.3 was installed',
+};
+const devCase = (label: string, obj: unknown): void => {
+  const r = parseReply(block(obj), opts);
+  console.log(r.ok ? `${label.padEnd(32)} ok   deviations=${r.reply.deviations.length}` : `${label.padEnd(32)} FAIL ${r.detail.slice(0, 80)}`);
+};
+devCase('declared mid-task, on continue', { status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'npx tsc --noEmit' }], deviations: [deviation] });
+devCase('declared on done', { status: 'done', steps: [], summary, deviations: [deviation] });
+devCase('left out entirely', { status: 'done', steps: [], summary });
+devCase('missing why (reject)', { status: 'done', steps: [], summary, deviations: [{ instruction: 'x', did: 'y' }] });
+devCase('blank why (reject)', { status: 'done', steps: [], summary, deviations: [{ ...deviation, why: '  ' }] });
+
+const merged = mergeDeviations(
+  [deviation],
+  [
+    { ...deviation, instruction: '  TSCONFIG.JSON with   moduleResolution node ', why: 'refined: TypeScript 6 removed node10' },
+    { instruction: 'jsx preserve', did: 'restored the value after each build', why: 'next build rewrites tsconfig.json' },
+  ],
+);
+console.log('merged by instruction     :', merged.length, '(expect 2 — the repeat is one deviation, later wording wins)');
+console.log('later wording kept        :', merged[0].why.startsWith('refined') ? 'yes' : 'NO');
+console.log(
+  describeDeviations(merged)
+    .split('\n')
+    .map((l) => '  ' + l)
+    .join('\n'),
+);

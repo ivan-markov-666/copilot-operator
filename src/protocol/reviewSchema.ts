@@ -104,12 +104,13 @@ export const ReviewSchema = z
 export type Review = z.infer<typeof ReviewSchema>;
 
 /** The findings written out for whoever has to act on them. */
-export function describeFindings(findings: ReviewFinding[]): string {
+export function describeFindings(findings: ReviewFinding[], isRepeated?: (f: ReviewFinding) => boolean): string {
   return findings
     .map((f, i) => {
       const where = f.where?.trim() ? ` (${f.where.trim()})` : '';
       const about = f.about === 'task' ? ' [about the task, not the work]' : '';
-      return `${i + 1}. ${f.what}${where}${about}\n   Evidence: ${f.evidence}`;
+      const again = isRepeated?.(f) ? ' [raised in an earlier round too]' : '';
+      return `${i + 1}. ${f.what}${where}${about}${again}\n   Evidence: ${f.evidence}`;
     })
     .join('\n\n');
 }
@@ -117,4 +118,31 @@ export function describeFindings(findings: ReviewFinding[]): string {
 /** True when nothing the reviewer found is something the implementer could fix. */
 export function allAboutTheTask(findings: ReviewFinding[]): boolean {
   return findings.length > 0 && findings.every((f) => f.about === 'task');
+}
+
+/** A `where`, normalised enough that two reviewers describing the same place agree. */
+function placeKey(where: string | undefined): string {
+  return (where ?? '').toLowerCase().replace(/\\/g, '/').replace(/\s+/g, ' ').trim();
+}
+
+function claimKey(what: string): string {
+  return what.toLowerCase().replace(/[`"'*_]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Whether a finding is one an earlier round already raised.
+ *
+ * Two reviewers are two conversations, so the wording of `what` drifts between rounds; the
+ * `where` does not, because it names a file and a place in it. So a finding is the same
+ * finding when it points at the same place, and only when neither round said where, when it
+ * makes the same claim word for word. The signal this feeds is one the runner otherwise threw
+ * away: in one run the same `where` came back in rounds one and two, the implementer had
+ * reported it fixed in between, the checks had passed, and nobody was asked the only question
+ * that mattered — whether fixing the work could resolve it at all.
+ */
+export function isRepeat(previous: ReviewFinding[], finding: ReviewFinding): boolean {
+  const place = placeKey(finding.where);
+  if (place) return previous.some((p) => placeKey(p.where) === place);
+  const claim = claimKey(finding.what);
+  return previous.some((p) => !placeKey(p.where) && claimKey(p.what) === claim);
 }

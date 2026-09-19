@@ -14,7 +14,8 @@
  *   npm run check:review
  */
 import { parseReview } from '../src/protocol/parser.js';
-import { allAboutTheTask, describeFindings, ReviewSchema } from '../src/protocol/reviewSchema.js';
+import { allAboutTheTask, describeFindings, isRepeat, ReviewSchema } from '../src/protocol/reviewSchema.js';
+import { reviewBrief, findingsMessage } from '../src/orchestrator/review.js';
 import { RunConfigSchema } from '../src/config/schema.js';
 
 const opts = { defaultShell: 'pwsh' as const };
@@ -105,3 +106,63 @@ for (const [verdict, stepsRun] of [
 ] as const) {
   console.log(`  ${verdict} after ${stepsRun} command(s) :`, wouldRefuse(verdict, stepsRun) ? 'sent back' : 'accepted');
 }
+
+/*
+ * A finding that comes back.
+ *
+ * Rounds one and two of one review pointed at the same `where`; the implementer had reported a
+ * fix between them and the checks had passed. The runner had every fact needed to ask the one
+ * question that mattered — can fixing the work resolve this at all — and asked nothing.
+ * Matching is by place, because two reviewers word one defect differently and a place does not
+ * drift; by claim only when neither round named a place.
+ */
+console.log('\n--- a finding that comes back is recognised by where it points ---');
+const round1 = [
+  {
+    what: 'The task requires jsx preserve, but web\\tsconfig.json sets it to react-jsx.',
+    evidence: 'x',
+    where: 'C:\\Projects\\calculator-test\\web\\tsconfig.json, compilerOptions.jsx',
+    about: 'work' as const,
+  },
+];
+const again = {
+  what: 'tsconfig.json uses "jsx": "react-jsx" instead of the task-required "jsx": "preserve".',
+  evidence: 'y',
+  where: 'c:/projects/calculator-test/web/tsconfig.json,  compilerOptions.jsx',
+  about: 'work' as const,
+};
+const elsewhere = { ...again, where: 'web/app/page.tsx' };
+const noPlace = { what: 'The README start command returns 500.', evidence: 'z' };
+console.log('same place, other words    :', isRepeat(round1, again), '(expect true)');
+console.log('different place            :', isRepeat(round1, elsewhere), '(expect false)');
+console.log('no place, same claim       :', isRepeat([noPlace], { ...noPlace, evidence: 'w' }), '(expect true)');
+console.log('no place, other claim      :', isRepeat([noPlace], { what: 'The README install command fails.', evidence: 'w' }), '(expect false)');
+console.log('first round, nothing before:', isRepeat([], again), '(expect false)');
+console.log('marked when written out    :', describeFindings([again], () => true).includes('earlier round') ? 'yes' : 'NO');
+
+/*
+ * What the second reviewer is told, and what the implementer hears.
+ *
+ * The brief carries two things it did not before: the implementer's declared deviations, as
+ * claims to test, and the previous round's findings, with the demand to decide whose problem a
+ * surviving one is. The message back to the implementer names the findings that recurred and
+ * points at `deviations` as the honest way out when the instruction cannot be kept.
+ */
+console.log('\n--- what the second round is told, and what the implementer hears ---');
+const brief = reviewBrief(
+  { vcs: { enabled: true, repoDir: 'C:\\Projects\\calculator-test' } } as never,
+  { prompt: 'Scaffold the front end.', level2: 'No dev servers.', title: 'web-scaffold' } as never,
+  ['web/tsconfig.json'],
+  { resolved: { cwd: 'C:\\Projects\\calculator-test' } } as never,
+  [{ instruction: 'jsx preserve', did: 'restored the value after each build', why: 'next build rewrites tsconfig.json' }],
+  { round: 1, findings: [{ ...round1[0], repeated: false }] },
+);
+console.log('brief carries the claim    :', brief.includes('could not be done as written') && brief.includes('jsx preserve') ? 'yes' : 'NO');
+console.log('brief carries round 1      :', brief.includes('What review round 1 found') ? 'yes' : 'NO');
+console.log('and asks for a decision    :', brief.includes('`about`') && brief.includes('unsatisfiable') ? 'yes' : 'NO');
+const plain = reviewBrief({ vcs: { enabled: false } } as never, { prompt: 'p', level2: '', title: 't' } as never, [], { resolved: { cwd: 'C:\\x' } } as never);
+console.log('first round says neither   :', !plain.includes('could not be done') && !plain.includes('review round') ? 'yes' : 'NO');
+const msg = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 2, 2, [again]);
+console.log('implementer told it recurred:', msg.includes('raised in the previous round') && msg.includes('`deviations`') ? 'yes' : 'NO');
+const quiet = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 1, 2);
+console.log('and not when it did not    :', !quiet.includes('previous round as well') ? 'yes' : 'NO');

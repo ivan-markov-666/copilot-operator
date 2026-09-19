@@ -51,6 +51,36 @@ export const MIN_SUMMARY_CHARS = 40;
  */
 export const MIN_TRIED_APPROACHES = 2;
 
+/**
+ * One instruction that was not followed as written, and what was done instead.
+ *
+ * The field exists because the alternative was prose, and prose is where two real decisions
+ * went to die in one run. A task required `moduleResolution node`; the TypeScript that
+ * `npm install` fetched had removed it, so the implementer pinned an older TypeScript in one
+ * package of a repository whose other package kept the new one, and said so in `notes`. A task
+ * required `jsx preserve`; `next build` rewrote the file after every run, so the implementer
+ * restored the value after each build, and said so in `notes`. Nobody reads `notes`: not the
+ * reviewer, which is denied the implementer's account on purpose; not the commit message; not
+ * the register. Both were product decisions taken by a model and recorded nowhere anyone
+ * would look.
+ *
+ * As data, a deviation goes three places: onto the task and into the commit, where a person
+ * finds it; and to the reviewer, as a claim to test rather than an account to trust. A true
+ * claim is a finding about the task; a false one is a finding about the work. Either way the
+ * `about: task` path finally has an entrance that does not depend on the reviewer noticing on
+ * its own.
+ */
+export const DeviationSchema = z.object({
+  /** The instruction, quoted or closely paraphrased, so it can be found in the task text. */
+  instruction: z.string().trim().min(1),
+  /** What was done instead. */
+  did: z.string().trim().min(1),
+  /** Why the instruction could not be followed as written: the error, the version, the fact. */
+  why: z.string().trim().min(1),
+});
+
+export type Deviation = z.infer<typeof DeviationSchema>;
+
 export const ReplySchema = z
   .object({
     /**
@@ -82,6 +112,12 @@ export const ReplySchema = z
     tried: z.array(z.string().trim().min(1)).default([]),
     /** What would unblock it: a decision, a credential, a missing file, a corrected task. */
     needed: z.string().optional(),
+    /**
+     * Instructions that could not be followed as written, with what was done instead and why.
+     * Accepted on any reply, because a deviation is made when it is made, not at the end; the
+     * runner keeps them for the task and merges repeats by instruction.
+     */
+    deviations: z.array(DeviationSchema).default([]),
   })
   .refine((r) => r.status !== 'continue' || r.steps.length > 0, {
     message:
@@ -117,4 +153,33 @@ export type Reply = z.infer<typeof ReplySchema>;
 
 export function isDownloadStep(s: Step): s is DownloadStepT {
   return s.type === 'download';
+}
+
+/** What makes two deviations the same one: the instruction, ignoring case and spacing. */
+function deviationKey(d: Deviation): string {
+  return d.instruction.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The deviations a task has declared so far, with a new reply's merged in.
+ *
+ * A deviation reported in iteration 5 must survive a `done` in iteration 12 that does not
+ * repeat it, and a `done` that does repeat it must not list it twice. The instruction keeps
+ * the wording it was first declared with — that is the one written when it happened — while
+ * `did` and `why` take the latest, so a reason refined as the work goes on is not lost.
+ */
+export function mergeDeviations(existing: Deviation[], incoming: Deviation[]): Deviation[] {
+  const merged = new Map<string, Deviation>();
+  for (const d of [...existing, ...incoming]) {
+    const key = deviationKey(d);
+    merged.set(key, { instruction: merged.get(key)?.instruction ?? d.instruction, did: d.did, why: d.why });
+  }
+  return [...merged.values()];
+}
+
+/** The deviations written out, for the commit message and the record. */
+export function describeDeviations(deviations: Deviation[]): string {
+  return deviations
+    .map((d, i) => `${i + 1}. Instruction: ${d.instruction}\n   Did instead: ${d.did}\n   Because: ${d.why}`)
+    .join('\n\n');
 }

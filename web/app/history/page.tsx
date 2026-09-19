@@ -369,6 +369,16 @@ function Flow({
                   {e.review.findings > 0 ? ` (${e.review.findings})` : ''}
                 </span>
               )}
+              {/*
+                Instructions the model could not follow as written. A count is enough here: the
+                row says a decision was taken that the plan did not make, and the task card says
+                which.
+              */}
+              {(e.deviations ?? 0) > 0 && (
+                <span className="badge waiting-approval" title={t('reg.deviationsWhy')}>
+                  {t('reg.deviations', { n: e.deviations ?? 0 })}
+                </span>
+              )}
               {e.runGroup && (
                 <span
                   className="chip"

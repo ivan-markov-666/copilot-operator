@@ -54,8 +54,17 @@ task finishes and its checks pass, a second conversation is opened that had no p
 shown the task and the files that changed, and made to decide by running them. Its verdict shows
 on the task card above the summary — that order is deliberate, since the summary is the
 implementer's account of itself and the verdict is what says whether to believe it — and as a
-badge on the register's row. Findings are listed with their evidence. A task can be `done` and
-still have been through two rounds of somebody else finding things wrong with it.
+badge on the register's row. Findings are listed with their evidence; one that is about the
+task rather than the work, and one that came back after the implementer reported a fix, each
+carry a chip saying so. A task can be `done` and still have been through two rounds of somebody
+else finding things wrong with it.
+
+**Not as the task said.** When the model declares it could not follow an instruction as
+written — the option was removed in the installed version, the build rewrites the file — the
+task card shows those deviations as a block of their own under the summary: the instruction,
+what was done instead, and why. It is kept out of the summary on purpose, because it is the one
+part of the outcome that is a decision the operator did not make. The register's row carries a
+count.
 
 **How a task can end.** `done` is the work finished and verified. `blocked` is the work not
 done, reported by the model with what it tried and what is in the way — a result, not a

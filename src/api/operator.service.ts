@@ -190,6 +190,8 @@ export type RegistryEntry = {
   runGroup?: TaskRunGroup;
   /** What an independent review concluded, in the short form a row has space for. */
   review?: { verdict: TaskReview['verdict']; findings: number; stepsRun: number };
+  /** How many instructions the model declared it could not follow as written. */
+  deviations?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
   attempt?: number;
   /**
@@ -1610,6 +1612,7 @@ export class OperatorService {
           review: t.review
             ? { verdict: t.review.verdict, findings: t.review.findings?.length ?? 0, stepsRun: t.review.stepsRun }
             : undefined,
+          deviations: t.deviations?.length || undefined,
           attempt: t.attempt,
           attempts: (t.attempts ?? []).map((a, n) => {
             const from = a.startedAt ? Date.parse(a.startedAt) : undefined;

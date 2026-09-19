@@ -19,6 +19,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task } from './model.js';
+import { describeDeviations } from '../protocol/replySchema.js';
 
 export type ExportVariant = 'full' | 'outcome';
 
@@ -204,6 +205,13 @@ async function sectionFor(task: Task, index: number, input: ExportInput): Promis
   if (task.summary) parts.push(task.summary.trimEnd());
   else if (task.reason) parts.push(`The task did not finish with a summary. Reason: ${task.reason}`);
   else parts.push('(no closing summary)');
+
+  // Right under the outcome, because this is the part of it the reader is least likely to
+  // expect: the task said one thing, and the model — with a reason — did another.
+  if ((task.deviations ?? []).length > 0) {
+    parts.push(`\n${THIN}\nNOT AS THE TASK SAID — instructions the model could not follow as written\n${THIN}`);
+    parts.push(describeDeviations(task.deviations ?? []));
+  }
 
   if (task.finalReply && task.finalReply.trim() !== (task.summary ?? '').trim()) {
     parts.push(`\n${THIN}\nACTUAL — the last message in full\n${THIN}`);

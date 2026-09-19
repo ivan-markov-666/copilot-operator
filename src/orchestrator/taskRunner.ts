@@ -18,12 +18,12 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import { isDownloadStep, type Step } from '../protocol/replySchema.js';
+import { isDownloadStep, mergeDeviations, describeDeviations, type Step, type Deviation } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { runChecks, failureMessage, failureReport, type CheckOutcome } from '../exec/checks.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
-import { allAboutTheTask } from '../protocol/reviewSchema.js';
+import { allAboutTheTask, isRepeat, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState } from '../vcs/git.js';
 import { describeStep, matchDenyPattern } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
@@ -354,6 +354,8 @@ export async function runTask(
   const startedAt = Date.now();
   const deadline = startedAt + cfg.limits.maxRunMinutes * 60_000;
   let iterations = 0;
+  /** What the model has declared it could not do as written, merged across every reply. */
+  let deviations: Deviation[] = [];
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
@@ -363,7 +365,7 @@ export async function runTask(
     // The task is re-read first, because the branch was recorded on it after this closure
     // was created.
     const fresh = (await store.getSession(session.id))?.tasks.find((x) => x.id === task.id);
-    const vcsAfter = await commitTaskResult(session, { ...task, vcs: fresh?.vcs }, { status, summary, reason }, bus).catch(
+    const vcsAfter = await commitTaskResult(session, { ...task, vcs: fresh?.vcs }, { status, summary, reason, deviations }, bus).catch(
       (e: unknown) => {
         sink.event('vcs-error', { error: String(e) }, `version control failed after the task: ${(e as Error).message}`, 'warn');
         return undefined;
@@ -390,6 +392,7 @@ export async function runTask(
       t.summary = summary;
       t.reason = reason;
       t.finalReply = finalReply;
+      if (deviations.length > 0) t.deviations = deviations;
       t.logFile = 'task-log.txt';
     });
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
@@ -607,6 +610,11 @@ export async function runTask(
      */
     let reviewRounds = 0;
     let lastReview: ReviewOutcome | null = null;
+    /**
+     * What the previous round found, as it was sent back. The next reviewer is told, and a
+     * finding that comes back is recognised against this — see `isRepeat`.
+     */
+    let previousFindings: Array<ReviewFinding & { repeated?: boolean }> = [];
 
     const reviewWanted = task.reviewEnabled ?? session.review?.enabled ?? true;
     const maxReviewRounds = Math.max(1, cfg.limits.maxReviewRounds ?? 2);
@@ -664,6 +672,8 @@ export async function runTask(
           dir: log.path('review', String(reviewRounds)),
           round: reviewRounds,
           changedFiles,
+          deviations,
+          previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings } : undefined,
           event: (type, data, human, level) => sink.event(type, data, human, level),
           record,
         });
@@ -678,13 +688,26 @@ export async function runTask(
         });
       }
 
+      /*
+       * Which findings an earlier round already raised.
+       *
+       * Decided before anything else, because it is the fact everything below turns on: a
+       * finding that survives a reported fix is the strongest evidence available that the
+       * task, not the work, is what cannot be satisfied — and the one fact the runner used to
+       * have and throw away.
+       */
+      const repeated = outcome.findings.filter((f) => isRepeat(previousFindings, f));
+      if (repeated.length > 0) {
+        sink.event('review-finding-repeated', { round: reviewRounds, count: repeated.length },
+          `${repeated.length} finding(s) came back after a reported fix: ${repeated.map((f) => f.where ?? f.what).join('; ')}`, 'warn');
+      }
       lastReview = outcome;
       await saveReview({
         verdict: outcome.verdict,
         rounds: reviewRounds,
         stepsRun: outcome.stepsRun,
         summary: outcome.summary,
-        findings: outcome.findings,
+        findings: outcome.findings.map((f) => (repeated.includes(f) ? { ...f, repeated: true } : f)),
         problem: outcome.problem,
         model: model || undefined,
       });
@@ -743,11 +766,12 @@ export async function runTask(
         `the review found ${outcome.findings.length} problem(s); sending them back to be fixed`, 'warn');
 
       await pacer.throttleSend();
-      const before = await transport.sendAndConfirm(findingsMessage(outcome, reviewRounds, maxReviewRounds));
+      const before = await transport.sendAndConfirm(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeated));
       const next = await transport.waitForReply(before);
       await saveReply(`review-${reviewRounds}-findings`, next);
       lastMarkdown = next.markdown;
       await pacer.settle();
+      previousFindings = outcome.findings.map((f) => ({ ...f, repeated: repeated.includes(f) }));
       return 'retry';
     };
 
@@ -829,6 +853,25 @@ export async function runTask(
       const { reply, done, blocked } = parsed;
       sink.event('reply-parsed', { iteration: iterations, status: reply.status, steps: reply.steps.length, notes: reply.notes },
         `iteration ${iterations}: ${reply.steps.length} step(s)${reply.notes ? ` — ${reply.notes}` : ''}`);
+
+      /*
+       * A deviation is recorded the moment it is declared, not when the task ends.
+       *
+       * Merged rather than appended, because the same one tends to be declared twice — once
+       * when it happens and again in the closing reply — and written to the task at once,
+       * because a task that ends `failed` or `aborted` still deviated, and that is still worth
+       * knowing about.
+       */
+      if (reply.deviations.length > 0) {
+        deviations = mergeDeviations(deviations, reply.deviations);
+        await setTask((t) => {
+          t.deviations = deviations;
+        });
+        sink.event('deviation-declared', { count: reply.deviations.length, total: deviations.length },
+          `the model says ${reply.deviations.length} instruction(s) could not be followed as written: ` +
+            reply.deviations.map((d) => d.instruction).join('; '), 'warn');
+        await record('DEVIATIONS DECLARED', describeDeviations(reply.deviations));
+      }
 
       /*
        * The task ends here, and it ends without the checks.

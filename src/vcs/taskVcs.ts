@@ -17,6 +17,7 @@
  */
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskVcs, VersionControl } from '../session/model.js';
+import type { Deviation } from '../protocol/replySchema.js';
 import { branchNameFrom, commitAll, commitFiles, commitsBetween, createBranch, checkoutExisting, freeBranchName, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
@@ -186,7 +187,7 @@ export function noteFor(repoDir: string, vcs: TaskVcs): string {
 export async function commitTaskResult(
   session: Session,
   task: Task,
-  outcome: { status: string; summary?: string; reason?: string },
+  outcome: { status: string; summary?: string; reason?: string; deviations?: Deviation[] },
   bus: EventBus,
 ): Promise<TaskVcs> {
   const settings = session.vcs;
@@ -230,13 +231,18 @@ export async function commitTaskResult(
  * summary, how it ended, the trailer — is added either way, because none of it can be known
  * in advance.
  */
-export function commitMessage(task: Task, outcome: { status: string; summary?: string; reason?: string }): string {
+export function commitMessage(task: Task, outcome: { status: string; summary?: string; reason?: string; deviations?: Deviation[] }): string {
   const planned = task.vcsPlan?.commitMessage?.trim();
   const [plannedSubject = '', ...plannedRest] = (planned ?? '').split('\n');
   const subject = (planned ? plannedSubject : task.title).replace(/\s+/g, ' ').trim().slice(0, 72) || 'copilot-operator task';
   const paragraphs = [
     plannedRest.join('\n').trim() || undefined,
     outcome.summary?.trim(),
+    // What the model could not do as the task said. In the commit because that is where the
+    // next person looks for why a file is not what the plan describes.
+    outcome.deviations && outcome.deviations.length > 0
+      ? `Not as the task said:\n${outcome.deviations.map((d) => `- ${d.instruction}\n  did: ${d.did}\n  because: ${d.why}`).join('\n')}`
+      : undefined,
     outcome.reason
       ? `Ended ${outcome.status}: ${outcome.reason}`
       : outcome.status !== 'done'

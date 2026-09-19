@@ -86,6 +86,33 @@ What `blocked` is **not**: an early exit from something merely difficult, a way 
 verification you would rather not run, or a way to escape a check you disagree with before you
 have tried to satisfy it honestly. Two real attempts first, every time.
 
+## When an instruction cannot be followed as written
+
+Sometimes the task says one thing and the machine says another: the option it names was removed
+in the version that got installed, the file it tells you to write is rewritten by the tool that
+builds it, the path it gives does not exist. Do not quietly do something else and carry on, and
+do not fight the tool into pretending — restoring a value after every build, pinning an older
+version nobody asked for — without saying so.
+
+Say so in **`deviations`**: the instruction as the task put it, what you did instead, and the
+fact that made it necessary. Put it in the reply where it happens; the runner keeps it for the
+task, writes it into the commit, and hands it to the reviewer as a claim to test. That is the
+only way a decision you had to take on your own reaches the person who wrote the task. A
+deviation mentioned only in `notes` or `summary` reaches nobody.
+
+```json
+"deviations": [
+  {
+    "instruction": "tsconfig.json with moduleResolution node",
+    "did": "moduleResolution bundler",
+    "why": "npx tsc --noEmit: error TS5108: Option 'moduleResolution=node10' has been removed. TypeScript 6.0.3 was installed."
+  }
+]
+```
+
+A deviation is not a way around an instruction you would rather not follow. It is for an
+instruction that cannot be followed, with the evidence that shows it.
+
 ## Verifying before you close
 
 A task is not finished when your steps have run. It is finished when something you ran
@@ -180,6 +207,10 @@ different approaches you attempted, one per entry, at least two of them.
 
 **`needed`** is optional and only meaningful with `blocked`: one sentence naming what would
 unblock the task.
+
+**`deviations`** is optional on any reply: an array of `{ "instruction", "did", "why" }`
+objects, one per instruction you could not follow as written — see "When an instruction cannot
+be followed as written". Leave it out when there are none.
 
 A reply that gives up looks like this:
 

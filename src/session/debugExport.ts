@@ -50,6 +50,8 @@ export type DebugTask = {
   level2: string;
   summary?: string;
   reason?: string;
+  /** What the model declared it could not do as written. A decision worth reading against the diff. */
+  deviations?: Task['deviations'];
   vcsPlan?: Task['vcsPlan'];
   vcs?: Task['vcs'];
   checks?: Task['checks'];
@@ -64,6 +66,7 @@ export type DebugTask = {
     runId?: string;
     reason?: string;
     summary?: string;
+    deviations?: Task['deviations'];
     checkResults?: Task['checkResults'];
     vcs?: Task['vcs'];
   }>;
@@ -178,6 +181,7 @@ async function taskOf(task: Task, runsDir: string): Promise<DebugTask> {
     level2: task.level2,
     summary: task.summary,
     reason: task.reason,
+    deviations: task.deviations,
     vcsPlan: task.vcsPlan,
     vcs: task.vcs,
     checks: task.checks,
@@ -191,6 +195,7 @@ async function taskOf(task: Task, runsDir: string): Promise<DebugTask> {
       runId: a.runId,
       reason: a.reason,
       summary: a.summary,
+      deviations: a.deviations,
       checkResults: a.checkResults,
       vcs: a.vcs,
     })),

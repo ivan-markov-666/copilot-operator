@@ -23,6 +23,8 @@ export type TaskAttempt = {
   iterations: number;
   summary?: string;
   reason?: string;
+  /** What this attempt declared it could not do as written. */
+  deviations?: TaskDeviation[];
   /** What the independent review concluded about this attempt. */
   review?: TaskReview;
   /** What this attempt ran with, so an edit cannot rewrite what was already asked. */
@@ -55,7 +57,18 @@ export type TaskCheck = {
 export type ReviewSettings = { enabled: boolean; model: string };
 
 /** One thing an independent review found wrong, with what proves it. */
-export type ReviewFinding = { what: string; evidence: string; where?: string };
+export type ReviewFinding = {
+  what: string;
+  evidence: string;
+  where?: string;
+  /** Whose problem it is: the work, or the task that asked for it. */
+  about?: 'work' | 'task';
+  /** An earlier round raised the same finding at the same place, and it came back. */
+  repeated?: boolean;
+};
+
+/** One instruction the model could not follow as written: which, what it did instead, and why. */
+export type TaskDeviation = { instruction: string; did: string; why: string };
 
 /** What an independent review concluded about a task. */
 export type TaskReview = {
@@ -108,6 +121,8 @@ export type Task = {
   summary?: string;
   finalReply?: string;
   reason?: string;
+  /** Instructions the model could not follow as written, with what it did instead and why. */
+  deviations?: TaskDeviation[];
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;
@@ -216,6 +231,8 @@ export type RegistryEntry = {
   runGroup?: TaskRunGroup;
   /** What an independent review concluded, in the short form a row has space for. */
   review?: { verdict: TaskReview['verdict']; findings: number; stepsRun: number };
+  /** How many instructions the model declared it could not follow as written. */
+  deviations?: number;
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
   /** The attempts before it, oldest first, each with its own run folder and log. */
