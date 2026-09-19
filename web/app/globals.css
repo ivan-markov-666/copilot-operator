@@ -1,98 +1,545 @@
+/*
+ * One stylesheet, two themes, and a handful of accessibility switches.
+ *
+ * Every colour is a variable on `:root`, redefined under `[data-theme="dark"]`. Nothing in the
+ * components knows which theme is on. The accessibility settings work the same way: they are
+ * `data-` attributes on `<html>`, set before the first paint by the script in the layout, and
+ * everything they change is expressed here.
+ *
+ * The palette is deliberately warm. Orange on near-black, or orange on cream, instead of the
+ * blue-grey a terminal tool reaches for by default: this is a window that stays open all day.
+ */
+
 :root {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --ink: #1b1f24;
-  --muted: #5c6470;
-  --line: #dfe3e8;
-  --accent: #2f6feb;
-  --accent-ink: #ffffff;
-  --ok: #1f8a4c;
-  --warn: #b26b00;
-  --bad: #c62828;
-  --code: #f0f2f5;
-  --radius: 10px;
+  /* Light: warm paper and a burnt orange dark enough to read as text on white. */
+  --bg: #fdf7f0;
+  --bg-tint: #f7ead9;
+  --panel: #fffdfb;
+  --ink: #241a13;
+  --muted: #7a6656;
+  --line: #ecdcc9;
+  --line-strong: #d8c3a9;
+  --accent: #b4500b;
+  --accent-ink: #fffaf5;
+  --accent-soft: #fbe9d8;
+  --ok: #2a6b45;
+  --ok-soft: #e4f1e7;
+  --warn: #8f5500;
+  --warn-soft: #fbedd6;
+  --bad: #a8271c;
+  --bad-soft: #fbe6e2;
+  --code: #f9efe3;
+  --shadow: 0 1px 2px rgba(74, 45, 20, 0.06), 0 6px 18px rgba(74, 45, 20, 0.05);
+
+  --radius: 12px;
+  --scale: 1;
   --mono: ui-monospace, Consolas, "Cascadia Mono", monospace;
+  --focus-width: 2px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1216;
-    --panel: #171b21;
-    --ink: #e6e9ee;
-    --muted: #9aa3ad;
-    --line: #2a313a;
-    --accent: #6ea0ff;
-    --accent-ink: #0b1220;
-    --ok: #4cc17a;
-    --warn: #e0a24a;
-    --bad: #ef6b6b;
-    --code: #10141a;
-  }
+:root[data-theme='dark'] {
+  /* Dark: warm charcoal rather than blue-black, amber rather than a cold blue. */
+  --bg: #17120f;
+  --bg-tint: #221a15;
+  --panel: #221b16;
+  --ink: #f2e8df;
+  --muted: #b6a493;
+  --line: #3a2e26;
+  --line-strong: #52412f;
+  --accent: #ff9f45;
+  --accent-ink: #2b1705;
+  --accent-soft: #35251a;
+  --ok: #7ed39f;
+  --ok-soft: #1e2b22;
+  --warn: #f0b96e;
+  --warn-soft: #2f2417;
+  --bad: #ff9081;
+  --bad-soft: #33201d;
+  --code: #1d1713;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
 }
+
+/* Accessibility: more contrast, at the cost of some of the warmth. */
+:root[data-contrast='high'] {
+  --ink: #000000;
+  --muted: #4a3a2c;
+  --line: #a88d6c;
+  --line-strong: #6b5236;
+  --accent: #8f3c00;
+  --panel: #ffffff;
+  --bg: #fff9f2;
+  --ok: #17512f;
+  --warn: #6b3f00;
+  --bad: #8a1a11;
+  --shadow: none;
+}
+
+:root[data-theme='dark'][data-contrast='high'] {
+  --ink: #ffffff;
+  --muted: #e0cfbd;
+  --line: #7d6650;
+  --line-strong: #a88a6a;
+  --accent: #ffc27a;
+  --panel: #100c09;
+  --bg: #000000;
+  --code: #0a0705;
+  --ok: #9ff0bd;
+  --warn: #ffd08f;
+  --bad: #ffb0a2;
+  --shadow: none;
+}
+
+:root[data-textsize='large'] { --scale: 1.12; }
+:root[data-textsize='huge'] { --scale: 1.28; }
+:root[data-focus='strong'] { --focus-width: 4px; }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: calc(15px * var(--scale)) / 1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+:root[data-links='underline'] a { text-decoration: underline; }
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  transition: none !important;
+  animation: none !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+/* A keyboard user's first stop: jump past the header into the page. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: 10px 16px;
+  border-radius: 0 0 var(--radius) 0;
+  z-index: 10;
+}
+.skip-link:focus { left: 0; }
 
 .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
-.top { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.top h1 { font-size: 22px; margin: 0; }
-.top nav a { margin-left: 16px; color: var(--muted); }
-.crumbs { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
-.panel h2 { font-size: 16px; margin: 0 0 10px; }
-.panel h3 { font-size: 14px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.top h1 { font-size: calc(21px * var(--scale)); margin: 0; letter-spacing: -0.01em; }
+.top h1 a { color: var(--accent); }
+.top nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.top nav a {
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: calc(14px * var(--scale));
+}
+.top nav a:hover { background: var(--accent-soft); color: var(--accent); text-decoration: none; }
+.top nav a[aria-current='page'] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/*
+ * The register's own button says `live` while the bot is working.
+ *
+ * It is small and it pulses, which is the whole design: big enough to catch the eye from
+ * another page, quiet enough not to compete with the page you are actually reading. The pulse
+ * stops for anyone who has asked the system for less motion — the two rules near the top of
+ * this file turn every animation off, and this one is not special.
+ */
+.top nav a .live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 0 6px 0 4px;
+  border-radius: 999px;
+  background: var(--ok-soft, var(--accent-soft));
+  color: var(--ok, var(--accent));
+  font-size: calc(10.5px * var(--scale));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.top nav a .live .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+
+.crumbs { color: var(--muted); font-size: calc(13px * var(--scale)); margin-bottom: 8px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+.panel h2 { font-size: calc(16px * var(--scale)); margin: 0 0 10px; }
+.panel h3 {
+  font-size: calc(13px * var(--scale));
+  margin: 16px 0 6px;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .grow { flex: 1 1 auto; }
 .muted { color: var(--muted); }
-.small { font-size: 13px; }
+.small { font-size: calc(13px * var(--scale)); }
 
-input[type=text], textarea, select {
-  width: 100%; background: var(--code); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
-  padding: 8px 10px; font: inherit;
+input[type='text'],
+textarea,
+select {
+  width: 100%;
+  background: var(--code);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 9px 11px;
+  font: inherit;
 }
-textarea { min-height: 110px; resize: vertical; font-family: var(--mono); font-size: 13px; line-height: 1.45; }
-textarea.prose { font-family: inherit; font-size: 14px; }
-label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+input[type='text']:focus,
+textarea:focus,
+select:focus { border-color: var(--accent); }
+textarea { min-height: 110px; resize: vertical; font-family: var(--mono); font-size: calc(13px * var(--scale)); line-height: 1.5; }
+textarea.prose { font-family: inherit; font-size: calc(14px * var(--scale)); }
+label { display: block; font-size: calc(13px * var(--scale)); color: var(--muted); margin: 12px 0 4px; }
 
-button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+input[type='checkbox'],
+input[type='radio'] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* A checkbox with its own explanation under it, for options that need one. */
+.option { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: var(--bg); }
+.option > label { display: flex; align-items: flex-start; gap: 10px; margin: 0; color: var(--ink); font-size: calc(14px * var(--scale)); cursor: pointer; }
+.option > label input { margin-top: 3px; flex: none; }
+.option .why { margin: 6px 0 0 26px; color: var(--muted); font-size: calc(12.5px * var(--scale)); }
+.option.warned { border-color: var(--warn); background: var(--warn-soft); }
+
+button {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 8px 13px;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 button.danger { color: var(--bad); border-color: var(--bad); }
-button:disabled { opacity: .5; cursor: default; }
+button.danger:hover:not(:disabled) { background: var(--bad-soft); border-color: var(--bad); }
+button.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+button.quiet:hover:not(:disabled) { color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
-.badge.queued { }
-.badge.running { color: var(--accent); border-color: var(--accent); }
-.badge.waiting-approval { color: var(--warn); border-color: var(--warn); }
-.badge.done { color: var(--ok); border-color: var(--ok); }
-.badge.failed, .badge.aborted, .badge.limit-reached { color: var(--bad); border-color: var(--bad); }
+.badge {
+  display: inline-block;
+  font-size: calc(12px * var(--scale));
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.badge.waiting-approval { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.badge.done { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+/*
+ * `blocked` is warned about, not condemned.
+ *
+ * It sits with "waiting for approval" rather than with "failed" on purpose: nothing went wrong
+ * with the machinery, a job was not done and somebody has to read why. Colouring it red would
+ * say the run broke, which is the one thing it did not do.
+ */
+.badge.blocked { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.badge.failed,
+.badge.aborted,
+.badge.limit-reached { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
 
-pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.45; margin: 6px 0; white-space: pre-wrap; word-break: break-word; }
+pre {
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: calc(12.5px * var(--scale));
+  line-height: 1.5;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 pre.tall { max-height: 420px; }
-details > summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+details > summary { cursor: pointer; color: var(--muted); font-size: calc(13px * var(--scale)); user-select: none; }
+details > summary:hover { color: var(--accent); }
 details[open] > summary { margin-bottom: 6px; }
 
-.task { border-left: 4px solid var(--line); padding-left: 12px; margin-bottom: 18px; }
+.task { border-left: 4px solid var(--line-strong); padding-left: 14px; margin-bottom: 18px; }
 .task.done { border-left-color: var(--ok); }
-.task.running, .task.waiting-approval { border-left-color: var(--accent); }
-.task.failed, .task.aborted, .task.limit-reached { border-left-color: var(--bad); }
-.task h4 { margin: 0 0 4px; font-size: 15px; }
-.summary { background: color-mix(in srgb, var(--ok) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--ok) 40%, var(--line)); border-radius: 8px; padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; }
+.task.running,
+.task.waiting-approval { border-left-color: var(--accent); }
+.task.blocked { border-left-color: var(--warn); }
+.task.failed,
+.task.aborted,
+.task.limit-reached { border-left-color: var(--bad); }
+.task h4 { margin: 0 0 4px; font-size: calc(15px * var(--scale)); }
+.task:target { background: var(--accent-soft); border-radius: 0 10px 10px 0; padding: 8px 8px 8px 14px; }
+
+.summary { background: var(--ok-soft); border: 1px solid var(--ok); border-radius: 9px; padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; }
 .reason { color: var(--bad); }
 
-.approval { background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border: 1px solid var(--warn); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; position: sticky; top: 8px; z-index: 2; }
-.approval code { font-family: var(--mono); font-size: 13px; }
+.approval {
+  background: var(--warn-soft);
+  border: 2px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  position: sticky;
+  top: 8px;
+  z-index: 2;
+}
+.approval code { font-family: var(--mono); font-size: calc(13px * var(--scale)); }
 
-.log { font-family: var(--mono); font-size: 12.5px; max-height: 320px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.log {
+  font-family: var(--mono);
+  font-size: calc(12.5px * var(--scale));
+  max-height: 320px;
+  overflow: auto;
+  background: var(--code);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+}
 .log div { white-space: pre-wrap; word-break: break-word; }
 .log .warn { color: var(--warn); }
 .log .error { color: var(--bad); }
 .log .time { color: var(--muted); margin-right: 8px; }
 
 table { width: 100%; border-collapse: collapse; }
-td, th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); font-size: 14px; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-.err { color: var(--bad); font-size: 13px; }
+td,
+th { text-align: left; padding: 9px 6px; border-bottom: 1px solid var(--line); font-size: calc(14px * var(--scale)); vertical-align: top; }
+th { color: var(--muted); font-weight: 700; font-size: calc(12px * var(--scale)); text-transform: uppercase; letter-spacing: 0.04em; }
+
+.err { color: var(--bad); font-size: calc(13px * var(--scale)); }
+
+/* A problem with what is in the form, stated where the form is. */
+.notice {
+  border: 1px solid var(--bad);
+  background: var(--bad-soft);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 10px 0;
+  font-size: calc(13.5px * var(--scale));
+}
+.notice strong { color: var(--bad); }
+.notice ul { margin: 6px 0 0; padding-left: 20px; }
+.notice.caution { border-color: var(--warn); background: var(--warn-soft); }
+.notice.caution strong { color: var(--warn); }
+.notice.calm { border-color: var(--line-strong); background: var(--bg-tint); }
+.notice.calm strong { color: var(--ink); }
+
+/* The registry: counters, filters and the flow of tasks. */
+.counts { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.count {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 96px;
+  background: var(--bg);
+}
+.count .n { font-size: calc(22px * var(--scale)); font-weight: 700; line-height: 1.2; }
+.count .k { color: var(--muted); font-size: calc(12px * var(--scale)); text-transform: uppercase; letter-spacing: 0.04em; }
+.count.done .n { color: var(--ok); }
+.count.failed .n { color: var(--bad); }
+.count.running .n { color: var(--accent); }
+
+/* Earlier attempts inside a register row: indented, quieter, and clearly subordinate. */
+.attempts { list-style: none; margin: 6px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); }
+.attempts > li { margin: 0 0 10px; }
+.attempts .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.attempts .when { color: var(--muted); font-size: calc(12.5px * var(--scale)); }
+.attempts .what { margin: 4px 0 0; }
+.count.queued .n { color: var(--accent); }
+
+.flow { list-style: none; margin: 8px 0 0; padding: 0; }
+.flow > li {
+  position: relative;
+  padding: 10px 0 14px 28px;
+  border-left: 2px solid var(--line);
+  margin-left: 7px;
+}
+.flow > li:last-child { border-left-color: transparent; }
+.flow > li::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: 16px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 3px solid var(--line-strong);
+}
+.flow > li.done::before { border-color: var(--ok); background: var(--ok); }
+.flow > li.running::before,
+.flow > li.waiting-approval::before { border-color: var(--accent); background: var(--accent); }
+.flow > li.failed::before,
+.flow > li.aborted::before,
+.flow > li.limit-reached::before { border-color: var(--bad); background: var(--bad); }
+.flow > li.queued::before { border-color: var(--line-strong); background: var(--panel); }
+.flow > li.next::before { border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 4px var(--accent-soft); }
+.flow .when { color: var(--muted); font-size: calc(12.5px * var(--scale)); }
+.flow .what { margin: 4px 0 0; }
+.flow .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.flow .head strong { font-size: calc(14.5px * var(--scale)); }
+
+.chip {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: calc(12px * var(--scale));
+  color: var(--muted);
+  background: var(--bg-tint);
+}
+
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.toolbar select,
+.toolbar input[type='text'] { width: auto; min-width: 150px; }
+
+.segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 9px; overflow: hidden; }
+.segmented button { border: none; border-radius: 0; border-right: 1px solid var(--line); }
+.segmented button:last-child { border-right: none; }
+.segmented button[aria-pressed='true'] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+/* A link that has to look like a button, because a download must be a real anchor. */
+.button-link {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  padding: 8px 13px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+.button-link:hover { filter: brightness(1.08); text-decoration: none; }
+.button-link + .button-link { background: var(--panel); color: var(--ink); border-color: var(--line-strong); font-weight: 400; }
+.button-link + .button-link:hover { background: var(--accent-soft); border-color: var(--accent); filter: none; }
+
+.empty { color: var(--muted); padding: 14px 0; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The box a plan is pasted into, or dropped onto. The dashed border is the only thing that
+   says a file can be dropped here, so it stays visible rather than appearing on hover. */
+.dropzone {
+  border: 2px dashed var(--line-strong);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--bg-tint);
+}
+.dropzone.active { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone textarea { margin: 0; }
+.dropzone p { margin: 8px 2px 2px; }
+
+/* One session's row in a run across several of them. */
+.batch-row td { vertical-align: middle; }
+.batch-row.running { background: var(--accent-soft); }
+
+/* The order the selected sessions will run in, with the controls that change it. */
+.run-order { list-style: decimal; margin: 10px 0 4px; padding-left: 28px; }
+.run-order li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+}
+.run-order button { padding: 2px 8px; margin-left: 4px; }
+
+/* A button that has to sit inside a sentence: it acts like a control, reads like a link. */
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.linkish:hover { filter: brightness(1.15); }
+
+/* The two ways to start a run, side by side, each with the sentence that says what it is for.
+   The accented one is first and stays first: it is what nearly every run is. */
+.run-choice { display: flex; gap: 20px; flex-wrap: wrap; margin: 12px 0 4px; }
+.run-choice > div { flex: 1 1 280px; }
+.run-choice .why { margin: 6px 2px 0; }
+
+/* Summaries a model wrote: prose with the odd command, list or quoted block in it. The point
+   of the styling is that the structure the model did write becomes visible. */
+.rich > :first-child { margin-top: 0; }
+.rich > :last-child { margin-bottom: 0; }
+.rich p { margin: 0 0 8px; max-width: 76ch; }
+.rich ul { margin: 0 0 8px; padding-left: 20px; }
+.rich li { margin: 2px 0; max-width: 74ch; }
+.rich code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--bg-tint);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 4px;
+  word-break: break-word;
+}
+.rich pre { margin: 6px 0 8px; }
+.summary .rich { white-space: normal; }

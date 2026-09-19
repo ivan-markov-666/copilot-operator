@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import './globals.css';
 import { LanguageProvider } from '../lib/i18n';
-import { Nav } from './nav';
+import { AppearanceProvider, themeScript } from '../lib/appearance';
+import { Nav, SkipLink } from './nav';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -11,19 +12,40 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    // The attributes below are the defaults the server can know about. The script in the head
+    // replaces them with the reader's own settings before the first paint, which means the
+    // markup React hydrates against has already changed. That is the point of it, not a bug,
+    // so this element's attributes are exempt from the hydration check. The exemption is one
+    // element deep and does not reach the page.
+    <html
+      lang="en"
+      suppressHydrationWarning
+      data-theme="light"
+      data-textsize="normal"
+      data-contrast="normal"
+      data-motion="normal"
+      data-links="plain"
+      data-focus="normal"
+    >
+      <head>
+        {/* Applies the stored theme before the first paint, so there is no flash of the wrong one. */}
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body>
-        <LanguageProvider>
-          <div className="wrap">
-            <header className="top">
-              <h1>
-                <Link href="/">copilot-operator</Link>
-              </h1>
-              <Nav />
-            </header>
-            {children}
-          </div>
-        </LanguageProvider>
+        <AppearanceProvider>
+          <LanguageProvider>
+            <SkipLink />
+            <div className="wrap">
+              <header className="top">
+                <h1>
+                  <Link href="/">copilot-operator</Link>
+                </h1>
+                <Nav />
+              </header>
+              <main id="main">{children}</main>
+            </div>
+          </LanguageProvider>
+        </AppearanceProvider>
       </body>
     </html>
   );
