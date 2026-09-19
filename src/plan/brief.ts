@@ -295,7 +295,8 @@ session works on, without the prefix.
 
 - \`"per-task"\` — every task branches from the same starting commit, so no task sees what the
   one before it changed. Use it for independent checks or alternatives. Give **each task** a
-  \`vcs.branch\`.
+  \`vcs.branch\`. A task that reads, checks or documents what an earlier task wrote does
+  **not** belong in a per-task session: it will not find the files.
 - \`"per-session"\` — one branch for the whole queue, each task building on the last. Use it for
   work that is one change made in steps. Give **the session** a \`vcs.branchName\` and leave the
   tasks' \`vcs.branch\` out; it is ignored in this mode.
@@ -325,6 +326,8 @@ const VCS_DETAIL_BG = `
 
 - \`"per-task"\` — всяка задача тръгва от един и същ начален комит и не вижда какво е променила
   предишната. За независими проверки или алтернативи. Дай на **всяка задача** \`vcs.branch\`.
+  Задача, която чете, проверява или документира написаното от по-ранна задача, **не** е за
+  per-task сесия: няма да намери файловете.
 - \`"per-session"\` — един клон за цялата опашка, всяка задача стъпва върху предишната. За работа,
   която е една промяна, направена на стъпки. Дай на **сесията** \`vcs.branchName\` и не пиши
   \`vcs.branch\` по задачите; в този режим се игнорира.

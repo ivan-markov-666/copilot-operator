@@ -132,6 +132,14 @@ added underneath either way, because none of that can be known in advance.
 In `per-session` mode the task-level `branch` is ignored and the session's `vcs.branchName`
 names the single branch the whole queue works on.
 
+Choose the mode by what the tasks need from each other, not by taste. In `per-task` mode every
+branch is cut from the commit the session started at, so a task never sees what an earlier task
+of the same session produced — an audit task that ran after a README task was auditing a tree
+without the README, and HEAD was left on that audit branch when the run ended. A task that
+reads, checks or documents earlier work belongs in a `per-session` session. Either way each task
+is told, in its opening message, which commit its branch was cut from and which earlier tasks'
+work is or is not in its tree, and the session page says which branch holds the complete work.
+
 ### The second opinion
 
 `review` on a session turns the independent review on or off and names the model it runs on;

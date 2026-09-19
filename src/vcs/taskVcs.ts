@@ -19,7 +19,7 @@ import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
-import { branchNameFrom, commitAll, commitFiles, commitsBetween, createBranch, checkoutExisting, freeBranchName, isValidBranchName, plannedBranchName, repoState } from './git.js';
+import { branchNameFrom, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, checkoutExisting, freeBranchName, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Session): string {
@@ -103,6 +103,35 @@ export async function prepareForTask(
   return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false });
 }
 
+/** Where a session's work is, for the operator: one branch, or one per task. */
+export type SessionBranches = {
+  mode: 'per-task' | 'per-session';
+  /** The one branch that holds the whole session's work, in per-session mode. */
+  complete?: string;
+  branches: Array<{ title: string; branch: string; commit?: string; status: string }>;
+};
+
+/**
+ * Which branch has the complete work of a session, when one does.
+ *
+ * Answered from the session's own record rather than from git, because the question is asked
+ * after the run, from a page, and often about a repository whose HEAD is somewhere else: in
+ * per-task mode HEAD is left on whichever task ran last, which for a nine-task plan was an
+ * audit branch that did not carry the README written one task earlier.
+ */
+export function sessionBranches(session: Session): SessionBranches {
+  const mode = session.vcs?.branchMode ?? 'per-task';
+  const branches = session.tasks
+    .filter((t) => !!t.vcs?.branch)
+    .map((t) => ({ title: t.title, branch: t.vcs?.branch as string, commit: t.vcs?.commit, status: t.status }));
+  if (mode === 'per-session') {
+    const planned = session.vcs?.branchName?.trim();
+    const complete = branches[branches.length - 1]?.branch ?? (planned ? plannedBranchName(planned, session.vcs?.branchPrefix || 'cop/') : undefined);
+    return { mode, complete, branches };
+  }
+  return { mode, branches };
+}
+
 /** The commit the task's first attempt started from, if it has one. */
 function firstAttemptBase(task: Task): string | undefined {
   return earliestBase(task);
@@ -150,8 +179,32 @@ async function switchTo(
   bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-branch', level: 'info',
     message: `working on branch ${vcs.branch}${from ? ` (from ${from.slice(0, 8)})` : ''}`, data: { ...vcs, repoDir: dir } });
 
-  return { vcs, note: noteFor(dir, vcs) };
+  // What the task stands on, and what it does not: the base commit by name, and the other
+  // tasks of this session that already ran, with the branch each of them worked on.
+  const subject = vcs.baseCommit ? await commitSubject(dir, vcs.baseCommit) : '';
+  const mode = session.vcs?.branchMode ?? 'per-task';
+  // On this branch (per-session: their work is here) or on others (per-task: it is not). A
+  // session whose mode was switched mid-way has both, and each kind is reported by where it is.
+  const earlier = session.tasks
+    .filter((t) => t.id !== task.id && !!t.vcs?.branch && t.status !== 'queued')
+    .filter((t) => (mode === 'per-session' ? t.vcs?.branch === vcs.branch : t.vcs?.branch !== vcs.branch))
+    .map((t) => ({ title: t.title, branch: t.vcs?.branch as string }));
+  const note = noteFor(dir, vcs, {
+    mode,
+    base: vcs.baseCommit ? { commit: vcs.baseCommit, subject } : undefined,
+    earlier,
+  });
+  return { vcs, note };
 }
+
+/** What a task is told about where it stands in the repository. */
+export type NoteContext = {
+  mode: 'per-task' | 'per-session';
+  /** The commit the branch was cut from, and its subject line. */
+  base?: { commit: string; subject: string };
+  /** The other tasks of this session that already ran, with the branch each worked on. */
+  earlier: Array<{ title: string; branch: string }>;
+};
 
 /**
  * What level 1 tells Copilot when version control is on.
@@ -161,13 +214,34 @@ async function switchTo(
  * plain instruction with the reason attached, because a rule without a reason is the kind a
  * model talks itself out of.
  */
-export function noteFor(repoDir: string, vcs: TaskVcs): string {
+export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode: 'per-task', earlier: [] }): string {
   if (!vcs.branch) return '';
+  const base = ctx.base
+    ? `\`${ctx.base.commit.slice(0, 8)}\`${ctx.base.subject ? ` ("${ctx.base.subject}")` : ''}`
+    : 'the current commit';
+  const named = ctx.earlier.map((e) => `"${e.title}"`).join(', ');
+  /*
+   * Which earlier work is in the tree and which is not, said outright. In per-task mode every
+   * branch is cut from the same commit, so an audit task that ran after a README task was
+   * looking at a tree without the README — and had no way to know, because until this note
+   * was written it was told only the branch's name.
+   */
+  const standing =
+    ctx.mode === 'per-session'
+      ? ctx.earlier.length > 0
+        ? `This branch already carries the work of ${ctx.earlier.length} earlier task(s) of this session — ${named} — so their files are in your working tree.`
+        : 'This is the first task on this branch.'
+      : ctx.earlier.length > 0
+        ? `Every task of this session gets its own branch from that same commit, so the work of the earlier tasks is NOT in your working tree: ` +
+          `${ctx.earlier.map((e) => `"${e.title}" is on \`${e.branch}\``).join(', ')}. If this task depends on what one of them produced, say so in the summary rather than looking for files that are not here.`
+        : 'Every task of this session gets its own branch from that same commit.';
   return [
     '## Version control',
     '',
-    `The runner has already put ${repoDir} on the branch \`${vcs.branch}\`, created for this task,`,
+    `The runner has already put ${repoDir} on the branch \`${vcs.branch}\`, created for this task from ${base},`,
     'and it will commit whatever you change when the task finishes.',
+    '',
+    standing,
     '',
     '- Do not create branches, switch branches, commit, stash, reset or revert. That is the',
     "  runner's job, and two of us doing it would leave the repository in a state neither of us",

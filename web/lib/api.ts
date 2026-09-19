@@ -199,7 +199,20 @@ export type RestoreResult = {
 };
 
 /** Whether version control can do its job in a session right now. */
-export type VcsStatus = { ok: boolean; repoDir: string; branch?: string; problem?: string; git?: string | null };
+export type VcsStatus = {
+  ok: boolean;
+  repoDir: string;
+  /** The branch HEAD is on right now, which after a per-task run is only the last task's. */
+  branch?: string;
+  problem?: string;
+  git?: string | null;
+  /** Where the session's work is: one branch, or one per task. */
+  work?: {
+    mode: 'per-task' | 'per-session';
+    complete?: string;
+    branches: Array<{ title: string; branch: string; commit?: string; status: string }>;
+  };
+};
 
 export type MirrorPreview = {
   files: string[];

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../src/session/store.js';
 import { EventBus } from '../src/session/events.js';
 import { git, repoState, commitAll, branchNameFrom } from '../src/vcs/git.js';
-import { prepareForTask, commitTaskResult, commitMessage } from '../src/vcs/taskVcs.js';
+import { prepareForTask, commitTaskResult, commitMessage, sessionBranches } from '../src/vcs/taskVcs.js';
 import { looksGenerated, findSuspicious } from '../src/vcs/commitHygiene.js';
 import { runCheck, COMMIT_CLEAN_CHECK } from '../src/exec/checks.js';
 import type { Session, Task } from '../src/session/model.js';
@@ -125,8 +125,34 @@ console.log('both on the same branch:', b1 === b2, '|', b1);
 const chainFiles = await git(repo, ['ls-tree', '--name-only', 'HEAD']);
 console.log('files there:', chainFiles.stdout.split('\n').join(', '), '(the second task built on the first)');
 
-console.log('\n--- what Copilot is told ---');
-console.log((prepared.note || '(nothing)').split('\n').slice(0, 6).join('\n'));
+/*
+ * What Copilot is told about where it stands.
+ *
+ * An audit task that ran after a README task, in per-task mode, audited a tree without the
+ * README and had no way to know: the note said only the branch's name. `prepared` is task 1's
+ * second attempt, cut from the first commit while task 2's work sits on another branch.
+ */
+console.log('\n--- what Copilot is told: where it stands ---');
+const told = prepared.note || '(nothing)';
+console.log(told.split('\n').slice(0, 7).join('\n'));
+console.log('names the base commit      :', told.includes('"first commit"') ? 'yes' : 'NO');
+console.log('says task 2 is elsewhere   :', told.includes('"add another" is on') && told.includes('NOT in your working tree') ? 'yes' : 'NO');
+
+const c3 = await store.addTask(session.id, { title: 'chained three', level2: '', prompt: 'p' });
+await reload();
+const chainedNote = (await prepareForTask(session, session.tasks.find((x) => x.id === c3.id) as Task, bus, save)).note;
+console.log('per-session: carries earlier:', chainedNote.includes('already carries the work of 2 earlier task(s)') ? 'yes' : 'NO');
+console.log(
+  'per-session: names them     :',
+  chainedNote.includes('"chained one"') && chainedNote.includes('"chained two"') && !chainedNote.includes('"add a feature"') ? 'yes' : 'NO',
+);
+
+console.log('\n--- where the work is, for the operator ---');
+await reload();
+const where = sessionBranches(session);
+console.log('mode                       :', where.mode, '| complete work on:', where.complete ?? '(no single branch)', '| branches:', where.branches.length);
+const perTaskWhere = sessionBranches({ ...session, vcs: { ...(session.vcs as NonNullable<Session['vcs']>), branchMode: 'per-task' } });
+console.log('per-task: no single branch :', perTaskWhere.complete === undefined ? 'yes' : 'NO', '| one per task:', perTaskWhere.branches.map((b) => b.branch).join(', '));
 
 console.log('\n--- the commit message ---');
 console.log(commitMessage({ title: 'add a feature', attempt: 2 } as Task, { status: 'done', summary: 'Added the thing.' }).split('\n').slice(0, 5).join('\n'));

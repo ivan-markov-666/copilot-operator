@@ -239,6 +239,12 @@ export async function commitFiles(dir: string, commit: string): Promise<Array<{ 
     }));
 }
 
+/** The subject line of one commit, or empty when it cannot be read. */
+export async function commitSubject(dir: string, commit: string): Promise<string> {
+  const r = await git(dir, ['log', '-1', '--format=%s', commit]);
+  return r.ok ? r.stdout.trim() : '';
+}
+
 /** One line per commit, newest first, for showing what a task produced. */
 export async function commitsBetween(dir: string, fromCommit: string, toRef = 'HEAD'): Promise<string[]> {
   const r = await git(dir, ['log', '--oneline', `${fromCommit}..${toRef}`]);

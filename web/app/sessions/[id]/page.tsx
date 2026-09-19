@@ -816,6 +816,28 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
               {t('vcs.ready', { branch: status.branch ?? '—', dir: status.repoDir })}
             </div>
           )}
+          {/*
+            Where the work is, as opposed to where HEAD is. After a per-task run HEAD sits on
+            whichever task ran last, which for one nine-task plan was an audit branch without
+            the README written one task earlier; the folder looked as if the README was missing.
+          */}
+          {status?.ok && status.work && status.work.branches.length > 0 && (
+            <div className="muted small">
+              {status.work.mode === 'per-session' && status.work.complete
+                ? t('vcs.completeOn', { branch: status.work.complete })
+                : t('vcs.noSingleBranch', { n: status.work.branches.length })}
+              {status.work.mode === 'per-task' && (
+                <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+                  {status.work.branches.map((b) => (
+                    <li key={b.branch}>
+                      <code>{b.branch}</code> — {b.title}
+                      {b.commit ? '' : ` (${t('vcs.taskNoFiles')})`}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           <p className="muted small">{t('vcs.pushIsYours')}</p>
         </>
       )}

@@ -33,7 +33,7 @@ import { buildDebugExport } from '../session/debugExport.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions } from '../plan/brief.js';
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
-import { vcsPreflight, restorePreview, restoreToBase, type RestorePreview } from '../vcs/taskVcs.js';
+import { vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { gitAvailable, repoUnusableReason } from '../vcs/git.js';
 import { makeAuthorizer, unattendedAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
@@ -1202,13 +1202,17 @@ export class OperatorService {
   // --- version control ----------------------------------------------------------------------
 
   /** Whether version control can do its job in this session, asked before a run. */
-  async vcsStatus(sessionId: string): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; git?: string | null }> {
+  async vcsStatus(
+    sessionId: string,
+  ): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; git?: string | null; work?: SessionBranches }> {
     await this.init();
     const session = await this.store.getSession(sessionId);
     if (!session) throw new Error('No such session.');
     const git = await gitAvailable();
     if (!git) return { ok: false, repoDir: '', problem: "git is not installed, or not on this machine's PATH.", git: null };
-    return { ...(await vcsPreflight(session)), git };
+    // `branch` is where HEAD is; `work` is where the session's work is. After a per-task run
+    // those differ, and the second is the one the operator is asking about.
+    return { ...(await vcsPreflight(session)), git, work: sessionBranches(session) };
   }
 
   /**
