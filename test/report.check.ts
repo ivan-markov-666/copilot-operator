@@ -121,6 +121,33 @@ console.log(
   }).split('\n')[0],
 );
 
+/*
+ * Exit 1 with nothing printed.
+ *
+ * `Get-NetTCPConnection -LocalPort 4300 -ErrorAction SilentlyContinue` on a free port: exit 1,
+ * no output, and the free port was the good outcome. Twice in one run the model then spent
+ * iterations with netstat proving nothing was wrong. The runner cannot change the code; it
+ * says what it sees, in the message and in the file.
+ */
+console.log('\n--- a non-zero exit that printed nothing is called out ---');
+const silent = buildCoveringMessage({ task: 'api-smoke', iteration: 3, results: [mk(1, 'completed', 1, '')], attachments: ['x.txt'] });
+console.log('in the summary   :', silent.includes('exit 1 with no output at all') ? 'yes' : 'NO');
+console.log('with the reason  :', silent.includes('found nothing') ? 'yes' : 'NO');
+const loud = buildCoveringMessage({ task: 'api-smoke', iteration: 3, results: [mk(1, 'completed', 1, 'error: nope\n')], attachments: ['x.txt'] });
+console.log('not when it spoke:', !loud.includes('no output at all') && !loud.includes('found nothing') ? 'yes' : 'NO');
+const fine = buildCoveringMessage({ task: 'api-smoke', iteration: 3, results: [mk(1, 'completed', 0, '')], attachments: ['x.txt'] });
+console.log('not on exit 0    :', !fine.includes('no output at all') ? 'yes' : 'NO');
+const silentFile = await writeReport([mk(1, 'completed', 1, '')], {
+  runId: 'silent',
+  iteration: 1,
+  dir,
+  fileNameTemplate: 'silent-{n}.txt',
+  maxReportBytes: 8 * 1024 * 1024,
+  maxOutputChars: 1000,
+  redactPatterns: [],
+});
+console.log('in the file too  :', (await readFile(silentFile.paths[0], 'utf8')).includes('printed nothing') ? 'yes' : 'NO');
+
 console.log('\n--- policy, using the shipped default deny list ---');
 const defaults = RunConfigSchema.parse({ openingMessages: [{ text: 'x' }] });
 const cfg = {

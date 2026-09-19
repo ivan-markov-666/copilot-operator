@@ -9,6 +9,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunResult } from './runner.js';
+import { silentFailure } from '../protocol/reporter.js';
 
 export type ReportOptions = {
   runId: string;
@@ -75,7 +76,11 @@ function sectionFor(r: RunResult, maxOutputChars: number): string {
   const out = clip(r.stdout, maxOutputChars);
   const err = r.stderr.trim().length > 0 ? `[stderr]\n${clip(r.stderr, maxOutputChars)}\n` : '';
   const note = r.truncated ? `[note] output was truncated; the full stream is in ${r.logPath}\n` : '';
-  return `${head}${out}${out.endsWith('\n') ? '' : '\n'}${err}${note}`;
+  // Said in the file as well as in the covering message, because the file is what gets read.
+  const silent = silentFailure(r)
+    ? '[note] exited non-zero and printed nothing. In PowerShell that is usually a cmdlet that found nothing (a free port, no matching process), not a failed command.\n'
+    : '';
+  return `${head}${out}${out.endsWith('\n') ? '' : '\n'}${err}${note}${silent}`;
 }
 
 /**

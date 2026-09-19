@@ -230,6 +230,16 @@ END RESULTS
 Steps appear in the order they were executed. Nothing is truncated in the file: the whole
 point of the file transport is that the full output survives.
 
+**A non-zero exit that printed nothing is called out, in the message and in the file.** In
+PowerShell that is what a cmdlet that found nothing looks like — `Get-NetTCPConnection` on a
+free port, `Get-Process` with no match — and the free port is the good outcome. Twice in one run
+a step ended this way at the exact moment the task had succeeded, and the model spent iterations
+proving with `netstat` that nothing was wrong; a weaker model would have ended the task
+`blocked` over a port that was free. The runner cannot change the exit code (`silentFailure` in
+`reporter.ts` only recognises the shape: completed, non-zero, empty stdout and stderr), so it says
+what it sees and leaves the conclusion to the step's own question. Verified by `npm run
+check:report`.
+
 **A message cannot consist of an attachment alone.** The composer keeps Send disabled until
 there is text, so the covering message is mandatory, not decorative. Since text has to be
 there anyway, it carries what Copilot needs in order to decide to open the file:

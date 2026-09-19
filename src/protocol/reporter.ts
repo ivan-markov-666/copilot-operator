@@ -33,10 +33,23 @@ export type CoveringMessageInput = {
   parts?: number;
 };
 
+/**
+ * A non-zero exit with nothing printed at all.
+ *
+ * In PowerShell that is what a cmdlet that found nothing looks like — `Get-NetTCPConnection`
+ * on a free port, `Get-Process` with no match — and the free port is the good outcome. Twice
+ * in one run a step ended this way at the exact moment the task had succeeded, and the model
+ * spent iterations proving with netstat that nothing was wrong. The runner cannot change the
+ * exit code; it can say what it sees.
+ */
+export function silentFailure(r: RunResult): boolean {
+  return r.outcome === 'completed' && r.exitCode !== 0 && r.stdout.trim() === '' && r.stderr.trim() === '';
+}
+
 function outcomeSummary(r: RunResult): string {
   switch (r.outcome) {
     case 'completed':
-      return `step ${r.id} exit ${r.exitCode}`;
+      return silentFailure(r) ? `step ${r.id} exit ${r.exitCode} with no output at all` : `step ${r.id} exit ${r.exitCode}`;
     case 'hard-timeout':
       return `step ${r.id} hit its time limit`;
     case 'idle-timeout':
@@ -83,6 +96,15 @@ export function buildCoveringMessage(input: CoveringMessageInput): string {
   if (stopped.length > 0) {
     lines.push(
       `Note: ${stopped.map((r) => `step ${r.id}`).join(', ')} was stopped by the runner, not by the command itself.`,
+    );
+  }
+
+  const silent = results.filter(silentFailure);
+  if (silent.length > 0) {
+    lines.push(
+      `Note: ${silent.map((r) => `step ${r.id}`).join(', ')} exited non-zero without printing anything. In PowerShell ` +
+        'that is usually a cmdlet that found nothing — a free port, no matching process — not a command that failed. ' +
+        'Decide from what the step was asking, not from the code alone.',
     );
   }
 

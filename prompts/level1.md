@@ -282,6 +282,12 @@ command, stdout and stderr. Exit `-1` means killed by a timeout. A large report 
 into `-part1`, `-part2` files: read all of them. A step the runner refused says why in its
 stderr; read the reason and adapt.
 
+A non-zero exit with nothing printed at all is, in PowerShell, usually a cmdlet that found
+nothing: `Get-NetTCPConnection` on a free port, `Get-Process` with no match. The runner marks
+such a step in the message and in the file. When the step was asking "is anything there?",
+empty is the answer, and often the good one — do not spend iterations proving that nothing is
+wrong.
+
 Never reason from the one-line message alone. Never invent output that was not in the file.
 If a file is missing or unreadable, say which one in `notes` and repeat the step.
 
