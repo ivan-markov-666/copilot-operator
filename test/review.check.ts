@@ -153,14 +153,14 @@ const brief = reviewBrief(
   { vcs: { enabled: true, repoDir: 'C:\\Projects\\calculator-test' } } as never,
   { prompt: 'Scaffold the front end.', level2: 'No dev servers.', title: 'web-scaffold' } as never,
   ['web/tsconfig.json'],
-  { resolved: { cwd: 'C:\\Projects\\calculator-test' } } as never,
+  'C:\\Projects\\calculator-test',
   [{ instruction: 'jsx preserve', did: 'restored the value after each build', why: 'next build rewrites tsconfig.json' }],
   { round: 1, findings: [{ ...round1[0], repeated: false }] },
 );
 console.log('brief carries the claim    :', brief.includes('could not be done as written') && brief.includes('jsx preserve') ? 'yes' : 'NO');
 console.log('brief carries round 1      :', brief.includes('What review round 1 found') ? 'yes' : 'NO');
 console.log('and asks for a decision    :', brief.includes('`about`') && brief.includes('unsatisfiable') ? 'yes' : 'NO');
-const plain = reviewBrief({ vcs: { enabled: false } } as never, { prompt: 'p', level2: '', title: 't' } as never, [], { resolved: { cwd: 'C:\\x' } } as never);
+const plain = reviewBrief({ vcs: { enabled: false } } as never, { prompt: 'p', level2: '', title: 't' } as never, [], 'C:\\x');
 console.log('first round says neither   :', !plain.includes('could not be done') && !plain.includes('review round') ? 'yes' : 'NO');
 const msg = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 2, 2, [again]);
 console.log('implementer told it recurred:', msg.includes('raised in the previous round') && msg.includes('`deviations`') ? 'yes' : 'NO');

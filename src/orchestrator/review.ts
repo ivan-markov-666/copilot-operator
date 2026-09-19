@@ -55,6 +55,8 @@ export type ReviewDeps = {
   dir: string;
   /** Which round this is, from 1. */
   round: number;
+  /** Where the reviewer's commands run: the session's project, the same as the implementer's. */
+  cwd: string;
   /** The files the task changed, as version control recorded them. */
   changedFiles: string[];
   /** Instructions the implementer says it could not follow as written. Claims, not facts. */
@@ -87,7 +89,7 @@ export function reviewBrief(
   session: Session,
   task: Task,
   changedFiles: string[],
-  cfg: ResolvedConfig,
+  cwd: string,
   deviations: Deviation[] = [],
   previous?: PreviousRound,
 ): string {
@@ -105,7 +107,7 @@ export function reviewBrief(
     '',
     '## Where to look',
     '',
-    `Working directory for your commands: ${cfg.resolved.cwd}`,
+    `Working directory for your commands: ${cwd}`,
     repo ? `Repository: ${repo}` : 'There is no repository for this work.',
     '',
     'Files this task changed:',
@@ -196,7 +198,7 @@ export async function runReview(
     await transport.waitForReply(before);
 
     await pacer.throttleSend();
-    before = await transport.sendAndConfirm(reviewBrief(session, task, deps.changedFiles, cfg, deps.deviations, deps.previous));
+    before = await transport.sendAndConfirm(reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous));
     let markdown = (await transport.waitForReply(before)).markdown;
     await saveReply('00-opening', markdown);
 
@@ -302,7 +304,7 @@ export async function runReview(
             id: step.id,
             shell: (step.shell ?? cfg.execution.defaultShell) as RunResult['shell'],
             command: step.cmd,
-            cwd: cfg.resolved.cwd,
+            cwd: deps.cwd,
             hardTimeoutMs: hard * 1000,
             idleTimeoutMs: idle * 1000,
             logPath: join(dir, 'steps', `${iterations}-${step.id}.log`),

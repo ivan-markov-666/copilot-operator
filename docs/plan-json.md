@@ -158,7 +158,8 @@ When a task has checks, Copilot reporting it as done is no longer the end of it.
 runs them; if they all pass the task ends as `done`; if any fails, the failures go back into
 the chat as a message with the output attached — the same shape as a step report — and the task
 carries on. After `limits.maxCheckRounds` rounds (3 by default) the task is closed as `failed`
-with the failing checks named in its reason.
+with the failing checks named in its reason. A check's `cwd` is optional: without it the
+command runs in the session's project folder, the same place the model's own steps run.
 
 ```jsonc
 "checks": [

@@ -23,6 +23,7 @@ import { SessionStore } from './session/store.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { mirrorProject, describeMirror, listSelectableDirs } from './context/projectMirror.js';
+import { isOwnCheckout } from './exec/workDir.js';
 import { defaultExportDir, desktopIsSynced, resolveDesktopDir } from './context/contextFiles.js';
 import { Url } from './transport/locators.js';
 import { findEdgeUsingProfile } from './transport/profileLock.js';
@@ -220,7 +221,14 @@ program
       try {
         const cfg = await loadConfig(configPath);
         say(true, `config ${cfg.configPath} parsed`);
-        say(existsSync(cfg.resolved.cwd), `working directory ${cfg.resolved.cwd}`);
+        // The configured cwd is only the fallback — a session's commands run in its project —
+        // and this checkout is refused as a fallback, so say so here rather than at run time.
+        const ownCwd = isOwnCheckout(cfg.resolved.cwd);
+        say(
+          existsSync(cfg.resolved.cwd) && !ownCwd,
+          `fallback working directory ${cfg.resolved.cwd}` +
+            (ownCwd ? " — this is the runner's own checkout; a session with no project folder will refuse to run" : ''),
+        );
         const profileExists = existsSync(cfg.resolved.profileDir);
         console.log(
           `  ${profileExists ? 'ok  ' : 'note'}  browser profile ${cfg.resolved.profileDir}` +

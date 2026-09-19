@@ -22,6 +22,8 @@ execution:
   mode: confirm
   defaultShell: pwsh
   # Where the commands run. Point it at a scratch folder, not at a real project.
+  # Fallback only: a session's commands run in its own project folder. The runner's own
+  # checkout is refused as a fallback.
   cwd: ~/copilot-operator-work
   # "fast" steps, the default
   commandTimeoutSec: 300

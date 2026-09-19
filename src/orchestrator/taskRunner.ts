@@ -22,6 +22,7 @@ import { isDownloadStep, mergeDeviations, describeDeviations, type Step, type De
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { runChecks, failureMessage, failureReport, type CheckOutcome } from '../exec/checks.js';
+import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState } from '../vcs/git.js';
@@ -409,6 +410,26 @@ export async function runTask(
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\n`, 'utf8');
 
+  /*
+   * Where this session's commands run, decided once and before anything is sent.
+   *
+   * The session's project, else the configured cwd — and never, by default, this runner's own
+   * checkout. A session that would land there has no working directory, and a task with no
+   * working directory does not start: refusing each step one by one would spend a whole
+   * conversation saying the same thing.
+   */
+  const work = workingDirFor(session, cfg.resolved.cwd);
+  if (isWorkingDirProblem(work)) {
+    sink.event('workdir-refused', { cwd: work.cwd }, work.problem, 'error');
+    return await finish('failed', work.problem);
+  }
+  sink.event(
+    'workdir',
+    { cwd: work.cwd, source: work.source, ownCheckout: work.ownCheckout },
+    `commands run in ${work.cwd} (${work.source})${work.ownCheckout ? " — this runner's own checkout, as the session was set" : ''}`,
+    work.ownCheckout ? 'warn' : 'info',
+  );
+
   try {
     // --- version control: a branch of this task's own, before anything is touched -------
     const prepared = await prepareForTask(session, task, bus, async (mutate) => {
@@ -472,6 +493,7 @@ export async function runTask(
       taskTitle: task.title,
       taskNumber,
       contractAlreadySent: session.contractSent,
+      workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
     });
     await setTask((t) => {
@@ -551,7 +573,7 @@ export async function runTask(
         `checking the task against ${checks.length} condition(s) the operator set`);
 
       const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
-        cwd: cfg.resolved.cwd,
+        cwd: work.cwd,
         logDir: log.path('checks'),
         signal: deps.signal,
         deny: (command) => matchDenyPattern(command, cfg.execution.denyPatterns),
@@ -671,6 +693,7 @@ export async function runTask(
           pacer,
           dir: log.path('review', String(reviewRounds)),
           round: reviewRounds,
+          cwd: work.cwd,
           changedFiles,
           deviations,
           previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings } : undefined,
@@ -1022,7 +1045,7 @@ export async function runTask(
             shell: (step.shell ?? cfg.execution.defaultShell) as RunResult['shell'],
             command: step.type === 'command' ? step.cmd : (scriptPath as string),
             scriptArgs: step.type === 'download' ? step.args : undefined,
-            cwd: cfg.resolved.cwd,
+            cwd: work.cwd,
             hardTimeoutMs: hard * 1000,
             idleTimeoutMs: idle * 1000,
             logPath: log.path('steps', `${iterations}-${step.id}.log`),

@@ -22,6 +22,15 @@ export type ComposeInput = {
   taskNumber: number;
   contractAlreadySent: boolean;
   /**
+   * Where the runner will execute the steps, as a fact for Copilot.
+   *
+   * Sent because the alternative is a guess: a step with a relative path resolves somewhere,
+   * and until this was said the somewhere was whatever the runner happened to be started
+   * from. Composed per task rather than written into the contract, because it is a fact about
+   * this session, not a rule about every one.
+   */
+  workDirNote?: string;
+  /**
    * What version control has already done for this task, as an instruction to Copilot.
    *
    * It belongs with level 1 rather than with the task: it is a rule about how this runner
@@ -34,6 +43,20 @@ export type ComposeInput = {
 
 const LEVEL2_HEADER = '## Project instructions (level 2)';
 const TASK_HEADER = '## Task';
+
+/**
+ * What the runner itself has to say, ahead of the user's instructions.
+ *
+ * These notes were composed and handed in for a whole release and never sent: the input
+ * carried `vcsNote`, and nothing here read it. A task that audited a repository was never told
+ * which commit its branch was cut from, because the sentence that said so was dropped on the
+ * way to the chat. So the block is built in one place and included in both shapes of opening,
+ * and a note that is empty simply leaves nothing behind.
+ */
+function runnerBlock(input: ComposeInput): string {
+  const notes = [input.workDirNote, input.vcsNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
+}
 
 function level2Block(level2: string): string {
   const body = level2.trim();
@@ -52,7 +75,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     `${TASK_HEADER} ${input.taskNumber}: ${input.taskTitle.trim() || 'untitled'}\n\n${input.prompt.trim()}`;
 
   if (!input.contractAlreadySent) {
-    const taskMessage = `${level2Block(input.level2)}\n\n${taskBlock}`;
+    const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}`;
     return {
       messages: [input.level1.trim(), taskMessage],
       firstMessage: `${input.level1.trim()}\n\n---\n\n${taskMessage}`,
@@ -63,6 +86,6 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     `New task in this same conversation. The level 1 contract you received at the start of ` +
     `this conversation still applies unchanged: same format, same rules, same stop word, ` +
     `and a full "summary" when you finish. Step numbering restarts at 1.`;
-  const taskMessage = `${reminder}\n\n${level2Block(input.level2)}\n\n${taskBlock}`;
+  const taskMessage = `${reminder}\n\n${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}`;
   return { messages: [taskMessage], firstMessage: taskMessage };
 }
