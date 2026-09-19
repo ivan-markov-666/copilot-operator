@@ -114,6 +114,15 @@ export async function runStep(
 
   await mkdir(dirname(req.logPath), { recursive: true });
   const log: WriteStream = createWriteStream(req.logPath, { flags: 'a' });
+  /*
+   * A step log that cannot be written must never take the process down with it.
+   *
+   * Without a listener, a stream error is an unhandled 'error' event, which in Node is an
+   * uncaught exception: a full disk, a locked file or a write that lands after the stream has
+   * ended would kill the API in the middle of a run. The log is a record of a step, not the
+   * step itself, so losing a line of it is the smallest possible failure and is treated as one.
+   */
+  log.on('error', () => undefined);
   log.write(`# step ${req.id} shell=${req.shell} cwd=${req.cwd}\n# ${req.command}\n`);
 
   const { file, args } = shellInvocation(req);
@@ -164,7 +173,10 @@ export async function runStep(
       const text = chunk.toString('utf8');
       lastOutputAt = Date.now();
       bytesOut += chunk.length;
-      log.write(stream === 'err' ? text.replace(/^/gm, '[stderr] ') : text);
+      // Output can still arrive after the child has closed and the step has been settled: the
+      // pipes flush independently of the close event. Writing then would be a write to an
+      // ended stream, so the tail goes to the captured text and not to the file.
+      if (!settled) log.write(stream === 'err' ? text.replace(/^/gm, '[stderr] ') : text);
 
       const trimmed = text.trimEnd();
       const nl = trimmed.lastIndexOf('\n');

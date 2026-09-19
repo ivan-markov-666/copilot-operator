@@ -12,6 +12,8 @@ import type { RunResult } from './runner.js';
 
 export type ReportOptions = {
   runId: string;
+  /** The task this report belongs to, by the name the conversation was given for it. */
+  task?: string;
   iteration: number;
   dir: string;
   fileNameTemplate: string;
@@ -87,8 +89,24 @@ export async function writeReport(
 ): Promise<WrittenReport> {
   await mkdir(opts.dir, { recursive: true });
 
-  const header =
-    `RESULTS run=${opts.runId} iteration=${opts.iteration} steps=${results.length}\n`;
+  /*
+   * The header identifies the report by the task's own name.
+   *
+   * It used to lead with `run=<id>`, and that one string cost three runs. The id names a folder
+   * on this machine and appears nowhere else Copilot can see: not in the task message, not in
+   * the contract, nowhere. Two tasks in one conversation therefore produce two reports bearing
+   * two identifiers that were never introduced — and a model asked to reconcile a result with
+   * the task it belongs to reasons, correctly, that it was never told which task owns this id.
+   * Observed three times, ending the last one in "the result belongs to run s922, but no task
+   * instructions for that run were supplied in this conversation". The task had been supplied;
+   * the id had not.
+   *
+   * So the title leads, because the title is what the task message announced, and the folder
+   * name follows with a label saying whose bookkeeping it is.
+   */
+  const label = opts.task?.trim() ? `task="${opts.task.trim()}"` : `run=${opts.runId}`;
+  const folder = opts.task?.trim() ? ` (runner's own folder: ${opts.runId})` : '';
+  const header = `RESULTS ${label} iteration=${opts.iteration} steps=${results.length}${folder}\n`;
   const footer = 'END RESULTS\n';
   const sections = results.map((r) => redact(sectionFor(r, opts.maxOutputChars), opts.redactPatterns));
 

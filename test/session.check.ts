@@ -46,8 +46,61 @@ const loaded = await store.getSession(s.id);
 console.log('tasks persisted   :', loaded?.tasks.length, '| titles:', loaded?.tasks.map((t) => t.title).join(' / '));
 await store.updateTask(s.id, t1.id, (t) => { t.status = 'done'; t.summary = 'did a'; });
 console.log('task updated      :', (await store.getSession(s.id))?.tasks[0].summary);
-try { await store.deleteTask(s.id, t1.id); console.log('delete done task  : ALLOWED (wrong)'); }
-catch (e) { console.log('delete done task  : refused (correct) -', (e as Error).message); }
+console.log('\n--- what can be deleted ---');
+const active = await store.addTask(s.id, { title: 'in flight', level2: '', prompt: 'do c' });
+await store.updateTask(s.id, active.id, (t) => { t.status = 'waiting-approval'; });
+try { await store.deleteTask(s.id, active.id); console.log('delete running    : ALLOWED (wrong)'); }
+catch (e) { console.log('delete running    : refused (correct) -', (e as Error).message); }
+await store.deleteTask(s.id, t1.id);
+console.log('delete done task  : allowed, tasks left:', (await store.getSession(s.id))?.tasks.length);
+
+console.log('\n--- running a finished task again ---');
+const retry = await store.addTask(s.id, { title: 'flaky', level2: 'L2', prompt: 'do it' });
+await store.updateTask(s.id, retry.id, (t) => {
+  t.status = 'failed';
+  t.runId = 'run-one';
+  t.iterations = 3;
+  t.summary = undefined;
+  t.reason = 'the chat went down';
+  t.startedAt = '2026-09-18T10:00:00.000Z';
+  t.finishedAt = '2026-09-18T10:05:00.000Z';
+});
+const requeued = await store.rerunTask(s.id, retry.id);
+console.log('status now        :', requeued.status, '| attempt:', requeued.attempt, '| iterations:', requeued.iterations);
+console.log('live fields clear :', requeued.runId === undefined && requeued.reason === undefined && requeued.finishedAt === undefined);
+console.log('kept the attempt  :', JSON.stringify(requeued.attempts?.map((a) => `${a.status}/${a.runId}/${a.iterations} iters/${a.reason}`)));
+try { await store.rerunTask(s.id, retry.id); console.log('re-running a queued task: ALLOWED (wrong)'); }
+catch (e) { console.log('re-running a queued task: refused (correct) -', (e as Error).message); }
+console.log('second attempt id :', `sessionId-taskId${(requeued.attempt ?? 1) > 1 ? `-a${requeued.attempt}` : ''}`, '(the run folder of attempt 1 is untouched)');
+
+console.log('\n--- editing a task that has already run ---');
+await store.updateTask(s.id, retry.id, (t) => {
+  t.status = 'done';
+  t.runId = 'run-two';
+  t.summary = 'it worked the second time';
+  t.iterations = 1;
+});
+const edited = await store.rerunTask(s.id, retry.id, { title: 'flaky, reworded', prompt: 'do it differently' });
+console.log('task now          :', edited.status, '| attempt:', edited.attempt, '| title:', edited.title, '| prompt:', edited.prompt);
+console.log('old attempts kept :', edited.attempts?.length);
+console.log('what attempt 2 ran:', JSON.stringify(edited.attempts?.[1] && { prompt: edited.attempts[1].prompt, summary: edited.attempts[1].summary }));
+console.log('the edit did NOT touch it:', edited.attempts?.[1]?.prompt === 'do it' && edited.attempts?.[1]?.summary === 'it worked the second time');
+
+console.log('\n--- recovery after the process was killed mid-task ---');
+const killed = await store.createSession('killed');
+const kt = await store.addTask(killed.id, { title: 'was waiting', level2: '', prompt: 'do d' });
+const kq = await store.addTask(killed.id, { title: 'still queued', level2: '', prompt: 'do e' });
+await store.updateTask(killed.id, kt.id, (t) => { t.status = 'waiting-approval'; });
+await store.updateSession(killed.id, (x) => { x.status = 'running'; });
+const recovered = await store.recoverInterrupted();
+const after = await store.getSession(killed.id);
+console.log('reported          :', recovered.filter((r) => r.sessionId === killed.id).map((r) => r.title).join(', '), '(expect: was waiting)');
+console.log('other sessions too:', recovered.length > 1, '(the pass covers every session, not just this one)');
+console.log('stuck task now    :', after?.tasks.find((t) => t.id === kt.id)?.status, '| reason:', after?.tasks.find((t) => t.id === kt.id)?.reason?.slice(0, 48));
+console.log('queued untouched  :', after?.tasks.find((t) => t.id === kq.id)?.status, '(expect queued)');
+console.log('session freed     :', after?.status, '(expect idle)');
+console.log('now deletable     :', await store.deleteTask(killed.id, kt.id).then(() => 'yes').catch((e: Error) => `no: ${e.message}`));
+console.log('second pass finds :', (await store.recoverInterrupted()).length, '(expect 0)');
 await store.savePreset('Payments team', 'Use pnpm.');
 console.log('presets           :', (await store.listPresets()).map((p) => p.name).join(', '));
 console.log('sessions listed   :', (await store.listSessions()).length);

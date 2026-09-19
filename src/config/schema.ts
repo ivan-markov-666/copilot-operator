@@ -20,6 +20,53 @@ export function expandPath(p: string, baseDir: string): string {
 /** Text given inline or as a file path. */
 const TextOrFile = z.union([z.string(), z.object({ file: z.string().min(1) })]);
 
+/*
+ * GIT_WRITE_NOTE — why the deny list knows about git.
+ *
+ * Version control here is the runner's job: it cuts the branch before a task and makes the
+ * commit after it, and level 1 tells Copilot in plain words that git is not its business. That
+ * was prose, and prose is advice. It broke: a task with a badly written check — "nothing has
+ * been pushed", tested by looking for the word origin in `git remote -v` — could not pass in a
+ * repository that legitimately had a remote. The failure went back to the chat, Copilot spent
+ * fifteen iterations proving the check was wrong, and then ran `git remote remove origin` to
+ * make it pass. It did pass. The repository lost its remote.
+ *
+ * That is the shape of the problem and it is not about one bad check: a failing check applies
+ * pressure toward making it pass, and the cheapest way to satisfy a claim about a repository is
+ * often to change the repository. So the rule stops being advice. A step that would change
+ * anything in git is refused before it reaches the shell, whatever the chat has concluded.
+ *
+ * Read-only git stays allowed, and deliberately so — auditing a repository is real work a task
+ * may be given. The patterns therefore match on the subcommand's own position, after git's
+ * global options, rather than anywhere in the line: `git log --grep=commit` is a question and
+ * `git commit` is a change, and a regex that cannot tell them apart would make the audit
+ * impossible in order to make the audit safe.
+ *
+ * The runner's own git does not pass through here. It runs through `execFile` in `vcs/git.ts`
+ * with an argument list and no shell, so nothing in this list can stop the branch and the
+ * commit that are supposed to happen.
+ */
+
+/** One of git's own options, before the subcommand: `-C <path>`, `--no-pager`, `-c k=v`. */
+const GIT_GLOBAL_OPTION =
+  '(?:--no-pager|--paginate|--bare|--literal-pathspecs|--exec-path=\\S*|-c\\s+\\S+|' +
+  '-C\\s+(?:"[^"]*"|\'[^\']*\'|\\S+)|--git-dir[= ]\\S+|--work-tree[= ]\\S+)';
+
+/** Subcommands that have no read-only form at all. */
+const GIT_ALWAYS_WRITES =
+  'commit|push|reset|rebase|merge|cherry-pick|revert|clean|checkout|switch|restore|stash|' +
+  'am|apply|init|clone|filter-branch|filter-repo|update-ref|update-index|gc|prune|repack|' +
+  'submodule|worktree|mv|rm|add|pull';
+
+/** Subcommands that read by default and write with these arguments. */
+const GIT_SOMETIMES_WRITES =
+  'remote\\s+(?:add|remove|rm|rename|set-url|set-head|set-branches|prune)\\b|' +
+  'branch\\s+(?:-[dDmMfu]\\b|--(?:delete|move|copy|force|set-upstream-to|unset-upstream))|' +
+  'tag\\s+(?:-d\\b|-f\\b|--(?:delete|force))|' +
+  'config\\s+(?:--unset|--unset-all|--replace-all|--add|--rename-section|--remove-section|--edit)|' +
+  'reflog\\s+(?:delete|expire)|' +
+  'notes\\s+(?:add|append|edit|remove|copy|prune)';
+
 export const RunConfigSchema = z.object({
   copilot: z
     .object({
@@ -30,6 +77,15 @@ export const RunConfigSchema = z.object({
       stopMarker: z.string().default('Край'),
       /** Short label; becomes the session name when run from the terminal. */
       label: z.string().default('run'),
+      /**
+       * The model a new session starts on, by the exact name the chat's picker shows.
+       *
+       * Not an enum, and not validated against a list: the list belongs to Microsoft, differs
+       * per tenant and changes without notice. An empty value means the chat is left on
+       * whatever it is already set to, which is the behaviour this project had before models
+       * could be chosen at all.
+       */
+      defaultModel: z.string().default(''),
       replyTimeoutSec: z.number().int().positive().default(900),
       signInTimeoutSec: z.number().int().positive().default(900),
       humanWaitSec: z.number().int().positive().default(900),
@@ -55,6 +111,14 @@ export const RunConfigSchema = z.object({
       longIdleTimeoutSec: z.number().int().positive().default(900),
       maxStepTimeoutSec: z.number().int().positive().default(28_800),
       stopOnFailure: z.boolean().default(false),
+      /**
+       * What a queue of tasks does when one of them does not end with a summary.
+       *
+       * False, the default, makes the queue a chain: the rest stay queued. True treats the
+       * tasks as independent. Sessions carry their own copy of this choice; this is the value
+       * a session created from the terminal starts with.
+       */
+      continueOnFailure: z.boolean().default(false),
       allowedScriptExtensions: z.array(z.string()).default(['.ps1', '.cmd', '.bat']),
       denyPatterns: z
         .array(z.string())
@@ -67,6 +131,9 @@ export const RunConfigSchema = z.object({
           'diskpart|bcdedit|vssadmin',
           'Disable-WindowsOptionalFeature',
           'net\\s+user\\s+\\w+\\s+/add',
+          // git that changes something. See GIT_WRITE_NOTE below.
+          `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})\\b`,
+          `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_SOMETIMES_WRITES})`,
         ]),
     })
     .prefault({}),
@@ -78,6 +145,20 @@ export const RunConfigSchema = z.object({
       maxOutputChars: z.number().int().positive().default(200_000),
       uploadRetries: z.number().int().nonnegative().default(2),
       redactPatterns: z.array(z.string()).default([]),
+    })
+    .prefault({}),
+
+  /**
+   * The project being worked on, remembered once instead of typed into every session.
+   *
+   * It is a default rather than a lock: a new session starts pointed at it, and any session
+   * can then be pointed somewhere else. Nothing here changes what an existing session does,
+   * because a setting that quietly redirected running work would be the worst kind.
+   */
+  project: z
+    .object({
+      /** Absolute path to the project folder. Empty means no default has been chosen. */
+      rootDir: z.string().default(''),
     })
     .prefault({}),
 
@@ -117,6 +198,46 @@ export const RunConfigSchema = z.object({
       maxRunMinutes: z.number().int().positive().default(120),
       maxFormatRetries: z.number().int().nonnegative().default(2),
       maxMessageChars: z.number().int().positive().default(100_000),
+      /**
+       * How many times a task may be sent back because its checks did not pass.
+       *
+       * Three, because the first round is usually a real mistake worth fixing, the second is
+       * the fix not working, and a third failure means the task is wrong rather than the work.
+       * Past that the loop is no longer productive and the operator should read it.
+       */
+      maxCheckRounds: z.number().int().positive().default(3),
+      /**
+       * How many times one command may be run inside a single task before it is refused.
+       *
+       * Three, and the third is generous. A command that returned the same thing twice will
+       * return it a third time; the model repeating it is not being thorough, it is stuck, and
+       * the loop costs a message, a reply and a report each time round. Observed: fifteen
+       * consecutive iterations of `git remote -v`, each one concluding that the answer had not
+       * changed. Refusing the fourth is what turns "stuck" into "tried something else", and the
+       * refusal says so in as many words.
+       */
+      maxCommandRepeats: z.number().int().positive().default(3),
+      /**
+       * How many iterations may pass with nothing but refused repeats before the task is ended.
+       *
+       * Two. The first is the model meeting the refusal and reacting to it, which is the whole
+       * point of the refusal; the second means it did not react, and a third would be the same
+       * again. The task then ends as `blocked` rather than running to `maxIterations`, because
+       * "it stopped repeating itself and said what was in the way" is a result and "it ran out
+       * of turns" is not.
+       */
+      maxStalledIterations: z.number().int().positive().default(2),
+      /**
+       * How many times a task may be sent back because an independent review found problems.
+       *
+       * Two. The first round is the review finding what the implementer missed, which is the
+       * whole point; the second is the fix being checked. A third failing round means the two
+       * conversations disagree about what the task means, and that is a question for a person
+       * rather than another lap — the task then ends `blocked` with what is still outstanding.
+       */
+      maxReviewRounds: z.number().int().positive().default(2),
+      /** How many iterations one review may take before it is abandoned as inconclusive. */
+      maxReviewIterations: z.number().int().positive().default(12),
     })
     .prefault({}),
 

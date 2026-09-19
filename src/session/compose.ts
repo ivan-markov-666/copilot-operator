@@ -21,6 +21,15 @@ export type ComposeInput = {
   /** Position of the task in the session, from 1. */
   taskNumber: number;
   contractAlreadySent: boolean;
+  /**
+   * What version control has already done for this task, as an instruction to Copilot.
+   *
+   * It belongs with level 1 rather than with the task: it is a rule about how this runner
+   * works, not something the user asked for. It is composed rather than written into the
+   * shipped contract because it is only true when version control is on, and a contract that
+   * describes a state of the world that does not hold is worse than one that says nothing.
+   */
+  vcsNote?: string;
 };
 
 const LEVEL2_HEADER = '## Project instructions (level 2)';

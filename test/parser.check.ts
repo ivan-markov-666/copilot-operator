@@ -30,6 +30,48 @@ show('bad shell', block({ status: 'continue', steps: [{ id: 1, type: 'command', 
 show('prose only', 'I think you should check the service and then reboot.');
 show('two blocks, json second', '```powershell\nGet-Date\n```\n\n' + block({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'Get-Date' }] }));
 
+/*
+ * Giving up honestly.
+ *
+ * The bar is in the schema rather than in the prose on purpose: a model that has stopped trying
+ * will also stop reading instructions carefully, so what makes `blocked` mean something is that
+ * a reply which does not meet it is sent back. Two different approaches, written down, and a
+ * summary of where things stand.
+ */
+console.log('\n--- blocked: the honest way out, and what it costs to use it ---');
+const tried = [
+  'Connected with the connection string in the task; the server refused with host not found.',
+  'Checked whether the host resolves with Resolve-DnsName; it does not.',
+];
+const blockedSummary =
+  'Nothing was changed. The task targets a database host that does not resolve from this machine, so no connection could be made. The migration files were read and are valid.';
+
+const blockedCase = (label: string, obj: unknown): void => {
+  const r = parseReply(block(obj), opts);
+  if (r.ok) {
+    console.log(
+      `${label.padEnd(32)} ok   blocked=${String(r.blocked).padEnd(5)} done=${String(r.done).padEnd(5)} tried=${r.reply.tried.length}`,
+    );
+  } else {
+    console.log(`${label.padEnd(32)} FAIL ${r.detail.slice(0, 92)}`);
+  }
+};
+
+blockedCase('blocked, done properly', { status: 'blocked', steps: [], tried, summary: blockedSummary, needed: 'The real host name.' });
+blockedCase('blocked, one approach only', { status: 'blocked', steps: [], tried: [tried[0]], summary: blockedSummary });
+blockedCase('blocked, no tried at all', { status: 'blocked', steps: [], summary: blockedSummary });
+blockedCase('blocked, no summary', { status: 'blocked', steps: [], tried });
+blockedCase('blocked, but carrying steps', { status: 'blocked', steps: [{ id: 1, type: 'command', cmd: 'Get-Date' }], tried, summary: blockedSummary });
+blockedCase('done, but carrying steps', { status: 'done', steps: [{ id: 1, type: 'command', cmd: 'Get-Date' }], summary });
+
+// The stop word must not turn a giving-up reply into a successful one.
+const withMarker = parseReply(block({ status: 'blocked', steps: [], tried, summary: blockedSummary }) + '\nКрай', opts);
+console.log(
+  'marker cannot fake done          :',
+  withMarker.ok ? `done=${withMarker.done} blocked=${withMarker.blocked}` : 'FAIL',
+  '(expect done=false blocked=true)',
+);
+
 console.log('\n--- line-number repair (DOM fallback) ---');
 const gutter = '1\n{"status":"continue","steps":[\n2\n{"id":1,"type":"command","cmd":"Get-Date"}]}';
 console.log('stripped ->', JSON.stringify(stripLineNumbers(gutter)));

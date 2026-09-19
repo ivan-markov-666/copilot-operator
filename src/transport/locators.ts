@@ -82,10 +82,71 @@ export const Label = {
   modelSelector: 'Model Selector',
 } as const;
 
+/**
+ * The model picker.
+ *
+ * The button was captured live: `button#gptModeSwitcher[aria-label="Model Selector"]`, showing
+ * `Auto`. What its popup contains was **not** captured, and it is the one thing here that
+ * Microsoft changes without warning: models come and go, and a tenant sees a different list
+ * from the next tenant. So nothing in this project hard-codes a list of models. The names are
+ * read from the open popup at the moment the user asks for them, and what is offered in the UI
+ * is whatever the chat itself offered.
+ *
+ * Because the popup's markup is unknown, the reader is deliberately role-based and tries
+ * several shapes rather than one selector. Anything matched inside the popup counts; the
+ * button's own text is the current selection.
+ */
+export const Model = {
+  /** The picker button. The id has been stable; the aria-label is the fallback. */
+  button: 'button#gptModeSwitcher',
+  buttonLabel: 'Model Selector',
+  /** Containers a Fluent popup can use. The first visible one after the click wins. */
+  popupSelectors: ['[role="menu"]', '[role="listbox"]', '[role="dialog"]', '[role="group"]'],
+  /**
+   * Roles an option can carry. All of them are read, not just the first that matches:
+   * the menu mixes `menuitemradio` for the choices with plain `menuitem` for the groups
+   * that open a submenu, so stopping at the first role hides every grouped model.
+   */
+  optionRoles: ['menuitemradio', 'menuitemcheckbox', 'option', 'radio', 'menuitem'] as const,
+  /** Attributes that mark the option currently in force. */
+  selectedAttributes: ['aria-checked', 'aria-selected', 'aria-pressed'],
+  /**
+   * A row that opens a submenu instead of choosing anything. Seen live as `GPT / OpenAI`
+   * with a chevron, holding `GPT 5.6 Think deeper` and `GPT 5.6 Quick response`. A tenant
+   * with other vendors enabled gets one such group per vendor, which is where the models
+   * this project is asked to pick actually live.
+   */
+  submenuAttributes: ['aria-haspopup', 'aria-expanded'],
+} as const;
+
 /** CSS selectors for things that have neither a test id nor an accessible name. */
 export const Css = {
   /** The composer element. Its DOM id has been stable so far. */
   composer: '#m365-chat-editor-target-element',
+  /**
+   * The composer's own wrapper, and the reason every Send lookup goes through it.
+   *
+   * "The button called Send" is not unique on this page. The Office feedback panel
+   * (`data-testid="obf-…"`) has one too, and when it opens over the chat a page-wide lookup
+   * matches two elements and Playwright refuses to guess — which is a run ending on a strict
+   * mode violation because Microsoft asked the operator what they thought of Copilot.
+   *
+   * Note the spelling: this one is `data-test-id`, with hyphens, unlike the `data-testid`
+   * values above. Both spellings exist in this UI.
+   */
+  composerWrapper: '[data-test-id="chat-input-wrapper"]',
+  /**
+   * The shape of the real Send button, used when the wrapper cannot be found.
+   *
+   * The composer's Send is its form's submit control; the feedback panel's is an ordinary
+   * button. So this tells them apart without knowing either one's container.
+   */
+  composerSendSubmit: 'button[type="submit"][aria-label="Send"]',
+  /**
+   * Anything belonging to the Office feedback panel. Never clicked, only detected: its
+   * buttons submit an opinion on the operator's own account, and this program has none.
+   */
+  feedbackPanel: '[data-testid^="obf-"]',
   /**
    * A rendered code block. Beware: it carries `scriptor-codeblock-virtualized`
    * and renders line numbers as separate text nodes, so `innerText` is

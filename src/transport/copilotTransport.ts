@@ -13,7 +13,7 @@
 import { chromium, type BrowserContext, type Page, type Download, type Locator } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Blocker, Css, Label, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
+import { Blocker, Css, Label, Model, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
 
@@ -52,6 +52,42 @@ export type ReplyCapture = {
 const ORIGIN = 'https://m365.cloud.microsoft';
 
 /**
+ * One entry of the model picker, exactly as the chat offered it.
+ *
+ * `name` is what is clicked and what is stored on a session; `raw` is the option's whole text,
+ * which is where the description and any quota notice live. Nothing is normalised, because the
+ * list belongs to Microsoft and differs per tenant and per day.
+ */
+export type ModelOption = {
+  name: string;
+  raw: string;
+  selected: boolean;
+  disabled: boolean;
+  /** The ARIA role the option carried, kept because it is the first thing to check if this breaks. */
+  role: string;
+  /** The submenu this option lives in, when it is not on the top level. Live example: `GPT`. */
+  group?: string;
+  /** The group row's whole text, which carries the vendor: `GPT\nOpenAI`. */
+  groupRaw?: string;
+};
+
+/** One row of the open menu, before it is decided whether it is a choice or a group. */
+type MenuRow = {
+  name: string;
+  raw: string;
+  selected: boolean;
+  disabled: boolean;
+  role: string;
+  /** True when the row opens a submenu rather than choosing a model. */
+  opensSubmenu: boolean;
+};
+
+/** Escapes a model name so it can be matched literally inside a regular expression. */
+function escapeForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * What the blocker detector saw, and why it thinks so.
  *
  * The reason is carried rather than thrown away because a detector that can only say "yes"
@@ -73,6 +109,101 @@ export class SendRejectedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SendRejectedError';
+  }
+}
+
+/**
+ * Takes the copy button off the operator's clipboard.
+ *
+ * Reading a reply means clicking Copilot's "Copy Response" and taking the raw markdown, which
+ * is the only lossless way to get it: the rendered DOM mangles code fences. The obvious
+ * implementation — click, then read the clipboard — quietly makes the machine unusable while a
+ * run is going. Every reply overwrites whatever the person had copied, so their next paste is a
+ * page of somebody else's markdown; and in the gap between the click and the read, anything
+ * *they* copy is what the runner picks up and parses as Copilot's answer. Both have happened.
+ *
+ * So the clipboard is removed from the path entirely. This script replaces the page's own way
+ * of copying with one that hands the text to a variable on `window` and never calls through, so
+ * pressing copy in this browser writes nothing anywhere on the machine. The runner then reads
+ * the variable. Nothing is written to the system clipboard and nothing is read from it, which
+ * means the person can copy and paste all day while a run is in progress and neither can reach
+ * the other.
+ *
+ * Both routes a web page has are covered: the modern `navigator.clipboard` calls and the older
+ * hidden-textarea-plus-`execCommand('copy')` trick. The counter is what makes a stale read
+ * impossible — the runner notes it before the click and waits for it to move, so a copy that
+ * did not happen reads as a failure rather than as the previous answer.
+ */
+export const CLIPBOARD_GUARD = `(() => {
+  const state = { text: '', seq: 0 };
+  try {
+    Object.defineProperty(window, '__copClipboard', { value: state, enumerable: false });
+  } catch (e) {
+    window.__copClipboard = state;
+  }
+
+  const remember = (text) => {
+    if (typeof text !== 'string' || text.length === 0) return;
+    state.text = text;
+    state.seq += 1;
+  };
+
+  const clip = navigator.clipboard;
+  if (clip) {
+    try {
+      Object.defineProperty(clip, 'writeText', {
+        configurable: true,
+        writable: true,
+        value: (text) => {
+          remember(String(text));
+          return Promise.resolve();
+        },
+      });
+    } catch (e) { /* a frame that will not let its clipboard be replaced reads as a failure later */ }
+
+    try {
+      Object.defineProperty(clip, 'write', {
+        configurable: true,
+        writable: true,
+        value: async (items) => {
+          for (const item of items || []) {
+            try {
+              if (item && item.types && item.types.indexOf('text/plain') >= 0) {
+                remember(await (await item.getType('text/plain')).text());
+              }
+            } catch (e) { /* one unreadable item is not a reason to drop the rest */ }
+          }
+        },
+      });
+    } catch (e) { /* as above */ }
+  }
+
+  // The old way: select text in a hidden field, then execCommand('copy'). The selection is
+  // exactly the text being copied, so it is taken and the command is never run.
+  try {
+    const realExec = document.execCommand.bind(document);
+    document.execCommand = (command, ...rest) => {
+      if (String(command).toLowerCase() === 'copy') {
+        const selected = String(window.getSelection() || '');
+        if (selected.length > 0) {
+          remember(selected);
+          return true;
+        }
+      }
+      return realExec(command, ...rest);
+    };
+  } catch (e) { /* as above */ }
+})();`;
+
+/**
+ * What `CLIPBOARD_GUARD` leaves on the page for this process to read.
+ *
+ * Declared so the two page-side functions below can be written as ordinary code rather than as
+ * casts: they run in the browser, but they are type-checked here like everything else.
+ */
+declare global {
+  interface Window {
+    __copClipboard?: { text: string; seq: number };
   }
 }
 
@@ -108,10 +239,8 @@ export class CopilotTransport {
       args: ['--start-maximized'],
     });
 
-    // Required for reading replies: the page's own clipboard read is denied otherwise.
-    await this.context
-      .grantPermissions(['clipboard-read', 'clipboard-write'], { origin: ORIGIN })
-      .catch(() => this.emit('clipboard-permission-failed'));
+    // Replies are captured without the machine's clipboard ever being touched. See CLIPBOARD_GUARD.
+    await this.context.addInitScript(CLIPBOARD_GUARD).catch(() => this.emit('clipboard-guard-failed'));
 
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
     this.page.setDefaultTimeout(60_000);
@@ -293,6 +422,16 @@ Current URL: ${url}`);
 
   /** Detects a blocker and waits it out. Throws when it is still there after the wait. */
   private async clearBlockers(): Promise<void> {
+    /*
+     * Both of these run before every message, not only when a conversation is opened.
+     *
+     * Edge's first-run dialogs and the consent banner do not wait for a convenient moment; they
+     * appear when they appear, sit over the chat, and block the composer. A run that met one
+     * mid-task did not fail at the dialog — it failed several steps later, looking like
+     * something else. Declining them before each send costs two locator lookups.
+     */
+    await this.dismissPopups().catch(() => undefined);
+    await this.dismissFeedbackPanel().catch(() => undefined);
     for (let i = 0; i < 3; i += 1) {
       const found = await this.detectBlocker();
       if (found.kind === 'none') return;
@@ -351,9 +490,23 @@ Current URL: ${url}`);
     return parseChatId(this.p.url());
   }
 
-  /** Best-effort dismissal of first-run dialogs. Unknown ones are left alone and reported. */
+  /**
+   * Best-effort dismissal of first-run dialogs. Unknown ones are left alone and reported.
+   *
+   * Every label here **declines**, and that is the whole rule. Edge's own first-run dialog
+   * offers "Confirm" next to "Set later", and confirming makes Edge the machine's default
+   * browser — a system setting, changed by a bot, because a task happened to start while the
+   * dialog was open. The consent banner underneath it offers "I Accept" next to "Reject All",
+   * and accepting agrees to tracking on the operator's behalf. So: "Set later", never
+   * "Confirm"; "Reject All", never "I Accept". A dialog whose only option is to agree to
+   * something is not dismissed at all — it is reported and left for a person.
+   *
+   * This matters more than it looks. The dialogs sit over the chat and block the composer, so a
+   * run that meets one does not fail cleanly; it fails somewhere further on, looking like
+   * something else entirely.
+   */
   async dismissPopups(): Promise<void> {
-    for (const name of ['Got it', 'Close', 'Dismiss', 'No thanks', 'Skip']) {
+    for (const name of ['Got it', 'Close', 'Dismiss', 'No thanks', 'Skip', 'Set later', 'Not now', 'Maybe later', 'Reject All', 'Reject all']) {
       const b = this.p.getByRole('button', { name, exact: true });
       if ((await b.count()) > 0 && (await b.first().isVisible().catch(() => false))) {
         await b.first().click().catch(() => undefined);
@@ -370,25 +523,345 @@ Current URL: ${url}`);
     const row = this.p.locator(`${Sidebar.conversationLink}[href*="${chatId}"]`).first();
     if ((await row.count()) === 0) return false;
 
-    await row.hover();
-    const more = row
-      .locator('xpath=ancestor-or-self::*[self::li or self::div][1]')
-      .getByRole('button', { name: Rename.moreButtonLabel, exact: true });
-    if ((await more.count()) === 0) return false;
-    await more.first().click();
+    /*
+     * Every step here waits for what it is about to click.
+     *
+     * `count()` does not wait. It was used for both the overflow button and the menu item, so
+     * a menu that had not finished rendering read as "not there", the method returned false —
+     * and left the menu standing open over the sidebar, on whichever chat it had been opened
+     * for. The rename then silently never happened, which is why conversations kept Copilot's
+     * own auto-generated titles instead of the name this runner gave them.
+     */
+    let opened = false;
+    try {
+      await row.hover();
+      const more = row
+        .locator('xpath=ancestor-or-self::*[self::li or self::div][1]')
+        .getByRole('button', { name: Rename.moreButtonLabel, exact: true })
+        .first();
+      await more.waitFor({ state: 'visible', timeout: 5_000 });
+      await more.click();
+      opened = true;
 
-    const item = this.p.getByRole('menuitem', { name: Rename.menuItem, exact: true });
-    if ((await item.count()) === 0) return false;
-    await item.first().click();
+      const item = this.p.getByRole('menuitem', { name: Rename.menuItem, exact: true }).first();
+      await item.waitFor({ state: 'visible', timeout: 5_000 });
+      await item.click();
+      opened = false;
 
-    const input = this.p.locator(Rename.input);
-    await input.waitFor({ state: 'visible', timeout: 10_000 });
-    await input.fill(name.slice(0, Rename.maxLength));
-    await this.p.getByRole('button', { name: Rename.saveText, exact: true }).first().click();
-    await input.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+      const input = this.p.locator(Rename.input);
+      await input.waitFor({ state: 'visible', timeout: 10_000 });
+      await input.fill(name.slice(0, Rename.maxLength));
+      await this.p.getByRole('button', { name: Rename.saveText, exact: true }).first().click();
+      await input.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
 
-    this.emit('chat-named', { chatId, name });
-    return true;
+      this.emit('chat-named', { chatId, name });
+      return true;
+    } catch (e) {
+      this.emit('chat-name-failed', { chatId, name, error: (e as Error).message });
+      return false;
+    } finally {
+      // Whatever happened, the sidebar is left as it was found. A menu left hanging over the
+      // chat list is not only untidy: it covers the rows and swallows the next click.
+      if (opened) await this.dismissOpenMenu();
+    }
+  }
+
+  /**
+   * Closes whatever menu or dialog is open, without caring which one it is.
+   *
+   * Escape first, because it is what the UI itself listens for; a click on a dead area of the
+   * page as the fallback for a menu that ignores it. Neither is allowed to throw: this runs in
+   * a `finally`, and a cleanup that can fail the operation it is cleaning up after is worse
+   * than the mess it was trying to tidy.
+   */
+  private async dismissOpenMenu(): Promise<void> {
+    try {
+      await this.p.keyboard.press('Escape');
+      await this.p.waitForTimeout(150);
+      const open = this.p.locator('[role="menu"]');
+      if ((await open.count()) > 0) {
+        await this.p.mouse.click(4, 4);
+        await this.p.waitForTimeout(150);
+      }
+    } catch {
+      /* the page may be navigating; a leftover menu is not worth an exception */
+    }
+  }
+
+  // --- the model picker ---------------------------------------------------------------
+
+  /**
+   * Which model the chat is set to, as the picker button reports it.
+   *
+   * Returns null when the picker is not in the page at all, which is a real state: some
+   * tenants do not expose a choice, and that is worth showing to the user as "this tenant
+   * offers no choice" rather than as an error.
+   */
+  async currentModel(): Promise<string | null> {
+    const button = await this.resolveModelButton(5_000);
+    if (!button) return null;
+    const text = ((await button.innerText().catch(() => '')) ?? '').trim();
+    const label = (await button.getAttribute('aria-label').catch(() => null)) ?? '';
+    // The aria-label is the control's name ("Model Selector"); the text is the value ("Auto").
+    return text.length > 0 ? text.split('\n')[0].trim() : label.replace(Model.buttonLabel, '').trim() || null;
+  }
+
+  private modelButton(): Locator {
+    const byId = this.p.locator(Model.button);
+    return byId;
+  }
+
+  /**
+   * The picker button, by id if it is there, otherwise by its accessible name.
+   *
+   * It waits rather than looking once. The composer is ready well before the toolbar around
+   * it finishes hydrating, so an immediate check after `ensureSignedIn` finds nothing and
+   * reports "this tenant has no model picker" about a tenant that plainly does. That is
+   * exactly what the first live read did, and a four-second pause in a probe is what showed
+   * it. Waiting is also the right answer for a slow morning on a cold profile.
+   */
+  private async resolveModelButton(timeoutMs = 15_000): Promise<Locator | null> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const byId = this.modelButton();
+      if ((await byId.count().catch(() => 0)) > 0) return byId.first();
+
+      const byLabel = this.p.getByRole('button', { name: Model.buttonLabel, exact: false });
+      if ((await byLabel.count().catch(() => 0)) > 0) return byLabel.first();
+
+      await this.p.waitForTimeout(500);
+    } while (Date.now() < deadline);
+    return null;
+  }
+
+  /**
+   * Opens the picker and reads what it offers, then closes it again without choosing.
+   *
+   * The list is whatever this tenant shows today. Nothing is filtered and nothing is
+   * translated: a name shown here is the name the chat uses, so clicking it later is an exact
+   * match rather than a guess. `raw` keeps the option's whole text, which is where Microsoft
+   * puts the one-line description and any "limit reached" notice.
+   */
+  async listModels(): Promise<{ options: ModelOption[]; current: string | null; note?: string }> {
+    const button = await this.resolveModelButton();
+    if (!button) {
+      return { options: [], current: null, note: 'This chat does not show a model picker, so there is nothing to choose.' };
+    }
+
+    const current = await this.currentModel();
+    await button.click();
+    if (!(await this.waitForPopup())) {
+      await this.closeMenu();
+      return { options: [], current, note: 'The model picker opened nothing that could be read.' };
+    }
+
+    const top = await this.readMenuRows();
+    await this.closeMenu();
+
+    const options: ModelOption[] = top.filter((r) => !r.opensSubmenu).map(({ opensSubmenu, ...o }) => o);
+    const groups = top.filter((r) => r.opensSubmenu);
+    const topNames = new Set(top.map((r) => r.name.toLowerCase()));
+
+    // Each group is opened in its own pass, from a freshly opened menu. Walking several
+    // submenus in one pass works until one of them closes the one above it, and then the
+    // reader silently returns half a list; re-opening costs a second and cannot go wrong.
+    for (const group of groups) {
+      const children = await this.readSubmenu(button, group.name, topNames);
+      for (const child of children) {
+        options.push({ ...child, group: group.name, groupRaw: group.raw });
+      }
+    }
+
+    this.emit('models-read', { count: options.length, groups: groups.length, current });
+    return { options, current };
+  }
+
+  /** Every visible menu row right now, across the menu and whatever submenu is open. */
+  private async readMenuRows(): Promise<MenuRow[]> {
+    return await this.p.evaluate(
+      ({ roles, selectedAttrs, submenuAttrs }) => {
+        const seen = new Set<string>();
+        const out: Array<{ name: string; raw: string; selected: boolean; disabled: boolean; role: string; opensSubmenu: boolean }> = [];
+
+        for (const role of roles) {
+          for (const el of Array.from(document.querySelectorAll(`[role="${role}"]`))) {
+            // A menu that is closed is still in the DOM, so visibility is what separates
+            // what is on screen from what was on screen a moment ago.
+            if ((el as HTMLElement).getClientRects().length === 0) continue;
+
+            const raw = ((el as HTMLElement).innerText || '').trim();
+            const label = el.getAttribute('aria-label')?.trim() ?? '';
+            // The first line is the name; the description sits underneath it.
+            const name = (raw.split('\n')[0] || label || '').trim();
+            if (!name || seen.has(name.toLowerCase())) continue;
+            seen.add(name.toLowerCase());
+
+            out.push({
+              name,
+              raw,
+              selected: selectedAttrs.some((a) => el.getAttribute(a) === 'true'),
+              disabled: el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled'),
+              role,
+              opensSubmenu: submenuAttrs.some((a) => {
+                const v = el.getAttribute(a);
+                return a === 'aria-haspopup' ? v === 'menu' || v === 'true' : v !== null;
+              }),
+            });
+          }
+        }
+        return out;
+      },
+      {
+        roles: [...Model.optionRoles],
+        selectedAttrs: [...Model.selectedAttributes],
+        submenuAttrs: [...Model.submenuAttributes],
+      },
+    );
+  }
+
+  /**
+   * Opens one group and reads what is inside it.
+   *
+   * The children are found by difference: whatever is on screen that was not on the top
+   * level belongs to the submenu that was just opened. That avoids having to identify which
+   * popup container is which, which is Fluent's business and changes with its internals.
+   */
+  private async readSubmenu(button: Locator, groupName: string, topNames: Set<string>): Promise<MenuRow[]> {
+    await button.click();
+    if (!(await this.waitForPopup())) return [];
+
+    const trigger = this.menuRow(groupName);
+    if ((await trigger.count()) === 0) {
+      await this.closeMenu();
+      return [];
+    }
+
+    // Hover is how these open; a click is the fallback for a build that wants one.
+    await trigger.hover().catch(() => undefined);
+    let children = await this.waitForNewRows(topNames);
+    if (children.length === 0) {
+      await trigger.click().catch(() => undefined);
+      children = await this.waitForNewRows(topNames);
+    }
+
+    await this.closeMenu();
+    return children;
+  }
+
+  /** Waits for rows to appear that were not on the top level, and returns them. */
+  private async waitForNewRows(known: Set<string>, timeoutMs = 4_000): Promise<MenuRow[]> {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const rows = (await this.readMenuRows()).filter((r) => !known.has(r.name.toLowerCase()));
+      if (rows.length > 0) return rows;
+      await this.p.waitForTimeout(250);
+    } while (Date.now() < deadline);
+    return [];
+  }
+
+  /** One visible menu row, matched on the first line of its text. */
+  private menuRow(name: string): Locator {
+    const selector = Model.optionRoles.map((r) => `[role="${r}"]:visible`).join(', ');
+    return this.p.locator(selector).filter({ hasText: new RegExp(`^${escapeForRegExp(name)}`, 'i') }).first();
+  }
+
+  /** Closes the picker, submenu included. */
+  private async closeMenu(): Promise<void> {
+    for (let i = 0; i < 3; i += 1) {
+      await this.p.keyboard.press('Escape').catch(() => undefined);
+      await this.p.waitForTimeout(200);
+      if ((await this.readMenuRows()).length === 0) return;
+    }
+  }
+
+  /** The first popup container that becomes visible after the picker is clicked. */
+  private async waitForPopup(timeoutMs = 8_000): Promise<Locator | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      for (const selector of Model.popupSelectors) {
+        const candidate = this.p.locator(selector);
+        const n = await candidate.count().catch(() => 0);
+        for (let i = 0; i < n; i += 1) {
+          const one = candidate.nth(i);
+          if (await one.isVisible().catch(() => false)) return one;
+        }
+      }
+      await this.p.waitForTimeout(250);
+    }
+    return null;
+  }
+
+  /**
+   * Sets the chat to a model by the exact name the picker showed.
+   *
+   * Verified by reading the button back rather than by trusting the click, because a menu
+   * item that is out of quota can look clicked and change nothing. When it did not take, the
+   * caller is told what the chat is actually on, which is the honest answer.
+   */
+  async selectModel(name: string): Promise<{ ok: boolean; current: string | null; reason?: string }> {
+    const button = await this.resolveModelButton();
+    if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
+
+    const before = await this.currentModel();
+    if (before && before.toLowerCase() === name.toLowerCase()) return { ok: true, current: before };
+
+    await button.click();
+    if (!(await this.waitForPopup())) return { ok: false, current: before, reason: 'The model picker did not open.' };
+
+    // The menu is walked rather than replayed from a saved path. A cached path goes stale the
+    // moment Microsoft moves a model between groups, and a name is what the user chose.
+    const top = await this.readMenuRows();
+    const wanted = (r: MenuRow): boolean => r.name.toLowerCase() === name.toLowerCase();
+
+    let target = top.find((r) => wanted(r) && !r.opensSubmenu);
+    if (!target) {
+      const topNames = new Set(top.map((r) => r.name.toLowerCase()));
+      for (const group of top.filter((r) => r.opensSubmenu)) {
+        const trigger = this.menuRow(group.name);
+        await trigger.hover().catch(() => undefined);
+        let children = await this.waitForNewRows(topNames);
+        if (children.length === 0) {
+          await trigger.click().catch(() => undefined);
+          children = await this.waitForNewRows(topNames);
+        }
+        const found = children.find(wanted);
+        if (found) {
+          target = found;
+          break;
+        }
+      }
+    }
+
+    if (!target) {
+      await this.closeMenu();
+      return { ok: false, current: before, reason: `The picker does not offer "${name}" any more.` };
+    }
+    if (target.disabled) {
+      await this.closeMenu();
+      return { ok: false, current: before, reason: `"${name}" is shown but not available right now.` };
+    }
+
+    await this.menuRow(target.name).click();
+    await this.p.waitForTimeout(1_000);
+    const after = await this.currentModel();
+
+    // The button shows the choice, so it is the check. It also **shortens** it: picking
+    // "GPT 5.6 Quick response" leaves the button reading "GPT 5.6 Quick". So a shown value
+    // that is a piece of the asked one counts as agreement, and the full name is what gets
+    // reported back, because that is what was actually chosen and what will be asked for
+    // again next time.
+    const asked = name.toLowerCase();
+    const shown = (after ?? '').toLowerCase();
+    if (shown && (shown === asked || shown.includes(asked) || asked.includes(shown))) {
+      const settled = asked.includes(shown) ? name : (after as string);
+      this.emit('model-selected', { model: settled, buttonShows: after });
+      return { ok: true, current: settled };
+    }
+    return {
+      ok: false,
+      current: after,
+      reason: `The chat reports "${after ?? 'unknown'}" after choosing "${name}".`,
+    };
   }
 
   private async turnCount(): Promise<number> {
@@ -407,10 +880,55 @@ Current URL: ${url}`);
     await composer.click();
     await composer.fill(text);
 
-    const send = this.p.getByRole('button', { name: Label.send, exact: true });
+    const send = await this.sendButton();
     await send.waitFor({ state: 'visible', timeout: 20_000 });
     await send.click();
     this.emit('message-sent', { chars: text.length, attachments: attachments.length });
+  }
+
+  /**
+   * The composer's own Send button, and nothing else called Send.
+   *
+   * Asking the page for "the button named Send" used to be enough. It is not: the Office
+   * feedback panel brings its own, and the moment it opens the lookup matches two elements and
+   * the run dies on a strict mode violation. So the search is scoped to the composer, with two
+   * fallbacks that narrow by a different signal each time, because the thing most likely to
+   * change here is the attribute name rather than the button.
+   */
+  private async sendButton(): Promise<Locator> {
+    const wrapper = this.p.locator(Css.composerWrapper);
+    if ((await wrapper.count()) > 0) {
+      return wrapper.first().getByRole('button', { name: Label.send, exact: true }).first();
+    }
+
+    const submit = this.p.locator(Css.composerSendSubmit);
+    if ((await submit.count()) > 0) {
+      this.emit('send-button-wrapper-missing', { using: Css.composerSendSubmit });
+      return submit.first();
+    }
+
+    // Last resort, and `.first()` rather than a bare locator: an unscoped match that finds two
+    // buttons should pick one and carry on, not end the run.
+    this.emit('send-button-unscoped');
+    return this.p.getByRole('button', { name: Label.send, exact: true }).first();
+  }
+
+  /**
+   * Closes the Office feedback panel if it has appeared over the chat.
+   *
+   * Escape and nothing else. The panel's own controls send an opinion from the operator's
+   * account, and a program that has no opinion must not be the thing that submits one. If
+   * Escape does not clear it, that is said out loud and the run carries on: the Send button is
+   * scoped now, so the panel being open is untidy rather than fatal.
+   */
+  private async dismissFeedbackPanel(): Promise<void> {
+    const panel = this.p.locator(Css.feedbackPanel);
+    if ((await panel.count()) === 0) return;
+    this.emit('feedback-panel-open');
+    await this.p.keyboard.press('Escape').catch(() => undefined);
+    await this.p.waitForTimeout(500);
+    if ((await panel.count()) > 0) this.emit('feedback-panel-stuck');
+    else this.emit('feedback-panel-dismissed');
   }
 
   /**
@@ -653,16 +1171,54 @@ Current URL: ${url}`);
   }
 
   /**
-   * Clicks "Copy Response" and reads the clipboard, which yields the whole answer as raw
-   * markdown with the fences intact. Falls back to the DOM text, flagged as degraded,
-   * because that text is known to be lossy.
+   * Clicks "Copy Response" and takes what the page tried to copy, which is the whole answer as
+   * raw markdown with the fences intact.
+   *
+   * What it does not do is touch the machine's clipboard: `CLIPBOARD_GUARD` has already put
+   * the page's copy call somewhere only this process reads. Falls back to the DOM text, flagged
+   * as degraded, because that text is known to be lossy.
    */
   private async copyLastReply(): Promise<{ markdown: string; degraded: boolean }> {
     const copy = this.lastAnswer().getByTestId(TestId.copyResponse).first();
     try {
+      /*
+       * Two guards around one click, both about the neighbours.
+       *
+       * The answer toolbar is a row of small buttons — copy, like, dislike, retry — and the
+       * copy button is the first of them. So before clicking, the button's own label is read
+       * and it has to look like a copy control: if the test id ever moves to a different
+       * button, the click is skipped rather than landing on "like", which would be a rating
+       * left on somebody's account by a program that has no opinion.
+       */
+      const label = ((await copy.getAttribute('aria-label')) ?? (await copy.getAttribute('title')) ?? '').toLowerCase();
+      if (label && !label.includes('copy')) {
+        this.emit('copy-button-moved', { label });
+        throw new Error(`the copy test id now points at a button labelled "${label}"`);
+      }
+
+      /*
+       * The counter is read before the click and waited on afterwards, so what comes back is
+       * necessarily what this click produced. A copy that silently did nothing times out and
+       * degrades; it can never be served the answer from the iteration before.
+       */
+      const before = await this.p.evaluate(() => window.__copClipboard?.seq ?? -1);
+      if (before < 0) throw new Error('the clipboard guard is not installed on this page');
+
       await copy.click({ timeout: 15_000 });
-      await this.p.waitForTimeout(300);
-      const text = await this.p.evaluate(async () => await navigator.clipboard.readText());
+      // And afterwards the pointer is parked away from the toolbar. Left where it was, it
+      // hovers whichever button the re-render slides under it, which shows a tooltip over the
+      // answer and puts the mouse one stray event away from a button nobody meant to press.
+      await this.p.mouse.move(2, 2).catch(() => undefined);
+
+      const captured = await this.p.waitForFunction(
+        (seq: number) => {
+          const state = window.__copClipboard;
+          return state && state.seq > seq ? state.text : null;
+        },
+        before,
+        { timeout: 15_000 },
+      );
+      const text = await captured.jsonValue();
       if (text && text.trim().length > 0) return { markdown: text, degraded: false };
     } catch {
       /* fall through */
@@ -709,10 +1265,24 @@ Current URL: ${url}`);
       }
     }
 
+    /*
+     * Two ways a download can arrive — in this page, or in a popup — and only one of them wins.
+     *
+     * The loser is the dangerous part. It keeps waiting after the race is decided and then
+     * rejects on its own: with a timeout two minutes later, or the instant the browser closes,
+     * with "Target page, context or browser has been closed". Nothing is awaiting it by then,
+     * so Node sees an unhandled rejection and takes the whole process down — which it did, in
+     * the middle of a run of three sessions, long after the download it belonged to had
+     * succeeded. Attaching a catch to each one as it is created is what makes a loser harmless;
+     * the race still reads from the originals, so the winner is unaffected.
+     */
     const fromPage = this.p.waitForEvent('download', { timeout: 120_000 });
+    fromPage.catch(() => undefined);
+
     const fromPopup = this.context
       ?.waitForEvent('page', { timeout: 120_000 })
       .then((pg) => pg.waitForEvent('download', { timeout: 120_000 }));
+    fromPopup?.catch(() => undefined);
 
     await link.click();
 

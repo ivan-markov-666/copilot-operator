@@ -18,10 +18,14 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import type { Step } from '../protocol/replySchema.js';
+import { isDownloadStep, type Step } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
-import { describeStep } from '../exec/policy.js';
+import { runChecks, failureMessage, failureReport, type CheckOutcome } from '../exec/checks.js';
+import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
+import { allAboutTheTask } from '../protocol/reviewSchema.js';
+import { repoState } from '../vcs/git.js';
+import { describeStep, matchDenyPattern } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -29,12 +33,13 @@ import { RunLog } from '../log/runLog.js';
 import { composeOpening } from '../session/compose.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskStatus } from '../session/model.js';
+import type { Session, Task, TaskRunGroup, TaskReview, TaskStatus } from '../session/model.js';
 import { mirrorProject, describeMirror } from '../context/projectMirror.js';
+import { prepareForTask, commitTaskResult } from '../vcs/taskVcs.js';
 import { defaultExportDir } from '../context/contextFiles.js';
 
 export type TaskOutcome = {
-  status: Extract<TaskStatus, 'done' | 'failed' | 'aborted' | 'limit-reached'>;
+  status: Extract<TaskStatus, 'done' | 'blocked' | 'failed' | 'aborted' | 'limit-reached'>;
   iterations: number;
   summary?: string;
   reason?: string;
@@ -47,7 +52,59 @@ export type RunDeps = {
   authorizer: StepAuthorizer;
   /** Set to stop after the current step. */
   signal?: AbortSignal;
+  /**
+   * The press of a start button this run belongs to, written onto every task it reaches.
+   *
+   * It is passed down rather than made here because a run of several sessions is one group
+   * across all of them, and only the caller that started them knows that.
+   */
+  runGroup?: TaskRunGroup;
 };
+
+/** Why a task that was reported as done is being closed as failed. */
+function checksFailedReason(outcomes: CheckOutcome[]): string {
+  const failed = outcomes.filter((o) => !o.passed);
+  return failed.length === 0
+    ? 'the checks the operator set for this task did not pass'
+    : `the task reported itself as done, but these checks did not pass: ${failed
+        .map((o) => `${o.check.name} (${o.detail})`)
+        .join('; ')}`;
+}
+
+/**
+ * What a command that has already been run is told, when it is sent again.
+ *
+ * Addressed to the model, because the model is the only thing that can act on it, and phrased
+ * as an instruction rather than a complaint: the useful half of a refusal is what to do next.
+ */
+function repeatRefusal(count: number, limit: number): string {
+  return (
+    `this exact command has already run ${count} time(s) in a row in this task and returned the same ` +
+    `result each time, which is the limit (maxCommandRepeats ${limit}). Running it again cannot ` +
+    'tell you anything new, so it was not run. Do something different in kind: a different ' +
+    'command, a different tool, a different way round the problem, or read something you have ' +
+    'not read yet. If you have genuinely run out of approaches, end the task with status ' +
+    '"blocked" and list in "tried" the different things you attempted.'
+  );
+}
+
+/**
+ * The reason line for a task the model gave up on, built from what it says it tried.
+ *
+ * The approaches are kept, not summarised away. "Blocked" on its own is no more useful than
+ * "failed"; the list of what was attempted is the part somebody reads to decide whether the
+ * task was wrong, the environment was wrong, or the model simply missed something obvious.
+ */
+function blockedReason(tried: string[], needed?: string): string {
+  const attempts = tried.map((t, i) => `(${i + 1}) ${t}`).join(' ');
+  const needs = needed?.trim();
+  return [
+    `stopped as blocked after ${tried.length} different approach(es): ${attempts}`,
+    needs ? `To unblock it: ${needs}` : '',
+  ]
+    .filter(Boolean)
+    .join(' — ');
+}
 
 /** A step that was refused never reaches the shell, but Copilot still has to hear about it. */
 function refusedResult(step: Step, reason: string): RunResult {
@@ -87,18 +144,23 @@ class Sink {
 }
 
 /**
- * Opens the browser for a session: signs in, then either reopens the session's conversation
- * or starts a new one. Shared by every task in the session.
+ * Opens the browser and signs in. Nothing about any particular conversation.
+ *
+ * Split from entering a conversation so that a run of several sessions can open one window and
+ * keep it. Closing the browser between sessions meant a fresh launch, a fresh sign-in check and
+ * a fresh profile lock for every one of them — minutes of nothing, repeated, and every one of
+ * those launches another chance to hit the failure where a leftover Edge process is still
+ * holding the profile.
  */
-export async function openSessionTransport(
+export async function openBrowser(
   cfg: ResolvedConfig,
-  session: Session,
   bus: EventBus,
-  runsDir: string,
+  downloadsDir: string,
+  sessionId: string,
 ): Promise<CopilotTransport> {
   const transport = new CopilotTransport({
     profileDir: cfg.resolved.profileDir,
-    downloadsDir: join(runsDir, '_browser'),
+    downloadsDir,
     chatUrl: cfg.copilot.url,
     channel: cfg.copilot.channel,
     headless: cfg.copilot.headless,
@@ -115,7 +177,7 @@ export async function openSessionTransport(
         'error-banner': 'The chat reported a transient error; reloading the page.',
       };
       bus.publish({
-        sessionId: session.id,
+        sessionId,
         type: `browser:${event}`,
         level: event === 'verification-required' ? 'warn' : 'info',
         message: spoken[event],
@@ -126,13 +188,27 @@ export async function openSessionTransport(
 
   await transport.open();
   await transport.ensureSignedIn();
+  return transport;
+}
 
+/**
+ * Puts an already-open browser on this session's conversation, or starts one for it.
+ *
+ * `closeOnFailure` is false when the browser is shared: a conversation that cannot be reopened
+ * is this session's problem, and taking the window down with it would end the sessions after it
+ * too, for a reason that has nothing to do with them.
+ */
+export async function enterSessionConversation(
+  transport: CopilotTransport,
+  session: Session,
+  opts: { closeOnFailure: boolean },
+): Promise<void> {
   if (session.chat) {
     const ok = await transport.openConversation(session.chat.chatId);
     if (!ok) {
       const byName = await transport.openConversationByName(session.chat.name);
       if (!byName) {
-        await transport.close();
+        if (opts.closeOnFailure) await transport.close();
         throw new Error(
           `The session's conversation "${session.chat.name}" could not be reopened. ` +
             'It may have been deleted in Copilot. Start a new session for a fresh conversation.',
@@ -142,7 +218,88 @@ export async function openSessionTransport(
   } else {
     await transport.newChat();
   }
+}
+
+/**
+ * Joins the conversation of another session in the same group, when there is one.
+ *
+ * Several sessions can be told to share a chat: useful when they are one piece of work split
+ * into parts that need to see each other's history, and wasteful to refuse when the tasks were
+ * written that way. The first session of a group to run opens the conversation in the ordinary
+ * way; every later one adopts the pointer and, with it, the fact that the level-1 contract has
+ * already been sent there — sending it twice into the same chat would be both noise and a
+ * contradiction, since the contract says it is sent once.
+ *
+ * A session that already has its own conversation is never moved. Its history is in that chat.
+ */
+async function joinGroupConversation(store: SessionStore, session: Session, bus: EventBus): Promise<Session> {
+  const group = session.conversationGroup?.trim().toLowerCase();
+  if (!group || session.chat) return session;
+
+  const others = (await store.listSessions()).filter(
+    (s) => s.id !== session.id && s.chat && (s.conversationGroup?.trim().toLowerCase() ?? '') === group,
+  );
+  if (others.length === 0) return session;
+
+  // The newest conversation in the group, so a group that was restarted carries on in the chat
+  // it is actually using rather than in the one it began with months ago.
+  const host = others.sort((a, b) => (b.chat?.createdAt ?? '').localeCompare(a.chat?.createdAt ?? ''))[0];
+
+  const updated = await store.updateSession(session.id, (s) => {
+    s.chat = host.chat;
+    s.contractSent = true;
+  });
+  bus.publish({
+    sessionId: session.id,
+    type: 'chat-joined',
+    level: 'info',
+    message: `sharing the conversation "${host.chat?.name}" with "${host.name}", as both are in the group "${session.conversationGroup}"`,
+    data: { group: session.conversationGroup, hostSession: host.id, chatId: host.chat?.chatId },
+  });
+  return updated;
+}
+
+/** The old shape, kept for the terminal path: open a browser and enter the conversation. */
+export async function openSessionTransport(
+  cfg: ResolvedConfig,
+  session: Session,
+  bus: EventBus,
+  runsDir: string,
+): Promise<CopilotTransport> {
+  const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id);
+  await enterSessionConversation(transport, session, { closeOnFailure: true });
   return transport;
+}
+
+/**
+ * Puts the conversation on the model the session asks for, once per run.
+ *
+ * Applied here rather than per task because the picker belongs to the conversation, and a
+ * failure is reported rather than raised: a model that is out of quota or has been withdrawn
+ * should not throw away a queue of tasks. The run continues on whatever the chat is actually
+ * set to, and the session records that, so the register shows which model did the work rather
+ * than which one was asked for.
+ */
+async function applySessionModel(transport: CopilotTransport, session: Session, bus: EventBus): Promise<string | undefined> {
+  if (!session.model?.trim()) return undefined;
+
+  const result = await transport.selectModel(session.model.trim()).catch((e: unknown) => ({
+    ok: false as const,
+    current: null,
+    reason: (e as Error).message,
+  }));
+
+  bus.publish({
+    sessionId: session.id,
+    type: result.ok ? 'model-selected' : 'model-not-selected',
+    level: result.ok ? 'info' : 'warn',
+    message: result.ok
+      ? `model: ${result.current ?? session.model}`
+      : `could not switch to "${session.model}": ${result.reason ?? 'unknown reason'}. Continuing on ${result.current ?? 'the chat default'}.`,
+    data: { asked: session.model, current: result.current, ok: result.ok },
+  });
+
+  return result.current ?? undefined;
 }
 
 /** Runs one task to completion inside an already-open transport. */
@@ -153,7 +310,10 @@ export async function runTask(
   deps: RunDeps,
 ): Promise<TaskOutcome> {
   const { cfg, store, bus, authorizer, signal } = deps;
-  const runId = task.runId ?? `${session.id}-${task.id}`;
+  // Every attempt gets its own folder. The first keeps the original name, so nothing that
+  // already exists on disk moves; a re-run adds its attempt number.
+  const attempt = task.attempt ?? 1;
+  const runId = task.runId ?? `${session.id}-${task.id}${attempt > 1 ? `-a${attempt}` : ''}`;
   const log = new RunLog(runId, cfg.resolved.runsDir);
   const sink = new Sink(log, bus, session.id, task.id);
   const pacer = new Pacer({
@@ -197,7 +357,33 @@ export async function runTask(
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
+
+    // Whatever the outcome, what the task changed goes onto its branch. A failed task that
+    // left files behind is exactly when having them committed somewhere is worth the most.
+    // The task is re-read first, because the branch was recorded on it after this closure
+    // was created.
+    const fresh = (await store.getSession(session.id))?.tasks.find((x) => x.id === task.id);
+    const vcsAfter = await commitTaskResult(session, { ...task, vcs: fresh?.vcs }, { status, summary, reason }, bus).catch(
+      (e: unknown) => {
+        sink.event('vcs-error', { error: String(e) }, `version control failed after the task: ${(e as Error).message}`, 'warn');
+        return undefined;
+      },
+    );
+    if (vcsAfter?.branch) {
+      await record(
+        'VERSION CONTROL',
+        [
+          `branch : ${vcsAfter.branch}`,
+          `commit : ${vcsAfter.commit ?? '(nothing was committed)'}`,
+          vcsAfter.problem ? `problem: ${vcsAfter.problem}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    }
+
     await setTask((t) => {
+      if (vcsAfter) t.vcs = vcsAfter;
       t.status = status;
       t.iterations = iterations;
       t.finishedAt = new Date().toISOString();
@@ -214,12 +400,29 @@ export async function runTask(
   await setTask((t) => {
     t.status = 'running';
     t.runId = runId;
+    t.runGroup = deps.runGroup;
     t.startedAt = new Date().toISOString();
   });
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\n`, 'utf8');
 
   try {
+    // --- version control: a branch of this task's own, before anything is touched -------
+    const prepared = await prepareForTask(session, task, bus, async (mutate) => {
+      await store.updateSession(session.id, mutate);
+    });
+    if (prepared.vcs.branch || prepared.vcs.problem) {
+      await setTask((t) => {
+        t.vcs = prepared.vcs;
+      });
+      await record(
+        'VERSION CONTROL',
+        prepared.vcs.problem
+          ? `not active: ${prepared.vcs.problem}`
+          : `branch ${prepared.vcs.branch}, from ${prepared.vcs.baseCommit ?? '(no commits yet)'}`,
+      );
+    }
+
     // --- project mirror, attached to the first message of the task ---------------------
     let mirrorFiles: string[] = [];
     if (session.mirror.enabled && session.mirror.rootDir) {
@@ -231,12 +434,23 @@ export async function runTask(
         targetDir,
         separator: cfg.projectMirror.separator,
         txtMode: cfg.projectMirror.txtMode,
-        respectGitignore: cfg.projectMirror.respectGitignore,
+        // The session's own switches win: they are what the operator ticked for this project.
+        // Settings only supply the fallback for a session saved before they existed.
+        respectGitignore: session.mirror.respectGitignore ?? cfg.projectMirror.respectGitignore,
         ignoreDirs: cfg.projectMirror.ignoreDirs,
-        includeEnvFiles: cfg.projectMirror.includeEnvFiles,
+        includeEnvFiles: session.mirror.includeEnvFiles ?? cfg.projectMirror.includeEnvFiles,
         maxFileBytes: cfg.projectMirror.maxFileBytes,
       });
       sink.event('mirror', { targetDir, ...result }, `project mirror: ${describeMirror(result)}`);
+      if (session.mirror.includeEnvFiles) {
+        const envCount = Object.keys(result.mapping).filter((p) => /(^|\/)\.env(\.|$)/i.test(p)).length;
+        if (envCount > 0) {
+          sink.event('mirror-env', { envCount }, `${envCount} .env file(s) are being attached, as configured`, 'warn');
+        }
+      }
+      for (const s of result.skipped.slice(0, 20)) {
+        sink.event('mirror-skipped', { ...s }, `not copied: ${s.relPath} (${s.reason})`);
+      }
       const all = Object.values(result.mapping).sort();
       mirrorFiles = all.slice(0, cfg.projectMirror.maxAttachedFiles).map((n) => join(targetDir, n));
       if (all.length > mirrorFiles.length) {
@@ -255,6 +469,7 @@ export async function runTask(
       taskTitle: task.title,
       taskNumber,
       contractAlreadySent: session.contractSent,
+      vcsNote: prepared.note,
     });
     await setTask((t) => {
       t.firstMessage = opening.firstMessage;
@@ -307,7 +522,278 @@ export async function runTask(
     }
 
     // --- the loop ---------------------------------------------------------------------
+    // How many times the checks have been run for this task, and how many times they may be.
+    let checkRounds = 0;
+    // Kept here rather than read back off the task: `setTask` writes to the store, it does not
+    // refresh the object this function is holding, so reading it back would give the state
+    // before the checks ran and the reason would come out empty.
+    let lastOutcomes: CheckOutcome[] = [];
+    const maxCheckRounds = Math.max(1, cfg.limits.maxCheckRounds ?? 3);
+
+    /**
+     * Whether "done" is accepted, decided by the operator's checks rather than by the reply.
+     *
+     * Returns `accept` when there is nothing to check or everything passed, `retry` when the
+     * failures have been sent back for Copilot to fix, and `give-up` when it has had its
+     * rounds. The checks run here, at the end, and not as steps: they are not work, they are
+     * the question of whether the work happened, and a task cannot be trusted to answer that
+     * about itself.
+     */
+    const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up'> => {
+      const checks = task.checks ?? [];
+      if (checks.length === 0) return 'accept';
+
+      checkRounds += 1;
+      sink.event('checks-started', { round: checkRounds, count: checks.length },
+        `checking the task against ${checks.length} condition(s) the operator set`);
+
+      const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
+        cwd: cfg.resolved.cwd,
+        logDir: log.path('checks'),
+        signal: deps.signal,
+        deny: (command) => matchDenyPattern(command, cfg.execution.denyPatterns),
+      }));
+
+      await setTask((t) => {
+        t.checkResults = outcomes.map((o) => ({ name: o.check.name, passed: o.passed, detail: o.detail }));
+      });
+
+      for (const o of outcomes) {
+        sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail },
+          `${o.passed ? 'passed' : 'FAILED'}: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
+      }
+
+      const failed = outcomes.filter((o) => !o.passed);
+      if (failed.length === 0) {
+        sink.event('checks-passed', { count: outcomes.length }, `all ${outcomes.length} check(s) passed`);
+        return 'accept';
+      }
+      if (deps.signal?.aborted) return 'give-up';
+      if (checkRounds > maxCheckRounds) {
+        sink.event('checks-exhausted', { rounds: checkRounds - 1 },
+          `${failed.length} check(s) still failing after ${maxCheckRounds} attempt(s); the task is closed as failed`, 'warn');
+        return 'give-up';
+      }
+
+      // The failures go back exactly the way step output does: a message with a file attached,
+      // because a compiler's opinion belongs in a file and not in a chat bubble.
+      const path = join(reportsDir, `checks-${checkRounds}.txt`);
+      await writeFile(path, failureReport(outcomes), 'utf8');
+      await record(`CHECKS ${checkRounds}`, failureReport(outcomes));
+      const message = failureMessage(outcomes, checkRounds, maxCheckRounds);
+
+      await pacer.throttleSend();
+      const before = await transport.sendAndConfirm(message, [path]);
+      const next = await transport.waitForReply(before);
+      await saveReply(`checks-${checkRounds}`, next);
+      lastMarkdown = next.markdown;
+      await pacer.settle();
+      return 'retry';
+    };
+
+    /*
+     * The second opinion.
+     *
+     * It runs after the checks and only when they have passed, which is the right order for two
+     * reasons: the checks are mechanical and free, so spending a whole conversation to discover
+     * what a string comparison would have told us is waste; and a reviewer shown work that does
+     * not even compile spends its round on that instead of on the things only a reader finds.
+     *
+     * The reviewer gets its own conversation, in the same browser, and the implementer's is
+     * returned to afterwards. What it is told is deliberately narrow — the task, the project
+     * instructions and the files that changed — and what it is not told is the implementer's
+     * summary, because a reviewer that reads an account of the work starts by trusting the thing
+     * it is meant to be checking.
+     */
+    let reviewRounds = 0;
+    let lastReview: ReviewOutcome | null = null;
+
+    const reviewWanted = task.reviewEnabled ?? session.review?.enabled ?? true;
+    const maxReviewRounds = Math.max(1, cfg.limits.maxReviewRounds ?? 2);
+
+    const saveReview = async (review: TaskReview): Promise<void> => {
+      await setTask((t) => {
+        t.review = review;
+      });
+    };
+
+    /**
+     * Whether a task that passed its checks is actually finished.
+     *
+     * `accept` — reviewed and passed, or not reviewed at all.
+     * `retry` — the reviewer found problems and they have been sent back to the implementer.
+     * `give-up` — the rounds are spent and the findings are still standing.
+     */
+    const gateOnReview = async (): Promise<'accept' | 'retry' | 'give-up'> => {
+      if (!reviewWanted) {
+        await saveReview({ verdict: 'skipped', rounds: 0, stepsRun: 0 });
+        return 'accept';
+      }
+
+      reviewRounds += 1;
+
+      const model = (session.review?.model ?? '').trim();
+      const repoDir = session.vcs?.enabled ? (session.vcs.repoDir ?? '').trim() : '';
+      /*
+       * What changed, read from git rather than from anybody's account of it.
+       *
+       * The commit happens when the task closes, which is after this, so the task's changes are
+       * still sitting in the working tree. That is exactly the list wanted: the branch was cut
+       * before this task started, so everything dirty now is this task's doing.
+       */
+      const changedFiles = repoDir ? (await repoState(repoDir).catch(() => null))?.changed ?? [] : [];
+
+      sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length },
+        `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})`);
+
+      let outcome: ReviewOutcome;
+      try {
+        await transport.newChat();
+        if (model) {
+          const picked = await transport.selectModel(model).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+          sink.event(picked.ok ? 'review-model-selected' : 'review-model-not-selected', { asked: model, current: picked.current },
+            picked.ok ? `the review runs on ${picked.current ?? model}` : `the review could not switch to "${model}": ${picked.reason ?? 'unknown reason'}`,
+            picked.ok ? 'info' : 'warn');
+        }
+
+        outcome = await runReview(transport, session, task, {
+          cfg,
+          authorizer,
+          signal,
+          pacer,
+          dir: log.path('review', String(reviewRounds)),
+          round: reviewRounds,
+          changedFiles,
+          event: (type, data, human, level) => sink.event(type, data, human, level),
+          record,
+        });
+      } catch (e) {
+        outcome = { verdict: 'error', findings: [], stepsRun: 0, iterations: 0, problem: (e as Error).message };
+      } finally {
+        // Back to the conversation that did the work, whatever happened in the other one. A
+        // task whose implementer chat is lost cannot be fixed, reported on, or closed properly.
+        await enterSessionConversation(transport, session, { closeOnFailure: false }).catch((e: unknown) => {
+          sink.event('review-return-failed', { error: String(e) },
+            `could not return to the task's own conversation after the review: ${(e as Error).message}`, 'error');
+        });
+      }
+
+      lastReview = outcome;
+      await saveReview({
+        verdict: outcome.verdict,
+        rounds: reviewRounds,
+        stepsRun: outcome.stepsRun,
+        summary: outcome.summary,
+        findings: outcome.findings,
+        problem: outcome.problem,
+        model: model || undefined,
+      });
+
+      if (outcome.verdict === 'pass') {
+        sink.event('review-passed', { round: reviewRounds, stepsRun: outcome.stepsRun },
+          `the review passed the work after running ${outcome.stepsRun} command(s)`);
+        return 'accept';
+      }
+
+      /*
+       * A review that could not be carried out does not fail the work.
+       *
+       * The browser closing, the chat refusing a message, the reviewer losing its format — none
+       * of that is evidence about the task, and turning good work into a failed task because
+       * the machinery stumbled would make the whole mechanism something to switch off. It is
+       * said loudly and recorded on the task instead, so "this went unreviewed" is visible.
+       */
+      if (outcome.verdict === 'error') {
+        sink.event('review-error', { round: reviewRounds, problem: outcome.problem },
+          `the review could not be carried out: ${outcome.problem ?? 'unknown reason'}. The work is accepted unreviewed.`, 'warn');
+        return 'accept';
+      }
+
+      /*
+       * Nothing here is the work's fault.
+       *
+       * When every finding is about the task — it contradicts itself, it asks for something the
+       * project instructions forbid, or it expects something untrue of this machine — sending it
+       * back is asking somebody to fix a sentence they are not allowed to change. The task stops
+       * here instead, on the first round, and says which part of its own description is wrong.
+       * That is a result for the person who wrote the task; another lap is not.
+       */
+      if (allAboutTheTask(outcome.findings)) {
+        sink.event('review-task-wrong', { round: reviewRounds, findings: outcome.findings.length },
+          `the review found ${outcome.findings.length} problem(s) with the task itself, not with the work`, 'warn');
+        return 'give-up';
+      }
+
+      /*
+       * Out of rounds, and only now.
+       *
+       * The budget counts times the findings are *sent back*, not reviews — so the last fix is
+       * always checked before the task is judged. Counting reviews instead cost a task: round
+       * two's finding was sent back, the implementer fixed it, the checks passed, and the task
+       * was then blocked quoting that finding as "still there" without anybody having looked
+       * at the fix. It had been fixed.
+       */
+      if (reviewRounds > maxReviewRounds) {
+        sink.event('review-exhausted', { rounds: maxReviewRounds, findings: outcome.findings.length },
+          `the review still has findings after ${maxReviewRounds} round(s) of fixing; the task is closed as blocked`, 'warn');
+        return 'give-up';
+      }
+
+      sink.event('review-failed', { round: reviewRounds, findings: outcome.findings.length },
+        `the review found ${outcome.findings.length} problem(s); sending them back to be fixed`, 'warn');
+
+      await pacer.throttleSend();
+      const before = await transport.sendAndConfirm(findingsMessage(outcome, reviewRounds, maxReviewRounds));
+      const next = await transport.waitForReply(before);
+      await saveReply(`review-${reviewRounds}-findings`, next);
+      lastMarkdown = next.markdown;
+      await pacer.settle();
+      return 'retry';
+    };
+
+    /** Why a task that was reviewed and found wanting is being closed without being done. */
+    const reviewBlockedReason = (): string => {
+      const findings = lastReview?.findings ?? [];
+      const listed = findings.map((f, i) => `(${i + 1}) ${f.what}`).join(' ');
+      // The two endings read differently because they ask different things of the reader: one
+      // is "the work is not finished", the other is "the task is wrong and needs a decision".
+      return allAboutTheTask(findings)
+        ? `an independent review found ${findings.length} problem(s) with the task itself rather than with the work, ` +
+          `so there was nothing to send back for fixing: ${listed}`
+        : `an independent review found ${findings.length} problem(s) that were still there after ` +
+          `${maxReviewRounds} round(s) of fixing: ${listed}`;
+    };
+
     let formatRetries = 0;
+
+    /*
+     * The anti-spin guards.
+     *
+     * `seen` counts how often each command has actually run, normalised only for whitespace so
+     * that two genuinely different commands never collide. `stalled` counts iterations in which
+     * every single step was refused as a repeat — which is the signature of a model going round
+     * in a circle, and the thing that turns into a task that ends rather than a task that times
+     * out.
+     */
+    const maxCommandRepeats = Math.max(1, cfg.limits.maxCommandRepeats ?? 3);
+    const maxStalledIterations = Math.max(1, cfg.limits.maxStalledIterations ?? 2);
+    /**
+     * Per command: how many times in a row it has returned exactly the same thing.
+     *
+     * The count is of *identical results*, not of runs, and the difference matters. A long task
+     * legitimately runs `npx tsc --noEmit` five or six times — after each fix, and again after
+     * each round of review findings — and every one of those runs is a verification of something
+     * that just changed. Counting runs refused the sixth one as a repeat and pushed the model
+     * into inventing ways around its own type-checker. Counting identical results refuses only
+     * what it was meant to: the same command, returning the same answer, again.
+     */
+    const seen = new Map<string, { sameInARow: number; signature: string }>();
+    const fingerprint = (step: Step): string =>
+      step.type === 'command' ? step.cmd.replace(/\s+/g, ' ').trim() : `download:${step.file}:${step.args.join(' ')}`;
+    /** What "the same answer" means: the exit code and the output, hashed. */
+    const resultSignature = (r: RunResult): string =>
+      createHash('sha256').update(`${r.exitCode}\u0000${r.outcome}\u0000${r.stdout}\u0000${r.stderr}`).digest('hex');
+    let stalled = 0;
 
     for (;;) {
       if (signal?.aborted) return await finish('aborted', 'stopped by the operator');
@@ -340,17 +826,80 @@ export async function runTask(
       await setTask((t) => {
         t.iterations = iterations;
       });
-      const { reply, done } = parsed;
+      const { reply, done, blocked } = parsed;
       sink.event('reply-parsed', { iteration: iterations, status: reply.status, steps: reply.steps.length, notes: reply.notes },
         `iteration ${iterations}: ${reply.steps.length} step(s)${reply.notes ? ` — ${reply.notes}` : ''}`);
 
+      /*
+       * The task ends here, and it ends without the checks.
+       *
+       * Running them would only produce a list of things that are not true, which is already
+       * what the reply said, at greater length and one message later. The reason carries the
+       * approaches that were tried, and that is what the register shows.
+       */
+      if (blocked) {
+        sink.event('task-blocked', { tried: reply.tried, needed: reply.needed },
+          `the task was given up as blocked after ${reply.tried.length} approach(es)`, 'warn');
+        return await finish('blocked', blockedReason(reply.tried, reply.needed), reply.summary, lastMarkdown);
+      }
+
       if (done && reply.steps.length === 0) {
-        return await finish('done', undefined, reply.summary, lastMarkdown);
+        const verdict = await gateOnChecks();
+        if (verdict === 'give-up') {
+          return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
+        }
+        if (verdict === 'accept') {
+          const reviewed = await gateOnReview();
+          if (reviewed === 'accept') return await finish('done', undefined, reply.summary, lastMarkdown);
+          if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), reply.summary, lastMarkdown);
+        }
+        continue;
+      }
+
+      /*
+       * A download step that names a file the reply does not carry.
+       *
+       * Copilot says "the attached script writes the files", the runner looks, and there is no
+       * attachment at all — it described a file instead of producing one. Caught here, before a
+       * single step runs, because the alternative is what happened: the download was refused
+       * mid-iteration, the steps after it failed against files that were never written, and the
+       * results file that went back was a page of errors about work that had never started. The
+       * model then lost track of which task it was on and re-ran the previous one.
+       *
+       * Only the empty case is treated this way. A name that does not match while exactly one
+       * file *is* attached is handled further down, where it is a naming difference rather than
+       * a missing file.
+       */
+      const wantedFiles = reply.steps.filter(isDownloadStep).map((x) => x.file);
+      if (wantedFiles.length > 0) {
+        const attached = await transport.lastMessageAttachmentNames().catch(() => [] as string[]);
+        if (attached.length === 0) {
+          formatRetries += 1;
+          sink.event('attachment-missing', { wanted: wantedFiles, retry: formatRetries },
+            `the reply asks to run ${wantedFiles.join(', ')} but carries no file at all, retry ${formatRetries}/${cfg.limits.maxFormatRetries}`,
+            'warn');
+          if (formatRetries > cfg.limits.maxFormatRetries) {
+            return await finish('failed', `Copilot kept asking to run files it did not attach: ${wantedFiles.join(', ')}`, undefined, lastMarkdown);
+          }
+          await pacer.throttleSend();
+          const askAgain = await transport.sendAndConfirm(
+            `Your last reply has a download step for ${wantedFiles.map((f) => `"${f}"`).join(', ')}, but the message ` +
+              'carries no attached file at all. Naming a file in the notes does not attach one, and nothing was run. ' +
+              'Send the reply again either with the file genuinely attached to the message, or — simpler and usually ' +
+              'better for source files — as ordinary command steps that write the file with Set-Content.',
+          );
+          const retry = await transport.waitForReply(askAgain);
+          await saveReply(`attachment-retry-${formatRetries}`, retry);
+          lastMarkdown = retry.markdown;
+          continue;
+        }
       }
 
       // --- execute -----------------------------------------------------------------
       const results: RunResult[] = [];
       let aborted = false;
+      /** How many of this iteration's steps were turned away for being repeats. */
+      let repeatsRefused = 0;
 
       for (const step of reply.steps) {
         if (signal?.aborted) {
@@ -384,6 +933,18 @@ export async function runTask(
             results.push(refusedResult(step, `${damage}. ${damageGuidance()}`));
             continue;
           }
+        }
+
+        // Refused before the operator is asked to approve it, because a step that cannot teach
+        // anyone anything is not worth a person's attention either.
+        const key = fingerprint(step);
+        const ran = seen.get(key)?.sameInARow ?? 0;
+        if (ran >= maxCommandRepeats) {
+          repeatsRefused += 1;
+          sink.event('step-repeated', { id: step.id, count: ran, limit: maxCommandRepeats },
+            `step ${step.id} refused: already run ${ran} time(s) in this task with the same result`, 'warn');
+          results.push(refusedResult(step, repeatRefusal(ran, maxCommandRepeats)));
+          continue;
         }
 
         await setTask((t) => {
@@ -432,6 +993,13 @@ export async function runTask(
         );
 
         results.push(result);
+        // The run counts toward the limit only if it changed nothing about the answer.
+        const signature = resultSignature(result);
+        const previous = seen.get(key);
+        seen.set(key, {
+          signature,
+          sameInARow: previous && previous.signature === signature ? previous.sameInARow + 1 : 1,
+        });
         sink.event('step-finished', { id: step.id, outcome: result.outcome, exitCode: result.exitCode, durationMs: result.durationMs },
           `step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
 
@@ -445,6 +1013,7 @@ export async function runTask(
       // --- report back ---------------------------------------------------------------
       const report = await writeReport(results, {
         runId,
+        task: task.title,
         iteration: iterations,
         dir: reportsDir,
         fileNameTemplate: cfg.report.fileName,
@@ -458,7 +1027,44 @@ export async function runTask(
 
       if (aborted) return await finish('aborted', 'the operator aborted the task', undefined, lastMarkdown);
 
-      const covering = buildCoveringMessage({ iteration: iterations, results, attachments: report.names, parts: report.parts });
+      /*
+       * Nothing this iteration did anything.
+       *
+       * Every step was a repeat of something already run, which means the previous refusal was
+       * read and ignored. One of those is the model reacting to the refusal; two in a row is a
+       * loop, and the task is ended here rather than left to burn through its iterations and
+       * die with a message about a limit that explains nothing.
+       */
+      if (reply.steps.length > 0 && repeatsRefused === reply.steps.length) {
+        stalled += 1;
+        sink.event('iteration-stalled', { stalled, limit: maxStalledIterations },
+          `every step this iteration was a repeat (${stalled}/${maxStalledIterations})`, 'warn');
+        if (stalled >= maxStalledIterations) {
+          const repeated = [...seen.entries()]
+            .filter(([, v]) => v.sameInARow >= maxCommandRepeats)
+            .map(([cmd]) => cmd.slice(0, 120));
+          return await finish(
+            'blocked',
+            `the same command(s) were sent again after being refused for repetition, ${stalled} iteration(s) running, ` +
+              `so the task was ended rather than left to run out of iterations. Repeated: ${repeated.join(' | ')}`,
+            reply.summary,
+            lastMarkdown,
+          );
+        }
+      } else {
+        stalled = 0;
+      }
+
+      let covering = buildCoveringMessage({ task: task.title, iteration: iterations, results, attachments: report.names, parts: report.parts });
+      // Said in the message as well as in the step's own output, because a refusal buried in an
+      // attached file is a refusal that gets read after the next command has been written.
+      if (repeatsRefused > 0) {
+        covering +=
+          `\n\n${repeatsRefused} of the ${reply.steps.length} step(s) were not run: they repeat a command ` +
+          `that has already run ${maxCommandRepeats} time(s) in this task with the same result. ` +
+          'Change the approach rather than the wording. If nothing else is left to try, end with ' +
+          'status "blocked" and say in "tried" what you attempted.';
+      }
       assertSendable(covering, report.names);
 
       let sent = false;
@@ -487,7 +1093,18 @@ export async function runTask(
         }
       }
 
-      if (done) return await finish('done', undefined, reply.summary, lastMarkdown);
+      if (done) {
+        const verdict = await gateOnChecks();
+        if (verdict === 'give-up') {
+          return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
+        }
+        if (verdict === 'accept') {
+          const reviewed = await gateOnReview();
+          if (reviewed === 'accept') return await finish('done', undefined, reply.summary, lastMarkdown);
+          if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), reply.summary, lastMarkdown);
+        }
+        continue;
+      }
       await pacer.settle();
     }
   } catch (e) {
@@ -505,7 +1122,17 @@ export async function runTask(
  */
 export async function runSession(
   sessionId: string,
-  deps: RunDeps & { continueOnFailure?: boolean },
+  deps: RunDeps & {
+    continueOnFailure?: boolean;
+    /**
+     * A browser that is already open, to be used and left open.
+     *
+     * Passed by a run of several sessions, which owns the window for the whole batch. When it
+     * is absent this function opens its own and closes it at the end, which is what a single
+     * session has always done.
+     */
+    transport?: CopilotTransport;
+  },
 ): Promise<{ ran: number; lastStatus?: TaskOutcome['status'] }> {
   const { cfg, store, bus } = deps;
   let session = await store.getSession(sessionId);
@@ -525,12 +1152,30 @@ export async function runSession(
   const sessionRunsDir = join(cfg.resolved.runsDir, session.id);
   await mkdir(sessionRunsDir, { recursive: true });
 
-  let transport: CopilotTransport | null = null;
+  const borrowed = deps.transport ?? null;
+  let transport: CopilotTransport | null = borrowed;
   let ran = 0;
   let lastStatus: TaskOutcome['status'] | undefined;
 
   try {
-    transport = await openSessionTransport(cfg, session, bus, sessionRunsDir);
+    session = await joinGroupConversation(store, session, bus);
+
+    if (borrowed) {
+      bus.publish({ sessionId, type: 'browser-reused', level: 'info', message: 'using the browser window that is already open' });
+      await enterSessionConversation(borrowed, session, { closeOnFailure: false });
+    } else {
+      transport = await openSessionTransport(cfg, session, bus, sessionRunsDir);
+    }
+    const chat = transport as CopilotTransport;
+
+    // The picker belongs to the conversation, so the session's choice is applied once, here,
+    // before the first task goes out. What the chat ended up on is recorded either way.
+    const modelInUse = await applySessionModel(chat, session, bus);
+    if (session.model?.trim()) {
+      await store.updateSession(sessionId, (s) => {
+        s.modelInUse = modelInUse;
+      });
+    }
 
     for (const queuedTask of queued) {
       if (deps.signal?.aborted) break;
@@ -538,20 +1183,27 @@ export async function runSession(
       const task = session.tasks.find((t) => t.id === queuedTask.id);
       if (!task || task.status !== 'queued') continue;
 
-      const outcome = await runTask(transport, session, task, deps);
+      const outcome = await runTask(chat, session, task, deps);
       ran += 1;
       lastStatus = outcome.status;
-      if (outcome.status !== 'done' && !deps.continueOnFailure) {
-        bus.publish({ sessionId, type: 'session-stopped-early', level: 'warn',
-          message: `task "${task.title}" ended ${outcome.status}; the remaining tasks stay queued` });
-        break;
+      if (outcome.status !== 'done') {
+        if (!deps.continueOnFailure) {
+          bus.publish({ sessionId, type: 'session-stopped-early', level: 'warn',
+            message: `task "${task.title}" ended ${outcome.status}; the remaining tasks stay queued` });
+          break;
+        }
+        // Saying this out loud matters: carrying on past a failure is a choice the operator
+        // made earlier, and the log is where they find out it was taken.
+        bus.publish({ sessionId, type: 'session-continuing', level: 'warn',
+          message: `task "${task.title}" ended ${outcome.status}; continuing with the next one, as this session is set to` });
       }
     }
   } catch (e) {
     bus.publish({ sessionId, type: 'session-error', level: 'error', message: (e as Error).message });
     throw e;
   } finally {
-    await transport?.close();
+    // A borrowed window belongs to whoever opened it and stays open for the next session.
+    if (!borrowed) await transport?.close();
     await store.updateSession(sessionId, (s) => {
       s.status = 'idle';
     });

@@ -250,6 +250,54 @@ program
   });
 
 program
+  .command('models')
+  .description('read the chat\'s model picker and print what it offers right now')
+  .option('-p, --profile <dir>', 'profile directory', DEFAULT_PROFILE)
+  .option('--url <url>', 'chat url', Url.chat)
+  .option('--json', 'print the raw list, for pasting into an issue')
+  .option('--set <name>', 'also switch the chat to this model, by its exact name')
+  .action(async (opts: { profile: string; url: string; json?: boolean; set?: string }) => {
+    const transport = new CopilotTransport({
+      profileDir: opts.profile,
+      downloadsDir: join(process.cwd(), 'runs', '_models'),
+      chatUrl: opts.url,
+      channel: 'msedge',
+      headless: false,
+      replyTimeoutMs: 60_000,
+      signInTimeoutMs: 900_000,
+      onEvent: (e, d) => console.log(`  [${e}]${d ? ' ' + JSON.stringify(d) : ''}`),
+    });
+
+    try {
+      await transport.open();
+      await transport.ensureSignedIn();
+      const { options, current, note } = await transport.listModels();
+
+      if (opts.json) {
+        console.log(JSON.stringify({ current, note, options }, null, 2));
+      } else {
+        console.log(`\ncurrently on: ${current ?? '(the picker did not say)'}`);
+        if (note) console.log(note);
+        if (options.length === 0) console.log('(no options could be read from the picker)');
+        for (const o of options) {
+          const marks = [o.selected ? 'selected' : '', o.disabled ? 'unavailable' : ''].filter(Boolean).join(', ');
+          const where = o.group ? `${o.group} > ` : '';
+          console.log(`  - ${where}${o.name}${marks ? `  [${marks}]` : ''}`);
+          const extra = o.raw.split('\n').slice(1).join(' ').trim();
+          if (extra) console.log(`      ${extra.slice(0, 120)}`);
+        }
+      }
+
+      if (opts.set) {
+        const result = await transport.selectModel(opts.set);
+        console.log(result.ok ? `switched to: ${result.current}` : `not switched: ${result.reason}`);
+      }
+    } finally {
+      await transport.close();
+    }
+  });
+
+program
   .command('mirror')
   .description('refresh the Desktop folder from the project, without touching the chat')
   .argument('<config>', 'path to run.yaml')
@@ -303,6 +351,11 @@ program
       rootDir: cfg.resolved.mirrorRootDir ?? '',
       includeDirs: cfg.projectMirror.includeDirs,
       excludeDirs: cfg.projectMirror.excludeDirs,
+      respectGitignore: cfg.projectMirror.respectGitignore,
+      includeEnvFiles: cfg.projectMirror.includeEnvFiles,
+    });
+    await store.updateSession(session.id, (s) => {
+      s.onFailure = cfg.execution.continueOnFailure ? 'continue' : 'stop';
     });
     const task = await store.addTask(session.id, {
       title: cfg.copilot.label,

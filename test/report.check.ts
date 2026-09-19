@@ -1,4 +1,5 @@
 import { writeReport, clip, stripAnsi } from '../src/exec/reportFile.js';
+import { buildCoveringMessage } from '../src/protocol/reporter.js';
 import { staticCheck, describeStep } from '../src/exec/policy.js';
 import type { RunResult } from '../src/exec/runner.js';
 import type { Step } from '../src/protocol/replySchema.js';
@@ -85,6 +86,41 @@ const redLine = (await readFile(red.paths[0], 'utf8'))
 console.log('redacted    :', JSON.stringify(redLine));
 console.log('clip        :', clip('a'.repeat(500), 200).includes('omitted'));
 
+/*
+ * What a report says it belongs to.
+ *
+ * Several tasks share one conversation, so a result has to be matchable to the task that asked
+ * for it — by something the conversation was actually told. The header used to lead with a run
+ * id, which names a folder on this machine and appears in no message anywhere. A model asked to
+ * reconcile the two reasoned, correctly, that it had never been told which task owned that id,
+ * and gave the task up as blocked: "the result belongs to run s922, but no task instructions
+ * for that run were supplied in this conversation". The task had been supplied. The id had not.
+ */
+console.log('\n--- a report is identified by the task, not by a folder nobody was told about ---');
+const named = await writeReport([mk(1, 'completed', 0, 'ok\n')], {
+  runId: '20260919-192813-ovz3-t-20260919-192813-s922',
+  task: 'calc-service',
+  iteration: 2,
+  dir,
+  fileNameTemplate: 'named-{n}.txt',
+  maxReportBytes: 8 * 1024 * 1024,
+  maxOutputChars: 1000,
+  redactPatterns: [],
+});
+const header = (await readFile(named.paths[0], 'utf8')).split('\n')[0];
+console.log('header        :', header);
+console.log('names the task:', header.includes('task="calc-service"'), '(expect true)');
+console.log('id is labelled:', header.includes("runner's own folder"), '(expect true)');
+console.log(
+  'the message   :',
+  buildCoveringMessage({
+    task: 'calc-service',
+    iteration: 2,
+    results: [mk(1, 'completed', 0, 'ok\n')],
+    attachments: ['named-2.txt'],
+  }).split('\n')[0],
+);
+
 console.log('\n--- policy, using the shipped default deny list ---');
 const defaults = RunConfigSchema.parse({ openingMessages: [{ text: 'x' }] });
 const cfg = {
@@ -107,5 +143,57 @@ for (const s of steps) {
   const verdict = d && d.action !== 'run' ? `${d.action}: ${d.reason}` : 'allowed';
   console.log(`  ${s.id}. ${describeStep(s).padEnd(44)} ${verdict}`);
 }
+
+/*
+ * git: the line between asking and changing.
+ *
+ * Both halves matter and they pull against each other. Refusing every git command would make an
+ * audit task impossible; refusing none leaves the repository at the mercy of whatever the chat
+ * decides — which is how a run once removed a remote to satisfy a badly written check. Every
+ * read-only command below was issued by a real task; every write below is a way somebody could
+ * change a repository without meaning to.
+ */
+console.log('\n--- git: questions allowed, changes refused ---');
+const gitReads = [
+  'git --no-pager -C C:\\Projects\\app log --graph --oneline --all --decorate',
+  'git --no-pager -C C:\\Projects\\app branch -vv',
+  'git --no-pager -C C:\\Projects\\app status --porcelain',
+  'git -C C:\\Projects\\app remote -v',
+  'git --no-pager -C C:\\Projects\\app ls-files | Select-String node_modules',
+  'git -C C:\\Projects\\app config --get-regexp ^remote\\.',
+  'git -C C:\\Projects\\app config --show-origin --get remote.origin.url',
+  'git ls-tree -r --name-only HEAD',
+  'git show HEAD:README.md',
+  'git log --grep=commit --oneline',
+  'git diff --stat HEAD~1',
+];
+const gitWrites = [
+  "git -C 'C:\\Projects\\app' remote remove origin",
+  'git remote set-url origin https://example.com/x.git',
+  'git commit -m "fix"',
+  'git -c user.name=bot commit --amend --no-edit',
+  'git push --force origin main',
+  'git reset --hard HEAD~3',
+  'git checkout -b something',
+  'git restore --staged .',
+  'git clean -fdx',
+  'git add .',
+  'git stash push -m wip',
+  'git branch -D cop/calc-api',
+  'git tag -d v1.0',
+  'git config --unset remote.origin.url',
+  'git init',
+  'git pull --rebase',
+];
+const refused = (cmd: string): boolean => {
+  const d = staticCheck({ id: 99, type: 'command', shell: 'pwsh', cmd }, cfg);
+  return d !== null && d.action !== 'run';
+};
+const wronglyRefused = gitReads.filter(refused);
+const wronglyAllowed = gitWrites.filter((c) => !refused(c));
+console.log(`  reads allowed   : ${gitReads.length - wronglyRefused.length}/${gitReads.length}`);
+for (const c of wronglyRefused) console.log(`    REFUSED (wrong): ${c}`);
+console.log(`  writes refused  : ${gitWrites.length - wronglyAllowed.length}/${gitWrites.length}`);
+for (const c of wronglyAllowed) console.log(`    ALLOWED (wrong): ${c}`);
 
 await rm(dir, { recursive: true, force: true });

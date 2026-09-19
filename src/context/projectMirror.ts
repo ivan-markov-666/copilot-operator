@@ -87,6 +87,60 @@ export type MirrorConfig = {
 
 export type SkippedFile = { relPath: string; reason: string };
 
+/**
+ * A directory that was asked to be both included and excluded.
+ *
+ * `same` is the plain case: the identical path in both lists, which has no sensible reading.
+ * `excluded-parent` is the same mistake one level up: excluding `src` while including
+ * `src/app` would leave nothing to copy. Excluding a directory *below* an included one is
+ * not a conflict at all; that is the normal way to carve out `src/generated`.
+ */
+export type SelectionConflict = { include: string; exclude: string; kind: 'same' | 'excluded-parent' };
+
+/** `.\Src\Foo\` and `src/foo` are the same directory. This is the form both lists compare in. */
+export function normalizeDirPath(dir: string): string {
+  const cleaned = dir
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '');
+  return cleaned === '' ? '.' : cleaned;
+}
+
+function isUnder(child: string, parent: string): boolean {
+  if (parent === '.') return child !== '.';
+  return child.toLowerCase().startsWith(`${parent.toLowerCase()}/`);
+}
+
+/** Every contradiction between the two lists, so a UI can refuse to save and say why. */
+export function findSelectionConflicts(includeDirs: string[], excludeDirs: string[]): SelectionConflict[] {
+  const includes = includeDirs.map(normalizeDirPath).filter(Boolean);
+  const excludes = excludeDirs.map(normalizeDirPath).filter(Boolean);
+  const out: SelectionConflict[] = [];
+
+  for (const inc of includes) {
+    for (const exc of excludes) {
+      if (inc.toLowerCase() === exc.toLowerCase()) {
+        out.push({ include: inc, exclude: exc, kind: 'same' });
+      } else if (isUnder(inc, exc)) {
+        out.push({ include: inc, exclude: exc, kind: 'excluded-parent' });
+      }
+    }
+  }
+  return out;
+}
+
+/** One sentence per conflict, for a message box or a thrown error. */
+export function describeConflicts(conflicts: SelectionConflict[]): string {
+  return conflicts
+    .map((c) =>
+      c.kind === 'same'
+        ? `"${c.include}" is in both the include and the exclude list.`
+        : `"${c.exclude}" is excluded but "${c.include}" is included, and lies under it.`,
+    )
+    .join(' ');
+}
+
 export type MirrorResult = {
   /** Target file names, relative to `targetDir`. */
   added: string[];
@@ -152,7 +206,21 @@ async function loadGitignore(rootDir: string, respect: boolean): Promise<Ignore 
   }
 }
 
-/** Depth-first walk of one directory, returning file paths relative to `rootDir`. */
+/**
+ * Depth-first walk of one directory, returning file paths relative to `rootDir`.
+ *
+ * Two rules about `.env` files are enforced here, and nowhere else:
+ *
+ *   - `.gitignore` never decides an env file. Almost every project ignores `.env`, so letting
+ *     the gitignore option hide them would make the env option meaningless. Env files are
+ *     always handed to `collectFiles`, which keeps or drops them by the env option alone.
+ *   - When env files are wanted, a directory that only `.gitignore` hides is still descended
+ *     into, but nothing except env files is taken from it. That is how an env file inside an
+ *     ignored folder still reaches the selection without dragging the folder along with it.
+ *
+ * `DEFAULT_IGNORE_DIRS` and the user's own exclusions are absolute: they are never descended
+ * into, env files or not.
+ */
 async function walk(
   rootDir: string,
   dirRel: string,
@@ -160,6 +228,7 @@ async function walk(
   ignoreDirs: Set<string>,
   excluded: Set<string>,
   out: string[],
+  opts: { includeEnvFiles: boolean; inGitignored?: boolean },
 ): Promise<void> {
   const abs = join(rootDir, dirRel);
   let entries;
@@ -176,9 +245,15 @@ async function walk(
     if (entry.isDirectory()) {
       if (ignoreDirs.has(entry.name.toLowerCase())) continue;
       if (excluded.has(posixRel.toLowerCase())) continue;
-      if (ig?.ignores(`${posixRel}/`)) continue;
-      await walk(rootDir, childRel, ig, ignoreDirs, excluded, out);
+      const gitignored = opts.inGitignored === true || (ig?.ignores(`${posixRel}/`) ?? false);
+      if (gitignored && !opts.includeEnvFiles) continue;
+      await walk(rootDir, childRel, ig, ignoreDirs, excluded, out, { ...opts, inGitignored: gitignored });
     } else if (entry.isFile()) {
+      if (isEnvFile(entry.name)) {
+        out.push(posixRel);
+        continue;
+      }
+      if (opts.inGitignored) continue;
       if (ig?.ignores(posixRel)) continue;
       out.push(posixRel);
     }
@@ -234,17 +309,23 @@ export async function collectFiles(cfg: MirrorConfig): Promise<{ files: string[]
     throw new Error('includeDirs is empty: nothing would be copied. Select at least one directory.');
   }
 
+  const conflicts = findSelectionConflicts(cfg.includeDirs, cfg.excludeDirs ?? []);
+  if (conflicts.length > 0) {
+    throw new Error(`The include and exclude lists contradict each other. ${describeConflicts(conflicts)}`);
+  }
+
+  const includeEnvFiles = cfg.includeEnvFiles ?? false;
   const ig = await loadGitignore(rootDir, cfg.respectGitignore ?? true);
   const ignoreDirs = new Set(
     [...DEFAULT_IGNORE_DIRS, ...(cfg.ignoreDirs ?? [])].map((d) => d.toLowerCase()),
   );
-  const excluded = new Set((cfg.excludeDirs ?? []).map((d) => d.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()));
+  const excluded = new Set((cfg.excludeDirs ?? []).map((d) => normalizeDirPath(d).toLowerCase()));
 
   const collected = new Set<string>();
   const skipped: SkippedFile[] = [];
 
   for (const dir of cfg.includeDirs) {
-    const dirRel = dir === '' || dir === '.' ? '.' : dir.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+    const dirRel = normalizeDirPath(dir);
     const abs = join(rootDir, dirRel);
     const s = await stat(abs).catch(() => null);
     if (!s?.isDirectory()) {
@@ -252,14 +333,14 @@ export async function collectFiles(cfg: MirrorConfig): Promise<{ files: string[]
       continue;
     }
     const found: string[] = [];
-    await walk(rootDir, dirRel, ig, ignoreDirs, excluded, found);
+    await walk(rootDir, dirRel, ig, ignoreDirs, excluded, found, { includeEnvFiles });
     for (const f of found) collected.add(f);
   }
 
   const maxBytes = cfg.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const files: string[] = [];
   for (const rel of [...collected].sort()) {
-    if (!(cfg.includeEnvFiles ?? false) && isEnvFile(rel)) {
+    if (!includeEnvFiles && isEnvFile(rel)) {
       skipped.push({ relPath: rel, reason: 'env file, excluded to protect secrets' });
       continue;
     }

@@ -19,7 +19,7 @@
     "cop": "tsx src/cli.ts",
     "check:parser": "tsx test/parser.check.ts",
     "check:report": "tsx test/report.check.ts",
-    "check": "npm run check:parser && npm run check:damage && npm run check:session && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:chat && npm run check:context && npm run check:pacing",
+    "check": "npm run check:parser && npm run check:damage && npm run check:session && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:vcs && npm run check:plan && npm run check:checks && npm run check:clipboard && npm run check:restart && npm run check:review && npm run check:chat && npm run check:context && npm run check:pacing",
     "probe": "tsx scripts/probe-locators.ts",
     "check:damage": "tsx test/damage.check.ts",
     "api": "npm run build && node dist/src/api/main.js",
@@ -28,7 +28,13 @@
     "web:build": "npm run build --workspace web",
     "check:session": "tsx test/session.check.ts",
     "start": "node scripts/dev.mjs",
-    "dev": "node scripts/dev.mjs --open"
+    "dev": "node scripts/dev.mjs --open",
+    "check:vcs": "tsx test/vcs.check.ts",
+    "check:plan": "tsx test/plan.check.ts",
+    "check:checks": "tsx test/checks.check.ts",
+    "check:clipboard": "tsx test/clipboard.check.ts",
+    "check:restart": "tsx test/restart.check.ts",
+    "check:review": "tsx test/review.check.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",

@@ -15,7 +15,21 @@ The machine-readable version lives in `src/transport/locators.ts`.
 | What | Locator |
 |---|---|
 | Composer | `#m365-chat-editor-target-element`, role `textbox`, aria-label `Message Copilot` |
-| Send button | `button[aria-label="Send"]` |
+| Composer wrapper | `[data-test-id="chat-input-wrapper"]` — note the hyphens, unlike `data-testid` elsewhere |
+| Send button | inside the wrapper, `button[type="submit"][aria-label="Send"]` |
+
+**`aria-label="Send"` is not unique on this page.** The Office feedback panel
+(`[data-testid^="obf-"]`, e.g. `obf-DxTFormSubmitButton`) has its own Send, and it appears
+unannounced over the chat. A page-wide `getByRole('button', { name: 'Send' })` then matches two
+elements and Playwright refuses to choose, which ends the run on a strict mode violation with no
+obvious connection to the cause. Observed 2026-09-19, mid-batch, between two messages.
+
+So every Send lookup is scoped to the composer wrapper. The two buttons also differ in kind —
+the composer's is its form's `type="submit"`, the feedback panel's is a plain `type="button"` —
+which is the fallback when the wrapper attribute changes.
+
+The feedback panel is detected and dismissed with **Escape only**. Nothing inside it is ever
+clicked: its buttons submit an opinion from the operator's own account.
 
 The composer is a **contenteditable `SPAN`**, not a textarea, part of the Fluent editor. Two consequences:
 
@@ -180,9 +194,59 @@ survives a message that carries an attachment.
 | Control | Locator | Note |
 |---|---|---|
 | New chat | `a[aria-label="New chat"]`, href `/chat?es=SSR&redirfrom=cosmicRingCookie` | It is an anchor, so navigating to the chat URL is equivalent. |
-| Model selector | `button#gptModeSwitcher[aria-label="Model Selector"]`, showed `Auto` | Worth pinning to a fixed model later for reproducibility. |
+| Model selector | `button#gptModeSwitcher[aria-label="Model Selector"]`, showed `Auto` | Now read and driven; see below. |
 | Add sources | `button[data-testid="PlusMenuButton"]` | File upload path, not needed for v1. |
 | Temporary chat | `button[aria-label="Temporary chat"]` | Could be useful to avoid polluting chat history. |
+
+## The model picker
+
+Captured live on 2026-09-18, on the same tenant.
+
+```html
+<button id="gptModeSwitcher" aria-label="Model Selector" aria-haspopup="menu">Auto</button>
+```
+
+The button's **text is the value** (`Auto`), while its `aria-label` is the control's name.
+
+**The menu is two levels deep.** Top-level choices are `role="menuitemradio"` with the name on
+the first line and a description on the second. A vendor is a `role="menuitem"` row carrying
+`aria-haspopup="menu"` that opens a submenu holding that vendor's models. Live on this tenant:
+
+| Row | Kind | Children |
+|---|---|---|
+| Auto — Decides how long to think | choice, `aria-checked="true"` | |
+| Quick response — Answers right away | choice | |
+| Think deeper — Think longer for better answers | choice | |
+| GPT — OpenAI | group, `aria-haspopup="menu"` | GPT 5.6 Think deeper, GPT 5.6 Quick response |
+
+A tenant with Anthropic enabled gets a Claude group the same way. **Reading only the first
+role that matches hides every grouped model**, which is what the first implementation did: it
+returned the three thinking modes and no models at all. Every role is now read, groups are
+opened one at a time from a freshly opened menu, and a submenu's children are identified as
+whatever is on screen that was not on the top level.
+
+**This list is not in the code and must never be.** It is what one tenant showed on one day;
+another tenant sees other entries, and Microsoft changes them.
+
+Two more facts worth keeping:
+
+- **The button truncates.** After choosing `GPT 5.6 Quick response` it reads `GPT 5.6 Quick`.
+  So verification accepts a button value that is a piece of the chosen name, and the full name
+  is what gets reported and stored.
+- **Nothing is marked while a grouped model is active.** With `GPT 5.6 Quick response` chosen,
+  no row in the menu came back with `aria-checked="true"`. The button is therefore the only
+  reliable answer to "what is this chat on", and `selected` on an option is a hint, not proof.
+
+**The button hydrates later than the composer.** `ensureSignedIn()` returns as soon as the
+composer is visible, and at that moment the button is not in the DOM yet. Checking once found
+nothing and the first live read reported "this chat has no model picker" about a chat that
+plainly has one. `resolveModelButton()` therefore polls for up to 15 s. The four-second pause
+in a throwaway probe is what turned a wrong conclusion into a fact.
+
+Verified end to end on the live chat: reading the current value, switching to `Quick response`
+and reading it back, refusing a name the menu does not offer (`Claude Sonnet 5`) without
+changing anything, reading all five entries including both inside the GPT group, selecting
+`GPT 5.6 Quick response` from that group and confirming it, and switching back to `Auto`.
 
 ## Not yet verified
 

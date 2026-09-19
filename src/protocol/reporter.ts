@@ -18,6 +18,13 @@ import type { RunResult } from '../exec/runner.js';
 export const MINIMUM_COVERING_TEXT = 'Ето отговора от терминала. Файлът е прикачен.';
 
 export type CoveringMessageInput = {
+  /**
+   * The task this output belongs to, by the name it was given in the conversation.
+   *
+   * Said in the message rather than only in the attached file, because several tasks share one
+   * conversation and "iteration 2" on its own belongs to whichever of them the reader guesses.
+   */
+  task?: string;
   iteration: number;
   results: RunResult[];
   /** File names actually attached, in order. */
@@ -46,16 +53,17 @@ function outcomeSummary(r: RunResult): string {
  * character limit of the composer, because the output it describes is in the attachment.
  */
 export function buildCoveringMessage(input: CoveringMessageInput): string {
-  const { iteration, results, attachments, parts } = input;
+  const { task, iteration, results, attachments, parts } = input;
+  const what = task?.trim() ? `"${task.trim()}", iteration ${iteration}` : `iteration ${iteration}`;
 
   if (attachments.length === 0) {
     // Should not happen, but an empty message is unsendable, so never return one.
-    return `${MINIMUM_COVERING_TEXT} (iteration ${iteration}, no file was produced)`;
+    return `${MINIMUM_COVERING_TEXT} (${what}, no file was produced)`;
   }
 
   const lines: string[] = [];
   lines.push(
-    `Terminal output for iteration ${iteration}: ${results.length} step(s), ` +
+    `Terminal output for ${what}: ${results.length} step(s), ` +
       `${results.map(outcomeSummary).join('; ')}.`,
   );
 

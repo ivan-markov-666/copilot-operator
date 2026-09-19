@@ -7,9 +7,14 @@
  * observed coming back from `innerText` with a chunk of valid JSON simply missing.
  */
 import { ReplySchema, type Reply, type Step } from './replySchema.js';
+import { ReviewSchema, type Review } from './reviewSchema.js';
 
-export type ParseOk = { ok: true; reply: Reply; done: boolean; json: string };
+export type ParseOk = { ok: true; reply: Reply; done: boolean; blocked: boolean; json: string };
 export type ParseFail = { ok: false; reason: string; detail: string };
+
+/** The same, for a reviewing conversation, which answers in its own contract. */
+export type ReviewParseOk = { ok: true; review: Review; verdict: 'continue' | 'pass' | 'fail'; json: string };
+export type ReviewParseResult = ReviewParseOk | ParseFail;
 export type ParseResult = ParseOk | ParseFail;
 
 /** Every fenced block in a markdown string, with its info string. */
@@ -112,10 +117,16 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       // The stop word alone is not enough to end a task any more: the summary is the
       // deliverable, and a marker without one would let a task close with nothing to show.
       // status "done" already guarantees a summary through the schema.
+      // A reply that gives up says so in `status`, and the stop word cannot override it: a
+      // model that writes "Край" under an explanation of why it cannot finish has ended the
+      // task, not completed it, and reading that as `done` would file a failure as a success.
+      const blocked = reply.status === 'blocked';
+
       return {
         ok: true,
         reply: { ...reply, steps },
-        done: reply.status === 'done' || (markerHit && hasSummary),
+        done: reply.status === 'done' || (markerHit && hasSummary && !blocked),
+        blocked,
         json: text.trim(),
       };
     }
@@ -126,6 +137,57 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
     reason: 'invalid-json',
     detail: errors.slice(0, 4).join(' | '),
   };
+}
+
+/**
+ * The same job for a reviewing conversation: find the json, validate it, hand it back.
+ *
+ * A sibling of `parseReply` rather than a generalisation of it. The two contracts differ in
+ * what they are allowed to say and in what ends them, and folding them into one parameterised
+ * function would mean every future change to either has to be reasoned about twice. The parts
+ * genuinely in common — finding the block, repairing line numbers, stripping citations — are
+ * shared as they are.
+ *
+ * There is no stop word here. A review ends through its verdict and nothing else, because a
+ * reviewer writing the implementer's stop word is a reviewer quoting the work, not finishing.
+ */
+export function parseReview(markdown: string, opts: { defaultShell: ParseOptions['defaultShell'] }): ReviewParseResult {
+  const candidates = findJsonCandidates(markdown);
+
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      reason: 'no-json-block',
+      detail: 'The reply contained no fenced ```json block and no JSON object at all.',
+    };
+  }
+
+  const errors: string[] = [];
+  for (const raw of candidates) {
+    for (const text of [raw, stripLineNumbers(raw)]) {
+      let value: unknown;
+      try {
+        value = JSON.parse(text);
+      } catch (e) {
+        errors.push(`JSON.parse failed: ${(e as Error).message}`);
+        continue;
+      }
+      const result = ReviewSchema.safeParse(value);
+      if (!result.success) {
+        errors.push(result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '));
+        continue;
+      }
+
+      const review = result.data;
+      review.notes = stripCitations(review.notes);
+      review.summary = stripCitations(review.summary);
+      const steps = review.steps.map<Step>((x) => ({ ...x, shell: x.shell ?? opts.defaultShell }));
+
+      return { ok: true, review: { ...review, steps }, verdict: review.status, json: text.trim() };
+    }
+  }
+
+  return { ok: false, reason: 'invalid-json', detail: errors.slice(0, 4).join(' | ') };
 }
 
 /** The message sent back when a reply did not validate. Names the problem, nothing else. */
