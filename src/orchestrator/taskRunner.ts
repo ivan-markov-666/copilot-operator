@@ -762,6 +762,13 @@ export async function runTask(
       if (outcome.verdict === 'pass') {
         sink.event('review-passed', { round: reviewRounds, stepsRun: outcome.stepsRun },
           `the review passed the work after running ${outcome.stepsRun} command(s)`);
+        // The work is right and the task is wrong. The task is done; the findings stay on its
+        // record for whoever wrote it, and the plan behind it is not stopped over a sentence.
+        if (outcome.findings.length > 0) {
+          sink.event('review-task-notes', { round: reviewRounds, findings: outcome.findings.length },
+            `the review passed the work and noted ${outcome.findings.length} problem(s) with the task itself: ` +
+              outcome.findings.map((f) => f.what).join(' '), 'warn');
+        }
         return 'accept';
       }
 

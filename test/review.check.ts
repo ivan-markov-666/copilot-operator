@@ -51,7 +51,23 @@ show('pass with "looks fine"', { status: 'pass', steps: [], summary: 'Looks corr
 show('fail with no findings', { status: 'fail', steps: [], summary });
 show('fail, finding with no evidence', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: '' }] });
 show('fail, vague finding', { status: 'fail', steps: [], summary, findings: [{ what: 'broken', evidence: finding.evidence }] });
-show('pass carrying findings', { status: 'pass', steps: [], summary, findings: [finding] });
+show('pass carrying a work finding', { status: 'pass', steps: [], summary, findings: [finding] });
+show('pass mixing work and task', { status: 'pass', steps: [], summary, findings: [finding, { ...finding, about: 'task' }] });
+
+/*
+ * Right work, wrong task.
+ *
+ * A README documenting four error messages where the task said three used to end `blocked`
+ * — the reviewer's only way to say "the task is wrong" was to fail the work, and the runner
+ * stopped the plan behind it. A pass may now carry findings, but only about the task.
+ */
+console.log('\n--- right work, wrong task: a pass with notes for whoever wrote it ---');
+show('pass with a task finding', {
+  status: 'pass',
+  steps: [],
+  summary,
+  findings: [{ what: 'The task says three ways to answer 400; the controller has four, all real and all documented.', evidence: 'Four distinct BadRequestException messages; the README lists all four.', about: 'task' }],
+});
 
 console.log('\n--- there is no way to give up without a verdict ---');
 show('blocked, as the implementer would', { status: 'blocked', steps: [], summary });

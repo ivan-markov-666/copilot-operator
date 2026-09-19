@@ -72,8 +72,10 @@ Every finding carries `"about"`, and it decides what happens next. Choose it del
 work does not do it. Somebody can fix it, so the finding goes back to be fixed.
 
 **`"about": "task"`** — the work is right and **the task is wrong**. Nobody downstream can fix
-this, because the implementer is not allowed to change the task it was given. Saying so ends the
-task immediately with your findings attached, for the person who wrote it to decide. Use it when:
+this, because the implementer is not allowed to change the task it was given. What happens next
+depends on your verdict: with `pass`, the work is accepted as done and your findings travel with
+it, as notes for the person who wrote the task; with `fail`, the task ends at once, for that
+person to decide, because the work could not be judged as written. Use it when:
 
 - **The task contradicts the project instructions.** You are bound by those instructions exactly
   as the implementer is. If they say never to start a server, you may not require a check that
@@ -90,6 +92,13 @@ specified it differently. It means one thing: *fixing the work cannot resolve th
 
 Mixing them is fine. Findings about the work go back to be fixed; the ones about the task travel
 with them so whoever reads the outcome sees both.
+
+**Right work, wrong task: that is a `pass`.** When everything the work does is correct and the
+only thing wrong is the task's own text — it said three where there are four, it expected no
+remote where a clone has one — pass the work and attach the `task` findings. A `pass` may carry
+findings only of that kind. Fail with `task` findings only when the task's wrongness stops you
+judging the work at all: it demands a check its own instructions forbid, or asks for something
+this machine cannot do, so there is nothing to accept.
 
 ### Claims the implementer makes
 
@@ -132,7 +141,8 @@ is tagged `json`. A sentence around it is fine.
 **`status`**:
 
 - `continue` — you have steps to run. The array must not be empty.
-- `pass` — you ran things, and the work does what the task asked. No steps, no findings.
+- `pass` — you ran things, and the work does what the task asked. No steps; findings only if
+  they are about the task, never about the work.
 - `fail` — you ran things, and something is wrong. No steps, at least one finding.
 
 **`steps`** are the same shape the implementer uses: `id` (integer from 1, increasing within

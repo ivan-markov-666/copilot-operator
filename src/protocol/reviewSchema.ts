@@ -95,10 +95,18 @@ export const ReviewSchema = z
   .refine((r) => r.status !== 'fail' || r.findings.length > 0, {
     message: 'status "fail" requires at least one entry in "findings", each with "what" and "evidence".',
   })
-  .refine((r) => r.status !== 'pass' || r.findings.length === 0, {
+  /*
+   * A pass may carry findings about the task, and only about the task.
+   *
+   * Without this the reviewer holding right work and a wrong task had one move — fail the
+   * work — and the runner then ended the task `blocked` over a sentence that was never in the
+   * work, stopping the plan behind it. A README documenting four error messages where the task
+   * said three is `done`, with a note for whoever wrote "three"; it is not a failure.
+   */
+  .refine((r) => r.status !== 'pass' || r.findings.every((f) => f.about === 'task'), {
     message:
-      'status "pass" cannot carry findings. If something is wrong, the verdict is "fail"; if the ' +
-      'point is minor, leave it out of "findings" and put it in "summary".',
+      'status "pass" can carry findings only with "about": "task" — the work is right and the task is wrong. ' +
+      'A finding about the work makes the verdict "fail"; a minor point goes in "summary", not in "findings".',
   });
 
 export type Review = z.infer<typeof ReviewSchema>;
