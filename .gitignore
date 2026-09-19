@@ -9,3 +9,7 @@ web/.next/
 web/next-env.d.ts
 web/node_modules/
 web/tsconfig.tsbuildinfo
+.env
+.env.*
+!.env.example
+/.next/
