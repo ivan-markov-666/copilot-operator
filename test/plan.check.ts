@@ -230,6 +230,26 @@ console.log('slashes flattened :', plannedBranchName('feature/CSV Writer!', 'cop
 const message = commitMessage(first?.tasks[1] as Task, { status: 'done', summary: 'Added the endpoint and the flag.' });
 console.log('commit subject    :', message.split('\n')[0]);
 console.log('planned body kept :', message.includes('stays off by default'));
+
+/*
+ * A read-only task is a flag, not a sentence.
+ *
+ * A smoke-test task told in prose to change nothing renamed the page's labels when a reviewer
+ * asked. The flag travels from the plan to the stored task, where the runner enforces it from
+ * the working tree.
+ */
+console.log('\n--- a read-only task: a flag the runner enforces ---');
+const roPlan = JSON.parse(JSON.stringify(planExample())) as { sessions: Array<{ name: string; tasks: Array<Record<string, unknown>> }> };
+roPlan.sessions[0].name = 'read-only probe';
+roPlan.sessions[0].tasks[0].readOnly = true;
+const ro = checkPlan(JSON.stringify(roPlan));
+console.log('valid             :', ro.ok, '(expect true)');
+const roImported = ro.ok ? await importPlan(store, ro.plan, 'Default Model') : null;
+const roSession = roImported ? await store.getSession(roImported.sessions[0].id) : null;
+console.log('flag reaches task :', roSession?.tasks[0]?.readOnly, '| the next task:', roSession?.tasks[1]?.readOnly, '(expect true | undefined)');
+console.log('default is off    :', first?.tasks[0]?.readOnly, '(expect undefined)');
+const roBad = checkPlan(JSON.stringify({ ...roPlan, sessions: [{ ...roPlan.sessions[0], tasks: [{ ...roPlan.sessions[0].tasks[0], readOnly: 'yes' }] }] }));
+console.log('not a boolean     :', roBad.ok ? 'ACCEPTED' : 'refused', '(expect refused)');
 console.log('summary underneath:', message.includes('Added the endpoint and the flag.'));
 console.log('trailer           :', message.trim().split('\n').slice(-1)[0]);
 const derived = commitMessage({ title: 'a task with no plan', attempt: 1 } as Task, { status: 'done', summary: 's' });

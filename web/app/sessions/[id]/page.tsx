@@ -1361,6 +1361,7 @@ function ExportPanel({ session }: { session: Session }) {
                 <input type="checkbox" checked={picked.includes(task.id)} onChange={() => toggle(task.id)} />
                 <span>
                   {task.title} <span className={`badge ${task.status}`}>{t(`status.${task.status}` as Key)}</span>{' '}
+                  {task.readOnly && <span className="chip">{t('task.readOnly')}</span>}{' '}
                   <span className="muted small">{fmtTime(task.finishedAt ?? task.startedAt ?? task.createdAt)}</span>
                 </span>
               </label>

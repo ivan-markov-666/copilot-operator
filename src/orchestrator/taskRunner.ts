@@ -27,13 +27,13 @@ import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/work
 import { redactSecrets } from '../exec/redaction.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
-import { repoState } from '../vcs/git.js';
+import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, matchDenyPattern } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
-import { composeOpening } from '../session/compose.js';
+import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -372,6 +372,25 @@ export async function runTask(
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
 
+    /*
+     * A read-only task that changed files has failed, whatever it reported.
+     *
+     * Decided from the working tree, not from the summary, and before the commit: the change
+     * is still committed on the task's branch — so it is not lost and the next task starts
+     * from a clean tree — but the task ends `failed` with the files named. Only a task that
+     * claims `done` is overturned; one that already ended badly keeps its own reason.
+     */
+    if (task.readOnly && status === 'done' && repoDirOf(session)) {
+      const changed = await workingTreePaths(repoDirOf(session)).catch(() => [] as string[]);
+      if (changed.length > 0) {
+        status = 'failed';
+        reason =
+          `this task is read-only and it changed ${changed.length} file(s): ${changed.slice(0, 8).join(', ')}` +
+          `${changed.length > 8 ? `, and ${changed.length - 8} more` : ''}. The change is committed on the task's branch; nothing is lost.`;
+        sink.event('readonly-violated', { files: changed.slice(0, 20) }, reason, 'error');
+      }
+    }
+
     // Whatever the outcome, what the task changed goes onto its branch. A failed task that
     // left files behind is exactly when having them committed somewhere is worth the most.
     // The task is re-read first, because the branch was recorded on it after this closure
@@ -511,6 +530,7 @@ export async function runTask(
       contractAlreadySent: session.contractSent,
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
+      readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
     });
     await setTask((t) => {
       t.firstMessage = opening.firstMessage;

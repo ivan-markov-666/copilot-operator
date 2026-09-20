@@ -384,6 +384,11 @@ function Flow({
                   {t('reg.disputes', { n: e.disputes ?? 0 })}
                 </span>
               )}
+              {e.readOnly && (
+                <span className="chip" title={t('reg.readOnlyWhy')}>
+                  {t('task.readOnly')}
+                </span>
+              )}
               {e.runGroup && (
                 <span
                   className="chip"

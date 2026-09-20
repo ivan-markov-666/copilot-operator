@@ -30,6 +30,8 @@ export type ComposeInput = {
    * this session, not a rule about every one.
    */
   workDirNote?: string;
+  /** Set for a task that must not change files. See `READ_ONLY_NOTE`. */
+  readOnlyNote?: string;
   /**
    * What version control has already done for this task, as an instruction to Copilot.
    *
@@ -54,9 +56,22 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.vcsNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.vcsNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
+
+/**
+ * What a read-only task is told. The rule is enforced by the runner from the working tree,
+ * so the note is a warning about a fact, not a request.
+ */
+export const READ_ONLY_NOTE = [
+  '## Read-only task',
+  '',
+  'This task must not change any file: it reads, runs and reports. The runner fails it if the',
+  'working tree has changed when it ends, whatever the summary says, and commits the change on',
+  "the task's branch so it is not lost. If a review finding asks you to change something, that",
+  'is a finding about the task, not about the work: dispute it rather than comply.',
+].join('\n');
 
 function level2Block(level2: string): string {
   const body = level2.trim();

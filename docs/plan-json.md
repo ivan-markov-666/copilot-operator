@@ -185,6 +185,14 @@ the work as it stands, and from then on runs it with the plan's checks on every 
 task. So a plan's checks are the floor: what reviews notice is added to them rather than found
 again by chance. The task card lists them under "From reviews".
 
+A task that must not change files — an audit, a smoke test, a report — carries `"readOnly":
+true`. It is a flag rather than a sentence in the prompt because a sentence is advice: a smoke
+test told in prose to change nothing renamed the page's labels when a reviewer asked it to. The
+runner fails a read-only task if the working tree has changed when it ends, whatever the summary
+says, names the files, and still commits the change on the task's branch so nothing is lost and
+the next task starts clean. The task is told so in its opening, with the instruction to dispute a
+finding that asks for a change rather than comply with it.
+
 ```jsonc
 "checks": [
   { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\Projects\app" },

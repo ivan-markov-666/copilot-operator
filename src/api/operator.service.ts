@@ -194,6 +194,8 @@ export type RegistryEntry = {
   deviations?: number;
   /** How many review findings the model disputed. */
   disputes?: number;
+  /** The task must not change files. */
+  readOnly?: boolean;
   /** Which attempt the row describes. 1 unless the task has been run again. */
   attempt?: number;
   /**
@@ -1620,6 +1622,7 @@ export class OperatorService {
             : undefined,
           deviations: t.deviations?.length || undefined,
           disputes: t.disputes?.length || undefined,
+          readOnly: t.readOnly || undefined,
           attempt: t.attempt,
           attempts: (t.attempts ?? []).map((a, n) => {
             const from = a.startedAt ? Date.parse(a.startedAt) : undefined;

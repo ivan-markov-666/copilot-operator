@@ -210,7 +210,15 @@ export class SessionStore {
 
   async addTask(
     sessionId: string,
-    input: { title: string; level2: string; prompt: string; vcsPlan?: TaskVcsPlan; checks?: TaskCheck[]; reviewEnabled?: boolean },
+    input: {
+      title: string;
+      level2: string;
+      prompt: string;
+      vcsPlan?: TaskVcsPlan;
+      checks?: TaskCheck[];
+      reviewEnabled?: boolean;
+      readOnly?: boolean;
+    },
   ): Promise<Task> {
     const vcsPlan = tidyVcsPlan(input.vcsPlan);
     const checks = (input.checks ?? []).filter((c) => c.name.trim() !== '');
@@ -228,6 +236,8 @@ export class SessionStore {
       ...(checks.length > 0 ? { checks } : {}),
       // Only `false` is worth storing: absent means "whatever the session says", which is on.
       ...(input.reviewEnabled === false ? { reviewEnabled: false } : {}),
+      // Only `true` is worth storing: a task may change files unless a plan said otherwise.
+      ...(input.readOnly === true ? { readOnly: true } : {}),
     };
     await this.updateSession(sessionId, (s) => {
       s.tasks.push(task);
@@ -328,6 +338,10 @@ export class SessionStore {
       // The results belong to the attempt that produced them, which is now on the record above.
       t.checkResults = undefined;
       t.review = undefined;
+      // Declared by the attempt above, and kept there. The checks reviews gave stay: they are
+      // the one thing a new attempt should inherit.
+      t.deviations = undefined;
+      t.disputes = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.
       t.vcs = undefined;

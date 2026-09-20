@@ -160,6 +160,8 @@ export type Task = {
   checkResults?: TaskCheckResult[];
   /** Turns the independent review off for this one task. Absent means the session decides. */
   reviewEnabled?: boolean;
+  /** The task must not change files; the runner fails it if the tree changed. */
+  readOnly?: boolean;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -273,6 +275,8 @@ export type RegistryEntry = {
   deviations?: number;
   /** How many review findings the model disputed. */
   disputes?: number;
+  /** The task must not change files. */
+  readOnly?: boolean;
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
   /** The attempts before it, oldest first, each with its own run folder and log. */

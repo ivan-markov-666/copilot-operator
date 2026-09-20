@@ -194,6 +194,16 @@ const TaskInput = z.object({
    * usable gains a lot.
    */
   review: z.boolean().optional(),
+  /**
+   * A task that must not change files: an audit, a smoke test, a report.
+   *
+   * Written as a flag rather than as a sentence in the prompt because a sentence is advice.
+   * A smoke-test task told in prose to change nothing renamed the page's labels when a
+   * reviewer asked it to. With the flag, the runner fails the task if the working tree has
+   * changed when it ends, whatever the summary says, and commits the change on the task's
+   * branch so nothing is lost and the next task starts clean.
+   */
+  readOnly: z.boolean().default(false),
 });
 
 const SessionInput = z.object({

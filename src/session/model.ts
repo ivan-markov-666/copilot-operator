@@ -123,6 +123,13 @@ export type Task = {
   checkResults?: TaskCheckResult[];
   /** Turns the independent review off for this one task. Absent means the session decides. */
   reviewEnabled?: boolean;
+  /**
+   * The task must not change files. The runner fails it if the working tree changed when it
+   * ends, and still commits the change on its branch so nothing is lost. A flag rather than a
+   * sentence, because a sentence is advice: a smoke test told to change nothing renamed the
+   * page's labels when a reviewer asked.
+   */
+  readOnly?: boolean;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };

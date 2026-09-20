@@ -133,6 +133,7 @@ export async function importPlan(store: SessionStore, plan: Plan, defaultModel =
         vcsPlan: task.vcs,
         checks: task.checks,
         reviewEnabled: task.review,
+        readOnly: task.readOnly || undefined,
       });
       titles.push(added.title);
     }
