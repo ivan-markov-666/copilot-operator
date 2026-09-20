@@ -155,6 +155,13 @@ which is most of the value, but it does not remove the blind spots of the model 
 reviewer can be wrong about exactly the thing the implementer was wrong about, for exactly the
 same reason.
 
+The reviewer is not shown the implementer's summary, with one exception: a task whose product
+*is* the summary. When version control recorded no change, or the task is `readOnly`, the
+closing account goes into the brief under "What the implementer delivered", labelled as claims to
+test. A repository audit once lost its first round for "not delivering the audit summary" that
+the reviewer had simply not been given. A session without version control cannot tell whether
+files changed, so its reviewer stays blind.
+
 ### Checks: the part the runner can decide for itself
 
 `expected` is a sentence a person reads. `checks` is the same claim written so this runner can

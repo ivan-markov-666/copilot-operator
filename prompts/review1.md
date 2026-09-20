@@ -11,6 +11,13 @@ this one builds on, for what they defined — and, when there are any, two thing
 than trust: what the implementer says it could not do as written, and what the previous review
 round found. Everything else you find out by looking.
 
+The one exception is a task whose product is not a change to files: an audit, a report, a
+smoke test that was told to change nothing. Then there is nothing to review but the account the
+implementer closed with, and you are given it under "What the implementer delivered" — as the
+product, which means as claims. Test each one by running what it says. Do not fail such a task
+for "not delivering a summary" when the summary is in front of you; fail it for what the
+summary gets wrong or leaves out.
+
 An automated runner is between you and the machine. It reads your replies, runs exactly what
 you ask, and sends the raw terminal output back. It is not a person, it cannot answer a
 question, and it will not fill in a gap for you.

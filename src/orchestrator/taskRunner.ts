@@ -28,7 +28,7 @@ import { redactSecrets } from '../exec/redaction.js';
 import { snapshotProcesses, reapLeftovers, describeLeftovers, type ProcessSnapshot } from '../exec/processes.js';
 import { collectEnvironment, describeEnvironment } from '../exec/environment.js';
 import { describeCrash } from '../transport/edgeCrash.js';
-import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
+import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, commandRefusal } from '../exec/policy.js';
@@ -792,7 +792,7 @@ export async function runTask(
      * `retry` — the reviewer found problems and they have been sent back to the implementer.
      * `give-up` — the rounds are spent and the findings are still standing.
      */
-    const gateOnReview = async (): Promise<'accept' | 'retry' | 'give-up'> => {
+    const gateOnReview = async (closing: string | undefined): Promise<'accept' | 'retry' | 'give-up'> => {
       if (!reviewWanted) {
         await saveReview({ verdict: 'skipped', rounds: 0, stepsRun: 0 });
         return 'accept';
@@ -810,9 +810,13 @@ export async function runTask(
        * before this task started, so everything dirty now is this task's doing.
        */
       const changedFiles = repoDir ? (await repoState(repoDir).catch(() => null))?.changed ?? [] : [];
+      // When nothing changed, or nothing was allowed to, the closing account is the product and
+      // the reviewer is given it — as claims to test. See `Deliverable` in review.ts.
+      const deliverable = deliverableFor(task, closing, repoDir !== '', changedFiles);
 
-      sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length },
-        `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})`);
+      sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length, deliverable: deliverable?.why },
+        `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})` +
+          (deliverable ? `; the closing summary goes with it as the product (${deliverable.why})` : ''));
 
       // What is running before the review, so that what the review leaves is its own.
       const beforeReview: ProcessSnapshot | null = processesBefore ? await snapshotProcesses(work.cwd).catch(() => null) : null;
@@ -836,6 +840,7 @@ export async function runTask(
           round: reviewRounds,
           cwd: work.cwd,
           changedFiles,
+          deliverable,
           deviations,
           disputes,
           previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings, leftovers: previousLeftovers } : undefined,
@@ -1155,7 +1160,7 @@ export async function runTask(
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
         if (verdict === 'accept') {
-          const reviewed = await gateOnReview();
+          const reviewed = await gateOnReview(reply.summary);
           if (reviewed === 'accept') return await finish('done', undefined, reply.summary, lastMarkdown);
           if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), reply.summary, lastMarkdown);
         }
@@ -1410,7 +1415,7 @@ export async function runTask(
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
         if (verdict === 'accept') {
-          const reviewed = await gateOnReview();
+          const reviewed = await gateOnReview(reply.summary);
           if (reviewed === 'accept') return await finish('done', undefined, reply.summary, lastMarkdown);
           if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), reply.summary, lastMarkdown);
         }

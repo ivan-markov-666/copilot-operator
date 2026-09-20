@@ -62,6 +62,8 @@ export type ReviewDeps = {
   cwd: string;
   /** The files the task changed, as version control recorded them. */
   changedFiles: string[];
+  /** The closing account, given only when it is the product. See `Deliverable`. */
+  deliverable?: Deliverable;
   /** Instructions the implementer says it could not follow as written. Claims, not facts. */
   deviations: Deviation[];
   /** Findings from earlier rounds the implementer says are wrong, by id. Claims, not facts. */
@@ -128,6 +130,41 @@ function leftoverNote(leftovers: ReviewLeftover[]): string {
  * reviewer found, and that a fix was reported. The new reviewer is asked to verify them afresh
  * and, if one is still there, to decide whose problem it is instead of raising it a third time.
  */
+/**
+ * The closing summary, handed to the reviewer as the thing under review.
+ *
+ * The reviewer is kept blind to the implementer's account on purpose (see the top of this
+ * file). That holds when the work is in files: the files are the product and the account is
+ * somebody's belief about them. It breaks for a task whose product *is* the account — an
+ * audit, a report, a smoke test that changes nothing — because then the reviewer is shown a
+ * task, told nothing changed, and left with nothing to judge. On 2026-09-20 a repository audit
+ * lost its first review round exactly so: "the required audit summary was not delivered", when
+ * the summary was the deliverable and the reviewer had not been given it.
+ *
+ * So the account travels only when the runner *knows* there is nothing else: version control
+ * recorded no change, or the task was declared read-only. A session without version control
+ * cannot know, and stays blind. And it travels labelled as what it is — the product, a set of
+ * claims to test by running what they say — not as a description to trust.
+ */
+export type Deliverable = {
+  summary: string;
+  why: 'no-files-changed' | 'read-only';
+};
+
+/** True when the closing account is the product, so the reviewer must be given it. */
+export function deliverableFor(
+  task: Pick<Task, 'readOnly'>,
+  summary: string | undefined,
+  tracked: boolean,
+  changedFiles: string[],
+): Deliverable | undefined {
+  const text = (summary ?? '').trim();
+  if (!text) return undefined;
+  if (task.readOnly) return { summary: text, why: 'read-only' };
+  if (tracked && changedFiles.length === 0) return { summary: text, why: 'no-files-changed' };
+  return undefined;
+}
+
 export function reviewBrief(
   session: Session,
   task: Task,
@@ -138,6 +175,7 @@ export function reviewBrief(
   disputes: Dispute[] = [],
   derivedFailing: Array<{ name: string; detail: string }> = [],
   earlier: Array<{ title: string; prompt: string }> = [],
+  deliverable?: Deliverable,
 ): string {
   const repo = session.vcs?.enabled ? session.vcs.repoDir?.trim() : '';
   const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
@@ -170,6 +208,22 @@ export function reviewBrief(
     '',
     'Files this task changed:',
     files,
+    ...(deliverable
+      ? [
+          '',
+          '## What the implementer delivered',
+          '',
+          deliverable.why === 'read-only'
+            ? 'This task was declared read-only: its product is not a change to files but the account below,'
+            : 'This task changed no files (version control recorded none), so its product is the account below,',
+          'written by the conversation that did the work when it closed. You are given it because it is the',
+          'thing under review, not because it is to be believed: every statement in it is a claim, and you',
+          'test a claim by running what it says and comparing. What the task asked for and the account does',
+          'not deliver is a finding; what the account states and the machine contradicts is a finding.',
+          '',
+          deliverable.summary,
+        ]
+      : []),
     ...(deviations.length > 0
       ? [
           '',
@@ -295,7 +349,7 @@ export async function runReview(
     await pacer.throttleSend();
     // The brief is saved as sent. Until it was, whether a later round had been told what the
     // earlier one found could not be checked from the run folder at all.
-    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier);
+    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier, deps.deliverable);
     await saveReply('00-brief', brief);
     await deps.record(`REVIEW ${round} BRIEF`, brief);
     before = await transport.sendAndConfirm(brief);

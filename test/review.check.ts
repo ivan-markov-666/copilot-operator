@@ -15,7 +15,7 @@
  */
 import { parseReview } from '../src/protocol/parser.js';
 import { allAboutTheTask, describeFindings, findingId, isGrounded, isRepeat, ReviewSchema } from '../src/protocol/reviewSchema.js';
-import { reviewBrief, findingsMessage, ungroundedMessage } from '../src/orchestrator/review.js';
+import { reviewBrief, findingsMessage, ungroundedMessage, deliverableFor } from '../src/orchestrator/review.js';
 import { earlierTasksForReview } from '../src/orchestrator/taskRunner.js';
 import { RunConfigSchema } from '../src/config/schema.js';
 
@@ -188,6 +188,43 @@ console.log('brief carries round 1      :', brief.includes('What review round 1 
 console.log('and asks for a decision    :', brief.includes('`about`') && brief.includes('unsatisfiable') ? 'yes' : 'NO');
 const plain = reviewBrief({ vcs: { enabled: false } } as never, { prompt: 'p', level2: '', title: 't' } as never, [], 'C:\\x');
 console.log('first round says neither   :', !plain.includes('could not be done') && !plain.includes('review round') ? 'yes' : 'NO');
+
+/*
+ * A task whose product is its closing account.
+ *
+ * A repository audit changed no files, so the reviewer — blind to summaries by design — was
+ * shown a task and an empty change list, and failed it for "not delivering the audit summary"
+ * that the implementer had in fact written. The account travels only when the runner knows
+ * there is nothing else: version control saw no change, or the task was read-only. Without
+ * version control it cannot know, and the reviewer stays blind.
+ */
+console.log('\n--- the closing account is the product when nothing changed ---');
+const audit = 'Branches: main at 096fab9. 8 commits, 18 tracked files, clean tree, nothing pushed.';
+const noFiles = deliverableFor({ readOnly: false }, audit, true, []);
+const someFiles = deliverableFor({ readOnly: false }, audit, true, ['README.md']);
+const readOnly = deliverableFor({ readOnly: true }, audit, true, ['web/page.tsx']);
+const untracked = deliverableFor({ readOnly: false }, audit, false, []);
+const empty = deliverableFor({ readOnly: true }, '   ', true, []);
+console.log('no files, tracked          :', noFiles?.why === 'no-files-changed' ? 'delivered' : 'NOT delivered (wrong)');
+console.log('files changed              :', someFiles === undefined ? 'blind' : 'DELIVERED (wrong)');
+console.log('read-only, files changed   :', readOnly?.why === 'read-only' ? 'delivered' : 'NOT delivered (wrong)');
+console.log('no version control         :', untracked === undefined ? 'blind' : 'DELIVERED (wrong)');
+console.log('blank summary              :', empty === undefined ? 'nothing to deliver' : 'DELIVERED (wrong)');
+const auditBrief = reviewBrief(
+  { vcs: { enabled: true, repoDir: 'C:\\x' } } as never,
+  { prompt: 'Audit the repository and report.', level2: '', title: 'repo-audit' } as never,
+  [],
+  'C:\\x',
+  [],
+  undefined,
+  [],
+  [],
+  [],
+  noFiles,
+);
+console.log('brief carries the account  :', auditBrief.includes('What the implementer delivered') && auditBrief.includes(audit) ? 'yes' : 'NO');
+console.log('as claims to test          :', auditBrief.includes('every statement in it is a claim') ? 'yes' : 'NO');
+console.log('and not otherwise          :', !plain.includes('What the implementer delivered') ? 'yes' : 'NO');
 const msg = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 2, 2, [again]);
 console.log('implementer told it recurred:', msg.includes('raised in the previous round') && msg.includes('`deviations`') ? 'yes' : 'NO');
 const quiet = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 1, 2);
