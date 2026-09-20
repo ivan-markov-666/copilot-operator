@@ -1824,6 +1824,20 @@ function TaskCard({
           )}
           {(task.deviations?.length ?? 0) > 0 && <Deviations items={task.deviations ?? []} />}
           {(task.disputes?.length ?? 0) > 0 && <Disputes items={task.disputes ?? []} />}
+          {/* Stopped by the runner; said here because a server left behind is a defect too. */}
+          {(task.leftovers?.length ?? 0) > 0 && (
+            <div className="err small" style={{ margin: '6px 0' }}>
+              {t('task.leftovers', { n: task.leftovers?.length ?? 0 })}
+              <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+                {(task.leftovers ?? []).map((l) => (
+                  <li key={`${l.by}-${l.pid}`}>
+                    <code>{l.name}</code> pid {l.pid}
+                    {l.ports.length > 0 ? ` · ${t('task.leftoverPorts', { ports: l.ports.join(', ') })}` : ''} · {l.by}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {task.reason && (
             <div className="reason small" style={{ margin: '6px 0' }}>
               {task.reason}

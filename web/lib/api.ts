@@ -146,6 +146,8 @@ export type Task = {
   disputes?: TaskDispute[];
   /** Checks reviewers gave with their findings; not cleared by a re-run. */
   reviewChecks?: TaskReviewCheck[];
+  /** Processes left running by the task or a review and stopped by the runner, with where they came from. */
+  leftovers?: Array<{ pid: number; name: string; command: string; ports: number[]; by: string }>;
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;

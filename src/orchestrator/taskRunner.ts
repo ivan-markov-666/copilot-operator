@@ -25,6 +25,7 @@ import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type Chec
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
+import { snapshotProcesses, reapLeftovers, describeLeftovers, type ProcessSnapshot } from '../exec/processes.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
@@ -368,9 +369,33 @@ export async function runTask(
   let reviewChecks: TaskReviewCheck[] = task.reviewChecks ?? [];
   /** Derived checks that still failed when the rounds ran out; the reviewer is told. */
   let derivedStillFailing: Array<{ name: string; detail: string }> = [];
+  /**
+   * What was running before the task, so that what it and its reviews leave running can be
+   * told apart and stopped. Taken once the working directory is known; null means "do not".
+   */
+  let processesBefore: ProcessSnapshot | null = null;
+  /** Stops what appeared since a snapshot, tied to the project, and writes it on the task. */
+  const reap = async (since: ProcessSnapshot | null, by: string): Promise<void> => {
+    if (!since) return;
+    const result = await reapLeftovers(work.cwd, since).catch(() => null);
+    if (!result || (result.killed.length === 0 && result.failed.length === 0)) return;
+    const all = [...result.killed, ...result.failed].map((l) => ({ pid: l.pid, name: l.name, command: l.command.slice(0, 300), ports: l.ports, by }));
+    await setTask((t) => {
+      t.leftovers = [...(t.leftovers ?? []), ...all];
+    });
+    sink.event('processes-reaped', { by, killed: result.killed.length, failed: result.failed.length, leftovers: all },
+      `${by} left ${all.length} process(es) running; stopped ${result.killed.length}` +
+        `${result.failed.length > 0 ? `, could not stop ${result.failed.length}` : ''}: ` +
+        all.map((l) => `${l.name} pid ${l.pid}${l.ports.length > 0 ? ` (port ${l.ports.join(', ')})` : ''}`).join('; '),
+      'warn');
+    await record(`LEFT RUNNING BY ${by.toUpperCase()}`, describeLeftovers([...result.killed, ...result.failed]));
+  };
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
+
+    // The net under the plan's own checks: whatever the task left running is stopped and named.
+    await reap(processesBefore, 'the task');
 
     /*
      * A read-only task that changed files has failed, whatever it reported.
@@ -464,6 +489,10 @@ export async function runTask(
     `commands run in ${work.cwd} (${work.source})${work.ownCheckout ? " — this runner's own checkout, as the session was set" : ''}`,
     work.ownCheckout ? 'warn' : 'info',
   );
+
+  // Not when the project is this runner's own checkout: every process of the runner would
+  // then look like a leftover.
+  processesBefore = work.ownCheckout ? null : await snapshotProcesses(work.cwd).catch(() => null);
 
   try {
     // --- version control: a branch of this task's own, before anything is touched -------
@@ -752,6 +781,8 @@ export async function runTask(
       sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length },
         `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})`);
 
+      // What is running before the review, so that what the review leaves is its own.
+      const beforeReview: ProcessSnapshot | null = processesBefore ? await snapshotProcesses(work.cwd).catch(() => null) : null;
       let outcome: ReviewOutcome;
       try {
         await transport.newChat();
@@ -789,6 +820,9 @@ export async function runTask(
             `could not return to the task's own conversation after the review: ${(e as Error).message}`, 'error');
         });
       }
+
+      // A reviewer that left its own server listening once failed the work for it.
+      await reap(beforeReview, `review round ${reviewRounds}`);
 
       /*
        * Which findings an earlier round already raised.

@@ -95,6 +95,11 @@ export type Task = {
    * noticed is arithmetic for every attempt after it.
    */
   reviewChecks?: TaskReviewCheck[];
+  /**
+   * Processes tied to the project that were still running when the task, or one of its
+   * reviews, ended — stopped by the runner and written down with where they came from.
+   */
+  leftovers?: Array<{ pid: number; name: string; command: string; ports: number[]; by: string }>;
   /** Path of the consolidated text log of everything executed, relative to the run folder. */
   logFile?: string;
   /**
