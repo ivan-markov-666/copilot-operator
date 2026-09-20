@@ -27,6 +27,7 @@ import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/work
 import { redactSecrets } from '../exec/redaction.js';
 import { snapshotProcesses, reapLeftovers, describeLeftovers, type ProcessSnapshot } from '../exec/processes.js';
 import { collectEnvironment, describeEnvironment } from '../exec/environment.js';
+import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
@@ -1396,7 +1397,13 @@ export async function runTask(
     const message = (e as Error).message;
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     await transport.dumpFailure(log.path('failures'), 'crash').catch(() => undefined);
-    return await finish('failed', message);
+    /*
+     * "Target page, context or browser has been closed" is what every call says once the
+     * browser is gone, and it explains nothing. When Edge left a crash report, the reason
+     * says so, with the process that died and where the report is.
+     */
+    const crash = /has been closed/i.test(message) ? await transport.recentCrash().catch(() => null) : null;
+    return await finish('failed', crash ? `${describeCrash(crash)}. Then: ${message}` : message);
   }
 }
 

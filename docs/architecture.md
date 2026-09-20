@@ -147,9 +147,10 @@ Rules:
 
 ### 2.4 Downloader
 
-- For each `download` step: register `waitForEvent('download')`, click the card, `download.saveAs(artifacts/<runId>/<id>-<suggestedFilename>)`.
+- For each `download` step: read the anchor's `href` — a `blob:` URL created in the page — and **fetch it in page context**, carried out as base64 and written to `artifacts/<runId>/<id>-<suggestedFilename>`. Never by clicking: the anchor carries `target="_blank"`, and clicking it crashed **Edge's browser process** every time it was tried — three minidumps in the bot profile's `Crashpad/reports`, one per attempt across two days, `ProcessType=browser`, the same `SubCode=0x80000003`, Edge 153.0.4234.32 — which ended the run and the plan behind it. The blob belongs to the page, so the page can read it without the download UI at all; an address that cannot be fetched is an error with a reason, not a crash.
 - Computes SHA-256, writes it to the run log, refuses to run the file unless its extension is in `allowedScriptExtensions` (default `.ps1`, `.cmd`, `.bat`).
 - Downloads are never taken from the browser's temp folder because Playwright deletes them when the context closes.
+- **A run that dies with the browser says why.** "Target page, context or browser has been closed" reads the same for a closed window, a second Edge on the profile and a crash. `edgeCrash.ts` looks for a minidump written to the profile's `Crashpad/reports` in the last minutes and reads the process type, version and sub-code from `watson_metadata` next to it; the failure dump and the task's reason then name the crash and point at the report. Verified by `npm run check:crash`.
 
 ### 2.5 CommandRunner
 

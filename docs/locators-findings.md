@@ -131,8 +131,8 @@ That explains the reported behaviour: the href is a `blob:` URL created in the p
 For the bot:
 
 - Locate by `a[download]` inside the last message, match on the `download` attribute for the file name.
-- Register `page.waitForEvent('download')` **before** clicking, then `download.saveAs(...)`.
-- Because the anchor carries `target="_blank"`, also listen on the context for a new page, so a download that gets attributed to a popup is not missed.
+- **Do not click it.** Clicking crashed Edge's *browser* process on every attempt — 2026-09-19 13:36 and 13:58, 2026-09-20 14:44 — each leaving a minidump in the profile's `Crashpad/reports` with `ProcessType=browser; SubCode=0x80000003` on Edge 153.0.4234.32. The `waitForEvent('download')` + click + popup-listener recipe below this line was written before any download had been tried live, and it never saved a file.
+- Instead: take the anchor's `href` (the `blob:` URL) and `fetch` it **in page context** via `page.evaluate`, return the bytes as base64, write them from Node. The blob belongs to the page, so the page can read it; nothing goes through the download manager.
 
 Observed in the same reply: Copilot showed a `Coding and executing` chip, meaning the tenant has the code interpreter enabled. That is what produces downloadable files.
 

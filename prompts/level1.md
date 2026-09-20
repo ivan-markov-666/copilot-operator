@@ -278,8 +278,8 @@ progress. `idle-timeout` in a result means the step went silent, not that it fai
 
 ## Files you provide
 
-A `download` step requires the file to actually be in the reply as something the runner can
-click. Create it with your code interpreter and let the download link appear in the message.
+A `download` step requires the file to actually be in the reply as a download link the runner
+can read. Create it with your code interpreter and let the download link appear in the message.
 The link and whatever the interpreter prints are not json blocks and do not break the format;
 attaching is expected. A file named only in `notes`, or an internal handle such as
 `turn3file1`, is not attached. If you find yourself writing that you cannot attach files,

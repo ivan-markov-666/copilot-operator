@@ -10,9 +10,10 @@
  *   2. Enter does not submit the composer. The Send button has to be clicked.
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
-import { chromium, type BrowserContext, type Page, type Download, type Locator } from 'playwright';
-import { mkdir } from 'node:fs/promises';
+import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { Blocker, Css, Label, Model, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
@@ -1266,32 +1267,39 @@ Current URL: ${url}`);
     }
 
     /*
-     * Two ways a download can arrive — in this page, or in a popup — and only one of them wins.
+     * Never through the browser's download manager.
      *
-     * The loser is the dangerous part. It keeps waiting after the race is decided and then
-     * rejects on its own: with a timeout two minutes later, or the instant the browser closes,
-     * with "Target page, context or browser has been closed". Nothing is awaiting it by then,
-     * so Node sees an unhandled rejection and takes the whole process down — which it did, in
-     * the middle of a run of three sessions, long after the download it belonged to had
-     * succeeded. Attaching a catch to each one as it is created is what makes a loser harmless;
-     * the race still reads from the originals, so the winner is unaffected.
+     * Clicking the anchor — a `blob:` href with `target="_blank"` — crashed Edge's browser
+     * process every time it was tried: three minidumps in the bot profile's Crashpad, one per
+     * attempt, `ProcessType=browser`, the same `SubCode=0x80000003`, Edge 153. A crash of the
+     * browser process ends the run and the plan behind it, and the download race that used to
+     * live here never got as far as saving a file. The blob was created in this page, so the
+     * page can read it: fetched in page context and carried out as base64, it never touches
+     * the download UI at all. An address that cannot be fetched is an error with a reason,
+     * not a crash.
      */
-    const fromPage = this.p.waitForEvent('download', { timeout: 120_000 });
-    fromPage.catch(() => undefined);
-
-    const fromPopup = this.context
-      ?.waitForEvent('page', { timeout: 120_000 })
-      .then((pg) => pg.waitForEvent('download', { timeout: 120_000 }));
-    fromPopup?.catch(() => undefined);
-
-    await link.click();
-
-    const download: Download = await Promise.race(
-      [fromPage, fromPopup].filter(Boolean) as Array<Promise<Download>>,
-    );
-    await download.saveAs(saveAs);
-    this.emit('downloaded', { fileName, saveAs });
+    const href = await link.getAttribute('href');
+    if (!href) throw new Error(`The attachment "${fileName}" carries no address it could be read from.`);
+    const base64 = await this.p.evaluate(async (url: string) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`the attachment could not be read: HTTP ${res.status}`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+      }
+      return btoa(binary);
+    }, href);
+    const bytes = Buffer.from(base64, 'base64');
+    await writeFile(saveAs, bytes);
+    this.emit('downloaded', { fileName, saveAs, bytes: bytes.length });
     return saveAs;
+  }
+
+  /** An Edge crash written to the profile in the last few minutes, if there is one. */
+  async recentCrash(): Promise<EdgeCrash | null> {
+    return await findRecentCrash(this.opts.profileDir).catch(() => null);
   }
 
   async turnCountNow(): Promise<number> {
@@ -1309,14 +1317,20 @@ Current URL: ${url}`);
     const { writeFile } = await import('node:fs/promises');
 
     if (!this.page || this.page.isClosed()) {
+      // A closed page reads the same whether the window was closed, another Edge took the
+      // profile, or Edge crashed. Only the last leaves a minidump, and it says which process.
+      const crash = await this.recentCrash();
       await writeFile(
         join(dir, `${tag}.txt`),
-        'The page was already closed when the failure was recorded, so there is nothing to ' +
-          'capture. This usually means the browser window was closed, or another Edge process ' +
-          'was using the same profile.',
+        crash
+          ? `${describeCrash(crash)}\n\nThe page was already closed when the failure was recorded, so there is nothing else to capture.`
+          : 'The page was already closed when the failure was recorded, so there is nothing to ' +
+              'capture. No Edge crash report was written in the last minutes, so this usually means ' +
+              'the browser window was closed, or another Edge process was using the same profile.',
         'utf8',
       ).catch(() => undefined);
-      this.emit('failure-dump-empty', { dir, tag });
+      if (crash) this.emit('browser-crashed', { dir, tag, ...crash });
+      else this.emit('failure-dump-empty', { dir, tag });
       return;
     }
 
