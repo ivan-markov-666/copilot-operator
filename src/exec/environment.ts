@@ -31,7 +31,10 @@ let cached: Environment | null = null;
 /** One probe: its trimmed stdout, or null when the tool is missing or says nothing. */
 function probe(file: string, args: string[], shell = false): string | null {
   try {
-    const r = spawnSync(file, args, { encoding: 'utf8', windowsHide: true, timeout: 15_000, shell });
+    // With a shell the command is one string; Node warns about args it would only concatenate.
+    const r = shell
+      ? spawnSync([file, ...args].join(' '), { encoding: 'utf8', windowsHide: true, timeout: 15_000, shell: true })
+      : spawnSync(file, args, { encoding: 'utf8', windowsHide: true, timeout: 15_000 });
     return r.status === 0 && typeof r.stdout === 'string' && r.stdout.trim() ? r.stdout.trim().split('\n')[0].trim() : null;
   } catch {
     return null;
