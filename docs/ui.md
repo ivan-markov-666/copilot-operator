@@ -59,6 +59,13 @@ task rather than the work, and one that came back after the implementer reported
 carry a chip saying so. A task can be `done` and still have been through two rounds of somebody
 else finding things wrong with it.
 
+**The clock.** Every task card says how long the task took, or, while it runs, for how long it
+has been running, ticking once a second; the session page says the same for the session's
+latest run under its header, and the register's run headers say it for each run. All of it is
+arithmetic over the `startedAt` and `finishedAt` the record already keeps — grouped by the run
+the tasks were started under — so nothing new is stored and nothing can disagree with the
+timestamps. A finished card never re-renders for the clock; only a live one ticks.
+
 **Not as the task said.** When the model declares it could not follow an instruction as
 written — the option was removed in the installed version, the build rewrites the file — the
 task card shows those deviations as a block of their own under the summary: the instruction,

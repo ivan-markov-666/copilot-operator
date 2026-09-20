@@ -164,6 +164,8 @@ export type Task = {
   attempt?: number;
   /** Attempts that already finished, oldest first. */
   attempts?: TaskAttempt[];
+  /** The press of a start button this task ran under. Tasks sharing one ran together. */
+  runGroup?: TaskRunGroup;
   vcs?: TaskVcs;
   /** The branch and commit message this task was asked to use, when someone chose them. */
   vcsPlan?: { branch?: string; commitMessage?: string };

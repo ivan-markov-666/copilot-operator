@@ -5,6 +5,9 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
+import { fmtDuration } from '../../../lib/api';
+import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
+import { useNow } from '../../../lib/useNow';
 import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
 import { ModelHint, ProjectHint } from '../../defaultHints';
@@ -77,6 +80,8 @@ export default function SessionPage() {
       </div>
 
       <Header session={session} queued={queued} onChange={reload} />
+
+      <RunClock tasks={session.tasks} />
 
       {(session.pending ?? []).map((a) => (
         <ApprovalBar key={a.id} approval={a} onDecided={reload} />
@@ -1474,6 +1479,8 @@ function TaskCard({
   const [branch, setBranch] = useState(task.vcsPlan?.branch ?? '');
   const [commitMessage, setCommitMessage] = useState(task.vcsPlan?.commitMessage ?? '');
   const [checks, setChecks] = useState<TaskCheck[]>(task.checks ?? []);
+  // Ticks only while this task runs; a finished card never re-renders for the clock.
+  const now = useNow(isLive(task));
   const [files, setFiles] = useState<{ reports: string[]; artifacts: string[]; replies: string[] } | null>(null);
   const [msg, setMsg] = useState('');
 
@@ -1628,6 +1635,8 @@ function TaskCard({
       <div className="muted small">
         {task.startedAt ? t('task.started', { t: fmtTime(task.startedAt) }) : t('task.added', { t: fmtTime(task.createdAt) })}
         {task.finishedAt ? ` · ${t('task.finished', { t: fmtTime(task.finishedAt) })}` : ''}
+        {task.startedAt && task.finishedAt ? ` · ${t('task.took', { d: fmtDuration(elapsedMs(task.startedAt, task.finishedAt)) })}` : ''}
+        {isLive(task) ? ` · ${t('task.runningFor', { d: fmtDuration(elapsedMs(task.startedAt, undefined, now)) })}` : ''}
       </div>
       {/*
         What version control actually did, on a task that has run. The strings for this existed
@@ -2087,6 +2096,25 @@ function ChecksEditor({ checks, onChange }: { checks: TaskCheck[]; onChange: (ne
 
       <button onClick={() => onChange([...checks, { name: '', expect: 'exit-zero', run: '' }])}>{t('checks.add')}</button>
     </div>
+  );
+}
+
+/**
+ * How long the session's latest run has taken, ticking while it runs.
+ *
+ * Arithmetic over the timestamps the tasks already carry, grouped by the run they were
+ * started under; nothing is stored. Frozen once the last task has finished.
+ */
+function RunClock({ tasks }: { tasks: Task[] }) {
+  const { t } = useT();
+  const latest = latestRun(tasks);
+  const now = useNow(!!latest && latest.tasks.some(isLive));
+  if (!latest) return null;
+  const span = runSpanMs(latest.run, latest.tasks, now);
+  return (
+    <p className="muted small" style={{ margin: '4px 0 10px' }}>
+      {t(span.live ? 'session.runClockLive' : 'session.runClock', { n: span.tasks, d: fmtDuration(span.ms) })}
+    </p>
   );
 }
 

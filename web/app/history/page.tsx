@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtDuration, type RegistryEntry, type TaskStatus } from '../../lib/api';
+import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
+import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { RichText } from '../richText';
 import { useTaskActions } from '../taskActions';
@@ -33,6 +35,15 @@ type Run = { id: string; startedAt: string; sessions: number; entries: RegistryE
  * that were genuinely sent off together, and nothing on the row tells them apart. The run id
  * does, so it is what the grouping is built on rather than the clock.
  */
+/** How long a run took, or has taken so far — ticking while any of its tasks is still going. */
+function RunTook({ run }: { run: Run }) {
+  const { t } = useT();
+  const live = run.entries.some(isLive);
+  const now = useNow(live);
+  const span = runSpanMs(run, run.entries, now);
+  return <>{t(span.live ? 'reg.runRunning' : 'reg.runTook', { d: fmtDuration(span.ms) })}</>;
+}
+
 function groupIntoRuns(entries: RegistryEntry[]): { runs: Run[]; loose: RegistryEntry[] } {
   const byId = new Map<string, Run>();
   const loose: RegistryEntry[] = [];
@@ -263,7 +274,11 @@ export default function HistoryPage() {
                 <h2 className="grow" style={{ margin: 0 }}>
                   {t('reg.runOf', { t: run.entries.length, s: run.sessions })}
                 </h2>
-                <span className="muted small">{t('reg.runAt', { when: fmtTime(run.startedAt) })}</span>
+                <span className="muted small">
+                  {t('reg.runAt', { when: fmtTime(run.startedAt) })}
+                  {' · '}
+                  <RunTook run={run} />
+                </span>
               </div>
               <Flow entries={run.entries} sizes={runSizes} onChange={() => void load()} />
             </section>
@@ -337,6 +352,8 @@ function Flow({
    * anyone wants from this page.
    */
   const actions = useTaskActions(onChange ?? (() => undefined));
+  // One tick for the whole list, and only while something in it is still going.
+  const now = useNow(entries.some(isLive));
 
   return (
     <ol className="flow">
@@ -409,6 +426,7 @@ function Flow({
               {e.startedAt ? t('task.started', { t: fmtTime(e.startedAt) }) : t('task.added', { t: fmtTime(e.createdAt) })}
               {e.finishedAt ? ` · ${t('task.finished', { t: fmtTime(e.finishedAt) })}` : ''}
               {e.durationMs !== undefined ? ` · ${t('reg.took', { d: fmtDuration(e.durationMs) })}` : ''}
+              {isLive(e) ? ` · ${t('task.runningFor', { d: fmtDuration(elapsedMs(e.startedAt, undefined, now)) })}` : ''}
               {e.iterations > 0 ? ` · ${t('reg.iterations', { n: e.iterations })}` : ''}
             </div>
 
