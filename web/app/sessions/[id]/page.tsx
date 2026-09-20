@@ -1781,6 +1781,38 @@ function TaskCard({
             </details>
           )}
 
+          {/*
+            Checks reviewers gave with their findings. Listed apart from the operator's, because
+            they were not asked for: each is what one review noticed, made repeatable.
+          */}
+          {(task.reviewChecks?.length ?? 0) > 0 && (
+            <details className="small" style={{ margin: '6px 0' }}>
+              <summary>{t('checks.fromReview', { n: task.reviewChecks?.length ?? 0 })}</summary>
+              <p className="why">{t('checks.fromReviewWhy')}</p>
+              <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
+                {(task.reviewChecks ?? []).map((rc) => {
+                  const result = (task.checkResults ?? []).find((r) => r.name === rc.check.name);
+                  return (
+                    <li key={rc.check.name}>
+                      <code>{rc.findingId}</code> <strong>{rc.check.name}</strong>
+                      {rc.state !== 'active' && (
+                        <span className="chip" style={{ marginLeft: 6 }}>
+                          {t(`checks.state.${rc.state}` as Key)}
+                        </span>
+                      )}
+                      <div className="muted">{rc.what}</div>
+                      {result && (
+                        <div className={result.passed ? 'muted' : 'reason'}>
+                          {result.passed ? t('checks.passed') : t('checks.failed')} — {result.detail}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+
           <ReviewVerdict review={task.review} />
 
           {task.summary && (

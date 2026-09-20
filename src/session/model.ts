@@ -38,6 +38,28 @@ export type TaskDeviation = { instruction: string; did: string; why: string };
 /** One review finding the model said was wrong: which (by id), why, and what shows it. */
 export type TaskDispute = { finding: string; why: string; evidence: string };
 
+/**
+ * A check a reviewer gave with a finding, kept with the task for every later attempt.
+ *
+ * `active` runs in the gate with the operator's checks. `suspended` is what a dispute does to
+ * it: not run until the next review rules — reactivated if that review raises the finding
+ * again, dropped if it does not. A derived check sends the work back like any other, but it
+ * never ends a task on its own: with the rounds spent and only derived checks failing, the
+ * work goes to the reviewer with those failures named, because a check written by one
+ * reviewer is outranked by the next reviewer's judgement, not by a counter.
+ */
+export type TaskReviewCheck = {
+  check: TaskCheck;
+  /** The finding it came from, `r1f2`, and what that finding said. */
+  findingId: string;
+  what: string;
+  where?: string;
+  round: number;
+  /** Which attempt of the task the finding was made on. */
+  attempt: number;
+  state: 'active' | 'suspended' | 'dropped';
+};
+
 export type Task = {
   id: string;
   title: string;
@@ -68,6 +90,11 @@ export type Task = {
   deviations?: TaskDeviation[];
   /** Review findings the model disputed, with its evidence. The next reviewer was told. */
   disputes?: TaskDispute[];
+  /**
+   * Checks that reviewers gave with their findings. Not cleared by a re-run: what one review
+   * noticed is arithmetic for every attempt after it.
+   */
+  reviewChecks?: TaskReviewCheck[];
   /** Path of the consolidated text log of everything executed, relative to the run folder. */
   logFile?: string;
   /**

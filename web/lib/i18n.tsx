@@ -364,6 +364,11 @@ const dict = {
     'checks.passed': 'passed',
     'checks.failed': 'failed',
     'checks.n': '{n} check(s)',
+    'checks.fromReview': 'From reviews ({n})',
+    'checks.fromReviewWhy':
+      'Checks reviewers gave with their findings: the mechanical test that would have caught each one. They stay with the task for every later attempt, so what one review noticed is never again found by chance.',
+    'checks.state.suspended': 'suspended — disputed, until the next review rules',
+    'checks.state.dropped': 'dropped — the next review did not raise it again',
     'checks.kind.exit-zero': 'the command succeeds',
     'checks.kind.exit-nonzero': 'the command fails',
     'checks.kind.output-contains': 'its output contains',
@@ -1106,6 +1111,11 @@ const dict = {
     'checks.passed': 'мина',
     'checks.failed': 'не мина',
     'checks.n': '{n} проверки',
+    'checks.fromReview': 'От рецензии ({n})',
+    'checks.fromReviewWhy':
+      'Проверки, дадени от рецензентите заедно с находките им: механичният тест, който би хванал всяка. Остават със задачата за всеки следващ опит, така че забелязаното веднъж не се намира повече по случайност.',
+    'checks.state.suspended': 'спряна — оспорена, до присъдата на следващата рецензия',
+    'checks.state.dropped': 'отпаднала — следващата рецензия не повдигна находката отново',
     'checks.kind.exit-zero': 'командата да успее',
     'checks.kind.exit-nonzero': 'командата да се провали',
     'checks.kind.output-contains': 'изходът ѝ да съдържа',

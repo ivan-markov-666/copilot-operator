@@ -164,8 +164,12 @@ rejected — name the commands and their results.
 
 **`findings`** is required on `fail`, one entry per defect, each with `what`, `evidence`,
 `where` — the file and the place in it, or the URL; required, because the same defect is
-recognised between rounds by it — and `about` (`"work"` or `"task"` — see above; it defaults to
-`"work"`):
+recognised between rounds by it — `about` (`"work"` or `"task"` — see above; it defaults to
+`"work"`), and, for a finding about the work, `check` wherever a command or a file can settle
+it: the same shape as the operator's checks (`name`, `expect`, `run` or `file`, `value`, `cwd`),
+the mechanical test that would have caught this. The runner runs it at once, on the work as it
+stands: if it passes, it does not capture the defect and is refused; if it fails, it stays with
+the task for every later attempt, so what you found once is never again found by chance.
 
 ```json
 {
@@ -177,7 +181,14 @@ recognised between rounds by it — and `about` (`"work"` or `"task"` — see ab
       "what": "The README tells the reader to start the API with `npx tsx src/main.ts`, and a server started that way returns HTTP 500 for every request.",
       "evidence": "`npx tsx src/main.ts` then POST /calculate {\"a\":9,\"b\":3,\"op\":\"/\"} returned {\"statusCode\":500,\"message\":\"Internal server error\"}; the server log shows TypeError: Cannot read properties of undefined (reading 'evaluate').",
       "where": "README.md, the Run section",
-      "about": "work"
+      "about": "work",
+      "check": {
+        "name": "the documented start command answers a valid request",
+        "expect": "output-contains",
+        "run": "$p = Start-Process npx -ArgumentList 'tsx','src/main.ts' -PassThru; try { Start-Sleep 5; (Invoke-WebRequest -Uri http://127.0.0.1:4300/calculate -Method Post -ContentType application/json -Body '{\"a\":9,\"b\":3,\"op\":\"/\"}').StatusCode } finally { Stop-Process -Id $p.Id -Force }",
+        "cwd": "C:\\Projects\\app\\api",
+        "value": "200"
+      }
     }
   ]
 }

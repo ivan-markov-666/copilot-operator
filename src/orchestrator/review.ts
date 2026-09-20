@@ -23,15 +23,16 @@ import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import { describeFindings, type ReviewFinding } from '../protocol/reviewSchema.js';
+import { describeFindings, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
-import { describeStep } from '../exec/policy.js';
+import { describeStep, matchDenyPattern } from '../exec/policy.js';
+import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { Pacer } from '../util/pacing.js';
-import type { Session, Task } from '../session/model.js';
+import type { Session, Task, TaskCheck } from '../session/model.js';
 
 /** How a review ended. `error` is the review itself failing, which is not the work's fault. */
 export type ReviewOutcome = {
@@ -44,6 +45,8 @@ export type ReviewOutcome = {
   /** Set when the review could not be carried out at all. */
   problem?: string;
   chatUrl?: string;
+  /** Checks the reviewer gave with its findings and that fail on the work as it stands. */
+  derivedChecks?: Array<{ findingId: string; check: TaskCheck; what: string; where?: string }>;
 };
 
 export type ReviewDeps = {
@@ -65,6 +68,13 @@ export type ReviewDeps = {
   disputes: Dispute[];
   /** What the round before this one found, when there was one. */
   previous?: PreviousRound;
+  /** The repository, for checks that look at it. */
+  repoDir?: string;
+  /**
+   * Checks from earlier reviews that still fail after the implementer's rounds ran out. The
+   * reviewer decides whether the defect is real; a counter does not.
+   */
+  derivedFailing?: Array<{ name: string; detail: string }>;
   event: (type: string, data?: Record<string, unknown>, human?: string, level?: 'info' | 'warn' | 'error') => void;
   record: (heading: string, body: string) => Promise<void>;
 };
@@ -95,6 +105,7 @@ export function reviewBrief(
   deviations: Deviation[] = [],
   previous?: PreviousRound,
   disputes: Dispute[] = [],
+  derivedFailing: Array<{ name: string; detail: string }> = [],
 ): string {
   const repo = session.vcs?.enabled ? session.vcs.repoDir?.trim() : '';
   const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
@@ -167,6 +178,20 @@ export function reviewBrief(
           disputes.map((d, i) => `${i + 1}. Finding ${d.finding}: ${d.why}\n   Implementer's evidence: ${d.evidence}`).join('\n\n'),
         ]
       : []),
+    ...(derivedFailing.length > 0
+      ? [
+          '',
+          '## Checks from earlier reviews that still fail',
+          '',
+          'Earlier reviewers gave these checks with their findings, and the implementer has had its rounds:',
+          'they still fail. You decide, not a counter. If the defect is real, fail the work with that',
+          'finding. If the check is wrong — it tests something the task never asked for, or tests it',
+          'badly — judge the work on what you find and say so in your summary; a check you do not',
+          'confirm is dropped.',
+          '',
+          derivedFailing.map((d, i) => `${i + 1}. ${d.name}\n   Last result: ${d.detail}`).join('\n\n'),
+        ]
+      : []),
     '',
     '## Your job',
     '',
@@ -202,6 +227,8 @@ export async function runReview(
   let stepsRun = 0;
   let iterations = 0;
   let formatRetries = 0;
+  /** A check that passes on the defective state is sent back once; after that it is dropped. */
+  let derivedRetried = false;
 
   const saveReply = async (label: string, markdown: string): Promise<void> => {
     await writeFile(join(dir, `${label}.md`), markdown, 'utf8').catch(() => undefined);
@@ -217,7 +244,7 @@ export async function runReview(
     await pacer.throttleSend();
     // The brief is saved as sent. Until it was, whether a later round had been told what the
     // earlier one found could not be checked from the run folder at all.
-    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes);
+    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing);
     await saveReply('00-brief', brief);
     await deps.record(`REVIEW ${round} BRIEF`, brief);
     before = await transport.sendAndConfirm(brief);
@@ -279,17 +306,50 @@ export async function runReview(
           continue;
         }
 
+        /*
+         * A finding's check is only worth keeping if it fails on the work as it stands.
+         *
+         * The reviewer says "this is the test that would have caught it"; the runner runs it
+         * now, on the defective state. One that passes captures something else — or nothing —
+         * and is sent back once with the result, then dropped. What survives is kept with the
+         * task for every attempt after this one.
+         */
+        const named = review.findings.map((f, i) => ({ ...f, id: findingId(round, i) }));
+        const validation = await validateDerivedChecks(named, {
+          cwd: deps.cwd,
+          logDir: dir,
+          repoDir: deps.repoDir,
+          deny: (command) => matchDenyPattern(command, cfg.execution.denyPatterns),
+          signal,
+        });
+        if (validation.refused.length > 0 && !derivedRetried) {
+          derivedRetried = true;
+          deps.event('review-check-refused', { round, refused: validation.refused.map((r) => r.finding.id) },
+            `${validation.refused.length} check(s) given with findings pass on the work as it is, so they do not capture the defect; sent back once`, 'warn');
+          await pacer.throttleSend();
+          const b = await transport.sendAndConfirm(refusedChecksMessage(validation.refused.map((r) => ({ id: r.finding.id, detail: r.outcome.detail }))));
+          markdown = (await transport.waitForReply(b)).markdown;
+          continue;
+        }
+        for (const r of validation.refused) {
+          deps.event('review-check-dropped', { round, finding: r.finding.id }, `the check given with ${r.finding.id} still passes on the defective state; dropped`, 'warn');
+        }
+        for (const k of validation.kept) {
+          deps.event('review-check-kept', { round, finding: k.finding.id, name: k.check.name }, `kept with the task: "${k.check.name}" (from ${k.finding.id})`);
+        }
+
         await deps.record(
           `REVIEW ${round}: ${verdict.toUpperCase()}`,
-          [review.summary ?? '', review.findings.length > 0 ? describeFindings(review.findings) : ''].filter(Boolean).join('\n\n'),
+          [review.summary ?? '', named.length > 0 ? describeFindings(named) : ''].filter(Boolean).join('\n\n'),
         );
         return {
           verdict,
           summary: review.summary,
-          findings: review.findings,
+          findings: named,
           stepsRun,
           iterations,
           chatUrl: (await transport.currentChatId().catch(() => null)) ?? undefined,
+          derivedChecks: validation.kept.map((k) => ({ findingId: k.finding.id, check: k.check, what: k.finding.what, where: k.finding.where })),
         };
       }
 
@@ -373,6 +433,19 @@ export async function runReview(
   } catch (e) {
     return { verdict: 'error', findings: [], stepsRun, iterations, problem: (e as Error).message };
   }
+}
+
+/** Sent once when a finding's check passes on the work it is supposed to fail on. */
+export function refusedChecksMessage(refused: Array<{ id: string; detail: string }>): string {
+  return [
+    `The check you gave with ${refused.length === 1 ? 'finding' : 'findings'} ${refused.map((r) => `[${r.id}]`).join(', ')} was run on the work exactly as it is now, and it passed:`,
+    '',
+    refused.map((r) => `- [${r.id}]: ${r.detail}`).join('\n'),
+    '',
+    'A check that passes on the defective state does not capture the defect you describe. Give one that',
+    'fails now and would pass once the finding is fixed, or leave `check` out of that finding. Reply with the',
+    'same verdict and the same findings, corrected. This is asked once; a check that still passes is dropped.',
+  ].join('\n');
 }
 
 /** A step the review did not run, in the shape the reporter expects. */

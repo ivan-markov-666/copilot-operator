@@ -20,6 +20,7 @@
  * The prose version the reviewer is sent lives in `prompts/review1.md`.
  */
 import { z } from 'zod';
+import { CheckInput } from '../plan/schema.js';
 import { StepSchema } from './replySchema.js';
 
 export const MIN_REVIEW_SUMMARY_CHARS = 40;
@@ -49,6 +50,16 @@ const Finding = z.object({
   where: z.string().trim().min(3, {
     message: 'A finding needs "where": the file and the place in it, or the URL, that the finding is about.',
   }),
+  /**
+   * The mechanical test that would have caught this, in the plan's own check shape.
+   *
+   * A review is judgement, and judgement varies: the same missing `@HttpCode(200)` was found
+   * in one run and missed in the next. A finding that carries its check turns the one thing
+   * the reviewer noticed into arithmetic the runner repeats on every later attempt. The runner
+   * runs it at once, on the work as it stands: a check that passes on the defective state does
+   * not capture the defect, and is refused.
+   */
+  check: CheckInput.optional(),
   /**
    * Whose problem this is, and the only field here that changes what happens next.
    *

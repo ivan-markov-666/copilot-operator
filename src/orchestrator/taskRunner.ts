@@ -22,6 +22,7 @@ import { isDownloadStep, mergeDeviations, describeDeviations, mergeDisputes, des
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
+import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
@@ -35,7 +36,7 @@ import { RunLog } from '../log/runLog.js';
 import { composeOpening } from '../session/compose.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskRunGroup, TaskReview, TaskStatus } from '../session/model.js';
+import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { mirrorProject, describeMirror } from '../context/projectMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
 import { defaultExportDir } from '../context/contextFiles.js';
@@ -360,6 +361,13 @@ export async function runTask(
   let deviations: Deviation[] = [];
   /** Review findings the model has disputed, by id, merged across every reply. */
   let disputes: Dispute[] = [];
+  /**
+   * Checks earlier reviews gave with their findings — carried over from every attempt before
+   * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
+   */
+  let reviewChecks: TaskReviewCheck[] = task.reviewChecks ?? [];
+  /** Derived checks that still failed when the rounds ran out; the reviewer is told. */
+  let derivedStillFailing: Array<{ name: string; detail: string }> = [];
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
@@ -401,6 +409,7 @@ export async function runTask(
       t.finalReply = finalReply;
       if (deviations.length > 0) t.deviations = deviations;
       if (disputes.length > 0) t.disputes = disputes;
+      if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
       t.logFile = 'task-log.txt';
     });
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
@@ -582,7 +591,7 @@ export async function runTask(
      * about itself.
      */
     const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up'> => {
-      const checks = [...(task.checks ?? []), ...(willCommit ? [COMMIT_CLEAN_CHECK] : [])];
+      const checks = [...(task.checks ?? []), ...activeChecks(reviewChecks), ...(willCommit ? [COMMIT_CLEAN_CHECK] : [])];
       if (checks.length === 0) return 'accept';
 
       checkRounds += 1;
@@ -623,6 +632,22 @@ export async function runTask(
       }
       if (deps.signal?.aborted) return 'give-up';
       if (checkRounds > maxCheckRounds) {
+        /*
+         * Only checks from earlier reviews are failing. A reviewer's check is outranked by the
+         * next reviewer's judgement, not by a counter: they are suspended, the work goes to
+         * review with them named, and the verdict decides whether they come back or go.
+         */
+        if (onlyDerivedFailing(outcomes)) {
+          const failingNames = new Set(failed.map((o) => o.check.name));
+          reviewChecks = reviewChecks.map((rc) => (rc.state === 'active' && failingNames.has(rc.check.name) ? { ...rc, state: 'suspended' as const } : rc));
+          await setTask((t) => {
+            t.reviewChecks = reviewChecks;
+          });
+          derivedStillFailing = failed.map((o) => ({ name: o.check.name, detail: o.detail }));
+          sink.event('checks-derived-deferred', { rounds: checkRounds - 1, checks: failed.map((o) => o.check.name) },
+            `${failed.length} check(s) from earlier reviews still fail after ${maxCheckRounds} attempt(s); the work goes to the reviewer with them named`, 'warn');
+          return 'accept';
+        }
         sink.event('checks-exhausted', { rounds: checkRounds - 1 },
           `${failed.length} check(s) still failing after ${maxCheckRounds} attempt(s); the task is closed as failed`, 'warn');
         return 'give-up';
@@ -729,6 +754,8 @@ export async function runTask(
           deviations,
           disputes,
           previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings } : undefined,
+          repoDir: willCommit ? repoDirOf(session) : undefined,
+          derivedFailing: derivedStillFailing,
           event: (type, data, human, level) => sink.event(type, data, human, level),
           record,
         });
@@ -759,9 +786,38 @@ export async function runTask(
       // Named by the runner — round and position — so a dispute can point at one and the
       // record can show which came back. The same objects are used everywhere below, so
       // `repeated` still identifies them.
-      const named = outcome.findings.map((f, i) => ({ ...f, id: findingId(reviewRounds, i), ...(repeated.includes(f) ? { repeated: true } : {}) }));
+      const named = outcome.findings.map((f, i) => ({
+        ...f,
+        id: (f as { id?: string }).id ?? findingId(reviewRounds, i),
+        ...(repeated.includes(f) ? { repeated: true } : {}),
+      }));
       outcome = { ...outcome, findings: named };
       const repeatedNamed = named.filter((f) => f.repeated);
+
+      /*
+       * What this verdict does to the derived checks: the ones this reviewer gave join the
+       * task; the ones suspended by a dispute or by spent rounds come back if the finding was
+       * raised again, and go if it was not.
+       */
+      if (outcome.verdict === 'pass' || outcome.verdict === 'fail') {
+        for (const d of outcome.derivedChecks ?? []) {
+          reviewChecks = [...reviewChecks, { check: d.check, findingId: d.findingId, what: d.what, where: d.where, round: reviewRounds, attempt, state: 'active' }];
+        }
+        const settled = settleAfterReview(reviewChecks, outcome.verdict, named);
+        reviewChecks = settled.checks;
+        if (settled.reactivated.length > 0) {
+          sink.event('review-check-reactivated', { findings: settled.reactivated },
+            `the review raised the disputed finding(s) again; their checks are back: ${settled.reactivated.join(', ')}`, 'warn');
+        }
+        if (settled.dropped.length > 0) {
+          sink.event('review-check-dropped', { findings: settled.dropped },
+            `the review did not raise the finding(s) again; their checks are dropped: ${settled.dropped.join(', ')}`);
+        }
+        derivedStillFailing = [];
+        await setTask((t) => {
+          t.reviewChecks = reviewChecks;
+        });
+      }
       lastReview = outcome;
       await saveReview({
         verdict: outcome.verdict,
@@ -960,6 +1016,16 @@ export async function runTask(
         sink.event('finding-disputed', { count: reply.disputed.length, ids: reply.disputed.map((d) => d.finding) },
           `the model disputes ${reply.disputed.length} review finding(s): ${reply.disputed.map((d) => d.finding).join(', ')}`, 'warn');
         await record('FINDINGS DISPUTED', describeDisputes(reply.disputed));
+        // A disputed finding's check does not run again until the next review rules on it.
+        const paused = suspendDisputed(reviewChecks, reply.disputed.map((d) => d.finding));
+        if (paused.suspended.length > 0) {
+          reviewChecks = paused.checks;
+          await setTask((t) => {
+            t.reviewChecks = reviewChecks;
+          });
+          sink.event('review-check-suspended', { findings: paused.suspended },
+            `check(s) from disputed finding(s) suspended until the next review rules: ${paused.suspended.join(', ')}`);
+        }
       }
 
       /*

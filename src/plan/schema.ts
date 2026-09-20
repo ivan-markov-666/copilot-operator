@@ -66,7 +66,7 @@ const VcsInput = z
  * model of its own, so a check it cannot decide by running something and comparing is a check
  * it would have to take on trust — which is the thing the check exists to replace.
  */
-const CheckInput = z
+export const CheckInput = z
   .object({
     name: z.string().trim().min(3, 'A check needs a name saying what it is checking.'),
     expect: z.enum(

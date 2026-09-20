@@ -52,6 +52,8 @@ show('fail with no findings', { status: 'fail', steps: [], summary });
 show('fail, finding with no evidence', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: '' }] });
 show('fail, vague finding', { status: 'fail', steps: [], summary, findings: [{ what: 'broken', evidence: finding.evidence, where: finding.where }] });
 show('fail, finding with no where', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: finding.evidence }] });
+show('fail, finding with a check', { status: 'fail', steps: [], summary, findings: [{ ...finding, check: { name: 'the start command answers', expect: 'output-contains', run: 'curl -s http://127.0.0.1:4300/calculate', value: '200' } }] });
+show('fail, malformed check', { status: 'fail', steps: [], summary, findings: [{ ...finding, check: { name: 'the start command answers', expect: 'output-contains' } }] });
 show('pass carrying a work finding', { status: 'pass', steps: [], summary, findings: [finding] });
 show('pass mixing work and task', { status: 'pass', steps: [], summary, findings: [finding, { ...finding, about: 'task' }] });
 

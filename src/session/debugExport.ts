@@ -54,6 +54,8 @@ export type DebugTask = {
   deviations?: Task['deviations'];
   /** Review findings the model disputed. */
   disputes?: Task['disputes'];
+  /** Checks reviewers gave with their findings, with their state. */
+  reviewChecks?: Task['reviewChecks'];
   vcsPlan?: Task['vcsPlan'];
   vcs?: Task['vcs'];
   checks?: Task['checks'];
@@ -186,6 +188,7 @@ async function taskOf(task: Task, runsDir: string): Promise<DebugTask> {
     reason: task.reason,
     deviations: task.deviations,
     disputes: task.disputes,
+    reviewChecks: task.reviewChecks,
     vcsPlan: task.vcsPlan,
     vcs: task.vcs,
     checks: task.checks,

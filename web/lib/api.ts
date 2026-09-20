@@ -77,6 +77,18 @@ export type TaskDeviation = { instruction: string; did: string; why: string };
 /** One review finding the model said was wrong: which (by id), why, and what shows it. */
 export type TaskDispute = { finding: string; why: string; evidence: string };
 
+/** A check a reviewer gave with a finding, kept with the task for every later attempt. */
+export type TaskReviewCheck = {
+  check: TaskCheck;
+  findingId: string;
+  what: string;
+  where?: string;
+  round: number;
+  attempt: number;
+  /** suspended: disputed, until the next review rules; dropped: the next review did not raise it again. */
+  state: 'active' | 'suspended' | 'dropped';
+};
+
 /** What an independent review concluded about a task. */
 export type TaskReview = {
   verdict: 'pass' | 'fail' | 'error' | 'skipped';
@@ -132,6 +144,8 @@ export type Task = {
   deviations?: TaskDeviation[];
   /** Review findings the model disputed, with its evidence. */
   disputes?: TaskDispute[];
+  /** Checks reviewers gave with their findings; not cleared by a re-run. */
+  reviewChecks?: TaskReviewCheck[];
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;

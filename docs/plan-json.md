@@ -179,6 +179,12 @@ plan had also dictated — so `tsconfig.tsbuildinfo` went into the history, past
 had the path in front of it and past an audit that looked only for the three folders the plan
 had thought of.
 
+Checks also accumulate from reviews. A reviewer may give, with a finding about the work, the
+check that would have caught it, in exactly this shape; the runner keeps it only if it fails on
+the work as it stands, and from then on runs it with the plan's checks on every attempt of that
+task. So a plan's checks are the floor: what reviews notice is added to them rather than found
+again by chance. The task card lists them under "From reviews".
+
 ```jsonc
 "checks": [
   { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\Projects\app" },
