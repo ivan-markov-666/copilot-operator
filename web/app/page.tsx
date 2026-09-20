@@ -357,9 +357,9 @@ function BatchPanel({
   /*
    * The reviewer's model, separate from the one doing the work.
    *
-   * It starts empty rather than on the default: leaving every session on what it is set to
-   * is the right default for a run panel, and the sentence under the picker says why picking
-   * a different one here is worth the click.
+   * It starts on the default review model when one is set, and empty otherwise: leaving every
+   * session on what it is set to is the right default for a run panel, and the sentence under
+   * the picker says why picking a different one here is worth the click.
    */
   const [reviewModel, setReviewModel] = useState('');
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
@@ -373,6 +373,7 @@ function BatchPanel({
         // Starting on the default is the whole point of having one; leaving every session on
         // its own is still one click away, and the line below says which sessions that changes.
         setModel((current) => current || c.defaultModel);
+        setReviewModel((current) => current || c.defaultReviewModel);
       })
       .catch(() => undefined);
   }, []);

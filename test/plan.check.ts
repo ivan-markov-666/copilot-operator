@@ -53,6 +53,31 @@ for (const lang of ['en', 'bg'] as const) {
   );
 }
 
+/*
+ * The machine's projects go into the brief by path.
+ *
+ * A plan across a front end, a back end and a test suite used to be written with three paths
+ * the chat model asked for and the operator typed from memory. With the folders listed, the
+ * model is told to use them as written and still to ask which of them the work is about.
+ */
+console.log('\n--- the brief lists the projects it was given, and only then ---');
+const known = [
+  { name: '', rootDir: 'C:\\Projects\\rules-tests', repo: true, isDefault: true },
+  { name: 'api', rootDir: 'C:\\Projects\\rules-api', repo: true, isDefault: false },
+  { name: 'scratch', rootDir: 'C:\\Projects\\scratch', repo: false, isDefault: false },
+];
+for (const lang of ['en', 'bg'] as const) {
+  const listed = planBrief({ lang, projects: known });
+  const bare = planBrief({ lang });
+  console.log(
+    `${lang} lists them     :`,
+    listed.includes('C:\\Projects\\rules-tests') && listed.includes('**api**') && listed.includes('C:\\Projects\\scratch') ? 'yes' : 'NO',
+    '| default marked:', /Default project|по подразбиране \(новите/.test(listed) ? 'yes' : 'NO',
+    '| says which is a repo:', /scratch`[^\n]*(not a git|не е git)/.test(listed) ? 'yes' : 'NO',
+    '| bare brief has no such section:', !bare.includes('rules-tests') && !/Projects on this machine|Проектите на тази машина/.test(bare) ? 'yes' : 'NO',
+  );
+}
+
 console.log('\n--- what a chat actually pastes: prose, a fence, then more prose ---');
 const wrapped = `Sure! Here is the plan you asked for:
 

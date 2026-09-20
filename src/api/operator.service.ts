@@ -32,6 +32,20 @@ import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions } from '../plan/brief.js';
+
+/** The folders the operator works in: the default new sessions start on, and the rest by name. */
+export type ProjectDefault = {
+  rootDir: string;
+  repoOk: boolean;
+  repoProblem?: string;
+  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string }>;
+};
+
+/** Windows paths: case and the slash direction do not make two folders. */
+function sameFolder(a: string, b: string): boolean {
+  const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+  return a.trim() !== '' && norm(a) === norm(b);
+}
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { gitAvailable, repoUnusableReason } from '../vcs/git.js';
@@ -330,11 +344,13 @@ export class OperatorService {
     // change what an existing session does.
     const cfg = await this.settings.load();
     const defaultModel = (cfg.copilot.defaultModel ?? '').trim();
+    const defaultReviewModel = (cfg.copilot.defaultReviewModel ?? '').trim();
     const projectDir = (cfg.project?.rootDir ?? '').trim();
-    if (!defaultModel && !projectDir) return session;
+    if (!defaultModel && !defaultReviewModel && !projectDir) return session;
 
     return await this.store.updateSession(session.id, (s) => {
       if (defaultModel) s.model = defaultModel;
+      if (defaultReviewModel) s.review = { enabled: s.review?.enabled !== false, model: defaultReviewModel };
       if (projectDir) {
         // Both fields, because they answer different questions about the same folder: where the
         // files are and where the branches go. Neither is switched on by being filled in.
@@ -994,8 +1010,16 @@ export class OperatorService {
   // --- plans ----------------------------------------------------------------------------
 
   /** The brief the operator hands to a chat model, in the language the interface is in. */
-  planBrief(opts: BriefOptions): string {
-    return planBrief({ lang: opts.lang === 'bg' ? 'bg' : 'en' });
+  async planBrief(opts: BriefOptions): Promise<string> {
+    // The machine's projects go into the brief by absolute path, so a plan across a front
+    // end, a back end and a test suite is written with the folders that exist rather than
+    // with three paths the chat model had to ask for and the operator typed from memory.
+    const project = await this.project();
+    const projects = [
+      ...(project.rootDir ? [{ name: '', rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
+      ...project.others.map((o) => ({ name: o.name, rootDir: o.rootDir, repo: o.repoOk, isDefault: false })),
+    ];
+    return planBrief({ lang: opts.lang === 'bg' ? 'bg' : 'en', projects });
   }
 
   /**
@@ -1081,7 +1105,7 @@ export class OperatorService {
     if (!check.ok) return { ok: false, check };
 
     const cfg = await this.settings.load();
-    const result = await importPlan(this.store, check.plan, (cfg.copilot.defaultModel ?? '').trim());
+    const result = await importPlan(this.store, check.plan, (cfg.copilot.defaultModel ?? '').trim(), (cfg.copilot.defaultReviewModel ?? '').trim());
     return {
       ok: true,
       result: { ...result, warnings: [...check.warnings, ...result.warnings] },
@@ -1474,26 +1498,47 @@ export class OperatorService {
    * The repository check travels with it because the two questions are always asked together:
    * somewhere to work, and whether that somewhere can be branched and committed.
    */
-  async project(): Promise<{ rootDir: string; repoOk: boolean; repoProblem?: string }> {
+  async project(): Promise<ProjectDefault> {
     const cfg = await this.settings.load();
     const rootDir = (cfg.project?.rootDir ?? '').trim();
     const problem = repoUnusableReason(rootDir);
-    return { rootDir, repoOk: rootDir !== '' && problem === null, ...(problem ? { repoProblem: problem } : {}) };
+    const others = (cfg.project?.others ?? []).map((o) => {
+      const p = repoUnusableReason(o.rootDir);
+      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}) };
+    });
+    return { rootDir, repoOk: rootDir !== '' && problem === null, ...(problem ? { repoProblem: problem } : {}), others };
   }
 
   /**
-   * Stores the project folder. An empty value clears it, which is a real choice: it means new
-   * sessions go back to starting with nothing chosen.
+   * Stores the project folder and the other folders the operator works in. A field left out
+   * of the patch is kept; an empty `rootDir` clears the default, which is a real choice: it
+   * means new sessions go back to starting with nothing chosen.
    *
    * A folder that is not a git repository is allowed here, because this setting is about where
    * the work is, not about version control. What it cannot do is silently promise version
-   * control, so the answer says whether it can carry it.
+   * control, so the answer says, for each folder, whether it can carry it. What is refused is a
+   * folder that is not there, a name used twice, and the default listed again among the others
+   * — each of those would be a setting that looks filled in and points nowhere.
    */
-  async setProject(rootDir: string): Promise<{ rootDir: string; repoOk: boolean; repoProblem?: string }> {
-    const value = (rootDir ?? '').trim();
-    if (value && !existsSync(value)) throw new Error(`The folder ${value} does not exist on this machine.`);
+  async setProject(patch: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }): Promise<ProjectDefault> {
     const raw = await this.settings.raw();
-    await this.settings.save({ ...raw, project: { ...((raw.project as object) ?? {}), rootDir: value } });
+    const current = ((raw.project as Record<string, unknown>) ?? {}) as { rootDir?: string; others?: Array<{ name: string; rootDir: string }> };
+    const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
+    if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
+
+    const others = (patch.others ?? current.others ?? []).map((o) => ({ name: (o.name ?? '').trim(), rootDir: (o.rootDir ?? '').trim() }));
+    const seen = new Set<string>();
+    for (const o of others) {
+      if (!o.name) throw new Error(`Every other project needs a name; the one at ${o.rootDir || '(no folder)'} has none.`);
+      if (!o.rootDir) throw new Error(`The project "${o.name}" needs a folder.`);
+      if (!existsSync(o.rootDir)) throw new Error(`The folder ${o.rootDir} for "${o.name}" does not exist on this machine.`);
+      if (sameFolder(o.rootDir, rootDir)) throw new Error(`${o.rootDir} is already the default project; it does not need listing again.`);
+      const key = o.name.toLowerCase();
+      if (seen.has(key)) throw new Error(`Two projects are named "${o.name}". Names are how the folders are told apart, so each needs its own.`);
+      seen.add(key);
+    }
+
+    await this.settings.save({ ...raw, project: { ...current, rootDir, others } });
     return await this.project();
   }
 
@@ -1505,12 +1550,34 @@ export class OperatorService {
    * The two travel together because the UI shows them in one place: a list to choose from,
    * and which of them is the standing choice.
    */
-  async models(): Promise<(ModelCatalogue & { defaultModel: string }) | { defaultModel: string; options: []; readAt: null }> {
+  async models(): Promise<
+    (ModelCatalogue & { defaultModel: string; defaultReviewModel: string }) | { defaultModel: string; defaultReviewModel: string; options: []; readAt: null }
+  > {
     await this.init();
     const cfg = await this.settings.load();
     const cached = await this.store.getModels();
     const defaultModel = cfg.copilot.defaultModel ?? '';
-    return cached ? { ...cached, defaultModel } : { defaultModel, options: [], readAt: null };
+    const defaultReviewModel = cfg.copilot.defaultReviewModel ?? '';
+    return cached ? { ...cached, defaultModel, defaultReviewModel } : { defaultModel, defaultReviewModel, options: [], readAt: null };
+  }
+
+  /**
+   * Sets the model a new session's independent review starts on. An empty name clears it,
+   * which means the review runs on the session's own model — the weaker choice, and the one
+   * every session had before this existed.
+   */
+  async setDefaultReviewModel(name: string): Promise<{ defaultReviewModel: string }> {
+    await this.init();
+    const raw = await this.settings.raw();
+    const copilot = { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultReviewModel: name.trim() };
+    await this.settings.save({ ...raw, copilot });
+    this.bus.publish({
+      sessionId: '*',
+      type: 'default-review-model-changed',
+      level: 'info',
+      message: name.trim() ? `new sessions will be reviewed by ${name.trim()}` : 'new sessions will be reviewed by their own model',
+    });
+    return { defaultReviewModel: name.trim() };
   }
 
   /**

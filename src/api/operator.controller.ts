@@ -346,8 +346,8 @@ export class OperatorController {
    * conversation and the answers belong to a session rather than to the whole document.
    */
   @Get('plan/brief')
-  planBrief(@Query('lang') lang?: string): { text: string } {
-    return { text: this.ops.planBrief({ lang: lang ?? 'en' }) };
+  async planBrief(@Query('lang') lang?: string): Promise<{ text: string }> {
+    return { text: await this.ops.planBrief({ lang: lang ?? 'en' }) };
   }
 
   /** Checks a pasted plan without importing anything, and says what it would duplicate. */
@@ -427,10 +427,10 @@ export class OperatorController {
     return this.ops.project();
   }
 
-  /** Stores it. An empty path clears it. */
+  /** Stores it. A field left out is kept; an empty `rootDir` clears the default. */
   @Put('project')
-  setProject(@Body() body: { rootDir?: string }): Promise<unknown> {
-    return this.ops.setProject(body?.rootDir ?? '').catch(fail);
+  setProject(@Body() body: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }): Promise<unknown> {
+    return this.ops.setProject({ rootDir: body?.rootDir, others: body?.others }).catch(fail);
   }
 
   /**
@@ -472,6 +472,12 @@ export class OperatorController {
   @Put('models/default')
   setDefaultModel(@Body() body: { model?: string }): Promise<unknown> {
     return this.ops.setDefaultModel(body?.model ?? '').catch(fail);
+  }
+
+  /** The model a new session's independent review runs on. An empty name means "the session's own". */
+  @Put('models/review-default')
+  setDefaultReviewModel(@Body() body: { model?: string }): Promise<unknown> {
+    return this.ops.setDefaultReviewModel(body?.model ?? '').catch(fail);
   }
 
   // --- the registry of every task -----------------------------------------------------------

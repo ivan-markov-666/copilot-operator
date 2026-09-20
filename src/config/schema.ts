@@ -86,6 +86,14 @@ export const RunConfigSchema = z.object({
        * could be chosen at all.
        */
       defaultModel: z.string().default(''),
+      /**
+       * The model a new session's independent review starts on. Empty means the session's own
+       * model reviews its own work, which is the weaker choice: a fresh conversation removes
+       * attachment to the work, not the model's blind spots. Kept apart from `defaultModel`
+       * because the two are chosen for opposite reasons — one for the work, one for being
+       * different from whatever did the work.
+       */
+      defaultReviewModel: z.string().default(''),
       replyTimeoutSec: z.number().int().positive().default(900),
       signInTimeoutSec: z.number().int().positive().default(900),
       humanWaitSec: z.number().int().positive().default(900),
@@ -159,6 +167,22 @@ export const RunConfigSchema = z.object({
     .object({
       /** Absolute path to the project folder. Empty means no default has been chosen. */
       rootDir: z.string().default(''),
+      /**
+       * The other folders this operator works in, each with a short name: a front end, a back
+       * end, the test suite. They are not defaults — a new session still starts on `rootDir` —
+       * and they are not sessions. They exist for two readers: every folder field in the app
+       * offers them with a button, and the plan brief lists them by absolute path, so a chat
+       * model writing a plan across three repositories is told where they are instead of asking
+       * for each one and being given a path from memory.
+       */
+      others: z
+        .array(
+          z.object({
+            name: z.string().trim().min(1),
+            rootDir: z.string().trim().min(1),
+          }),
+        )
+        .default([]),
     })
     .prefault({}),
 

@@ -10,7 +10,7 @@ import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
 import { useNow } from '../../../lib/useNow';
 import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
-import { ModelHint, ProjectHint } from '../../defaultHints';
+import { ModelHint, ProjectHint, ReviewModelHint } from '../../defaultHints';
 import { RichText } from '../../richText';
 import { useTaskActions } from '../../taskActions';
 
@@ -590,7 +590,7 @@ function ReviewPanel({ session, onChange }: { session: Session; onChange: () => 
         disabled={session.running || !enabled}
       />
       <p className="why">{t('review.modelWhy')}</p>
-      <ModelHint current={model} onUse={(name) => setModel(name)} />
+      <ReviewModelHint current={model} onUse={(name) => setModel(name)} />
 
       <div className="row" style={{ marginTop: 10 }}>
         <button className="primary" onClick={() => void save()} disabled={busy || session.running}>

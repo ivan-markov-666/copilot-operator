@@ -22,7 +22,56 @@ import { PLAN_VERSION } from './schema.js';
 
 export type BriefOptions = {
   lang?: string;
+  /**
+   * The folders this machine's operator works in, listed in the brief by absolute path. The
+   * chat model still asks which of them the work is about; what it no longer does is ask for
+   * a path and get one typed from memory. Empty means the section is left out.
+   */
+  projects?: KnownProject[];
 };
+
+export type KnownProject = {
+  /** Empty for the default project, which is named by its role rather than by a label. */
+  name: string;
+  rootDir: string;
+  /** Whether the folder is a git repository, so the model can write `vcs` without guessing. */
+  repo: boolean;
+  isDefault: boolean;
+};
+
+function projectsSectionEn(projects: KnownProject[]): string {
+  if (projects.length === 0) return '';
+  const lines = projects.map((p) => {
+    const label = p.isDefault ? 'Default project (new sessions start here)' : p.name;
+    return `- **${label}**: \`${p.rootDir}\` — ${p.repo ? 'a git repository, so `vcs.repoDir` may point at it' : 'not a git repository: `vcs` must be off for work here'}`;
+  });
+  return `
+## Projects on this machine
+
+The operator has told the system where they work. Use these paths exactly as written; do not
+ask for them again, and do not invent others. Still ask which of them this work is about — a
+plan may touch one, several or all of them — and put each session in the folder its work is in.
+
+${lines.join('\n')}
+`;
+}
+
+function projectsSectionBg(projects: KnownProject[]): string {
+  if (projects.length === 0) return '';
+  const lines = projects.map((p) => {
+    const label = p.isDefault ? 'Проект по подразбиране (новите сесии тръгват тук)' : p.name;
+    return `- **${label}**: \`${p.rootDir}\` — ${p.repo ? 'git хранилище, така че `vcs.repoDir` може да сочи към него' : 'не е git хранилище: `vcs` трябва да е изключен за работа тук'}`;
+  });
+  return `
+## Проектите на тази машина
+
+Потребителят е казал на системата къде работи. Ползвай тези пътища точно както са написани;
+не ги питай пак и не измисляй други. Все пак питай за кои от тях е тази работа — един план
+може да засяга един, няколко или всички — и сложи всяка сесия в папката, в която е нейната работа.
+
+${lines.join('\n')}
+`;
+}
 
 /**
  * A filled-in plan, used as the example in every language.
@@ -435,7 +484,7 @@ function rowsBg(): string[][] {
   return [...FIELD_ROWS_BG.slice(0, -2), ...VCS_ROWS_BG.slice(0, 1), ...FIELD_ROWS_BG.slice(-2), ...VCS_ROWS_BG.slice(1)];
 }
 
-function buildEn(): string {
+function buildEn(projects: KnownProject[]): string {
   const rows = rowsEn();
 
   return `
@@ -453,7 +502,7 @@ Windows machine. Here is what it actually does, because it changes what a good t
   browser login will hang the task.
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
-
+${projectsSectionEn(projects)}
 ## Your job, in order
 
 1. **Interview the user first.** Do not write any JSON until you can answer all of these:
@@ -526,7 +575,7 @@ ${JSON.stringify(planExample(), null, 2)}
 `.trim();
 }
 
-function buildBg(): string {
+function buildBg(projects: KnownProject[]): string {
   const rows = rowsBg();
 
   return `
@@ -545,7 +594,7 @@ function buildBg(): string {
   браузър, ще увисне.
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
-
+${projectsSectionBg(projects)}
 ## Какво трябва да направиш, по ред
 
 1. **Първо разпитай потребителя.** Не пиши никакъв JSON, докато не можеш да отговориш на
@@ -632,5 +681,6 @@ ${JSON.stringify(planExample(), null, 2)}
  */
 export function planBrief(opts: BriefOptions | string = {}): string {
   const lang = typeof opts === 'string' ? opts : opts.lang;
-  return lang === 'bg' ? buildBg() : buildEn();
+  const projects = typeof opts === 'string' ? [] : (opts.projects ?? []);
+  return lang === 'bg' ? buildBg(projects) : buildEn(projects);
 }

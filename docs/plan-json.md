@@ -247,12 +247,25 @@ turned out, and the edit form adds, changes and removes them.
 
 ## The project, and the repository it has to be
 
-The folder being worked on is set once, on the `Project` page, and stored in
+The folder being worked on is set once, on the `Settings` page, and stored in
 `data/settings.json` under `project.rootDir`. A new session starts with that folder in both its
 project-files field and its version-control field; sessions that already exist are untouched and
 offer it with a button instead. Every folder field in the app carries a line saying what the
 default is and linking to where it is changed, so nobody has to remember the path or hunt for
 the setting.
+
+The same page keeps the **other projects** the operator works in — `project.others`, each a
+name and an absolute path — because one piece of work is often three repositories: a front end,
+a back end, the test suite. They are not defaults and not sessions. Every folder field offers
+them by name next to the default, and the plan brief lists all of them under "Projects on this
+machine", with whether each is a git repository, so a plan across several repositories is
+written with the folders that exist rather than with paths the chat model asked for and the
+operator typed from memory. The brief still tells the model to ask which of them the work is
+about.
+
+The page also holds the model new sessions are **reviewed** by (`copilot.defaultReviewModel`),
+next to the one they work on. A plan whose session names no `review.model` gets it, the same way
+a session with no `model` gets `copilot.defaultModel`.
 
 Version control is refused where it cannot work. Turning it on for a folder that is not a git
 repository is not allowed — not warned about afterwards, refused at the point of choosing —

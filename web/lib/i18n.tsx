@@ -606,10 +606,23 @@ const dict = {
 
     // plans imported as JSON
     'nav.import': 'Plan from JSON',
-    'nav.defaults': 'Defaults',
+    'nav.defaults': 'Settings',
     'def.title': 'What every new session starts with',
     'def.intro':
-      'Two things are chosen here once instead of in every session: the folder being worked on, and the model that runs it. Sessions keep their own copies, so any of them can be changed afterwards without touching these.',
+      'Three things are chosen here once instead of in every session: the folders being worked on, the model that does the work, and the model that reviews it. Sessions keep their own copies, so any of them can be changed afterwards without touching these.',
+    'def.reviewTitle': 'Model for the review',
+    'def.reviewIntro':
+      "The model a new session's independent review starts on. A different model from the one doing the work is the cheapest way to make the second opinion genuinely second: a fresh conversation removes attachment to the work, not the model's blind spots.",
+    'def.reviewField': 'Review model',
+    'def.reviewNone': "The session's own model",
+    'def.reviewSaved': 'New sessions will be reviewed by {name}.',
+    'def.reviewCleared': 'Cleared. New sessions are reviewed by their own model.',
+    'def.reviewSame': 'This is the same model as the one doing the work. A different one would catch more.',
+    'def.reviewAffectsNew': 'A new session starts with this review model, copied onto it when it is created. A plan that names none for a session gets it too.',
+    'def.reviewAffectsExisting': 'Sessions that already exist keep theirs. Their review panel offers this one with a button.',
+    'def.reviewAffectsBatch': 'A run of several sessions starts with this review model chosen, and says so before it writes it onto them.',
+    'def.reviewDefaultIs': 'Default review model: {name}',
+    'def.reviewNoneShort': 'No default review model is set.',
     'def.modelTitle': 'Model for new sessions',
     'def.modelIntro':
       'The model a session starts on, by the exact name the chat\'s own picker shows. The list is whatever was read from the chat last; it belongs to Microsoft and differs per tenant, so it is never a list written into this project.',
@@ -648,6 +661,18 @@ const dict = {
     'proj.useIt': 'use it here',
     'proj.setIt': 'set one',
     'proj.change': 'change it',
+    'proj.others': 'Other projects',
+    'proj.othersIntro':
+      'The rest of the folders you work in — a front end, a back end, the test suite — each with a short name. New sessions still start on the default above. These are offered with a button wherever a folder is chosen, and the plan brief lists them by path, so a plan across several repositories is written with the folders that exist instead of asking for each one.',
+    'proj.otherName': 'Name',
+    'proj.otherDir': 'Folder',
+    'proj.otherAdd': 'Add',
+    'proj.otherRemove': 'Remove',
+    'proj.othersNone': 'No other projects yet.',
+    'proj.othersSaved': 'Saved: {n} other project(s).',
+    'proj.otherRepo': 'git repository',
+    'proj.otherNotRepo': 'not a git repository',
+    'proj.otherUse': 'use {name}',
     'plan.title': 'A plan written by a chat model',
     'plan.intro':
       'Describe the work to any chat model you like, let it ask you the questions, and paste what it writes back here. This page creates the sessions and the tasks; it starts nothing.',
@@ -1355,10 +1380,23 @@ const dict = {
 
     // планове, внесени като JSON
     'nav.import': 'План от JSON',
-    'nav.defaults': 'По подразбиране',
+    'nav.defaults': 'Настройки',
     'def.title': 'С какво тръгва всяка нова сесия',
     'def.intro':
-      'Тук се избират веднъж две неща, вместо във всяка сесия: папката, по която се работи, и моделът, който я изпълнява. Сесиите си пазят собствени копия, така че всяка от тях може да бъде променена после, без това да пипа зададеното тук.',
+      'Тук се избират веднъж три неща, вместо във всяка сесия: папките, по които се работи, моделът, който върши работата, и моделът, който я проверява. Сесиите си пазят собствени копия, така че всяка от тях може да бъде променена после, без това да пипа зададеното тук.',
+    'def.reviewTitle': 'Модел за рецензията',
+    'def.reviewIntro':
+      'Моделът, с който тръгва независимата рецензия на новата сесия. Модел, различен от този, който върши работата, е най-евтиният начин второто мнение наистина да е второ: новият разговор маха привързаността към работата, но не и слепите петна на модела.',
+    'def.reviewField': 'Модел за рецензията',
+    'def.reviewNone': 'Собственият модел на сесията',
+    'def.reviewSaved': 'Новите сесии ще бъдат проверявани от {name}.',
+    'def.reviewCleared': 'Изчистено. Новите сесии се проверяват от собствения си модел.',
+    'def.reviewSame': 'Това е същият модел, който върши работата. Друг би хванал повече.',
+    'def.reviewAffectsNew': 'Новата сесия тръгва с този модел за рецензията, записан върху нея при създаването ѝ. План, който не назовава такъв за сесия, също го получава.',
+    'def.reviewAffectsExisting': 'Вече съществуващите сесии си пазят своя. Панелът им за рецензия предлага този с бутон.',
+    'def.reviewAffectsBatch': 'Изпълнението на няколко сесии тръгва с този модел за рецензията избран и го казва, преди да го запише върху тях.',
+    'def.reviewDefaultIs': 'Модел за рецензията по подразбиране: {name}',
+    'def.reviewNoneShort': 'Няма зададен модел за рецензията по подразбиране.',
     'def.modelTitle': 'Модел за новите сесии',
     'def.modelIntro':
       'Моделът, с който тръгва една сесия, с точното име от менюто на самия чат. Списъкът е този, който е прочетен от чата последно; той принадлежи на Microsoft и е различен за всеки клиент, затова никога не е списък, записан в този проект.',
@@ -1397,6 +1435,18 @@ const dict = {
     'proj.useIt': 'ползвай го тук',
     'proj.setIt': 'задайте такъв',
     'proj.change': 'смени',
+    'proj.others': 'Други проекти',
+    'proj.othersIntro':
+      'Останалите папки, по които работите — front end, back end, тестовете — всяка с кратко име. Новите сесии пак тръгват от папката по подразбиране горе. Тези се предлагат с бутон навсякъде, където се избира папка, а заданието за план ги изброява с пътищата им, така че план през няколко хранилища се пише с папките, които съществуват, вместо да пита за всяка.',
+    'proj.otherName': 'Име',
+    'proj.otherDir': 'Папка',
+    'proj.otherAdd': 'Добави',
+    'proj.otherRemove': 'Махни',
+    'proj.othersNone': 'Още няма други проекти.',
+    'proj.othersSaved': 'Запазено: {n} други проекта.',
+    'proj.otherRepo': 'git хранилище',
+    'proj.otherNotRepo': 'не е git хранилище',
+    'proj.otherUse': 'ползвай {name}',
     'plan.title': 'План, написан от чат модел',
     'plan.intro':
       'Опишете работата на кой да е чат модел, оставете го да ви зададе въпросите и поставете тук това, което ви е написал. Тази страница създава сесиите и задачите; не стартира нищо.',

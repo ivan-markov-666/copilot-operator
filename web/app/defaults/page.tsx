@@ -1,12 +1,17 @@
 'use client';
 
 /**
- * What every new session starts with: which folder, and which model.
+ * What every new session starts with: which folders, which model does the work, and which
+ * model reviews it.
  *
  * Its own page rather than a row on the system page, because the system page answers "is this
  * machine set up", which is read once, and this answers "what am I working on", which changes
  * whenever the work does. Every folder field and every model picker in the app links here, so
  * this is also where somebody arrives the first time they wonder where a default comes from.
+ *
+ * The folders are one default and a named list. One is what a new session is pointed at; the
+ * list is the rest of the repositories the same person works in — a front end, a back end, a
+ * test suite — which every folder field then offers by name and the plan brief lists by path.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -25,12 +30,13 @@ export default function DefaultsPage() {
       </div>
       <ProjectSection />
       <ModelSection />
+      <ReviewModelSection />
     </>
   );
 }
 
 // ---------------------------------------------------------------------------------------
-// The folder
+// The folders
 // ---------------------------------------------------------------------------------------
 
 function ProjectSection() {
@@ -40,6 +46,10 @@ function ProjectSection() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // The row being added to the named list. Kept apart from the list itself so a half-typed
+  // entry is never saved by a click meant for something else.
+  const [newName, setNewName] = useState('');
+  const [newDir, setNewDir] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -56,32 +66,50 @@ function ProjectSection() {
     void load();
   }, [load]);
 
-  const save = async (value: string) => {
+  const save = async (patch: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }, done: (p: ProjectDefault) => string) => {
     setBusy(true);
     setMsg('');
     try {
-      const p = await api.setProject(value);
+      const p = await api.setProject(patch);
       setProject(p);
       setDir(p.rootDir);
-      setMsg(p.rootDir ? t('proj.saved', { dir: p.rootDir }) : t('proj.cleared'));
+      setMsg(done(p));
       setErr('');
+      return true;
     } catch (e) {
       setErr((e as Error).message);
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
-  const browse = async () => {
+  const saveDefault = (value: string) => save({ rootDir: value }, (p) => (p.rootDir ? t('proj.saved', { dir: p.rootDir }) : t('proj.cleared')));
+
+  const browse = async (into: (path: string) => void, start: string) => {
     setBusy(true);
     try {
-      const picked = await api.browseFolder(dir.trim() || undefined);
-      if (picked.ok) await save(picked.path);
+      const picked = await api.browseFolder(start.trim() || undefined);
+      if (picked.ok) into(picked.path);
       else if (!picked.cancelled) setErr(picked.reason ?? '');
     } finally {
       setBusy(false);
     }
   };
+
+  const others = project?.others ?? [];
+  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir }));
+
+  const addOther = async () => {
+    const ok = await save({ others: [...plain(others), { name: newName.trim(), rootDir: newDir.trim() }] }, (p) => t('proj.othersSaved', { n: p.others.length }));
+    if (ok) {
+      setNewName('');
+      setNewDir('');
+    }
+  };
+
+  const removeOther = (name: string) =>
+    save({ others: plain(others.filter((o) => o.name !== name)) }, (p) => t('proj.othersSaved', { n: p.others.length }));
 
   return (
     <div className="panel" id="project">
@@ -100,13 +128,13 @@ function ProjectSection() {
           placeholder="C:\Projects\my-app"
           disabled={busy}
         />
-        <button onClick={() => void browse()} disabled={busy}>
+        <button onClick={() => void browse((p) => void saveDefault(p), dir)} disabled={busy}>
           {t('mirror.browse')}
         </button>
-        <button className="primary" onClick={() => void save(dir)} disabled={busy || dir.trim() === (project?.rootDir ?? '')}>
+        <button className="primary" onClick={() => void saveDefault(dir)} disabled={busy || dir.trim() === (project?.rootDir ?? '')}>
           {t('proj.save')}
         </button>
-        <button className="quiet" onClick={() => void save('')} disabled={busy || !project?.rootDir}>
+        <button className="quiet" onClick={() => void saveDefault('')} disabled={busy || !project?.rootDir}>
           {t('proj.clear')}
         </button>
       </div>
@@ -131,6 +159,69 @@ function ProjectSection() {
         </div>
       )}
 
+      <h3 id="others">{t('proj.others')}</h3>
+      <p className="muted small">{t('proj.othersIntro')}</p>
+      {others.length === 0 ? (
+        <p className="muted small">{t('proj.othersNone')}</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>{t('proj.otherName')}</th>
+              <th>{t('proj.otherDir')}</th>
+              <th />
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {others.map((o) => (
+              <tr key={o.name}>
+                <td>
+                  <strong>{o.name}</strong>
+                </td>
+                <td className="small">{o.rootDir}</td>
+                <td className="small">
+                  <span className={`badge ${o.repoOk ? 'done' : ''}`} title={o.repoProblem}>
+                    {o.repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
+                  </span>
+                </td>
+                <td>
+                  <button className="quiet" onClick={() => void removeOther(o.name)} disabled={busy}>
+                    {t('proj.otherRemove')}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          type="text"
+          aria-label={t('proj.otherName')}
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder={t('proj.otherName')}
+          disabled={busy}
+          style={{ width: 160 }}
+        />
+        <input
+          type="text"
+          className="grow"
+          aria-label={t('proj.otherDir')}
+          value={newDir}
+          onChange={(e) => setNewDir(e.target.value)}
+          placeholder="C:\Projects\my-app-tests"
+          disabled={busy}
+        />
+        <button onClick={() => void browse((p) => setNewDir(p), newDir)} disabled={busy}>
+          {t('mirror.browse')}
+        </button>
+        <button className="primary" onClick={() => void addOther()} disabled={busy || !newName.trim() || !newDir.trim()}>
+          {t('proj.otherAdd')}
+        </button>
+      </div>
+
       <h3>{t('proj.affects')}</h3>
       <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>
         <li>{t('proj.affectsNew')}</li>
@@ -143,8 +234,57 @@ function ProjectSection() {
 }
 
 // ---------------------------------------------------------------------------------------
-// The model
+// The models: one for the work, one for the second opinion
 // ---------------------------------------------------------------------------------------
+
+/** The picker every model section shares: the catalogue read from the chat, grouped as it came. */
+function ModelPicker({
+  id,
+  chosen,
+  onChange,
+  none,
+  catalogue,
+  disabled,
+}: {
+  id: string;
+  chosen: string;
+  onChange: (name: string) => void;
+  none: string;
+  catalogue: ModelCatalogue | null;
+  disabled: boolean;
+}) {
+  const { t } = useT();
+  const all = catalogue?.options ?? [];
+  const known = all.some((o) => o.name === chosen);
+  const ungrouped = all.filter((o) => !o.group);
+  const grouped = new Map<string, typeof all>();
+  for (const o of all) {
+    if (!o.group) continue;
+    grouped.set(o.group, [...(grouped.get(o.group) ?? []), o]);
+  }
+  return (
+    <select id={id} value={chosen} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ width: 'auto', minWidth: 280 }}>
+      <option value="">{none}</option>
+      {chosen && !known && <option value={chosen}>{t('model.notInList', { name: chosen })}</option>}
+      {ungrouped.map((o) => (
+        <option key={o.name} value={o.name} disabled={o.disabled}>
+          {o.name}
+          {o.disabled ? ` — ${t('model.unavailable')}` : ''}
+        </option>
+      ))}
+      {[...grouped.entries()].map(([group, items]) => (
+        <optgroup key={group} label={group}>
+          {items.map((o) => (
+            <option key={o.name} value={o.name} disabled={o.disabled}>
+              {o.name}
+              {o.disabled ? ` — ${t('model.unavailable')}` : ''}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
 
 function ModelSection() {
   const { t } = useT();
@@ -197,15 +337,6 @@ function ModelSection() {
     }
   };
 
-  const all = catalogue?.options ?? [];
-  const known = all.some((o) => o.name === chosen);
-  const ungrouped = all.filter((o) => !o.group);
-  const grouped = new Map<string, typeof all>();
-  for (const o of all) {
-    if (!o.group) continue;
-    grouped.set(o.group, [...(grouped.get(o.group) ?? []), o]);
-  }
-
   return (
     <div className="panel" id="model">
       <h2>{t('def.modelTitle')}</h2>
@@ -214,32 +345,7 @@ function ModelSection() {
 
       <label htmlFor="default-model">{t('def.modelField')}</label>
       <div className="row">
-        <select
-          id="default-model"
-          value={chosen}
-          onChange={(e) => setChosen(e.target.value)}
-          disabled={busy}
-          style={{ width: 'auto', minWidth: 280 }}
-        >
-          <option value="">{t('def.modelNone')}</option>
-          {chosen && !known && <option value={chosen}>{t('model.notInList', { name: chosen })}</option>}
-          {ungrouped.map((o) => (
-            <option key={o.name} value={o.name} disabled={o.disabled}>
-              {o.name}
-              {o.disabled ? ` — ${t('model.unavailable')}` : ''}
-            </option>
-          ))}
-          {[...grouped.entries()].map(([group, items]) => (
-            <optgroup key={group} label={group}>
-              {items.map((o) => (
-                <option key={o.name} value={o.name} disabled={o.disabled}>
-                  {o.name}
-                  {o.disabled ? ` — ${t('model.unavailable')}` : ''}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+        <ModelPicker id="default-model" chosen={chosen} onChange={setChosen} none={t('def.modelNone')} catalogue={catalogue} disabled={busy} />
         <button className="primary" onClick={() => void save(chosen)} disabled={busy || chosen === (catalogue?.defaultModel ?? '')}>
           {t('proj.save')}
         </button>
@@ -267,6 +373,79 @@ function ModelSection() {
         <li>{t('def.modelAffectsNew')}</li>
         <li>{t('def.modelAffectsExisting')}</li>
         <li>{t('def.modelAffectsBatch')}</li>
+      </ul>
+    </div>
+  );
+}
+
+function ReviewModelSection() {
+  const { t } = useT();
+  const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
+  const [chosen, setChosen] = useState('');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .models()
+      .then((c) => {
+        setCatalogue(c);
+        setChosen(c.defaultReviewModel);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  const save = async (name: string) => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const saved = await api.setDefaultReviewModel(name);
+      setCatalogue((c) => (c ? { ...c, defaultReviewModel: saved.defaultReviewModel } : c));
+      setChosen(saved.defaultReviewModel);
+      setMsg(saved.defaultReviewModel ? t('def.reviewSaved', { name: saved.defaultReviewModel }) : t('def.reviewCleared'));
+      setErr('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const sameAsWork = chosen !== '' && chosen === (catalogue?.defaultModel ?? '');
+
+  return (
+    <div className="panel" id="review">
+      <h2>{t('def.reviewTitle')}</h2>
+      <p className="muted small">{t('def.reviewIntro')}</p>
+      {err && <div className="err">{err}</div>}
+
+      <label htmlFor="default-review-model">{t('def.reviewField')}</label>
+      <div className="row">
+        <ModelPicker id="default-review-model" chosen={chosen} onChange={setChosen} none={t('def.reviewNone')} catalogue={catalogue} disabled={busy} />
+        <button className="primary" onClick={() => void save(chosen)} disabled={busy || chosen === (catalogue?.defaultReviewModel ?? '')}>
+          {t('proj.save')}
+        </button>
+        <button className="quiet" onClick={() => void save('')} disabled={busy || !catalogue?.defaultReviewModel}>
+          {t('proj.clear')}
+        </button>
+      </div>
+      {sameAsWork && (
+        <p className="why" style={{ color: 'var(--warn)' }}>
+          {t('def.reviewSame')}
+        </p>
+      )}
+      {msg && (
+        <div className="muted small" role="status" style={{ marginTop: 6 }}>
+          {msg}
+        </div>
+      )}
+
+      <h3>{t('proj.affects')}</h3>
+      <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>
+        <li>{t('def.reviewAffectsNew')}</li>
+        <li>{t('def.reviewAffectsExisting')}</li>
+        <li>{t('def.reviewAffectsBatch')}</li>
       </ul>
 
       <div className="row" style={{ marginTop: 12 }}>

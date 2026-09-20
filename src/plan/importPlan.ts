@@ -80,7 +80,7 @@ export function plannedSessionSignature(session: PlanSession): string {
  * `defaultModel` is what a session starts on when the plan does not name one, which keeps an
  * imported session behaving like one made by hand in the UI.
  */
-export async function importPlan(store: SessionStore, plan: Plan, defaultModel = ''): Promise<ImportResult> {
+export async function importPlan(store: SessionStore, plan: Plan, defaultModel = '', defaultReviewModel = ''): Promise<ImportResult> {
   const sessions: ImportedSession[] = [];
   const warnings: string[] = [];
 
@@ -115,7 +115,9 @@ export async function importPlan(store: SessionStore, plan: Plan, defaultModel =
     await store.updateSession(created.id, (s: Session) => {
       s.onFailure = planned.onFailure;
       // Absent means reviewed, which is the default everywhere else too.
-      s.review = { enabled: planned.review?.enabled !== false, model: (planned.review?.model ?? '').trim() };
+      // The reviewing model follows the same rule as the working one: the plan's word, else
+      // the standing default, else the session's own.
+      s.review = { enabled: planned.review?.enabled !== false, model: (planned.review?.model || defaultReviewModel).trim() };
       s.conversationGroup = group || undefined;
       s.model = (planned.model || defaultModel).trim() || undefined;
       s.vcs = vcs;

@@ -388,6 +388,8 @@ export type ModelCatalogue = {
   note?: string;
   /** The model a newly created session starts on. Empty means the chat is left alone. */
   defaultModel: string;
+  /** The model a new session's independent review runs on. Empty means the session's own. */
+  defaultReviewModel: string;
 };
 
 export type Session = {
@@ -473,8 +475,11 @@ export type BatchState = {
   sessions: BatchSession[];
 };
 
-/** The project folder new sessions start pointed at, and whether it can carry version control. */
-export type ProjectDefault = { rootDir: string; repoOk: boolean; repoProblem?: string };
+/** One of the other folders the operator works in, by name, with whether it can carry version control. */
+export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string };
+
+/** The project folder new sessions start pointed at, whether it can carry version control, and the other folders by name. */
+export type ProjectDefault = { rootDir: string; repoOk: boolean; repoProblem?: string; others: OtherProject[] };
 
 export type Preset = { name: string; content: string; updatedAt: string };
 
@@ -646,11 +651,15 @@ export const api = {
   /** The folder new sessions start pointed at. */
   project: () => call<ProjectDefault>('/project'),
   /** Stores it; an empty path clears it. */
-  setProject: (rootDir: string) => call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify({ rootDir }) }),
+  /** A field left out is kept; an empty `rootDir` clears the default. */
+  setProject: (patch: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }) =>
+    call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
 
   models: () => call<ModelCatalogue>('/models'),
   /** Stores the model new sessions start on. An empty name clears it. */
   setDefaultModel: (model: string) => call<{ defaultModel: string }>('/models/default', { method: 'PUT', body: JSON.stringify({ model }) }),
+  setDefaultReviewModel: (model: string) =>
+    call<{ defaultReviewModel: string }>('/models/review-default', { method: 'PUT', body: JSON.stringify({ model }) }),
   /** Opens the browser and re-reads the picker. Slow, and refused while a session runs. */
   refreshModels: () => call<ModelCatalogue>('/models/refresh', { method: 'POST', body: '{}' }),
 };
