@@ -457,9 +457,37 @@ export function checkPlan(text: string): PlanCheck {
   return {
     ok: true,
     plan: parsed.data,
-    warnings: [...warnings, ...duplicateNameWarnings(parsed.data)],
+    warnings: [...warnings, ...duplicateNameWarnings(parsed.data), ...indexCheckWarnings(parsed.data)],
     summary: summarise(parsed.data),
   };
+}
+
+/**
+ * A check that asks the git index whether a file the task creates is there can never pass.
+ *
+ * The runner commits after the task, so during the task a new file is untracked and
+ * `git ls-files` does not list it — and the task is forbidden to `git add`. A plan wrote
+ * exactly that check ("the seed rule set is tracked") and the task ended blocked after three
+ * honest attempts, with the work complete and the file on disk. `file-exists` is the check
+ * that was meant; the negative form (`output-omits` on `ls-files`, "node_modules is not
+ * tracked") is fine and stays silent.
+ */
+function indexCheckWarnings(plan: Plan): string[] {
+  const out: string[] = [];
+  plan.sessions.forEach((s, i) => {
+    s.tasks.forEach((t, j) => {
+      t.checks.forEach((c, k) => {
+        if (c.expect !== 'output-contains' && c.expect !== 'output-matches') return;
+        if (!/\bgit\b[^|;&]*\bls-files\b/i.test(c.run ?? '')) return;
+        out.push(
+          `sessions[${i}].tasks[${j}].checks[${k}]: "${c.name}" asks git ls-files to list a file. A file the task creates is ` +
+            'untracked until the runner commits after the task, and the task may not git add, so this check cannot pass. ' +
+            'Use "file-exists" for a file the task writes; the index is right only for what earlier tasks committed.',
+        );
+      });
+    });
+  });
+  return out;
 }
 
 /** The issues as a block the user can hand back to the chat model without editing it. */

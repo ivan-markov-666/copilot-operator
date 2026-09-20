@@ -124,7 +124,25 @@ export default function SessionsPage() {
     await load();
   };
 
-  const stateLabel = (s: Session) => (s.running ? t('state.running') : t(`state.${s.status}` as 'state.idle'));
+  /*
+   * What a session's row says about it.
+   *
+   * `idle` is the store's word and it is true of a session that has never run and of one whose
+   * nine tasks all ended done; the list showed both as "idle", and after a run the eye had to go
+   * to the task counts to tell them apart. So the label is derived: a session with tasks, none
+   * of them queued or running, is "completed" when every task ended done and "ended, with
+   * failures" otherwise. The store is not told; the next queued task makes it idle again.
+   */
+  const settled = (s: Session): { label: string; badge: string; title?: string } => {
+    if (s.running) return { label: t('state.running'), badge: 'running' };
+    const open = s.tasks.some((x) => x.status === 'queued' || x.status === 'running');
+    if (s.status !== 'idle' || open || s.tasks.length === 0) return { label: t(`state.${s.status}` as 'state.idle'), badge: '' };
+    const notDone = s.tasks.filter((x) => x.status !== 'done').length;
+    return notDone === 0
+      ? { label: t('state.completed'), badge: 'done', title: t('state.completedTitle') }
+      : { label: t('state.ended'), badge: 'failed', title: t('state.endedTitle', { n: notDone }) };
+  };
+  const stateLabel = (s: Session) => settled(s).label;
   const queuedIn = (s: Session) => s.tasks.filter((x) => x.status === 'queued').length;
 
   /**
@@ -284,7 +302,7 @@ export default function SessionsPage() {
                       {s.tasks.length} <span className="muted small">{t('home.tasksDetail', { done, queued })}</span>
                     </td>
                     <td>
-                      <span className={`badge ${s.running ? 'running' : ''}`}>{stateLabel(s)}</span>
+                      <span className={`badge ${settled(s).badge}`} title={settled(s).title}>{stateLabel(s)}</span>
                     </td>
                     <td>
                       {s.chat ? (

@@ -55,7 +55,7 @@
           "expected": "All routes above answer as specified; the seed set evaluates the three example payloads as described; `npm test` passes; data/audit.jsonl exists after an evaluation and `git status` does not list it.",
           "vcs": { "commitMessage": "Store rule sets as JSON files and expose them over HTTP\n\nCRUD on rule sets, evaluation with an audit line per call, a seed loan-approval set, and route tests against a temporary data folder." },
           "checks": [
-            { "name": "the seed rule set is tracked", "expect": "output-contains", "run": "git --no-pager -C C:\\Projects\\rules-api ls-files data", "cwd": "C:\\Projects\\rules-api", "value": "data/rulesets/loan-approval.json" },
+            { "name": "the seed rule set exists", "expect": "file-exists", "file": "C:\\Projects\\rules-api\\data\\rulesets\\loan-approval.json" },
             { "name": "the seed has the underage rule", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\data\\rulesets\\loan-approval.json", "value": "underage" },
             { "name": "the audit log is ignored", "expect": "output-omits", "run": "git --no-pager -C C:\\Projects\\rules-api ls-files", "cwd": "C:\\Projects\\rules-api", "value": "audit.jsonl" },
             { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-api" },

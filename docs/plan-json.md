@@ -223,6 +223,13 @@ A check command goes through the same deny list as a step, and a check that cann
 evaluated — no command where one is needed, a refused command, an unreadable file — **fails**.
 A gate that opens when it breaks is worse than no gate.
 
+One check can never pass and the validator warns about it: `output-contains` over `git
+ls-files` for a file the task itself writes. The runner commits *after* the task, so during the
+task the new file is untracked, and the task may not `git add`. A plan wrote exactly that
+("the seed rule set is tracked") and the task ended blocked after three honest attempts with
+the work complete. `file-exists` is the check that was meant; the negative form, `output-omits`
+on `ls-files` for `node_modules`, is fine.
+
 Checks are editable in the UI like everything else: the task card lists them with how they last
 turned out, and the edit form adds, changes and removes them.
 

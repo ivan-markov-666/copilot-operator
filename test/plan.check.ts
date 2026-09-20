@@ -96,6 +96,26 @@ console.log('readOnly accepted :', flaggedCheck.ok && flaggedCheck.plan.sessions
 console.log('warnings          :', flaggedWarnings.length, '(expect 1) —', flaggedWarnings.join(' | '));
 console.log('about owner only  :', flaggedWarnings.length === 1 && flaggedWarnings[0]!.includes('owner') && !flaggedWarnings.some((w) => w.includes('readOnly')) ? 'yes' : 'NO');
 
+/*
+ * A check against the git index for a file the task writes cannot pass before the commit.
+ *
+ * The rules-engine plan asked `git ls-files` to list the seed the task had just created; the
+ * task ended blocked with the file on disk and the work complete. The validator now says so at
+ * import; the negative form for node_modules stays silent.
+ */
+console.log('\n--- a check that asks the index about a new file is warned about ---');
+const indexed = JSON.parse(JSON.stringify(planExample())) as { sessions: Array<{ tasks: Array<{ checks?: unknown[] }> }> };
+indexed.sessions[0]!.tasks[0]!.checks = [
+  { name: 'the seed is tracked', expect: 'output-contains', run: 'git --no-pager -C C:\\x ls-files data', value: 'data/seed.json' },
+  { name: 'dependencies are not tracked', expect: 'output-omits', run: 'git --no-pager -C C:\\x ls-files', value: 'node_modules' },
+  { name: 'the seed exists', expect: 'file-exists', file: 'C:\\x\\data\\seed.json' },
+];
+const indexedCheck = checkPlan(JSON.stringify(indexed));
+const indexWarnings = indexedCheck.ok ? indexedCheck.warnings.filter((w) => w.includes('ls-files')) : [];
+console.log('valid             :', indexedCheck.ok);
+console.log('warned once       :', indexWarnings.length === 1 && indexWarnings[0]!.includes('the seed is tracked') ? 'yes' : `NO (${indexWarnings.length})`);
+console.log('names the fix     :', indexWarnings[0]?.includes('file-exists') ? 'yes' : 'NO');
+
 console.log('\n--- what a chat actually pastes: prose, a fence, then more prose ---');
 const wrapped = `Sure! Here is the plan you asked for:
 
