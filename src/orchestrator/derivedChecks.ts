@@ -82,7 +82,7 @@ export function settleAfterReview(
   const dropped: string[] = [];
   const checks = reviewChecks.map((rc) => {
     if (rc.state !== 'suspended') return rc;
-    const raisedAgain = verdict === 'fail' && newFindings.some((f) => isRepeat([{ what: rc.what, evidence: '', where: rc.where ?? '', about: 'work' as const }], f));
+    const raisedAgain = verdict === 'fail' && newFindings.some((f) => isRepeat([{ what: rc.what, evidence: '', basis: '', where: rc.where ?? '', about: 'work' as const }], f));
     if (raisedAgain) {
       reactivated.push(rc.findingId);
       return { ...rc, state: 'active' as const };

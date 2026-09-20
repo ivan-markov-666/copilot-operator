@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import { describeFindings, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
+import { describeFindings, findingId, isGrounded, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { describeStep, matchDenyPattern } from '../exec/policy.js';
@@ -71,6 +71,11 @@ export type ReviewDeps = {
   /** The repository, for checks that look at it. */
   repoDir?: string;
   /**
+   * Earlier tasks of the same session, when they build on each other. What they defined is
+   * what this task rests on: a smoke test's labels were named by the page task before it.
+   */
+  earlier?: Array<{ title: string; prompt: string }>;
+  /**
    * Checks from earlier reviews that still fail after the implementer's rounds ran out. The
    * reviewer decides whether the defect is real; a counter does not.
    */
@@ -106,6 +111,7 @@ export function reviewBrief(
   previous?: PreviousRound,
   disputes: Dispute[] = [],
   derivedFailing: Array<{ name: string; detail: string }> = [],
+  earlier: Array<{ title: string; prompt: string }> = [],
 ): string {
   const repo = session.vcs?.enabled ? session.vcs.repoDir?.trim() : '';
   const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
@@ -118,6 +124,18 @@ export function reviewBrief(
     '## The project instructions that applied',
     '',
     task.level2.trim() || '(none)',
+    ...(earlier.length > 0
+      ? [
+          '',
+          '## Earlier tasks of this session, for context',
+          '',
+          'This task builds on the ones below, in the same working tree. They were reviewed already and',
+          'are not yours to judge again; they are here because what they defined is what this task rests',
+          'on — a label, a port, a route named there is the expectation here. A finding may quote them.',
+          '',
+          ...earlier.map((e) => `### Earlier task: ${e.title}\n\n${e.prompt.trim()}`),
+        ]
+      : []),
     '',
     '## Where to look',
     '',
@@ -229,6 +247,10 @@ export async function runReview(
   let formatRetries = 0;
   /** A check that passes on the defective state is sent back once; after that it is dropped. */
   let derivedRetried = false;
+  /** A finding whose basis is not in the task is sent back once; after that it is dropped. */
+  let groundingRetried = false;
+  /** What a finding may quote: this task, its instructions, and the earlier tasks it was shown. */
+  const groundingSources = [task.prompt, task.level2, ...(deps.earlier ?? []).map((e) => e.prompt)];
 
   const saveReply = async (label: string, markdown: string): Promise<void> => {
     await writeFile(join(dir, `${label}.md`), markdown, 'utf8').catch(() => undefined);
@@ -244,7 +266,7 @@ export async function runReview(
     await pacer.throttleSend();
     // The brief is saved as sent. Until it was, whether a later round had been told what the
     // earlier one found could not be checked from the run folder at all.
-    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing);
+    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier);
     await saveReply('00-brief', brief);
     await deps.record(`REVIEW ${round} BRIEF`, brief);
     before = await transport.sendAndConfirm(brief);
@@ -314,7 +336,40 @@ export async function runReview(
          * and is sent back once with the result, then dropped. What survives is kept with the
          * task for every attempt after this one.
          */
-        const named = review.findings.map((f, i) => ({ ...f, id: findingId(round, i) }));
+        /*
+         * A finding has to rest on a sentence somebody wrote.
+         *
+         * Two reviewers in a row failed a page for label text no task had specified. The basis
+         * is checked against what the reviewer was given: not there, and the finding is sent
+         * back once for the quote; still not there, and it is dropped as an invented
+         * requirement. A review left with nothing grounded has not reviewed anything.
+         */
+        const ungrounded = review.findings.filter((f) => !isGrounded(f.basis, groundingSources));
+        if (ungrounded.length > 0 && !groundingRetried) {
+          groundingRetried = true;
+          deps.event('review-finding-ungrounded', { round, count: ungrounded.length },
+            `${ungrounded.length} finding(s) rest on a sentence that is not in the task; sent back once for the quote`, 'warn');
+          await pacer.throttleSend();
+          const b = await transport.sendAndConfirm(ungroundedMessage(ungrounded));
+          markdown = (await transport.waitForReply(b)).markdown;
+          continue;
+        }
+        const grounded = review.findings.filter((f) => isGrounded(f.basis, groundingSources));
+        for (const f of ungrounded) {
+          deps.event('review-finding-dropped', { round, what: f.what.slice(0, 120) },
+            `dropped as an invented requirement — its basis is not in the task: ${f.what.slice(0, 120)}`, 'warn');
+        }
+        if (verdict === 'fail' && grounded.length === 0) {
+          return {
+            verdict: 'error',
+            findings: [],
+            stepsRun,
+            iterations,
+            problem: `every finding of round ${round} rested on something the task never asked for, twice; the review is inconclusive`,
+          };
+        }
+
+        const named = grounded.map((f, i) => ({ ...f, id: findingId(round, i) }));
         const validation = await validateDerivedChecks(named, {
           cwd: deps.cwd,
           logDir: dir,
@@ -433,6 +488,21 @@ export async function runReview(
   } catch (e) {
     return { verdict: 'error', findings: [], stepsRun, iterations, problem: (e as Error).message };
   }
+}
+
+/** Sent once when a finding's basis is not a quote from what the reviewer was given. */
+export function ungroundedMessage(findings: ReviewFinding[]): string {
+  return [
+    `${findings.length === 1 ? 'One of your findings rests' : `${findings.length} of your findings rest`} on a sentence that is not in the task, its project`,
+    'instructions, or the earlier tasks you were shown:',
+    '',
+    findings.map((f) => `- "${f.basis}" — for: ${f.what}`).join('\n'),
+    '',
+    'A finding must quote the sentence that asks for the thing it says is missing. Quote it exactly, from the',
+    'text you were given; if there is no such sentence, the task never asked for it and it is not a finding.',
+    'Reply with the same verdict and findings, corrected. This is asked once; a finding still without a basis',
+    'in the task is dropped.',
+  ].join('\n');
 }
 
 /** Sent once when a finding's check passes on the work it is supposed to fail on. */

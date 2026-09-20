@@ -51,6 +51,18 @@ const Finding = z.object({
     message: 'A finding needs "where": the file and the place in it, or the URL, that the finding is about.',
   }),
   /**
+   * The sentence of the task this finding rests on, quoted.
+   *
+   * A reviewer once searched a page for label text no task had specified and failed the work
+   * for its absence; the next reviewer did the same. Every finding now has to say which
+   * sentence asked for the thing it says is missing, and the runner checks that the sentence
+   * is really there — in this task, its project instructions, or an earlier task of the same
+   * session. A finding that cannot quote its basis is an invented requirement, and is refused.
+   */
+  basis: z.string().trim().min(12, {
+    message: 'A finding needs "basis": the sentence of the task (or its project instructions) it rests on, quoted, at least 12 characters.',
+  }),
+  /**
    * The mechanical test that would have caught this, in the plan's own check shape.
    *
    * A review is judgement, and judgement varies: the same missing `@HttpCode(200)` was found
@@ -140,6 +152,29 @@ export function describeFindings(findings: ReviewFinding[], isRepeated?: (f: Rev
       return `${i + 1}. ${id ? `[${id}] ` : ''}${f.what}${where}${about}${again}\n   Evidence: ${f.evidence}`;
     })
     .join('\n\n');
+}
+
+/** Text as it is compared for grounding: one case, one space, no markdown dressing. */
+function groundingKey(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[`*_"'“”‘’]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Whether a finding's basis is really a quote from what the reviewer was given.
+ *
+ * Substring after normalisation, so a quote that drops a backtick or a line break still
+ * grounds; a paraphrase does not, and neither does a sentence from nowhere. Sources are the
+ * task, its project instructions and, in a per-session run, the earlier tasks the reviewer
+ * was shown — "labelled A and B" is in the page task, not in the smoke test that checks it.
+ */
+export function isGrounded(basis: string, sources: string[]): boolean {
+  const key = groundingKey(basis);
+  if (key.length < 12) return false;
+  return sources.some((s) => groundingKey(s).includes(key));
 }
 
 /**

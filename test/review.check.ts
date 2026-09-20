@@ -14,8 +14,9 @@
  *   npm run check:review
  */
 import { parseReview } from '../src/protocol/parser.js';
-import { allAboutTheTask, describeFindings, findingId, isRepeat, ReviewSchema } from '../src/protocol/reviewSchema.js';
-import { reviewBrief, findingsMessage } from '../src/orchestrator/review.js';
+import { allAboutTheTask, describeFindings, findingId, isGrounded, isRepeat, ReviewSchema } from '../src/protocol/reviewSchema.js';
+import { reviewBrief, findingsMessage, ungroundedMessage } from '../src/orchestrator/review.js';
+import { earlierTasksForReview } from '../src/orchestrator/taskRunner.js';
 import { RunConfigSchema } from '../src/config/schema.js';
 
 const opts = { defaultShell: 'pwsh' as const };
@@ -26,6 +27,7 @@ const summary =
 const finding = {
   what: 'The README tells the reader to start the API with a command that returns HTTP 500 for every request.',
   evidence: 'npx tsx src/main.ts, then POST /calculate returned {"statusCode":500}; the log shows the service was never injected.',
+  basis: 'run the commands it tells a reader to run, exactly as written, and show that they work',
   where: 'README.md, the Run section',
 };
 
@@ -51,7 +53,8 @@ show('pass with "looks fine"', { status: 'pass', steps: [], summary: 'Looks corr
 show('fail with no findings', { status: 'fail', steps: [], summary });
 show('fail, finding with no evidence', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: '' }] });
 show('fail, vague finding', { status: 'fail', steps: [], summary, findings: [{ what: 'broken', evidence: finding.evidence, where: finding.where }] });
-show('fail, finding with no where', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: finding.evidence }] });
+show('fail, finding with no where', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: finding.evidence, basis: finding.basis }] });
+show('fail, finding with no basis', { status: 'fail', steps: [], summary, findings: [{ what: finding.what, evidence: finding.evidence, where: finding.where }] });
 show('fail, finding with a check', { status: 'fail', steps: [], summary, findings: [{ ...finding, check: { name: 'the start command answers', expect: 'output-contains', run: 'curl -s http://127.0.0.1:4300/calculate', value: '200' } }] });
 show('fail, malformed check', { status: 'fail', steps: [], summary, findings: [{ ...finding, check: { name: 'the start command answers', expect: 'output-contains' } }] });
 show('pass carrying a work finding', { status: 'pass', steps: [], summary, findings: [finding] });
@@ -69,7 +72,7 @@ show('pass with a task finding', {
   status: 'pass',
   steps: [],
   summary,
-  findings: [{ what: 'The task says three ways to answer 400; the controller has four, all real and all documented.', evidence: 'Four distinct BadRequestException messages; the README lists all four.', where: 'README.md, the errors section', about: 'task' }],
+  findings: [{ what: 'The task says three ways to answer 400; the controller has four, all real and all documented.', evidence: 'Four distinct BadRequestException messages; the README lists all four.', basis: 'the three ways it refuses', where: 'README.md, the errors section', about: 'task' }],
 });
 
 console.log('\n--- there is no way to give up without a verdict ---');
@@ -92,6 +95,7 @@ const aboutWork = { ...finding, about: 'work' as const };
 const aboutTask = {
   what: 'The task requires the three ways the API answers 400, but the controller has four, all of them real.',
   evidence: 'The controller throws four distinct BadRequestException messages; the README documents all four.',
+  basis: 'every way it answers 400, with the message each one gives',
   where: 'README.md, the errors section',
   about: 'task' as const,
 };
@@ -141,6 +145,7 @@ const round1 = [
   {
     what: 'The task requires jsx preserve, but web\\tsconfig.json sets it to react-jsx.',
     evidence: 'x',
+    basis: 'jsx preserve, module esnext',
     where: 'C:\\Projects\\calculator-test\\web\\tsconfig.json, compilerOptions.jsx',
     about: 'work' as const,
   },
@@ -148,15 +153,16 @@ const round1 = [
 const again = {
   what: 'tsconfig.json uses "jsx": "react-jsx" instead of the task-required "jsx": "preserve".',
   evidence: 'y',
+  basis: 'jsx preserve, module esnext',
   where: 'c:/projects/calculator-test/web/tsconfig.json,  compilerOptions.jsx',
   about: 'work' as const,
 };
 const elsewhere = { ...again, where: 'web/app/page.tsx' };
-const noPlace = { what: 'The README start command returns 500.', evidence: 'z', where: '' };
+const noPlace = { what: 'The README start command returns 500.', evidence: 'z', basis: 'run the commands it tells', where: '' };
 console.log('same place, other words    :', isRepeat(round1, again), '(expect true)');
 console.log('different place            :', isRepeat(round1, elsewhere), '(expect false)');
 console.log('no place, same claim       :', isRepeat([noPlace], { ...noPlace, evidence: 'w' }), '(expect true)');
-console.log('no place, other claim      :', isRepeat([noPlace], { what: 'The README install command fails.', evidence: 'w', where: '' }), '(expect false)');
+console.log('no place, other claim      :', isRepeat([noPlace], { what: 'The README install command fails.', evidence: 'w', basis: 'run the commands it tells', where: '' }), '(expect false)');
 console.log('first round, nothing before:', isRepeat([], again), '(expect false)');
 console.log('marked when written out    :', describeFindings([again], () => true).includes('earlier round') ? 'yes' : 'NO');
 
@@ -210,3 +216,39 @@ const disputedBrief = reviewBrief(
 );
 console.log('brief carries the dispute  :', disputedBrief.includes('Findings the implementer disputes') && disputedBrief.includes('r1f1') ? 'yes' : 'NO');
 console.log('and names the finding      :', disputedBrief.includes('[r1f1] tsconfig.json') ? 'yes' : 'NO');
+
+/*
+ * A finding rests on a sentence somebody wrote.
+ *
+ * Two reviewers in a row failed a page for label text no task had specified — "First number",
+ * where the page task said "labelled A and B" and the smoke-test task said only "both input
+ * labels". The basis is checked against the task, its instructions, and the earlier tasks the
+ * reviewer was shown; a paraphrase or an invention does not ground.
+ */
+console.log('\n--- a finding must quote the sentence it rests on ---');
+const pageTask = 'Write the calculator page. It has two number inputs, labelled A and B, each a real <label> tied to its input; four buttons, one per operation.';
+const smokeTask = 'Prove the page is served: fetch the HTML and check it contains the four operation buttons and both input labels.';
+console.log('exact quote                :', isGrounded('check it contains the four operation buttons and both input labels', [smokeTask]), '(expect true)');
+console.log('case, spaces, backticks    :', isGrounded('`Two number inputs, labelled   A and B`', [pageTask]), '(expect true)');
+console.log('from an earlier task       :', isGrounded('labelled A and B, each a real <label>', [smokeTask, pageTask]), '(expect true)');
+console.log('paraphrase                 :', isGrounded('the inputs must be labelled First number and Second number', [smokeTask, pageTask]), '(expect false)');
+console.log('too short to mean anything :', isGrounded('labelled', [pageTask]), '(expect false)');
+const askedAgain = ungroundedMessage([{ ...again, basis: 'the labels must read First number and Second number' }]);
+console.log('asked for the quote once   :', askedAgain.includes('quote the sentence') && askedAgain.includes('First number') ? 'yes' : 'NO');
+
+console.log('\n--- which earlier tasks the reviewer is shown ---');
+const chain = {
+  vcs: { enabled: true, branchMode: 'per-session' },
+  tasks: [
+    { id: 'a', title: 'scaffold', prompt: 'p1', status: 'done' },
+    { id: 'b', title: 'page', prompt: pageTask, status: 'done' },
+    { id: 'c', title: 'skipped', prompt: 'p3', status: 'queued' },
+    { id: 'd', title: 'smoke', prompt: smokeTask, status: 'running' },
+    { id: 'e', title: 'later', prompt: 'p5', status: 'queued' },
+  ],
+} as never;
+const shown = earlierTasksForReview(chain, { id: 'd' } as never);
+console.log('the ones that ran, before  :', shown.map((e) => e.title).join(', '), '(expect scaffold, page)');
+console.log('not in per-task mode       :', earlierTasksForReview({ ...(chain as object), vcs: { enabled: true, branchMode: 'per-task' } } as never, { id: 'd' } as never).length, '(expect 0)');
+const contextBrief = reviewBrief({ vcs: { enabled: false } } as never, { prompt: smokeTask, level2: '', title: 'smoke' } as never, [], 'C:\\x', [], undefined, [], [], shown);
+console.log('brief carries them         :', contextBrief.includes('Earlier tasks of this session') && contextBrief.includes('labelled A and B') ? 'yes' : 'NO');

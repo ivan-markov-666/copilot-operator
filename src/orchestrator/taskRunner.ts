@@ -93,6 +93,23 @@ function repeatRefusal(count: number, limit: number): string {
 }
 
 /**
+ * The earlier tasks a reviewer is shown, when tasks build on each other.
+ *
+ * Only in per-session mode, where the tree carries their work, and only the ones that ran:
+ * the last three before this one, prompts capped, because the brief is read by a model with
+ * a context to spend and the point is what they defined, not their every word.
+ */
+export function earlierTasksForReview(session: Session, task: Task, limit = 3, maxChars = 2500): Array<{ title: string; prompt: string }> {
+  if (session.vcs?.branchMode !== 'per-session') return [];
+  const index = session.tasks.findIndex((t) => t.id === task.id);
+  const before = index < 0 ? session.tasks : session.tasks.slice(0, index);
+  return before
+    .filter((t) => t.status !== 'queued')
+    .slice(-limit)
+    .map((t) => ({ title: t.title, prompt: t.prompt.length > maxChars ? `${t.prompt.slice(0, maxChars)}\n[… ${t.prompt.length - maxChars} more characters]` : t.prompt }));
+}
+
+/**
  * The reason line for a task the model gave up on, built from what it says it tried.
  *
  * The approaches are kept, not summarised away. "Blocked" on its own is no more useful than
@@ -807,6 +824,7 @@ export async function runTask(
           previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings } : undefined,
           repoDir: willCommit ? repoDirOf(session) : undefined,
           derivedFailing: derivedStillFailing,
+          earlier: earlierTasksForReview(session, task),
           event: (type, data, human, level) => sink.event(type, data, human, level),
           record,
         });

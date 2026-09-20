@@ -110,9 +110,9 @@ for (const [check] of cases.slice(0, 3)) console.log(' ', describeCheck(check));
  * on its own.
  */
 console.log('\n--- a check given with a finding is kept only if it fails now ---');
-const findingWithBadCheck = { id: 'r1f1', what: 'x', evidence: 'y', where: 'z', about: 'work' as const, check: { name: 'always fine', expect: 'exit-zero' as const, run: 'echo fine', shell: 'cmd' as const, cwd: dir } };
-const findingWithGoodCheck = { id: 'r1f2', what: 'the build fails', evidence: 'y', where: 'api/src', about: 'work' as const, check: { name: 'the build passes', expect: 'exit-zero' as const, run: 'exit /b 3', shell: 'cmd' as const, cwd: dir } };
-const findingWithout = { id: 'r1f3', what: 'no check given', evidence: 'y', where: 'w', about: 'work' as const };
+const findingWithBadCheck = { id: 'r1f1', what: 'x', evidence: 'y', basis: 'the build must pass', where: 'z', about: 'work' as const, check: { name: 'always fine', expect: 'exit-zero' as const, run: 'echo fine', shell: 'cmd' as const, cwd: dir } };
+const findingWithGoodCheck = { id: 'r1f2', what: 'the build fails', evidence: 'y', basis: 'the build must pass', where: 'api/src', about: 'work' as const, check: { name: 'the build passes', expect: 'exit-zero' as const, run: 'exit /b 3', shell: 'cmd' as const, cwd: dir } };
+const findingWithout = { id: 'r1f3', what: 'no check given', evidence: 'y', basis: 'the build must pass', where: 'w', about: 'work' as const };
 const validated = await validateDerivedChecks([findingWithBadCheck, findingWithGoodCheck, findingWithout], { cwd: dir, logDir });
 console.log('kept (fails now)          :', validated.kept.map((k) => k.finding.id).join(', '), '(expect r1f2)');
 console.log('refused (passes now)      :', validated.refused.map((r) => r.finding.id).join(', '), '(expect r1f1)');
@@ -122,9 +122,9 @@ console.log('\n--- a dispute suspends it; the next review decides ---');
 const kept: TaskReviewCheck[] = validated.kept.map((k) => ({ check: k.check, findingId: k.finding.id, what: k.finding.what, where: k.finding.where, round: 1, attempt: 1, state: 'active' }));
 const paused = suspendDisputed(kept, ['R1F2', 'r9f9']);
 console.log('suspended by id           :', paused.suspended.join(', '), '| state:', paused.checks[0].state, '(expect r1f2 | suspended)');
-const raisedAgain = settleAfterReview(paused.checks, 'fail', [{ what: 'the build still fails', evidence: 'e', where: 'api/src' }]);
+const raisedAgain = settleAfterReview(paused.checks, 'fail', [{ what: 'the build still fails', evidence: 'e', basis: 'the build must pass', where: 'api/src' }]);
 console.log('raised again → active     :', raisedAgain.reactivated.join(', '), raisedAgain.checks[0].state, '(expect r1f2 active)');
-const notRaised = settleAfterReview(paused.checks, 'fail', [{ what: 'something else', evidence: 'e', where: 'web/app' }]);
+const notRaised = settleAfterReview(paused.checks, 'fail', [{ what: 'something else', evidence: 'e', basis: 'the build must pass', where: 'web/app' }]);
 console.log('not raised → dropped      :', notRaised.dropped.join(', '), notRaised.checks[0].state, '(expect r1f2 dropped)');
 const passed = settleAfterReview(paused.checks, 'pass', []);
 console.log('review passed → dropped   :', passed.dropped.join(', '), '(expect r1f2)');
