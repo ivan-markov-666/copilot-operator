@@ -38,6 +38,18 @@ export type TaskDeviation = { instruction: string; did: string; why: string };
 /** One review finding the model said was wrong: which (by id), why, and what shows it. */
 export type TaskDispute = { finding: string; why: string; evidence: string };
 
+/** The machine's tools at the time a task ran. `null` is "not found on this machine". */
+export type TaskEnvironment = {
+  collectedAt: string;
+  os: string;
+  node: string;
+  npm: string | null;
+  git: string | null;
+  pwsh: string | null;
+  powershell: string | null;
+  edge: { path: string; version: string | null } | null;
+};
+
 /**
  * A check a reviewer gave with a finding, kept with the task for every later attempt.
  *
@@ -100,6 +112,12 @@ export type Task = {
    * reviews, ended — stopped by the runner and written down with where they came from.
    */
   leftovers?: Array<{ pid: number; name: string; command: string; ports: number[]; by: string }>;
+  /**
+   * The machine's tools as they were when the task ran: the layer under the project's
+   * lockfile. Two runs of one plan a day apart got different major versions of everything
+   * `npm install` fetched, and this is where that difference is read from.
+   */
+  environment?: TaskEnvironment;
   /** Path of the consolidated text log of everything executed, relative to the run folder. */
   logFile?: string;
   /**

@@ -56,6 +56,8 @@ export type DebugTask = {
   disputes?: Task['disputes'];
   /** Checks reviewers gave with their findings, with their state. */
   reviewChecks?: Task['reviewChecks'];
+  /** The machine's tools when the task ran. Read this first when two runs differ. */
+  environment?: Task['environment'];
   vcsPlan?: Task['vcsPlan'];
   vcs?: Task['vcs'];
   checks?: Task['checks'];
@@ -189,6 +191,7 @@ async function taskOf(task: Task, runsDir: string): Promise<DebugTask> {
     deviations: task.deviations,
     disputes: task.disputes,
     reviewChecks: task.reviewChecks,
+    environment: task.environment,
     vcsPlan: task.vcsPlan,
     vcs: task.vcs,
     checks: task.checks,

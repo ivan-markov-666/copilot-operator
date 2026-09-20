@@ -1824,6 +1824,16 @@ function TaskCard({
           )}
           {(task.deviations?.length ?? 0) > 0 && <Deviations items={task.deviations ?? []} />}
           {(task.disputes?.length ?? 0) > 0 && <Disputes items={task.disputes ?? []} />}
+          {task.environment && (
+            <div className="muted small" style={{ margin: '4px 0' }}>
+              {t('task.ranWith', {
+                node: task.environment.node,
+                npm: task.environment.npm ?? '—',
+                git: task.environment.git ?? '—',
+                pwsh: task.environment.pwsh ?? task.environment.powershell ?? '—',
+              })}
+            </div>
+          )}
           {/* Stopped by the runner; said here because a server left behind is a defect too. */}
           {(task.leftovers?.length ?? 0) > 0 && (
             <div className="err small" style={{ margin: '6px 0' }}>

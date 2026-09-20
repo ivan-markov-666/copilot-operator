@@ -148,6 +148,17 @@ export type Task = {
   reviewChecks?: TaskReviewCheck[];
   /** Processes left running by the task or a review and stopped by the runner, with where they came from. */
   leftovers?: Array<{ pid: number; name: string; command: string; ports: number[]; by: string }>;
+  /** The machine's tools when the task ran. */
+  environment?: {
+    collectedAt: string;
+    os: string;
+    node: string;
+    npm: string | null;
+    git: string | null;
+    pwsh: string | null;
+    powershell: string | null;
+    edge: { path: string; version: string | null } | null;
+  };
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;

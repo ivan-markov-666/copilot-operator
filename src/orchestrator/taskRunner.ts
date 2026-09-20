@@ -26,6 +26,7 @@ import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } 
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
 import { snapshotProcesses, reapLeftovers, describeLeftovers, type ProcessSnapshot } from '../exec/processes.js';
+import { collectEnvironment, describeEnvironment } from '../exec/environment.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
@@ -486,6 +487,15 @@ export async function runTask(
   });
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\n`, 'utf8');
+
+  // Which world this run got: the machine's tools, so a difference between two runs of one
+  // plan has somewhere to be read from. Once per process; the probes are child processes.
+  const environment = collectEnvironment();
+  await writeFile(log.path('environment.json'), JSON.stringify(environment, null, 2), 'utf8').catch(() => undefined);
+  await record('ENVIRONMENT', describeEnvironment(environment));
+  await setTask((t) => {
+    t.environment = environment;
+  });
 
   /*
    * Where this session's commands run, decided once and before anything is sent.
