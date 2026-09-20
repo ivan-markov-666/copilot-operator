@@ -115,6 +115,22 @@ not. This is not a parser bug we can work around, it is missing data.
 
 Verified in the browser pane: clipboard read is denied without that grant, so the permission call is mandatory, not optional.
 
+## Long conversations are virtualised: never count rendered turns
+
+A page saved from a 48-message conversation (2026-09-20, third task of a per-session chat,
+re-entered after a review) held **four** `data-testid="m365-chat-llm-web-ui-chat-message"`
+elements, each with `aria-setsize="48"` and a `data-index`. The list is windowed. "The chat
+accepted the message" and "a reply arrived" were both defined as *the number of turn elements
+went up*, which stops being true once the window is full: a findings message landed twice, drew
+a reply, and the runner declared it not accepted and failed the task.
+
+- The conversation's real size is `aria-setsize` on (or inside) each rendered turn; read the
+  maximum. Fall back to the rendered count only when the attribute is absent.
+- The newest user message is `[id^="user-message-"]` and its text is in a child
+  `[data-testid="chatOutput"]`; "it landed" is also decidable by that bubble having changed
+  and beginning with what was sent — the second signal, and what stops a retry from posting
+  the same message twice.
+
 ## Downloads: solved
 
 This was the part the user expected to be hard. It is not. A file Copilot generates renders as an ordinary anchor inside the markdown:

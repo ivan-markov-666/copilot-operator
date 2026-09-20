@@ -14,6 +14,7 @@ import { chromium, type BrowserContext, type Page, type Locator } from 'playwrig
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
+import { landed } from './acceptance.js';
 import { Blocker, Css, Label, Model, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
@@ -865,8 +866,39 @@ Current URL: ${url}`);
     };
   }
 
+  /**
+   * How many messages the conversation holds — not how many the page has rendered.
+   *
+   * Copilot virtualises a long conversation: a saved page of a 48-message chat held four turn
+   * elements, each carrying `aria-setsize="48"`. Acceptance and reply detection used to be
+   * "the number of turn elements went up", which stops being true the moment the window is
+   * full. After re-entering a long chat for the third task of a session, a findings message
+   * landed — twice, and drew a reply — and was declared "not accepted", and the task failed.
+   * The app says the real size itself, in the accessibility attribute; that is what is
+   * counted, with the rendered count as the fallback for a page that does not carry it.
+   */
   private async turnCount(): Promise<number> {
-    return await this.p.getByTestId(TestId.turn).count();
+    return await this.p.evaluate((turnSel: string) => {
+      const nodes = Array.from(document.querySelectorAll(turnSel));
+      let size = 0;
+      for (const n of nodes) {
+        const carrier = n.matches('[aria-setsize]') ? n : (n.querySelector('[aria-setsize]') ?? n.closest('[aria-setsize]'));
+        const v = carrier ? Number(carrier.getAttribute('aria-setsize')) : NaN;
+        if (!Number.isNaN(v) && v > size) size = v;
+      }
+      return size > 0 ? size : nodes.length;
+    }, `[data-testid="${TestId.turn}"]`);
+  }
+
+  /** The newest user message as shown, for telling "landed but not counted" from "not sent". */
+  private async lastUserTurnText(): Promise<string> {
+    return await this.p
+      .evaluate(() => {
+        const nodes = document.querySelectorAll('[id^="user-message-"]');
+        const last = nodes[nodes.length - 1] as HTMLElement | undefined;
+        return last ? last.innerText : '';
+      })
+      .catch(() => '');
   }
 
   /** Puts text in the composer and clicks Send. Enter is not used: it does not submit. */
@@ -948,9 +980,20 @@ Current URL: ${url}`);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const before = await this.turnCount();
+      const shownBefore = await this.lastUserTurnText();
+      // A retry after a message that did land would put it in the chat twice — which is
+      // exactly what happened before the size was read from the app. Look first.
+      if (attempt > 1 && landed(text, shownBefore, this.retryBaseline)) {
+        this.emit('send-landed-after-all', { attempt });
+        return this.retryBaselineTurns;
+      }
+      if (attempt === 1) {
+        this.retryBaseline = shownBefore;
+        this.retryBaselineTurns = before;
+      }
       await this.send(text, attachments);
 
-      const accepted = await this.waitForAccepted(before, 30_000);
+      const accepted = await this.waitForAccepted(before, 30_000, text, shownBefore);
       if (accepted) return before;
 
       const found = await this.detectBlocker();
@@ -976,13 +1019,22 @@ Current URL: ${url}`);
     );
   }
 
-  /** True once a new turn exists, i.e. the chat really took the message. */
-  private async waitForAccepted(previousTurns: number, timeoutMs: number): Promise<boolean> {
+  /** What the newest user message said before the first attempt, for the retry check. */
+  private retryBaseline = '';
+  private retryBaselineTurns = 0;
+
+  /**
+   * True once the chat really took the message: the conversation grew, or the newest user
+   * message is now the one that was sent. Two signals, because the first is what the app
+   * reports and the second is what a person would look at.
+   */
+  private async waitForAccepted(previousTurns: number, timeoutMs: number, text: string, shownBefore: string): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (this.p.isClosed()) return false;
       const now = await this.turnCount().catch(() => previousTurns);
       if (now > previousTurns) return true;
+      if (landed(text, await this.lastUserTurnText(), shownBefore)) return true;
       const found = await this.detectBlocker();
       if (found.kind !== 'none') return false;
       await this.p.waitForTimeout(1_000);
@@ -1034,7 +1086,15 @@ Current URL: ${url}`);
     const state = async (): Promise<{ turns: number; streaming: boolean; finished: boolean }> =>
       await this.p.evaluate(
         ({ turnSel, stopLabel, wrapperSel, copySel }) => {
-          const turns = document.querySelectorAll(turnSel).length;
+          // The conversation's size as the app reports it, not the rendered count: see turnCount.
+          const nodes = Array.from(document.querySelectorAll(turnSel));
+          let size = 0;
+          for (const n of nodes) {
+            const carrier = n.matches('[aria-setsize]') ? n : (n.querySelector('[aria-setsize]') ?? n.closest('[aria-setsize]'));
+            const v = carrier ? Number(carrier.getAttribute('aria-setsize')) : NaN;
+            if (!Number.isNaN(v) && v > size) size = v;
+          }
+          const turns = size > 0 ? size : nodes.length;
           const streaming = Array.from(document.querySelectorAll('button')).some(
             (b) => b.getAttribute('aria-label') === stopLabel,
           );

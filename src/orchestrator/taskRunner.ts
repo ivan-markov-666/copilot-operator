@@ -393,11 +393,11 @@ export async function runTask(
    * told apart and stopped. Taken once the working directory is known; null means "do not".
    */
   let processesBefore: ProcessSnapshot | null = null;
-  /** Stops what appeared since a snapshot, tied to the project, and writes it on the task. */
-  const reap = async (since: ProcessSnapshot | null, by: string): Promise<void> => {
-    if (!since) return;
+  /** Stops what appeared since a snapshot, tied to the project, writes it on the task, and says what it was. */
+  const reap = async (since: ProcessSnapshot | null, by: string): Promise<Array<{ name: string; ports: number[] }>> => {
+    if (!since) return [];
     const result = await reapLeftovers(work.cwd, since).catch(() => null);
-    if (!result || (result.killed.length === 0 && result.failed.length === 0)) return;
+    if (!result || (result.killed.length === 0 && result.failed.length === 0)) return [];
     const all = [...result.killed, ...result.failed].map((l) => ({ pid: l.pid, name: l.name, command: l.command.slice(0, 300), ports: l.ports, by }));
     await setTask((t) => {
       t.leftovers = [...(t.leftovers ?? []), ...all];
@@ -408,6 +408,7 @@ export async function runTask(
         all.map((l) => `${l.name} pid ${l.pid}${l.ports.length > 0 ? ` (port ${l.ports.join(', ')})` : ''}`).join('; '),
       'warn');
     await record(`LEFT RUNNING BY ${by.toUpperCase()}`, describeLeftovers([...result.killed, ...result.failed]));
+    return all.map((l) => ({ name: l.name, ports: l.ports }));
   };
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
@@ -770,6 +771,8 @@ export async function runTask(
      * finding that comes back is recognised against this — see `isRepeat`.
      */
     let previousFindings: Array<ReviewFinding & { id: string; repeated?: boolean }> = [];
+    /** What the previous review's own steps left running, told to both sides. */
+    let previousLeftovers: Array<{ name: string; ports: number[] }> = [];
 
     const reviewWanted = task.reviewEnabled ?? session.review?.enabled ?? true;
     const maxReviewRounds = Math.max(1, cfg.limits.maxReviewRounds ?? 2);
@@ -811,6 +814,7 @@ export async function runTask(
 
       // What is running before the review, so that what the review leaves is its own.
       const beforeReview: ProcessSnapshot | null = processesBefore ? await snapshotProcesses(work.cwd).catch(() => null) : null;
+      let roundLeftovers: Array<{ name: string; ports: number[] }> = [];
       let outcome: ReviewOutcome;
       try {
         await transport.newChat();
@@ -832,9 +836,14 @@ export async function runTask(
           changedFiles,
           deviations,
           disputes,
-          previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings } : undefined,
+          previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings, leftovers: previousLeftovers } : undefined,
           repoDir: willCommit ? repoDirOf(session) : undefined,
           derivedFailing: derivedStillFailing,
+          // Before the verdict is judged: a check given with a finding must fail on the work,
+          // not on a server the reviewer forgot to stop.
+          beforeVerdict: async () => {
+            roundLeftovers = [...roundLeftovers, ...(await reap(beforeReview, `review round ${reviewRounds}`))];
+          },
           earlier: earlierTasksForReview(session, task),
           event: (type, data, human, level) => sink.event(type, data, human, level),
           record,
@@ -851,7 +860,7 @@ export async function runTask(
       }
 
       // A reviewer that left its own server listening once failed the work for it.
-      await reap(beforeReview, `review round ${reviewRounds}`);
+      roundLeftovers = [...roundLeftovers, ...(await reap(beforeReview, `review round ${reviewRounds}`))];
 
       /*
        * Which findings an earlier round already raised.
@@ -975,7 +984,7 @@ export async function runTask(
       await pacer.throttleSend();
       // The reviewer quotes output in its evidence, so the message gets the same treatment.
       // Recorded as sent, because what reached the chat is what the next question is about.
-      const findingsSent = redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeatedNamed), cfg.report.redactPatterns);
+      const findingsSent = redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeatedNamed, roundLeftovers), cfg.report.redactPatterns);
       await writeFile(log.path('review', String(reviewRounds), 'findings-sent.md'), findingsSent, 'utf8').catch(() => undefined);
       await record(`REVIEW ${reviewRounds} FINDINGS SENT`, findingsSent);
       const before = await transport.sendAndConfirm(findingsSent);
@@ -984,6 +993,7 @@ export async function runTask(
       lastMarkdown = next.markdown;
       await pacer.settle();
       previousFindings = named;
+      previousLeftovers = roundLeftovers;
       return 'retry';
     };
 

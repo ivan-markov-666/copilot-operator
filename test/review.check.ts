@@ -194,6 +194,30 @@ const quiet = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1,
 console.log('and not when it did not    :', !quiet.includes('previous round as well') ? 'yes' : 'NO');
 
 /*
+ * A reviewer that leaves its own server listening and then finds the port busy.
+ *
+ * Twice in one task: round one and round two each left `next start` on 4310, found 4310 busy,
+ * and gave a check that "failed on the defective state" — the defect being its own. Both
+ * sides are now told what the review left running, and the check is judged only after the
+ * runner has stopped it.
+ */
+console.log('\n--- what a review left running is said to both sides ---');
+const portFinding = { ...again, what: 'Port 4310 was still listening after the server was stopped.', where: 'runtime verification on port 4310' };
+const withLeftover = findingsMessage({ verdict: 'fail', findings: [portFinding], stepsRun: 1, iterations: 1 }, 1, 2, [], [{ name: 'node.exe', ports: [4310] }]);
+console.log('implementer is told        :', withLeftover.includes("reviewer's own doing") && withLeftover.includes('4310') ? 'yes' : 'NO');
+const noPorts = findingsMessage({ verdict: 'fail', findings: [portFinding], stepsRun: 1, iterations: 1 }, 1, 2, [], [{ name: 'esbuild.exe', ports: [] }]);
+console.log('not for a silent leftover  :', !noPorts.includes('own doing') ? 'yes' : 'NO');
+const nextBrief = reviewBrief(
+  { vcs: { enabled: false } } as never,
+  { prompt: 'p', level2: '', title: 't' } as never,
+  [],
+  'C:\\x',
+  [],
+  { round: 1, findings: [{ ...portFinding, id: 'r1f1' }], leftovers: [{ name: 'node.exe', ports: [4310] }] },
+);
+console.log('next reviewer is told      :', nextBrief.includes('After round 1') && nextBrief.includes('4310') && nextBrief.includes('Stop what you start') ? 'yes' : 'NO');
+
+/*
  * A wrong finding can be answered.
  *
  * The findings message used to say "say so in your summary", and the next reviewer never sees

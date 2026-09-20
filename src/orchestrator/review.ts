@@ -80,12 +80,38 @@ export type ReviewDeps = {
    * reviewer decides whether the defect is real; a counter does not.
    */
   derivedFailing?: Array<{ name: string; detail: string }>;
+  /**
+   * Called once the reviewer has a verdict, before its findings are judged. The runner uses
+   * it to stop what the review's own steps left running: a reviewer that left its server on
+   * the port and then found the port busy gave a check that "failed on the defective state",
+   * and the defect was its own.
+   */
+  beforeVerdict?: () => Promise<void>;
   event: (type: string, data?: Record<string, unknown>, human?: string, level?: 'info' | 'warn' | 'error') => void;
   record: (heading: string, body: string) => Promise<void>;
 };
 
+/** A process a review's own steps left running, stopped by the runner. */
+export type ReviewLeftover = { name: string; ports: number[] };
+
 /** The findings of the round before this one, as they were sent back to the implementer. */
-export type PreviousRound = { round: number; findings: Array<ReviewFinding & { id?: string; repeated?: boolean }> };
+export type PreviousRound = {
+  round: number;
+  findings: Array<ReviewFinding & { id?: string; repeated?: boolean }>;
+  /** What that reviewer left running. A finding about one of those ports was its own doing. */
+  leftovers?: ReviewLeftover[];
+};
+
+/** The sentence both sides get when a review left something listening. */
+function leftoverNote(leftovers: ReviewLeftover[]): string {
+  const listening = leftovers.filter((l) => l.ports.length > 0);
+  if (listening.length === 0) return '';
+  return (
+    `After this review the runner stopped ${listening.length} process(es) the reviewer's own steps had left running: ` +
+    listening.map((l) => `${l.name} listening on ${l.ports.join(', ')}`).join('; ') +
+    '. A finding about one of those ports is the reviewer\'s own doing, not the work\'s.'
+  );
+}
 
 /**
  * What the reviewer is told about the work.
@@ -180,6 +206,9 @@ export function reviewBrief(
                 `${i + 1}. ${f.id ? `[${f.id}] ` : ''}${f.what}${f.where ? ` (${f.where})` : ''}${f.repeated ? ' — raised in more than one round already' : ''}`,
             )
             .join('\n'),
+          ...(previous.leftovers && leftoverNote(previous.leftovers)
+            ? ['', leftoverNote(previous.leftovers).replace('After this review', `After round ${previous.round}`), 'Stop what you start, in the same step, and check the port only after that.']
+            : []),
         ]
       : []),
     ...(disputes.length > 0
@@ -336,6 +365,10 @@ export async function runReview(
          * and is sent back once with the result, then dropped. What survives is kept with the
          * task for every attempt after this one.
          */
+        // Whatever the review's own steps left running goes first, so that a check given
+        // with a finding is judged against the work and not against the reviewer's leftovers.
+        await deps.beforeVerdict?.();
+
         /*
          * A finding has to rest on a sentence somebody wrote.
          *
@@ -544,7 +577,14 @@ function refused(id: number, reason: string, command = '(not run)'): RunResult {
  * cannot be kept, and to declare the second case in `deviations`, where it reaches the reviewer
  * and the person who wrote the task.
  */
-export function findingsMessage(outcome: ReviewOutcome, round: number, maxRounds: number, repeated: ReviewFinding[] = []): string {
+export function findingsMessage(
+  outcome: ReviewOutcome,
+  round: number,
+  maxRounds: number,
+  repeated: ReviewFinding[] = [],
+  leftovers: ReviewLeftover[] = [],
+): string {
+  const note = leftoverNote(leftovers);
   return [
     `An independent review of your work found ${outcome.findings.length} problem(s). The reviewer is a`,
     'separate conversation that was given the task and the files you changed, ran the work itself, and',
@@ -554,6 +594,7 @@ export function findingsMessage(outcome: ReviewOutcome, round: number, maxRounds
     '',
     describeFindings(outcome.findings, (f) => repeated.includes(f)),
     '',
+    ...(note ? [`${note} If that is what a finding is about, dispute it with the evidence from your own step.`, ''] : []),
     ...(repeated.length > 0
       ? [
           `${repeated.length} of these ${repeated.length === 1 ? 'was' : 'were'} raised in the previous round as well: you reported a fix,`,
