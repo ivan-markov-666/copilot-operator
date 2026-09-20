@@ -9,7 +9,7 @@
  *   cop chat                  print the last run's conversation link
  */
 import { Command } from 'commander';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -194,6 +194,60 @@ program
           ? `Windows PowerShell (${winps.stdout.trim()}); pwsh not found`
           : 'no PowerShell found',
     );
+
+    /*
+     * The three things a machine that is not this one has failed on, or would.
+     *
+     * git: version control runs `git` from PATH for every task; a laptop with git only inside
+     * an IDE has none there. npm: every plan's first task is `npm install`, and a corporate proxy
+     * that is not configured for npm fails it with a message the chat model then spends an
+     * iteration reading. Models: the picker's names belong to the tenant, so the defaults saved
+     * here ("GPT 5.6 Think deeper") may not exist on another account — the run then goes on with
+     * whatever the chat is set to, and says so in a warning nobody reads until the review turns
+     * out to have run on the same model as the work.
+     */
+    const git = spawnSync('git', ['--version'], { encoding: 'utf8' });
+    say(git.status === 0, git.status === 0 ? git.stdout.trim() : 'git not found on PATH — version control cannot branch or commit');
+
+    // One command string through the shell: on Windows npm is npm.cmd, which Node will not
+    // spawn without a shell, and a shell with an args array is what Node deprecates.
+    const registry = spawnSync('npm config get registry', { encoding: 'utf8', shell: true }).stdout?.trim() || '(unknown registry)';
+    const ping = spawnSync('npm ping --fetch-timeout=15000 --fetch-retries=0', { encoding: 'utf8', timeout: 25_000, shell: true });
+    say(
+      ping.status === 0,
+      ping.status === 0
+        ? `npm reaches ${registry}`
+        : `npm cannot reach ${registry} — behind a proxy, set it for npm (npm config set proxy / https-proxy) or HTTPS_PROXY; every plan starts with npm install`,
+    );
+
+    const dataDir = join(process.cwd(), 'data');
+    const readJson = (file: string): Record<string, unknown> | null => {
+      try {
+        return JSON.parse(readFileSync(join(dataDir, file), 'utf8')) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    };
+    const settings = readJson('settings.json');
+    const models = readJson('models.json') as { options?: Array<{ name: string }> } | null;
+    const copilot = (settings?.copilot as { defaultModel?: string; defaultReviewModel?: string } | undefined) ?? {};
+    const wanted: Array<[string, string]> = [
+      ['default model', (copilot.defaultModel ?? '').trim()],
+      ['default review model', (copilot.defaultReviewModel ?? '').trim()],
+    ].filter(([, name]) => name !== '') as Array<[string, string]>;
+    if (wanted.length === 0) {
+      console.log('  note  no default model is set; sessions leave the chat on whatever it shows');
+    } else if (!models?.options?.length) {
+      console.log(`  note  ${wanted.map(([w, n]) => `${w} "${n}"`).join(', ')} set, but the picker has never been read here — read it from the Settings page before trusting them`);
+    } else {
+      const names = new Set(models.options.map((o) => o.name));
+      for (const [what, name] of wanted) {
+        say(names.has(name), names.has(name) ? `${what} "${name}" is in the picker read on this machine` : `${what} "${name}" is not in the picker read on this machine (${models.options.length} option(s)) — the run would fall back to whatever the chat shows`);
+      }
+      if (wanted.length === 2 && wanted[0]![1] === wanted[1]![1]) {
+        console.log('  note  the review runs on the same model as the work; a different one catches more');
+      }
+    }
 
     const edgeUsers = findEdgeUsingProfile(DEFAULT_PROFILE);
     if (Array.isArray(edgeUsers) && edgeUsers.length > 0) {

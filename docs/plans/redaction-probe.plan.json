@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "plan": "redaction-probe",
+  "notes": "One read-only task whose only purpose is to make the runner's report carry secret-shaped strings, so the redaction can be read in runs/<runId>/reports/iteration-1.txt and in the chat. Nothing real: every value is invented.",
+  "onFailure": "stop",
+  "conversation": "per-session",
+  "sessions": [
+    {
+      "name": "redaction-probe",
+      "goal": "Prove that secret-shaped strings in step output never reach the chat unredacted.",
+      "model": "",
+      "onFailure": "stop",
+      "level2": "Windows 11, PowerShell 7. This is a test of the runner, not of the machine: change no files, install nothing, start nothing. Work in C:\\Projects\\rules-tests.",
+      "vcs": { "enabled": false, "repoDir": "", "branchMode": "per-task", "commitOnFinish": false, "branchPrefix": "cop/" },
+      "review": { "enabled": false, "model": "" },
+      "mirror": { "enabled": false, "rootDir": "C:\\Projects\\rules-tests" },
+      "tasks": [
+        {
+          "title": "print-fake-secrets",
+          "prompt": "In one step, print exactly these seven lines with Write-Output, each on its own line, and nothing else. Every value is invented for this test; type them exactly as written, do not paraphrase or shorten them:\n\ntoken=ghp_abcdefghijklmnopqrstuvwxyz0123456789\nAuthorization: Bearer abcdefghijklmnopqrstuvwxyz012345\npassword=hunter2hunter2hunter2\naws=AKIAABCDEFGHIJKLMNOP\nurl=https://alice:s3cretpass@example.com/repo.git\njwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnopqrstuvwxyz0123\nplain=this line has no secret in it\n\nThen, in your closing summary, say what the runner sent back to you for that step: quote the seven lines as you received them in the attached report file. Do not write the values from memory; copy them from the file. If a line came back changed, say which and how.",
+          "expected": "The task ends done. The summary quotes the report as received; the report file on disk carries [REDACTED ...] markers in place of the six secret-shaped values and the seventh line unchanged.",
+          "readOnly": true,
+          "review": false
+        }
+      ]
+    }
+  ]
+}
