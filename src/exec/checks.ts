@@ -49,7 +49,7 @@ export type CheckRunOptions = {
   /** Ceiling per check. Checks are meant to be quick; a slow one is usually a mistake. */
   timeoutMs?: number;
   /** Refuses a command before it runs, the same gate the steps go through. */
-  deny?: (command: string) => string | null;
+  deny?: (command: string, shell: Shell) => string | null;
   /** The repository whose working tree `commit-clean` looks at. Absent means the check passes. */
   repoDir?: string;
 };
@@ -96,7 +96,8 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     const command = (check.run ?? '').trim();
     if (!command) return fail('this check asks about a command but names none');
 
-    const refused = opts.deny?.(command);
+    const shell = (check.shell ?? 'pwsh') as Shell;
+    const refused = opts.deny?.(command, shell);
     if (refused) return fail(`the command was refused before it ran: ${refused}`);
 
     let result: RunResult;
@@ -104,7 +105,7 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
       result = await runStep(
         {
           id: 900 + index,
-          shell: (check.shell ?? 'pwsh') as Shell,
+          shell,
           command,
           cwd: (check.cwd ?? '').trim() || opts.cwd,
           hardTimeoutMs: opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,

@@ -194,7 +194,7 @@ the task for every later attempt, so what you found once is never again found by
       "check": {
         "name": "the documented start command answers a valid request",
         "expect": "output-contains",
-        "run": "$p = Start-Process npx -ArgumentList 'tsx','src/main.ts' -PassThru; try { Start-Sleep 5; (Invoke-WebRequest -Uri http://127.0.0.1:4300/calculate -Method Post -ContentType application/json -Body '{\"a\":9,\"b\":3,\"op\":\"/\"}').StatusCode } finally { Stop-Process -Id $p.Id -Force }",
+        "run": "$p = Start-Process -FilePath 'npx.cmd' -ArgumentList 'tsx','src/main.ts' -PassThru; try { Start-Sleep 5; (Invoke-WebRequest -Uri http://127.0.0.1:4300/calculate -Method Post -ContentType application/json -Body '{\"a\":9,\"b\":3,\"op\":\"/\"}').StatusCode } finally { taskkill /PID $p.Id /T /F }",
         "cwd": "C:\\Projects\\app\\api",
         "value": "200"
       }
@@ -208,10 +208,16 @@ the task for every later attempt, so what you found once is never again found by
 - Never change anything. You are reading and running, not fixing. No edits, no new files, no
   git command that writes. If something needs fixing, that is a finding; somebody else does it.
 - Never an interactive command, and never an endless one. Anything you start, you stop — and
-  on Windows `Stop-Process` on the PID that `Start-Process npx`/`npm`/`cmd.exe` returned stops
-  only the wrapper; the `node.exe` child keeps the port. Stop the tree (`taskkill /PID $p.Id /T
-  /F`) or the process that owns the port, then check. Two reviewers in a row found a port
-  "still busy" that their own wrapper had left, and failed the work for it.
+  on Windows `Stop-Process` on the PID that `Start-Process npx.cmd`/`npm.cmd`/`cmd.exe`
+  returned stops only the wrapper; the `node.exe` child keeps the port. Stop the tree
+  (`taskkill /PID $p.Id /T /F`) or the process that owns the port, then check. Two reviewers in
+  a row found a port "still busy" that their own wrapper had left, and failed the work for it.
+- Never `Start-Process npx` with the bare name. PowerShell resolves it to `npx.ps1` and
+  Start-Process hands the script to the Windows shell: no server starts, and the step can hang
+  on an "open with" dialog until its timeout. The runner refuses the form. Name the file
+  (`Start-Process -FilePath 'npx.cmd' -ArgumentList ...`) or start the program itself
+  (`Start-Process node -ArgumentList ...`). Thirteen review steps in one day did this and then
+  reported "connection refused" against work that was fine.
 - Never base a conclusion on output you were not given. If you need it, ask for it as a step.
 - Never pass because the work looks reasonable. Pass because you ran it and it did what the
   task promised.

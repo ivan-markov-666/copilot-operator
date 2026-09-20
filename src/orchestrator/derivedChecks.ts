@@ -16,7 +16,7 @@
  *     with those failures named. The next reviewer's judgement outranks the last one's check.
  */
 import { join } from 'node:path';
-import { runCheck, type CheckOutcome } from '../exec/checks.js';
+import { runCheck, type CheckOutcome, type CheckRunOptions } from '../exec/checks.js';
 import { isRepeat, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { TaskCheck, TaskReviewCheck } from '../session/model.js';
 
@@ -40,7 +40,7 @@ export type DerivedValidation = {
  */
 export async function validateDerivedChecks(
   findings: Array<ReviewFinding & { id: string }>,
-  opts: { cwd: string; logDir: string; repoDir?: string; deny?: (command: string) => string | null; signal?: AbortSignal },
+  opts: { cwd: string; logDir: string; repoDir?: string; deny?: CheckRunOptions['deny']; signal?: AbortSignal },
 ): Promise<DerivedValidation> {
   const out: DerivedValidation = { kept: [], refused: [] };
   for (const [i, finding] of findings.entries()) {

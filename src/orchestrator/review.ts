@@ -26,7 +26,7 @@ import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } fro
 import { describeFindings, findingId, isGrounded, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
-import { describeStep, matchDenyPattern } from '../exec/policy.js';
+import { describeStep, commandRefusal } from '../exec/policy.js';
 import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
@@ -407,7 +407,7 @@ export async function runReview(
           cwd: deps.cwd,
           logDir: dir,
           repoDir: deps.repoDir,
-          deny: (command) => matchDenyPattern(command, cfg.execution.denyPatterns),
+          deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns),
           signal,
         });
         if (validation.refused.length > 0 && !derivedRetried) {

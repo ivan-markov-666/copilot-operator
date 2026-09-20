@@ -14,6 +14,8 @@
  */
 import { extname } from 'node:path';
 import type { Step } from '../protocol/replySchema.js';
+import type { Shell } from './runner.js';
+import { findShellExecuteTrap } from './shellExecuteTrap.js';
 
 export type PolicyDecision =
   | { action: 'run' }
@@ -56,16 +58,36 @@ export function checkScriptExtension(fileName: string, allowed: string[]): strin
 }
 
 /**
+ * Why a command line must not run, or null. The one gate for a step's command and for a
+ * check's command alike: the deny list, then the forms that are not dangerous but cannot work
+ * (see `shellExecuteTrap.ts`) — refused for the same reason a check that would hang is refused,
+ * because the alternative is an iteration spent on a symptom.
+ */
+export function commandRefusal(
+  command: string,
+  shell: Shell,
+  denyPatterns: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const hit = matchDenyPattern(command, denyPatterns);
+  if (hit) return `matches deny pattern /${hit}/`;
+  return findShellExecuteTrap(command, shell, env);
+}
+
+/**
  * Applies the automatic rules. Returns null when the step is acceptable so far, or a
  * decision when it is refused without asking anyone.
  */
-export function staticCheck(step: Step, cfg: PolicyConfig): PolicyDecision | null {
-  const subject = step.type === 'command' ? step.cmd : `${step.file} ${step.args.join(' ')}`;
+export function staticCheck(step: Step, cfg: PolicyConfig, env: NodeJS.ProcessEnv = process.env): PolicyDecision | null {
+  if (step.type === 'command') {
+    const reason = commandRefusal(step.cmd, (step.shell ?? 'pwsh') as Shell, cfg.denyPatterns, env);
+    return reason ? { action: 'skip', reason } : null;
+  }
 
-  const hit = matchDenyPattern(subject, cfg.denyPatterns);
+  const hit = matchDenyPattern(`${step.file} ${step.args.join(' ')}`, cfg.denyPatterns);
   if (hit) return { action: 'skip', reason: `matches deny pattern /${hit}/` };
 
-  if (step.type === 'download' && step.run) {
+  if (step.run) {
     const bad = checkScriptExtension(step.file, cfg.allowedScriptExtensions);
     if (bad) return { action: 'skip', reason: bad };
   }

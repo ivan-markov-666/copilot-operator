@@ -31,7 +31,7 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, matchDenyPattern } from '../exec/policy.js';
+import { describeStep, commandRefusal } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -682,7 +682,7 @@ export async function runTask(
         cwd: work.cwd,
         logDir: log.path('checks'),
         signal: deps.signal,
-        deny: (command) => matchDenyPattern(command, cfg.execution.denyPatterns),
+        deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns),
         repoDir: willCommit ? repoDirOf(session) : undefined,
       }));
 

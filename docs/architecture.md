@@ -161,6 +161,7 @@ Implemented in `src/exec/runner.ts`.
 - `spawn('pwsh.exe' | 'powershell.exe' | 'cmd.exe', args, { cwd, windowsHide: true })`. For `pwsh`: `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <cmd>`; for downloaded scripts: `-File <path> <args>`.
 - Steps run **sequentially in the order given**; a failing step does not stop the run (Copilot decides), unless `stopOnFailure: true`.
 - Policy gate before every step: deny list regexes (`Remove-Item .* -Recurse`, `format `, `reg (add|delete)`, `Stop-Computer`, ...), optional allow list. In confirm mode the user sees the step and presses Enter / `s` to skip / `q` to abort.
+- The same gate refuses `Start-Process` on a bare name that PowerShell would resolve to a `.ps1` shim (`npx`, `npm`, `pnpm`: `src/exec/shellExecuteTrap.ts`). Start-Process hands a script to ShellExecute, which on a machine whose `.ps1` association is a Store app fails with "cannot find all the information required" or shows a "Select an app" dialog; the step hangs until its timeout and nothing listens. The decision is made by walking PATH the way PowerShell does, not from a list of names, and check commands go through it too.
 
 #### Long-running steps
 

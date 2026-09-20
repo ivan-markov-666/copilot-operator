@@ -316,6 +316,16 @@ such a step in the message and in the file. When the step was asking "is anythin
 empty is the answer, and often the good one — do not spend iterations proving that nothing is
 wrong.
 
+`Start-Process npx` does not start npx. PowerShell resolves the bare name to `npx.ps1` (Node
+ships one next to `npx.cmd`; every global install adds another, `pnpm.ps1`), and
+`Start-Process` hands a script to the Windows shell, which fails with "cannot find all the
+information required" or opens a "Select an app" dialog nobody is there to answer — the step
+hangs until its timeout and nothing listens on the port. The runner refuses the form. Name the
+file, `Start-Process -FilePath 'npx.cmd' -ArgumentList 'tsx','src/main.ts'`, or start the
+program itself, `Start-Process node -ArgumentList 'dist/main.js'`. Inline, `npx tsx src/main.ts`
+runs fine: there the script runs in your shell. Thirteen review steps in one day started a
+server this way and then reported "connection refused" against work that was fine.
+
 `Start-Process` on `npx`, `npm` or `cmd.exe` returns the **wrapper's** PID. `Stop-Process` on
 it leaves the real server — a `node.exe` child — running and listening. Three tasks in a row,
 and their reviewers, found the port "still busy" for this reason. Stop the tree

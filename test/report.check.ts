@@ -2,10 +2,11 @@ import { writeReport, clip, stripAnsi } from '../src/exec/reportFile.js';
 import { buildCoveringMessage } from '../src/protocol/reporter.js';
 import { redactSecrets, findSecrets } from '../src/exec/redaction.js';
 import { staticCheck, describeStep } from '../src/exec/policy.js';
+import { forgetScriptShims } from '../src/exec/shellExecuteTrap.js';
 import type { RunResult } from '../src/exec/runner.js';
 import type { Step } from '../src/protocol/replySchema.js';
 import { RunConfigSchema } from '../src/config/schema.js';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -220,6 +221,59 @@ for (const s of steps) {
   const verdict = d && d.action !== 'run' ? `${d.action}: ${d.reason}` : 'allowed';
   console.log(`  ${s.id}. ${describeStep(s).padEnd(44)} ${verdict}`);
 }
+
+/*
+ * Start-Process on a name PowerShell would resolve to a .ps1 shim.
+ *
+ * Every refused line below was issued by a reviewer on 2026-09-20; none of them started a
+ * server, one hung 91 s on an "open with" dialog. The PATH is built here so the verdicts do not
+ * depend on what this machine has installed: `npx` and `pnpm` have a `.ps1` next to a `.cmd`,
+ * `node` is an `.exe`, `next` is not on PATH at all.
+ */
+console.log('\n--- Start-Process on a .ps1 shim: refused, the working forms allowed ---');
+const shimDir = join(dir, 'shims');
+await mkdir(shimDir, { recursive: true });
+for (const f of ['npx.ps1', 'npx.cmd', 'npm.ps1', 'npm.cmd', 'pnpm.ps1', 'pnpm.cmd', 'node.exe', 'pwsh.exe']) {
+  await writeFile(join(shimDir, f), '');
+}
+forgetScriptShims();
+const shimEnv = { PATH: shimDir, PATHEXT: '.COM;.EXE;.BAT;.CMD' };
+const trapped = [
+  "$p = Start-Process npx -ArgumentList 'next','start','-p','4310' -PassThru",
+  "$p=Start-Process npx -ArgumentList 'tsx','src/main.ts' -PassThru; try { Start-Sleep 8 } finally { Stop-Process -Id $p.Id -Force }",
+  "$p = Start-Process -FilePath npx -PassThru -ArgumentList @('tsx', 'src/main.ts')",
+  "$p = Start-Process -PassThru -WindowStyle Hidden -ArgumentList 'tsx', 'src/main.ts' npx",
+  "$p = start npm -ArgumentList 'run','dev' -PassThru",
+  "saps -FilePath:pnpm -ArgumentList dev",
+  "Start-Process 'C:\\tools\\serve.ps1'",
+];
+const working = [
+  "$p = Start-Process -FilePath 'npx.cmd' -ArgumentList 'tsx','src/main.ts' -PassThru",
+  "$p = Start-Process node -ArgumentList 'dist/main.js' -PassThru",
+  "$p = Start-Process pwsh -ArgumentList '-NoProfile','-Command','npx tsx src/main.ts' -PassThru",
+  "$p = Start-Process cmd.exe -ArgumentList '/c','npx next start' -PassThru",
+  "$p = Start-Process next -ArgumentList 'start' -PassThru",
+  'npx tsx src/main.ts',
+  "Write-Host 'server start'; Get-Process | Where-Object Name -eq node",
+  '$p = Start-Process $exe -ArgumentList dev',
+];
+const trapVerdict = (cmd: string, shell: Step['shell'] = 'pwsh'): boolean => {
+  const d = staticCheck({ id: 98, type: 'command', shell, cmd }, cfg, shimEnv);
+  return d !== null && d.action !== 'run';
+};
+const trapMissed = trapped.filter((c) => !trapVerdict(c));
+const trapWrong = working.filter((c) => trapVerdict(c));
+console.log(`  traps refused   : ${trapped.length - trapMissed.length}/${trapped.length}`);
+for (const c of trapMissed) console.log(`    ALLOWED (wrong): ${c}`);
+console.log(`  working allowed : ${working.length - trapWrong.length}/${working.length}`);
+for (const c of trapWrong) console.log(`    REFUSED (wrong): ${c}`);
+const cmdBuiltin = trapVerdict('start npx tsx src/main.ts', 'cmd');
+const cmdNested = trapVerdict('powershell -Command "Start-Process npx"', 'cmd');
+console.log(`  cmd's own start : ${cmdBuiltin ? 'REFUSED (wrong)' : 'allowed'}; nested Start-Process in cmd: ${cmdNested ? 'refused' : 'ALLOWED (wrong)'}`);
+const trapReason = staticCheck({ id: 97, type: 'command', shell: 'pwsh', cmd: trapped[0]! }, cfg, shimEnv);
+const reasonNamesFix = trapReason?.action === 'skip' && trapReason.reason.includes("'npx.cmd'") && trapReason.reason.includes('npx.ps1');
+console.log(`  reason names the .ps1 and the .cmd: ${reasonNamesFix ? 'yes' : 'NO'}`);
+forgetScriptShims();
 
 /*
  * git: the line between asking and changing.
