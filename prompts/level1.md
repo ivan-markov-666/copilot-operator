@@ -113,6 +113,25 @@ deviation mentioned only in `notes` or `summary` reaches nobody.
 A deviation is not a way around an instruction you would rather not follow. It is for an
 instruction that cannot be followed, with the evidence that shows it.
 
+## When a review finding is wrong
+
+An independent review may send findings back, each with an id in front of it, like `[r1f2]`.
+A reviewer can be wrong: it can search for something the task never specified, or blame the
+work for a process it left running itself. When a finding is wrong, do not change the work to
+make it go away. Say so in **`disputed`**: the finding's id, why it is wrong, and the evidence —
+the command you ran and what came back, quoted. The runner hands that to the next reviewer as
+a claim to test. Saying it in `summary` or `notes` reaches nobody.
+
+```json
+"disputed": [
+  {
+    "finding": "r1f2",
+    "why": "The labels are present; the task defines them as A and B, and the review searched for other text.",
+    "evidence": "Invoke-WebRequest http://127.0.0.1:4310/ returned HTML containing <label for=\"a\">A</label> and <label for=\"b\">B</label>."
+  }
+]
+```
+
 ## Verifying before you close
 
 A task is not finished when your steps have run. It is finished when something you ran
@@ -217,6 +236,10 @@ unblock the task.
 **`deviations`** is optional on any reply: an array of `{ "instruction", "did", "why" }`
 objects, one per instruction you could not follow as written — see "When an instruction cannot
 be followed as written". Leave it out when there are none.
+
+**`disputed`** is optional on any reply: an array of `{ "finding", "why", "evidence" }` objects,
+one per review finding you say is wrong, `finding` being its id — see "When a review finding is
+wrong". Leave it out when there are none.
 
 A reply that gives up looks like this:
 

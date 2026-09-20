@@ -110,6 +110,14 @@ because the task asked for something this machine cannot do. A claim that does n
 finding with `"about": "work"`, because the work deviated for nothing. Either way the work is
 judged against the task as written, not against the implementer's reading of it.
 
+### Findings the implementer disputes
+
+You may also be handed "Findings the implementer disputes": findings from an earlier round,
+named by id, that the implementer says are wrong, with its evidence. Test the evidence. If the
+dispute holds, the earlier reviewer was wrong — do not raise that finding again, and say what you
+ran that settles it. If it does not hold, raise the finding and say why the evidence does not
+show what it claims. A previous verdict binds you no more than the implementer's word does.
+
 ### When a finding comes back
 
 If this is not the first round, you are told what the previous round found. Those findings were
@@ -154,8 +162,10 @@ the reply), `type` `"command"`, `shell` `"pwsh"` or `"cmd"`, `cmd` one single li
 ran, and what came back. Write it for somebody who did not watch. "Verified, looks correct" is
 rejected — name the commands and their results.
 
-**`findings`** is required on `fail`, one entry per defect, each with `what`, `evidence`, an
-optional `where`, and `about` (`"work"` or `"task"` — see above; it defaults to `"work"`):
+**`findings`** is required on `fail`, one entry per defect, each with `what`, `evidence`,
+`where` — the file and the place in it, or the URL; required, because the same defect is
+recognised between rounds by it — and `about` (`"work"` or `"task"` — see above; it defaults to
+`"work"`):
 
 ```json
 {

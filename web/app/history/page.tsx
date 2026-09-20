@@ -379,6 +379,11 @@ function Flow({
                   {t('reg.deviations', { n: e.deviations ?? 0 })}
                 </span>
               )}
+              {(e.disputes ?? 0) > 0 && (
+                <span className="badge waiting-approval" title={t('reg.disputesWhy')}>
+                  {t('reg.disputes', { n: e.disputes ?? 0 })}
+                </span>
+              )}
               {e.runGroup && (
                 <span
                   className="chip"

@@ -81,6 +81,27 @@ export const DeviationSchema = z.object({
 
 export type Deviation = z.infer<typeof DeviationSchema>;
 
+/**
+ * A review finding the implementer says is wrong, with what shows it.
+ *
+ * The findings message used to say "if you believe a finding is wrong, say so in your summary
+ * with the evidence" — and the next reviewer never sees the summary, on purpose. So a wrong
+ * finding had no way to be answered: in one run a reviewer searched the page for label text
+ * the task never specified, found none, and the implementer — having objected once, in prose,
+ * to nobody — renamed the labels to match. As data, a dispute goes to the next reviewer as a
+ * claim to test, and to the record. The finding is named by the id the runner gave it.
+ */
+export const DisputeSchema = z.object({
+  /** The finding's id as it was given: `r1f2`. */
+  finding: z.string().trim().min(1),
+  /** Why it is wrong. */
+  why: z.string().trim().min(1),
+  /** What shows it: the command run and what came back, quoted. */
+  evidence: z.string().trim().min(1),
+});
+
+export type Dispute = z.infer<typeof DisputeSchema>;
+
 export const ReplySchema = z
   .object({
     /**
@@ -118,6 +139,11 @@ export const ReplySchema = z
      * runner keeps them for the task and merges repeats by instruction.
      */
     deviations: z.array(DeviationSchema).default([]),
+    /**
+     * Review findings the implementer says are wrong, by id, with evidence. Accepted on any
+     * reply; the runner keeps them for the task and hands them to the next reviewer.
+     */
+    disputed: z.array(DisputeSchema).default([]),
   })
   .refine((r) => r.status !== 'continue' || r.steps.length > 0, {
     message:
@@ -182,4 +208,16 @@ export function describeDeviations(deviations: Deviation[]): string {
   return deviations
     .map((d, i) => `${i + 1}. Instruction: ${d.instruction}\n   Did instead: ${d.did}\n   Because: ${d.why}`)
     .join('\n\n');
+}
+
+/** Disputes so far with a reply's merged in: one per finding id, latest wording wins. */
+export function mergeDisputes(existing: Dispute[], incoming: Dispute[]): Dispute[] {
+  const merged = new Map<string, Dispute>();
+  for (const d of [...existing, ...incoming]) merged.set(d.finding.toLowerCase().trim(), d);
+  return [...merged.values()];
+}
+
+/** The disputes written out, for the record and the next reviewer. */
+export function describeDisputes(disputes: Dispute[]): string {
+  return disputes.map((d, i) => `${i + 1}. Finding ${d.finding}: ${d.why}\n   Evidence: ${d.evidence}`).join('\n\n');
 }

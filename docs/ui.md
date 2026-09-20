@@ -64,7 +64,9 @@ written — the option was removed in the installed version, the build rewrites 
 task card shows those deviations as a block of their own under the summary: the instruction,
 what was done instead, and why. It is kept out of the summary on purpose, because it is the one
 part of the outcome that is a decision the operator did not make. The register's row carries a
-count.
+count. Review findings the model disputed — by the id shown in front of each finding, with the
+model's evidence — get a block of the same kind, because a dispute is a disagreement between
+two conversations that the next reviewer ruled on and a person may want to re-read.
 
 **How a task can end.** `done` is the work finished and verified. `blocked` is the work not
 done, reported by the model with what it tried and what is in the way — a result, not a

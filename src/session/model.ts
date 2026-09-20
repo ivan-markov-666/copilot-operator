@@ -35,6 +35,9 @@ export type SessionStatus = 'idle' | 'running' | 'stopping';
 /** One instruction not followed as written: which, what was done instead, and why. */
 export type TaskDeviation = { instruction: string; did: string; why: string };
 
+/** One review finding the model said was wrong: which (by id), why, and what shows it. */
+export type TaskDispute = { finding: string; why: string; evidence: string };
+
 export type Task = {
   id: string;
   title: string;
@@ -63,6 +66,8 @@ export type Task = {
    * and written only in a note is a decision nobody made.
    */
   deviations?: TaskDeviation[];
+  /** Review findings the model disputed, with its evidence. The next reviewer was told. */
+  disputes?: TaskDispute[];
   /** Path of the consolidated text log of everything executed, relative to the run folder. */
   logFile?: string;
   /**
@@ -227,6 +232,8 @@ export type TaskReview = {
   stepsRun: number;
   summary?: string;
   findings?: Array<{
+    /** Round and position, `r1f2`: what a dispute names. Absent on records older than this. */
+    id?: string;
     what: string;
     evidence: string;
     where?: string;
@@ -281,6 +288,8 @@ export type TaskAttempt = {
   reason?: string;
   /** What this attempt declared it could not do as written. */
   deviations?: TaskDeviation[];
+  /** Review findings this attempt disputed. */
+  disputes?: TaskDispute[];
   /**
    * What this attempt actually ran with.
    *

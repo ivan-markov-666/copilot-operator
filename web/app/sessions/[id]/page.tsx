@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
+import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
@@ -1790,6 +1790,7 @@ function TaskCard({
             </div>
           )}
           {(task.deviations?.length ?? 0) > 0 && <Deviations items={task.deviations ?? []} />}
+          {(task.disputes?.length ?? 0) > 0 && <Disputes items={task.disputes ?? []} />}
           {task.reason && (
             <div className="reason small" style={{ margin: '6px 0' }}>
               {task.reason}
@@ -2063,6 +2064,34 @@ function Deviations({ items }: { items: TaskDeviation[] }) {
 }
 
 /**
+ * Review findings the model said were wrong, with its evidence.
+ *
+ * Shown because a dispute is a disagreement between two conversations that only a person can
+ * finally settle: the next reviewer ruled on it, and the record of both sides is what the
+ * operator reads when the ruling looks wrong.
+ */
+function Disputes({ items }: { items: TaskDispute[] }) {
+  const { t } = useT();
+  return (
+    <div className="summary">
+      <strong>{t('task.disputes', { n: items.length })}</strong>
+      <ol style={{ margin: '6px 0', paddingLeft: 20 }}>
+        {items.map((d, i) => (
+          <li key={i} style={{ marginBottom: 6 }}>
+            <div>
+              <code>{d.finding}</code> — {d.why}
+            </div>
+            <div className="muted">
+              {t('review.evidence')}: {d.evidence}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
  * What the independent review concluded, on the task it reviewed.
  *
  * Shown above the summary rather than below it, and deliberately so: the summary is the
@@ -2094,6 +2123,7 @@ function ReviewVerdict({ review }: { review?: TaskReview }) {
             {(review.findings ?? []).map((f, i) => (
               <li key={i} style={{ marginBottom: 8 }}>
                 <div>
+                  {f.id && <code style={{ marginRight: 6 }}>{f.id}</code>}
                   {f.what}
                   {f.about === 'task' && (
                     <span className="chip" style={{ marginLeft: 6 }}>

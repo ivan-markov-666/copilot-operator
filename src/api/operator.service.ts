@@ -192,6 +192,8 @@ export type RegistryEntry = {
   review?: { verdict: TaskReview['verdict']; findings: number; stepsRun: number };
   /** How many instructions the model declared it could not follow as written. */
   deviations?: number;
+  /** How many review findings the model disputed. */
+  disputes?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
   attempt?: number;
   /**
@@ -1617,6 +1619,7 @@ export class OperatorService {
             ? { verdict: t.review.verdict, findings: t.review.findings?.length ?? 0, stepsRun: t.review.stepsRun }
             : undefined,
           deviations: t.deviations?.length || undefined,
+          disputes: t.disputes?.length || undefined,
           attempt: t.attempt,
           attempts: (t.attempts ?? []).map((a, n) => {
             const from = a.startedAt ? Date.parse(a.startedAt) : undefined;

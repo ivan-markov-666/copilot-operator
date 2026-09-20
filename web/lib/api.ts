@@ -25,6 +25,8 @@ export type TaskAttempt = {
   reason?: string;
   /** What this attempt declared it could not do as written. */
   deviations?: TaskDeviation[];
+  /** Review findings this attempt disputed. */
+  disputes?: TaskDispute[];
   /** What the independent review concluded about this attempt. */
   review?: TaskReview;
   /** What this attempt ran with, so an edit cannot rewrite what was already asked. */
@@ -58,6 +60,8 @@ export type ReviewSettings = { enabled: boolean; model: string };
 
 /** One thing an independent review found wrong, with what proves it. */
 export type ReviewFinding = {
+  /** Round and position, `r1f2`: what a dispute names. */
+  id?: string;
   what: string;
   evidence: string;
   where?: string;
@@ -69,6 +73,9 @@ export type ReviewFinding = {
 
 /** One instruction the model could not follow as written: which, what it did instead, and why. */
 export type TaskDeviation = { instruction: string; did: string; why: string };
+
+/** One review finding the model said was wrong: which (by id), why, and what shows it. */
+export type TaskDispute = { finding: string; why: string; evidence: string };
 
 /** What an independent review concluded about a task. */
 export type TaskReview = {
@@ -123,6 +130,8 @@ export type Task = {
   reason?: string;
   /** Instructions the model could not follow as written, with what it did instead and why. */
   deviations?: TaskDeviation[];
+  /** Review findings the model disputed, with its evidence. */
+  disputes?: TaskDispute[];
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;
@@ -248,6 +257,8 @@ export type RegistryEntry = {
   review?: { verdict: TaskReview['verdict']; findings: number; stepsRun: number };
   /** How many instructions the model declared it could not follow as written. */
   deviations?: number;
+  /** How many review findings the model disputed. */
+  disputes?: number;
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
   /** The attempts before it, oldest first, each with its own run folder and log. */

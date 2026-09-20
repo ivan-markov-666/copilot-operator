@@ -41,7 +41,14 @@ const Finding = z.object({
     .trim()
     .min(10, 'A finding needs evidence: the command you ran and what it actually returned.'),
   /** The file, the endpoint, the line — wherever the defect lives. */
-  where: z.string().trim().optional(),
+  /**
+   * Required, because it is how the same defect is recognised between rounds. Two reviewers
+   * word one problem differently; a file and a place in it do not drift. A first-round
+   * finding without one made a second-round repeat invisible, and the loop ran a third time.
+   */
+  where: z.string().trim().min(3, {
+    message: 'A finding needs "where": the file and the place in it, or the URL, that the finding is about.',
+  }),
   /**
    * Whose problem this is, and the only field here that changes what happens next.
    *
@@ -115,12 +122,23 @@ export type Review = z.infer<typeof ReviewSchema>;
 export function describeFindings(findings: ReviewFinding[], isRepeated?: (f: ReviewFinding) => boolean): string {
   return findings
     .map((f, i) => {
+      const id = (f as { id?: string }).id;
       const where = f.where?.trim() ? ` (${f.where.trim()})` : '';
       const about = f.about === 'task' ? ' [about the task, not the work]' : '';
       const again = isRepeated?.(f) ? ' [raised in an earlier round too]' : '';
-      return `${i + 1}. ${f.what}${where}${about}${again}\n   Evidence: ${f.evidence}`;
+      return `${i + 1}. ${id ? `[${id}] ` : ''}${f.what}${where}${about}${again}\n   Evidence: ${f.evidence}`;
     })
     .join('\n\n');
+}
+
+/**
+ * The name a finding is referred to by, once the runner has it: round and position.
+ *
+ * Given by the runner rather than the reviewer so that it is unique across rounds and cannot
+ * be forgotten. It is what the implementer names in `disputed`, and what the record shows.
+ */
+export function findingId(round: number, index: number): string {
+  return `r${round}f${index + 1}`;
 }
 
 /** True when nothing the reviewer found is something the implementer could fix. */

@@ -332,6 +332,9 @@ const dict = {
     'reg.deviations': '{n} deviation(s)',
     'reg.deviationsWhy':
       'The model could not follow every instruction as written and said what it did instead. Open the task to read them.',
+    'task.disputes': 'Review findings the model disputed ({n})',
+    'reg.disputes': '{n} dispute(s)',
+    'reg.disputesWhy': 'The model said a review finding was wrong and gave evidence; the next reviewer was told. Open the task to read both sides.',
     'restore.button': 'Restore',
     'restore.why': 'Put the repository back to the code as it was before this task started.',
     'restore.checking': 'checking…',
@@ -1071,6 +1074,9 @@ const dict = {
     'reg.deviations': '{n} отклонение(я)',
     'reg.deviationsWhy':
       'Моделът не е могъл да следва всяка инструкция буквално и е казал какво е направил вместо това. Отвори задачата, за да ги прочетеш.',
+    'task.disputes': 'Оспорени находки на рецензията ({n})',
+    'reg.disputes': '{n} оспорване(ия)',
+    'reg.disputesWhy': 'Моделът е казал, че находка на рецензията е грешна, с доказателство; следващият рецензент е уведомен. Отвори задачата за двете страни.',
     'restore.button': 'Върни',
     'restore.why': 'Връща хранилището към кода, какъвто е бил преди тази задача да започне.',
     'restore.checking': 'проверява се…',

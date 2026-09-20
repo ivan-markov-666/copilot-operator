@@ -24,7 +24,7 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { describeFindings, type ReviewFinding } from '../protocol/reviewSchema.js';
-import type { Deviation } from '../protocol/replySchema.js';
+import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { describeStep } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
@@ -61,6 +61,8 @@ export type ReviewDeps = {
   changedFiles: string[];
   /** Instructions the implementer says it could not follow as written. Claims, not facts. */
   deviations: Deviation[];
+  /** Findings from earlier rounds the implementer says are wrong, by id. Claims, not facts. */
+  disputes: Dispute[];
   /** What the round before this one found, when there was one. */
   previous?: PreviousRound;
   event: (type: string, data?: Record<string, unknown>, human?: string, level?: 'info' | 'warn' | 'error') => void;
@@ -68,7 +70,7 @@ export type ReviewDeps = {
 };
 
 /** The findings of the round before this one, as they were sent back to the implementer. */
-export type PreviousRound = { round: number; findings: Array<ReviewFinding & { repeated?: boolean }> };
+export type PreviousRound = { round: number; findings: Array<ReviewFinding & { id?: string; repeated?: boolean }> };
 
 /**
  * What the reviewer is told about the work.
@@ -92,6 +94,7 @@ export function reviewBrief(
   cwd: string,
   deviations: Deviation[] = [],
   previous?: PreviousRound,
+  disputes: Dispute[] = [],
 ): string {
   const repo = session.vcs?.enabled ? session.vcs.repoDir?.trim() : '';
   const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
@@ -145,9 +148,23 @@ export function reviewBrief(
           previous.findings
             .map(
               (f, i) =>
-                `${i + 1}. ${f.what}${f.where ? ` (${f.where})` : ''}${f.repeated ? ' — raised in more than one round already' : ''}`,
+                `${i + 1}. ${f.id ? `[${f.id}] ` : ''}${f.what}${f.where ? ` (${f.where})` : ''}${f.repeated ? ' — raised in more than one round already' : ''}`,
             )
             .join('\n'),
+        ]
+      : []),
+    ...(disputes.length > 0
+      ? [
+          '',
+          '## Findings the implementer disputes',
+          '',
+          'The implementer says these findings from an earlier round are wrong, and gives its evidence. They',
+          'are claims; test them. If a dispute holds, the earlier reviewer was wrong — do not raise that',
+          'finding again, and say in your summary what you ran that settles it. If it does not hold, raise',
+          "the finding with `\"about\": \"work\"` and say why the implementer's evidence does not show what it",
+          'claims. Either way the work is judged against the task as written.',
+          '',
+          disputes.map((d, i) => `${i + 1}. Finding ${d.finding}: ${d.why}\n   Implementer's evidence: ${d.evidence}`).join('\n\n'),
         ]
       : []),
     '',
@@ -198,7 +215,12 @@ export async function runReview(
     await transport.waitForReply(before);
 
     await pacer.throttleSend();
-    before = await transport.sendAndConfirm(reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous));
+    // The brief is saved as sent. Until it was, whether a later round had been told what the
+    // earlier one found could not be checked from the run folder at all.
+    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes);
+    await saveReply('00-brief', brief);
+    await deps.record(`REVIEW ${round} BRIEF`, brief);
+    before = await transport.sendAndConfirm(brief);
     let markdown = (await transport.waitForReply(before)).markdown;
     await saveReply('00-opening', markdown);
 
@@ -404,7 +426,9 @@ export function findingsMessage(outcome: ReviewOutcome, round: number, maxRounds
     `Fix these, then verify as usual and close the task again. This is review round ${round} of ${maxRounds};`,
     'after that the task is closed as blocked with whatever is still outstanding.',
     '',
-    'If you believe a finding is wrong, say so in your summary with the evidence that shows it —',
-    'do not change the thing the reviewer looked at in order to make the objection go away.',
+    'If you believe a finding is wrong, say so in `disputed`: its id (the `[r1f2]` in front of it), why it',
+    'is wrong, and the evidence that shows it — the command you ran and what came back. A dispute goes to',
+    'the next reviewer as a claim to test; a sentence in your summary goes nowhere. Do not change the',
+    'thing the reviewer looked at in order to make the objection go away.',
   ].join('\n');
 }

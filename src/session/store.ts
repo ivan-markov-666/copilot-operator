@@ -294,6 +294,7 @@ export class SessionStore {
           summary: t.summary,
           reason: t.reason,
           deviations: t.deviations,
+          disputes: t.disputes,
           // The text as it was when this attempt ran, before any edit below.
           title: t.title,
           prompt: t.prompt,

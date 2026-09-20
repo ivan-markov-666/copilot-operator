@@ -1,5 +1,5 @@
 import { parseReply, extractFencedBlocks, stripLineNumbers } from '../src/protocol/parser.js';
-import { mergeDeviations, describeDeviations } from '../src/protocol/replySchema.js';
+import { mergeDeviations, describeDeviations, mergeDisputes, describeDisputes } from '../src/protocol/replySchema.js';
 
 const opts = { stopMarker: 'Край', defaultShell: 'pwsh' as const };
 const show = (label: string, md: string): void => {
@@ -116,6 +116,26 @@ const merged = mergeDeviations(
 );
 console.log('merged by instruction     :', merged.length, '(expect 2 — the repeat is one deviation, later wording wins)');
 console.log('later wording kept        :', merged[0].why.startsWith('refined') ? 'yes' : 'NO');
+
+/*
+ * Disputes: a wrong review finding, answered as data.
+ *
+ * One run's reviewer searched a page for label text the task never specified, and the
+ * implementer, having objected in prose to nobody, renamed the labels. The field is the
+ * objection with an address: the finding's id and the evidence, for the next reviewer.
+ */
+console.log('\n--- disputed: a wrong finding, answered where it can be read ---');
+const dispute = { finding: 'r1f2', why: 'The labels are A and B, as the task defines them.', evidence: 'Invoke-WebRequest returned HTML with <label for="a">A</label> and <label for="b">B</label>.' };
+const disCase = (label: string, obj: unknown): void => {
+  const r = parseReply(block(obj), opts);
+  console.log(r.ok ? `${label.padEnd(32)} ok   disputed=${r.reply.disputed.length}` : `${label.padEnd(32)} FAIL ${r.detail.slice(0, 80)}`);
+};
+disCase('disputed, on continue', { status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'npx next build' }], disputed: [dispute] });
+disCase('disputed, on done', { status: 'done', steps: [], summary, disputed: [dispute] });
+disCase('missing evidence (reject)', { status: 'done', steps: [], summary, disputed: [{ finding: 'r1f2', why: 'wrong' }] });
+const mergedDisputes = mergeDisputes([dispute], [{ ...dispute, finding: 'R1F2', why: 'refined: the review searched for text the task never gave' }, { finding: 'r1f1', why: 'x', evidence: 'y' }]);
+console.log('merged by finding id      :', mergedDisputes.length, '(expect 2)');
+console.log(describeDisputes(mergedDisputes).split('\n').map((l) => '  ' + l).join('\n'));
 console.log(
   describeDeviations(merged)
     .split('\n')

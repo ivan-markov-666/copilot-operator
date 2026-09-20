@@ -18,14 +18,14 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import { isDownloadStep, mergeDeviations, describeDeviations, type Step, type Deviation } from '../protocol/replySchema.js';
+import { isDownloadStep, mergeDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
-import { allAboutTheTask, isRepeat, type ReviewFinding } from '../protocol/reviewSchema.js';
+import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState } from '../vcs/git.js';
 import { describeStep, matchDenyPattern } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
@@ -358,6 +358,8 @@ export async function runTask(
   let iterations = 0;
   /** What the model has declared it could not do as written, merged across every reply. */
   let deviations: Deviation[] = [];
+  /** Review findings the model has disputed, by id, merged across every reply. */
+  let disputes: Dispute[] = [];
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
@@ -398,6 +400,7 @@ export async function runTask(
       t.reason = reason;
       t.finalReply = finalReply;
       if (deviations.length > 0) t.deviations = deviations;
+      if (disputes.length > 0) t.disputes = disputes;
       t.logFile = 'task-log.txt';
     });
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
@@ -633,6 +636,7 @@ export async function runTask(
       await writeFile(path, checkReport, 'utf8');
       await record(`CHECKS ${checkRounds}`, checkReport);
       const message = failureMessage(outcomes, checkRounds, maxCheckRounds);
+      await record(`CHECKS ${checkRounds} MESSAGE SENT`, message);
 
       await pacer.throttleSend();
       const before = await transport.sendAndConfirm(message, [path]);
@@ -663,7 +667,7 @@ export async function runTask(
      * What the previous round found, as it was sent back. The next reviewer is told, and a
      * finding that comes back is recognised against this — see `isRepeat`.
      */
-    let previousFindings: Array<ReviewFinding & { repeated?: boolean }> = [];
+    let previousFindings: Array<ReviewFinding & { id: string; repeated?: boolean }> = [];
 
     const reviewWanted = task.reviewEnabled ?? session.review?.enabled ?? true;
     const maxReviewRounds = Math.max(1, cfg.limits.maxReviewRounds ?? 2);
@@ -723,6 +727,7 @@ export async function runTask(
           cwd: work.cwd,
           changedFiles,
           deviations,
+          disputes,
           previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings } : undefined,
           event: (type, data, human, level) => sink.event(type, data, human, level),
           record,
@@ -751,13 +756,19 @@ export async function runTask(
         sink.event('review-finding-repeated', { round: reviewRounds, count: repeated.length },
           `${repeated.length} finding(s) came back after a reported fix: ${repeated.map((f) => f.where ?? f.what).join('; ')}`, 'warn');
       }
+      // Named by the runner — round and position — so a dispute can point at one and the
+      // record can show which came back. The same objects are used everywhere below, so
+      // `repeated` still identifies them.
+      const named = outcome.findings.map((f, i) => ({ ...f, id: findingId(reviewRounds, i), ...(repeated.includes(f) ? { repeated: true } : {}) }));
+      outcome = { ...outcome, findings: named };
+      const repeatedNamed = named.filter((f) => f.repeated);
       lastReview = outcome;
       await saveReview({
         verdict: outcome.verdict,
         rounds: reviewRounds,
         stepsRun: outcome.stepsRun,
         summary: outcome.summary,
-        findings: outcome.findings.map((f) => (repeated.includes(f) ? { ...f, repeated: true } : f)),
+        findings: named,
         problem: outcome.problem,
         model: model || undefined,
       });
@@ -824,12 +835,16 @@ export async function runTask(
 
       await pacer.throttleSend();
       // The reviewer quotes output in its evidence, so the message gets the same treatment.
-      const before = await transport.sendAndConfirm(redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeated), cfg.report.redactPatterns));
+      // Recorded as sent, because what reached the chat is what the next question is about.
+      const findingsSent = redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeatedNamed), cfg.report.redactPatterns);
+      await writeFile(log.path('review', String(reviewRounds), 'findings-sent.md'), findingsSent, 'utf8').catch(() => undefined);
+      await record(`REVIEW ${reviewRounds} FINDINGS SENT`, findingsSent);
+      const before = await transport.sendAndConfirm(findingsSent);
       const next = await transport.waitForReply(before);
       await saveReply(`review-${reviewRounds}-findings`, next);
       lastMarkdown = next.markdown;
       await pacer.settle();
-      previousFindings = outcome.findings.map((f) => ({ ...f, repeated: repeated.includes(f) }));
+      previousFindings = named;
       return 'retry';
     };
 
@@ -929,6 +944,22 @@ export async function runTask(
           `the model says ${reply.deviations.length} instruction(s) could not be followed as written: ` +
             reply.deviations.map((d) => d.instruction).join('; '), 'warn');
         await record('DEVIATIONS DECLARED', describeDeviations(reply.deviations));
+      }
+
+      /*
+       * A disputed finding goes on the record and to the next reviewer, not into the summary.
+       *
+       * The alternative was the one the message used to recommend — "say so in your summary"
+       * — and the summary is the one thing the next reviewer is never shown.
+       */
+      if (reply.disputed.length > 0) {
+        disputes = mergeDisputes(disputes, reply.disputed);
+        await setTask((t) => {
+          t.disputes = disputes;
+        });
+        sink.event('finding-disputed', { count: reply.disputed.length, ids: reply.disputed.map((d) => d.finding) },
+          `the model disputes ${reply.disputed.length} review finding(s): ${reply.disputed.map((d) => d.finding).join(', ')}`, 'warn');
+        await record('FINDINGS DISPUTED', describeDisputes(reply.disputed));
       }
 
       /*

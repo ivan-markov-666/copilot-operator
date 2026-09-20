@@ -19,7 +19,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task } from './model.js';
-import { describeDeviations } from '../protocol/replySchema.js';
+import { describeDeviations, describeDisputes } from '../protocol/replySchema.js';
 
 export type ExportVariant = 'full' | 'outcome';
 
@@ -211,6 +211,11 @@ async function sectionFor(task: Task, index: number, input: ExportInput): Promis
   if ((task.deviations ?? []).length > 0) {
     parts.push(`\n${THIN}\nNOT AS THE TASK SAID — instructions the model could not follow as written\n${THIN}`);
     parts.push(describeDeviations(task.deviations ?? []));
+  }
+
+  if ((task.disputes ?? []).length > 0) {
+    parts.push(`\n${THIN}\nDISPUTED — review findings the model said were wrong\n${THIN}`);
+    parts.push(describeDisputes(task.disputes ?? []));
   }
 
   if (task.finalReply && task.finalReply.trim() !== (task.summary ?? '').trim()) {

@@ -52,6 +52,8 @@ export type DebugTask = {
   reason?: string;
   /** What the model declared it could not do as written. A decision worth reading against the diff. */
   deviations?: Task['deviations'];
+  /** Review findings the model disputed. */
+  disputes?: Task['disputes'];
   vcsPlan?: Task['vcsPlan'];
   vcs?: Task['vcs'];
   checks?: Task['checks'];
@@ -67,6 +69,7 @@ export type DebugTask = {
     reason?: string;
     summary?: string;
     deviations?: Task['deviations'];
+    disputes?: Task['disputes'];
     checkResults?: Task['checkResults'];
     vcs?: Task['vcs'];
   }>;
@@ -182,6 +185,7 @@ async function taskOf(task: Task, runsDir: string): Promise<DebugTask> {
     summary: task.summary,
     reason: task.reason,
     deviations: task.deviations,
+    disputes: task.disputes,
     vcsPlan: task.vcsPlan,
     vcs: task.vcs,
     checks: task.checks,
@@ -196,6 +200,7 @@ async function taskOf(task: Task, runsDir: string): Promise<DebugTask> {
       reason: a.reason,
       summary: a.summary,
       deviations: a.deviations,
+      disputes: a.disputes,
       checkResults: a.checkResults,
       vcs: a.vcs,
     })),
