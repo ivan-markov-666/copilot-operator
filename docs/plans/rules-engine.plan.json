@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "plan": "rules-engine",
+  "notes": "Three repositories that are one piece of work: a rules-engine API, a web UI that authors rule sets and tries them, and a Playwright Test project that tests both through fixtures, page objects and data-driven cases. Sessions run in this order because each builds on the previous repository's working tree. Ports: API 4400, web 4410. Nothing is pushed anywhere.",
+  "onFailure": "stop",
+  "conversation": "per-session",
+  "sessions": [
+    {
+      "name": "rules-api",
+      "goal": "A TypeScript rules-engine service: rule sets as JSON, evaluated over a payload through HTTP, with unit tests, an audit log, and a README whose commands are proven by running them.",
+      "model": "",
+      "onFailure": "stop",
+      "level2": "Windows 11, PowerShell 7, Node 20 or newer, npm. The repository is C:\\Projects\\rules-api and it is empty apart from README.md. Express 4 with TypeScript, zod for validation, tsx for running TypeScript, node's built-in test runner for tests (`npm test` runs `tsx --test` over `src/**/*.test.ts`). The service binds 127.0.0.1:4400. Rule sets live as one JSON file each under data/rulesets/ and are tracked; the audit log data/audit.jsonl is not tracked.\n\nRules for every task here:\n- Write the .gitignore before the first `npm install`. The runner commits what a task leaves behind.\n- Never leave a server running. Start it with `$p = Start-Process -FilePath node -ArgumentList 'dist/main.js' -PassThru -WorkingDirectory C:\\Projects\\rules-api`, wait for the port with a bounded loop (at most 60 seconds), call it, and stop it in the same step's `finally` with `taskkill /PID $p.Id /T /F`. Never `Start-Process npx` or `Start-Process npm` by bare name: PowerShell hands the .ps1 shim to the Windows shell and nothing starts.\n- Nothing interactive. No `npm init` without `-y`, no generators that ask questions.\n- Errors from the API are JSON of the shape { \"error\": { \"code\": \"...\", \"message\": \"...\" } } with the HTTP status that fits; validation errors add \"issues\".\n- Do not touch any other repository.",
+      "vcs": {
+        "enabled": true,
+        "repoDir": "C:\\Projects\\rules-api",
+        "branchMode": "per-session",
+        "branchName": "rules-api",
+        "commitOnFinish": true,
+        "branchPrefix": "cop/"
+      },
+      "review": { "enabled": true, "model": "" },
+      "tasks": [
+        {
+          "title": "api-scaffold",
+          "prompt": "Create the service project by hand in C:\\Projects\\rules-api.\n\n1. First, before installing anything, write C:\\Projects\\rules-api\\.gitignore with one entry per line: `node_modules/`, `dist/`, `*.log`, `data/audit.jsonl`, `.env`, `.env.*`, `!.env.example`.\n2. `npm init -y`, then install express, zod as dependencies and typescript, tsx, @types/node, @types/express as dev dependencies. Pin what npm installs (no caret ranges) so a later install reproduces this one.\n3. tsconfig.json: strict, target ES2022, module NodeNext, moduleResolution NodeNext, outDir dist, rootDir src, include src.\n4. src/main.ts starts an Express app on 127.0.0.1:4400 with `GET /health` answering 200 `{ \"ok\": true, \"service\": \"rules-api\" }`. Keep the app in src/app.ts (a function that builds and returns the Express app without listening) so tests can mount it on an ephemeral port; main.ts only listens.\n5. package.json scripts: `build` = `tsc -p tsconfig.json`, `start` = `node dist/main.js`, `dev` = `tsx src/main.ts`, `test` = `tsx --test \"src/**/*.test.ts\"`, `typecheck` = `tsc --noEmit`.\n6. One test, src/app.test.ts, that builds the app, listens on port 0, fetches /health, asserts the body, and closes the server.\n7. Prove it: `npm run build`, `npm test`, and one bounded step that starts dist/main.js, fetches http://127.0.0.1:4400/health, prints the body, and stops the process tree in `finally`.",
+          "expected": "`npm run typecheck`, `npm run build` and `npm test` pass; GET /health on 4400 answers the JSON above; node_modules and dist are not tracked.",
+          "vcs": { "commitMessage": "Scaffold the rules-api service\n\nExpress and TypeScript by hand, an app factory apart from the listener so tests can mount it on an ephemeral port, and a health endpoint proven by calling it." },
+          "checks": [
+            { "name": "the repository ignores dependencies", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\.gitignore", "value": "node_modules" },
+            { "name": "dependencies are not tracked", "expect": "output-omits", "run": "git --no-pager -C C:\\Projects\\rules-api ls-files", "cwd": "C:\\Projects\\rules-api", "value": "node_modules" },
+            { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-api" },
+            { "name": "the unit tests pass", "expect": "exit-zero", "run": "npm test", "cwd": "C:\\Projects\\rules-api" },
+            { "name": "the app factory exists", "expect": "file-exists", "file": "C:\\Projects\\rules-api\\src\\app.ts" },
+            { "name": "it binds port 4400", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\src\\main.ts", "value": "4400" }
+          ]
+        },
+        {
+          "title": "rule-model-and-evaluator",
+          "prompt": "Add the rules model and a pure evaluator, with unit tests, in C:\\Projects\\rules-api. No HTTP in this task.\n\n1. src/rules/model.ts: zod schemas and inferred types.\n   - RuleSet: id (slug: lowercase letters, digits, hyphens), name, version (positive integer), rules (array).\n   - Rule: id (slug, unique within the set), name, priority (integer, higher runs first), when (Condition), then (Action[], at least one).\n   - Condition is one of: a leaf `{ \"field\": \"applicant.age\", \"op\": ..., \"value\": ... }` with ops eq, neq, gt, gte, lt, lte, in, contains, exists; a group `{ \"all\": [Condition...] }`; a group `{ \"any\": [Condition...] }`. Groups nest. `field` is a dotted path into the payload. `in` expects an array value; `contains` works on strings and arrays; `exists` ignores value.\n   - Action is one of: `{ \"type\": \"set\", \"path\": \"output.rate\", \"value\": ... }`, `{ \"type\": \"tag\", \"tag\": \"vip\" }`, `{ \"type\": \"reject\", \"code\": \"underage\", \"message\": \"...\" }`.\n2. src/rules/evaluate.ts: `evaluate(ruleSet, payload)` returns `{ output, tags, matched, rejected }`: output starts as a deep copy of the payload and `set` actions write into it by path (creating objects along the way); tags is a de-duplicated array in the order added; matched lists `{ ruleId, name }` in evaluation order; rejected is `{ code, message }` or undefined. Rules run by priority descending, ties in array order. The first `reject` action stops evaluation: later rules do not run, and the rejecting rule is the last in matched. A missing field makes every op except `exists` false. Comparisons with gt/gte/lt/lte apply to numbers only; anything else is false, never a throw.\n3. Unit tests in src/rules/evaluate.test.ts and src/rules/model.test.ts: at least 14 cases covering every op, a nested all/any group, priority ordering, tag de-duplication, set creating nested paths, reject stopping evaluation, a missing field, a non-number compared with gt, and two model rejections (duplicate rule id, unknown op) with the zod issue path shown.\n4. Run `npm test` and `npm run typecheck` and put the counts in the summary.",
+          "expected": "`npm test` passes with at least 14 tests across the two new files; the evaluator is pure (no file or network access) and never throws on a well-formed rule set.",
+          "vcs": { "commitMessage": "Add the rules model and a pure evaluator\n\nzod schemas for rule sets, rules, nested conditions and actions, and an evaluator that runs rules by priority, writes set actions by path, collects tags and stops at the first reject." },
+          "checks": [
+            { "name": "the evaluator exists", "expect": "file-exists", "file": "C:\\Projects\\rules-api\\src\\rules\\evaluate.ts" },
+            { "name": "the model exists", "expect": "file-exists", "file": "C:\\Projects\\rules-api\\src\\rules\\model.ts" },
+            { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-api" },
+            { "name": "the unit tests pass", "expect": "exit-zero", "run": "npm test", "cwd": "C:\\Projects\\rules-api" },
+            { "name": "there are at least 15 tests in total", "expect": "output-matches", "run": "npm test 2>&1", "cwd": "C:\\Projects\\rules-api", "value": "# pass (1[5-9]|[2-9][0-9]|[1-9][0-9]{2,})" },
+            { "name": "none fail", "expect": "output-contains", "run": "npm test 2>&1", "cwd": "C:\\Projects\\rules-api", "value": "# fail 0" }
+          ]
+        },
+        {
+          "title": "rulesets-store-and-http",
+          "prompt": "Expose rule sets and evaluation over HTTP in C:\\Projects\\rules-api, backed by JSON files.\n\n1. Store: src/store/fileStore.ts reads and writes one file per rule set at data/rulesets/<id>.json, atomically (write to a temp file, then rename). List, get, put, delete.\n2. Seed data/rulesets/loan-approval.json (tracked in git): id loan-approval, name \"Loan approval\", version 1, and these rules in this order: `underage` (priority 100): reject with code underage when applicant.age lt 18; `unsupported-country` (priority 90): reject with code unsupported_country when applicant.country not in [\"BG\", \"DE\", \"RO\"] (express it with the ops available); `vip` (priority 50): tag vip when applicant.income gte 100000; `rate-small` (priority 10): set output.rate to 0.12 when loan.amount lt 5000; `rate-large` (priority 10): set output.rate to 0.08 when loan.amount gte 5000.\n3. Routes, mounted by src/app.ts: `GET /rulesets` (array of { id, name, version, rules: <count> }), `GET /rulesets/:id` (the full set, 404 with code not_found), `PUT /rulesets/:id` (body validated with the RuleSet schema; the id in the path must equal the id in the body, else 400 with code id_mismatch; validation failures are 400 with code invalid_ruleset and `issues` as zod reports them; answers 200 with the stored set), `DELETE /rulesets/:id` (204, or 404), `POST /rulesets/:id/evaluate` (body is the payload object; answers 200 with the evaluation result plus `ruleSetId` and `version`; 404 when the set is missing; 400 with code invalid_payload when the body is not a JSON object). Every evaluation appends one line to data/audit.jsonl: { at, ruleSetId, version, matched: [ids], rejected: code or null }.\n4. Tests in src/http/routes.test.ts that mount the app on an ephemeral port against a temporary copy of the data folder (never the tracked seed): list contains loan-approval; get 404; put an invalid set and assert code invalid_ruleset with a non-empty issues array; put a valid set, get it back, delete it, get 404; evaluate the seed with an underage applicant (rejected underage, rate absent), with a VIP from DE borrowing 7000 (tag vip, output.rate 0.08, not rejected), and with a payload that is an array (400 invalid_payload). At least 8 new tests.\n5. `npm test`, `npm run typecheck`, and one bounded step that builds, starts dist/main.js, calls GET /rulesets and POST /rulesets/loan-approval/evaluate with a valid applicant, prints both bodies, and stops the process tree in `finally`. Confirm data/audit.jsonl gained a line and is ignored by git.",
+          "expected": "All routes above answer as specified; the seed set evaluates the three example payloads as described; `npm test` passes; data/audit.jsonl exists after an evaluation and `git status` does not list it.",
+          "vcs": { "commitMessage": "Store rule sets as JSON files and expose them over HTTP\n\nCRUD on rule sets, evaluation with an audit line per call, a seed loan-approval set, and route tests against a temporary data folder." },
+          "checks": [
+            { "name": "the seed rule set is tracked", "expect": "output-contains", "run": "git --no-pager -C C:\\Projects\\rules-api ls-files data", "cwd": "C:\\Projects\\rules-api", "value": "data/rulesets/loan-approval.json" },
+            { "name": "the seed has the underage rule", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\data\\rulesets\\loan-approval.json", "value": "underage" },
+            { "name": "the audit log is ignored", "expect": "output-omits", "run": "git --no-pager -C C:\\Projects\\rules-api ls-files", "cwd": "C:\\Projects\\rules-api", "value": "audit.jsonl" },
+            { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-api" },
+            { "name": "the tests pass", "expect": "exit-zero", "run": "npm test", "cwd": "C:\\Projects\\rules-api" },
+            { "name": "there are at least 23 tests in total", "expect": "output-matches", "run": "npm test 2>&1", "cwd": "C:\\Projects\\rules-api", "value": "# pass (2[3-9]|[3-9][0-9]|[1-9][0-9]{2,})" }
+          ]
+        },
+        {
+          "title": "api-readme",
+          "prompt": "Write C:\\Projects\\rules-api\\README.md and prove every command in it.\n\nSections: what the service is (three sentences); Requirements; Install; Run (`npm run build` then `npm start`; the URL); Test; The rule-set format, with the loan-approval seed as the example and a table of the ops and the actions; The HTTP API, one subsection per route with a PowerShell `Invoke-RestMethod` example and the exact JSON it returns, taken from a real call; Errors, listing every error code the service can return with its status.\n\nThen run the README: in one bounded step, execute the Run commands exactly as written, call each documented example exactly as written, print what came back, and stop the process tree in `finally`. If a documented response differs from the real one, fix the README, not the service, unless the service is wrong against the earlier tasks.",
+          "expected": "Every command and example in README.md was executed as written in this task and the output in the file matches what came back.",
+          "vcs": { "commitMessage": "Document the rules-api service\n\nInstall, run, test, the rule-set format, every route with a real example, and every error code — each command run as written." },
+          "checks": [
+            { "name": "the README names the port", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\README.md", "value": "4400" },
+            { "name": "the README documents evaluation", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\README.md", "value": "/evaluate" },
+            { "name": "the README lists the error codes", "expect": "file-contains", "file": "C:\\Projects\\rules-api\\README.md", "value": "invalid_ruleset" },
+            { "name": "it still builds", "expect": "exit-zero", "run": "npm run build", "cwd": "C:\\Projects\\rules-api" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "rules-web",
+      "goal": "A Next.js UI for the rules-api service: list rule sets, edit one rule by rule, and try a payload against it — every interactive element carrying a data-testid the test project can rely on.",
+      "model": "",
+      "onFailure": "stop",
+      "level2": "Windows 11, PowerShell 7, Node 20 or newer, npm. The repository is C:\\Projects\\rules-web and it is empty apart from README.md. Next.js 15 with the app router, React 19, TypeScript, no UI library, plain CSS in app/globals.css. The UI runs on port 4410 and talks to the API at the URL in NEXT_PUBLIC_RULES_API, which defaults to http://127.0.0.1:4400 when unset. The API is the service in C:\\Projects\\rules-api (read its README.md for the routes; do not change that repository).\n\nRules for every task here:\n- Write the .gitignore before the first `npm install`.\n- Every element a test would click, type into or read gets a `data-testid`, and the names given in the tasks are the names to use, exactly.\n- Never leave a server running. Start the web app with `$p = Start-Process -FilePath node -ArgumentList 'node_modules/next/dist/bin/next','start','-p','4410' -PassThru -WorkingDirectory C:\\Projects\\rules-web` and the API with `node dist/main.js` the same way, wait for the ports with a bounded loop, and stop both process trees with `taskkill /PID $p.Id /T /F` in the same step's `finally`. Never `Start-Process npx` or `Start-Process npm` by bare name.\n- `npm run build` is the proof for every task; it takes a minute, mark such steps as long.\n- Do not touch any other repository.",
+      "vcs": {
+        "enabled": true,
+        "repoDir": "C:\\Projects\\rules-web",
+        "branchMode": "per-session",
+        "branchName": "rules-web",
+        "commitOnFinish": true,
+        "branchPrefix": "cop/"
+      },
+      "review": { "enabled": true, "model": "" },
+      "tasks": [
+        {
+          "title": "web-scaffold",
+          "prompt": "Create the Next.js app by hand in C:\\Projects\\rules-web — no create-next-app, it asks questions.\n\n1. First write .gitignore with one entry per line: `node_modules/`, `.next/`, `out/`, `*.log`, `.env`, `.env.*`, `!.env.example`, `*.tsbuildinfo`.\n2. package.json with scripts `dev` = `next dev -p 4410`, `build` = `next build`, `start` = `next start -p 4410`, `typecheck` = `tsc --noEmit`; dependencies next (15.x), react and react-dom (19.x); dev dependencies typescript, @types/node, @types/react, @types/react-dom. Pin the versions npm resolves.\n3. tsconfig.json as Next expects (strict; jsx preserve — Next rewrites this file on build, which is fine; leave what it writes). next.config.mjs with reactStrictMode true. app/layout.tsx with a header reading \"Rules\" (`data-testid=\"app-title\"`) and a nav link to `/` (`data-testid=\"nav-home\"`). app/page.tsx with a placeholder heading \"Rule sets\" (`data-testid=\"page-title\"`). lib/api.ts exporting `apiBase()` (the env var or the default) and typed helper functions for the routes the API README documents; do not call them yet.\n4. `npm run build` passes. Then one bounded step: start `next start -p 4410`, fetch http://127.0.0.1:4410/ and print whether the HTML contains `data-testid=\"page-title\"`, stop the tree in `finally`.",
+          "expected": "`npm run build` passes; the page on 4410 serves the placeholder with the three data-testids; node_modules and .next are not tracked.",
+          "vcs": { "commitMessage": "Scaffold the rules-web app\n\nNext.js by hand on port 4410, a typed API client that reads NEXT_PUBLIC_RULES_API, and the first data-testids." },
+          "checks": [
+            { "name": "the repository ignores the build output", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\.gitignore", "value": ".next" },
+            { "name": "dependencies are not tracked", "expect": "output-omits", "run": "git --no-pager -C C:\\Projects\\rules-web ls-files", "cwd": "C:\\Projects\\rules-web", "value": "node_modules" },
+            { "name": "the api client exists", "expect": "file-exists", "file": "C:\\Projects\\rules-web\\lib\\api.ts" },
+            { "name": "it starts on 4410", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\package.json", "value": "-p 4410" },
+            { "name": "the app builds", "expect": "exit-zero", "run": "npx next build", "cwd": "C:\\Projects\\rules-web" }
+          ]
+        },
+        {
+          "title": "ruleset-list",
+          "prompt": "Make the home page list the rule sets, in C:\\Projects\\rules-web.\n\napp/page.tsx becomes a client component that fetches `GET /rulesets` on mount through lib/api.ts and renders: a `<ul data-testid=\"ruleset-list\">` with one `<li data-testid=\"ruleset-row\">` per set containing the name as a link to `/rulesets/<id>` (`data-testid=\"ruleset-link\"`), the version (`data-testid=\"ruleset-version\"`) and the rule count (`data-testid=\"ruleset-rules\"`); an empty state `<p data-testid=\"ruleset-empty\">No rule sets yet.</p>` when the array is empty; while loading, `<p data-testid=\"ruleset-loading\">`; when the API cannot be reached, `<p data-testid=\"api-error\">` whose text names the API base URL. Also a small form above the list to create a new empty rule set: an id input (`data-testid=\"new-ruleset-id\"`), a name input (`data-testid=\"new-ruleset-name\"`), a Create button (`data-testid=\"new-ruleset-create\"`) that PUTs `{ id, name, version: 1, rules: [] }` and then navigates to the editor; an API error goes into `data-testid=\"new-ruleset-error\"`.\n\nProve it with `npm run build`, then one bounded step that starts both the API (from C:\\Projects\\rules-api\\dist, build it first if dist is missing) and the web app, fetches the page HTML and prints whether the list, loading or empty testid is present, and stops both trees in `finally`. The list itself renders client-side, so the HTML check is for the shell; say so in the summary.",
+          "expected": "The home page shows every rule set the API returns with the testids above, an empty state, an error state naming the API URL, and a create form that lands on the new set's editor.",
+          "vcs": { "commitMessage": "List rule sets on the home page\n\nClient-side fetch with loading, empty and API-error states, and a form that creates an empty set and opens its editor." },
+          "checks": [
+            { "name": "the list testid is in the page", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\app\\page.tsx", "value": "ruleset-list" },
+            { "name": "the error state is in the page", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\app\\page.tsx", "value": "api-error" },
+            { "name": "the create form is in the page", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\app\\page.tsx", "value": "new-ruleset-create" },
+            { "name": "the app builds", "expect": "exit-zero", "run": "npx next build", "cwd": "C:\\Projects\\rules-web" }
+          ]
+        },
+        {
+          "title": "ruleset-editor",
+          "prompt": "Add the editor page app/rulesets/[id]/page.tsx in C:\\Projects\\rules-web.\n\nIt loads `GET /rulesets/:id` and shows: the name in an input (`data-testid=\"ruleset-name\"`), the version as text (`data-testid=\"ruleset-version\"`), and a table with one `<tr data-testid=\"rule-row\">` per rule holding editable inputs for id (`rule-id`), name (`rule-name`), priority (`rule-priority`), a single leaf condition — field (`rule-field`), op as a select of the nine ops (`rule-op`), value as text parsed as JSON when it parses and kept as a string otherwise (`rule-value`) — and one action: type as a select of set, tag, reject (`rule-action-type`) with the fields that type needs (`rule-action-path`, `rule-action-value`, `rule-action-tag`, `rule-action-code`, `rule-action-message`), and a Remove button (`rule-remove`). Rules whose condition is a group, or that have more than one action, are shown read-only as JSON in that row (`rule-json`) with a note; they must survive a save unchanged. Below the table: Add rule (`add-rule`) appends a row with sensible defaults, Save (`save-ruleset`) PUTs the whole set with the version incremented by one, and the outcome goes into `data-testid=\"save-status\"`: \"Saved version N\" on success, or the API's error message and, for invalid_ruleset, each issue path and message as a list (`save-issue`). A 404 on load shows `data-testid=\"ruleset-missing\"`.\n\nKeep the page's state in one object and derive the PUT body from it; do not mutate what the API returned. Prove it with `npm run build`, then a bounded step that serves the app and the API and fetches /rulesets/loan-approval, stopping both trees in `finally`.",
+          "expected": "The editor round-trips the loan-approval seed: load, add a rule, save, reload, and the new rule is there with version 2; an invalid save shows the API's issues.",
+          "vcs": { "commitMessage": "Add the rule-set editor\n\nOne row per rule with a leaf condition and one action editable in place, grouped or multi-action rules preserved as JSON, and a save that reports the new version or the API's issues." },
+          "checks": [
+            { "name": "the editor page exists", "expect": "file-exists", "file": "C:\\Projects\\rules-web\\app\\rulesets\\[id]\\page.tsx" },
+            { "name": "rows carry the testid", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\app\\rulesets\\[id]\\page.tsx", "value": "rule-row" },
+            { "name": "saving reports its status", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\app\\rulesets\\[id]\\page.tsx", "value": "save-status" },
+            { "name": "the app builds", "expect": "exit-zero", "run": "npx next build", "cwd": "C:\\Projects\\rules-web" }
+          ]
+        },
+        {
+          "title": "try-it-panel",
+          "prompt": "Add a Try-it panel to the editor page in C:\\Projects\\rules-web, as its own component components/TryIt.tsx rendered under the rule table.\n\nA textarea (`data-testid=\"payload-input\"`) pre-filled with `{ \"applicant\": { \"age\": 30, \"country\": \"BG\", \"income\": 50000 }, \"loan\": { \"amount\": 7000 } }`, an Evaluate button (`evaluate`) that POSTs the parsed payload to `/rulesets/:id/evaluate`, and a result block (`evaluation-result`) showing: the matched rules as a list (`matched-rule`, one per rule, text = the rule name), the tags (`evaluation-tags`, comma-separated, or \"none\"), the output as pretty JSON in a `<pre>` (`evaluation-output`), and, when rejected, `data-testid=\"evaluation-rejected\"` with the code and message. A textarea that is not valid JSON disables the button and shows `data-testid=\"payload-invalid\"`; an API error goes into `data-testid=\"evaluation-error\"`. Evaluation uses the rule set as stored on the server, not the unsaved edits, and the panel says so in a sentence.\n\nProve it with `npm run build` and a bounded step serving both apps, as before.",
+          "expected": "With the loan-approval seed, the pre-filled payload shows rate-large matched, rate 0.08, no tags, not rejected; age 16 shows rejected underage.",
+          "vcs": { "commitMessage": "Add a Try-it panel to the editor\n\nA payload textarea, one evaluate call against the stored set, and the matched rules, tags, output and rejection shown with testids." },
+          "checks": [
+            { "name": "the panel exists", "expect": "file-exists", "file": "C:\\Projects\\rules-web\\components\\TryIt.tsx" },
+            { "name": "the result block carries the testid", "expect": "file-contains", "file": "C:\\Projects\\rules-web\\components\\TryIt.tsx", "value": "evaluation-result" },
+            { "name": "the app builds", "expect": "exit-zero", "run": "npx next build", "cwd": "C:\\Projects\\rules-web" }
+          ]
+        },
+        {
+          "title": "web-smoke",
+          "prompt": "Smoke-test the built web app against the real API, changing nothing in either repository.\n\nIn one bounded step: build the API if C:\\Projects\\rules-api\\dist is missing and start it from dist; `npm run build` the web app if .next is missing and start it; wait for both ports with bounded loops; fetch `/`, `/rulesets/loan-approval` and `/rulesets/does-not-exist` from 4410 and report the HTTP status of each and whether the HTML shell contains `app-title`; call the API's `GET /rulesets` and `POST /rulesets/loan-approval/evaluate` with the Try-it default payload and report the bodies; stop both process trees in `finally`. Then list every data-testid that appears in the web repository's .tsx files, sorted, with the file it is in — the test project will build on this list. Put the statuses, the bodies and the testid table in the summary.",
+          "expected": "Both apps start from a clean build, the three pages answer, the API answers, both are stopped, and the summary carries the full testid inventory. No file in either repository changes.",
+          "readOnly": true,
+          "vcs": { "commitMessage": "Smoke-test the web app against the API\n\nNo changes: statuses of the three pages, the API bodies and the data-testid inventory are in the task summary." },
+          "checks": [
+            { "name": "the build output is there", "expect": "file-exists", "file": "C:\\Projects\\rules-web\\.next\\BUILD_ID" },
+            { "name": "nothing changed in the web repository", "expect": "exit-zero", "run": "git --no-pager -C C:\\Projects\\rules-web diff --quiet --exit-code", "cwd": "C:\\Projects\\rules-web" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "rules-tests",
+      "goal": "A Playwright Test project that tests the API through request fixtures and the UI through page objects, with data-driven cases, tags, and a config that starts both applications itself.",
+      "model": "",
+      "onFailure": "stop",
+      "level2": "Windows 11, PowerShell 7, Node 20 or newer, npm. The repository is C:\\Projects\\rules-tests and it is empty apart from README.md. @playwright/test with TypeScript; the browser is Chromium only. The applications under test are C:\\Projects\\rules-api (port 4400, `npm run build` then `npm start`, README.md documents the routes) and C:\\Projects\\rules-web (port 4410, `npm run build` then `npm start`, every interactive element has a data-testid; the web-smoke task's summary and the .tsx files list them). Neither of those repositories may be changed from here; if a test needs something they do not offer, that is a finding for the summary, not an edit.\n\nRules for every task here:\n- Write the .gitignore before the first `npm install`: node_modules/, test-results/, playwright-report/, blob-report/, .env, .env.*.\n- The Playwright config starts both applications through `webServer` entries with `cwd` set to each repository, `reuseExistingServer: true`, and a `url` to wait on (the API's /health, the web app's /). The commands are `npm run start` in each; building is the test project's `prepare:apps` script, run once before the first test run and whenever the applications changed.\n- Tests never depend on each other and never on the seed's exact contents beyond what the API README documents: a test that needs a rule set creates one with a unique id through the API in a fixture and deletes it afterwards.\n- Never leave a server running: Playwright stops what its webServer started; anything you start yourself you stop in the same step. Never `Start-Process npx` or `Start-Process npm` by bare name.\n- Nothing interactive. `npx playwright install chromium` is allowed; it is a download.\n- Do not touch any other repository.",
+      "vcs": {
+        "enabled": true,
+        "repoDir": "C:\\Projects\\rules-tests",
+        "branchMode": "per-session",
+        "branchName": "rules-tests",
+        "commitOnFinish": true,
+        "branchPrefix": "cop/"
+      },
+      "review": { "enabled": true, "model": "" },
+      "tasks": [
+        {
+          "title": "test-scaffold",
+          "prompt": "Create the Playwright Test project in C:\\Projects\\rules-tests.\n\n1. .gitignore first, as the project instructions say. `npm init -y`; install @playwright/test and typescript, @types/node as dev dependencies, pinned. `npx playwright install chromium`.\n2. tsconfig.json: strict, module NodeNext, moduleResolution NodeNext, target ES2022, types [\"node\"], include tests, fixtures, pages, playwright.config.ts.\n3. playwright.config.ts: testDir `tests`; fullyParallel true; retries 0; workers 2; reporter `[['list'], ['html', { open: 'never' }]]`; use: baseURL `http://127.0.0.1:4410`, trace `on-first-retry`, screenshot `only-on-failure`; two projects: `api` with testMatch `**/api/**/*.spec.ts` and `e2e` with testMatch `**/e2e/**/*.spec.ts` on Desktop Chrome; and `webServer` with two entries as the project instructions describe, the API first with url `http://127.0.0.1:4400/health` and timeout 60000, the web app with url `http://127.0.0.1:4410/` and timeout 120000. Export the API base URL from fixtures/config.ts as `API_URL` (env RULES_API_URL or the default) so tests never hard-code it twice.\n4. package.json scripts: `prepare:apps` = builds both applications (`npm --prefix C:\\Projects\\rules-api run build` and the same for rules-web), `test` = `playwright test`, `test:api` = `playwright test --project=api`, `test:e2e` = `playwright test --project=e2e`, `test:smoke` = `playwright test --grep @smoke`, `report` = `playwright show-report`.\n5. tests/api/health.spec.ts: one test tagged @smoke that GETs API_URL + /health through the `request` fixture and asserts `{ ok: true, service: 'rules-api' }`. tests/e2e/home.spec.ts: one test tagged @smoke that opens `/` and expects `app-title` to have text \"Rules\".\n6. Run `npm run prepare:apps`, then `npx playwright test --list` (prints both tests), then `npm run test:smoke` (both pass; Playwright starts and stops both applications). Put the list output and the run summary in the task summary.",
+          "expected": "`npx playwright test --list` shows 2 tests in 2 projects; `npm run test:smoke` passes with both applications started by Playwright and stopped afterwards; nothing is left listening on 4400 or 4410.",
+          "vcs": { "commitMessage": "Scaffold the Playwright Test project\n\nTwo projects, api and e2e, a config that starts both applications through webServer, and one smoke test in each." },
+          "checks": [
+            { "name": "the repository ignores the reports", "expect": "file-contains", "file": "C:\\Projects\\rules-tests\\.gitignore", "value": "playwright-report" },
+            { "name": "dependencies are not tracked", "expect": "output-omits", "run": "git --no-pager -C C:\\Projects\\rules-tests ls-files", "cwd": "C:\\Projects\\rules-tests", "value": "node_modules" },
+            { "name": "the config starts the applications", "expect": "file-contains", "file": "C:\\Projects\\rules-tests\\playwright.config.ts", "value": "webServer" },
+            { "name": "the config knows the web port", "expect": "file-contains", "file": "C:\\Projects\\rules-tests\\playwright.config.ts", "value": "4410" },
+            { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-tests" },
+            { "name": "playwright lists the tests", "expect": "output-matches", "run": "npx playwright test --list", "cwd": "C:\\Projects\\rules-tests", "value": "Total: 2 tests" }
+          ]
+        },
+        {
+          "title": "api-tests",
+          "prompt": "Write the API tests in C:\\Projects\\rules-tests.\n\n1. fixtures/api.ts extends the base test with: `api` — an APIRequestContext with baseURL API_URL; `ruleSet` — a fixture that PUTs a rule set with a unique id (`t-<8 random hex>`), a name, version 1 and the five rules of the loan-approval seed copied from the API README (not fetched from the seed at test time), yields `{ id, body }`, and DELETEs it afterwards even when the test failed.\n2. tests/data/loan-cases.json: at least 8 cases of `{ name, payload, expect: { rejected: code or null, tags: [...], rate: number or null, matched: [rule ids] } }` covering: underage, unsupported country, VIP with a large loan, VIP with a small loan, non-VIP small, non-VIP large, the boundary age 18, the boundary income 100000, and a payload with no loan object at all.\n3. tests/api/rulesets.spec.ts: list contains the fixture's set with the right rule count; get returns it with version 1; put with an id that does not match the path answers 400 id_mismatch; put an invalid set (unknown op) answers 400 invalid_ruleset with a non-empty issues array; put a valid update answers 200 with version 2 and get confirms it; delete answers 204 and get answers 404 not_found; get of a never-created id answers 404.\n4. tests/api/evaluate.spec.ts: one test per case in loan-cases.json generated in a loop (test title = case name), asserting rejected, tags, output.rate and matched exactly; plus: evaluate on a missing set answers 404; a payload that is an array answers 400 invalid_payload; a second evaluation of the same payload gives the same result (determinism).\n5. `npx playwright test --project=api` passes. `npx playwright test --project=api --list` in the summary.",
+          "expected": "At least 18 API tests, all passing, none reading the seed at test time; the rule-set fixture leaves nothing behind (GET /rulesets after the run lists only the seed).",
+          "vcs": { "commitMessage": "Add the API tests\n\nA rule-set fixture with cleanup, CRUD and validation tests, and evaluation cases driven from a JSON file." },
+          "checks": [
+            { "name": "the cases file exists", "expect": "file-exists", "file": "C:\\Projects\\rules-tests\\tests\\data\\loan-cases.json" },
+            { "name": "the fixture exists", "expect": "file-exists", "file": "C:\\Projects\\rules-tests\\fixtures\\api.ts" },
+            { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-tests" },
+            { "name": "there are at least 18 api tests", "expect": "output-matches", "run": "npx playwright test --project=api --list", "cwd": "C:\\Projects\\rules-tests", "value": "Total: (1[8-9]|[2-9][0-9]) tests" },
+            { "name": "the api tests pass", "expect": "exit-zero", "run": "npx playwright test --project=api --reporter=line", "cwd": "C:\\Projects\\rules-tests" }
+          ]
+        },
+        {
+          "title": "e2e-page-objects-and-tests",
+          "prompt": "Write the end-to-end tests in C:\\Projects\\rules-tests, through page objects.\n\n1. pages/HomePage.ts (goto, the list, rows, rowByName, the create form and a `createRuleSet(id, name)` that fills and submits and waits for the editor URL), pages/EditorPage.ts (goto(id), name input, version, rows, `addRule()`, `fillRule(rowIndex, { id, name, priority, field, op, value, action })`, `removeRule(rowIndex)`, `save()`, saveStatus, saveIssues, `expectSavedVersion(n)`), pages/TryItPanel.ts (payload textarea, evaluate, matchedRules, tags, output, rejected, error, `evaluate(payloadObject)`). Every locator uses `getByTestId` with the names the web app defines; no CSS selectors.\n2. fixtures/pages.ts extends the api fixtures with `home`, `editor`, `tryIt` page objects and reuses `ruleSet` for a seeded set.\n3. tests/e2e/list.spec.ts: the seeded set appears with its name, version and rule count; clicking it opens the editor; creating a set from the form lands on its editor and it then appears in the list (delete it through the API afterwards); with a never-created id the editor shows `ruleset-missing`.\n4. tests/e2e/editor.spec.ts: adding a rule and saving reports \"Saved version 2\" and reloading shows the rule; removing a rule and saving persists; saving with a duplicate rule id shows at least one `save-issue`; a grouped rule (put one through the API into the seeded set) is shown as `rule-json` and survives a save unchanged.\n5. tests/e2e/try-it.spec.ts: the default payload on the seeded set matches rate-large with rate 0.08 and no rejection; age 16 shows `evaluation-rejected` with underage; income 150000 shows tag vip; invalid JSON disables the button and shows `payload-invalid`. Tag the default-payload test and the list test @smoke.\n6. `npx playwright test --project=e2e` passes. Add `README.md` for the test project: how to run everything, the scripts, what the fixtures do, and the testid contract the page objects depend on (a table: testid, page, used by).",
+          "expected": "At least 10 e2e tests, all passing through page objects with getByTestId only; the README's testid table matches the page objects.",
+          "vcs": { "commitMessage": "Add the end-to-end tests through page objects\n\nHome, editor and Try-it page objects on data-testids, fixtures that seed a rule set through the API, and a README with the testid contract." },
+          "checks": [
+            { "name": "the editor page object exists", "expect": "file-exists", "file": "C:\\Projects\\rules-tests\\pages\\EditorPage.ts" },
+            { "name": "page objects use testids", "expect": "output-omits", "run": "Get-ChildItem -Path pages -Filter *.ts | Select-String -Pattern \"locator\\('\" | ForEach-Object { $_.Line }", "cwd": "C:\\Projects\\rules-tests", "value": "locator('" },
+            { "name": "typescript compiles", "expect": "exit-zero", "run": "npx tsc --noEmit", "cwd": "C:\\Projects\\rules-tests" },
+            { "name": "there are at least 10 e2e tests", "expect": "output-matches", "run": "npx playwright test --project=e2e --list", "cwd": "C:\\Projects\\rules-tests", "value": "Total: (1[0-9]|[2-9][0-9]) tests" },
+            { "name": "the e2e tests pass", "expect": "exit-zero", "run": "npx playwright test --project=e2e --reporter=line", "cwd": "C:\\Projects\\rules-tests" },
+            { "name": "the README has the testid contract", "expect": "file-contains", "file": "C:\\Projects\\rules-tests\\README.md", "value": "payload-input" }
+          ]
+        },
+        {
+          "title": "suite-audit",
+          "prompt": "Run the whole suite twice and report on it, changing nothing.\n\n`npm test` twice in a row (Playwright starts and stops the applications each time). Report, in the summary: per project, how many tests passed, failed, were skipped, and the wall time of each run; any test whose outcome differed between the two runs, by name; the slowest five tests with their durations (from the list reporter); that playwright-report/index.html exists and its size; and the tracked-file count of this repository against `git ls-files`. If anything failed, say which test and quote the assertion — do not fix it here; a failure is a finding for the record.",
+          "expected": "Two full runs, every count in the summary, no file in the repository changed.",
+          "readOnly": true,
+          "vcs": { "commitMessage": "Audit the test suite over two full runs\n\nNo changes: counts per project, timings, flakiness and the report location are in the task summary." },
+          "checks": [
+            { "name": "the html report was written", "expect": "file-exists", "file": "C:\\Projects\\rules-tests\\playwright-report\\index.html" },
+            { "name": "nothing changed in the test repository", "expect": "exit-zero", "run": "git --no-pager -C C:\\Projects\\rules-tests diff --quiet --exit-code", "cwd": "C:\\Projects\\rules-tests" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "rules-audit",
+      "goal": "A read-only audit of all three repositories after the work: what is on which branch, what is tracked, what is clean, and what was never pushed.",
+      "model": "",
+      "onFailure": "stop",
+      "level2": "Windows 11, PowerShell 7. Read-only: no file in any repository changes in this session, no git command that writes. The three repositories are C:\\Projects\\rules-api, C:\\Projects\\rules-web and C:\\Projects\\rules-tests. Use `git --no-pager -C <repo> ...` for every git command.",
+      "vcs": {
+        "enabled": true,
+        "repoDir": "C:\\Projects\\rules-tests",
+        "branchMode": "per-session",
+        "branchName": "audit",
+        "commitOnFinish": true,
+        "branchPrefix": "cop/"
+      },
+      "review": { "enabled": true, "model": "" },
+      "tasks": [
+        {
+          "title": "three-repo-audit",
+          "prompt": "For each of the three repositories, using read-only git commands only, establish and report: every local branch with its tip commit and subject; the total commit count on all branches; the number of tracked files; whether any of node_modules, .next, dist, test-results, playwright-report, audit.jsonl or *.tsbuildinfo is tracked (name each hit); whether the working tree is clean; the configured remotes and, for each, whether any local branch has been pushed to it. Then answer, in one table with one row per repository: branch that holds the complete work, commits, tracked files, tracked build output (none or the list), clean (yes/no), pushed (yes/no). Put the table and the commands you ran in the summary.",
+          "expected": "One table, three rows, every cell backed by a command whose output was read in this task; nothing changed anywhere.",
+          "readOnly": true,
+          "vcs": { "commitMessage": "Audit the three repositories\n\nNo changes: branches, counts, tracked build output, cleanliness and push state are in the task summary." },
+          "checks": [
+            { "name": "the api tree is clean", "expect": "exit-zero", "run": "git --no-pager -C C:\\Projects\\rules-api diff --quiet --exit-code", "cwd": "C:\\Projects\\rules-tests" },
+            { "name": "the web tree is clean", "expect": "exit-zero", "run": "git --no-pager -C C:\\Projects\\rules-web diff --quiet --exit-code", "cwd": "C:\\Projects\\rules-tests" },
+            { "name": "no build output is tracked in the api", "expect": "output-omits", "run": "git --no-pager -C C:\\Projects\\rules-api ls-files", "cwd": "C:\\Projects\\rules-tests", "value": "dist/" }
+          ]
+        }
+      ]
+    }
+  ]
+}

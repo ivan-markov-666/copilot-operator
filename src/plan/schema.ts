@@ -323,16 +323,29 @@ function pathOf(parts: ReadonlyArray<PropertyKey>): string {
   );
 }
 
+/**
+ * The keys of an object schema, read from the schema rather than listed by hand.
+ *
+ * The list used to be written out here, and it drifted: `readOnly` was added to the task
+ * schema and not to the list, so every plan that used it was told "readOnly is not part of the
+ * format and was ignored" — while the importer applied it. A warning that contradicts what
+ * happens is worse than none. Reading the shape cannot drift.
+ */
+function keysOf(schema: unknown, fallback: readonly string[] = []): readonly string[] {
+  const shape = (schema as { shape?: Record<string, unknown> }).shape;
+  return shape ? Object.keys(shape) : fallback;
+}
+
 const KNOWN_KEYS = {
-  plan: ['version', 'plan', 'notes', 'onFailure', 'conversation', 'sessions'],
-  session: ['name', 'goal', 'model', 'onFailure', 'level2', 'conversationGroup', 'vcs', 'review', 'mirror', 'tasks'],
-  task: ['title', 'prompt', 'expected', 'level2', 'vcs', 'checks', 'review'],
-  check: ['name', 'expect', 'run', 'shell', 'cwd', 'file', 'value'],
-  vcs: ['enabled', 'repoDir', 'branchMode', 'commitOnFinish', 'branchPrefix', 'branchName'],
-  taskVcs: ['branch', 'commitMessage'],
-  review: ['enabled', 'model'],
-  mirror: ['enabled', 'rootDir', 'includeDirs', 'excludeDirs', 'respectGitignore', 'includeEnvFiles'],
-} as const;
+  plan: keysOf(PlanSchema),
+  session: keysOf(SessionInput),
+  task: keysOf(TaskInput),
+  check: keysOf(CheckInput, ['name', 'expect', 'run', 'shell', 'cwd', 'file', 'value']),
+  vcs: keysOf(VcsInput),
+  taskVcs: keysOf(TaskVcsInput),
+  review: keysOf(ReviewInput),
+  mirror: keysOf(MirrorInput),
+};
 
 function unknownKeys(value: unknown, kind: keyof typeof KNOWN_KEYS, where: string, out: string[]): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;

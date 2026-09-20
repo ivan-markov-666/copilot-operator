@@ -78,6 +78,24 @@ for (const lang of ['en', 'bg'] as const) {
   );
 }
 
+/*
+ * The "not part of the format" warning must agree with the schema.
+ *
+ * The known-key list was written by hand and missed `readOnly`, so every plan that used the
+ * flag was told it had been ignored while the importer applied it. The keys now come from the
+ * schemas themselves; this keeps them honest: a real field draws no warning, an invented one does.
+ */
+console.log('\n--- an invented field is warned about; a real one is not ---');
+const flagged = JSON.parse(JSON.stringify(planExample())) as { sessions: Array<{ tasks: Array<Record<string, unknown>> }> };
+flagged.sessions[0]!.tasks[0]!.readOnly = true;
+flagged.sessions[0]!.tasks[0]!.owner = 'somebody';
+const flaggedCheck = checkPlan(JSON.stringify(flagged));
+const flaggedWarnings = flaggedCheck.ok ? flaggedCheck.warnings : [];
+console.log('valid             :', flaggedCheck.ok);
+console.log('readOnly accepted :', flaggedCheck.ok && flaggedCheck.plan.sessions[0]!.tasks[0]!.readOnly === true ? 'yes' : 'NO');
+console.log('warnings          :', flaggedWarnings.length, '(expect 1) —', flaggedWarnings.join(' | '));
+console.log('about owner only  :', flaggedWarnings.length === 1 && flaggedWarnings[0]!.includes('owner') && !flaggedWarnings.some((w) => w.includes('readOnly')) ? 'yes' : 'NO');
+
 console.log('\n--- what a chat actually pastes: prose, a fence, then more prose ---');
 const wrapped = `Sure! Here is the plan you asked for:
 
