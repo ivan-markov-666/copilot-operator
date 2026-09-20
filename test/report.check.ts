@@ -1,5 +1,6 @@
 import { writeReport, clip, stripAnsi } from '../src/exec/reportFile.js';
 import { buildCoveringMessage } from '../src/protocol/reporter.js';
+import { redactSecrets, findSecrets } from '../src/exec/redaction.js';
 import { staticCheck, describeStep } from '../src/exec/policy.js';
 import type { RunResult } from '../src/exec/runner.js';
 import type { Step } from '../src/protocol/replySchema.js';
@@ -85,6 +86,44 @@ const redLine = (await readFile(red.paths[0], 'utf8'))
   .find((l) => l.includes('user=ivan'));
 console.log('redacted    :', JSON.stringify(redLine));
 console.log('clip        :', clip('a'.repeat(500), 200).includes('omitted'));
+
+/*
+ * What is redacted whether or not the configuration says so.
+ *
+ * The report is uploaded to the chat as a file. On a work machine what a step prints is real:
+ * a token in a stack trace, a connection string in an error, a key printed by mistake. The
+ * shapes below are secrets wherever they appear, and a listing of a type called `password`
+ * is not one of them.
+ */
+console.log('\n--- secret-shaped strings never leave the machine ---');
+const leaks: Array<[string, string, string]> = [
+  ['JWT', 'Authorization: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U', 'eyJ'],
+  ['bearer', 'curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123"', 'abcdefghij'],
+  ['AWS key', 'aws_access_key_id = AKIAIOSFODNN7EXAMPLE', 'AKIAIOSFODNN7'],
+  ['GitHub token', 'remote: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', 'ghp_ABC'],
+  ['password=', 'ConnectionString=Server=db;User=app;Password=Sup3rS3cret!;', 'Sup3rS3cret'],
+  ['api_key in JSON', '{"api_key": "sk-live-9f8e7d6c5b4a3210", "name": "x"}', 'sk-live'],
+  ['URL credentials', 'fetching https://ivan:hunter2pass@git.example.com/repo.git', 'hunter2'],
+  ['private key', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nQ==\n-----END RSA PRIVATE KEY-----', 'MIIEow'],
+];
+for (const [label, text, secret] of leaks) {
+  const out = redactSecrets(text);
+  console.log(`  ${label.padEnd(16)} ${!out.includes(secret) && out.includes('REDACTED') ? 'gone' : 'STILL THERE'}   ${out.slice(0, 70)}`);
+}
+const kept = ['interface User { password: string; token?: string }', 'the token was rejected', 'Password: required', 'https://example.com/path'];
+for (const text of kept) console.log(`  ${'left alone'.padEnd(16)} ${redactSecrets(text) === text ? 'yes' : 'CHANGED'}   ${text}`);
+console.log('  own patterns on top   ', redactSecrets('token=abc123 user=ivan', ['token=\\w+']) === '[REDACTED] user=ivan' ? 'yes' : 'NO');
+console.log('  counted by shape      ', JSON.stringify(findSecrets('Password=Sup3rS3cret! and AKIAIOSFODNN7EXAMPLE and password: string')));
+const leaky = await writeReport([mk(1, 'completed', 0, 'AccountKey=abcdef0123456789==;\n')], {
+  runId: 'leak',
+  iteration: 1,
+  dir,
+  fileNameTemplate: 'leak-{n}.txt',
+  maxReportBytes: 8e6,
+  maxOutputChars: 1000,
+  redactPatterns: [],
+});
+console.log('  the file is clean     ', !(await readFile(leaky.paths[0], 'utf8')).includes('abcdef0123456789') ? 'yes' : 'NO', '| reported:', JSON.stringify(leaky.redactions));
 
 /*
  * What a report says it belongs to.

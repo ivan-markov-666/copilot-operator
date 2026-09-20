@@ -10,6 +10,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunResult } from './runner.js';
 import { silentFailure } from '../protocol/reporter.js';
+import { findSecrets, redactSecrets, type RedactionHit } from './redaction.js';
 
 export type ReportOptions = {
   runId: string;
@@ -30,6 +31,8 @@ export type WrittenReport = {
   names: string[];
   bytes: number;
   parts: number;
+  /** What was taken out before the file was written: secret-shaped strings, by shape. */
+  redactions: RedactionHit[];
 };
 
 /**
@@ -48,17 +51,14 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI, '');
 }
 
-/** Replaces anything the user asked to keep off the wire. Applied to the whole report. */
+/**
+ * Everything secret-shaped first, then anything the user asked to keep off the wire.
+ *
+ * The built-in shapes are not optional: the report is uploaded to the chat as a file, and on
+ * a work machine what a step prints is real. See `redaction.ts` for what is recognised.
+ */
 export function redact(text: string, patterns: string[]): string {
-  let out = text;
-  for (const p of patterns) {
-    try {
-      out = out.replace(new RegExp(p, 'gi'), '[REDACTED]');
-    } catch {
-      out = out.split(p).join('[REDACTED]');
-    }
-  }
-  return out;
+  return redactSecrets(text, patterns);
 }
 
 /** Keeps the head and the tail of an over-long stream and says how much was dropped. */
@@ -113,7 +113,13 @@ export async function writeReport(
   const folder = opts.task?.trim() ? ` (runner's own folder: ${opts.runId})` : '';
   const header = `RESULTS ${label} iteration=${opts.iteration} steps=${results.length}${folder}\n`;
   const footer = 'END RESULTS\n';
-  const sections = results.map((r) => redact(sectionFor(r, opts.maxOutputChars), opts.redactPatterns));
+  const raw = results.map((r) => sectionFor(r, opts.maxOutputChars));
+  // Counted before redaction so the event can say what kind of thing was taken out — the
+  // operator on a work machine wants to know a token was printed, not only that it was hidden.
+  const byShape = new Map<string, number>();
+  for (const hit of raw.flatMap(findSecrets)) byShape.set(hit.name, (byShape.get(hit.name) ?? 0) + hit.count);
+  const redactions: RedactionHit[] = [...byShape.entries()].map(([name, count]) => ({ name, count }));
+  const sections = raw.map((s) => redact(s, opts.redactPatterns));
 
   const chunks: string[][] = [[]];
   let size = Buffer.byteLength(header) + Buffer.byteLength(footer);
@@ -148,5 +154,5 @@ export async function writeReport(
     total += Buffer.byteLength(body);
   }
 
-  return { paths, names, bytes: total, parts };
+  return { paths, names, bytes: total, parts, redactions };
 }

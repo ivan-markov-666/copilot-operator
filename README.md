@@ -37,8 +37,10 @@ There is a web UI for all of this, and a terminal command for a single task.
 The bot executes commands and scripts written by a language model. Confirm mode is on by
 default: every step is shown and waits for a keypress. Unattended mode is behind an explicit
 flag. There is a deny list, a per-step timeout, an iteration cap, and every downloaded file
-is hashed into the run log. Running it in a dedicated Windows account or Windows Sandbox is
-recommended.
+is hashed into the run log. Everything a step prints goes to the chat as a file, so
+secret-shaped strings — tokens, keys, passwords in assignments and URLs, private key blocks —
+are redacted from every report before it is uploaded, always, with `report.redactPatterns`
+applied on top. Running it in a dedicated Windows account or Windows Sandbox is recommended.
 
 ## Requirements
 

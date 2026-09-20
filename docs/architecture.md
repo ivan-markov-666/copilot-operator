@@ -230,6 +230,18 @@ END RESULTS
 Steps appear in the order they were executed. Nothing is truncated in the file: the whole
 point of the file transport is that the full output survives.
 
+**Secret-shaped strings are redacted from every report, always.** `report.redactPatterns` was
+empty by default, and the report is uploaded to the chat as a file: on a work machine what a
+step prints is a token in a stack trace, a connection string in an error message, a key a step
+printed by mistake — into the tenant's Copilot. `redaction.ts` recognises the shapes that are
+secrets wherever they appear (JWTs, bearer tokens, AWS/GitHub/Slack/Azure keys, `password=` and
+`api_key:` assignments, credentials inside URLs, private key blocks) and replaces them before
+the file is written, keeping the name of the thing so the model can still reason about the
+line; `password: string` in a type listing is left alone. The operator's own patterns apply on
+top. The same treatment covers the check report and the review's findings message, both of
+which quote output. What was taken out is counted by shape and said as a warning event, so an
+operator sees that a token was printed at all. Verified by `npm run check:report`.
+
 **A non-zero exit that printed nothing is called out, in the message and in the file.** In
 PowerShell that is what a cmdlet that found nothing looks like — `Get-NetTCPConnection` on a
 free port, `Get-Process` with no match — and the free port is the good outcome. Twice in one run

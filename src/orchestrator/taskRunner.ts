@@ -23,6 +23,7 @@ import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
+import { redactSecrets } from '../exec/redaction.js';
 import { runReview, findingsMessage, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState } from '../vcs/git.js';
@@ -627,8 +628,10 @@ export async function runTask(
       // The failures go back exactly the way step output does: a message with a file attached,
       // because a compiler's opinion belongs in a file and not in a chat bubble.
       const path = join(reportsDir, `checks-${checkRounds}.txt`);
-      await writeFile(path, failureReport(outcomes), 'utf8');
-      await record(`CHECKS ${checkRounds}`, failureReport(outcomes));
+      // Check output is uploaded too, so it is redacted the same way a step report is.
+      const checkReport = redactSecrets(failureReport(outcomes), cfg.report.redactPatterns);
+      await writeFile(path, checkReport, 'utf8');
+      await record(`CHECKS ${checkRounds}`, checkReport);
       const message = failureMessage(outcomes, checkRounds, maxCheckRounds);
 
       await pacer.throttleSend();
@@ -820,7 +823,8 @@ export async function runTask(
         `the review found ${outcome.findings.length} problem(s); sending them back to be fixed`, 'warn');
 
       await pacer.throttleSend();
-      const before = await transport.sendAndConfirm(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeated));
+      // The reviewer quotes output in its evidence, so the message gets the same treatment.
+      const before = await transport.sendAndConfirm(redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeated), cfg.report.redactPatterns));
       const next = await transport.waitForReply(before);
       await saveReply(`review-${reviewRounds}-findings`, next);
       lastMarkdown = next.markdown;
@@ -1121,6 +1125,10 @@ export async function runTask(
       await record(`ITERATION ${iterations}`, await readFile(report.paths[0], 'utf8'));
       sink.event('report-written', { iteration: iterations, files: report.names, bytes: report.bytes },
         `report: ${report.names.join(', ')} (${report.bytes < 1024 ? `${report.bytes} bytes` : `${(report.bytes / 1024).toFixed(1)} KB`})`);
+      if (report.redactions.length > 0) {
+        sink.event('report-redacted', { iteration: iterations, redactions: report.redactions },
+          `redacted before upload: ${report.redactions.map((r) => `${r.count}× ${r.name}`).join(', ')}`, 'warn');
+      }
 
       if (aborted) return await finish('aborted', 'the operator aborted the task', undefined, lastMarkdown);
 

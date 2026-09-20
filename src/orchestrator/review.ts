@@ -329,6 +329,10 @@ export async function runReview(
         redactPatterns: cfg.report.redactPatterns,
       });
       await deps.record(`REVIEW ${round}, ITERATION ${iterations}`, await readFile(report.paths[0], 'utf8'));
+      if (report.redactions.length > 0) {
+        deps.event('report-redacted', { round, iteration: iterations, redactions: report.redactions },
+          `redacted before upload: ${report.redactions.map((r) => `${r.count}× ${r.name}`).join(', ')}`, 'warn');
+      }
 
       const covering = buildCoveringMessage({
         task: `review of "${task.title}"`,
