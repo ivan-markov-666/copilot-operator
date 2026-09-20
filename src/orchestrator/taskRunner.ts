@@ -18,7 +18,7 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import { isDownloadStep, mergeDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
+import { isDownloadStep, resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
@@ -1068,13 +1068,14 @@ export async function runTask(
       /*
        * A deviation is recorded the moment it is declared, not when the task ends.
        *
-       * Merged rather than appended, because the same one tends to be declared twice — once
-       * when it happens and again in the closing reply — and written to the task at once,
-       * because a task that ends `failed` or `aborted` still deviated, and that is still worth
-       * knowing about.
+       * Merged rather than appended while the task goes on, because the same one tends to be
+       * declared twice; replaced by the closing reply's list when it carries one, because that
+       * is the final account and a deviation undone since would otherwise stand in the commit.
+       * Written to the task at once, because a task that ends `failed` or `aborted` still
+       * deviated, and that is still worth knowing about.
        */
       if (reply.deviations.length > 0) {
-        deviations = mergeDeviations(deviations, reply.deviations);
+        deviations = resolveDeviations(deviations, reply.status, reply.deviations);
         await setTask((t) => {
           t.deviations = deviations;
         });

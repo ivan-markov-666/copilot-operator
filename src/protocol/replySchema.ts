@@ -210,6 +210,20 @@ export function describeDeviations(deviations: Deviation[]): string {
     .join('\n\n');
 }
 
+/**
+ * The deviations a task carries after a reply.
+ *
+ * A `continue` adds to the list. A `done` or `blocked` that carries deviations replaces it,
+ * because the closing reply is the final account: a deviation declared mid-way and undone
+ * since — `moduleResolution` set to Node16, then back to `node` once TypeScript was pinned —
+ * stood in the commit as a fact. A closing reply that names none keeps what was declared,
+ * because forgetting to repeat is more common than meaning to retract.
+ */
+export function resolveDeviations(existing: Deviation[], status: Reply['status'], incoming: Deviation[]): Deviation[] {
+  if (status !== 'continue' && incoming.length > 0) return mergeDeviations([], incoming);
+  return mergeDeviations(existing, incoming);
+}
+
 /** Disputes so far with a reply's merged in: one per finding id, latest wording wins. */
 export function mergeDisputes(existing: Dispute[], incoming: Dispute[]): Dispute[] {
   const merged = new Map<string, Dispute>();

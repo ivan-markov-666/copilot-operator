@@ -113,6 +113,11 @@ deviation mentioned only in `notes` or `summary` reaches nobody.
 A deviation is not a way around an instruction you would rather not follow. It is for an
 instruction that cannot be followed, with the evidence that shows it.
 
+When you close with `done` or `blocked`, list in `deviations` every deviation that still holds
+in the final state. That list replaces what you declared along the way, so a deviation you
+undid — an option you tried and then restored — is not recorded as a fact. A closing reply
+with no `deviations` keeps what was declared earlier.
+
 ## When a review finding is wrong
 
 An independent review may send findings back, each with an id in front of it, like `[r1f2]`.

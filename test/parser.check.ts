@@ -1,5 +1,5 @@
 import { parseReply, extractFencedBlocks, stripLineNumbers } from '../src/protocol/parser.js';
-import { mergeDeviations, describeDeviations, mergeDisputes, describeDisputes } from '../src/protocol/replySchema.js';
+import { mergeDeviations, describeDeviations, resolveDeviations, mergeDisputes, describeDisputes } from '../src/protocol/replySchema.js';
 
 const opts = { stopMarker: 'Край', defaultShell: 'pwsh' as const };
 const show = (label: string, md: string): void => {
@@ -116,6 +116,20 @@ const merged = mergeDeviations(
 );
 console.log('merged by instruction     :', merged.length, '(expect 2 — the repeat is one deviation, later wording wins)');
 console.log('later wording kept        :', merged[0].why.startsWith('refined') ? 'yes' : 'NO');
+
+/*
+ * The closing reply is the final account.
+ *
+ * A deviation declared mid-way and undone since — Node16 set, then back to `node` once
+ * TypeScript was pinned — stood in the commit as a fact. A `done` that lists deviations
+ * replaces the list; one that lists none keeps it, because forgetting is the common case.
+ */
+const midWay = [{ instruction: 'moduleResolution node', did: 'Node16', why: 'TS5108' }];
+const closing = [{ instruction: 'typescript latest', did: 'pinned 5.9.2', why: 'TS5108 under 6' }];
+console.log('continue adds             :', resolveDeviations(midWay, 'continue', closing).length, '(expect 2)');
+console.log('done replaces             :', resolveDeviations(midWay, 'done', closing).map((d) => d.did).join(', '), '(expect pinned 5.9.2)');
+console.log('blocked replaces          :', resolveDeviations(midWay, 'blocked', closing).length, '(expect 1)');
+console.log('done with none keeps      :', resolveDeviations(midWay, 'done', []).length, '(expect 1)');
 
 /*
  * Disputes: a wrong review finding, answered as data.
