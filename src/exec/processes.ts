@@ -81,6 +81,8 @@ export async function snapshotProcesses(projectDir: string): Promise<ProcessSnap
   return {
     processes: parseJsonList<{ ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string }>(procs)
       .filter((p) => p.ProcessId !== process.pid)
+      // The query itself names the folder in its `-like` pattern, and so finds itself.
+      .filter((p) => !(p.CommandLine ?? '').includes('Get-CimInstance Win32_Process'))
       .map((p) => ({ pid: p.ProcessId, parent: p.ParentProcessId, name: p.Name ?? '', command: p.CommandLine ?? '' })),
     listeners: parseJsonList<{ LocalPort: number; OwningProcess: number }>(ports).map((l) => ({ port: l.LocalPort, pid: l.OwningProcess })),
   };
@@ -115,7 +117,20 @@ export async function reapLeftovers(projectDir: string, before: ProcessSnapshot)
   const pids = new Set(leftovers.map((l) => l.pid));
   const roots = leftovers.filter((l) => !pids.has(l.parent));
   const rest = leftovers.filter((l) => pids.has(l.parent));
-  for (const l of roots) (await killTree(l.pid)) ? result.killed.push(l) : result.failed.push(l);
+  for (const l of roots) {
+    if (await killTree(l.pid)) {
+      result.killed.push(l);
+      continue;
+    }
+    // taskkill also fails on a process that ended between the snapshot and now; gone is gone.
+    let stillThere = true;
+    try {
+      process.kill(l.pid, 0);
+    } catch {
+      stillThere = false;
+    }
+    (stillThere ? result.failed : result.killed).push(l);
+  }
   for (const l of rest) {
     // Probably gone with its parent; count it as killed unless it is demonstrably still there.
     result.killed.push(l);
