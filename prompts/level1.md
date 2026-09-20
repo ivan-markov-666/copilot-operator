@@ -316,6 +316,12 @@ such a step in the message and in the file. When the step was asking "is anythin
 empty is the answer, and often the good one — do not spend iterations proving that nothing is
 wrong.
 
+`Start-Process` on `npx`, `npm` or `cmd.exe` returns the **wrapper's** PID. `Stop-Process` on
+it leaves the real server — a `node.exe` child — running and listening. Three tasks in a row,
+and their reviewers, found the port "still busy" for this reason. Stop the tree
+(`taskkill /PID $p.Id /T /F`) or the process that owns the port
+(`(Get-NetTCPConnection -LocalPort N -State Listen).OwningProcess`), in the same `finally`.
+
 Never reason from the one-line message alone. Never invent output that was not in the file.
 If a file is missing or unreadable, say which one in `notes` and repeat the step.
 

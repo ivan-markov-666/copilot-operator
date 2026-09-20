@@ -31,6 +31,13 @@ export type CoveringMessageInput = {
   attachments: string[];
   /** Set when the report had to be split. */
   parts?: number;
+  /**
+   * What the runner has to say about the previous reply, in the message that carries the
+   * next report. A dispute that suspended a check, for one: without the sentence saying so,
+   * the implementer that had just disputed a check it could not satisfy ended the task
+   * `blocked` over that check, not knowing it would no longer run.
+   */
+  notes?: string[];
 };
 
 /**
@@ -107,6 +114,8 @@ export function buildCoveringMessage(input: CoveringMessageInput): string {
         'Decide from what the step was asking, not from the code alone.',
     );
   }
+
+  for (const note of input.notes ?? []) lines.push(note);
 
   return lines.join(' ');
 }

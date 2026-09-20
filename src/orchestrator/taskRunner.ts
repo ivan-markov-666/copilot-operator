@@ -381,6 +381,8 @@ export async function runTask(
   let deviations: Deviation[] = [];
   /** Review findings the model has disputed, by id, merged across every reply. */
   let disputes: Dispute[] = [];
+  /** What the runner tells the model in its next message about the reply just processed. */
+  let runnerNotes: string[] = [];
   /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
    * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
@@ -1120,6 +1122,18 @@ export async function runTask(
           sink.event('review-check-suspended', { findings: paused.suspended },
             `check(s) from disputed finding(s) suspended until the next review rules: ${paused.suspended.join(', ')}`);
         }
+        /*
+         * Said back at once, in the next message. The implementer that disputed a check it
+         * could not satisfy, and heard nothing, ended the task `blocked` over that check — it
+         * had no way to know the dispute had taken the check out of the gate.
+         */
+        const ids = reply.disputed.map((d) => d.finding).join(', ');
+        runnerNotes.push(
+          paused.suspended.length > 0
+            ? `Noted: you disputed ${ids}. The check(s) tied to ${paused.suspended.join(', ')} are suspended and will not run ` +
+              'until the next review rules on your dispute. When the work is verified, report done again; the next reviewer is told.'
+            : `Noted: you disputed ${ids}; no check was tied to those findings. The next reviewer is told. When the work is verified, report done again.`,
+        );
       }
 
       /*
@@ -1351,7 +1365,8 @@ export async function runTask(
         stalled = 0;
       }
 
-      let covering = buildCoveringMessage({ task: task.title, iteration: iterations, results, attachments: report.names, parts: report.parts });
+      let covering = buildCoveringMessage({ task: task.title, iteration: iterations, results, attachments: report.names, parts: report.parts, notes: runnerNotes });
+      runnerNotes = [];
       // Said in the message as well as in the step's own output, because a refusal buried in an
       // attached file is a refusal that gets read after the next command has been written.
       if (repeatsRefused > 0) {

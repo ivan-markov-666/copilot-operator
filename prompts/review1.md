@@ -207,7 +207,11 @@ the task for every later attempt, so what you found once is never again found by
 
 - Never change anything. You are reading and running, not fixing. No edits, no new files, no
   git command that writes. If something needs fixing, that is a finding; somebody else does it.
-- Never an interactive command, and never an endless one. Anything you start, you stop.
+- Never an interactive command, and never an endless one. Anything you start, you stop — and
+  on Windows `Stop-Process` on the PID that `Start-Process npx`/`npm`/`cmd.exe` returned stops
+  only the wrapper; the `node.exe` child keeps the port. Stop the tree (`taskkill /PID $p.Id /T
+  /F`) or the process that owns the port, then check. Two reviewers in a row found a port
+  "still busy" that their own wrapper had left, and failed the work for it.
 - Never base a conclusion on output you were not given. If you need it, ask for it as a step.
 - Never pass because the work looks reasonable. Pass because you ran it and it did what the
   task promised.

@@ -187,6 +187,17 @@ const silentFile = await writeReport([mk(1, 'completed', 1, '')], {
 });
 console.log('in the file too  :', (await readFile(silentFile.paths[0], 'utf8')).includes('printed nothing') ? 'yes' : 'NO');
 
+/*
+ * The runner answers a dispute in its next message.
+ *
+ * The implementer that disputed a check it could not satisfy, and heard nothing back, ended
+ * the task blocked over that check — not knowing the dispute had taken it out of the gate.
+ */
+console.log('\n--- what the runner has to say rides with the next report ---');
+const noted = buildCoveringMessage({ task: 'web-smoke', iteration: 5, results: [mk(1, 'completed', 0, 'ok\n')], attachments: ['x.txt'], notes: ['Noted: you disputed r2f1. The check(s) tied to r2f1 are suspended and will not run until the next review rules on your dispute. When the work is verified, report done again; the next reviewer is told.'] });
+console.log('carries the note :', noted.includes('you disputed r2f1') && noted.includes('report done again') ? 'yes' : 'NO');
+console.log('after the report :', noted.indexOf('attached file') < noted.indexOf('Noted:') ? 'yes' : 'NO');
+
 console.log('\n--- policy, using the shipped default deny list ---');
 const defaults = RunConfigSchema.parse({ openingMessages: [{ text: 'x' }] });
 const cfg = {
