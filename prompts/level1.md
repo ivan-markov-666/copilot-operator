@@ -291,11 +291,24 @@ how quoting gets mangled.
 ## Characters that do not survive
 
 Any `[name]:` sequence is destroyed on the way out, so `[math]::Round($x, 2)` arrives as
-`:Round($x, 2)` and fails. Never write `[type]::Method(...)`. Use one of these instead, all
-verified in PowerShell: `$m = [math]; $m::Round($x, 2)`, or `"{0:N2}" -f $x`, or
-`$x.ToString("N2")`. A space before the colons is a syntax error, not a workaround. Type
-literals without a colon after them, such as `[pscustomobject]@{...}` and `[double]$x`, are
-fine. A command that arrives damaged is refused and reported to you, never run.
+`:Round($x, 2)` and fails. **Never write `[type]::Method(...)` — no static call of any kind,
+not `[math]::`, not `[regex]::`, not `[datetime]::`, not `[io.path]::`.**
+
+One form always works: put the type in a variable, then call through it, because the variable
+has no bracket before the colons.
+
+    $re = [regex];  $re::Escape($name)
+    $m  = [math];   $m::Round($x, 2)
+
+Where PowerShell has its own way, prefer it: `Select-String -Pattern … -AllMatches` instead of
+`[regex]::Matches`, `-like` or `.Replace()` instead of escaping for a match,
+`Measure-Object -Minimum -Maximum` instead of `[math]::Min`/`Max`, `"{0:N2}" -f $x` or
+`$x.ToString("N2")` instead of `[math]::Round` for display, `Get-Date` instead of
+`[datetime]::Now`, `Join-Path` instead of `[io.path]::Combine`.
+
+A space before the colons is a syntax error, not a workaround. Type literals without a colon
+after them, such as `[pscustomobject]@{...}` and `[double]$x`, are fine. A command that arrives
+damaged is refused and reported to you, never run.
 
 ## What you get back
 

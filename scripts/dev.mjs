@@ -34,9 +34,41 @@ function bin(pkgRelPath) {
   throw new Error(`cannot find ${pkgRelPath}; run npm install`);
 }
 
+/**
+ * Says what is missing before anything is built, rather than after.
+ *
+ * A fresh clone on a second machine got through the whole API build and then Turbopack failed
+ * with three screens about filesystem roots and concurrent installs, because `next` was not
+ * where it looks. Dependencies that are simply not installed are the ordinary cause, and a
+ * lockfile inside `web/` is the other: it makes npm treat that folder as its own project, so
+ * the root install never hoists anything for it. Both are one sentence to say and a minute to
+ * fix; neither is worth finding out from a stack trace.
+ */
+function checkInstall() {
+  const problems = [];
+  if (!existsSync(resolve(root, 'node_modules'))) {
+    problems.push('the repository has no node_modules');
+  }
+  const nextPkg = [root, resolve(root, 'web')].map((b) => resolve(b, 'node_modules', 'next', 'package.json')).find(existsSync);
+  if (!nextPkg) problems.push('the Next.js package is not installed (no node_modules/next here or in web/)');
+  if (existsSync(resolve(root, 'web', 'package-lock.json'))) {
+    problems.push(
+      'web/package-lock.json exists, which means npm install was run inside web/ instead of at the repository root; ' +
+        'that makes web its own project and the workspace install never reaches it — delete it, and web/node_modules with it',
+    );
+  }
+  if (problems.length === 0) return;
+  for (const p of problems) log('start', p);
+  log('start', `fix it with one command, run in ${root}:`);
+  log('start', '    npm install');
+  process.exit(1);
+}
+
 function log(tag, line) {
   process.stdout.write(`[${tag}] ${line}\n`);
 }
+
+checkInstall();
 
 // 0. Refuse to start on top of something that already holds a port, and say what it is.
 //    A previous run of this project can survive as orphans (the API and Next.js's own

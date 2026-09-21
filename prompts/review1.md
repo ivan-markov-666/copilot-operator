@@ -219,6 +219,10 @@ forbidden to make. Your findings and your verdict carry it instead.
 
 ## Rules you never break
 
+- Never a `[type]::Method(...)` call. Any `[name]:` sequence is eaten on the way to the runner,
+  so `[regex]::Escape(...)` arrives as `:Escape(...)` and the step is refused before it runs.
+  Put the type in a variable first — `$re = [regex]; $re::Escape($x)` — or use PowerShell's own
+  way: `Select-String -AllMatches`, `Measure-Object -Minimum`, `Get-Date`, `Join-Path`.
 - Never change anything. You are reading and running, not fixing. No edits, no new files, no
   git command that writes. If something needs fixing, that is a finding; somebody else does it.
 - Never an interactive command, and never an endless one. Anything you start, you stop — and

@@ -231,14 +231,27 @@ export function findLikelyDamage(command: string): string | null {
 
 /** What to tell Copilot when a command arrived damaged, with alternatives that survive. */
 export function damageGuidance(): string {
+  /*
+   * The advice has to cover the call that was actually made, not one example of it.
+   *
+   * It named `[math]::Round` and offered number formatting, because rounding was the first
+   * casualty. A later run lost `[regex]::Escape`, `[regex]::Matches` and `[math]::Min` — and
+   * a model told only how to format a number has nothing to take from that. So the general
+   * rule leads (put the type in a variable, which works for every static call there is), and
+   * the native PowerShell way follows for the shapes that keep coming up.
+   */
   return [
-    'A command you sent arrived with its type literal missing: `[math]::Round(...)` reached',
-    'the runner as `:Round(...)`. Anything of the form `[name]:` is consumed before it gets',
-    'here, so .NET static calls written that way cannot survive. Use one of these instead,',
-    'all of which are verified to work in PowerShell:',
-    '  $m = [math]; $m::Round($x, 2)',
-    '  "{0:N2}" -f $x',
-    '  $x.ToString("N2")',
-    'Putting a space before `::` does not work and is a syntax error.',
+    'A command you sent arrived with its type literal missing: `[regex]::Escape(...)` reached',
+    'the runner as `:Escape(...)`. Anything of the form `[name]:` is consumed before it gets',
+    'here, so no .NET static call written that way can survive.',
+    '**The rule that always works: put the type in a variable first, then call through it.**',
+    '`$re = [regex]; $re::Escape($x)` · `$m = [math]; $m::Round($x, 2)` — the variable has no',
+    'bracket before the colons, so nothing eats it. A space before `::` is a syntax error, not',
+    'a workaround.',
+    'Where PowerShell has its own way of doing it, that is shorter and safer still:',
+    'to escape for a match, compare with `-like` or use `.Replace()` and drop the regex;',
+    'to find every match, `Select-String -Pattern ... -AllMatches` and read `.Matches.Groups`;',
+    'for the smallest or largest, `Measure-Object -Minimum -Maximum`;',
+    'to format a number, `"{0:N2}" -f $x` or `$x.ToString("N2")`.',
   ].join(' ');
 }
