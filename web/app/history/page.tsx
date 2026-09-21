@@ -143,7 +143,18 @@ export default function HistoryPage() {
   const grouped = useMemo(() => groupIntoRuns(shown), [shown]);
 
   const active = shown.filter((e) => e.status === 'running' || e.status === 'waiting-approval');
-  const upcoming = shown.filter((e) => e.status === 'queued');
+  /*
+   * What is next, in the order it would run: sessions in the order the last run had them,
+   * then each session's queue. A chain session's failed task heads its queue, because that is
+   * where "Continue" puts it back — the tasks behind it were written assuming it worked.
+   */
+  const byRunOrder = (a: RegistryEntry, b: RegistryEntry) =>
+    (a.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) - (b.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) || a.position - b.position;
+  const queuedOnly = shown.filter((e) => e.status === 'queued');
+  const chainFailed = shown.filter(
+    (e) => FAILED_STATUSES.includes(e.status) && e.sessionOnFailure === 'stop' && !e.sessionRunning && queuedOnly.some((q) => q.sessionId === e.sessionId),
+  );
+  const upcoming = [...chainFailed, ...queuedOnly].sort(byRunOrder);
   const past = shown
     .filter((e) => !OPEN_STATUSES.includes(e.status))
     .sort((a, b) => Date.parse(b.finishedAt ?? b.startedAt ?? b.createdAt) - Date.parse(a.finishedAt ?? a.startedAt ?? a.createdAt));
@@ -263,7 +274,7 @@ export default function HistoryPage() {
         {all !== null && all.length > 0 && shown.length === 0 && <div className="empty">{t('reg.noMatch')}</div>}
       </div>
 
-      {view === 'list' && shown.length > 0 && <ListView entries={[...active, ...upcoming, ...past]} />}
+      {view === 'list' && shown.length > 0 && <ListView entries={[...active, ...queuedOnly, ...past]} />}
 
       {view === 'runs' && shown.length > 0 && (
         <>
@@ -383,6 +394,11 @@ function Flow({
               <strong>{e.title}</strong>
               <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
               {isNext && <span className="chip">{t('reg.next')}</span>}
+              {upcoming && FAILED_STATUSES.includes(e.status) && (
+                <span className="chip" title={t('reg.willRequeueFirstWhy')}>
+                  {t('reg.willRequeueFirst')}
+                </span>
+              )}
               {e.sessionRunning && <span className="chip">{t('reg.sessionRunning')}</span>}
               {/*
                * Said on the row itself, not only in the grouped view: the commonest moment for
@@ -803,9 +819,16 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
   const looseFailed = failed.filter((e) => e.sessionOnFailure !== 'stop');
   const chosenLoose = looseFailed.filter((e) => picked.has(e.taskId));
   const requeue = [...chainFailed, ...chosenLoose];
-  // Sessions in the order their first task appears, which is the order they would run.
-  const sessionIds = [...new Set([...upcoming, ...requeue].map((e) => e.sessionId))];
-  const name = [...upcoming, ...requeue].map((e) => e.runGroup?.name).find(Boolean);
+  // Sessions in the order the last run had them, then by first appearance: the order they run in.
+  const ordered = [...upcoming, ...requeue].sort(
+    (a, b) => (a.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) - (b.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) || a.position - b.position,
+  );
+  const sessionIds = [...new Set(ordered.map((e) => e.sessionId))];
+  const name = ordered.map((e) => e.runGroup?.name).find(Boolean);
+  const label =
+    chainFailed.length > 0
+      ? t('reg.continueWithFailed', { f: chainFailed.length, n: upcoming.length, s: sessionIds.length })
+      : t('reg.continue', { n: upcoming.length, s: sessionIds.length });
 
   const openPanel = () => {
     setPicked(new Set(looseFailed.map((e) => e.taskId)));
@@ -835,7 +858,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     <div style={{ marginBottom: 8 }}>
       <div className="row">
         <button className="primary" disabled={busy || anyRunning} onClick={openPanel} title={t('reg.continueWhy')}>
-          {t('reg.continue', { n: upcoming.length, s: sessionIds.length })}
+          {label}
         </button>
         {anyRunning && <span className="muted small">{t('reg.continueRunning')}</span>}
         {msg && <span className="small">{msg}</span>}

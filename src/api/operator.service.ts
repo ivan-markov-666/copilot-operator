@@ -199,6 +199,8 @@ export type RegistryEntry = {
   sessionRunning: boolean;
   /** Whether the session is one chain (a failed task stops the rest) or independent tasks. */
   sessionOnFailure: 'stop' | 'continue';
+  /** Where the session sat in the last run that selected it, so a continuation keeps that order. */
+  sessionRunOrder?: number;
   chatUrl?: string;
   taskId: string;
   title: string;
@@ -1515,6 +1517,11 @@ export class OperatorService {
     for (const entry of tasks) {
       const dir = (entry.session.vcs?.enabled ? entry.session.vcs.repoDir : '')?.trim();
       if (!dir) continue;
+      // A repository whose affected tasks never ran has nothing to go back to: the run never
+      // touched it. Taking "no base commit recorded" as a refusal blocked "run again from
+      // here" for every plan whose later sessions had not started yet — which is the usual
+      // shape of a run that stopped in the middle.
+      if (!entry.task.startedAt) continue;
       if (!byRepo.has(dir)) byRepo.set(dir, entry);
     }
     for (const [dir, entry] of byRepo) {
@@ -1856,6 +1863,7 @@ export class OperatorService {
           sessionName: s.name,
           sessionStatus: s.status,
           sessionOnFailure: s.onFailure === 'continue' ? 'continue' : 'stop',
+          sessionRunOrder: s.runGroup?.order,
           sessionRunning: this.running.has(s.id),
           chatUrl: s.chat?.url,
           taskId: t.id,

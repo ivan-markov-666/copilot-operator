@@ -271,6 +271,8 @@ export type RegistryEntry = {
   sessionRunning: boolean;
   /** Whether the session is one chain (a failed task stops the rest) or independent tasks. */
   sessionOnFailure: 'stop' | 'continue';
+  /** Where the session sat in the last run that selected it, so a continuation keeps that order. */
+  sessionRunOrder?: number;
   chatUrl?: string;
   taskId: string;
   title: string;
