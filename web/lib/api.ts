@@ -315,7 +315,7 @@ export type RegistryEntry = {
  * Several sessions started together share one, which is what lets the register say which
  * tasks went out as a single decision rather than merely at a similar time.
  */
-export type TaskRunGroup = { id: string; startedAt: string; sessions: number };
+export type TaskRunGroup = { id: string; startedAt: string; sessions: number; name?: string };
 
 /** Whether the bot is working. Cheap enough to ask from every page on a timer. */
 export type Activity = { running: boolean; sessions: number; batch: boolean };
@@ -407,6 +407,8 @@ export type Session = {
   onFailure?: 'stop' | 'continue';
   /** Sessions with the same group share one Copilot conversation. */
   conversationGroup?: string;
+  /** The name of the plan this session was imported from, offered as the run's name. */
+  planName?: string;
   vcs?: VersionControl;
   vcsBaseCommit?: string;
   /** Whether a second, independent conversation checks the work. On unless said otherwise. */
@@ -563,8 +565,8 @@ export const api = {
   taskFileUrl: (id: string, taskId: string, kind: string, name: string, runId?: string) =>
     `${API}/sessions/${id}/tasks/${taskId}/files/${kind}/${encodeURIComponent(name)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
 
-  start: (id: string, mode: 'confirm' | 'unattended') =>
-    call<{ started: boolean; reason?: string }>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode }) }),
+  start: (id: string, mode: 'confirm' | 'unattended', name?: string) =>
+    call<{ started: boolean; reason?: string }>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode, name }) }),
   stop: (id: string) => call<{ stopping: boolean }>(`/sessions/${id}/stop`, { method: 'POST', body: '{}' }),
   /** Every step waiting for a decision right now, or only one session's. */
   approvals: (sessionId?: string) =>
@@ -586,12 +588,14 @@ export const api = {
     model?: string,
     /** The model the independent review runs on, written onto every selected session. */
     reviewModel?: string,
+    /** What to call the run; the register groups by it and the exports are named after it. */
+    name?: string,
   ) =>
     call<{ started: boolean; reason?: string; batch?: BatchState }>('/batch/start', {
       method: 'POST',
       // An absent model leaves every session on the one it already has; a name is written
       // onto all of them before the run starts.
-      body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel }),
+      body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name }),
     }),
   stopBatch: () => call<{ stopping: boolean }>('/batch/stop', { method: 'POST', body: '{}' }),
 
@@ -628,6 +632,17 @@ export const api = {
    * A URL rather than a call, because the browser downloading it is the whole point: the file
    * is then on disk, ready to be handed to whoever has to work out what went wrong.
    */
+  /**
+   * One of the three JSON views: `plan` (what was asked, importable again), `domain` (what
+   * happened to the work), `bot` (what the runner did) — of a task, a session or a whole run.
+   */
+  exportUrl: (kind: 'plan' | 'domain' | 'bot', where: { run?: string; session?: string; task?: string }) => {
+    const q = new URLSearchParams();
+    if (where.run) q.set('run', where.run);
+    if (where.session) q.set('session', where.session);
+    if (where.task) q.set('task', where.task);
+    return `${API}/export/${kind}?${q.toString()}`;
+  },
   debugExportUrl: (sessionIds: string[]) =>
     `${API}/debug/export${sessionIds.length > 0 ? `?sessions=${encodeURIComponent(sessionIds.join(','))}` : ''}`,
 

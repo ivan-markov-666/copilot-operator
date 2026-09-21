@@ -162,6 +162,8 @@ export default function HistoryPage() {
         </div>
         <p className="muted small">{t('reg.hint')}</p>
 
+        <NewTaskPanel sessions={sessions} />
+
         <div className="counts">
           <div className="count">
             <div className="n">{counts.total}</div>
@@ -270,16 +272,7 @@ export default function HistoryPage() {
 
           {grouped.runs.map((run) => (
             <section className="panel" key={run.id}>
-              <div className="row">
-                <h2 className="grow" style={{ margin: 0 }}>
-                  {t('reg.runOf', { t: run.entries.length, s: run.sessions })}
-                </h2>
-                <span className="muted small">
-                  {t('reg.runAt', { when: fmtTime(run.startedAt) })}
-                  {' · '}
-                  <RunTook run={run} />
-                </span>
-              </div>
+              <RunHeading run={run} />
               <Flow entries={run.entries} sizes={runSizes} onChange={() => void load()} />
             </section>
           ))}
@@ -319,7 +312,7 @@ export default function HistoryPage() {
             <section className="panel">
               <h2>{t('reg.past')}</h2>
               <p className="muted small">{t('reg.pastHint')}</p>
-              {past.length === 0 ? <div className="empty">{t('reg.noPast')}</div> : <Flow entries={past} sizes={runSizes} onChange={() => void load()} />}
+              {past.length === 0 ? <div className="empty">{t('reg.noPast')}</div> : <PastByRun entries={past} sizes={runSizes} onChange={() => void load()} />}
             </section>
           )}
         </>
@@ -354,8 +347,20 @@ function Flow({
   const actions = useTaskActions(onChange ?? (() => undefined));
   // One tick for the whole list, and only while something in it is still going.
   const now = useNow(entries.some(isLive));
+  /** The failed task whose prompt is being rewritten, if one is. */
+  const [fixing, setFixing] = useState<RegistryEntry | null>(null);
 
   return (
+    <>
+    {fixing && (
+      <FixPromptDialog
+        entry={fixing}
+        onClose={(changed) => {
+          setFixing(null);
+          if (changed) onChange?.();
+        }}
+      />
+    )}
     <ol className="flow">
       {entries.map((e) => {
         const isNext = upcoming && e.queuePosition === 1;
@@ -499,6 +504,17 @@ function Flow({
                 </a>
               )}
               {/*
+               * The three JSON views of this one task, for handing to whoever debugs it: what
+               * was asked, what happened to the work, what the runner did. On every task that
+               * has run — a passed task is exactly what somebody compares a failed one against.
+               */}
+              {e.startedAt && <ExportLinks where={{ session: e.sessionId, task: e.taskId }} />}
+              {FAILED_STATUSES.includes(e.status) && !e.sessionRunning && (
+                <button className="quiet" onClick={() => setFixing(e)} title={t('reg.fixPromptHint')}>
+                  {t('reg.fixPrompt')}
+                </button>
+              )}
+              {/*
                * Only on a task that has actually run. A queued one has no point to go back to
                * and is already where a restart would put it.
                */}
@@ -527,6 +543,195 @@ function Flow({
         );
       })}
     </ol>
+    </>
+  );
+}
+
+/** The three JSON downloads, as a tight group of links with what each one answers on hover. */
+function ExportLinks({ where }: { where: { run?: string; session?: string; task?: string } }) {
+  const { t } = useT();
+  return (
+    <span className="exports" title={t('reg.exportTitle')}>
+      <span className="muted">{t('reg.exportTitle')}:</span>{' '}
+      <a href={api.exportUrl('plan', where)} title={t('reg.exportPlanWhy')}>
+        {t('reg.exportPlan')}
+      </a>
+      {' · '}
+      <a href={api.exportUrl('domain', where)} title={t('reg.exportDomainWhy')}>
+        {t('reg.exportDomain')}
+      </a>
+      {' · '}
+      <a href={api.exportUrl('bot', where)} title={t('reg.exportBotWhy')}>
+        {t('reg.exportBot')}
+      </a>
+    </span>
+  );
+}
+
+/** A run's title line: its name, its size, when, how long, and its own three downloads. */
+function RunHeading({ run }: { run: Run }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
+  const name = run.entries.map((e) => e.runGroup?.name).find(Boolean) ?? t('reg.runUnnamed');
+  const done = run.entries.filter((e) => e.status === 'done').length;
+  const failed = run.entries.filter((e) => FAILED_STATUSES.includes(e.status)).length;
+  return (
+    <div className="run-heading">
+      <div className="row">
+        <h2 className="grow" style={{ margin: 0 }}>
+          {name}
+        </h2>
+        <span className="muted small">
+          {t('reg.runOf', { t: run.entries.length, s: run.sessions })}
+          {' · '}
+          {t('reg.runAt', { when: fmtTime(run.startedAt) })}
+          {' · '}
+          <RunTook run={run} />
+        </span>
+      </div>
+      <div className="row small" style={{ marginTop: 4 }}>
+        <span className={`badge ${failed > 0 ? 'failed' : done === run.entries.length ? 'done' : ''}`}>{t('reg.runCounts', { done, failed })}</span>
+        <ExportLinks where={{ run: run.id }} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Finished tasks, gathered under the run that produced them, newest run first.
+ *
+ * A register of a hundred finished tasks in one column is unreadable, and the thing that
+ * makes it readable is the same thing that answers "what went out together": the run. So
+ * each run folds, the newest open and the rest closed, with its name and its counts on the
+ * fold, and the tasks that were never part of a run at the bottom.
+ */
+function PastByRun({ entries, sizes, onChange }: { entries: RegistryEntry[]; sizes: Map<string, number>; onChange: () => void }) {
+  const { t } = useT();
+  const grouped = useMemo(() => groupIntoRuns(entries), [entries]);
+  return (
+    <>
+      {grouped.runs.map((run, i) => (
+        <details key={run.id} className="run-fold" open={i === 0}>
+          <summary>
+            <RunHeading run={run} />
+          </summary>
+          <Flow entries={run.entries} sizes={sizes} onChange={onChange} />
+        </details>
+      ))}
+      {grouped.loose.length > 0 && (
+        <details className="run-fold" open={grouped.runs.length === 0}>
+          <summary>
+            <div className="run-heading">
+              <h2 style={{ margin: 0 }}>{t('reg.notInARun')}</h2>
+              <p className="muted small" style={{ margin: '4px 0 0' }}>{t('reg.notInARunHint')}</p>
+            </div>
+          </summary>
+          <Flow entries={grouped.loose} sizes={sizes} onChange={onChange} />
+        </details>
+      )}
+    </>
+  );
+}
+
+/**
+ * The prompt of one failed task, alone, to be rewritten and queued again.
+ *
+ * The task card edits everything at once — title, level 2, prompt, git names, checks — and
+ * after a failure that is four things too many: the failure is in the task text, and that is
+ * what gets rewritten. Nothing else is touched; the attempt that ran keeps the text it ran
+ * with, and the new attempt goes to the back of the session's queue.
+ */
+function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (changed: boolean) => void }) {
+  const { t } = useT();
+  const [prompt, setPrompt] = useState<string | null>(null);
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .session(entry.sessionId)
+      .then((s) => {
+        const task = s.tasks.find((x) => x.id === entry.taskId);
+        if (live) setPrompt(task?.prompt ?? '');
+      })
+      .catch((e) => {
+        if (live) setMsg((e as Error).message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [entry.sessionId, entry.taskId]);
+
+  const save = async () => {
+    if (prompt === null) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      await api.rerunTask(entry.sessionId, entry.taskId, { prompt });
+      setMsg(t('reg.fixPromptSaved', { title: entry.title }));
+      setTimeout(() => onClose(true), 900);
+    } catch (e) {
+      setMsg((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={() => onClose(false)}>
+      <div className="modal wide" role="dialog" aria-modal="true" aria-labelledby="fix-title" onClick={(e) => e.stopPropagation()}>
+        <h2 id="fix-title">{t('reg.fixPromptTitle', { title: entry.title })}</h2>
+        <p className="muted small">{t('reg.fixPromptHint')}</p>
+        {entry.reason && <p className="what err small">{t('reg.stopped', { reason: entry.reason })}</p>}
+        {prompt === null ? (
+          <p className="muted small">{msg || t('reg.fixPromptLoading')}</p>
+        ) : (
+          <textarea className="prose" value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ minHeight: 260 }} disabled={busy} />
+        )}
+        <div className="row modal-actions">
+          {msg && prompt !== null && <span className="small grow">{msg}</span>}
+          <button type="button" className="quiet" onClick={() => onClose(false)} disabled={busy}>
+            {t('dialog.cancel')}
+          </button>
+          <button type="button" className="primary" onClick={() => void save()} disabled={busy || prompt === null || !prompt.trim()}>
+            {t('reg.fixPromptSave')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A way into writing a task from the page where the need for one is noticed. */
+function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
+  const { t } = useT();
+  const [sessionId, setSessionId] = useState('');
+  const target = sessionId || sessions[0]?.[0] || '';
+  return (
+    <div className="row" style={{ marginTop: 10 }}>
+      <label htmlFor="new-task-session" style={{ margin: 0 }}>
+        {t('reg.newTask')} {t('reg.newTaskIn')}
+      </label>
+      {sessions.length === 0 ? (
+        <span className="muted small">{t('reg.newTaskNoSessions')}</span>
+      ) : (
+        <select id="new-task-session" value={target} onChange={(e) => setSessionId(e.target.value)} style={{ width: 'auto', minWidth: 180 }}>
+          {sessions.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+      )}
+      {target && (
+        <Link href={`/sessions/${target}#new-task`}>
+          <button className="primary">{t('reg.newTaskGo')}</button>
+        </Link>
+      )}
+      <Link href="/">
+        <button className="quiet">{t('reg.newSession')}</button>
+      </Link>
+    </div>
   );
 }
 

@@ -277,11 +277,38 @@ export class OperatorController {
     }
   }
 
+  /**
+   * One of the three JSON views of a task, a session or a run: `plan` (what was asked, in the
+   * format that imports again), `domain` (what happened to the work) or `bot` (what the runner
+   * did). Exactly one of `run`, `session` or `session`+`task` names the scope.
+   */
+  @Get('export/:kind')
+  async exportView(
+    @Param('kind') kind: string,
+    @Res() res: Response,
+    @Query('run') run?: string,
+    @Query('session') session?: string,
+    @Query('task') task?: string,
+  ): Promise<void> {
+    if (kind !== 'plan' && kind !== 'domain' && kind !== 'bot') {
+      res.status(400).send('kind must be plan, domain or bot');
+      return;
+    }
+    try {
+      const { fileName, content } = await this.ops.exportView(kind, { runId: run?.trim() || undefined, sessionId: session?.trim() || undefined, taskId: task?.trim() || undefined });
+      res.type('application/json; charset=utf-8');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.send(content);
+    } catch (e) {
+      res.status(400).send((e as Error).message);
+    }
+  }
+
   // --- run control ------------------------------------------------------------------------
 
   @Post('sessions/:id/start')
-  start(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended' }): Promise<unknown> {
-    return this.ops.start(id, body?.mode === 'unattended' ? 'unattended' : 'confirm');
+  start(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended'; name?: string }): Promise<unknown> {
+    return this.ops.start(id, body?.mode === 'unattended' ? 'unattended' : 'confirm', body?.name);
   }
 
   @Post('sessions/:id/stop')
@@ -313,6 +340,8 @@ export class OperatorController {
       model?: string;
       /** The model the independent review runs on, for every session in this run. */
       reviewModel?: string;
+      /** What to call the run; the register groups by it and the exports are named after it. */
+      name?: string;
     },
   ): Promise<unknown> {
     if (!Array.isArray(body?.sessionIds)) throw new BadRequestException('sessionIds must be a list of session ids');
@@ -326,6 +355,7 @@ export class OperatorController {
         body?.model,
         // The same for the review: absent means each session keeps whatever it is set to.
         body?.reviewModel,
+        body?.name,
       )
       .catch(fail);
   }

@@ -120,6 +120,7 @@ export async function importPlan(store: SessionStore, plan: Plan, defaultModel =
       s.review = { enabled: planned.review?.enabled !== false, model: (planned.review?.model || defaultReviewModel).trim() };
       s.conversationGroup = group || undefined;
       s.model = (planned.model || defaultModel).trim() || undefined;
+      s.planName = plan.plan.trim() || undefined;
       s.vcs = vcs;
     });
 

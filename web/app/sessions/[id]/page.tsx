@@ -132,7 +132,7 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
 
   const start = async (mode: 'confirm' | 'unattended') => {
     if (mode === 'unattended' && !(await confirmDialog(t('session.unattendedConfirm')))) return;
-    const r = await api.start(session.id, mode);
+    const r = await api.start(session.id, mode, session.planName);
     setMsg(
       r.started
         ? t(mode === 'unattended' ? 'session.startedAuto' : 'session.startedStep')
@@ -1422,7 +1422,7 @@ function TaskForm({
   };
 
   return (
-    <div className="panel">
+    <div className="panel" id="new-task">
       <h2>{t('form.title')}</h2>
       <p className="muted small">{t('form.hint')}</p>
       <label>{t('form.titleLabel')}</label>

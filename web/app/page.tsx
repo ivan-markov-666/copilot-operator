@@ -381,6 +381,8 @@ function BatchPanel({
    * the picker says why picking a different one here is worth the click.
    */
   const [reviewModel, setReviewModel] = useState('');
+  /** What to call the run. Empty means the plan's name of the first selected session, if any. */
+  const [runName, setRunName] = useState('');
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
   const [vcsProblems, setVcsProblems] = useState<Array<{ name: string; problem: string }>>([]);
 
@@ -467,6 +469,7 @@ function BatchPanel({
         onFailure,
         model || undefined,
         reviewModel || undefined,
+        runName.trim() || runnable.map((s) => s.planName).find(Boolean) || undefined,
       );
       setMsg(r.started ? '' : t('batch.notStarted', { reason: r.reason ?? '' }));
       onChange();
@@ -548,6 +551,16 @@ function BatchPanel({
               ))}
             </ol>
           )}
+
+          <label htmlFor="batch-run-name">{t('batch.runName')}</label>
+          <input
+            id="batch-run-name"
+            type="text"
+            value={runName}
+            onChange={(e) => setRunName(e.target.value)}
+            placeholder={runnable.map((s) => s.planName).find(Boolean) ?? t('batch.runNamePlaceholder')}
+          />
+          <p className="why">{t('batch.runNameWhy')}</p>
 
           <label htmlFor="batch-model">{t('batch.model')}</label>
           <div className="row">

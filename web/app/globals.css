@@ -644,3 +644,15 @@ select optgroup { background: var(--panel); color: var(--ink); }
   .modal { padding: 14px; }
   pre, .log { font-size: 12px; }
 }
+
+/* The register: runs fold, each with its heading on the fold and its downloads. */
+.run-fold { border-top: 1px solid var(--line); padding: 8px 0 4px; }
+.run-fold:first-of-type { border-top: none; }
+.run-fold > summary { cursor: pointer; list-style: none; }
+.run-fold > summary::-webkit-details-marker { display: none; }
+.run-fold > summary::before { content: '▸'; display: inline-block; width: 16px; color: var(--muted); transition: transform 0.15s; }
+.run-fold[open] > summary::before { transform: rotate(90deg); }
+.run-fold > summary .run-heading { display: inline-block; width: calc(100% - 16px); vertical-align: top; }
+.run-heading h2 { font-size: calc(15px * var(--scale)); }
+.exports { white-space: nowrap; }
+.modal.wide { width: min(820px, 100%); }

@@ -175,6 +175,12 @@ export type TaskRunGroup = {
   startedAt: string;
   /** How many sessions that press of the button started. */
   sessions: number;
+  /**
+   * What the operator called this run, when they did. A plan's name is offered as the default;
+   * the register groups by it, and the exports are named after it, because a file called after
+   * an id is one nobody finds again.
+   */
+  name?: string;
 };
 
 /**
@@ -194,6 +200,8 @@ export type SessionRunGroup = {
   id: string;
   startedAt: string;
   sessions: number;
+  /** See `TaskRunGroup.name`. */
+  name?: string;
   /** Where this session sat in the run's order, from 0. */
   order: number;
   /** The tasks that were queued when the run began: what this session was asked to do. */
@@ -466,6 +474,11 @@ export type Session = {
    * is written before any of these sessions exists.
    */
   conversationGroup?: string;
+  /**
+   * The name of the plan this session was imported from, if any. Offered as the run's name
+   * when the session is started, so a run is called what its plan was called.
+   */
+  planName?: string;
   /**
    * The Copilot model this conversation should run on, by the exact name the chat's own
    * picker shows. Empty means "whatever the chat is already set to", which is how every

@@ -30,6 +30,7 @@ import { newId, tidyVcsPlan } from '../session/model.js';
 import { runSession, openBrowser } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
+import { buildPlanExport, buildDomainExport, buildBotExport, exportFileName, type ExportKind, type ExportScope } from '../session/exports.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions } from '../plan/brief.js';
 
@@ -106,6 +107,8 @@ export type BatchSession = {
 export type BatchState = {
   id: string;
   startedAt: string;
+  /** What the operator called the run. See `TaskRunGroup.name`. */
+  name?: string;
   finishedAt?: string;
   mode: 'confirm' | 'unattended';
   /** `stop` gives up on the rest when a session fails; `continue` works through them all. */
@@ -575,6 +578,62 @@ export class OperatorService {
     return await buildDebugExport({ sessions, runsDir: cfg.resolved.runsDir, cwd: cfg.resolved.cwd });
   }
 
+  /**
+   * One of the three JSON views (plan, domain, bot) of one task, one session or one run.
+   *
+   * A run is everything that one press of a start button set off, across sessions: the tasks
+   * stamped with its id, and the sessions that were part of it even where a task never got its
+   * turn. The file is named after the run's own name when it has one, because a file called
+   * `run-r-abc123` is not something anyone can find again.
+   */
+  async exportView(kind: ExportKind, where: { sessionId?: string; taskId?: string; runId?: string }): Promise<{ fileName: string; content: string }> {
+    await this.init();
+    let scope: ExportScope;
+    if (where.runId) {
+      const runId = where.runId;
+      const all = await this.store.listSessions();
+      const sessions = all
+        .filter((s) => s.runGroup?.id === runId || s.tasks.some((t) => t.runGroup?.id === runId || t.attempts?.some((a) => a.runGroup?.id === runId)))
+        .sort((a, b) => (a.runGroup?.id === runId ? (a.runGroup.order ?? 0) : 0) - (b.runGroup?.id === runId ? (b.runGroup.order ?? 0) : 0));
+      if (sessions.length === 0) throw new Error(`No session took part in run ${runId}.`);
+      const group = sessions.map((s) => s.runGroup).find((g) => g?.id === runId);
+      const name = group?.name?.trim() || `run-${(group?.startedAt ?? '').slice(0, 16).replace(/[:T]/g, '-')}`;
+      scope = {
+        sessions,
+        // A task belongs to the run if this attempt ran in it, or if it was queued for it and
+        // never reached — that second kind is what the run's own record on the session is for.
+        taskFilter: (s, t) => t.runGroup?.id === runId || (s.runGroup?.id === runId && s.runGroup.taskIds.includes(t.id)),
+        label: name,
+      };
+    } else if (where.sessionId) {
+      const session = await this.store.getSession(where.sessionId);
+      if (!session) throw new Error('No such session.');
+      if (where.taskId) {
+        const task = session.tasks.find((t) => t.id === where.taskId);
+        if (!task) throw new Error('No such task.');
+        scope = { sessions: [session], taskFilter: (_s, t) => t.id === task.id, label: `${session.name}-${task.title}` };
+      } else {
+        scope = { sessions: [session], label: session.name };
+      }
+    } else {
+      throw new Error('Name a run, a session or a task.');
+    }
+
+    const cfg = await this.settings.load();
+    const document =
+      kind === 'plan'
+        ? buildPlanExport(scope)
+        : kind === 'domain'
+          ? await buildDomainExport(scope, cfg.resolved.runsDir)
+          : await buildBotExport(scope, cfg.resolved.runsDir, {
+              node: process.versions.node,
+              platform: process.platform,
+              cwd: cfg.resolved.cwd,
+              limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, mode: cfg.execution.mode } },
+            });
+    return { fileName: exportFileName(kind, scope.label), content: JSON.stringify(document, null, 2) };
+  }
+
   // --- running --------------------------------------------------------------------------
 
   isRunning(sessionId: string): boolean {
@@ -585,13 +644,13 @@ export class OperatorService {
    * Starts the session's queued tasks in the background. Returns immediately; progress
    * arrives on the event stream. One run per session at a time.
    */
-  async start(sessionId: string, mode: 'confirm' | 'unattended' = 'confirm'): Promise<{ started: boolean; reason?: string }> {
+  async start(sessionId: string, mode: 'confirm' | 'unattended' = 'confirm', name?: string): Promise<{ started: boolean; reason?: string }> {
     // One conversation at a time is not a policy, it is the browser profile: a second run
     // does not get a second browser, it gets an error about a closed one. A batch already
     // holds that turn, so a single session asking for it now is refused where the reason can
     // still be read, rather than three minutes later in a stack trace.
     if (this.batch?.running) return { started: false, reason: 'a batch of sessions is running' };
-    const runGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1 };
+    const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, ...(name?.trim() ? { name: name.trim() } : {}) };
     // A run of one is still a run, and it records the same thing a batch does, so that going
     // back and starting again from a task works the same whether one session was started or six.
     await this.store.updateSession(sessionId, (s) => {
@@ -758,6 +817,8 @@ export class OperatorService {
      * the work, and a run panel that could only set one model made that the hard path.
      */
     reviewModel?: string,
+    /** What to call the run. Offered from the plan's name; empty means it goes by its id. */
+    name?: string,
   ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
     await this.init();
     if (this.batch?.running) return { started: false, reason: 'a batch is already running' };
@@ -808,6 +869,7 @@ export class OperatorService {
     this.batch = {
       id: newId('b-'),
       startedAt: new Date().toISOString(),
+      ...(name?.trim() ? { name: name.trim() } : {}),
       mode,
       onFailure,
       stopping: false,
@@ -891,6 +953,7 @@ export class OperatorService {
         id: batch.id,
         startedAt: batch.startedAt,
         sessions: batch.sessions.filter((s) => s.state === 'waiting').length,
+        ...(batch.name ? { name: batch.name } : {}),
       };
 
       /*
