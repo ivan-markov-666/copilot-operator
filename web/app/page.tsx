@@ -200,7 +200,7 @@ export default function SessionsPage() {
         </div>
       )}
 
-      <div className="panel">
+      <div className="panel" id="new-session">
         <h2>{t('home.new')}</h2>
         <p className="muted small">{t('home.newHint')}</p>
         <div className="row">

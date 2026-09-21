@@ -18,6 +18,7 @@ import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { RichText } from '../richText';
 import { useTaskActions } from '../taskActions';
+import { confirmDialog } from '../dialog';
 
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
 /** Everything that ended without the work being done, which is what the counter asks about. */
@@ -300,6 +301,7 @@ export default function HistoryPage() {
             <section className="panel">
               <h2>{t('reg.upcoming')}</h2>
               <p className="muted small">{t('reg.upcomingHint')}</p>
+              <ContinueRun upcoming={upcoming} onChange={() => void load()} />
               {upcoming.length === 0 ? (
                 <div className="empty">{t('reg.noUpcoming')}</div>
               ) : (
@@ -702,35 +704,91 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
   );
 }
 
-/** A way into writing a task from the page where the need for one is noticed. */
+/**
+ * A way into new work from the page where the need for it is noticed.
+ *
+ * One button, for a new session. A new task needs a session to live in, so choosing one in
+ * the list is the whole action: it opens that session's task form. No second button, because
+ * a row with two buttons and a list reads as three decisions and it is one.
+ */
 function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
   const { t } = useT();
-  const [sessionId, setSessionId] = useState('');
-  const target = sessionId || sessions[0]?.[0] || '';
   return (
     <div className="row" style={{ marginTop: 10 }}>
-      <label htmlFor="new-task-session" style={{ margin: 0 }}>
-        {t('reg.newTask')} {t('reg.newTaskIn')}
-      </label>
-      {sessions.length === 0 ? (
-        <span className="muted small">{t('reg.newTaskNoSessions')}</span>
-      ) : (
-        <select id="new-task-session" value={target} onChange={(e) => setSessionId(e.target.value)} style={{ width: 'auto', minWidth: 180 }}>
-          {sessions.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </select>
-      )}
-      {target && (
-        <Link href={`/sessions/${target}#new-task`}>
-          <button className="primary">{t('reg.newTaskGo')}</button>
-        </Link>
-      )}
-      <Link href="/">
-        <button className="quiet">{t('reg.newSession')}</button>
+      <Link href="/#new-session">
+        <button className="primary">{t('reg.newSession')}</button>
       </Link>
+      {sessions.length > 0 && (
+        <>
+          <label htmlFor="new-task-session" style={{ margin: 0 }}>
+            {t('reg.newTask')} {t('reg.newTaskIn')}
+          </label>
+          <select
+            id="new-task-session"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) window.location.href = `/sessions/${e.target.value}#new-task`;
+            }}
+            style={{ width: 'auto', minWidth: 200 }}
+          >
+            <option value="">{t('reg.newTaskPick')}</option>
+            {sessions.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Carrying on with what is queued, from the page that shows it is queued.
+ *
+ * A run that stopped — a failure with "stop the rest", a session stopped by hand, a task fixed
+ * and queued again — leaves tasks in "what is next" and no way to set them off from here; the
+ * operator had to find the right session page, or the run panel, and rebuild the selection.
+ * This is the run panel's start, for exactly the sessions that still have something queued,
+ * in the order the queue shows them.
+ */
+function ContinueRun({ upcoming, onChange }: { upcoming: RegistryEntry[]; onChange: () => void }) {
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  // Sessions in the order their first queued task appears, which is the order they would run.
+  const sessionIds = [...new Set(upcoming.map((e) => e.sessionId))];
+  const anyRunning = upcoming.some((e) => e.sessionRunning);
+  const name = upcoming.map((e) => e.runGroup?.name).find(Boolean);
+
+  const start = async (mode: 'confirm' | 'unattended') => {
+    if (mode === 'unattended' && !(await confirmDialog(t('batch.unattendedConfirm', { n: sessionIds.length })))) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name);
+      setMsg(r.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
+      onChange();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (sessionIds.length === 0) return null;
+  return (
+    <div className="row" style={{ marginBottom: 8 }}>
+      <button className="primary" disabled={busy || anyRunning} onClick={() => void start('confirm')} title={t('reg.continueWhy')}>
+        {t('reg.continue', { n: upcoming.length, s: sessionIds.length })}
+      </button>
+      <button disabled={busy || anyRunning} onClick={() => void start('unattended')} title={t('reg.continueUnattendedWhy')}>
+        {t('reg.continueUnattended')}
+      </button>
+      {anyRunning && <span className="muted small">{t('reg.continueRunning')}</span>}
+      {msg && <span className="small">{msg}</span>}
     </div>
   );
 }
