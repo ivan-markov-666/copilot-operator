@@ -121,3 +121,56 @@ try {
 
 await rm(root, { recursive: true, force: true });
 await rm(target, { recursive: true, force: true });
+
+/*
+ * Several projects on the Desktop, one folder each, the project's name in every file name.
+ *
+ * One flat folder for whatever session was running meant the second project's sync deleted
+ * the first project's copies, and two `src--main.ts.txt` were one file to the chat. The
+ * folder is per project now and the name is in front; the switch off removes the folders;
+ * files the flat layout left in the root are cleared once.
+ */
+console.log('\n--- projects on the Desktop: one folder each, named files, and the switch off ---');
+const { loadConfigObject } = await import('../src/config/schema.js');
+const { mirrorAllProjects, removeProjectMirrors, removeLegacyFlatMirror, projectNameFor, projectTargetDir } = await import('../src/context/desktopMirror.js');
+const { readFile: readF } = await import('node:fs/promises');
+const rootA = join(tmpdir(), 'cop-mirror-src-a');
+const rootB = join(tmpdir(), 'cop-mirror-src-b');
+for (const [r, body] of [[rootA, 'export const a = 1;\n'], [rootB, 'export const b = 2;\n']] as const) {
+  await rm(r, { recursive: true, force: true });
+  await mkdir(join(r, 'src'), { recursive: true });
+  await writeFile(join(r, 'src', 'app.ts'), body);
+}
+const desktop = join(tmpdir(), 'cop-mirror-desktop');
+await rm(desktop, { recursive: true, force: true });
+await mkdir(desktop, { recursive: true });
+await writeFile(join(desktop, 'src--stale.ts.txt'), 'left by the flat layout\n');
+const dcfg = await loadConfigObject(
+  {
+    openingMessages: [{ text: 'x' }],
+    project: { rootDir: rootA, others: [{ name: 'Second App', rootDir: rootB, mirror: { includeDirs: ['src'] } }], mirrorToDesktop: true, mirror: { includeDirs: ['src'] } },
+    projectMirror: { targetDir: desktop },
+  },
+  process.cwd(),
+  'test',
+);
+const outcomes = await mirrorAllProjects(dcfg);
+const folders = (await readdir(desktop)).sort();
+const firstName = projectNameFor(rootA, dcfg);
+const firstFiles = (await readdir(projectTargetDir(dcfg, firstName))).sort();
+const secondFiles = (await readdir(join(desktop, 'Second App'))).sort();
+console.log('projects mirrored  :', outcomes.map((o) => o.name).join(', '), '(expect the default by its folder name, then Second App)');
+console.log('desktop holds      :', folders.join(', '));
+console.log('stale flat file    :', folders.includes('src--stale.ts.txt') ? 'STILL THERE (wrong)' : 'removed');
+console.log('first project files:', firstFiles.join(', '));
+console.log('names carry project:', firstFiles.every((f) => f.startsWith(`${firstName}--`)) && secondFiles.every((f) => f.startsWith('Second App--')) ? 'yes' : 'NO');
+console.log('second app content :', (await readF(join(desktop, 'Second App', 'Second App--src--app.ts.txt'), 'utf8')).trim());
+const removed = await removeProjectMirrors(dcfg);
+console.log('switch off removes :', removed.length, 'folder(s); desktop now:', (await readdir(desktop)).join(', ') || '(empty)');
+const legacyOnly = await loadConfigObject({ openingMessages: [{ text: 'x' }], projectMirror: { targetDir: desktop } }, process.cwd(), 'test');
+await writeFile(join(desktop, 'keep.md'), 'not ours\n');
+await writeFile(join(desktop, 'a--b.ts.txt'), 'ours\n');
+console.log('legacy sweep       :', (await removeLegacyFlatMirror(legacyOnly)).join(', '), '| kept:', (await readdir(desktop)).join(', '));
+await rm(rootA, { recursive: true, force: true });
+await rm(rootB, { recursive: true, force: true });
+await rm(desktop, { recursive: true, force: true });

@@ -314,10 +314,22 @@ The bot has to show Copilot the project it is working on, and the human has to s
 charge of exactly which files that is.
 
 **Everything in this path is the file system, not the browser.** The user names the project
-root and the directories to include; the program copies them into **one folder on the
-Desktop** that it alone owns, by default `<Desktop>/copilot-operator-context`. OneDrive picks
-that folder up on its own. No Playwright, no upload form, no web picker anywhere here. How
-the copying and the naming work is section 2.8.
+root and the directories to include; the program copies them into **a folder on the Desktop**
+that it alone owns, by default `<Desktop>/copilot-operator-context`, **one subfolder per
+project** named after the project, with the project's name in front of every file name
+(`rules-api--src--main.ts.txt`). OneDrive picks that folder up on its own. No Playwright, no
+upload form, no web picker anywhere here. How the copying and the naming work is section 2.8.
+
+One folder for whatever session was running was right for one project and wrong for three:
+each session's sync deleted the previous project's copies as "no longer selected", and once
+attached to the chat, `src--main.ts.txt` from the API and from the web app were one name.
+`src/context/desktopMirror.ts` owns the per-project layout. The Settings page's switch
+(`project.mirrorToDesktop`) keeps **every** listed project on the Desktop with its own
+selection of directories (`project.mirror`, `others[].mirror`), refreshed before each run and
+at the flip of the switch; off, the project folders are removed, because a stale copy of a
+code base in the cloud is worse than none. A session's own mirror (the files attached to its
+first message) uses the same per-project folder whether or not the switch is on. Files the
+old flat layout left in the root are swept once.
 
 #### Desktop, and OneDrive
 

@@ -73,6 +73,12 @@ export type MirrorConfig = {
   excludeDirs?: string[];
   /** The flat folder on the Desktop that only this program owns. */
   targetDir: string;
+  /**
+   * Put in front of every flattened name, as if the project sat in a folder of that name:
+   * `rules-api--src--main.ts.txt`. With several projects mirrored, the chat sees only file
+   * names, and `src--main.ts.txt` from two repositories is one file to it.
+   */
+  namePrefix?: string;
   /** Path separator replacement in the flattened name. */
   separator?: string;
   txtMode?: TxtMode;
@@ -382,7 +388,7 @@ export async function mirrorProject(cfg: MirrorConfig): Promise<MirrorResult> {
   let totalBytes = 0;
 
   for (const rel of files) {
-    const targetName = flattenName(rel, used, separator, txtMode);
+    const targetName = flattenName(cfg.namePrefix ? `${cfg.namePrefix}/${rel}` : rel, used, separator, txtMode);
     desired.add(targetName);
     mapping[rel] = targetName;
 

@@ -270,6 +270,13 @@ written with the folders that exist rather than with paths the chat model asked 
 operator typed from memory. The brief still tells the model to ask which of them the work is
 about.
 
+The same page has the switch that keeps every listed project **on the Desktop**
+(`project.mirrorToDesktop`): one folder per project under `copilot-operator-context`, each with
+its own selection of directories (chosen in a tree or typed), the project's name in front of
+every file name, refreshed before each run. Off, the folders are removed. That is the path into
+OneDrive and the chat's file picker; a session's own `mirror` (the files attached to its first
+message) uses the same per-project folder either way.
+
 The page also holds the model new sessions are **reviewed** by (`copilot.defaultReviewModel`),
 next to the one they work on. A plan whose session names no `review.model` gets it, the same way
 a session with no `model` gets `copilot.defaultModel`.

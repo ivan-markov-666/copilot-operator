@@ -477,11 +477,25 @@ export type BatchState = {
   sessions: BatchSession[];
 };
 
+/** Which directories of one project go to the Desktop, and how. */
+export type ProjectMirrorSelection = { includeDirs: string[]; excludeDirs: string[]; respectGitignore: boolean; includeEnvFiles: boolean };
+
 /** One of the other folders the operator works in, by name, with whether it can carry version control. */
-export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string };
+export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection };
 
 /** The project folder new sessions start pointed at, whether it can carry version control, and the other folders by name. */
-export type ProjectDefault = { rootDir: string; repoOk: boolean; repoProblem?: string; others: OtherProject[] };
+export type ProjectDefault = {
+  rootDir: string;
+  repoOk: boolean;
+  repoProblem?: string;
+  others: OtherProject[];
+  /** Whether every project's selection is kept on the Desktop, refreshed before each run. */
+  mirrorToDesktop: boolean;
+  /** The default project's selection. */
+  mirror?: ProjectMirrorSelection;
+  /** The Desktop folder that holds one subfolder per project. */
+  contextRoot: string;
+};
 
 export type Preset = { name: string; content: string; updatedAt: string };
 
@@ -667,8 +681,12 @@ export const api = {
   project: () => call<ProjectDefault>('/project'),
   /** Stores it; an empty path clears it. */
   /** A field left out is kept; an empty `rootDir` clears the default. */
-  setProject: (patch: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }) =>
-    call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
+  setProject: (patch: {
+    rootDir?: string;
+    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+    mirrorToDesktop?: boolean;
+    mirror?: ProjectMirrorSelection;
+  }) => call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
 
   models: () => call<ModelCatalogue>('/models'),
   /** Stores the model new sessions start on. An empty name clears it. */

@@ -4,6 +4,7 @@
  * Bound to localhost only (see main.ts). There is no authentication because there is no
  * network: this API runs on the operator's own machine and drives that machine's browser.
  */
+import type { ProjectMirrorSelection } from '../config/schema.js';
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, Sse, NotFoundException, BadRequestException } from '@nestjs/common';
 import type { Response } from 'express';
 import { Observable } from 'rxjs';
@@ -459,8 +460,16 @@ export class OperatorController {
 
   /** Stores it. A field left out is kept; an empty `rootDir` clears the default. */
   @Put('project')
-  setProject(@Body() body: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }): Promise<unknown> {
-    return this.ops.setProject({ rootDir: body?.rootDir, others: body?.others }).catch(fail);
+  setProject(
+    @Body()
+    body: {
+      rootDir?: string;
+      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+      mirrorToDesktop?: boolean;
+      mirror?: ProjectMirrorSelection;
+    },
+  ): Promise<unknown> {
+    return this.ops.setProject({ rootDir: body?.rootDir, others: body?.others, mirrorToDesktop: body?.mirrorToDesktop, mirror: body?.mirror }).catch(fail);
   }
 
   /**

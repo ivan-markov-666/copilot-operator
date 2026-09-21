@@ -12,6 +12,7 @@ import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
 import { ModelHint, ProjectHint, ReviewModelHint } from '../../defaultHints';
 import { ModelPicker } from '../../modelPicker';
+import { DirTree } from '../../dirTree';
 import { RichText } from '../../richText';
 import { confirmDialog } from '../../dialog';
 import { useTaskActions } from '../../taskActions';
@@ -1099,6 +1100,19 @@ function MirrorPanel({ session, onChange }: { session: Session; onChange: () => 
           />
         </div>
       </div>
+
+      {/* The same two lists, filled by clicking directories instead of typing paths. */}
+      <DirTree
+        rootDir={rootDir}
+        respectGitignore={respectGitignore}
+        include={include.split('\n')}
+        exclude={exclude.split('\n')}
+        onChange={(inc, exc) => {
+          setInclude(inc.join('\n'));
+          setExclude(exc.join('\n'));
+          setPreview(null);
+        }}
+      />
 
       {conflicts.length > 0 && (
         <div className="notice" role="alert">

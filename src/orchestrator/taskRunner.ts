@@ -41,8 +41,8 @@ import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { mirrorProject, describeMirror } from '../context/projectMirror.js';
+import { projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
-import { defaultExportDir } from '../context/contextFiles.js';
 
 export type TaskOutcome = {
   status: Extract<TaskStatus, 'done' | 'blocked' | 'failed' | 'aborted' | 'limit-reached'>;
@@ -545,12 +545,17 @@ export async function runTask(
     // --- project mirror, attached to the first message of the task ---------------------
     let mirrorFiles: string[] = [];
     if (session.mirror.enabled && session.mirror.rootDir) {
-      const targetDir = cfg.resolved.mirrorTargetDir ?? defaultExportDir();
+      // One folder per project, and the project's name in front of every file name, so three
+      // repositories mirrored in turn do not delete each other's copies or collide in the chat.
+      const projectName = projectNameFor(session.mirror.rootDir, cfg);
+      const targetDir = projectTargetDir(cfg, projectName);
+      await removeLegacyFlatMirror(cfg).catch(() => undefined);
       const result = await mirrorProject({
         rootDir: session.mirror.rootDir,
         includeDirs: session.mirror.includeDirs.length ? session.mirror.includeDirs : ['.'],
         excludeDirs: session.mirror.excludeDirs,
         targetDir,
+        namePrefix: projectName,
         separator: cfg.projectMirror.separator,
         txtMode: cfg.projectMirror.txtMode,
         // The session's own switches win: they are what the operator ticked for this project.

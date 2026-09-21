@@ -67,6 +67,15 @@ const GIT_SOMETIMES_WRITES =
   'reflog\\s+(?:delete|expire)|' +
   'notes\\s+(?:add|append|edit|remove|copy|prune)';
 
+/** Which directories of one project are copied to the Desktop, and how. */
+const ProjectMirrorSelection = z.object({
+  includeDirs: z.array(z.string()).default([]),
+  excludeDirs: z.array(z.string()).default([]),
+  respectGitignore: z.boolean().default(true),
+  includeEnvFiles: z.boolean().default(false),
+});
+export type ProjectMirrorSelection = z.infer<typeof ProjectMirrorSelection>;
+
 export const RunConfigSchema = z.object({
   copilot: z
     .object({
@@ -180,9 +189,23 @@ export const RunConfigSchema = z.object({
           z.object({
             name: z.string().trim().min(1),
             rootDir: z.string().trim().min(1),
+            /** Which of this project's directories go to the Desktop. See `mirror` below. */
+            mirror: ProjectMirrorSelection.optional(),
           }),
         )
         .default([]),
+      /**
+       * Keep a copy of every project's selected directories on the Desktop, one folder per
+       * project under `copilot-operator-context`, refreshed before every run.
+       *
+       * The Desktop is the way into OneDrive, and OneDrive is the way into the chat's file
+       * picker. This is the switch for it: on, every project listed here is mirrored, with its
+       * own selection; off, the project folders are removed from the Desktop, because a stale
+       * copy of a code base sitting in the cloud is worse than none.
+       */
+      mirrorToDesktop: z.boolean().default(false),
+      /** The default project's own selection. */
+      mirror: ProjectMirrorSelection.optional(),
     })
     .prefault({}),
 

@@ -14,12 +14,13 @@
  * test suite — which every folder field then offers by name and the plan brief lists by path.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, type ModelCatalogue, type ProjectDefault } from '../../lib/api';
+import { api, type ModelCatalogue, type ProjectDefault, type ProjectMirrorSelection } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
+import { DirTree } from '../dirTree';
 
 export default function DefaultsPage() {
   const { t } = useT();
@@ -68,7 +69,7 @@ function ProjectSection() {
     void load();
   }, [load]);
 
-  const save = async (patch: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }, done: (p: ProjectDefault) => string) => {
+  const save = async (patch: Parameters<typeof api.setProject>[0], done: (p: ProjectDefault) => string) => {
     setBusy(true);
     setMsg('');
     try {
@@ -100,7 +101,12 @@ function ProjectSection() {
   };
 
   const others = project?.others ?? [];
-  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir }));
+  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir, ...(o.mirror ? { mirror: o.mirror } : {}) }));
+
+  const toggleDesktop = (on: boolean) => save({ mirrorToDesktop: on }, (p) => (p.mirrorToDesktop ? t('proj.mirrorOn', { root: p.contextRoot }) : t('proj.mirrorOff')));
+  const saveDefaultFolders = (sel: ProjectMirrorSelection) => save({ mirror: sel }, () => t('proj.foldersSaved'));
+  const saveOtherFolders = (name: string, sel: ProjectMirrorSelection) =>
+    save({ others: plain(others.map((o) => (o.name === name ? { ...o, mirror: sel } : o))) }, () => t('proj.foldersSaved'));
 
   const addOther = async () => {
     const ok = await save({ others: [...plain(others), { name: newName.trim(), rootDir: newDir.trim() }] }, (p) => t('proj.othersSaved', { n: p.others.length }));
@@ -118,6 +124,16 @@ function ProjectSection() {
       <h2>{t('proj.title')}</h2>
       <p className="muted small">{t('proj.intro')}</p>
       {err && <div className="err">{err}</div>}
+
+      {project && (
+        <div className={`option${project.mirrorToDesktop ? ' warned' : ''}`} style={{ marginBottom: 12 }}>
+          <label>
+            <input type="checkbox" checked={project.mirrorToDesktop} onChange={(e) => void toggleDesktop(e.target.checked)} disabled={busy} />
+            <span>{t('proj.mirrorToDesktop')}</span>
+          </label>
+          <p className="why">{t('proj.mirrorToDesktopWhy', { root: project.contextRoot })}</p>
+        </div>
+      )}
 
       <label htmlFor="proj-dir">{t('proj.field')}</label>
       <div className="row">
@@ -161,6 +177,15 @@ function ProjectSection() {
         </div>
       )}
 
+      {project?.rootDir && (
+        <details className="small" style={{ marginTop: 10 }}>
+          <summary>
+            {t('proj.folders')} — {project.rootDir}
+          </summary>
+          <ProjectFolders rootDir={project.rootDir} value={project.mirror} onSave={saveDefaultFolders} busy={busy} />
+        </details>
+      )}
+
       <h3 id="others">{t('proj.others')}</h3>
       <p className="muted small">{t('proj.othersIntro')}</p>
       {others.length === 0 ? (
@@ -177,22 +202,32 @@ function ProjectSection() {
           </thead>
           <tbody>
             {others.map((o) => (
-              <tr key={o.name}>
-                <td>
-                  <strong>{o.name}</strong>
-                </td>
-                <td className="small">{o.rootDir}</td>
-                <td className="small">
-                  <span className={`badge ${o.repoOk ? 'done' : ''}`} title={o.repoProblem}>
-                    {o.repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
-                  </span>
-                </td>
-                <td>
-                  <button className="quiet" onClick={() => void removeOther(o.name)} disabled={busy}>
-                    {t('proj.otherRemove')}
-                  </button>
-                </td>
-              </tr>
+              <Fragment key={o.name}>
+                <tr>
+                  <td>
+                    <strong>{o.name}</strong>
+                  </td>
+                  <td className="small">{o.rootDir}</td>
+                  <td className="small">
+                    <span className={`badge ${o.repoOk ? 'done' : ''}`} title={o.repoProblem}>
+                      {o.repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
+                    </span>
+                  </td>
+                  <td>
+                    <button className="quiet" onClick={() => void removeOther(o.name)} disabled={busy}>
+                      {t('proj.otherRemove')}
+                    </button>
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={4} style={{ paddingTop: 0 }}>
+                    <details className="small">
+                      <summary>{t('proj.folders')}</summary>
+                      <ProjectFolders rootDir={o.rootDir} value={o.mirror} onSave={(sel) => saveOtherFolders(o.name, sel)} busy={busy} />
+                    </details>
+                  </td>
+                </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -231,6 +266,82 @@ function ProjectSection() {
         <li>{t('proj.affectsPlan')}</li>
         <li>{t('proj.affectsNever')}</li>
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Which of one project's folders go to the Desktop: the two lists, the two switches, and the
+ * tree that fills the lists by clicking. Saved per project, because a test suite wants its
+ * `tests` and `fixtures` where an API wants its `src` and nothing else.
+ */
+function ProjectFolders({
+  rootDir,
+  value,
+  onSave,
+  busy,
+}: {
+  rootDir: string;
+  value?: ProjectMirrorSelection;
+  onSave: (sel: ProjectMirrorSelection) => Promise<boolean>;
+  busy: boolean;
+}) {
+  const { t } = useT();
+  const [include, setInclude] = useState((value?.includeDirs ?? []).join('\n'));
+  const [exclude, setExclude] = useState((value?.excludeDirs ?? []).join('\n'));
+  const [respectGitignore, setRespectGitignore] = useState(value?.respectGitignore ?? true);
+  const [includeEnvFiles, setIncludeEnvFiles] = useState(value?.includeEnvFiles ?? false);
+
+  const lines = (text: string) => text.split('\n').map((s) => s.trim()).filter(Boolean);
+  const toggleEnv = async (on: boolean) => {
+    if (on && !(await confirmDialog(t('mirror.envWarn')))) return;
+    setIncludeEnvFiles(on);
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <p className="muted small">{t('proj.foldersHint')}</p>
+      <div className="row" style={{ alignItems: 'flex-start' }}>
+        <div className="grow">
+          <label>{t('mirror.include')}</label>
+          <textarea value={include} onChange={(e) => setInclude(e.target.value)} placeholder={'src\ntests'} style={{ minHeight: 70 }} />
+        </div>
+        <div className="grow">
+          <label>{t('mirror.exclude')}</label>
+          <textarea value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder={'src/generated'} style={{ minHeight: 70 }} />
+        </div>
+      </div>
+      <DirTree
+        rootDir={rootDir}
+        respectGitignore={respectGitignore}
+        include={lines(include)}
+        exclude={lines(exclude)}
+        onChange={(inc, exc) => {
+          setInclude(inc.join('\n'));
+          setExclude(exc.join('\n'));
+        }}
+      />
+      <div className="option">
+        <label>
+          <input type="checkbox" checked={respectGitignore} onChange={(e) => setRespectGitignore(e.target.checked)} />
+          <span>{t('mirror.gitignore')}</span>
+        </label>
+      </div>
+      <div className={`option${includeEnvFiles ? ' warned' : ''}`}>
+        <label>
+          <input type="checkbox" checked={includeEnvFiles} onChange={(e) => void toggleEnv(e.target.checked)} />
+          <span>{t('mirror.env')}</span>
+        </label>
+      </div>
+      <div className="row" style={{ marginTop: 6 }}>
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() => void onSave({ includeDirs: lines(include), excludeDirs: lines(exclude), respectGitignore, includeEnvFiles })}
+        >
+          {t('proj.foldersSave')}
+        </button>
+      </div>
     </div>
   );
 }

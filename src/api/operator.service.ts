@@ -31,6 +31,9 @@ import { runSession, openBrowser } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
 import { buildPlanExport, buildDomainExport, buildBotExport, exportFileName, type ExportKind, type ExportScope } from '../session/exports.js';
+import { mirrorAllProjects, removeProjectMirrors, contextRoot } from '../context/desktopMirror.js';
+import { describeMirror } from '../context/projectMirror.js';
+import type { ProjectMirrorSelection } from '../config/schema.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions } from '../plan/brief.js';
 
@@ -39,7 +42,13 @@ export type ProjectDefault = {
   rootDir: string;
   repoOk: boolean;
   repoProblem?: string;
-  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string }>;
+  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection }>;
+  /** Whether every project's selection is kept on the Desktop, refreshed before each run. */
+  mirrorToDesktop: boolean;
+  /** The default project's selection. */
+  mirror?: ProjectMirrorSelection;
+  /** The Desktop folder that holds one subfolder per project. */
+  contextRoot: string;
 };
 
 /** Windows paths: case and the slash direction do not make two folders. */
@@ -684,6 +693,10 @@ export class OperatorService {
     runGroup?: TaskRunGroup,
   ): Promise<{ started: boolean; reason?: string; done: Promise<RunTally> }> {
     await this.init();
+    // Every project's Desktop copy brought up to date before the chat opens, when the operator
+    // asked for that. Before the run rather than before each task: a task's own mirror already
+    // refreshes its project, and the other projects do not change while the bot works.
+    await this.refreshDesktopMirrors();
     const idle: RunTally = { ran: 0, failed: 0, leftQueued: 0, failedTitles: [] };
     if (this.running.has(sessionId)) return { started: false, reason: 'already running', done: Promise.resolve(idle) };
     const session = await this.store.getSession(sessionId);
@@ -1567,9 +1580,38 @@ export class OperatorService {
     const problem = repoUnusableReason(rootDir);
     const others = (cfg.project?.others ?? []).map((o) => {
       const p = repoUnusableReason(o.rootDir);
-      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}) };
+      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}), mirror: o.mirror };
     });
-    return { rootDir, repoOk: rootDir !== '' && problem === null, ...(problem ? { repoProblem: problem } : {}), others };
+    return {
+      rootDir,
+      repoOk: rootDir !== '' && problem === null,
+      ...(problem ? { repoProblem: problem } : {}),
+      others,
+      mirrorToDesktop: cfg.project?.mirrorToDesktop ?? false,
+      mirror: cfg.project?.mirror,
+      contextRoot: contextRoot(cfg),
+    };
+  }
+
+  /**
+   * Refreshes every project's Desktop folder, when the switch is on. Called before a run
+   * starts, so what OneDrive holds when the chat opens is the code as it is now, for every
+   * project on the Settings page and not only the one the session is about.
+   */
+  async refreshDesktopMirrors(): Promise<void> {
+    const cfg = await this.settings.load();
+    if (!cfg.project?.mirrorToDesktop) return;
+    try {
+      const outcomes = await mirrorAllProjects(cfg);
+      this.bus.publish({
+        sessionId: '*',
+        type: 'desktop-mirror',
+        level: 'info',
+        message: outcomes.map((o) => `${o.name}: ${describeMirror(o.result)}`).join('; ') || 'no projects to mirror',
+      });
+    } catch (e) {
+      this.bus.publish({ sessionId: '*', type: 'desktop-mirror-failed', level: 'warn', message: (e as Error).message });
+    }
   }
 
   /**
@@ -1583,13 +1625,27 @@ export class OperatorService {
    * folder that is not there, a name used twice, and the default listed again among the others
    * — each of those would be a setting that looks filled in and points nowhere.
    */
-  async setProject(patch: { rootDir?: string; others?: Array<{ name: string; rootDir: string }> }): Promise<ProjectDefault> {
+  async setProject(patch: {
+    rootDir?: string;
+    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+    mirrorToDesktop?: boolean;
+    mirror?: ProjectMirrorSelection;
+  }): Promise<ProjectDefault> {
     const raw = await this.settings.raw();
-    const current = ((raw.project as Record<string, unknown>) ?? {}) as { rootDir?: string; others?: Array<{ name: string; rootDir: string }> };
+    const current = ((raw.project as Record<string, unknown>) ?? {}) as {
+      rootDir?: string;
+      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+      mirrorToDesktop?: boolean;
+      mirror?: ProjectMirrorSelection;
+    };
     const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
     if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
 
-    const others = (patch.others ?? current.others ?? []).map((o) => ({ name: (o.name ?? '').trim(), rootDir: (o.rootDir ?? '').trim() }));
+    const others = (patch.others ?? current.others ?? []).map((o) => ({
+      name: (o.name ?? '').trim(),
+      rootDir: (o.rootDir ?? '').trim(),
+      ...(o.mirror ? { mirror: o.mirror } : {}),
+    }));
     const seen = new Set<string>();
     for (const o of others) {
       if (!o.name) throw new Error(`Every other project needs a name; the one at ${o.rootDir || '(no folder)'} has none.`);
@@ -1601,7 +1657,20 @@ export class OperatorService {
       seen.add(key);
     }
 
-    await this.settings.save({ ...raw, project: { ...current, rootDir, others } });
+    const mirrorToDesktop = patch.mirrorToDesktop ?? current.mirrorToDesktop ?? false;
+    const mirror = patch.mirror ?? current.mirror;
+    const cfg = await this.settings.save({ ...raw, project: { ...current, rootDir, others, mirrorToDesktop, ...(mirror ? { mirror } : {}) } });
+
+    /*
+     * The switch acts at once, both ways. On: every project's folder appears on the Desktop
+     * now, not at the next run, because "I turned it on and nothing happened" is a support
+     * question. Off: the folders go, because a copy of a code base left in OneDrive after the
+     * operator said no is the one outcome the switch must not produce. A changed selection
+     * with the switch on is applied the same way.
+     */
+    const wasOn = current.mirrorToDesktop ?? false;
+    if (mirrorToDesktop) await mirrorAllProjects(cfg);
+    else if (wasOn) await removeProjectMirrors(cfg);
     return await this.project();
   }
 
