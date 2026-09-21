@@ -28,6 +28,7 @@ export default function ImportPage() {
   const [org, setOrg] = useState('');
   const [orgSaved, setOrgSaved] = useState('');
   const [orgCustomised, setOrgCustomised] = useState(false);
+  const [orgExample, setOrgExample] = useState('');
   const [orgMsg, setOrgMsg] = useState('');
   const [briefOpen, setBriefOpen] = useState(false);
   const [copied, setCopied] = useState('');
@@ -85,6 +86,7 @@ export default function ImportPage() {
           setOrg(r.organisation);
           setOrgSaved(r.organisation);
           setOrgCustomised(r.customised);
+          setOrgExample(r.example);
           setBriefErr('');
         }
       })
@@ -210,7 +212,7 @@ export default function ImportPage() {
             {t('plan.orgPart')} <span className="muted small">— {orgCustomised ? t('plan.orgCustomised') : t('plan.orgShipped')}</span>
           </summary>
           <p className="muted small" style={{ marginTop: 8 }}>{t('plan.orgHint')}</p>
-          <textarea value={org} onChange={(e) => setOrg(e.target.value)} style={{ minHeight: 260 }} />
+          <textarea value={org} onChange={(e) => setOrg(e.target.value)} placeholder={orgExample} style={{ minHeight: 260 }} />
           <div className="row" style={{ marginTop: 8 }}>
             <button className="primary" onClick={() => void saveOrg()} disabled={org === orgSaved}>
               {t('plan.orgSave')}

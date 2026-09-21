@@ -672,3 +672,24 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .dir.out-inherited > .dir-row .dir-name { color: var(--muted); text-decoration: line-through; }
 .dir-out { width: 22px; height: 22px; padding: 0; border-radius: 6px; font-size: 13px; line-height: 1; color: var(--muted); }
 .dir-out.on { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+
+/* The story of a task (taskStory.tsx): what was sent, answered, run, and how it ended. */
+.story-box { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: var(--code); }
+.story { list-style: none; margin: 6px 0; padding: 0; }
+.story > li { border-left: 3px solid var(--line-strong); padding: 6px 10px; margin: 6px 0; }
+.story > li.sent { border-left-color: var(--accent); }
+.story > li.reply { border-left-color: var(--ok); }
+.story > li.story-step { border-left-color: var(--muted); }
+.story > li.failed { border-left-color: var(--bad); background: var(--bad-soft); }
+.story > li.story-review { border-left-color: var(--warn); }
+.story-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: calc(13px * var(--scale)); }
+.story-cmd { margin: 4px 0; white-space: pre-wrap; word-break: break-word; font-size: calc(12px * var(--scale)); color: var(--ink); }
+.story-out { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; font-size: calc(12px * var(--scale)); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.story-out.always { max-height: 260px; }
+.story-notes { margin: 4px 0; font-size: calc(13px * var(--scale)); }
+.story-fixed { padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); margin: 6px 0; }
+.story-fixed.close { border-color: var(--ok); }
+.story-fixed.close.failed { border-color: var(--bad); background: var(--bad-soft); }
+.option-inline { display: inline-flex; align-items: center; gap: 6px; }
+.story-box .live { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.story-box .live .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: live-pulse 1.6s ease-in-out infinite; }

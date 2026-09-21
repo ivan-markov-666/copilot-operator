@@ -1330,6 +1330,7 @@ export async function runTask(
       const report = await writeReport(results, {
         runId,
         task: task.title,
+        taskText: task.prompt,
         iteration: iterations,
         dir: reportsDir,
         fileNameTemplate: cfg.report.fileName,

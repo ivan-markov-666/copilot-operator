@@ -499,6 +499,24 @@ export type ProjectDefault = {
 
 export type Preset = { name: string; content: string; updatedAt: string };
 
+/** One thing that happened in a task attempt, as the run folder recorded it. */
+export type StoryEntry =
+  | { kind: 'sent'; iteration: number; label: string; text: string }
+  | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string }
+  | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean }
+  | { kind: 'review'; round: number; entries: StoryEntry[] };
+
+export type Story = {
+  runId: string;
+  title: string;
+  status: string;
+  prompt: string;
+  level2: string;
+  entries: StoryEntry[];
+  close?: { status: string; summary?: string; reason?: string; checks?: TaskCheckResult[] };
+  live: boolean;
+};
+
 export type SessionEvent = {
   at: string;
   sessionId: string;
@@ -570,6 +588,9 @@ export const api = {
   rerunTask: (id: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {}) =>
     call<Task>(`/sessions/${id}/tasks/${taskId}/rerun`, { method: 'POST', body: JSON.stringify(patch) }),
   /** `runId` asks for one earlier attempt instead of the current one. */
+  /** The attempt as a story: sent, answered, run, ended. Polled while live. */
+  taskStory: (id: string, taskId: string, runId?: string) =>
+    call<Story>(`/sessions/${id}/tasks/${taskId}/story${runId ? `?run=${encodeURIComponent(runId)}` : ''}`),
   taskFiles: (id: string, taskId: string, runId?: string) =>
     call<{ reports: string[]; artifacts: string[]; replies: string[] }>(
       `/sessions/${id}/tasks/${taskId}/files${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
@@ -622,11 +643,11 @@ export const api = {
    */
   /** The persona whole (`text`), and in its two parts: the software's (fixed) and the organisation's (editable). */
   planBrief: (lang: string) =>
-    call<{ text: string; software: string; organisation: string; customised: boolean }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
-  organisation: (lang: string) => call<{ content: string; customised: boolean }>(`/organisation?lang=${encodeURIComponent(lang)}`),
+    call<{ text: string; software: string; organisation: string; customised: boolean; example: string }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
+  organisation: (lang: string) => call<{ content: string; customised: boolean; example: string }>(`/organisation?lang=${encodeURIComponent(lang)}`),
   setOrganisation: (content: string) => call<{ ok: true }>('/organisation', { method: 'PUT', body: JSON.stringify({ content }) }),
   resetOrganisation: (lang: string) =>
-    call<{ content: string; customised: boolean }>(`/organisation?lang=${encodeURIComponent(lang)}`, { method: 'DELETE' }),
+    call<{ content: string; customised: boolean; example: string }>(`/organisation?lang=${encodeURIComponent(lang)}`, { method: 'DELETE' }),
   /** Checks a pasted plan and imports nothing. */
   checkPlan: (text: string) => call<PlanCheck>('/plan/check', { method: 'POST', body: JSON.stringify({ text }) }),
   /** Creates everything the plan describes, and starts none of it. */

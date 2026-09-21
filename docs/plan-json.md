@@ -35,13 +35,18 @@ plan's, the work's or the machine's — and which button fixes it. For the end i
 acceptance criterion to evidence in the work export and proposes a read-only task for anything
 only claimed.
 
-It has two levels. The **software level** is this project's and does not change: what the bot
-is, the format, the exports, the failure words, how to validate. The **organisation level** is
-the operator's: where tickets come from, which company sources to search (OneDrive, SharePoint,
-Teams, the wiki, the ticket system), how the machine is laid out (the Desktop mirror and its
-file names), the team's conventions. It ships as `prompts/organisation.<lang>.md`, is edited on
-the import page, and the edited copy lives in `data/organisation.md` in whatever language it is
-written in. The copy button takes both parts; the page shows each on its own so it is clear
+The persona is called **Kerrigan**, and it has two levels. The **software level** is this
+project's and does not change: what the bot is, the format, the exports, the failure words,
+how to validate. The **organisation level** is the operator's: where tickets come from, which
+company sources to search (OneDrive, SharePoint, Teams, the wiki, the ticket system), how the
+machine is laid out (the Desktop mirror and its file names), the team's conventions — branch
+naming, how a pull request is made, standards, templates. It starts **empty**: while it is,
+the brief carries an interview phase before everything else, in which Kerrigan asks about all
+of that, writes the text, and asks the operator to paste it into "Organisation level (yours)"
+on the import page and save. `prompts/organisation.<lang>.md` is the example shown inside that
+interview, not the default; the saved text lives in `data/organisation.md` in whatever language
+it is written in, travels with every later copy, and the questions stop. Delete it and they
+come back. The copy button takes both parts; the page shows each on its own so it is clear
 which is which. `GET /api/plan/brief?lang=bg` returns the whole and the parts;
 `GET|PUT|DELETE /api/organisation` is the operator's text.
 

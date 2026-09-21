@@ -13,6 +13,7 @@ import { useAppearance } from '../../../lib/appearance';
 import { ModelHint, ProjectHint, ReviewModelHint } from '../../defaultHints';
 import { ModelPicker } from '../../modelPicker';
 import { DirTree } from '../../dirTree';
+import { TaskStory } from '../../taskStory';
 import { RichText } from '../../richText';
 import { confirmDialog } from '../../dialog';
 import { useTaskActions } from '../../taskActions';
@@ -1482,6 +1483,7 @@ function TaskCard({
   const { t } = useT();
   const fmtTime = useFmtTime();
   const [editing, setEditing] = useState(false);
+  const [showStory, setShowStory] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [level2, setLevel2] = useState(task.level2);
   const [promptText, setPromptText] = useState(task.prompt);
@@ -1599,6 +1601,11 @@ function TaskCard({
         <span className={`badge ${task.status}`}>{t(`status.${task.status}` as Key)}</span>
         {(task.attempt ?? 1) > 1 && <span className="chip">{t('task.attemptN', { n: task.attempt ?? 1 })}</span>}
         {task.iterations > 0 && <span className="muted small">{t('task.iterations', { n: task.iterations })}</span>}
+        {task.runId && (
+          <button className={showStory ? '' : 'quiet'} onClick={() => setShowStory((v) => !v)} title={t('story.why')}>
+            {showStory ? t('story.hide') : t('story.show')}
+          </button>
+        )}
         {editable && (
           <button onClick={() => setEditing((v) => !v)} title={t('task.editAll')}>
             {editing ? t('task.cancel') : t('task.edit')}
@@ -1721,6 +1728,10 @@ function TaskCard({
               ? t('task.gitBranchOnly', { branch: task.vcsPlan.branch })
               : t('task.gitCommitOnly', { subject: (task.vcsPlan.commitMessage ?? '').split('\n')[0] })}
         </div>
+      )}
+
+      {showStory && task.runId && (
+        <TaskStory sessionId={session.id} taskId={task.id} live={task.status === 'running' || task.status === 'waiting-approval'} />
       )}
 
       {editing ? (

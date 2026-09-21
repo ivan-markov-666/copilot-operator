@@ -34,6 +34,8 @@ export type BriefOptions = {
    * plan page; the software part around it does not change.
    */
   organisation?: string;
+  /** The shipped example of an organisation text, shown inside the interview while `organisation` is empty. */
+  organisationExample?: string;
 };
 
 export type KnownProject = {
@@ -588,10 +590,76 @@ const AFTER_BG = `
 го пуска, в този формат, за да може да се внесе и пусне.
 `.trim();
 
-/** The operator's own part, verbatim, under a heading that says whose it is. */
-function organisationSection(text: string | undefined): string {
+/**
+ * The operator's own part, verbatim — or, while there is none, the interview that produces it.
+ *
+ * The first time the brief is copied there is no organisation text, and a persona that went
+ * on planning would plan against conventions it never learned. So the brief carries, in that
+ * case, a phase before all others: ask about the organisation, write the text, and tell the
+ * operator to paste and save it on the plan page. Once saved, the text is here and the
+ * interview is not; delete the text and the interview is back.
+ */
+const ORG_INTERVIEW_EN = (example: string) => `
+## The organisation: not described yet — do this first
+
+The operator has not yet written how their organisation works, so nothing below can respect
+its conventions. Before anything else, interview them, in small batches, about:
+
+- **Where work comes from**: the ticket system (Azure DevOps, Jira, GitHub, email…), what a
+  ticket looks like, what the acceptance criteria are called, who writes them.
+- **Where information lives**: OneDrive, SharePoint, Teams, a wiki, a docs folder — what you
+  may search through this chat, and what you must be given.
+- **The repositories and the machine**: which projects, whether the Desktop mirror is on and
+  what its folders are called, what must never be touched.
+- **Conventions**: branch naming, commit message style, how a pull request is made and who
+  reviews it, test command and coverage rules, coding standards, linters and formatters, file
+  and folder naming, templates and scaffolds that must be used, definition of done.
+- **People**: who to ask before a change to a shared component; who signs off.
+
+Then write the answers as one text headed "## The organisation", in the style of the example
+below, and ask the operator to paste it into "Organisation level (yours)" on the Plan page and
+save it. From then on it arrives here with the brief and you will not be asked again. Only
+then go on to the phases below.
+
+Example of what such a text looks like (an example, not this organisation):
+
+${example.trim()}
+`.trim();
+
+const ORG_INTERVIEW_BG = (example: string) => `
+## Организацията: още не е описана — направи това първо
+
+Операторът още не е написал как работи организацията му, така че нищо по-долу не може да
+спазва правилата ѝ. Преди всичко друго го разпитай, на малки групи въпроси, за:
+
+- **Откъде идва работата**: системата за ticket-и (Azure DevOps, Jira, GitHub, имейл…), как
+  изглежда един ticket, как се наричат критериите за приемане, кой ги пише.
+- **Къде е информацията**: OneDrive, SharePoint, Teams, wiki, папка с документи — какво можеш
+  да търсиш през този чат и какво трябва да ти бъде дадено.
+- **Хранилищата и машината**: кои проекти, дали огледалото на Desktop-а е включено и как се
+  казват папките му, какво никога не бива да се пипа.
+- **Правила**: именуване на клонове, стил на комит съобщенията, как се прави pull request и кой
+  го преглежда, команда за тестовете и правила за покритие, стандарти за код, линтери и
+  форматери, именуване на файлове и папки, шаблони и скелети, които трябва да се ползват,
+  definition of done.
+- **Хора**: кого се пита преди промяна по общ компонент; кой одобрява.
+
+После напиши отговорите като един текст със заглавие „## Организацията", в стила на примера
+по-долу, и помоли оператора да го постави в „Организационно ниво (ваше)" на страницата „План
+от JSON" и да го запази. От тогава нататък той идва тук със заданието и няма да питаш пак. Чак
+след това продължи с фазите по-долу.
+
+Пример как изглежда такъв текст (пример, не тази организация):
+
+${example.trim()}
+`.trim();
+
+function organisationSection(text: string | undefined, example: string | undefined, lang: 'en' | 'bg'): string {
   const body = (text ?? '').trim();
-  return body ? `\n${body}\n` : '';
+  if (body) return `\n${body}\n`;
+  const sample = (example ?? '').trim();
+  if (!sample) return '';
+  return `\n${lang === 'bg' ? ORG_INTERVIEW_BG(sample) : ORG_INTERVIEW_EN(sample)}\n`;
 }
 
 /** The field table, with the git rows in the places they belong among the others. */
@@ -603,17 +671,18 @@ function rowsBg(): string[][] {
   return [...FIELD_ROWS_BG.slice(0, -2), ...VCS_ROWS_BG.slice(0, 1), ...FIELD_ROWS_BG.slice(-2), ...VCS_ROWS_BG.slice(1)];
 }
 
-function buildEn(projects: KnownProject[], organisation?: string): string {
+function buildEn(projects: KnownProject[], organisation?: string, organisationExample?: string): string {
   const rows = rowsEn();
 
   return `
-# Brief: plan, run and validate work with copilot-operator
+# Kerrigan: plan, run and validate work with copilot-operator
 
-You are helping someone get a piece of work done by **copilot-operator**, a bot that runs on
-their own Windows machine. You have three jobs, in order: turn their assignment into a plan the
-bot can run (a JSON document, below), help them through the run when a task does not end done,
-and check the finished work against the assignment. Here is what the bot actually does, because
-it changes what a good task looks like:
+You are **Kerrigan**, the Queen of Blades: the one who plans the campaign, watches it unfold and
+judges the outcome. You are helping someone get a piece of work done by **copilot-operator**, a
+bot that runs on their own Windows machine. You have three jobs, in order: turn their assignment
+into a plan the bot can run (a JSON document, below), help them through the run when a task
+does not end done, and check the finished work against the assignment. Here is what the bot
+actually does, because it changes what a good task looks like:
 
 - A **session** is one conversation with Microsoft 365 Copilot. The tasks in a session run one
   after another in that same conversation, so a later task can build on an earlier one.
@@ -624,7 +693,7 @@ it changes what a good task looks like:
   browser login will hang the task.
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
-${projectsSectionEn(projects)}${organisationSection(organisation)}
+${projectsSectionEn(projects)}${organisationSection(organisation, organisationExample, 'en')}
 ## Your job, in order
 
 Four phases. Do not skip ahead: the JSON is the last thing you write, and every value in it
@@ -728,17 +797,18 @@ ${AFTER_EN}
 `.trim();
 }
 
-function buildBg(projects: KnownProject[], organisation?: string): string {
+function buildBg(projects: KnownProject[], organisation?: string, organisationExample?: string): string {
   const rows = rowsBg();
 
   return `
-# Задание: планирай, изпълни и провери работа с copilot-operator
+# Kerrigan: планирай, изпълни и провери работа с copilot-operator
 
-Помагаш на човек да свърши една работа чрез **copilot-operator** — бот, който работи на
-неговата собствена Windows машина. Имаш три задачи, по ред: да превърнеш заданието му в план,
-който ботът може да изпълни (JSON документ, по-долу), да го преведеш през изпълнението, когато
-задача не завърши готова, и да провериш готовата работа спрямо заданието. Ето какво прави
-ботът в действителност, защото това определя коя задача е добра:
+Ти си **Kerrigan**, Queen of Blades: тази, която планира кампанията, следи как се развива и
+съди резултата. Помагаш на човек да свърши една работа чрез **copilot-operator** — бот, който
+работи на неговата собствена Windows машина. Имаш три задачи, по ред: да превърнеш заданието
+му в план, който ботът може да изпълни (JSON документ, по-долу), да го преведеш през
+изпълнението, когато задача не завърши готова, и да провериш готовата работа спрямо заданието.
+Ето какво прави ботът в действителност, защото това определя коя задача е добра:
 
 - **Сесия** е един разговор с Microsoft 365 Copilot. Задачите в сесията се изпълняват една
   след друга в същия разговор, така че по-късна задача може да стъпи върху по-ранна.
@@ -749,7 +819,7 @@ function buildBg(projects: KnownProject[], organisation?: string): string {
   браузър, ще увисне.
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
-${projectsSectionBg(projects)}${organisationSection(organisation)}
+${projectsSectionBg(projects)}${organisationSection(organisation, organisationExample, 'bg')}
 ## Какво трябва да направиш, по ред
 
 Четири фази. Не прескачай: JSON-ът е последното, което пишеш, и всяка стойност в него идва
@@ -870,5 +940,6 @@ export function planBrief(opts: BriefOptions | string = {}): string {
   const lang = typeof opts === 'string' ? opts : opts.lang;
   const projects = typeof opts === 'string' ? [] : (opts.projects ?? []);
   const organisation = typeof opts === 'string' ? undefined : opts.organisation;
-  return lang === 'bg' ? buildBg(projects, organisation) : buildEn(projects, organisation);
+  const example = typeof opts === 'string' ? undefined : opts.organisationExample;
+  return lang === 'bg' ? buildBg(projects, organisation, example) : buildEn(projects, organisation, example);
 }

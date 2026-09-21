@@ -14,6 +14,8 @@ import { findSecrets, redactSecrets, type RedactionHit } from './redaction.js';
 
 export type ReportOptions = {
   runId: string;
+  /** The task's own text, repeated at the top of every results file. See `reminder` below. */
+  taskText?: string;
   /** The task this report belongs to, by the name the conversation was given for it. */
   task?: string;
   iteration: number;
@@ -111,7 +113,20 @@ export async function writeReport(
    */
   const label = opts.task?.trim() ? `task="${opts.task.trim()}"` : `run=${opts.runId}`;
   const folder = opts.task?.trim() ? ` (runner's own folder: ${opts.runId})` : '';
-  const header = `RESULTS ${label} iteration=${opts.iteration} steps=${results.length}${folder}\n`;
+  /*
+   * The task text travels with every results file.
+   *
+   * Copilot's context is not the conversation: in a long chat the early turns fall out of
+   * what the model can see. Observed on the third task of a conversation, iteration 3: "the
+   * task specification itself is absent from the conversation state available here", and the
+   * task ended blocked asking for text the runner had sent 90 seconds earlier. The reminder
+   * costs the prompt's length per file and makes the results file self-contained: what was
+   * asked, then what happened.
+   */
+  const reminder = opts.taskText?.trim()
+    ? `\n--- THE TASK, AS GIVEN (repeated with every results file so it is always in view) ---\n${opts.taskText.trim()}\n--- END OF THE TASK ---\n\n`
+    : '';
+  const header = `RESULTS ${label} iteration=${opts.iteration} steps=${results.length}${folder}\n${reminder}`;
   const footer = 'END RESULTS\n';
   const raw = results.map((r) => sectionFor(r, opts.maxOutputChars));
   // Counted before redaction so the event can say what kind of thing was taken out — the

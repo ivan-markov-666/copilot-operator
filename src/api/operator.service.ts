@@ -33,6 +33,7 @@ import { buildDebugExport } from '../session/debugExport.js';
 import { buildPlanExport, buildDomainExport, buildBotExport, exportFileName, type ExportKind, type ExportScope } from '../session/exports.js';
 import { mirrorAllProjects, removeProjectMirrors, contextRoot } from '../context/desktopMirror.js';
 import { describeMirror } from '../context/projectMirror.js';
+import { buildStory, type Story } from '../session/story.js';
 import type { ProjectMirrorSelection } from '../config/schema.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions } from '../plan/brief.js';
@@ -313,7 +314,7 @@ export class OperatorService {
 
   // --- the organisation's part of the plan persona -------------------------------------
 
-  async getOrganisation(lang: string): Promise<{ content: string; customised: boolean }> {
+  async getOrganisation(lang: string): Promise<{ content: string; customised: boolean; example: string }> {
     await this.init();
     return await this.store.getOrganisation(lang === 'bg' ? 'bg' : 'en');
   }
@@ -323,7 +324,7 @@ export class OperatorService {
     await this.store.setOrganisation(content);
   }
 
-  async resetOrganisation(lang: string): Promise<{ content: string; customised: boolean }> {
+  async resetOrganisation(lang: string): Promise<{ content: string; customised: boolean; example: string }> {
     await this.init();
     await this.store.resetOrganisation();
     return await this.store.getOrganisation(lang === 'bg' ? 'bg' : 'en');
@@ -516,6 +517,25 @@ export class OperatorService {
     if (!chosen) return null;
     const path = join(cfg.resolved.runsDir, chosen, 'task-log.txt');
     return existsSync(path) ? await readFile(path, 'utf8') : null;
+  }
+
+  /**
+   * The story of one attempt, assembled from its run folder: what was sent, what the chat
+   * answered, what ran with its output, the review rounds, how it ended. Read while it runs
+   * (the page polls) and afterwards; `runId` picks an earlier attempt.
+   */
+  async taskStory(sessionId: string, taskId: string, runId?: string): Promise<Story | null> {
+    const cfg = await this.settings.load();
+    const s = await this.store.getSession(sessionId);
+    const t = s?.tasks.find((x) => x.id === taskId);
+    const chosen = resolveRunId(t, runId);
+    if (!t || !chosen) return null;
+    const current = chosen === t.runId;
+    // An earlier attempt is read with its own record, so the closing summary is that attempt's.
+    const attempt = current ? t : (t.attempts ?? []).find((a) => a.runId === chosen);
+    const view: Task = current || !attempt ? t : { ...t, ...attempt, status: attempt.status, attempts: undefined };
+    const live = current && this.running.has(sessionId) && (t.status === 'running' || t.status === 'waiting-approval');
+    return await buildStory(cfg.resolved.runsDir, chosen, view, live);
   }
 
   /** Files a task produced, so the UI can list reports and downloaded scripts. */
@@ -1109,7 +1129,7 @@ export class OperatorService {
    * by path, and the organisation's part (the operator's, edited on the plan page). Returned
    * whole for copying and in parts for showing, so the page can say which is which.
    */
-  async planBrief(opts: BriefOptions): Promise<{ text: string; software: string; organisation: string; customised: boolean }> {
+  async planBrief(opts: BriefOptions): Promise<{ text: string; software: string; organisation: string; customised: boolean; example: string }> {
     // The machine's projects go into the brief by absolute path, so a plan across a front
     // end, a back end and a test suite is written with the folders that exist rather than
     // with three paths the chat model had to ask for and the operator typed from memory.
@@ -1121,10 +1141,11 @@ export class OperatorService {
     ];
     const organisation = await this.getOrganisation(lang);
     return {
-      text: planBrief({ lang, projects, organisation: organisation.content }),
+      text: planBrief({ lang, projects, organisation: organisation.content, organisationExample: organisation.example }),
       software: planBrief({ lang, projects }),
       organisation: organisation.content,
       customised: organisation.customised,
+      example: organisation.example,
     };
   }
 
@@ -1931,6 +1952,12 @@ export class OperatorService {
       profileDir: cfg.resolved.profileDir,
       profileExists: existsSync(cfg.resolved.profileDir),
       profileHeldBy: Array.isArray(holders) ? holders.map((h) => h.pid) : 'unknown',
+      /*
+       * Whether the bot itself is what holds the profile. While a run is going, Edge is open
+       * on that profile *by the runner*, and the warning "close this Edge window, a run would
+       * fail" was shown in exactly the moment it was false. The page says which it is.
+       */
+      botRunning: this.running.size > 0 || this.batch?.running === true,
       desktop: resolveDesktopDir(),
       desktopSynced: desktopIsSynced(),
       cwd: cfg.resolved.cwd,

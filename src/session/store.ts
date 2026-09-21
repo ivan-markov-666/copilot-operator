@@ -104,11 +104,14 @@ export class SessionStore {
    * the machine is laid out. One customised copy in `data/organisation.md`, whatever language
    * it is written in; the shipped default comes per language from the prompts folder.
    */
-  async getOrganisation(lang: 'en' | 'bg'): Promise<{ content: string; customised: boolean }> {
+  async getOrganisation(lang: 'en' | 'bg'): Promise<{ content: string; customised: boolean; example: string }> {
     const custom = join(this.dir, 'organisation.md');
-    if (existsSync(custom)) return { content: await readFile(custom, 'utf8'), customised: true };
     const shipped = join(this.defaultLevel1Path, '..', `organisation.${lang}.md`);
-    return { content: await readFile(shipped, 'utf8').catch(() => ''), customised: false };
+    const example = await readFile(shipped, 'utf8').catch(() => '');
+    if (existsSync(custom)) return { content: await readFile(custom, 'utf8'), customised: true, example };
+    // Nothing until the operator writes it: an empty field is what makes the persona ask.
+    // The shipped text is the example it is shown, not the answer.
+    return { content: '', customised: false, example };
   }
 
   async setOrganisation(content: string): Promise<void> {

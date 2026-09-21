@@ -206,6 +206,14 @@ export class OperatorController {
     res.type('text/plain; charset=utf-8').send(text);
   }
 
+  /** The attempt as a story: what was sent, answered, run and how it ended. `run` picks an earlier attempt. */
+  @Get('sessions/:id/tasks/:taskId/story')
+  async taskStory(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
+    const story = await this.ops.taskStory(id, taskId, run);
+    if (!story) throw new NotFoundException('This task has not run yet, or that attempt is not its own.');
+    return story;
+  }
+
   @Get('sessions/:id/tasks/:taskId/files')
   taskFiles(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
     return this.ops.taskFiles(id, taskId, run);
@@ -377,14 +385,14 @@ export class OperatorController {
    * conversation and the answers belong to a session rather than to the whole document.
    */
   @Get('plan/brief')
-  async planBrief(@Query('lang') lang?: string): Promise<{ text: string; software: string; organisation: string; customised: boolean }> {
+  async planBrief(@Query('lang') lang?: string): Promise<{ text: string; software: string; organisation: string; customised: boolean; example: string }> {
     return await this.ops.planBrief({ lang: lang ?? 'en' });
   }
 
   // --- the organisation's part of the plan persona -------------------------------------
 
   @Get('organisation')
-  organisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean }> {
+  organisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
     return this.ops.getOrganisation(lang ?? 'en');
   }
 
@@ -396,7 +404,7 @@ export class OperatorController {
   }
 
   @Delete('organisation')
-  resetOrganisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean }> {
+  resetOrganisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
     return this.ops.resetOrganisation(lang ?? 'en');
   }
 

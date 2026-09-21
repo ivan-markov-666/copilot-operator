@@ -19,6 +19,7 @@ import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { RichText } from '../richText';
 import { useTaskActions } from '../taskActions';
 import { confirmDialog } from '../dialog';
+import { TaskStory } from '../taskStory';
 
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
 /** Everything that ended without the work being done, which is what the counter asks about. */
@@ -351,6 +352,15 @@ function Flow({
   const now = useNow(entries.some(isLive));
   /** The failed task whose prompt is being rewritten, if one is. */
   const [fixing, setFixing] = useState<RegistryEntry | null>(null);
+  /** The rows whose story is unfolded. */
+  const [storyOpen, setStoryOpen] = useState<Set<string>>(new Set());
+  const flipStory = (taskId: string) =>
+    setStoryOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
 
   return (
     <>
@@ -511,6 +521,11 @@ function Flow({
                * has run — a passed task is exactly what somebody compares a failed one against.
                */}
               {e.startedAt && <ExportLinks where={{ session: e.sessionId, task: e.taskId }} />}
+              {e.runId && (
+                <button className={storyOpen.has(e.taskId) ? '' : 'quiet'} onClick={() => flipStory(e.taskId)} title={t('story.why')}>
+                  {storyOpen.has(e.taskId) ? t('story.hide') : t('story.show')}
+                </button>
+              )}
               {FAILED_STATUSES.includes(e.status) && !e.sessionRunning && (
                 <button className="quiet" onClick={() => setFixing(e)} title={t('reg.fixPromptHint')}>
                   {t('reg.fixPrompt')}
@@ -541,6 +556,9 @@ function Flow({
                 </>
               )}
             </div>
+            {storyOpen.has(e.taskId) && e.runId && (
+              <TaskStory sessionId={e.sessionId} taskId={e.taskId} live={e.status === 'running' || e.status === 'waiting-approval'} />
+            )}
           </li>
         );
       })}
@@ -714,7 +732,7 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
 function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
   const { t } = useT();
   return (
-    <div className="row" style={{ marginTop: 10 }}>
+    <div className="row" style={{ margin: '14px 0 18px' }}>
       <Link href="/#new-session">
         <button className="primary">{t('reg.newSession')}</button>
       </Link>

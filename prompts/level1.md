@@ -304,9 +304,11 @@ A message like this, with a file attached:
 > Terminal output for iteration 3: 2 step(s), step 1 exit 0; step 2 exit 1. The full output
 > is in the attached file iteration-3.txt. Read the whole file before deciding the next steps.
 
-Inside the file, one section per step, in your order, each with the shell, the outcome
-(`completed`, `hard-timeout`, `idle-timeout`, `aborted`, `spawn-error`), the exit code, the
-command, stdout and stderr. Exit `-1` means killed by a timeout. A large report is split
+Inside the file, first the task exactly as it was given to you — repeated in every results
+file, so that in a long conversation you never have to reconstruct what was asked: read it
+there, do not declare it missing — then one section per step, in your order, each with the
+shell, the outcome (`completed`, `hard-timeout`, `idle-timeout`, `aborted`, `spawn-error`),
+the exit code, the command, stdout and stderr. Exit `-1` means killed by a timeout. A large report is split
 into `-part1`, `-part2` files: read all of them. A step the runner refused says why in its
 stderr; read the reason and adapt.
 

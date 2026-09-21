@@ -43,7 +43,9 @@ export default function SystemPage() {
               <tr>
                 <th>{t('sys.profileInUse')}</th>
                 <td>
-                  {Array.isArray(held) && held.length > 0 ? (
+                  {Array.isArray(held) && held.length > 0 && doctor.botRunning ? (
+                    <span className="muted">{t('sys.profileBot', { n: held.length })}</span>
+                  ) : Array.isArray(held) && held.length > 0 ? (
                     <span className="err">{t('sys.profileHeld', { pids: held.join(', ') })}</span>
                   ) : held === 'unknown' ? (
                     <span className="muted">{t('sys.profileUnknown')}</span>

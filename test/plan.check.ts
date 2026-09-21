@@ -83,6 +83,17 @@ for (const lang of ['en', 'bg'] as const) {
     '| org text absent when not given:', !bare.includes('JIRA-PAY') ? 'yes' : 'NO',
     '| org before the job list:', withOrg.indexOf('JIRA-PAY') < withOrg.indexOf(lang === 'en' ? '## Your job, in order' : '## Какво трябва да направиш') ? 'yes' : 'NO',
   );
+  // Nothing written yet: the brief interviews first, showing the shipped text as an example only.
+  const asking = planBrief({ lang, organisationExample: '## The organisation\n\nEXAMPLE-ONLY text.' });
+  const notAsking = planBrief({ lang, organisation: 'Real text.', organisationExample: 'EXAMPLE-ONLY' });
+  console.log(
+    `${lang} interview`,
+    '| asks when empty:', /(not described yet|още не е описана)/.test(asking) && asking.includes('EXAMPLE-ONLY') ? 'yes' : 'NO',
+    '| names the conventions:', /(branch naming|именуване на клонове)/.test(asking) && /(pull request)/.test(asking) ? 'yes' : 'NO',
+    '| says where to paste:', /(Organisation level \(yours\)|Организационно ниво \(ваше\))/.test(asking) ? 'yes' : 'NO',
+    '| silent once written:', !/(not described yet|още не е описана)/.test(notAsking) && !notAsking.includes('EXAMPLE-ONLY') ? 'yes' : 'NO',
+    '| is Kerrigan:', /Kerrigan/.test(asking) ? 'yes' : 'NO',
+  );
 }
 
 console.log('\n--- the brief lists the projects it was given, and only then ---');
