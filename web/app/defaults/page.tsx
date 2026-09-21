@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, type ModelCatalogue, type ProjectDefault } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
+import { ModelPicker } from '../modelPicker';
 
 export default function DefaultsPage() {
   const { t } = useT();
@@ -236,55 +237,6 @@ function ProjectSection() {
 // ---------------------------------------------------------------------------------------
 // The models: one for the work, one for the second opinion
 // ---------------------------------------------------------------------------------------
-
-/** The picker every model section shares: the catalogue read from the chat, grouped as it came. */
-function ModelPicker({
-  id,
-  chosen,
-  onChange,
-  none,
-  catalogue,
-  disabled,
-}: {
-  id: string;
-  chosen: string;
-  onChange: (name: string) => void;
-  none: string;
-  catalogue: ModelCatalogue | null;
-  disabled: boolean;
-}) {
-  const { t } = useT();
-  const all = catalogue?.options ?? [];
-  const known = all.some((o) => o.name === chosen);
-  const ungrouped = all.filter((o) => !o.group);
-  const grouped = new Map<string, typeof all>();
-  for (const o of all) {
-    if (!o.group) continue;
-    grouped.set(o.group, [...(grouped.get(o.group) ?? []), o]);
-  }
-  return (
-    <select id={id} value={chosen} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ width: 'auto', minWidth: 280 }}>
-      <option value="">{none}</option>
-      {chosen && !known && <option value={chosen}>{t('model.notInList', { name: chosen })}</option>}
-      {ungrouped.map((o) => (
-        <option key={o.name} value={o.name} disabled={o.disabled}>
-          {o.name}
-          {o.disabled ? ` — ${t('model.unavailable')}` : ''}
-        </option>
-      ))}
-      {[...grouped.entries()].map(([group, items]) => (
-        <optgroup key={group} label={group}>
-          {items.map((o) => (
-            <option key={o.name} value={o.name} disabled={o.disabled}>
-              {o.name}
-              {o.disabled ? ` — ${t('model.unavailable')}` : ''}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
-  );
-}
 
 function ModelSection() {
   const { t } = useT();

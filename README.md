@@ -15,7 +15,7 @@ browser, so it needs no API licence and no admin consent.
 
 ## What it does
 
-1. Opens a conversation and sends **level 1**, the contract with the runner: phases, json
+1. Opens a conversation and sends **level 1**, the base prompt about how the runner works: phases, json
    format, stop word, the final summary, the rules nothing else can override.
 2. Sends **level 2**, the user's instructions for the project and the team, together with
    the **task**.

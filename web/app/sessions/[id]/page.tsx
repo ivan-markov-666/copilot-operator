@@ -11,6 +11,7 @@ import { useNow } from '../../../lib/useNow';
 import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
 import { ModelHint, ProjectHint, ReviewModelHint } from '../../defaultHints';
+import { ModelPicker } from '../../modelPicker';
 import { RichText } from '../../richText';
 import { useTaskActions } from '../../taskActions';
 
@@ -581,14 +582,9 @@ function ReviewPanel({ session, onChange }: { session: Session; onChange: () => 
       </div>
 
       <label htmlFor="review-model">{t('review.modelField')}</label>
-      <input
-        id="review-model"
-        type="text"
-        value={model}
-        placeholder={t('review.modelSame')}
-        onChange={(e) => setModel(e.target.value)}
-        disabled={session.running || !enabled}
-      />
+      <div className="row">
+        <ModelPicker id="review-model" chosen={model} onChange={setModel} none={t('review.modelSame')} disabled={session.running || !enabled} />
+      </div>
       <p className="why">{t('review.modelWhy')}</p>
       <ReviewModelHint current={model} onUse={(name) => setModel(name)} />
 

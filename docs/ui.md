@@ -24,7 +24,7 @@ did. When one finishes with a summary, the next queued one starts. A task that e
 other way stops the run and leaves the rest queued, because a failed task usually leaves the
 machine in a state the next one did not expect.
 
-**Level 1.** The contract with the runner: phases, json format, stop word, final summary,
+**Level 1.** The base prompt about how the runner works: phases, json format, stop word, final summary,
 the rules level 2 cannot override. Shipped in `prompts/level1.md`, shown above the tasks on
 every session page, editable on its own page with a reset to the shipped version. Sent once
 per conversation, on its own, and acknowledged before the first task goes out.

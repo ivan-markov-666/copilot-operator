@@ -101,7 +101,7 @@ export const RunConfigSchema = z.object({
     })
     .prefault({}),
 
-  /** Level 1: the contract with the runner. Shipped with the project; editable in the UI. */
+  /** Level 1: the base prompt about how the runner works. Shipped with the project; editable in the UI. */
   level1File: z.string().default('prompts/level1.md'),
   /** Level 2: the user's project, domain and team instructions for this task. */
   level2: TextOrFile.optional(),

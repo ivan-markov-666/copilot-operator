@@ -21,7 +21,7 @@ const dict = {
     'nav.live': 'live',
     'nav.liveTitle': 'The bot is working right now: {n} session(s) running. Open the register to watch it.',
     'nav.history': 'Task register',
-    'nav.level1': 'Level 1 contract',
+    'nav.level1': 'Level 1 prompt',
     'nav.presets': 'Level 2 presets',
     'nav.appearance': 'Appearance',
     'nav.system': 'System',
@@ -152,14 +152,14 @@ const dict = {
     'model.showDetails': 'show what the picker said',
 
     // level 1 panel
-    'l1.title': 'Level 1: the contract with the runner',
+    'l1.title': 'Level 1: the base prompt',
     'l1.sent': 'sent in this conversation',
     'l1.notSent': 'sent with the first task',
     'l1.edit': 'edit',
     'l1.hint':
-      'Has priority over the level 2 instructions of every task below. Defines the phases, the json format, the stop word and the final summary.',
+      'The prompt about how the bot works, sent once per conversation with priority over the level 2 instructions of every task below: the phases of a task, the JSON reply format, the stop word, how to verify before closing, when to declare a task blocked, a deviation or a disputed finding, and the rules level 2 cannot override.',
     'l1.customised': 'Using your customised copy.',
-    'l1.show': 'show the contract',
+    'l1.show': 'show the prompt',
 
     // version control
     'vcs.title': 'Version control',
@@ -462,17 +462,17 @@ const dict = {
     'live.none': 'Nothing yet. Events appear here while a run is in progress.',
 
     // level 1 page
-    'l1page.title': 'Level 1: the contract with the runner',
+    'l1page.title': 'Level 1: the base prompt',
     'l1page.hint':
-      'Sent once at the start of every conversation, before any project instructions. It defines the phases, the json format, the stop word, the final summary and the rules that level 2 cannot override. Edit it only if you know why: the parser expects exactly the format described here.',
+      'The prompt about how the bot works. It is sent once at the start of every conversation, before any project instructions, and a later task in the same conversation gets a short reminder of it. It tells the model the phases of a task (receive, plan a step, emit, read the results, repeat, verify, close), the JSON reply format the runner parses, the stop word, what a "done" needs (a verification it has run and read), when a task is "blocked" (at least two real approaches and something specific in the way), how to declare an instruction that cannot be followed as written and how to dispute a review finding, how the results file and refused steps come back, and the rules that level 2 cannot override. The independent review has its own prompt (prompts/review1.md). Edit it only if you know why: the parser expects exactly the format described here.',
     'l1page.custom': 'Customised copy in data/level1.md',
     'l1page.shipped': 'Shipped version, prompts/level1.md',
     'l1page.unsaved': 'unsaved changes',
     'l1page.save': 'Save',
     'l1page.saved': 'Saved. Applies to sessions started from now on.',
     'l1page.reset': 'Reset to shipped',
-    'l1page.resetConfirm': 'Discard your edits and go back to the contract shipped with the project?',
-    'l1page.resetDone': 'Reset to the shipped contract.',
+    'l1page.resetConfirm': 'Discard your edits and go back to the base prompt shipped with the project?',
+    'l1page.resetDone': 'Reset to the shipped base prompt.',
 
     // presets page
     'presets.title': 'Level 2 presets',
@@ -821,7 +821,7 @@ const dict = {
     'nav.live': 'live',
     'nav.liveTitle': 'Ботът работи в момента: {n} сесия(и). Отворете регистъра, за да гледате.',
     'nav.history': 'Регистър на задачите',
-    'nav.level1': 'Договор ниво 1',
+    'nav.level1': 'Основен prompt',
     'nav.presets': 'Шаблони ниво 2',
     'nav.appearance': 'Изглед',
     'nav.system': 'Система',
@@ -946,14 +946,14 @@ const dict = {
     'model.defaultCleared': 'новите сесии ще остават на настроеното в чата',
     'model.showDetails': 'покажи какво каза изборът',
 
-    'l1.title': 'Ниво 1: договорът с изпълнителя',
+    'l1.title': 'Ниво 1: основен prompt',
     'l1.sent': 'изпратен в този разговор',
     'l1.notSent': 'изпраща се с първата задача',
     'l1.edit': 'редактирай',
     'l1.hint':
-      'Има приоритет над инструкциите от ниво 2 на всяка задача по-долу. Дефинира фазите, JSON формата, стоп думата и финалното обяснение.',
+      'Prompt-ът за начина, по който работи ботът, изпращан веднъж на разговор с приоритет над инструкциите от ниво 2 на всяка задача по-долу: фазите на една задача, JSON форматът на отговора, стоп думата, как се проверява преди затваряне, кога задача е блокирана, отклонение или оспорена находка, и правилата, които ниво 2 не може да промени.',
     'l1.customised': 'Използва се вашето редактирано копие.',
-    'l1.show': 'покажи договора',
+    'l1.show': 'покажи prompt-а',
 
     'vcs.title': 'Контрол на версиите',
     'vcs.on': 'включен',
@@ -1244,17 +1244,17 @@ const dict = {
     'live.title': 'На живо',
     'live.none': 'Още нищо. Събитията се появяват тук, докато тече изпълнение.',
 
-    'l1page.title': 'Ниво 1: договорът с изпълнителя',
+    'l1page.title': 'Ниво 1: основен prompt',
     'l1page.hint':
-      'Изпраща се веднъж в началото на всеки разговор, преди инструкциите за проекта. Дефинира фазите, JSON формата, стоп думата, финалното обяснение и правилата, които ниво 2 не може да променя. Редактирайте го само ако знаете защо: парсърът очаква точно описания тук формат.',
+      'Prompt-ът за начина, по който работи ботът. Изпраща се веднъж в началото на всеки разговор, преди инструкциите за проекта, а следваща задача в същия разговор получава кратко напомняне за него. Казва на модела фазите на една задача (получи, планирай стъпка, изпрати, прочети резултата, повтори, провери, затвори), JSON формата на отговора, който runner-ът парсва, стоп думата, какво изисква „done" (проверка, която сам е пуснал и прочел), кога задача е „blocked" (поне два реални подхода и нещо конкретно на пътя), как се обявява инструкция, която не може да се изпълни както е написана, и как се оспорва находка от рецензия, как се връщат файлът с резултатите и отказаните стъпки, и правилата, които ниво 2 не може да промени. Независимата рецензия има собствен prompt (prompts/review1.md). Редактирайте го само ако знаете защо: парсърът очаква точно описания тук формат.',
     'l1page.custom': 'Редактирано копие в data/level1.md',
     'l1page.shipped': 'Оригиналът от проекта, prompts/level1.md',
     'l1page.unsaved': 'незапазени промени',
     'l1page.save': 'Запази',
     'l1page.saved': 'Запазено. Важи за сесии, започнати от сега нататък.',
     'l1page.reset': 'Върни оригинала',
-    'l1page.resetConfirm': 'Да отхвърля ли редакциите ви и да върна договора, доставен с проекта?',
-    'l1page.resetDone': 'Върнат е оригиналният договор.',
+    'l1page.resetConfirm': 'Да отхвърля ли редакциите ви и да върна основния prompt, доставен с проекта?',
+    'l1page.resetDone': 'Върнат е оригиналният основен prompt.',
 
     'presets.title': 'Шаблони за ниво 2',
     'presets.hint':

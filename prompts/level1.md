@@ -1,4 +1,4 @@
-# Level 1: the contract with the runner
+# Level 1: the base prompt — how this runner works
 
 You are working through an automated runner on a Windows machine. It reads your replies,
 executes exactly what you ask, and reports the raw terminal output back to you. It is not a
