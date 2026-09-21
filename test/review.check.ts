@@ -225,6 +225,32 @@ const auditBrief = reviewBrief(
 console.log('brief carries the account  :', auditBrief.includes('What the implementer delivered') && auditBrief.includes(audit) ? 'yes' : 'NO');
 console.log('as claims to test          :', auditBrief.includes('every statement in it is a claim') ? 'yes' : 'NO');
 console.log('and not otherwise          :', !plain.includes('What the implementer delivered') ? 'yes' : 'NO');
+
+/*
+ * A read-only task's reviewer is told to give no check.
+ *
+ * A check is a command against the repository, and a read-only task may not change the
+ * repository: whatever it reports is settled before the task starts. One reviewer of a smoke
+ * test proved it by freezing the delivered inventory inside a PowerShell array and comparing
+ * the repository with that paste; the implementer then delivered the complete inventory, which
+ * was the fix asked for, and the frozen list went on disagreeing for three attempts.
+ */
+const roBrief = reviewBrief(
+  { vcs: { enabled: true, repoDir: 'C:\\x' } } as never,
+  { prompt: 'Smoke-test it, change nothing.', level2: '', title: 'web-smoke', readOnly: true } as never,
+  ['web/page.tsx'],
+  'C:\\x',
+  [],
+  undefined,
+  [],
+  [],
+  [],
+  readOnly,
+);
+console.log('read-only: no check asked  :', /Do not give a .check. with a finding/.test(roBrief) ? 'yes' : 'NO');
+console.log('says why                   :', roBrief.includes('may not change the repository') ? 'yes' : 'NO');
+console.log('warns against a frozen copy:', roBrief.includes('freezes a copy of the account') ? 'yes' : 'NO');
+console.log('a changing task is not told:', !/Do not give a .check. with a finding/.test(auditBrief) ? 'yes' : 'NO');
 const msg = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 2, 2, [again]);
 console.log('implementer told it recurred:', msg.includes('raised in the previous round') && msg.includes('`deviations`') ? 'yes' : 'NO');
 const quiet = findingsMessage({ verdict: 'fail', findings: [again], stepsRun: 1, iterations: 1 }, 1, 2);

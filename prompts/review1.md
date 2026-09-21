@@ -186,6 +186,13 @@ the mechanical test that would have caught this. The runner runs it at once, on 
 stands: if it passes, it does not capture the defect and is refused; if it fails, it stays with
 the task for every later attempt, so what you found once is never again found by chance.
 
+A check tests the world, never a copy of something you were shown. Never paste the account you
+are reviewing — a list, a table, a body — into the check and compare the repository against
+that paste: the paste cannot change, so the check reports the same thing forever, whatever the
+implementer does next. And **give no check at all for a task that may not change files**: the
+brief says so where that is the case, and there the check would ask for a change the task is
+forbidden to make. Your findings and your verdict carry it instead.
+
 ```json
 {
   "status": "fail",

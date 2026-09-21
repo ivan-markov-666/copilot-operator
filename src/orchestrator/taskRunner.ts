@@ -909,7 +909,24 @@ export async function runTask(
         }
         const settled = settleAfterReview(reviewChecks, outcome.verdict, named);
         reviewChecks = settled.checks;
-        if (settled.reactivated.length > 0) {
+        /*
+         * A read-only task never carries an active derived check, whatever a review says.
+         *
+         * New ones are not kept (see review.ts), and one kept before this rule — or before the
+         * task was marked read-only — must not be revived by a later round either: it is a
+         * command against a repository the task may not touch, so raising the finding again
+         * does not give the task a lever, it only puts the same immovable condition back in
+         * the gate. The finding itself still travels and still fails the work.
+         */
+        if (task.readOnly) {
+          const revived = reviewChecks.filter((rc) => rc.state === 'active').map((rc) => rc.findingId);
+          if (revived.length > 0) {
+            sink.event('review-check-not-kept-readonly', { findings: revived },
+              `this task may not change files, so the check(s) from ${revived.join(', ')} stay out of the gate; the finding(s) stand`, 'warn');
+          }
+          reviewChecks = reviewChecks.map((rc) => (rc.state === 'active' ? { ...rc, state: 'suspended' as const } : rc));
+        }
+        if (settled.reactivated.length > 0 && !task.readOnly) {
           sink.event('review-check-reactivated', { findings: settled.reactivated },
             `the review raised the disputed finding(s) again; their checks are back: ${settled.reactivated.join(', ')}`, 'warn');
         }

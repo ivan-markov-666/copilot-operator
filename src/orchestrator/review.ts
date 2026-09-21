@@ -216,6 +216,17 @@ export function reviewBrief(
           deliverable.why === 'read-only'
             ? 'This task was declared read-only: its product is not a change to files but the account below,'
             : 'This task changed no files (version control recorded none), so its product is the account below,',
+          ...(deliverable.why === 'read-only'
+            ? [
+                '',
+                '**Do not give a `check` with a finding about this task.** A check is a command run against the',
+                'repository, and this task may not change the repository: whatever the command reports is settled',
+                'before the task starts, so no correction it is allowed to make can alter it. A check that instead',
+                'freezes a copy of the account below inside itself tests a string you pasted, not the work. Your',
+                'findings and your verdict are the whole of your leverage here, and they are enough: the work goes',
+                'back with them, and the next review rules on what came back.',
+              ]
+            : []),
           'written by the conversation that did the work when it closed. You are given it because it is the',
           'thing under review, not because it is to be believed: every statement in it is a claim, and you',
           'test a claim by running what it says and comparing. What the task asked for and the account does',
@@ -457,6 +468,48 @@ export async function runReview(
         }
 
         const named = grounded.map((f, i) => ({ ...f, id: findingId(round, i) }));
+
+        /*
+         * A read-only task's findings never become gate conditions.
+         *
+         * A derived check is a command run against the repository, and a read-only task is
+         * forbidden to change the repository: whatever such a check reports is fixed before
+         * the task starts, so it cannot be satisfied by anything the task is allowed to do.
+         * Observed: a reviewer of a smoke test found the delivered testid inventory
+         * incomplete — it was — and gave a check that froze the delivered list inside a
+         * PowerShell array and compared it with the file. The implementer then delivered the
+         * complete inventory, which is exactly what was asked, and the check went on failing,
+         * because the list it compares against is a copy of an old summary. Three attempts,
+         * two of them in fresh conversations, ended blocked on a condition no action could
+         * meet, and the implementer said so with the exact evidence.
+         *
+         * The reviewer's judgement is not weakened by this: the finding still travels, the
+         * verdict still fails the work, and the next reviewer still rules on it. What it may
+         * not do is put a condition into a gate that the task has no lever to move.
+         */
+        if (task.readOnly && named.some((f) => f.check)) {
+          deps.event(
+            'review-check-not-kept-readonly',
+            { round, findings: named.filter((f) => f.check).map((f) => f.id) },
+            'this task may not change files, so a check given with a finding could never be satisfied by it; the findings stand, the checks are not kept',
+            'warn',
+          );
+        }
+        if (task.readOnly) {
+          await deps.record(
+            `REVIEW ${round}: ${verdict.toUpperCase()}`,
+            [review.summary ?? '', named.length > 0 ? describeFindings(named) : ''].filter(Boolean).join('\n\n'),
+          );
+          return {
+            verdict,
+            summary: review.summary,
+            findings: named,
+            stepsRun,
+            iterations,
+            chatUrl: (await transport.currentChatId().catch(() => null)) ?? undefined,
+          };
+        }
+
         const validation = await validateDerivedChecks(named, {
           cwd: deps.cwd,
           logDir: dir,
