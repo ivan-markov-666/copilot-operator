@@ -15,6 +15,7 @@
 
 import { useCallback, useState } from 'react';
 import { api } from '../lib/api';
+import { confirmDialog } from './dialog';
 import { useT } from '../lib/i18n';
 
 export type TaskRef = { sessionId: string; taskId: string; title: string };
@@ -67,7 +68,7 @@ export function useTaskActions(onChange: () => void): TaskActions {
                 list: preview.leftBehind.slice(0, 10).join('\n'),
               })
             : t('restore.confirm', common);
-        if (!window.confirm(question)) return;
+        if (!(await confirmDialog(question))) return;
 
         const done = await api.restore(task.sessionId, task.taskId);
         if (!done.ok) {
@@ -144,7 +145,7 @@ export function useTaskActions(onChange: () => void): TaskActions {
           repos: repos || t('restart.noRepo'),
           mode: t(plan.mode === 'unattended' ? 'run.unattended' : 'run.confirm'),
         });
-        if (!window.confirm(question)) return;
+        if (!(await confirmDialog(question))) return;
 
         const done = await api.restartFrom(task.sessionId, task.taskId);
         if (!done.started) {

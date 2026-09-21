@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, type Preset } from '../../lib/api';
+import { confirmDialog } from '../dialog';
 import { useT, useFmtTime } from '../../lib/i18n';
 
 export default function PresetsPage() {
@@ -31,7 +32,7 @@ export default function PresetsPage() {
     setContent(p.content);
   };
   const remove = async (p: Preset) => {
-    if (!confirm(t('presets.deleteConfirm', { name: p.name }))) return;
+    if (!(await confirmDialog(t('presets.deleteConfirm', { name: p.name })))) return;
     await api.deletePreset(p.name);
     await load();
   };

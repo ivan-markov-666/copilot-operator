@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
+import { confirmDialog } from '../dialog';
 import { useT } from '../../lib/i18n';
 
 export default function Level1Page() {
@@ -32,7 +33,7 @@ export default function Level1Page() {
     }
   };
   const reset = async () => {
-    if (!confirm(t('l1page.resetConfirm'))) return;
+    if (!(await confirmDialog(t('l1page.resetConfirm')))) return;
     const l = await api.resetLevel1();
     setContent(l.content);
     setSaved(l.content);

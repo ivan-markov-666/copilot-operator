@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, type ModelCatalogue, type ProjectDefault } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
+import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
 
 export default function DefaultsPage() {
@@ -274,7 +275,7 @@ function ModelSection() {
   };
 
   const refresh = async () => {
-    if (!window.confirm(t('model.refreshConfirm'))) return;
+    if (!(await confirmDialog(t('model.refreshConfirm')))) return;
     setBusy(true);
     setMsg(t('model.refreshing'));
     try {

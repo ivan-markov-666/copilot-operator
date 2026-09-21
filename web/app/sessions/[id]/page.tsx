@@ -13,6 +13,7 @@ import { useAppearance } from '../../../lib/appearance';
 import { ModelHint, ProjectHint, ReviewModelHint } from '../../defaultHints';
 import { ModelPicker } from '../../modelPicker';
 import { RichText } from '../../richText';
+import { confirmDialog } from '../../dialog';
 import { useTaskActions } from '../../taskActions';
 
 // ---------------------------------------------------------------------------------------
@@ -130,7 +131,7 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
   useEffect(() => setGroup(session.conversationGroup ?? ''), [session.conversationGroup]);
 
   const start = async (mode: 'confirm' | 'unattended') => {
-    if (mode === 'unattended' && !confirm(t('session.unattendedConfirm'))) return;
+    if (mode === 'unattended' && !(await confirmDialog(t('session.unattendedConfirm')))) return;
     const r = await api.start(session.id, mode);
     setMsg(
       r.started
@@ -158,7 +159,7 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
       setMsg(t('home.deleteRunning'));
       return;
     }
-    if (!window.confirm(t('home.deleteConfirm', { name: session.name, n: session.tasks.length }))) return;
+    if (!(await confirmDialog(t('home.deleteConfirm', { name: session.name, n: session.tasks.length })))) return;
     try {
       await api.deleteSession(session.id);
       window.location.href = '/';
@@ -298,7 +299,7 @@ function ApprovalBar({ approval, onDecided }: { approval: Approval; onDecided: (
   const decide = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
     // Running the rest unattended is the same decision as starting unattended, so it is asked
     // in the same words. The step on screen has been seen; the ones after it have not.
-    if (action === 'run-all' && !window.confirm(t('approval.runAllConfirm'))) return;
+    if (action === 'run-all' && !(await confirmDialog(t('approval.runAllConfirm')))) return;
     setBusy(true);
     try {
       await api.decide(approval.id, action);
@@ -406,7 +407,7 @@ function ModelPanel({ session, onChange }: { session: Session; onChange: () => v
   };
 
   const refresh = async () => {
-    if (!window.confirm(t('model.refreshConfirm'))) return;
+    if (!(await confirmDialog(t('model.refreshConfirm')))) return;
     setBusy(true);
     setMsg(t('model.refreshing'));
     try {
@@ -977,8 +978,8 @@ function MirrorPanel({ session, onChange }: { session: Session; onChange: () => 
   };
 
   /** Turning the env switch on is a decision about secrets, so it is asked out loud once. */
-  const toggleEnv = (on: boolean) => {
-    if (on && !window.confirm(t('mirror.envWarn'))) return;
+  const toggleEnv = async (on: boolean) => {
+    if (on && !(await confirmDialog(t('mirror.envWarn')))) return;
     setIncludeEnvFiles(on);
     setPreview(null);
   };
@@ -1513,7 +1514,7 @@ function TaskCard({
     (!!task.vcs?.baseCommit || (task.attempts ?? []).some((a) => a.vcs?.baseCommit));
 
   const rerun = async () => {
-    if (!window.confirm(t('task.rerunConfirm', { title: task.title }))) return;
+    if (!(await confirmDialog(t('task.rerunConfirm', { title: task.title })))) return;
     try {
       await api.rerunTask(session.id, task.id);
       onChange();
@@ -1529,7 +1530,7 @@ function TaskCard({
    * under the question it actually answered. Editing in place would quietly rewrite history.
    */
   const saveAndRerun = async () => {
-    if (!window.confirm(t('task.editRanConfirm', { title: task.title }))) return;
+    if (!(await confirmDialog(t('task.editRanConfirm', { title: task.title })))) return;
     try {
       await api.rerunTask(session.id, task.id, { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks });
       setEditing(false);
@@ -1550,7 +1551,7 @@ function TaskCard({
 
   const remove = async () => {
     const question = task.status === 'queued' ? 'task.deleteConfirm' : 'task.deleteConfirmRan';
-    if (!confirm(t(question, { title: task.title }))) return;
+    if (!(await confirmDialog(t(question, { title: task.title })))) return;
     try {
       await api.deleteTask(session.id, task.id);
       onChange();

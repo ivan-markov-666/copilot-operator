@@ -4,6 +4,7 @@ import './globals.css';
 import { LanguageProvider } from '../lib/i18n';
 import { AppearanceProvider, themeScript } from '../lib/appearance';
 import { Nav, SkipLink } from './nav';
+import { DialogHost } from './dialog';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -34,16 +35,18 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <AppearanceProvider>
           <LanguageProvider>
-            <SkipLink />
-            <div className="wrap">
-              <header className="top">
-                <h1>
-                  <Link href="/">copilot-operator</Link>
-                </h1>
-                <Nav />
-              </header>
-              <main id="main">{children}</main>
-            </div>
+            <DialogHost>
+              <SkipLink />
+              <div className="wrap">
+                <header className="top">
+                  <h1>
+                    <Link href="/">copilot-operator</Link>
+                  </h1>
+                  <Nav />
+                </header>
+                <main id="main">{children}</main>
+              </div>
+            </DialogHost>
           </LanguageProvider>
         </AppearanceProvider>
       </body>

@@ -543,3 +543,104 @@ th { color: var(--muted); font-weight: 700; font-size: calc(12px * var(--scale))
 }
 .rich pre { margin: 6px 0 8px; }
 .summary .rich { white-space: normal; }
+
+/*
+ * Selects, drawn by the page rather than by the platform.
+ *
+ * The native control ignores the theme: a dark page got a white drop-down with a grey arrow
+ * from another decade. `appearance: none` hands the box back to the stylesheet; the arrow is
+ * an inline SVG in the current text colour, so it follows light and dark for free. The
+ * option list itself is still the platform's — there is no styling it — but it opens from a
+ * control that belongs to the page.
+ */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  cursor: pointer;
+}
+select:disabled { cursor: not-allowed; opacity: 0.6; }
+select option,
+select optgroup { background: var(--panel); color: var(--ink); }
+
+/* Nav icons: recognition next to the label, in the link's own colour. */
+.top nav a { display: inline-flex; align-items: center; gap: 6px; }
+.top nav a .nav-icon { flex: none; opacity: 0.85; }
+
+/*
+ * The app's own dialogs (see dialog.tsx).
+ *
+ * A backdrop that dims the page, a panel in the theme's colours, the question in full with
+ * its line breaks kept, and the confirming button focused so Enter answers it and Escape
+ * declines. Nothing here is the platform's.
+ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+.modal {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  width: min(560px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 18px 20px;
+}
+.modal h2 { margin: 0 0 10px; font-size: calc(16px * var(--scale)); }
+.modal.danger h2 { color: var(--bad); }
+.modal-body { white-space: pre-wrap; line-height: 1.5; font-size: calc(14px * var(--scale)); }
+.modal-actions { justify-content: flex-end; margin-top: 16px; }
+
+/*
+ * Phones.
+ *
+ * At 320px the header wrapped into a wall of pills, tables ran off the page, and the toolbar's
+ * fixed-width fields pushed each other out of view. Below 600px the page uses its gutter for
+ * content, the nav becomes a scrollable strip, tables scroll inside their panel, and every
+ * field takes the full width instead of a share of a row that no longer exists.
+ */
+@media (max-width: 600px) {
+  .wrap { padding: 12px 10px 60px; }
+  .top { gap: 8px; margin-bottom: 12px; padding-bottom: 10px; }
+  .top h1 { font-size: calc(18px * var(--scale)); }
+  .top nav {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .top nav::-webkit-scrollbar { display: none; }
+  .top nav a { flex: none; padding: 6px 9px; font-size: calc(13px * var(--scale)); }
+  .panel { padding: 12px; }
+  .row { gap: 8px; }
+  .row > input[type='text'],
+  .row > select,
+  .row > textarea,
+  .toolbar > div,
+  .toolbar select,
+  .toolbar input[type='text'] { width: 100%; min-width: 0; flex: 1 1 100%; }
+  .row > button { flex: 1 1 auto; }
+  select { min-width: 0 !important; width: 100%; }
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+  .counts { gap: 6px; }
+  .count { flex: 1 1 calc(50% - 6px); }
+  .segmented { display: flex; width: 100%; }
+  .segmented button { flex: 1 1 auto; }
+  .flow > li { padding-left: 18px; }
+  .modal { padding: 14px; }
+  pre, .log { font-size: 12px; }
+}

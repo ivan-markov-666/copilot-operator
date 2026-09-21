@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus } from '../lib/api';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
+import { confirmDialog } from './dialog';
 import { ModelHint } from './defaultHints';
 
 export default function SessionsPage() {
@@ -87,7 +88,7 @@ export default function SessionsPage() {
       setMsg(t('home.deleteRunning'));
       return;
     }
-    if (!window.confirm(t('home.deleteConfirm', { name: session.name, n: session.tasks.length }))) return;
+    if (!(await confirmDialog(t('home.deleteConfirm', { name: session.name, n: session.tasks.length })))) return;
     try {
       await api.deleteSession(session.id);
       setMsg(t('home.deleted', { name: session.name }));
@@ -103,7 +104,7 @@ export default function SessionsPage() {
     const chosen = (sessions ?? []).filter((x) => selected.includes(x.id));
     if (chosen.length === 0) return;
     const names = chosen.map((x) => `• ${x.name} (${x.tasks.length})`).join('\n');
-    if (!window.confirm(t('home.deleteSelectedConfirm', { n: chosen.length, names }))) return;
+    if (!(await confirmDialog(t('home.deleteSelectedConfirm', { n: chosen.length, names })))) return;
 
     let done = 0;
     const failed: string[] = [];
@@ -458,7 +459,7 @@ function BatchPanel({
         : null;
 
   const start = async (mode: 'confirm' | 'unattended') => {
-    if (mode === 'unattended' && !confirm(t('batch.unattendedConfirm', { n: runnable.length }))) return;
+    if (mode === 'unattended' && !(await confirmDialog(t('batch.unattendedConfirm', { n: runnable.length })))) return;
     try {
       const r = await api.startBatch(
         runnable.map((s) => s.id),
@@ -797,7 +798,7 @@ function HomeApproval({
   const [busy, setBusy] = useState(false);
 
   const decide = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
-    if (action === 'run-all' && !window.confirm(t('approval.runAllConfirm'))) return;
+    if (action === 'run-all' && !(await confirmDialog(t('approval.runAllConfirm')))) return;
     setBusy(true);
     try {
       await api.decide(approval.id, action);

@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, type PlanCheck, type PlanImport } from '../../lib/api';
+import { confirmDialog } from '../dialog';
 import { useT, useFmtTime } from '../../lib/i18n';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -106,7 +107,7 @@ export default function ImportPage() {
     const known = check && !check.ok ? [] : (check?.duplicates ?? []);
     if (known.length > 0) {
       const names = known.map((d) => `• ${d.name} (${d.tasks})`).join('\n');
-      if (!window.confirm(t('plan.duplicateConfirm', { names }))) return;
+      if (!(await confirmDialog(t('plan.duplicateConfirm', { names })))) return;
     }
 
     setBusy('import');
