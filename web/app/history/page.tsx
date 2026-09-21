@@ -423,6 +423,11 @@ function Flow({
                   {t('task.readOnly')}
                 </span>
               )}
+              {(e.autoRetries ?? 0) > 0 && (
+                <span className={`badge ${e.status === 'done' ? 'done' : 'blocked'}`} title={t('reg.retriedFreshWhy')}>
+                  {e.status === 'done' ? t('reg.retriedFreshDone', { n: e.autoRetries ?? 0 }) : t('reg.retriedFreshStill', { n: e.autoRetries ?? 0 })}
+                </span>
+              )}
               {e.runGroup && (
                 <span
                   className="chip"

@@ -522,7 +522,10 @@ The failure words: \`blocked\` — the chat gave up after real attempts (read \`
 \`needed\`); \`failed\` — the checks did not pass after their rounds; \`limit-reached\` — the
 iterations or the time ran out (the task is too big: split it); \`aborted\` — stopped by the
 operator or the runner. A review \`fail\` whose findings are about the *task* means the task
-contradicts itself or the level 2, and the task text is what to fix.
+contradicts itself or the level 2, and the task text is what to fix. A task the runner ran
+again in a fresh conversation after it blocked (the register says so) and that came back done
+was blocked by the chat — a long conversation Copilot could no longer see the start of — and
+needs no fix; one that blocked again after the fresh conversations was not the chat's fault.
 
 Never tell the operator to edit the repository by hand between tasks, and never write a task
 that satisfies a check by changing what the check measures.
@@ -574,7 +577,10 @@ const AFTER_BG = `
 итерациите или времето са свършили (задачата е твърде голяма: раздели я); \`aborted\` —
 спряна от оператора или от runner-а. Рецензия \`fail\` с находки за *задачата* означава, че
 задачата си противоречи или противоречи на ниво 2, и текстът на задачата е това, което се
-поправя.
+поправя. Задача, която runner-ът е пуснал отново в нов разговор, след като е блокирала
+(регистърът го казва), и която след това е готова, е била блокирана от чата — дълъг разговор,
+чието начало Copilot вече не е виждал — и не иска поправка; такава, която е блокирала пак и
+след новите разговори, не е по вина на чата.
 
 Никога не казвай на оператора да редактира хранилището на ръка между задачите и никога не
 пиши задача, която удовлетворява проверка, като променя това, което проверката измерва.

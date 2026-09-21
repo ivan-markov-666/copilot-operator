@@ -34,6 +34,7 @@ export default function DefaultsPage() {
       <ProjectSection />
       <ModelSection />
       <ReviewModelSection />
+      <ExecutionSection />
     </>
   );
 }
@@ -342,6 +343,82 @@ function ProjectFolders({
           {t('proj.foldersSave')}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * How a run behaves when a task does not end done — the one number worth a field here.
+ *
+ * The rest of `limits` stays in the settings file: iterations, minutes, review rounds are
+ * tuned once by whoever set the machine up. This one is a decision the operator meets after
+ * every blocked task, so it sits where they can change it without opening a file.
+ */
+function ExecutionSection() {
+  const { t } = useT();
+  const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
+  const [retries, setRetries] = useState(2);
+  const [saved, setSaved] = useState(2);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => {
+        setRaw(s.raw);
+        const limits = (s.resolved.limits ?? {}) as { retryBlockedInFreshChat?: number };
+        const n = typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2;
+        setRetries(n);
+        setSaved(n);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  const save = async () => {
+    if (!raw) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const limits = { ...((raw.limits as Record<string, unknown>) ?? {}), retryBlockedInFreshChat: retries };
+      const next = { ...raw, limits };
+      await api.saveSettings(next);
+      setRaw(next);
+      setSaved(retries);
+      setMsg(t('exec.saved'));
+      setErr('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel" id="execution">
+      <h2>{t('exec.title')}</h2>
+      <p className="muted small">{t('exec.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      <label htmlFor="retry-blocked">{t('exec.retryBlocked')}</label>
+      <div className="row">
+        <input
+          id="retry-blocked"
+          type="number"
+          min={0}
+          max={5}
+          value={retries}
+          onChange={(e) => setRetries(Math.max(0, Math.min(5, Number(e.target.value) || 0)))}
+          style={{ width: 90 }}
+          disabled={busy || !raw}
+        />
+        <span className="muted small">{t('exec.retryBlockedTimes')}</span>
+        <button className="primary" onClick={() => void save()} disabled={busy || !raw || retries === saved}>
+          {t('exec.save')}
+        </button>
+        {msg && <span className="muted small">{msg}</span>}
+      </div>
+      <p className="why">{t('exec.retryBlockedWhy')}</p>
     </div>
   );
 }

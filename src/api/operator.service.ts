@@ -223,6 +223,8 @@ export type RegistryEntry = {
   disputes?: number;
   /** The task must not change files. */
   readOnly?: boolean;
+  /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
+  autoRetries?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
   attempt?: number;
   /**
@@ -1873,6 +1875,7 @@ export class OperatorService {
           deviations: t.deviations?.length || undefined,
           disputes: t.disputes?.length || undefined,
           readOnly: t.readOnly || undefined,
+          autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,
           attempts: (t.attempts ?? []).map((a, n) => {
             const from = a.startedAt ? Date.parse(a.startedAt) : undefined;

@@ -1511,8 +1511,60 @@ export async function runSession(
       const task = session.tasks.find((t) => t.id === queuedTask.id);
       if (!task || task.status !== 'queued') continue;
 
-      const outcome = await runTask(chat, session, task, deps);
+      let outcome = await runTask(chat, session, task, deps);
       ran += 1;
+
+      /*
+       * A blocked task is run again in a fresh conversation, up to the configured number of
+       * times, before the verdict stands.
+       *
+       * No judgement is made about why it blocked; none can be. The move is the one thing that
+       * separates the causes: a new chat, with the contract sent again and nothing else in it,
+       * cures a cause that lived in the conversation (Copilot no longer seeing the early turns;
+       * a history it argued itself into) and cures nothing else. So a task that comes back done
+       * was blocked by the chat, and a task that blocks again — in nearly the same words, with
+       * both attempts on its record — was not. The operator reads which from the register.
+       */
+      const retriesAllowed = cfg.limits.retryBlockedInFreshChat ?? 0;
+      let retried = 0;
+      while (outcome.status === 'blocked' && retried < retriesAllowed && !deps.signal?.aborted) {
+        retried += 1;
+        bus.publish({
+          sessionId,
+          taskId: task.id,
+          type: 'task-retry-fresh-chat',
+          level: 'warn',
+          message: `"${task.title}" ended blocked; running it again in a fresh conversation (${retried} of ${retriesAllowed})`,
+          data: { attempt: retried, of: retriesAllowed, reason: outcome.reason },
+        });
+        await store.rerunTask(sessionId, task.id, {});
+        // The conversation pointer is dropped, so the next message opens a new chat, registers
+        // it and sends the contract again. The old chat stays where it is, readable.
+        session = await store.updateSession(sessionId, (s) => {
+          s.chat = undefined;
+          s.contractSent = false;
+          const again = s.tasks.find((x) => x.id === task.id);
+          if (again) again.autoRetries = (again.autoRetries ?? 0) + 1;
+        });
+        await chat.newChat();
+        const fresh = session.tasks.find((x) => x.id === task.id);
+        if (!fresh) break;
+        outcome = await runTask(chat, session, fresh, deps);
+        ran += 1;
+      }
+      if (retried > 0) {
+        bus.publish({
+          sessionId,
+          taskId: task.id,
+          type: outcome.status === 'blocked' ? 'task-retry-exhausted' : 'task-retry-recovered',
+          level: outcome.status === 'blocked' ? 'error' : 'info',
+          message:
+            outcome.status === 'blocked'
+              ? `"${task.title}" blocked again after ${retried} fresh conversation(s): the cause is not the chat — read the task text, the checks and the machine`
+              : `"${task.title}" ended ${outcome.status} in a fresh conversation after blocking ${retried} time(s): the earlier block was the chat's`,
+          data: { retried, status: outcome.status },
+        });
+      }
       lastStatus = outcome.status;
       if (outcome.status !== 'done') {
         if (!deps.continueOnFailure) {

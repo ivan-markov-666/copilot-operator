@@ -294,6 +294,8 @@ export type RegistryEntry = {
   readOnly?: boolean;
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
+  /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
+  autoRetries?: number;
   /** The attempts before it, oldest first, each with its own run folder and log. */
   attempts?: Array<{
     attempt: number;
@@ -550,6 +552,8 @@ export const api = {
   health: () => call<{ ok: boolean }>('/health'),
   doctor: () => call<Record<string, unknown>>('/doctor'),
   settings: () => call<{ raw: Record<string, unknown>; defaults: unknown; resolved: Record<string, unknown> }>('/settings'),
+  /** Writes the whole raw settings object back; the API validates it before saving. */
+  saveSettings: (raw: Record<string, unknown>) => call<{ ok: true }>('/settings', { method: 'PUT', body: JSON.stringify(raw) }),
 
   level1: () => call<{ content: string; customised: boolean }>('/level1'),
   setLevel1: (content: string) => call<{ ok: true }>('/level1', { method: 'PUT', body: JSON.stringify({ content }) }),

@@ -147,6 +147,13 @@ export type Task = {
   /** Turns the independent review off for this one task. Absent means the session decides. */
   reviewEnabled?: boolean;
   /**
+   * How many times the runner ran this task again in a fresh conversation after it ended
+   * `blocked`, on its own (`limits.retryBlockedInFreshChat`). A row that says "retried in a
+   * fresh chat, then done" means the chat was the cause; one that says "retried twice, still
+   * blocked" means it was not.
+   */
+  autoRetries?: number;
+  /**
    * The task must not change files. The runner fails it if the working tree changed when it
    * ends, and still commits the change on its branch so nothing is lost. A flag rather than a
    * sentence, because a sentence is advice: a smoke test told to change nothing renamed the

@@ -285,6 +285,19 @@ export const RunConfigSchema = z.object({
       maxReviewRounds: z.number().int().positive().default(2),
       /** How many iterations one review may take before it is abandoned as inconclusive. */
       maxReviewIterations: z.number().int().positive().default(12),
+      /**
+       * How many times a task that ends `blocked` is run again, in a fresh conversation, before
+       * that verdict is accepted.
+       *
+       * The runner cannot tell why a task blocked: the prompt, the machine, or the chat itself
+       * — a long conversation whose early turns Copilot can no longer see, which is how a task
+       * once asked for "the original task text" ninety seconds after receiving it. What it can
+       * do is mechanical: run the same task again in a new chat, contract and all. A cause in
+       * the chat goes away; a cause in the prompt or the machine blocks again, in nearly the
+       * same words, and after this many tries the task stays blocked with both attempts on
+       * its record. Zero turns it off.
+       */
+      retryBlockedInFreshChat: z.number().int().nonnegative().default(2),
     })
     .prefault({}),
 
