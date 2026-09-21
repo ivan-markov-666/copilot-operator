@@ -302,7 +302,7 @@ export default function HistoryPage() {
             <section className="panel">
               <h2>{t('reg.upcoming')}</h2>
               <p className="muted small">{t('reg.upcomingHint')}</p>
-              <ContinueRun upcoming={upcoming} onChange={() => void load()} />
+              <ContinueRun entries={shown} onChange={() => void load()} />
               {upcoming.length === 0 ? (
                 <div className="empty">{t('reg.noUpcoming')}</div>
               ) : (
@@ -776,23 +776,52 @@ function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
  * This is the run panel's start, for exactly the sessions that still have something queued,
  * in the order the queue shows them.
  */
-function ContinueRun({ upcoming, onChange }: { upcoming: RegistryEntry[]; onChange: () => void }) {
+function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange: () => void }) {
   const { t } = useT();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [open, setOpen] = useState(false);
+  /** Failed tasks of independent sessions the operator chose to queue again. */
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  /** A failed task whose prompt is being rewritten from inside this panel. */
+  const [fixingHint, setFixingHint] = useState<RegistryEntry | null>(null);
 
-  // Sessions in the order their first queued task appears, which is the order they would run.
-  const sessionIds = [...new Set(upcoming.map((e) => e.sessionId))];
-  const anyRunning = upcoming.some((e) => e.sessionRunning);
-  const name = upcoming.map((e) => e.runGroup?.name).find(Boolean);
+  /*
+   * What "continue" means depends on the session.
+   *
+   * A session whose tasks are one chain stops at a failure, and the queued tasks behind it were
+   * written assuming it worked: continuing without it would run them against a state that does
+   * not exist. So its failed task goes back in the queue, in its place, as a condition — how it
+   * is made to pass is the operator's job (the register offers "Fix the prompt", and the runner
+   * already tried a fresh conversation). A session of independent tasks has no such condition;
+   * its failed tasks are offered, ticked by default, and can be left out.
+   */
+  const upcoming = entries.filter((e) => e.status === 'queued');
+  const failed = entries.filter((e) => FAILED_STATUSES.includes(e.status) && !e.sessionRunning);
+  const anyRunning = entries.some((e) => e.sessionRunning);
+  const chainFailed = failed.filter((e) => e.sessionOnFailure === 'stop');
+  const looseFailed = failed.filter((e) => e.sessionOnFailure !== 'stop');
+  const chosenLoose = looseFailed.filter((e) => picked.has(e.taskId));
+  const requeue = [...chainFailed, ...chosenLoose];
+  // Sessions in the order their first task appears, which is the order they would run.
+  const sessionIds = [...new Set([...upcoming, ...requeue].map((e) => e.sessionId))];
+  const name = [...upcoming, ...requeue].map((e) => e.runGroup?.name).find(Boolean);
+
+  const openPanel = () => {
+    setPicked(new Set(looseFailed.map((e) => e.taskId)));
+    setOpen(true);
+    setMsg('');
+  };
 
   const start = async (mode: 'confirm' | 'unattended') => {
     if (mode === 'unattended' && !(await confirmDialog(t('batch.unattendedConfirm', { n: sessionIds.length })))) return;
     setBusy(true);
     setMsg('');
     try {
+      for (const e of requeue) await api.rerunTask(e.sessionId, e.taskId);
       const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name);
       setMsg(r.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
+      setOpen(false);
       onChange();
     } catch (e) {
       setMsg((e as Error).message);
@@ -801,17 +830,85 @@ function ContinueRun({ upcoming, onChange }: { upcoming: RegistryEntry[]; onChan
     }
   };
 
-  if (sessionIds.length === 0) return null;
+  if (upcoming.length === 0 && failed.length === 0) return null;
   return (
-    <div className="row" style={{ marginBottom: 8 }}>
-      <button className="primary" disabled={busy || anyRunning} onClick={() => void start('confirm')} title={t('reg.continueWhy')}>
-        {t('reg.continue', { n: upcoming.length, s: sessionIds.length })}
-      </button>
-      <button disabled={busy || anyRunning} onClick={() => void start('unattended')} title={t('reg.continueUnattendedWhy')}>
-        {t('reg.continueUnattended')}
-      </button>
-      {anyRunning && <span className="muted small">{t('reg.continueRunning')}</span>}
-      {msg && <span className="small">{msg}</span>}
+    <div style={{ marginBottom: 8 }}>
+      <div className="row">
+        <button className="primary" disabled={busy || anyRunning} onClick={openPanel} title={t('reg.continueWhy')}>
+          {t('reg.continue', { n: upcoming.length, s: sessionIds.length })}
+        </button>
+        {anyRunning && <span className="muted small">{t('reg.continueRunning')}</span>}
+        {msg && <span className="small">{msg}</span>}
+      </div>
+      {open && !anyRunning && (
+        <div className="notice" style={{ marginTop: 8 }}>
+          <strong>{t('reg.continuePanelTitle')}</strong>
+          {chainFailed.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div className="small">{t('reg.continueChain')}</div>
+              <ul className="small" style={{ margin: '4px 0', paddingLeft: 18 }}>
+                {chainFailed.map((e) => (
+                  <li key={e.taskId}>
+                    <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>{' '}
+                    <button className="quiet small" onClick={() => setFixingHint(e)}>
+                      {t('reg.fixPrompt')}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {looseFailed.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div className="small">{t('reg.continueIndependent')}</div>
+              <ul className="small" style={{ margin: '4px 0', paddingLeft: 18, listStyle: 'none' }}>
+                {looseFailed.map((e) => (
+                  <li key={e.taskId}>
+                    <label className="option-inline">
+                      <input
+                        type="checkbox"
+                        checked={picked.has(e.taskId)}
+                        onChange={(ev) =>
+                          setPicked((prev) => {
+                            const next = new Set(prev);
+                            if (ev.target.checked) next.add(e.taskId);
+                            else next.delete(e.taskId);
+                            return next;
+                          })
+                        }
+                      />
+                      <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="small" style={{ marginTop: 6 }}>
+            {t('reg.continueSummary', { q: upcoming.length, r: requeue.length, s: sessionIds.length })}
+          </div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="primary" disabled={busy || sessionIds.length === 0} onClick={() => void start('confirm')}>
+              {t('reg.continueGo')}
+            </button>
+            <button disabled={busy || sessionIds.length === 0} onClick={() => void start('unattended')} title={t('reg.continueUnattendedWhy')}>
+              {t('reg.continueUnattended')}
+            </button>
+            <button className="quiet" disabled={busy} onClick={() => setOpen(false)}>
+              {t('dialog.cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+      {fixingHint && (
+        <FixPromptDialog
+          entry={fixingHint}
+          onClose={(changed) => {
+            setFixingHint(null);
+            if (changed) onChange();
+          }}
+        />
+      )}
     </div>
   );
 }

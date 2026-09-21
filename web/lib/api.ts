@@ -269,6 +269,8 @@ export type RegistryEntry = {
   sessionName: string;
   sessionStatus: 'idle' | 'running' | 'stopping';
   sessionRunning: boolean;
+  /** Whether the session is one chain (a failed task stops the rest) or independent tasks. */
+  sessionOnFailure: 'stop' | 'continue';
   chatUrl?: string;
   taskId: string;
   title: string;

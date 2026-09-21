@@ -197,6 +197,8 @@ export type RegistryEntry = {
   sessionName: string;
   sessionStatus: Session['status'];
   sessionRunning: boolean;
+  /** Whether the session is one chain (a failed task stops the rest) or independent tasks. */
+  sessionOnFailure: 'stop' | 'continue';
   chatUrl?: string;
   taskId: string;
   title: string;
@@ -1853,6 +1855,7 @@ export class OperatorService {
           sessionId: s.id,
           sessionName: s.name,
           sessionStatus: s.status,
+          sessionOnFailure: s.onFailure === 'continue' ? 'continue' : 'stop',
           sessionRunning: this.running.has(s.id),
           chatUrl: s.chat?.url,
           taskId: t.id,
