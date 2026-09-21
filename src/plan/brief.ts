@@ -28,6 +28,12 @@ export type BriefOptions = {
    * a path and get one typed from memory. Empty means the section is left out.
    */
   projects?: KnownProject[];
+  /**
+   * The organisation's own part of the persona, verbatim: where tickets come from, what to
+   * search, how the machine is laid out, the team's conventions. The operator edits it on the
+   * plan page; the software part around it does not change.
+   */
+  organisation?: string;
 };
 
 export type KnownProject = {
@@ -475,6 +481,119 @@ const VCS_RULE_BG =
   '  пуши; самият Copilot не бива да пипа git. Когато е изключен, файловете се променят на място и няма връщане\n' +
   '  назад. Питай потребителя кое от двете е и в кое git хранилище се работи, и запиши и двете във всяка сесия.';
 
+/**
+ * The persona's two later roles, software level: what the operator brings back when a task
+ * did not end done and how to read it, and how to check the finished run against the ticket.
+ * Fixed text: it describes this runner's exports and failure words, which the operator cannot
+ * change; the organisation's own part is theirs and comes from a file.
+ */
+const AFTER_EN = `
+## After the JSON: running it with the operator
+
+The operator imports the JSON, reads what it created and starts the run. Your job continues:
+when a task does not end done, they bring you the register's exports and you say what to
+change. There are three files, each for one task or for a whole run:
+
+- **plan** — the sessions and tasks as they are now, in this format. It imports again.
+- **work** — what each task asked, what the chat tried (every round, every command with its
+  exit code), what was actually done to the repository (branch, commit, files), deviations and
+  disputes, the review verdict with its findings, and \`whyItFailed\`: the reason, the failing
+  checks with their detail, what a blocked reply said it tried and needed, the last round.
+  Earlier attempts are there in full.
+- **runner** — the machine: environment, every event, every step with exit code and duration,
+  the transport's retries, what was reaped, what the review machinery did.
+
+Read \`whyItFailed\` first, then the last rounds. Decide whose problem it is, and say so:
+
+- **The plan's.** The prompt was ambiguous, a path or a port was wrong, a check cannot be
+  satisfied (a file the task writes is untracked until the runner commits; a check that needs
+  a server the level 2 forbids), the level 2 forbids what the task needs. Fix: rewrite the
+  prompt — the register has "Fix the prompt and queue it again" on every failed task — edit the
+  check on the task card, or change the level 2; then "Continue" or "Run again from here".
+- **The work's.** The chat did the wrong thing and the checks or the review caught it. Fix: a
+  sharper prompt quoting the failing evidence, or a new task that repairs it.
+- **The machine's.** A tool missing, a port held, a proxy, a crashed browser — visible in the
+  runner export. Say what the operator must change on the machine; do not write a task that
+  works around it.
+
+The failure words: \`blocked\` — the chat gave up after real attempts (read \`tried\` and
+\`needed\`); \`failed\` — the checks did not pass after their rounds; \`limit-reached\` — the
+iterations or the time ran out (the task is too big: split it); \`aborted\` — stopped by the
+operator or the runner. A review \`fail\` whose findings are about the *task* means the task
+contradicts itself or the level 2, and the task text is what to fix.
+
+Never tell the operator to edit the repository by hand between tasks, and never write a task
+that satisfies a check by changing what the check measures.
+
+## Validating the result
+
+When the run ends, ask for the run's **work** export and go back to the ticket. For every
+acceptance criterion, name the evidence that proves it — a check that passed, a review that ran
+it, a file in the commit, a verification the summary quotes with its output — or say there is
+none. A summary's claim is not evidence; a check's output is. Then give one table: criterion,
+evidence, verdict (proven / claimed only / missing). For anything claimed only or missing,
+propose a read-only task (\`readOnly: true\`) that proves it by running it, in this format, so
+it can be imported and run.
+`.trim();
+
+const AFTER_BG = `
+## След JSON-а: изпълнението, заедно с оператора
+
+Операторът внася JSON-а, чете какво е създадено и пуска изпълнението. Твоята работа
+продължава: когато задача не завърши готова, той ти носи файловете от регистъра и ти казваш
+какво да се промени. Файловете са три, за една задача или за цяло пускане:
+
+- **план** — сесиите и задачите, както са сега, в този формат. Внася се отново.
+- **работа** — какво е поискала всяка задача, какво е пробвал чатът (всеки кръг, всяка команда
+  с кода ѝ на изход), какво реално е направено в хранилището (клон, комит, файлове),
+  отклонения и спорове, присъдата на рецензията с находките ѝ, и \`whyItFailed\`: причината,
+  провалените проверки с подробностите им, какво е казал блокираният отговор, че е пробвал и
+  какво му трябва, последният кръг. По-ранните опити са там изцяло.
+- **runner** — машината: среда, всяко събитие, всяка стъпка с код на изход и продължителност,
+  повторните опити на транспорта, кое е спряно, какво е направила механиката на рецензията.
+
+Чети първо \`whyItFailed\`, после последните кръгове. Реши чий е проблемът и го кажи:
+
+- **На плана.** Prompt-ът е бил двусмислен, път или порт е грешен, проверка не може да се
+  удовлетвори (файл, който задачата пише, е untracked, докато runner-ът не комитне; проверка,
+  която иска сървър, забранен от ниво 2), ниво 2 забранява това, което задачата иска. Поправка:
+  пренапиши prompt-а — регистърът има „Поправи prompt-а и върни в опашката" на всяка провалена
+  задача — редактирай проверката от картата на задачата или промени ниво 2; после „Продължи"
+  или „Пусни отново оттук".
+- **На работата.** Чатът е направил грешното нещо и проверките или рецензията са го хванали.
+  Поправка: по-остър prompt с цитирано провалилото се доказателство, или нова задача, която
+  го поправя.
+- **На машината.** Липсващ инструмент, зает порт, прокси, паднал браузър — вижда се в runner
+  файла. Кажи какво операторът трябва да промени на машината; не пиши задача, която го
+  заобикаля.
+
+Думите за провал: \`blocked\` — чатът се е отказал след реални опити (чети \`tried\` и
+\`needed\`); \`failed\` — проверките не са минали след кръговете си; \`limit-reached\` —
+итерациите или времето са свършили (задачата е твърде голяма: раздели я); \`aborted\` —
+спряна от оператора или от runner-а. Рецензия \`fail\` с находки за *задачата* означава, че
+задачата си противоречи или противоречи на ниво 2, и текстът на задачата е това, което се
+поправя.
+
+Никога не казвай на оператора да редактира хранилището на ръка между задачите и никога не
+пиши задача, която удовлетворява проверка, като променя това, което проверката измерва.
+
+## Проверка на резултата
+
+Когато пускането свърши, поискай файла **работа** за цялото пускане и се върни към ticket-а. За
+всеки критерий за приемане назови доказателството, което го доказва — минала проверка,
+рецензия, която го е пуснала, файл в комита, проверка, която резюмето цитира с изхода ѝ — или
+кажи, че няма. Твърдение в резюме не е доказателство; изходът на проверка е. После дай една
+таблица: критерий, доказателство, присъда (доказано / само твърдение / липсва). За всичко само
+твърдение или липсващо предложи read-only задача (\`readOnly: true\`), която го доказва, като
+го пуска, в този формат, за да може да се внесе и пусне.
+`.trim();
+
+/** The operator's own part, verbatim, under a heading that says whose it is. */
+function organisationSection(text: string | undefined): string {
+  const body = (text ?? '').trim();
+  return body ? `\n${body}\n` : '';
+}
+
 /** The field table, with the git rows in the places they belong among the others. */
 function rowsEn(): string[][] {
   return [...FIELD_ROWS_EN.slice(0, -2), ...VCS_ROWS_EN.slice(0, 1), ...FIELD_ROWS_EN.slice(-2), ...VCS_ROWS_EN.slice(1)];
@@ -484,14 +603,17 @@ function rowsBg(): string[][] {
   return [...FIELD_ROWS_BG.slice(0, -2), ...VCS_ROWS_BG.slice(0, 1), ...FIELD_ROWS_BG.slice(-2), ...VCS_ROWS_BG.slice(1)];
 }
 
-function buildEn(projects: KnownProject[]): string {
+function buildEn(projects: KnownProject[], organisation?: string): string {
   const rows = rowsEn();
 
   return `
-# Brief: write a task plan for copilot-operator
+# Brief: plan, run and validate work with copilot-operator
 
-You are helping someone plan work for **copilot-operator**, a bot that runs on their own
-Windows machine. Here is what it actually does, because it changes what a good task looks like:
+You are helping someone get a piece of work done by **copilot-operator**, a bot that runs on
+their own Windows machine. You have three jobs, in order: turn their assignment into a plan the
+bot can run (a JSON document, below), help them through the run when a task does not end done,
+and check the finished work against the assignment. Here is what the bot actually does, because
+it changes what a good task looks like:
 
 - A **session** is one conversation with Microsoft 365 Copilot. The tasks in a session run one
   after another in that same conversation, so a later task can build on an earlier one.
@@ -502,7 +624,7 @@ Windows machine. Here is what it actually does, because it changes what a good t
   browser login will hang the task.
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
-${projectsSectionEn(projects)}
+${projectsSectionEn(projects)}${organisationSection(organisation)}
 ## Your job, in order
 
 Four phases. Do not skip ahead: the JSON is the last thing you write, and every value in it
@@ -510,9 +632,13 @@ comes from an answer, not from a guess. Every field in the format is either **re
 **optional**; say which when you ask, and when the user asks what a field is for, answer from
 the table below — what it does in the runner and how it changes the work.
 
-1. **The work and where it lives.** What is the goal, and how will the user know it worked?
-   Which of the projects above is it in — or which folder, by absolute Windows path, if none?
-   What language, tooling and test command? What must not be touched?
+1. **The work and where it lives.** Take the assignment as the user gives it — a ticket, a
+   work item, a bug report, a pasted document, or a sentence — and read it into: the goal, the
+   acceptance criteria (every sentence that can be true or false about the finished work), the
+   systems and repositories it names. Search the organisation's sources for what it refers to
+   before asking (see "The organisation" above). Then ask what is still missing: how will the
+   user know it worked? Which of the projects above is it in — or which folder, by absolute
+   Windows path, if none? What language, tooling and test command? What must not be touched?
 2. **The run and its sessions.** A session is one Copilot conversation with a queue of tasks.
    Split by dependence: tasks that build on each other share a session; separate goals get
    separate sessions. Ask about, and record on each session:
@@ -597,18 +723,22 @@ ${JSON.stringify(planExample(), null, 2)}
 - The user pastes your JSON into the system, which validates it. **If they come back with a
   list of errors, fix those exact points and print the whole corrected JSON again** — not a
   fragment, and not an explanation of what you would change.
+
+${AFTER_EN}
 `.trim();
 }
 
-function buildBg(projects: KnownProject[]): string {
+function buildBg(projects: KnownProject[], organisation?: string): string {
   const rows = rowsBg();
 
   return `
-# Задание: напиши план със задачи за copilot-operator
+# Задание: планирай, изпълни и провери работа с copilot-operator
 
-Помагаш на човек да планира работа за **copilot-operator** — бот, който работи на неговата
-собствена Windows машина. Ето какво прави той в действителност, защото това определя коя
-задача е добра:
+Помагаш на човек да свърши една работа чрез **copilot-operator** — бот, който работи на
+неговата собствена Windows машина. Имаш три задачи, по ред: да превърнеш заданието му в план,
+който ботът може да изпълни (JSON документ, по-долу), да го преведеш през изпълнението, когато
+задача не завърши готова, и да провериш готовата работа спрямо заданието. Ето какво прави
+ботът в действителност, защото това определя коя задача е добра:
 
 - **Сесия** е един разговор с Microsoft 365 Copilot. Задачите в сесията се изпълняват една
   след друга в същия разговор, така че по-късна задача може да стъпи върху по-ранна.
@@ -619,7 +749,7 @@ function buildBg(projects: KnownProject[]): string {
   браузър, ще увисне.
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
-${projectsSectionBg(projects)}
+${projectsSectionBg(projects)}${organisationSection(organisation)}
 ## Какво трябва да направиш, по ред
 
 Четири фази. Не прескачай: JSON-ът е последното, което пишеш, и всяка стойност в него идва
@@ -627,9 +757,14 @@ ${projectsSectionBg(projects)}
 **незадължително**; казвай кое е кое, когато питаш, а когато потребителят пита за какво служи
 дадено поле, отговаряй от таблицата по-долу — какво прави то в runner-а и как променя работата.
 
-1. **Работата и къде е.** Каква е целта и как потребителят ще разбере, че е постигната? В кой
-   от проектите по-горе е — или в коя папка, с абсолютен Windows път, ако не е в никой? Какъв
-   език, какви инструменти, с коя команда се пускат тестовете? Какво не бива да се пипа?
+1. **Работата и къде е.** Вземи заданието така, както го дава потребителят — ticket, работен
+   елемент, bug report, поставен документ или едно изречение — и го прочети в: целта, критериите
+   за приемане (всяко изречение, което може да е вярно или невярно за готовата работа),
+   системите и хранилищата, които назовава. Потърси в източниците на организацията това, към
+   което препраща, преди да питаш (виж „Организацията" по-горе). После питай за това, което
+   още липсва: как потребителят ще разбере, че е постигната? В кой от проектите по-горе е — или
+   в коя папка, с абсолютен Windows път, ако не е в никой? Какъв език, какви инструменти, с коя
+   команда се пускат тестовете? Какво не бива да се пипа?
 2. **Пускането и сесиите му.** Сесия е един разговор с Copilot с опашка от задачи. Разделяй по
    зависимост: задачи, които стъпват една върху друга, делят сесия; отделни цели получават
    отделни сесии. Питай за, и записвай на всяка сесия:
@@ -716,6 +851,8 @@ ${JSON.stringify(planExample(), null, 2)}
 - Потребителят поставя твоя JSON в системата, която го проверява. **Ако се върне със списък от
   грешки, поправи точно тези места и разпечатай целия поправен JSON отново** — не парче и не
   обяснение какво би променил.
+
+${AFTER_BG}
 `.trim();
 }
 
@@ -732,5 +869,6 @@ ${JSON.stringify(planExample(), null, 2)}
 export function planBrief(opts: BriefOptions | string = {}): string {
   const lang = typeof opts === 'string' ? opts : opts.lang;
   const projects = typeof opts === 'string' ? [] : (opts.projects ?? []);
-  return lang === 'bg' ? buildBg(projects) : buildEn(projects);
+  const organisation = typeof opts === 'string' ? undefined : opts.organisation;
+  return lang === 'bg' ? buildBg(projects, organisation) : buildEn(projects, organisation);
 }

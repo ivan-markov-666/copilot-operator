@@ -620,7 +620,13 @@ export const api = {
    * chosen here and baked in; the brief now tells the model to ask about them, because they
    * belong to a session rather than to the whole document.
    */
-  planBrief: (lang: string) => call<{ text: string }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
+  /** The persona whole (`text`), and in its two parts: the software's (fixed) and the organisation's (editable). */
+  planBrief: (lang: string) =>
+    call<{ text: string; software: string; organisation: string; customised: boolean }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
+  organisation: (lang: string) => call<{ content: string; customised: boolean }>(`/organisation?lang=${encodeURIComponent(lang)}`),
+  setOrganisation: (content: string) => call<{ ok: true }>('/organisation', { method: 'PUT', body: JSON.stringify({ content }) }),
+  resetOrganisation: (lang: string) =>
+    call<{ content: string; customised: boolean }>(`/organisation?lang=${encodeURIComponent(lang)}`, { method: 'DELETE' }),
   /** Checks a pasted plan and imports nothing. */
   checkPlan: (text: string) => call<PlanCheck>('/plan/check', { method: 'POST', body: JSON.stringify({ text }) }),
   /** Creates everything the plan describes, and starts none of it. */

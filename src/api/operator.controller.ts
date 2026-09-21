@@ -377,8 +377,27 @@ export class OperatorController {
    * conversation and the answers belong to a session rather than to the whole document.
    */
   @Get('plan/brief')
-  async planBrief(@Query('lang') lang?: string): Promise<{ text: string }> {
-    return { text: await this.ops.planBrief({ lang: lang ?? 'en' }) };
+  async planBrief(@Query('lang') lang?: string): Promise<{ text: string; software: string; organisation: string; customised: boolean }> {
+    return await this.ops.planBrief({ lang: lang ?? 'en' });
+  }
+
+  // --- the organisation's part of the plan persona -------------------------------------
+
+  @Get('organisation')
+  organisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean }> {
+    return this.ops.getOrganisation(lang ?? 'en');
+  }
+
+  @Put('organisation')
+  async setOrganisation(@Body() body: { content: string }): Promise<{ ok: true }> {
+    if (typeof body?.content !== 'string') throw new BadRequestException('content must be text');
+    await this.ops.setOrganisation(body.content);
+    return { ok: true };
+  }
+
+  @Delete('organisation')
+  resetOrganisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean }> {
+    return this.ops.resetOrganisation(lang ?? 'en');
   }
 
   /** Checks a pasted plan without importing anything, and says what it would duplicate. */

@@ -97,6 +97,28 @@ export class SessionStore {
     await rm(this.level1Path, { force: true });
   }
 
+  // --- the organisation's part of the plan persona -------------------------------------
+
+  /**
+   * The operator's own part of the plan brief: where tickets come from, what to search, how
+   * the machine is laid out. One customised copy in `data/organisation.md`, whatever language
+   * it is written in; the shipped default comes per language from the prompts folder.
+   */
+  async getOrganisation(lang: 'en' | 'bg'): Promise<{ content: string; customised: boolean }> {
+    const custom = join(this.dir, 'organisation.md');
+    if (existsSync(custom)) return { content: await readFile(custom, 'utf8'), customised: true };
+    const shipped = join(this.defaultLevel1Path, '..', `organisation.${lang}.md`);
+    return { content: await readFile(shipped, 'utf8').catch(() => ''), customised: false };
+  }
+
+  async setOrganisation(content: string): Promise<void> {
+    await this.atomicWrite(join(this.dir, 'organisation.md'), content);
+  }
+
+  async resetOrganisation(): Promise<void> {
+    await rm(join(this.dir, 'organisation.md'), { force: true });
+  }
+
   // --- the model catalogue ----------------------------------------------------------------
 
   /** What the chat's picker offered when it was last read, or null if it never was. */

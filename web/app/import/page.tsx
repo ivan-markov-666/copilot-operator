@@ -21,11 +21,45 @@ export default function ImportPage() {
   const { t, locale } = useT();
   const fmtTime = useFmtTime();
 
-  // Step 1: the brief. There is nothing to configure — see the panel's own explanation.
+  // Step 1: the persona. Two parts: the software's, shown and fixed, and the organisation's,
+  // edited here and saved on this machine. The copy button takes the assembled whole.
   const [brief, setBrief] = useState('');
+  const [software, setSoftware] = useState('');
+  const [org, setOrg] = useState('');
+  const [orgSaved, setOrgSaved] = useState('');
+  const [orgCustomised, setOrgCustomised] = useState(false);
+  const [orgMsg, setOrgMsg] = useState('');
   const [briefOpen, setBriefOpen] = useState(false);
   const [copied, setCopied] = useState('');
   const [briefErr, setBriefErr] = useState('');
+
+  const saveOrg = async () => {
+    try {
+      await api.setOrganisation(org);
+      const r = await api.planBrief(locale);
+      setBrief(r.text);
+      setOrgSaved(r.organisation);
+      setOrgCustomised(r.customised);
+      setOrgMsg(t('plan.orgSaved'));
+    } catch (e) {
+      setOrgMsg((e as Error).message);
+    }
+  };
+
+  const resetOrg = async () => {
+    if (!(await confirmDialog(t('plan.orgResetConfirm')))) return;
+    try {
+      const r = await api.resetOrganisation(locale);
+      setOrg(r.content);
+      setOrgSaved(r.content);
+      setOrgCustomised(r.customised);
+      const b = await api.planBrief(locale);
+      setBrief(b.text);
+      setOrgMsg(t('plan.orgShipped'));
+    } catch (e) {
+      setOrgMsg((e as Error).message);
+    }
+  };
 
   // Step 2: the answer.
   const [text, setText] = useState('');
@@ -47,6 +81,10 @@ export default function ImportPage() {
       .then((r) => {
         if (!cancelled) {
           setBrief(r.text);
+          setSoftware(r.software);
+          setOrg(r.organisation);
+          setOrgSaved(r.organisation);
+          setOrgCustomised(r.customised);
           setBriefErr('');
         }
       })
@@ -152,14 +190,37 @@ export default function ImportPage() {
           <button className="primary" onClick={() => void copy('brief', brief)} disabled={!brief}>
             {t('plan.copyBrief')}
           </button>
-          <button className="quiet" onClick={() => setBriefOpen((v) => !v)}>
-            {briefOpen ? t('plan.hideBrief') : t('plan.showBrief')}
-          </button>
           {copied === 'brief' && <span className="badge done">{t('plan.copied')}</span>}
           <span className="muted small">{t('plan.briefLang')}</span>
         </div>
         {briefErr && <div className="err">{briefErr}</div>}
-        {briefOpen && <textarea readOnly value={brief} style={{ minHeight: 380, marginTop: 10 }} />}
+
+        <h3 style={{ marginTop: 16 }}>{t('plan.persona')}</h3>
+        <p className="why">{t('plan.personaWhy')}</p>
+
+        {/* The software's part: shown so nobody has to copy it to read it, and never editable here. */}
+        <details style={{ marginTop: 8 }} open={briefOpen} onToggle={(e) => setBriefOpen((e.target as HTMLDetailsElement).open)}>
+          <summary>{t('plan.softwarePart')}</summary>
+          <textarea readOnly value={software} style={{ minHeight: 380, marginTop: 10 }} />
+        </details>
+
+        {/* The organisation's part: theirs, edited in place, saved on this machine. */}
+        <details style={{ marginTop: 8 }} open>
+          <summary>
+            {t('plan.orgPart')} <span className="muted small">— {orgCustomised ? t('plan.orgCustomised') : t('plan.orgShipped')}</span>
+          </summary>
+          <p className="muted small" style={{ marginTop: 8 }}>{t('plan.orgHint')}</p>
+          <textarea value={org} onChange={(e) => setOrg(e.target.value)} style={{ minHeight: 260 }} />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="primary" onClick={() => void saveOrg()} disabled={org === orgSaved}>
+              {t('plan.orgSave')}
+            </button>
+            <button className="quiet" onClick={() => void resetOrg()} disabled={!orgCustomised}>
+              {t('plan.orgReset')}
+            </button>
+            {orgMsg && <span className="muted small">{orgMsg}</span>}
+          </div>
+        </details>
       </div>
 
       <div className="panel">

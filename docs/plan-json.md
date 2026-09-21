@@ -24,7 +24,28 @@ a chat, and an import never starts anything.
 
 ## The brief asks; the page does not
 
-There is nothing to configure on the import page. The brief used to be assembled from two
+The brief is a persona with three jobs, in order: turn the operator's assignment into a plan
+(the JSON below), help them through the run when a task does not end done, and check the
+finished work against the assignment. It takes the assignment in whatever form it comes — a
+ticket, a work item, a bug report, a pasted document — reads it into a goal and acceptance
+criteria, and searches the organisation's sources before asking. For the run it knows the
+register's three exports (plan, work, runner), what `whyItFailed` holds, and the failure words
+(`blocked`, `failed`, `limit-reached`, `aborted`), and it says whose problem a failure is — the
+plan's, the work's or the machine's — and which button fixes it. For the end it maps every
+acceptance criterion to evidence in the work export and proposes a read-only task for anything
+only claimed.
+
+It has two levels. The **software level** is this project's and does not change: what the bot
+is, the format, the exports, the failure words, how to validate. The **organisation level** is
+the operator's: where tickets come from, which company sources to search (OneDrive, SharePoint,
+Teams, the wiki, the ticket system), how the machine is laid out (the Desktop mirror and its
+file names), the team's conventions. It ships as `prompts/organisation.<lang>.md`, is edited on
+the import page, and the edited copy lives in `data/organisation.md` in whatever language it is
+written in. The copy button takes both parts; the page shows each on its own so it is clear
+which is which. `GET /api/plan/brief?lang=bg` returns the whole and the parts;
+`GET|PUT|DELETE /api/organisation` is the operator's text.
+
+There is nothing else to configure on the import page. The brief used to be assembled from two
 answers given there — version control on or off, and which folder — and both have moved into
 the conversation, because that is where they can actually be answered: nobody can sensibly say
 whether work should be committed before they have described the work.
@@ -34,7 +55,7 @@ an answer. The answers then travel in the JSON **per session**, which is the oth
 reason: a plan where one session builds a feature on a branch and another only audits the
 repository is a normal plan, and a single switch on a form could not express it.
 
-The brief is served in the language the UI is in. `GET /api/plan/brief?lang=bg`.
+The brief is served in the language the UI is in.
 
 ## The format
 

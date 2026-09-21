@@ -60,6 +60,31 @@ for (const lang of ['en', 'bg'] as const) {
  * the chat model asked for and the operator typed from memory. With the folders listed, the
  * model is told to use them as written and still to ask which of them the work is about.
  */
+/*
+ * The persona has three jobs and two levels.
+ *
+ * Planning the JSON was the whole brief; a task that failed then left the operator alone with
+ * the register. The software part now says how to read the three exports and the failure
+ * words, and how to check the finished run against the ticket. The organisation's part — where
+ * tickets come from, what to search, how the machine is laid out — is the operator's text and
+ * goes in verbatim, under its own heading, only when given.
+ */
+console.log('\n--- the persona plans, runs and validates, and carries the organisation text ---');
+for (const lang of ['en', 'bg'] as const) {
+  const withOrg = planBrief({ lang, organisation: '## The organisation\n\nTickets come from JIRA-PAY. Search the Payments wiki first.' });
+  const bare = planBrief({ lang });
+  console.log(
+    `${lang}`,
+    '| reads exports:', /whyItFailed/.test(withOrg) && /(runner|runner)/.test(withOrg) ? 'yes' : 'NO',
+    '| failure words:', /limit-reached/.test(withOrg) && /blocked/.test(withOrg) ? 'yes' : 'NO',
+    '| validates against the ticket:', /(claimed only|само твърдение)/.test(withOrg) ? 'yes' : 'NO',
+    '| takes a ticket:', /(acceptance\s+criteria|критериите\s+за\s+приемане)/.test(withOrg) ? 'yes' : 'NO',
+    '| org text in:', withOrg.includes('JIRA-PAY') && withOrg.includes('Payments wiki') ? 'yes' : 'NO',
+    '| org text absent when not given:', !bare.includes('JIRA-PAY') ? 'yes' : 'NO',
+    '| org before the job list:', withOrg.indexOf('JIRA-PAY') < withOrg.indexOf(lang === 'en' ? '## Your job, in order' : '## Какво трябва да направиш') ? 'yes' : 'NO',
+  );
+}
+
 console.log('\n--- the brief lists the projects it was given, and only then ---');
 const known = [
   { name: '', rootDir: 'C:\\Projects\\rules-tests', repo: true, isDefault: true },

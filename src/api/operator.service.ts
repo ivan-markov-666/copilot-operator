@@ -311,6 +311,24 @@ export class OperatorService {
     return await this.store.getLevel1();
   }
 
+  // --- the organisation's part of the plan persona -------------------------------------
+
+  async getOrganisation(lang: string): Promise<{ content: string; customised: boolean }> {
+    await this.init();
+    return await this.store.getOrganisation(lang === 'bg' ? 'bg' : 'en');
+  }
+
+  async setOrganisation(content: string): Promise<void> {
+    await this.init();
+    await this.store.setOrganisation(content);
+  }
+
+  async resetOrganisation(lang: string): Promise<{ content: string; customised: boolean }> {
+    await this.init();
+    await this.store.resetOrganisation();
+    return await this.store.getOrganisation(lang === 'bg' ? 'bg' : 'en');
+  }
+
   // --- level 2 presets ------------------------------------------------------------------
 
   async listPresets(): Promise<Level2Preset[]> {
@@ -1086,16 +1104,28 @@ export class OperatorService {
   // --- plans ----------------------------------------------------------------------------
 
   /** The brief the operator hands to a chat model, in the language the interface is in. */
-  async planBrief(opts: BriefOptions): Promise<string> {
+  /**
+   * The persona, assembled: the software part (fixed, this project's), the machine's projects
+   * by path, and the organisation's part (the operator's, edited on the plan page). Returned
+   * whole for copying and in parts for showing, so the page can say which is which.
+   */
+  async planBrief(opts: BriefOptions): Promise<{ text: string; software: string; organisation: string; customised: boolean }> {
     // The machine's projects go into the brief by absolute path, so a plan across a front
     // end, a back end and a test suite is written with the folders that exist rather than
     // with three paths the chat model had to ask for and the operator typed from memory.
+    const lang = opts.lang === 'bg' ? 'bg' : 'en';
     const project = await this.project();
     const projects = [
       ...(project.rootDir ? [{ name: '', rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
       ...project.others.map((o) => ({ name: o.name, rootDir: o.rootDir, repo: o.repoOk, isDefault: false })),
     ];
-    return planBrief({ lang: opts.lang === 'bg' ? 'bg' : 'en', projects });
+    const organisation = await this.getOrganisation(lang);
+    return {
+      text: planBrief({ lang, projects, organisation: organisation.content }),
+      software: planBrief({ lang, projects }),
+      organisation: organisation.content,
+      customised: organisation.customised,
+    };
   }
 
   /**
