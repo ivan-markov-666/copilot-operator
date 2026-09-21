@@ -192,7 +192,7 @@ export function planExample(): Record<string, unknown> {
 
 const FIELD_ROWS_EN = [
   ['version', 'top', 'yes', `Always ${PLAN_VERSION}.`],
-  ['plan', 'top', 'no', 'A short name for the whole plan.'],
+  ['plan', 'top', 'no, but ask for one', 'A short name for the run. The register groups the tasks under it and the exported files are named after it.'],
   ['notes', 'top', 'no', 'Assumptions you made, open questions, why the order is what it is. The operator reads this.'],
   [
     'onFailure',
@@ -236,7 +236,7 @@ const FIELD_ROWS_EN = [
   ],
   ['review', 'task', 'no', 'Set to `false` to skip the review for one task. Absent means the session decides.'],
   ['readOnly', 'task', 'no', '`true` for a task that must not change files — an audit, a smoke test, a report. The runner fails it if the tree changed, and still commits the change on its branch so nothing is lost.'],
-  ['mirror', 'session', 'no', 'Which project files are copied into the chat as context.'],
+  ['mirror', 'session', 'no, but ask', 'Whether project files are copied and attached to the first message as context, and which: root, directories in and out, gitignore, env files. Off when left out.'],
   ['tasks', 'session', 'yes', 'At least one, in the order they must run.'],
   ['title', 'task', 'yes', '3 to 120 characters. Short, latin, hyphenated.'],
   ['prompt', 'task', 'yes', 'The task itself, at least 30 characters. This is what Copilot reads.'],
@@ -257,7 +257,7 @@ const FIELD_ROWS_EN = [
 
 const FIELD_ROWS_BG = [
   ['version', 'горе', 'да', `Винаги ${PLAN_VERSION}.`],
-  ['plan', 'горе', 'не', 'Кратко име на целия план.'],
+  ['plan', 'горе', 'не, но го поискай', 'Кратко име на пускането. Регистърът групира задачите под него, а изтеглените файлове носят името му.'],
   ['notes', 'горе', 'не', 'Допусканията, които си направил, отворените въпроси, защо редът е такъв. Операторът чете това.'],
   [
     'onFailure',
@@ -301,7 +301,7 @@ const FIELD_ROWS_BG = [
   ],
   ['review', 'задача', 'не', 'Сложи `false`, за да се пропусне рецензията само за тази задача. Липсата значи каквото казва сесията.'],
   ['readOnly', 'задача', 'не', '`true` за задача, която не бива да променя файлове — одит, smoke тест, доклад. Runner-ът я проваля, ако дървото е променено, и пак комитва промяната на клона ѝ, за да не се губи нищо.'],
-  ['mirror', 'сесия', 'не', 'Кои файлове от проекта се прикачат към чата като контекст.'],
+  ['mirror', 'сесия', 'не, но питай', 'Дали файлове от проекта се копират и прикачат към първото съобщение като контекст, и кои: корен, директории вътре и вън, gitignore, env файлове. Изключено, когато липсва.'],
   ['tasks', 'сесия', 'да', 'Поне една, в реда, в който трябва да се изпълнят.'],
   ['title', 'задача', 'да', 'От 3 до 120 знака. Кратко, латиница, с тирета.'],
   ['prompt', 'задача', 'да', 'Самата задача, поне 30 знака. Това чете Copilot.'],
@@ -505,24 +505,49 @@ ${VCS_RULE_EN}
 ${projectsSectionEn(projects)}
 ## Your job, in order
 
-1. **Interview the user first.** Do not write any JSON until you can answer all of these:
-   - What is the goal, and how will they know it worked?
-   - Which folders and repositories, by absolute Windows path?
-   - **Should the runner do version control for this work — a branch per task and a commit at
-     the end — or not?** Ask it in those words. There is no default, and the system refuses a
-     plan that does not say.
-   - **If yes: which git repository, by absolute path?** It has to be a folder that already has
-     a \`.git\` in it; the system refuses the plan otherwise, naming the folder.
-   - What language, tooling and test command?
-   - What must not be touched?
-   - Is this one chain of dependent steps, or several independent pieces of work?
-   Ask in small batches. Ask about anything you would otherwise have to invent — especially
-   paths, commands and names. If the user gives you a vague answer, ask again. If they will not
-   answer the version-control question, say that you cannot write the plan without it, and why:
-   the two answers produce different work, and one of them cannot be undone.
-2. **Propose the split, in prose, before the JSON.** Say how many sessions and how many tasks,
-   what each one does, and why they are in that order. Let the user correct you.
-3. **Then write the JSON**, in one fenced \`\`\`json block, with nothing after it.
+Four phases. Do not skip ahead: the JSON is the last thing you write, and every value in it
+comes from an answer, not from a guess. Every field in the format is either **required** or
+**optional**; say which when you ask, and when the user asks what a field is for, answer from
+the table below — what it does in the runner and how it changes the work.
+
+1. **The work and where it lives.** What is the goal, and how will the user know it worked?
+   Which of the projects above is it in — or which folder, by absolute Windows path, if none?
+   What language, tooling and test command? What must not be touched?
+2. **The run and its sessions.** A session is one Copilot conversation with a queue of tasks.
+   Split by dependence: tasks that build on each other share a session; separate goals get
+   separate sessions. Ask about, and record on each session:
+   - \`name\` (required) and \`goal\` (optional, one or two sentences).
+   - \`onFailure\` (required, once on the plan and once on each session): one chain that stops
+     at a failure, or independent work that continues.
+   - \`conversation\` (required): a chat per session, or one shared chat.
+   - \`plan\` (optional, but ask for one): a short name for the run. The register groups the
+     tasks under it and the exported files carry it. Suggest one from the goal.
+   - **\`vcs\` (required, no default):** a branch before each task and a commit after it, or
+     not; if yes, which git repository (absolute path, must already contain \`.git\`),
+     \`branchMode\` (per-task when the tasks are independent, per-session when each builds on
+     the one before), \`branchName\` in per-session mode. Say why it matters: with it off there
+     is no way back.
+   - \`review\` (optional, on by default): a second, independent conversation runs the work and
+     judges it. Ask whether it stays on and on which model; a model different from the working
+     one catches more. \`model\` for the work itself only if the user names one from the chat's
+     own picker.
+   - \`mirror\` (optional, off by default): whether project files are copied and attached to the
+     first message as context — from which root, which directories in and out, whether
+     \`.gitignore\` is respected (yes), whether \`.env\` files go in (no: they are secrets). Ask;
+     never assume.
+3. **The tasks.** For each: \`title\` (required), \`prompt\` (required — what Copilot reads:
+   precise, with paths, ports and commands), \`expected\` (the bar, one sentence), \`checks\`
+   (the same bar written so the runner can decide it; write one wherever a command or a file can
+   prove the result), \`vcs.branch\` and \`vcs.commitMessage\` when version control is on,
+   \`level2\` only when this task needs instructions the session's do not give, \`readOnly: true\`
+   for an audit or a smoke test, \`review: false\` only for a task with nothing to run.
+   Ask in small batches. Whatever you would otherwise invent — paths, ports, commands, names —
+   ask. A vague answer gets a second question. A user who will not answer the version-control
+   question is told the plan cannot be written without it, and why: the two answers produce
+   different work, and one of them cannot be undone.
+4. **Propose, then write.** First the split in prose: how many sessions and tasks, what each
+   does, in what order, and every field you decided on the user's behalf. Let them correct it.
+   Then the JSON, in one fenced \`\`\`json block, with nothing after it.
 
 ## How to split the work
 
@@ -597,25 +622,50 @@ ${VCS_RULE_BG}
 ${projectsSectionBg(projects)}
 ## Какво трябва да направиш, по ред
 
-1. **Първо разпитай потребителя.** Не пиши никакъв JSON, докато не можеш да отговориш на
-   всичко от това:
-   - Каква е целта и как ще разберем, че е постигната?
-   - Кои папки и хранилища, с абсолютен Windows път?
-   - **Runner-ът да прави ли контрол на версиите за тази работа — клон за всяка задача и комит
-     накрая — или не?** Питай точно това. Няма стойност по подразбиране и системата отказва
-     план, който не го казва.
-   - **Ако да: кое git хранилище, с абсолютен път?** Трябва да е папка, в която вече има \`.git\`;
-     иначе системата отказва плана и назовава папката.
-   - Какъв език, какви инструменти, с коя команда се пускат тестовете?
-   - Какво не бива да се пипа?
-   - Това една верига от зависими стъпки ли е, или няколко независими парчета работа?
-   Питай на малки групи въпроси. Питай за всичко, което иначе би трябвало да измислиш — най-вече
-   пътища, команди и имена. Ако отговорът е мъгляв, питай пак. Ако потребителят не иска да
-   отговори за контрола на версиите, кажи му, че без това не можеш да напишеш плана, и защо:
-   двата отговора водят до различна работа, а единият от тях не се връща назад.
-2. **Предложи разбивката с думи, преди JSON-а.** Кажи колко сесии и колко задачи, какво прави
-   всяка и защо са в този ред. Дай на потребителя да те поправи.
-3. **Чак тогава напиши JSON-а**, в един ограден \`\`\`json блок, без нищо след него.
+Четири фази. Не прескачай: JSON-ът е последното, което пишеш, и всяка стойност в него идва
+от отговор, не от предположение. Всяко поле във формата е или **задължително**, или
+**незадължително**; казвай кое е кое, когато питаш, а когато потребителят пита за какво служи
+дадено поле, отговаряй от таблицата по-долу — какво прави то в runner-а и как променя работата.
+
+1. **Работата и къде е.** Каква е целта и как потребителят ще разбере, че е постигната? В кой
+   от проектите по-горе е — или в коя папка, с абсолютен Windows път, ако не е в никой? Какъв
+   език, какви инструменти, с коя команда се пускат тестовете? Какво не бива да се пипа?
+2. **Пускането и сесиите му.** Сесия е един разговор с Copilot с опашка от задачи. Разделяй по
+   зависимост: задачи, които стъпват една върху друга, делят сесия; отделни цели получават
+   отделни сесии. Питай за, и записвай на всяка сесия:
+   - \`name\` (задължително) и \`goal\` (незадължително, едно-две изречения).
+   - \`onFailure\` (задължително, веднъж на плана и веднъж на всяка сесия): една верига, която
+     спира при провал, или независима работа, която продължава.
+   - \`conversation\` (задължително): чат на сесия, или един общ чат.
+   - \`plan\` (незадължително, но поискай го): кратко име на пускането. Регистърът групира
+     задачите под него, а изтеглените файлове го носят. Предложи такова от целта.
+   - **\`vcs\` (задължително, без стойност по подразбиране):** клон преди всяка задача и комит
+     след нея, или не; ако да — кое git хранилище (абсолютен път, трябва вече да има \`.git\`),
+     \`branchMode\` (per-task, когато задачите са независими; per-session, когато всяка стъпва
+     върху предишната), \`branchName\` в режим per-session. Кажи защо е важно: без него няма
+     връщане назад.
+   - \`review\` (незадължително, включено по подразбиране): втори, независим разговор пуска
+     работата и я оценява. Питай дали остава включен и на кой модел; модел, различен от
+     работния, хваща повече. \`model\` за самата работа — само ако потребителят назове такъв
+     от менюто на чата.
+   - \`mirror\` (незадължително, изключено по подразбиране): дали файлове от проекта се копират
+     и прикачат към първото съобщение като контекст — от кой корен, кои директории вътре и вън,
+     дали се спазва \`.gitignore\` (да), дали влизат \`.env\` файлове (не: те са тайни). Питай;
+     никога не предполагай.
+3. **Задачите.** За всяка: \`title\` (задължително), \`prompt\` (задължително — това чете
+   Copilot: точно, с пътища, портове и команди), \`expected\` (летвата, едно изречение),
+   \`checks\` (същата летва, написана така, че runner-ът да я решава сам; пиши по една навсякъде,
+   където команда или файл може да докаже резултата), \`vcs.branch\` и \`vcs.commitMessage\`,
+   когато контролът на версиите е включен, \`level2\` само когато тази задача има нужда от
+   инструкции, които сесията не дава, \`readOnly: true\` за одит или smoke тест, \`review: false\`
+   само за задача, в която няма какво да се пусне.
+   Питай на малки групи въпроси. Всичко, което иначе би измислил — пътища, портове, команди,
+   имена — питай. Мъгляв отговор получава втори въпрос. Потребител, който не иска да отговори
+   за контрола на версиите, чува, че планът не може да се напише без това, и защо: двата
+   отговора водят до различна работа, а единият от тях не се връща назад.
+4. **Предложи, после напиши.** Първо разбивката с думи: колко сесии и задачи, какво прави
+   всяка, в какъв ред, и всяко поле, което си решил от името на потребителя. Дай му да те
+   поправи. После JSON-а, в един ограден \`\`\`json блок, без нищо след него.
 
 ## Как се разбива работата
 
