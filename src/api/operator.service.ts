@@ -1154,7 +1154,7 @@ export class OperatorService {
     const lang = opts.lang === 'bg' ? 'bg' : 'en';
     const project = await this.project();
     const projects = [
-      ...(project.rootDir ? [{ name: '', rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
+      ...(project.rootDir ? [{ name: project.name, rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
       ...project.others.map((o) => ({ name: o.name, rootDir: o.rootDir, repo: o.repoOk, isDefault: false })),
     ];
     const [organisation, work] = await Promise.all([this.getContext('organisation', lang), this.getContext('work', lang)]);

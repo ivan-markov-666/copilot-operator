@@ -58,7 +58,10 @@ export type KnownProject = {
 function projectsSectionEn(projects: KnownProject[]): string {
   if (projects.length === 0) return '';
   const lines = projects.map((p) => {
-    const label = p.isDefault ? 'Default project (new sessions start here)' : p.name;
+    // The default project's own name when the operator gave it one: they will use that word
+    // for it in the conversation, and a plan that answers with "the default project" is a plan
+    // written about something nobody says out loud.
+    const label = p.isDefault ? (p.name ? `${p.name} — the default; new sessions start here` : 'Default project (new sessions start here)') : p.name;
     return `- **${label}**: \`${p.rootDir}\` — ${p.repo ? 'a git repository, so `vcs.repoDir` may point at it' : 'not a git repository: `vcs` must be off for work here'}`;
   });
   return `
@@ -75,7 +78,7 @@ ${lines.join('\n')}
 function projectsSectionBg(projects: KnownProject[]): string {
   if (projects.length === 0) return '';
   const lines = projects.map((p) => {
-    const label = p.isDefault ? 'Проект по подразбиране (новите сесии тръгват тук)' : p.name;
+    const label = p.isDefault ? (p.name ? `${p.name} — по подразбиране; новите сесии тръгват тук` : 'Проект по подразбиране (новите сесии тръгват тук)') : p.name;
     return `- **${label}**: \`${p.rootDir}\` — ${p.repo ? 'git хранилище, така че `vcs.repoDir` може да сочи към него' : 'не е git хранилище: `vcs` трябва да е изключен за работа тук'}`;
   });
   return `
