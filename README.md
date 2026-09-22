@@ -126,6 +126,7 @@ Design and findings:
 - [`docs/architecture.md`](docs/architecture.md) — the whole design
 - [`docs/locators-findings.md`](docs/locators-findings.md) — what the live Copilot DOM looks like and why
 - [`docs/tech-stack-research.md`](docs/tech-stack-research.md) — why Playwright and not the alternatives
+- [`docs/deferred.md`](docs/deferred.md) — designed, argued and deliberately not built yet, with the reasoning kept
 
 ## Notable findings
 
