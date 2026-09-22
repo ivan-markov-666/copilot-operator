@@ -158,19 +158,3 @@ export function dangerousRefusal(text: string): string | null {
   return null;
 }
 
-/**
- * The same, for a file that was downloaded and is about to be executed.
- *
- * Reported with the line it was found on, because a refused script is a script somebody now has
- * to read, and "somewhere in these two hundred lines" is not a place to start.
- */
-export function dangerousInScript(fileName: string, body: string): string | null {
-  const lines = body.split(/\r?\n/);
-  for (const [i, line] of lines.entries()) {
-    const refusal = dangerousRefusal(line);
-    if (refusal) {
-      return `${fileName} line ${i + 1} ${refusal}\n    ${line.trim().slice(0, 200)}`;
-    }
-  }
-  return null;
-}

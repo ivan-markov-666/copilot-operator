@@ -463,7 +463,6 @@ program
     const policy = {
       mode: cfg.execution.mode,
       denyPatterns: cfg.execution.denyPatterns,
-      allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
     };

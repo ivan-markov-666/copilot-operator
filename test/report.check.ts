@@ -204,7 +204,8 @@ const defaults = RunConfigSchema.parse({ openingMessages: [{ text: 'x' }] });
 const cfg = {
   mode: 'unattended' as const,
   denyPatterns: defaults.execution.denyPatterns,
-  allowedScriptExtensions: defaults.execution.allowedScriptExtensions,
+  allowedPrograms: defaults.execution.allowedPrograms,
+  isolation: 'separate-account' as const,
 };
 const steps: Step[] = [
   { id: 1, type: 'command', shell: 'pwsh', cmd: 'Get-Date' },
@@ -213,8 +214,10 @@ const steps: Step[] = [
   { id: 4, type: 'command', shell: 'cmd', cmd: 'format C: /q' },
   { id: 5, type: 'command', shell: 'pwsh', cmd: 'reg delete HKLM\\Software\\Foo /f' },
   { id: 6, type: 'command', shell: 'pwsh', cmd: 'vssadmin delete shadows /all' },
-  { id: 7, type: 'download', file: 'tool.exe', run: true, args: [] },
-  { id: 8, type: 'download', file: 'fix.ps1', run: true, args: [] },
+  // What the two file steps here used to be, now as the only form there is: an off-list binary
+  // and a project script, both of which the allowlist turns away.
+  { id: 7, type: 'command', shell: 'pwsh', cmd: '.\\tool.exe --apply' },
+  { id: 8, type: 'command', shell: 'pwsh', cmd: '.\\fix.ps1' },
 ];
 for (const s of steps) {
   const d = staticCheck(s, cfg);

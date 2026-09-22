@@ -145,24 +145,6 @@ export const RunConfigSchema = z.object({
        * a session created from the terminal starts with.
        */
       continueOnFailure: z.boolean().default(false),
-      allowedScriptExtensions: z.array(z.string()).default(['.ps1', '.cmd', '.bat']),
-      /**
-       * Whether a downloaded file may be executed at all, as opposed to only saved.
-       *
-       * Off by default, and deliberately so. A `download` step carries a `run` flag, but that
-       * flag is written by the language model, in the same reply as the file it wants run, so it
-       * is not the operator's decision — it is the driven thing deciding whether the thing it
-       * just fetched may execute. That is no gate at all, and it is exactly the shape a security
-       * team reads as a loader: an automation process fetches a script and runs it. So execution
-       * needs a second key, this one, which only a person editing the config can turn, and a
-       * machine that never turns it on cannot be talked into running an attachment by any reply.
-       *
-       * With it off, a download step still downloads: the file is saved to the run's artifacts
-       * folder, hashed and kept, and the result says so. What it does not do is start it. The
-       * ordinary way to run logic is a `command` step, or a file committed to the project and run
-       * by path — both of which were written down before the run and are not fetched mid-task.
-       */
-      allowRunningDownloads: z.boolean().default(false),
       /**
        * What the operator has arranged to contain this runner. An assertion, recorded as one.
        *
@@ -442,8 +424,6 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
     {
       mode: cfg.execution.mode,
       allowedPrograms: cfg.execution.allowedPrograms,
-      allowRunningDownloads: cfg.execution.allowRunningDownloads,
-      allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
       denyPatterns: cfg.execution.denyPatterns,
     },
     lock,

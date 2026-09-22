@@ -101,7 +101,7 @@ for (const cmd of [
 }
 
 console.log('\n--- the rules apply only where nobody is watching ---');
-const base = { denyPatterns: [] as string[], allowedScriptExtensions: ['.ps1'], allowedPrograms: ALLOWED };
+const base = { denyPatterns: [] as string[], allowedPrograms: ALLOWED };
 const watched = { ...base, mode: 'confirm' as const };
 // An unattended policy must declare its isolation before any of these rules are reached at all —
 // see `isolation.ts`. These cases are about what an unattended run refuses *once* it is allowed to

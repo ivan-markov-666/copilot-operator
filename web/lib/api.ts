@@ -453,8 +453,6 @@ export type Approval = {
   taskId: string;
   stepId: number;
   description: string;
-  /** The text of the script this step would run, when it would run one. See `PendingApproval`. */
-  script?: string;
   createdAt: string;
 };
 

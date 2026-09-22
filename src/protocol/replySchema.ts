@@ -12,7 +12,21 @@ export const ShellSchema = z.enum(['pwsh', 'powershell', 'cmd']);
 
 const CommandStep = z.object({
   id: z.number().int().positive(),
-  type: z.literal('command'),
+  /*
+   * The only kind of step there is.
+   *
+   * There used to be a second, `download`: the chat attached a file and the runner fetched it and
+   * ran it. That is gone — not disabled, removed — because a process that fetches a file and
+   * executes it is a loader whatever its intentions, and it is what put a security team on the
+   * phone. The message below is what a chat still writing the old form is told, since the reply
+   * comes straight back to it and "invalid literal" would teach it nothing.
+   */
+  type: z.literal('command', {
+    error:
+      'this runner has no file steps: it never fetches or runs a file the chat provides. Every step is ' +
+      'a `command`. For something too long for one line, write the file with Set-Content in one command ' +
+      'step and run it with its interpreter in the next.',
+  }),
   shell: ShellSchema.optional(),
   cmd: z.string().min(1),
   expect: z.enum(['fast', 'long']).optional(),
@@ -20,20 +34,8 @@ const CommandStep = z.object({
   idleTimeoutSec: z.number().int().positive().optional(),
 });
 
-const DownloadStep = z.object({
-  id: z.number().int().positive(),
-  type: z.literal('download'),
-  /** Must match a file attached to the same reply, character for character. */
-  file: z.string().min(1),
-  run: z.boolean().default(false),
-  shell: ShellSchema.optional(),
-  args: z.array(z.string()).default([]),
-  expect: z.enum(['fast', 'long']).optional(),
-  timeoutSec: z.number().int().positive().optional(),
-  idleTimeoutSec: z.number().int().positive().optional(),
-});
 
-export const StepSchema = z.discriminatedUnion('type', [CommandStep, DownloadStep]);
+export const StepSchema = CommandStep;
 
 /**
  * The shortest `summary` that counts as an explanation. Below this it is a label, not the
@@ -174,12 +176,8 @@ export const ReplySchema = z
 
 export type Step = z.infer<typeof StepSchema>;
 export type CommandStepT = z.infer<typeof CommandStep>;
-export type DownloadStepT = z.infer<typeof DownloadStep>;
 export type Reply = z.infer<typeof ReplySchema>;
 
-export function isDownloadStep(s: Step): s is DownloadStepT {
-  return s.type === 'download';
-}
 
 /** What makes two deviations the same one: the instruction, ignoring case and spacing. */
 function deviationKey(d: Deviation): string {

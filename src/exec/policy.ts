@@ -12,10 +12,9 @@
  * suggestion that would wipe a folder. Real isolation is a separate account or a sandbox,
  * which the README recommends.
  */
-import { extname } from 'node:path';
 import type { Step } from '../protocol/replySchema.js';
 import { effectiveShell, type Shell } from './shells.js';
-import { dangerousInScript, dangerousRefusal } from './dangerous.js';
+import { dangerousRefusal } from './dangerous.js';
 import { findShellExecuteTrap } from './shellExecuteTrap.js';
 import { inlineCodeRefusal, programRefusal } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
@@ -28,23 +27,16 @@ export type PolicyDecision =
 export type PolicyConfig = {
   mode: 'confirm' | 'unattended';
   denyPatterns: string[];
-  allowedScriptExtensions: string[];
   /** The programs a command may start. Empty disables the allowlist. See `programs.ts`. */
   allowedPrograms: string[];
   /** What the operator says contains this runner. See `isolation.ts`. Defaults to none. */
   isolation?: IsolationClaim;
 };
 
-export function describeStep(step: Step, scriptPath?: string): string {
+export function describeStep(step: Step): string {
   // The shell it will really be read by, not the one this file used to assume: a line in the
   // log that names an interpreter the machine has not got explains the wrong failure.
-  if (step.type === 'command') {
-    return `[${effectiveShell(step.shell)}] ${step.cmd}`;
-  }
-  const how = step.run ? `run with ${effectiveShell(step.shell)}` : 'save only';
-  return `[download] ${step.file} (${how}${step.args.length ? ` ${step.args.join(' ')}` : ''})${
-    scriptPath ? ` -> ${scriptPath}` : ''
-  }`;
+  return `[${effectiveShell(step.shell)}] ${step.cmd}`;
 }
 
 /** Returns the first deny pattern that matches, or null. */
@@ -60,11 +52,6 @@ export function matchDenyPattern(text: string, patterns: string[]): string | nul
   return null;
 }
 
-export function checkScriptExtension(fileName: string, allowed: string[]): string | null {
-  const ext = extname(fileName).toLowerCase();
-  if (allowed.map((e) => e.toLowerCase()).includes(ext)) return null;
-  return `"${fileName}" has extension ${ext || '(none)'}, which is not in allowedScriptExtensions`;
-}
 
 /**
  * Why a command line must not run, or null. The one gate for a step's command and for a
@@ -94,42 +81,7 @@ export function commandRefusal(
   return findShellExecuteTrap(command, shell, env);
 }
 
-/**
- * Whether a download step may actually execute its file, rather than only save it.
- *
- * Two gates, and both must agree:
- *   the reply asked for it   `step.run`, written by the model; false by default in the reply schema.
- *   the operator allows it    `execution.allowRunningDownloads`, false by default in the config.
- *
- * The second gate exists because the first is not the model's to give. `step.run` arrives in the
- * same reply as the file it wants run, written by the thing this tool is driving; letting that
- * alone decide whether a freshly fetched file may execute is no gate at all, and it is precisely
- * the shape a security team reads as a loader — a process fetching a script and running it. So a
- * downloaded file runs only when a person has turned execution on, and a machine that never does
- * cannot be talked into running an attachment by any reply, however the reply is phrased.
- *
- * The one place this is decided, so a step and a log and a test cannot disagree about it.
- */
-export function downloadWillRun(step: Step, allowRunningDownloads: boolean): boolean {
-  return step.type === 'download' && step.run === true && allowRunningDownloads;
-}
 
-/**
- * Why a downloaded script must not be run, or null.
- *
- * The gap this closes was the whole of it. A download step was screened on its *file name* and
- * its arguments and never on its contents, so `run.ps1` — an allowed extension, an innocent
- * name — passed the gate carrying anything at all inside it. The runner then started it with
- * `pwsh -File`, and whatever the script did next was a child of this process: to anything
- * watching the machine, this tool ran it. The file name was the one thing about it nobody
- * needed to see.
- */
-export function scriptRefusal(fileName: string, body: string, denyPatterns: string[]): string | null {
-  const technique = dangerousInScript(fileName, body);
-  if (technique) return technique;
-  const hit = matchDenyPattern(body, denyPatterns);
-  return hit ? `${fileName} matches deny pattern /${hit}/` : null;
-}
 
 /**
  * Why an unattended run may not begin at all, or null.
@@ -168,42 +120,27 @@ export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowed
  * decision when it is refused without asking anyone.
  */
 export function staticCheck(step: Step, cfg: PolicyConfig, env: NodeJS.ProcessEnv = process.env): PolicyDecision | null {
-  if (step.type === 'command') {
-    // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`
-    // are shell-specific, so screening for one interpreter and running in another finds nothing.
-    const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env);
-    if (reason) return { action: 'skip', reason };
-    /*
-     * Autonomy is graded: an unattended run carries strictly more restrictions than a watched one,
-     * because the thing that makes a watched run safe — a person reading each line — is exactly
-     * what an unattended run has removed. Two rules apply only here.
-     *
-     * First, unattended and an empty allowlist is the one combination nobody should be able to
-     * assemble by accident: no list, and no one to notice. The run is stopped on its first step
-     * with the reason, rather than quietly becoming the blank cheque this whole round exists to
-     * remove.
-     *
-     * Second, an allowlisted interpreter used to evaluate a string, or a shell wrapped in a shell,
-     * escapes the allowlist by construction (see `inlineCodeRefusal`). Watched, that is ordinary
-     * and a person can judge it. Unwatched, it makes the list meaningless.
-     */
-    if (cfg.mode === 'unattended') {
-      // The same rule the run was supposed to have been stopped by before it ever started. Kept
-      // here as well as at the entrance, because this is the one path nothing can go round.
-      const precondition = unattendedPrecondition(cfg);
-      if (precondition) return { action: 'skip', reason: precondition };
-      const inline = inlineCodeRefusal(step.cmd);
-      if (inline) return { action: 'skip', reason: inline };
-    }
-    return null;
-  }
+  // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`
+  // are shell-specific, so screening for one interpreter and running in another finds nothing.
+  const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env);
+  if (reason) return { action: 'skip', reason };
 
-  const hit = matchDenyPattern(`${step.file} ${step.args.join(' ')}`, cfg.denyPatterns);
-  if (hit) return { action: 'skip', reason: `matches deny pattern /${hit}/` };
-
-  if (step.run) {
-    const bad = checkScriptExtension(step.file, cfg.allowedScriptExtensions);
-    if (bad) return { action: 'skip', reason: bad };
+  /*
+   * Autonomy is graded: an unattended run carries strictly more restrictions than a watched one,
+   * because the thing that makes a watched run safe — a person reading each line — is exactly what
+   * an unattended run has removed.
+   *
+   * The precondition is the same one the entrances ask before anything starts; it is asked again
+   * here because the entrance is a courtesy and this is the path nothing goes round. The second
+   * rule is about an allowlisted interpreter used to evaluate a string, or a shell wrapped in a
+   * shell, which escapes the allowlist by construction: watched, a person can judge it; unwatched,
+   * it makes the list meaningless.
+   */
+  if (cfg.mode === 'unattended') {
+    const precondition = unattendedPrecondition(cfg);
+    if (precondition) return { action: 'skip', reason: precondition };
+    const inline = inlineCodeRefusal(step.cmd);
+    if (inline) return { action: 'skip', reason: inline };
   }
   return null;
 }

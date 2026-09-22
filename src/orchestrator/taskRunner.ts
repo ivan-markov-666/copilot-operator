@@ -18,7 +18,7 @@ import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
-import { isDownloadStep, resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
+import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type ShellProblem } from '../exec/shells.js';
@@ -32,7 +32,7 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, commandRefusal, scriptRefusal, downloadWillRun } from '../exec/policy.js';
+import { describeStep, commandRefusal } from '../exec/policy.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
@@ -589,8 +589,6 @@ export async function runTask(
     isolation,
     mode: cfg.execution.mode,
     allowedPrograms: cfg.execution.allowedPrograms,
-    allowRunningDownloads: cfg.execution.allowRunningDownloads,
-    allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
     denyPatterns: cfg.execution.denyPatterns,
     cwd: work.cwd,
     lock: cfg.policyLock,
@@ -599,10 +597,10 @@ export async function runTask(
   await record('POLICY', describePolicyManifest(manifest));
   sink.event(
     'policy',
-    { mode: manifest.mode, allowlist: manifest.allowlist.enforced, allowlistDigest: manifest.allowlist.digest, downloadsMayRun: manifest.downloads.mayRun },
+    { mode: manifest.mode, allowlist: manifest.allowlist.enforced, allowlistDigest: manifest.allowlist.digest },
     `policy: ${manifest.mode}, allowlist ${manifest.allowlist.enforced ? `${manifest.allowlist.count} programs (${manifest.allowlist.digest})` : 'NOT ENFORCED'}, ` +
-      `downloads ${manifest.downloads.mayRun ? 'may run' : 'saved only'}`,
-    manifest.mode === 'unattended' || !manifest.allowlist.enforced || manifest.downloads.mayRun ? 'warn' : 'info',
+      'the chat cannot supply files',
+    manifest.mode === 'unattended' || !manifest.allowlist.enforced ? 'warn' : 'info',
   );
 
   // Not when the project is this runner's own checkout: every process of the runner would
@@ -1172,8 +1170,7 @@ export async function runTask(
      * what it was meant to: the same command, returning the same answer, again.
      */
     const seen = new Map<string, { sameInARow: number; signature: string }>();
-    const fingerprint = (step: Step): string =>
-      step.type === 'command' ? step.cmd.replace(/\s+/g, ' ').trim() : `download:${step.file}:${step.args.join(' ')}`;
+    const fingerprint = (step: Step): string => step.cmd.replace(/\s+/g, ' ').trim();
     /** What "the same answer" means: the exit code and the output, hashed. */
     const resultSignature = (r: RunResult): string =>
       createHash('sha256').update(`${r.exitCode}\u0000${r.outcome}\u0000${r.stdout}\u0000${r.stderr}`).digest('hex');
@@ -1301,44 +1298,6 @@ export async function runTask(
         continue;
       }
 
-      /*
-       * A download step that names a file the reply does not carry.
-       *
-       * Copilot says "the attached script writes the files", the runner looks, and there is no
-       * attachment at all — it described a file instead of producing one. Caught here, before a
-       * single step runs, because the alternative is what happened: the download was refused
-       * mid-iteration, the steps after it failed against files that were never written, and the
-       * results file that went back was a page of errors about work that had never started. The
-       * model then lost track of which task it was on and re-ran the previous one.
-       *
-       * Only the empty case is treated this way. A name that does not match while exactly one
-       * file *is* attached is handled further down, where it is a naming difference rather than
-       * a missing file.
-       */
-      const wantedFiles = reply.steps.filter(isDownloadStep).map((x) => x.file);
-      if (wantedFiles.length > 0) {
-        const attached = await transport.lastMessageAttachmentNames().catch(() => [] as string[]);
-        if (attached.length === 0) {
-          formatRetries += 1;
-          sink.event('attachment-missing', { wanted: wantedFiles, retry: formatRetries },
-            `the reply asks to run ${wantedFiles.join(', ')} but carries no file at all, retry ${formatRetries}/${cfg.limits.maxFormatRetries}`,
-            'warn');
-          if (formatRetries > cfg.limits.maxFormatRetries) {
-            return await finish('failed', `Copilot kept asking to run files it did not attach: ${wantedFiles.join(', ')}`, undefined, lastMarkdown);
-          }
-          await pacer.throttleSend();
-          const askAgain = await transport.sendAndConfirm(
-            `Your last reply has a download step for ${wantedFiles.map((f) => `"${f}"`).join(', ')}, but the message ` +
-              'carries no attached file at all. Naming a file in the notes does not attach one, and nothing was run. ' +
-              'Send the reply again either with the file genuinely attached to the message, or — simpler and usually ' +
-              'better for source files — as ordinary command steps that write the file with Set-Content.',
-          );
-          const retry = await transport.waitForReply(askAgain);
-          await saveReply(`attachment-retry-${formatRetries}`, retry);
-          lastMarkdown = retry.markdown;
-          continue;
-        }
-      }
 
       // --- execute -----------------------------------------------------------------
       const results: RunResult[] = [];
@@ -1354,66 +1313,8 @@ export async function runTask(
           aborted = true;
           break;
         }
-        let scriptPath: string | undefined;
-        /** The downloaded script's text, so the operator approves what it says and not its name. */
-        let scriptBody: string | undefined;
 
-        if (step.type === 'download') {
-          const target = join(artifactsDir, `${iterations}-${step.id}-${step.file}`);
-          try {
-            await transport.downloadAttachment(step.file, target);
-            const hash = createHash('sha256').update(await readFile(target)).digest('hex');
-            sink.event('download', { file: step.file, path: target, sha256: hash }, `downloaded ${step.file} (sha256 ${hash.slice(0, 12)}…)`);
-            scriptPath = target;
-          } catch (e) {
-            results.push(refusedResult(step, `download failed: ${(e as Error).message}`));
-            continue;
-          }
-          // Whether this file runs at all is not `step.run`'s to decide on its own: that flag is
-          // written by the model, in the same reply as the file. Execution also requires the
-          // operator to have turned it on (`execution.allowRunningDownloads`), and by default they
-          // have not, so a download is saved and handed back — never started — unless both agree.
-          // See `downloadWillRun`. The message distinguishes the two save-only cases, because one
-          // is the model's own choice and the other is a policy it should stop trying to work past.
-          if (!downloadWillRun(step, cfg.execution.allowRunningDownloads)) {
-            const note = step.run
-              ? 'not run: running downloaded files is turned off on this machine ' +
-                '(execution.allowRunningDownloads). Put the logic in command steps, or commit the ' +
-                'file to the project and run it by path; do not re-attach it to get it executed.'
-              : 'saved only, as the step asked.';
-            results.push({
-              ...refusedResult(step, note),
-              exitCode: 0,
-              outcome: 'completed',
-              stderr: '',
-              stdout: `Saved to ${scriptPath}\n${step.run ? `${note}\n` : ''}`,
-            });
-            continue;
-          }
-
-          /*
-           * What is inside it, before it is started.
-           *
-           * The gate above screened the file's *name* and its arguments, and that was the whole
-           * of it: an allowed extension and an innocent name let anything through, and the next
-           * line started it with `pwsh -File`. Whatever it then did was a child of this process,
-           * so to anything watching the machine this tool did it — which is exactly how a
-           * security team comes to be asking why an automation framework decoded a base64 blob
-           * into a script and ran it. The script is read and screened here, where refusing it
-           * still costs nothing, and the refusal goes back to the chat naming the line.
-           */
-          scriptBody = await readFile(scriptPath, 'utf8').catch(() => '');
-          const body = scriptBody;
-          const unsafe = scriptRefusal(step.file, body, cfg.execution.denyPatterns);
-          if (unsafe) {
-            sink.event('script-refused', { id: step.id, file: step.file, path: scriptPath, reason: unsafe },
-              `step ${step.id}: the downloaded script was not run — ${unsafe}`, 'warn');
-            results.push(refusedResult(step, unsafe));
-            continue;
-          }
-        }
-
-        if (step.type === 'command') {
+        {
           const damage = findLikelyDamage(step.cmd);
           if (damage) {
             sink.event('step-damaged', { id: step.id, cmd: step.cmd, damage }, `step ${step.id} arrived damaged: ${damage}`, 'warn');
@@ -1460,8 +1361,8 @@ export async function runTask(
         await setTask((t) => {
           t.status = 'waiting-approval';
         });
-        sink.event('step-proposed', { id: step.id, description: describeStep(step, scriptPath) }, `step ${step.id}: ${describeStep(step, scriptPath)}`);
-        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, scriptPath, scriptBody });
+        sink.event('step-proposed', { id: step.id, description: describeStep(step) }, `step ${step.id}: ${describeStep(step)}`);
+        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations });
         await setTask((t) => {
           t.status = 'running';
         });
@@ -1482,13 +1383,12 @@ export async function runTask(
         const hard = Math.min(step.timeoutSec ?? (long ? cfg.execution.longCommandTimeoutSec : cfg.execution.commandTimeoutSec), cap);
         const idle = Math.min(step.idleTimeoutSec ?? (long ? cfg.execution.longIdleTimeoutSec : cfg.execution.idleTimeoutSec), cap);
 
-        sink.event('step-started', { id: step.id, shell: step.shell ?? defaultShell }, `running step ${step.id}: ${describeStep(step, scriptPath)}`);
+        sink.event('step-started', { id: step.id, shell: step.shell ?? defaultShell }, `running step ${step.id}: ${describeStep(step)}`);
         const result = await runStep(
           {
             id: step.id,
             shell: step.shell ?? defaultShell,
-            command: step.type === 'command' ? step.cmd : (scriptPath as string),
-            scriptArgs: step.type === 'download' ? step.args : undefined,
+            command: step.cmd,
             cwd: work.cwd,
             hardTimeoutMs: hard * 1000,
             idleTimeoutMs: idle * 1000,

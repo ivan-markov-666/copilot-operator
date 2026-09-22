@@ -15,17 +15,6 @@ export type AuthorizeContext = {
   sessionId?: string;
   taskId?: string;
   iteration: number;
-  scriptPath?: string;
-  /**
-   * The downloaded script's own text, when the step is about to run one.
-   *
-   * Approval used to be shown the file's name and nothing else — `[download] collect-logs.ps1
-   * (run with pwsh)` — which is exactly as much as the automated gate could see, and exactly
-   * the reason neither of them noticed what was inside. A person cannot approve a decision
-   * they were not shown, and asking them to approve a file name is asking them to approve a
-   * file name.
-   */
-  scriptBody?: string;
 };
 
 export interface StepAuthorizer {
@@ -51,7 +40,7 @@ export function makeAuthorizer(
 export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void): StepAuthorizer {
   return makeAuthorizer(cfg, async (step, ctx) => {
     print('');
-    print(`  step ${step.id}: ${describeStep(step, ctx.scriptPath)}`);
+    print(`  step ${step.id}: ${describeStep(step)}`);
     const rl = createInterface({ input: stdin, output: stdout });
     try {
       const answer = (await rl.question('  [Enter] run  [s] skip  [q] abort > ')).trim().toLowerCase();

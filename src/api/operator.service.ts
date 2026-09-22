@@ -879,7 +879,6 @@ export class OperatorService {
     const policy = {
       mode,
       denyPatterns: cfg.execution.denyPatterns,
-      allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
     };
@@ -1554,17 +1553,8 @@ export class OperatorService {
     return this.running.get(sessionId)?.mode;
   }
 
-  /** As much of a downloaded script as belongs in an approval box, and a line saying if there is more. */
-  private static clipScript(text: string, maxLines = 120, maxChars = 8000): string {
-    const lines = text.split(/\r?\n/);
-    const head = lines.slice(0, maxLines).join('\n').slice(0, maxChars);
-    if (head.length >= text.length) return head;
-    const cut = lines.length - maxLines;
-    const more = cut > 0 ? `${cut} more line(s)` : 'more of it';
-    return `${head}\n… (${more}; the whole file is kept in the run\'s artifacts folder)`;
-  }
 
-  private webAuthorizer(policy: { mode: 'confirm' | 'unattended'; denyPatterns: string[]; allowedScriptExtensions: string[]; allowedPrograms: string[] }, signal: AbortSignal): StepAuthorizer {
+  private webAuthorizer(policy: { mode: 'confirm' | 'unattended'; denyPatterns: string[]; allowedPrograms: string[] }, signal: AbortSignal): StepAuthorizer {
     return makeAuthorizer(policy, (step, ctx) =>
       new Promise<PolicyDecision>((resolvePromise) => {
         // The operator may have pressed "run the rest without asking" on an earlier step.
@@ -1580,9 +1570,7 @@ export class OperatorService {
           sessionId: ctx.sessionId ?? '',
           taskId: ctx.taskId ?? '',
           stepId: step.id,
-          description: step.type === 'command' ? `[${step.shell ?? 'pwsh'}] ${step.cmd}` : `[download] ${step.file}${step.run ? ' (run)' : ''}${ctx.scriptPath ? ` -> ${ctx.scriptPath}` : ''}`,
-          // Clipped: enough to read and judge, not so much that the box becomes a file viewer.
-          ...(ctx.scriptBody ? { script: OperatorService.clipScript(ctx.scriptBody) } : {}),
+          description: `[${step.shell ?? 'pwsh'}] ${step.cmd}`,
           createdAt: new Date().toISOString(),
         };
         if (signal.aborted) {

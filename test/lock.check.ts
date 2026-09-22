@@ -18,8 +18,6 @@ function check(what: string, got: unknown, want: unknown): void {
 const operator: LockablePolicy = {
   mode: 'unattended',
   allowedPrograms: ['node', 'npm', 'git', 'nmap'],
-  allowRunningDownloads: true,
-  allowedScriptExtensions: ['.ps1', '.bat'],
   denyPatterns: ['local-one'],
 };
 
@@ -47,18 +45,12 @@ check('the lock list is used instead of "off"', emptied.policy.allowedPrograms.l
 check('so the gate stays enforced', emptied.policy.allowedPrograms.length > 0, true);
 check('and it is reported', emptied.outcome.changes.some((c) => c.includes('switched off locally')), true);
 
-console.log('\n--- downloads: a lock can forbid, never grant ---');
-check('false forces false', applyPolicyLock(operator, { allowRunningDownloads: false }).policy.allowRunningDownloads, false);
-check('true does not force true', applyPolicyLock({ ...operator, allowRunningDownloads: false }, { allowRunningDownloads: true }).policy.allowRunningDownloads, false);
-
 console.log('\n--- deny patterns are a floor, merged in ---');
 const merged = applyPolicyLock(operator, { denyPatterns: ['locked-one', 'local-one'] });
 check('the lock pattern is added', merged.policy.denyPatterns.includes('locked-one'), true);
 check('the local one is kept', merged.policy.denyPatterns.includes('local-one'), true);
 check('and not duplicated', merged.policy.denyPatterns.filter((p) => p === 'local-one').length, 1);
 
-console.log('\n--- script extensions are a ceiling ---');
-check('narrowed', applyPolicyLock(operator, { allowedScriptExtensions: ['.ps1'] }).policy.allowedScriptExtensions.length, 1);
 
 console.log('\n--- a malformed lock is rejected, not ignored ---');
 check('an unknown key is refused', PolicyLockSchema.safeParse({ allowEverything: true }).success, false);

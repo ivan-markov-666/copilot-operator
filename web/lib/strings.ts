@@ -255,7 +255,6 @@ export const dict = {
       'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused. Continue?',
     'approval.skip': 'Skip',
     'approval.abort': 'Abort task',
-    'approval.script': 'What this script does (read it before approving)',
 
     // which model the conversation runs on
     'model.title': 'Copilot model',
@@ -1228,7 +1227,6 @@ export const dict = {
       'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват. Продължавате ли?',
     'approval.skip': 'Пропусни',
     'approval.abort': 'Прекрати задачата',
-    'approval.script': 'Какво прави този скрипт (прочетете го, преди да одобрите)',
 
     'model.title': 'Модел на Copilot',
     'model.hint':

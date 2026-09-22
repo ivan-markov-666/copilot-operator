@@ -8,8 +8,7 @@ browser, so it needs no API licence and no admin consent.
 
 > **Status: working, every part verified against a live Microsoft 365 Copilot tenant.**
 > The loop, chat naming, reply parsing, command execution and the results file are confirmed.
-> A step printing for 92 s survived while a silent one was stopped at its idle limit. A script
-> Copilot generated was downloaded, hashed, executed and its output read back. Project files
+> A step printing for 92 s survived while a silent one was stopped at its idle limit. Project files
 > mirrored to the Desktop were attached and answered questions from. Unattended mode is the
 > one thing still untried, deliberately.
 
@@ -21,11 +20,11 @@ browser, so it needs no API licence and no admin consent.
    the **task**.
 3. Reads Copilot's reply and parses a strict JSON block out of it. A reply that does not
    match is sent back with the reason.
-4. Downloads any script Copilot attached to the chat.
-5. Runs the commands in PowerShell or `cmd`, in order, capturing stdout, stderr and exit codes.
-6. Writes the whole terminal output to a `.txt` file and attaches it to the chat.
-7. Repeats until Copilot finishes with a **summary** of what it did and what the result is.
-8. Runs the next queued task in the same conversation.
+4. Runs the commands in PowerShell or `cmd`, in order, capturing stdout, stderr and exit codes.
+   Commands are the only thing it runs: nothing the chat attaches is fetched, saved or executed.
+5. Writes the whole terminal output to a `.txt` file and attaches it to the chat.
+6. Repeats until Copilot finishes with a **summary** of what it did and what the result is.
+7. Runs the next queued task in the same conversation.
 
 A **session** is one conversation with a queue of tasks. Selected parts of a project can be
 mirrored to a Desktop folder and attached, so the chat can see the code it is asked about.
@@ -34,10 +33,10 @@ There is a web UI for all of this, and a terminal command for a single task.
 
 ## Safety
 
-The bot executes commands and scripts written by a language model. Confirm mode is on by
-default: every step is shown and waits for a keypress. Unattended mode is behind an explicit
-flag. There is a deny list, a per-step timeout, an iteration cap, and every downloaded file
-is hashed into the run log. Everything a step prints goes to the chat as a file, so
+The bot executes commands written by a language model — commands only; it has no way to take a
+file from the chat. Confirm mode is on by default: every step is shown and waits for a keypress.
+Unattended mode is behind an explicit flag and its own preconditions. There is a deny list, a
+per-step timeout and an iteration cap. Everything a step prints goes to the chat as a file, so
 secret-shaped strings — tokens, keys, passwords in assignments and URLs, private key blocks —
 are redacted from every report before it is uploaded, always, with `report.redactPatterns`
 applied on top. Running it in a dedicated Windows account or Windows Sandbox is recommended.
@@ -52,7 +51,7 @@ top of it — it can add, never subtract.
 
 | Refused | The ordinary way instead |
 |---|---|
-| `certutil`, `bitsadmin` | read or convert files with PowerShell; download in a step of its own |
+| `certutil`, `bitsadmin` | read or convert files with PowerShell in a step of their own |
 | `wscript`, `cscript`, `mshta` | run the tool itself; never `.js`, `.vbs` or `.hta` as code |
 | `regsvr32`, `rundll32`, `installutil`, `forfiles` | call the program directly |
 | `-EncodedCommand`, base64 decoded into code, `Invoke-Expression` | write the command out in full |
@@ -60,9 +59,9 @@ top of it — it can add, never subtract.
 | running anything out of `%TEMP%` | work inside the project folder |
 | antivirus exclusions, scheduled tasks, Run keys, new services | nothing here should outlive the run |
 
-The same screening reads the *contents* of a script before it is started, not only its name, and
-a name hidden rather than written — a caret or empty quotes inside a word, a name assembled from
-pieces, one resolved by wildcard — is refused as the hiding it is.
+Every step is a command and every command is read in full before it runs, so there is nowhere for
+any of this to arrive unread. A name hidden rather than written — a caret or empty quotes inside a
+word, a name assembled from pieces, one resolved by wildcard — is refused as the hiding it is.
 
 ### How a run is regulated
 
@@ -79,9 +78,13 @@ Five rules decide what a step may do, and each is recorded with the run that it 
   show the same assessment. A fresh install says `none`, so the unattended **Run sessions** button
   is refused until you have arranged something and said so; **Step by step** is unaffected.
 
-- **Files are data, not code.** A file the chat attaches is downloaded, hashed and kept. It is
-  *not* executed: `execution.allowRunningDownloads` is off by default, and while it is off no
-  reply can cause an attachment to run, whatever the step asks for.
+- **The chat cannot give this runner a file.** There is one kind of step, `command`, and nothing
+  the chat attaches is fetched, saved or run. This is not a setting that could be turned back on:
+  the step type does not exist and neither does the code that fetched one. A process that receives
+  a file and executes it is a loader whatever it meant by it, and that is precisely the shape a
+  security team opened an incident about. Work too long for one line is written **from a command
+  step** — `Set-Content` with a here-string — and run in the next, so its contents passed through a
+  step that was read and screened and it sits in the project where it can be read afterwards.
 - **Only the declared toolchain runs.** `execution.allowedPrograms` names the programs a command
   may start — the shells, the JavaScript, .NET, Java, Python, Go and Rust tools, `git`, and a few
   Windows utilities. A command that starts anything else is refused and sent back with the reason.
@@ -93,9 +96,9 @@ Five rules decide what a step may do, and each is recorded with the run that it 
   (`node -e`, `python -c`) or a shell wrapped in a shell (`cmd /c …`) — the forms that escape the
   allowlist by construction.
 - **An administrator can set a floor the operator cannot lower.** A `policy.lock.json` beside the
-  configuration may forbid unattended runs, cap the allowlist, force downloads to stay
-  unexecutable and add deny patterns. Every field only ever tightens, and the runner never writes
-  the file. A machine without one behaves exactly as before.
+  configuration may forbid unattended runs, cap the allowlist and add deny patterns. Every field
+  only ever tightens, and the runner never writes the file. A machine without one behaves exactly
+  as before.
 
 ### The local API is not open to everything on the machine
 
@@ -123,7 +126,7 @@ that process can read the file. It moves the API from "anything on this machine,
 off it" to "something that can read a file in the install".
 
 Every task writes `policy.json` into its run folder and a `POLICY` block into its log: the mode,
-the allowlist and its digest, whether downloads could execute, digests of the deny list and of the
+the allowlist and its digest, that the chat cannot supply files, digests of the deny list and of the
 built-in refusals, whether a lock was in force and what it changed, and the account the run used.
 So "what was this permitted to do at the time" is answered from the run folder rather than from a
 configuration file that has been edited since.

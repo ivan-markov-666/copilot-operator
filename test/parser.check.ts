@@ -25,7 +25,9 @@ show('done, summary too short', block({ status: 'done', steps: [], summary: 'don
 show('marker + summary, continue', block({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'echo hi' }], summary }) + '\nКрай');
 show('marker, no summary (not done)', block({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'echo hi' }] }) + '\nКрай');
 show('long step', block({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'npm test', expect: 'long', timeoutSec: 7200, idleTimeoutSec: 600 }] }));
-show('download step', block({ status: 'continue', steps: [{ id: 1, type: 'download', file: 'x.ps1', run: true, args: ['-WhatIf'] }] }));
+// The step type that no longer exists. Kept as a case because a chat that learned the old contract
+// will still write it, and what it is told back has to be the guidance, not "invalid literal".
+show('a file step, which is gone', block({ status: 'continue', steps: [{ id: 1, type: 'download', file: 'x.ps1', run: true, args: ['-WhatIf'] }] }));
 show('continue with no steps', block({ status: 'continue', steps: [] }));
 show('bad shell', block({ status: 'continue', steps: [{ id: 1, type: 'command', shell: 'bash', cmd: 'ls' }] }));
 show('prose only', 'I think you should check the service and then reboot.');

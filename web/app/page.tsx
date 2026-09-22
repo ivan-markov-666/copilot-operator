@@ -867,18 +867,6 @@ function HomeApproval({
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
-      {/*
-        What the step would actually run, when it is a script.
-        The line above names the file. Approving a file name is not approving anything: it is
-        the same thing the automated gate could see, and the same reason neither of them
-        noticed what was inside one.
-      */}
-      {approval.script && (
-        <details open>
-          <summary>{t('approval.script')}</summary>
-          <pre className="tall">{approval.script}</pre>
-        </details>
-      )}
       <div className="row">
         <button className="primary" disabled={busy} onClick={() => void decide('run')}>
           {t('approval.run')}

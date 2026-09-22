@@ -1295,67 +1295,6 @@ Current URL: ${url}`);
    * `target="_blank"`, which is exactly why hovering shows nothing useful. The download event
    * has to be registered before the click, and the popup case is covered too.
    */
-  async downloadAttachment(fileName: string, saveAs: string): Promise<string> {
-    const exact = this.lastAnswer()
-      .locator(`${Css.downloadLink}[download="${fileName.replace(/"/g, '\\"')}"]`)
-      .first();
-
-    let link = exact;
-    if ((await exact.count()) === 0) {
-      // A name that does not match is not the same as nothing being there. The code
-      // interpreter names its own files, so the link can be called something else entirely,
-      // and refusing on a string mismatch would waste a file that is sitting right there.
-      const present = await this.lastMessageAttachmentNames();
-      const ci = present.findIndex((n) => n.toLowerCase() === fileName.toLowerCase());
-
-      if (ci >= 0) {
-        link = this.lastAnswer().locator(Css.downloadLink).nth(ci);
-        this.emit('download-name-case-differs', { asked: fileName, found: present[ci] });
-      } else if (present.length === 1) {
-        link = this.lastAnswer().locator(Css.downloadLink).first();
-        this.emit('download-name-differs', { asked: fileName, using: present[0] });
-      } else {
-        throw new Error(
-          present.length === 0
-            ? `No downloadable file is present in that reply at all, so "${fileName}" could ` +
-              'not be fetched. Produce the file with your code interpreter so a download link ' +
-              'appears in the message itself; a file name in the notes is not a file.'
-            : `That reply offers ${present.join(', ')}, but the step asked for "${fileName}". ` +
-              'Use the exact name of a file you actually attached.',
-        );
-      }
-    }
-
-    /*
-     * Never through the browser's download manager.
-     *
-     * Clicking the anchor — a `blob:` href with `target="_blank"` — crashed Edge's browser
-     * process every time it was tried: three minidumps in the bot profile's Crashpad, one per
-     * attempt, `ProcessType=browser`, the same `SubCode=0x80000003`, Edge 153. A crash of the
-     * browser process ends the run and the plan behind it, and the download race that used to
-     * live here never got as far as saving a file. The blob was created in this page, so the
-     * page can read it: fetched in page context and carried out as base64, it never touches
-     * the download UI at all. An address that cannot be fetched is an error with a reason,
-     * not a crash.
-     */
-    const href = await link.getAttribute('href');
-    if (!href) throw new Error(`The attachment "${fileName}" carries no address it could be read from.`);
-    const base64 = await this.p.evaluate(async (url: string) => {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`the attachment could not be read: HTTP ${res.status}`);
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      let binary = '';
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
-      }
-      return btoa(binary);
-    }, href);
-    const bytes = Buffer.from(base64, 'base64');
-    await writeFile(saveAs, bytes);
-    this.emit('downloaded', { fileName, saveAs, bytes: bytes.length });
-    return saveAs;
-  }
 
   /** An Edge crash written to the profile in the last few minutes, if there is one. */
   async recentCrash(): Promise<EdgeCrash | null> {

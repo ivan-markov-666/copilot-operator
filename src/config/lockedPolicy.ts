@@ -15,8 +15,6 @@
  *                            and an operator who empties their own list gets the lock's rather than
  *                            the gate switched off, because empty means "no allowlist" and that is
  *                            the one direction a lock must never permit.
- *   allowRunningDownloads    `false` forces it false; the lock can forbid, never grant.
- *   allowedScriptExtensions  a ceiling, intersected the same way.
  *   denyPatterns             a floor: merged in, so a lock pattern cannot be deleted locally.
  *
  * The runner never writes this file. There is no API route that edits it and no UI that shows it
@@ -37,8 +35,6 @@ export const PolicyLockSchema = z
   .object({
     maxMode: z.enum(['confirm', 'unattended']).optional(),
     allowedPrograms: z.array(z.string()).optional(),
-    allowRunningDownloads: z.boolean().optional(),
-    allowedScriptExtensions: z.array(z.string()).optional(),
     denyPatterns: z.array(z.string()).optional(),
   })
   .strict();
@@ -49,8 +45,6 @@ export type PolicyLock = z.infer<typeof PolicyLockSchema>;
 export type LockablePolicy = {
   mode: 'confirm' | 'unattended';
   allowedPrograms: string[];
-  allowRunningDownloads: boolean;
-  allowedScriptExtensions: string[];
   denyPatterns: string[];
 };
 
@@ -90,19 +84,6 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
     if (before.length === 0) changes.push(`allowlist enforced with the lock's ${next.allowedPrograms.length} programs (it was switched off locally)`);
     else if (next.allowedPrograms.length !== before.length) {
       changes.push(`allowlist narrowed from ${before.length} to ${next.allowedPrograms.length} programs`);
-    }
-  }
-
-  if (lock.allowRunningDownloads === false && next.allowRunningDownloads) {
-    next.allowRunningDownloads = false;
-    changes.push('running downloaded files forced off');
-  }
-
-  if (lock.allowedScriptExtensions) {
-    const before = next.allowedScriptExtensions;
-    next.allowedScriptExtensions = intersect(before, lock.allowedScriptExtensions);
-    if (next.allowedScriptExtensions.length !== before.length) {
-      changes.push(`script extensions narrowed from ${before.length} to ${next.allowedScriptExtensions.length}`);
     }
   }
 

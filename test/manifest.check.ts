@@ -23,8 +23,6 @@ const env = { USERNAME: 'ivan', USERDOMAIN: 'CORP', COMPUTERNAME: 'LAPTOP-01' } 
 const base = {
   mode: 'confirm' as const,
   allowedPrograms: ['node', 'npm', 'git'],
-  allowRunningDownloads: false,
-  allowedScriptExtensions: ['.ps1'],
   denyPatterns: ['a', 'b'],
   cwd: 'C:\\Projects\\thing',
   isolation: assessIsolation('separate-account', { user: 'bot', computer: 'BOX', elevated: false, windowsSandbox: false }),
@@ -39,16 +37,18 @@ console.log('\n--- the safe posture is recorded as such ---');
 const safe = collectPolicyManifest(base, env);
 check('allowlist enforced', safe.allowlist.enforced, true);
 check('counted', safe.allowlist.count, 3);
-check('downloads cannot run', safe.downloads.mayRun, false);
+// A constant, checked anyway: it is the first question asked of a tool like this, and an absent
+// field would leave the reader working out whether it means no or means nobody wrote it down.
+check('the chat cannot supply a file at all', safe.chatFiles.includes('no file step'), true);
 check('the account is recorded', safe.account.user, 'ivan');
 check('the working directory is recorded', safe.cwd, 'C:\\Projects\\thing');
 
 console.log('\n--- an empty allowlist is recorded as NOT enforced, not as an empty list ---');
-const open = collectPolicyManifest({ ...base, allowedPrograms: [], mode: 'unattended', allowRunningDownloads: true }, env);
+const open = collectPolicyManifest({ ...base, allowedPrograms: [], mode: 'unattended' }, env);
 check('not enforced', open.allowlist.enforced, false);
 check('and the prose says so plainly', describePolicyManifest(open).includes('NOT ENFORCED'), true);
 check('unattended is named as unwatched', describePolicyManifest(open).includes('no person saw the steps'), true);
-check('and that downloads could execute', describePolicyManifest(open).includes('COULD be executed'), true);
+check('and that no file can come from the chat', describePolicyManifest(open).includes('no file step'), true);
 
 console.log('\n--- the built-in floor is fingerprinted ---');
 check('every technique is counted', safe.builtIn.count, DANGEROUS_TECHNIQUES.length);
