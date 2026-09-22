@@ -222,131 +222,82 @@ function ProjectSection() {
         </div>
       )}
 
-      {/* The name first, because it is what the project is called everywhere else: the Desktop
-          folder, the file names inside it, and the list the plan brief hands to Kerrigan. */}
-      <label htmlFor="proj-name">{t('proj.nameField')}</label>
-      <input
-        id="proj-name"
-        type="text"
-        value={name}
-        onChange={(e) => {
-          setName(e.target.value);
-          nameLater(e.target.value);
+      {/*
+        One shape for every project, the default included.
+        The default used to be two auto-saving fields with a paragraph of repository advice under
+        them, while the others were an add-row and a table of text that could not be edited at
+        all: to correct a path you removed the project and typed it again, and the same fact —
+        whether the folder is a git repository — was a full notice for one and a three-word badge
+        for the others. Nothing about being the default makes any of that necessary. It is the
+        first entry in one list, marked, and every entry is read and written the same way.
+      */}
+      <p className="muted small">{t('proj.listIntro')}</p>
+
+      <ProjectEntry
+        name={name}
+        dir={dir}
+        repoOk={!!project?.repoOk}
+        repoProblem={project?.repoProblem}
+        mirror={project?.mirror}
+        isDefault
+        busy={busy}
+        onName={(v) => {
+          setName(v);
+          nameLater(v);
         }}
-        onBlur={() => void saveName(name)}
-        placeholder={dir ? dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : t('proj.namePlaceholder')}
-        disabled={busy}
+        onNameBlur={() => void saveName(name)}
+        onDir={(v) => {
+          setDir(v);
+          dirLater(v);
+        }}
+        onDirBlur={() => void saveDefault(dir)}
+        onBrowse={() => void browse((path) => void saveDefault(path), dir)}
+        onRemove={project?.rootDir ? () => void saveDefault('') : undefined}
+        removeLabel={t('proj.clear')}
+        onFolders={saveDefaultFolders}
       />
-      <p className="why">{t('proj.nameWhy')}</p>
-
-      <label htmlFor="proj-dir">{t('proj.field')}</label>
-      <div className="row">
-        <input
-          id="proj-dir"
-          type="text"
-          className="grow"
-          value={dir}
-          onChange={(e) => {
-            setDir(e.target.value);
-            dirLater(e.target.value);
-          }}
-          onBlur={() => void saveDefault(dir)}
-          placeholder="C:\Projects\my-app"
-          disabled={busy}
-        />
-        <button onClick={() => void browse((p) => void saveDefault(p), dir)} disabled={busy}>
-          {t('mirror.browse')}
-        </button>
-        <button className="quiet" onClick={() => void saveDefault('')} disabled={busy || !project?.rootDir}>
-          {t('proj.clear')}
-        </button>
-      </div>
       <SavedNote msg={msg} />
-
       {project && !project.rootDir && <p className="muted small" style={{ marginTop: 8 }}>{t('proj.none')}</p>}
 
-      {project?.rootDir && project.repoOk && (
-        <div className="notice calm" style={{ marginTop: 10 }}>
-          <strong>{t('proj.isRepo')}</strong>
-        </div>
-      )}
-      {project?.rootDir && !project.repoOk && (
-        <div className="notice caution" style={{ marginTop: 10 }}>
-          <strong>{t('proj.notRepo')}</strong>
-          <div className="small" style={{ marginTop: 4 }}>{project.repoProblem}</div>
-          <div className="muted small" style={{ marginTop: 6 }}>{t('proj.notRepoWhy')}</div>
-        </div>
-      )}
+      {others.map((o) => (
+        <ProjectEntry
+          key={o.name}
+          name={o.name}
+          dir={o.rootDir}
+          repoOk={o.repoOk}
+          repoProblem={o.repoProblem}
+          mirror={o.mirror}
+          busy={busy}
+          onName={(v) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, name: v } : x))) }, () => t('proj.nameSaved'))}
+          onDir={(v) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, rootDir: v } : x))) }, () => t('proj.othersSaved', { n: others.length }))}
+          onBrowse={() =>
+            void browse(
+              (path) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, rootDir: path } : x))) }, () => t('proj.othersSaved', { n: others.length })),
+              o.rootDir,
+            )
+          }
+          onRemove={() => void removeOther(o.name)}
+          removeLabel={t('proj.otherRemove')}
+          onFolders={(sel) => saveOtherFolders(o.name, sel)}
+        />
+      ))}
 
-      {project?.rootDir && (
-        <details className="small" style={{ marginTop: 10 }}>
-          <summary>
-            {t('proj.folders')} — {project.rootDir}
-          </summary>
-          <ProjectFolders rootDir={project.rootDir} value={project.mirror} onSave={saveDefaultFolders} busy={busy} />
-        </details>
-      )}
-
-      <h3 id="others">{t('proj.others')}</h3>
+      <h3 id="others">{t('proj.addTitle')}</h3>
       <p className="muted small">{t('proj.othersIntro')}</p>
-      {others.length === 0 ? (
-        <p className="muted small">{t('proj.othersNone')}</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>{t('proj.otherName')}</th>
-              <th>{t('proj.otherDir')}</th>
-              <th />
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {others.map((o) => (
-              <Fragment key={o.name}>
-                <tr>
-                  <td>
-                    <strong>{o.name}</strong>
-                  </td>
-                  <td className="small">{o.rootDir}</td>
-                  <td className="small">
-                    <span className={`badge ${o.repoOk ? 'done' : ''}`} title={o.repoProblem}>
-                      {o.repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
-                    </span>
-                  </td>
-                  <td>
-                    <button className="quiet" onClick={() => void removeOther(o.name)} disabled={busy}>
-                      {t('proj.otherRemove')}
-                    </button>
-                  </td>
-                </tr>
-                <tr>
-                  <td colSpan={4} style={{ paddingTop: 0 }}>
-                    <details className="small">
-                      <summary>{t('proj.folders')}</summary>
-                      <ProjectFolders rootDir={o.rootDir} value={o.mirror} onSave={(sel) => saveOtherFolders(o.name, sel)} busy={busy} />
-                    </details>
-                  </td>
-                </tr>
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
-      )}
       <div className="row" style={{ marginTop: 8 }}>
         <input
           type="text"
-          aria-label={t('proj.otherName')}
+          aria-label={t('proj.entryName')}
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder={t('proj.otherName')}
+          placeholder={t('proj.entryName')}
           disabled={busy}
           style={{ width: 160 }}
         />
         <input
           type="text"
           className="grow"
-          aria-label={t('proj.otherDir')}
+          aria-label={t('proj.entryDir')}
           value={newDir}
           onChange={(e) => setNewDir(e.target.value)}
           placeholder="C:\Projects\my-app-tests"
@@ -376,6 +327,101 @@ function ProjectSection() {
  * tree that fills the lists by clicking. Saved per project, because a test suite wants its
  * `tests` and `fixtures` where an API wants its `src` and nothing else.
  */
+/**
+ * One project, however it is held.
+ *
+ * The default lives in `project.rootDir`/`project.name` and the others in `project.others[]`,
+ * which is a difference in where the setting is stored and was never a difference the operator
+ * should have had to see. They read and write the same way here; only the chip says which one
+ * new sessions start in.
+ */
+function ProjectEntry({
+  name,
+  dir,
+  repoOk,
+  repoProblem,
+  mirror,
+  isDefault = false,
+  busy,
+  onName,
+  onNameBlur,
+  onDir,
+  onDirBlur,
+  onBrowse,
+  onRemove,
+  removeLabel,
+  onFolders,
+}: {
+  name: string;
+  dir: string;
+  repoOk: boolean;
+  repoProblem?: string;
+  mirror?: ProjectMirrorSelection;
+  isDefault?: boolean;
+  busy: boolean;
+  onName: (value: string) => void;
+  onNameBlur?: () => void;
+  onDir: (value: string) => void;
+  onDirBlur?: () => void;
+  onBrowse: () => void;
+  onRemove?: () => void;
+  removeLabel: string;
+  onFolders: (sel: ProjectMirrorSelection) => Promise<boolean>;
+}) {
+  const { t } = useT();
+  return (
+    <div className="panel inner" style={{ marginTop: 10 }}>
+      <div className="row">
+        <div style={{ width: 200 }}>
+          <label>{t('proj.entryName')}</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => onName(e.target.value)}
+            onBlur={onNameBlur}
+            placeholder={dir ? (dir.replace(/[\/]+$/, '').split(/[\/]/).pop() ?? '') : t('proj.namePlaceholder')}
+            disabled={busy}
+          />
+        </div>
+        <div className="grow">
+          <label>{t('proj.entryDir')}</label>
+          <input type="text" value={dir} onChange={(e) => onDir(e.target.value)} onBlur={onDirBlur} placeholder="C:\Projects\my-app" disabled={busy} />
+        </div>
+        <button onClick={onBrowse} disabled={busy}>
+          {t('mirror.browse')}
+        </button>
+        {onRemove && (
+          <button className="quiet" onClick={onRemove} disabled={busy}>
+            {removeLabel}
+          </button>
+        )}
+      </div>
+
+      <div className="row small" style={{ marginTop: 6 }}>
+        {isDefault && (
+          <span className="chip" title={t('proj.isDefaultWhy')}>
+            {t('proj.isDefault')}
+          </span>
+        )}
+        {dir && (
+          <span className={`badge ${repoOk ? 'done' : ''}`} title={repoOk ? t('proj.isRepo') : repoProblem}>
+            {repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
+          </span>
+        )}
+        {dir && !repoOk && <span className="muted">{repoProblem || t('proj.notRepoWhy')}</span>}
+      </div>
+
+      {dir && (
+        <details className="small" style={{ marginTop: 8 }}>
+          <summary>{t('proj.folders')}</summary>
+          <ProjectFolders rootDir={dir} value={mirror} onSave={onFolders} busy={busy} />
+        </details>
+      )}
+    </div>
+  );
+}
+
+
 function ProjectFolders({
   rootDir,
   value,
@@ -409,6 +455,25 @@ function ProjectFolders({
   };
   const writeLater = useDebouncedSave(write);
 
+  /*
+   * One way in for both lists, because there were three and only one of them saved.
+   *
+   * The two text areas and the tree are three ways of editing the same pair of lists, and each
+   * had a handler of its own: the "out" box saved, the "in" box only filled the field, and the
+   * tree filled both fields and saved neither. So typing a directory to include, or clicking one
+   * in the tree, looked exactly like it had worked and was gone by the next load — and the only
+   * reason it ever seemed to work was that toggling `.gitignore` or `.env` afterwards wrote
+   * whatever happened to be in the boxes at that moment.
+   *
+   * Both lists are passed explicitly rather than read back out of state, because a save
+   * scheduled from a change cannot see the state that change has not applied yet.
+   */
+  const apply = (nextInclude: string[], nextExclude: string[]) => {
+    setInclude(nextInclude.join('\n'));
+    setExclude(nextExclude.join('\n'));
+    writeLater({ includeDirs: nextInclude, excludeDirs: nextExclude });
+  };
+
   const toggleEnv = async (on: boolean) => {
     if (on && !(await confirmDialog(t('mirror.envWarn')))) return;
     setIncludeEnvFiles(on);
@@ -421,7 +486,14 @@ function ProjectFolders({
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="grow">
           <label>{t('mirror.include')}</label>
-          <textarea value={include} onChange={(e) => setInclude(e.target.value)} placeholder={'src\ntests'} style={{ minHeight: 70 }} />
+          <textarea
+            value={include}
+            onChange={(e) => {
+              setInclude(e.target.value);
+              writeLater({ includeDirs: lines(e.target.value), excludeDirs: lines(exclude) });
+            }}
+            placeholder={'src\ntests'} style={{ minHeight: 70 }}
+          />
         </div>
         <div className="grow">
           <label>{t('mirror.exclude')}</label>
@@ -429,7 +501,7 @@ function ProjectFolders({
             value={exclude}
             onChange={(e) => {
               setExclude(e.target.value);
-              writeLater({ excludeDirs: lines(e.target.value) });
+              writeLater({ includeDirs: lines(include), excludeDirs: lines(e.target.value) });
             }}
             placeholder={'src/generated'}
             style={{ minHeight: 70 }}
@@ -442,10 +514,7 @@ function ProjectFolders({
         includeEnvFiles={includeEnvFiles}
         include={lines(include)}
         exclude={lines(exclude)}
-        onChange={(inc, exc) => {
-          setInclude(inc.join('\n'));
-          setExclude(exc.join('\n'));
-        }}
+        onChange={apply}
       />
       <div className="option">
         <label>

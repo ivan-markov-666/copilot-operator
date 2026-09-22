@@ -248,6 +248,7 @@ export const dict = {
       'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused. Continue?',
     'approval.skip': 'Skip',
     'approval.abort': 'Abort task',
+    'approval.script': 'What this script does (read it before approving)',
 
     // which model the conversation runs on
     'model.title': 'Copilot model',
@@ -809,6 +810,12 @@ export const dict = {
     'proj.setIt': 'set one',
     'proj.change': 'change it',
     'proj.others': 'Other projects',
+    'proj.isDefault': 'the default',
+    'proj.isDefaultWhy': 'New sessions start in this one, and the plan brief offers it first.',
+    'proj.entryName': 'Name',
+    'proj.entryDir': 'Folder',
+    'proj.addTitle': 'Add another project',
+    'proj.listIntro': 'Every project this machine works in. The first is the default: new sessions start there. The others are named so a plan can send work to them. All of them are described the same way, and all of them save as you type.',
     'proj.othersIntro':
       'The rest of the folders you work in — a front end, a back end, the test suite — each with a short name. New sessions still start on the default above. These are offered with a button wherever a folder is chosen, and the plan brief lists them by path, so a plan across several repositories is written with the folders that exist instead of asking for each one.',
     'proj.otherName': 'Name',
@@ -1207,6 +1214,7 @@ export const dict = {
       'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват. Продължавате ли?',
     'approval.skip': 'Пропусни',
     'approval.abort': 'Прекрати задачата',
+    'approval.script': 'Какво прави този скрипт (прочетете го, преди да одобрите)',
 
     'model.title': 'Модел на Copilot',
     'model.hint':
@@ -1749,6 +1757,12 @@ export const dict = {
     'proj.setIt': 'задайте такъв',
     'proj.change': 'смени',
     'proj.others': 'Други проекти',
+    'proj.isDefault': 'по подразбиране',
+    'proj.isDefaultWhy': 'Новите сесии тръгват в този, а заданието за плана го предлага пръв.',
+    'proj.entryName': 'Име',
+    'proj.entryDir': 'Папка',
+    'proj.addTitle': 'Добави още един проект',
+    'proj.listIntro': 'Всички проекти, в които тази машина работи. Първият е по подразбиране: новите сесии тръгват там. Останалите са именувани, за да може план да прати работа към тях. Всички се описват по един и същи начин и всички се запазват, докато пишете.',
     'proj.othersIntro':
       'Останалите папки, по които работите — front end, back end, тестовете — всяка с кратко име. Новите сесии пак тръгват от папката по подразбиране горе. Тези се предлагат с бутон навсякъде, където се избира папка, а заданието за план ги изброява с пътищата им, така че план през няколко хранилища се пише с папките, които съществуват, вместо да пита за всяка.',
     'proj.otherName': 'Име',

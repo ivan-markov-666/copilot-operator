@@ -15,6 +15,7 @@
 import { extname } from 'node:path';
 import type { Step } from '../protocol/replySchema.js';
 import { effectiveShell, type Shell } from './shells.js';
+import { dangerousInScript, dangerousRefusal } from './dangerous.js';
 import { findShellExecuteTrap } from './shellExecuteTrap.js';
 
 export type PolicyDecision =
@@ -71,9 +72,31 @@ export function commandRefusal(
   denyPatterns: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
+  // The built-in refusals first, because the operator's list can add to them and must not be
+  // able to stand in for them: a config written before they existed, or edited since, still gets
+  // them. See `dangerous.ts` for what is on the list and why each one is.
+  const technique = dangerousRefusal(command);
+  if (technique) return technique;
   const hit = matchDenyPattern(command, denyPatterns);
   if (hit) return `matches deny pattern /${hit}/`;
   return findShellExecuteTrap(command, shell, env);
+}
+
+/**
+ * Why a downloaded script must not be run, or null.
+ *
+ * The gap this closes was the whole of it. A download step was screened on its *file name* and
+ * its arguments and never on its contents, so `run.ps1` — an allowed extension, an innocent
+ * name — passed the gate carrying anything at all inside it. The runner then started it with
+ * `pwsh -File`, and whatever the script did next was a child of this process: to anything
+ * watching the machine, this tool ran it. The file name was the one thing about it nobody
+ * needed to see.
+ */
+export function scriptRefusal(fileName: string, body: string, denyPatterns: string[]): string | null {
+  const technique = dangerousInScript(fileName, body);
+  if (technique) return technique;
+  const hit = matchDenyPattern(body, denyPatterns);
+  return hit ? `${fileName} matches deny pattern /${hit}/` : null;
 }
 
 /**

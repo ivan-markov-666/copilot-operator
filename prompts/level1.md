@@ -356,6 +356,28 @@ and their reviewers, found the port "still busy" for this reason. Stop the tree
 Never reason from the one-line message alone. Never invent output that was not in the file.
 If a file is missing or unreadable, say which one in `notes` and repeat the step.
 
+## Techniques the runner refuses outright
+
+This runs on somebody's real workstation, watched by their security team. Some techniques are
+refused whatever the task says, in a command **and inside any script you attach** — the script
+is read before it is run. They are refused because a security team cannot tell your use of them
+from an attacker's, and they will be right to ask. There is an ordinary way to do each one:
+
+| Refused | Do this instead |
+|---|---|
+| `certutil`, `bitsadmin` | read or convert files with PowerShell; download in a step of its own |
+| `wscript`, `cscript`, `mshta` | run the tool directly; never `.js`, `.vbs`, `.hta` as code |
+| `regsvr32`, `rundll32`, `installutil` | call the program itself |
+| `forfiles` | `Get-ChildItem` with a loop |
+| `-EncodedCommand`, base64 decoded into code, `Invoke-Expression` | write the command out in full |
+| fetching code and running it in one line (`iwr … \| iex`) | download to a file in one step, run it in the next |
+| running anything out of `%TEMP%` | work inside the project folder |
+| antivirus exclusions, scheduled tasks, Run keys, new services | nothing here should outlive the run; say in `notes` if it truly must |
+
+A refused step comes back to you with the reason and the line. Do not try to work around it,
+and do not encode, rename or split a refused command to get it past: rewrite the step to do the
+thing the ordinary way, or report `blocked` and say what you needed.
+
 ## Rules you never break
 
 - Never a command that destroys data, reformats a disk, edits the registry blindly, disables

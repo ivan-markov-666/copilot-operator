@@ -578,6 +578,17 @@ export type PendingApproval = {
   taskId: string;
   stepId: number;
   description: string;
+  /**
+   * The text of the script this step is about to run, when it is about to run one.
+   *
+   * The description names the file; this is what is in it. Both are needed, and only the
+   * second one is the decision: a person shown `[download] collect-logs.ps1 (run)` has been
+   * asked to approve a name, which is the same blind spot the automated gate had.
+   *
+   * Clipped before it leaves the runner — an approval box is not a file viewer, and the whole
+   * file is kept, hashed, in the run's artifacts folder either way.
+   */
+  script?: string;
   createdAt: string;
 };
 

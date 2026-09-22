@@ -427,7 +427,16 @@ export type Session = {
   pending?: Approval[];
 };
 
-export type Approval = { id: string; sessionId: string; taskId: string; stepId: number; description: string; createdAt: string };
+export type Approval = {
+  id: string;
+  sessionId: string;
+  taskId: string;
+  stepId: number;
+  description: string;
+  /** The text of the script this step would run, when it would run one. See `PendingApproval`. */
+  script?: string;
+  createdAt: string;
+};
 
 /** One thing wrong with a pasted plan, with the place in the document it is wrong at. */
 export type PlanIssue = { path: string; message: string };

@@ -32,7 +32,7 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, commandRefusal } from '../exec/policy.js';
+import { describeStep, commandRefusal, scriptRefusal } from '../exec/policy.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -1321,6 +1321,8 @@ export async function runTask(
           break;
         }
         let scriptPath: string | undefined;
+        /** The downloaded script's text, so the operator approves what it says and not its name. */
+        let scriptBody: string | undefined;
 
         if (step.type === 'download') {
           const target = join(artifactsDir, `${iterations}-${step.id}-${step.file}`);
@@ -1335,6 +1337,27 @@ export async function runTask(
           }
           if (!step.run) {
             results.push({ ...refusedResult(step, 'saved only'), exitCode: 0, outcome: 'completed', stderr: '', stdout: `Saved to ${scriptPath}\n` });
+            continue;
+          }
+
+          /*
+           * What is inside it, before it is started.
+           *
+           * The gate above screened the file's *name* and its arguments, and that was the whole
+           * of it: an allowed extension and an innocent name let anything through, and the next
+           * line started it with `pwsh -File`. Whatever it then did was a child of this process,
+           * so to anything watching the machine this tool did it — which is exactly how a
+           * security team comes to be asking why an automation framework decoded a base64 blob
+           * into a script and ran it. The script is read and screened here, where refusing it
+           * still costs nothing, and the refusal goes back to the chat naming the line.
+           */
+          scriptBody = await readFile(scriptPath, 'utf8').catch(() => '');
+          const body = scriptBody;
+          const unsafe = scriptRefusal(step.file, body, cfg.execution.denyPatterns);
+          if (unsafe) {
+            sink.event('script-refused', { id: step.id, file: step.file, path: scriptPath, reason: unsafe },
+              `step ${step.id}: the downloaded script was not run — ${unsafe}`, 'warn');
+            results.push(refusedResult(step, unsafe));
             continue;
           }
         }
@@ -1387,7 +1410,7 @@ export async function runTask(
           t.status = 'waiting-approval';
         });
         sink.event('step-proposed', { id: step.id, description: describeStep(step, scriptPath) }, `step ${step.id}: ${describeStep(step, scriptPath)}`);
-        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, scriptPath });
+        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, scriptPath, scriptBody });
         await setTask((t) => {
           t.status = 'running';
         });
