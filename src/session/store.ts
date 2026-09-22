@@ -42,6 +42,17 @@ const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
  */
 export const DEFAULT_REVIEW: ReviewSettings = { enabled: true, model: '' };
 
+/**
+ * The two standing texts the operator gives the plan persona, kept apart because they change
+ * at different rates.
+ *
+ * `organisation` is the slow one: how the company works, and where the projects are. Written
+ * once and read for months. `work` is the fast one: what this group of tasks is about, which
+ * ticket, which constraints — replaced whenever the work changes. Kept in one field they were
+ * edited together, and the half that never changes was rewritten every time the other did.
+ */
+export type ContextKind = 'organisation' | 'work';
+
 export const DEFAULT_VCS: VersionControl = {
   enabled: true,
   repoDir: '',
@@ -104,9 +115,9 @@ export class SessionStore {
    * the machine is laid out. One customised copy in `data/organisation.md`, whatever language
    * it is written in; the shipped default comes per language from the prompts folder.
    */
-  async getOrganisation(lang: 'en' | 'bg'): Promise<{ content: string; customised: boolean; example: string }> {
-    const custom = join(this.dir, 'organisation.md');
-    const shipped = join(this.defaultLevel1Path, '..', `organisation.${lang}.md`);
+  async getContext(kind: ContextKind, lang: 'en' | 'bg'): Promise<{ content: string; customised: boolean; example: string }> {
+    const custom = join(this.dir, `context-${kind}.md`);
+    const shipped = join(this.defaultLevel1Path, '..', `${kind}.${lang}.md`);
     const example = await readFile(shipped, 'utf8').catch(() => '');
     if (existsSync(custom)) return { content: await readFile(custom, 'utf8'), customised: true, example };
     // Nothing until the operator writes it: an empty field is what makes the persona ask.
@@ -114,12 +125,12 @@ export class SessionStore {
     return { content: '', customised: false, example };
   }
 
-  async setOrganisation(content: string): Promise<void> {
-    await this.atomicWrite(join(this.dir, 'organisation.md'), content);
+  async setContext(kind: ContextKind, content: string): Promise<void> {
+    await this.atomicWrite(join(this.dir, `context-${kind}.md`), content);
   }
 
-  async resetOrganisation(): Promise<void> {
-    await rm(join(this.dir, 'organisation.md'), { force: true });
+  async resetContext(kind: ContextKind): Promise<void> {
+    await rm(join(this.dir, `context-${kind}.md`), { force: true });
   }
 
   // --- the model catalogue ----------------------------------------------------------------

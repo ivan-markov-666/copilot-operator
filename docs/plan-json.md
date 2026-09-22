@@ -35,20 +35,29 @@ plan's, the work's or the machine's — and which button fixes it. For the end i
 acceptance criterion to evidence in the work export and proposes a read-only task for anything
 only claimed.
 
-The persona is called **Kerrigan**, and it has two levels. The **software level** is this
-project's and does not change: what the bot is, the format, the exports, the failure words,
-how to validate. The **organisation level** is the operator's: where tickets come from, which
-company sources to search (OneDrive, SharePoint, Teams, the wiki, the ticket system), how the
-machine is laid out (the Desktop mirror and its file names), the team's conventions — branch
-naming, how a pull request is made, standards, templates. It starts **empty**: while it is,
-the brief carries an interview phase before everything else, in which Kerrigan asks about all
-of that, writes the text, and asks the operator to paste it into "Organisation level (yours)"
-on the import page and save. `prompts/organisation.<lang>.md` is the example shown inside that
-interview, not the default; the saved text lives in `data/organisation.md` in whatever language
-it is written in, travels with every later copy, and the questions stop. Delete it and they
-come back. The copy button takes both parts; the page shows each on its own so it is clear
-which is which. `GET /api/plan/brief?lang=bg` returns the whole and the parts;
-`GET|PUT|DELETE /api/organisation` is the operator's text.
+The persona is called **Kerrigan**, and what it is given comes in three parts. The **software
+part** is this project's and does not change: what the bot is, the format, the exports, the
+failure words, how to validate. The other two are the operator's, and they are separate because
+they change at different rates:
+
+- **The organisation and the projects** — how the company works (tickets, the sources Kerrigan
+  may search, branch and commit conventions, how a pull request is made, standards, templates,
+  who signs off) and, for each project, its path, what is inside it, and how Kerrigan can read
+  its code from the chat. Written once and read for months.
+- **This work** — the ticket, the goal, which projects it touches, what has already been decided
+  or tried, what must not change meanwhile. Replaced whenever the work is.
+
+Both start **empty**. While either is, the brief carries an interview phase before everything
+else: Kerrigan asks about both, then hands back **two JSON documents** and tells the operator
+which field each goes in. `prompts/organisation.<lang>.md` and `prompts/work.<lang>.md` are the
+shapes it is shown, not defaults; what the operator pastes lives in `data/context-organisation.md`
+and `data/context-work.md`, travels with every later copy of the brief, and stops the questions.
+Emptying a field brings them back. The import page shows all three parts and saves the two
+editable ones as they are typed. `GET /api/plan/brief?lang=bg` returns the whole and the parts;
+`GET|PUT|DELETE /api/context/organisation` and `…/work` are the operator's texts.
+
+Kerrigan is also told never to end a message without saying what happens next — what to paste
+where, what to press, which answer it is waiting on.
 
 There is nothing else to configure on the import page. The brief used to be assembled from two
 answers given there — version control on or off, and which folder — and both have moved into

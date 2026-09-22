@@ -525,6 +525,10 @@ export type Story = {
   live: boolean;
 };
 
+/** Which of the operator's two standing texts: the slow one, or the one per group of tasks. */
+export type ContextKind = 'organisation' | 'work';
+export type ContextText = { content: string; customised: boolean; example: string };
+
 export type SessionEvent = {
   at: string;
   sessionId: string;
@@ -653,11 +657,23 @@ export const api = {
    */
   /** The persona whole (`text`), and in its two parts: the software's (fixed) and the organisation's (editable). */
   planBrief: (lang: string) =>
-    call<{ text: string; software: string; organisation: string; customised: boolean; example: string }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
-  organisation: (lang: string) => call<{ content: string; customised: boolean; example: string }>(`/organisation?lang=${encodeURIComponent(lang)}`),
-  setOrganisation: (content: string) => call<{ ok: true }>('/organisation', { method: 'PUT', body: JSON.stringify({ content }) }),
-  resetOrganisation: (lang: string) =>
-    call<{ content: string; customised: boolean; example: string }>(`/organisation?lang=${encodeURIComponent(lang)}`, { method: 'DELETE' }),
+    call<{
+      text: string;
+      software: string;
+      organisation: string;
+      customised: boolean;
+      example: string;
+      work: string;
+      workCustomised: boolean;
+      workExample: string;
+    }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
+  /** One of the operator's two standing texts for the plan persona. */
+  context: (kind: ContextKind, lang: string) =>
+    call<ContextText>(`/context/${kind}?lang=${encodeURIComponent(lang)}`),
+  setContext: (kind: ContextKind, content: string) =>
+    call<{ ok: true }>(`/context/${kind}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+  resetContext: (kind: ContextKind, lang: string) =>
+    call<ContextText>(`/context/${kind}?lang=${encodeURIComponent(lang)}`, { method: 'DELETE' }),
   /** Checks a pasted plan and imports nothing. */
   checkPlan: (text: string) => call<PlanCheck>('/plan/check', { method: 'POST', body: JSON.stringify({ text }) }),
   /** Creates everything the plan describes, and starts none of it. */

@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, type PlanCheck, type PlanImport } from '../../lib/api';
+import { api, type ContextKind, type PlanCheck, type PlanImport } from '../../lib/api';
 import { confirmDialog } from '../dialog';
 import { useT, useFmtTime } from '../../lib/i18n';
 
@@ -21,46 +21,16 @@ export default function ImportPage() {
   const { t, locale } = useT();
   const fmtTime = useFmtTime();
 
-  // Step 1: the persona. Two parts: the software's, shown and fixed, and the organisation's,
-  // edited here and saved on this machine. The copy button takes the assembled whole.
+  // Step 1: the persona. Three parts: the software's, fixed and shown, and the operator's two
+  // texts — the organisation with its projects, which changes rarely, and this work, which
+  // changes with every group of tasks. The copy button takes all of it as one.
   const [brief, setBrief] = useState('');
   const [software, setSoftware] = useState('');
-  const [org, setOrg] = useState('');
-  const [orgSaved, setOrgSaved] = useState('');
-  const [orgCustomised, setOrgCustomised] = useState(false);
-  const [orgExample, setOrgExample] = useState('');
-  const [orgMsg, setOrgMsg] = useState('');
   const [briefOpen, setBriefOpen] = useState(false);
   const [copied, setCopied] = useState('');
   const [briefErr, setBriefErr] = useState('');
-
-  const saveOrg = async () => {
-    try {
-      await api.setOrganisation(org);
-      const r = await api.planBrief(locale);
-      setBrief(r.text);
-      setOrgSaved(r.organisation);
-      setOrgCustomised(r.customised);
-      setOrgMsg(t('plan.orgSaved'));
-    } catch (e) {
-      setOrgMsg((e as Error).message);
-    }
-  };
-
-  const resetOrg = async () => {
-    if (!(await confirmDialog(t('plan.orgResetConfirm')))) return;
-    try {
-      const r = await api.resetOrganisation(locale);
-      setOrg(r.content);
-      setOrgSaved(r.content);
-      setOrgCustomised(r.customised);
-      const b = await api.planBrief(locale);
-      setBrief(b.text);
-      setOrgMsg(t('plan.orgShipped'));
-    } catch (e) {
-      setOrgMsg((e as Error).message);
-    }
-  };
+  /** Bumped when a context text is saved, so the assembled brief is fetched again. */
+  const [contextVersion, setContextVersion] = useState(0);
 
   // Step 2: the answer.
   const [text, setText] = useState('');
@@ -83,10 +53,6 @@ export default function ImportPage() {
         if (!cancelled) {
           setBrief(r.text);
           setSoftware(r.software);
-          setOrg(r.organisation);
-          setOrgSaved(r.organisation);
-          setOrgCustomised(r.customised);
-          setOrgExample(r.example);
           setBriefErr('');
         }
       })
@@ -96,7 +62,7 @@ export default function ImportPage() {
     return () => {
       cancelled = true;
     };
-  }, [locale]);
+  }, [locale, contextVersion]);
 
   const copy = useCallback(
     async (what: string, value: string) => {
@@ -206,23 +172,12 @@ export default function ImportPage() {
           <textarea readOnly value={software} style={{ minHeight: 380, marginTop: 10 }} />
         </details>
 
-        {/* The organisation's part: theirs, edited in place, saved on this machine. */}
-        <details style={{ marginTop: 8 }} open>
-          <summary>
-            {t('plan.orgPart')} <span className="muted small">— {orgCustomised ? t('plan.orgCustomised') : t('plan.orgShipped')}</span>
-          </summary>
-          <p className="muted small" style={{ marginTop: 8 }}>{t('plan.orgHint')}</p>
-          <textarea value={org} onChange={(e) => setOrg(e.target.value)} placeholder={orgExample} style={{ minHeight: 260 }} />
-          <div className="row" style={{ marginTop: 8 }}>
-            <button className="primary" onClick={() => void saveOrg()} disabled={org === orgSaved}>
-              {t('plan.orgSave')}
-            </button>
-            <button className="quiet" onClick={() => void resetOrg()} disabled={!orgCustomised}>
-              {t('plan.orgReset')}
-            </button>
-            {orgMsg && <span className="muted small">{orgMsg}</span>}
-          </div>
-        </details>
+        {/* The operator's two texts. Separate because they change at different rates: the
+            organisation and its projects are written once and read for months, while the work
+            is replaced whenever the work is. Kept in one field, the half that never changes was
+            rewritten every time the other did. */}
+        <ContextField kind="organisation" onSaved={() => setContextVersion((v) => v + 1)} />
+        <ContextField kind="work" onSaved={() => setContextVersion((v) => v + 1)} />
       </div>
 
       <div className="panel">
@@ -411,5 +366,101 @@ export default function ImportPage() {
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * One of the operator's two standing texts for Kerrigan: shown, edited, saved as it is typed.
+ *
+ * Both hold whatever the persona handed back — JSON, by the time it is asked properly — and
+ * both are opaque to this page: it stores the text and hands it to the brief. The example the
+ * persona is shown sits in the placeholder, so an empty field says what belongs in it without
+ * pretending to be an answer.
+ */
+function ContextField({ kind, onSaved }: { kind: ContextKind; onSaved: () => void }) {
+  const { t, locale } = useT();
+  const [value, setValue] = useState('');
+  const [saved, setSaved] = useState('');
+  const [example, setExample] = useState('');
+  const [customised, setCustomised] = useState(false);
+  const [msg, setMsg] = useState('');
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .context(kind, locale)
+      .then((r) => {
+        if (cancelled) return;
+        setValue(r.content);
+        setSaved(r.content);
+        setExample(r.example);
+        setCustomised(r.customised);
+      })
+      .catch((e: Error) => setMsg(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, locale]);
+
+  const write = async (text: string) => {
+    try {
+      await api.setContext(kind, text);
+      setSaved(text);
+      setCustomised(text.trim() !== '');
+      setMsg(t('plan.ctxSaved'));
+      onSaved();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+
+  const later = (text: string) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => void write(text), 900);
+  };
+
+  const clear = async () => {
+    if (!(await confirmDialog(t('plan.ctxClearConfirm')))) return;
+    try {
+      const r = await api.resetContext(kind, locale);
+      setValue(r.content);
+      setSaved(r.content);
+      setCustomised(r.customised);
+      setMsg(t('plan.ctxCleared'));
+      onSaved();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+
+  const label = kind === 'organisation' ? t('plan.orgPart') : t('plan.workPart');
+  const hint = kind === 'organisation' ? t('plan.orgHint') : t('plan.workHint');
+
+  return (
+    <details style={{ marginTop: 8 }} open>
+      <summary>
+        {label} <span className="muted small">— {customised ? t('plan.ctxWritten') : t('plan.ctxEmpty')}</span>
+      </summary>
+      <p className="muted small" style={{ marginTop: 8 }}>{hint}</p>
+      <textarea
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          later(e.target.value);
+        }}
+        onBlur={() => value !== saved && void write(value)}
+        placeholder={example}
+        style={{ minHeight: 220 }}
+      />
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="quiet" onClick={() => void clear()} disabled={!customised}>
+          {t('plan.ctxClear')}
+        </button>
+        <span className="muted small" role="status">
+          {msg || t('def.savedAutomatically')}
+        </span>
+      </div>
+    </details>
   );
 }

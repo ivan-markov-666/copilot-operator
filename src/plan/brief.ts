@@ -36,6 +36,14 @@ export type BriefOptions = {
   organisation?: string;
   /** The shipped example of an organisation text, shown inside the interview while `organisation` is empty. */
   organisationExample?: string;
+  /**
+   * The operator's text for *this* group of tasks: the ticket, the goal, what an earlier
+   * attempt tried, what must not change while it happens. Replaced whenever the work changes,
+   * which is why it is not part of `organisation`.
+   */
+  work?: string;
+  /** The shipped example of a work text, shown while `work` is empty. */
+  workExample?: string;
 };
 
 export type KnownProject = {
@@ -605,67 +613,156 @@ const AFTER_BG = `
  * operator to paste and save it on the plan page. Once saved, the text is here and the
  * interview is not; delete the text and the interview is back.
  */
-const ORG_INTERVIEW_EN = (example: string) => `
-## The organisation: not described yet — do this first
+const ORG_INTERVIEW_EN = (example: string, workExample: string) => `
+## Nothing has been written down yet — do this before anything else
 
-The operator has not yet written how their organisation works, so nothing below can respect
-its conventions. Before anything else, interview them, in small batches, about:
+The operator has not yet told you how their organisation works or what this work is, so nothing
+below can respect either. This happens once. Interview them, in small batches, and then hand
+back two documents they will paste into the app and keep.
+
+**Ask about the organisation** — the part that will be true for months:
 
 - **Where work comes from**: the ticket system (Azure DevOps, Jira, GitHub, email…), what a
   ticket looks like, what the acceptance criteria are called, who writes them.
 - **Where information lives**: OneDrive, SharePoint, Teams, a wiki, a docs folder — what you
   may search through this chat, and what you must be given.
-- **The repositories and the machine**: which projects, whether the Desktop mirror is on and
-  what its folders are called, what must never be touched.
+- **The projects**: for each one, its name, its absolute path, what it is, the folders inside
+  it that matter, how you can read its code from this chat, and the commands that build, start
+  and test it. The paths under "Projects on this machine" above are the ones the app knows; ask
+  what each one actually is.
 - **Conventions**: branch naming, commit message style, how a pull request is made and who
-  reviews it, test command and coverage rules, coding standards, linters and formatters, file
-  and folder naming, templates and scaffolds that must be used, definition of done.
-- **People**: who to ask before a change to a shared component; who signs off.
+  reviews it, the test command and any coverage rule, coding standards, linters and formatters,
+  file and folder naming, the templates and scaffolds that must be used, definition of done.
+- **People**: who must be asked before a shared component changes; who signs off.
+- **What must never be touched.**
 
-Then write the answers as one text headed "## The organisation", in the style of the example
-below, and ask the operator to paste it into "Organisation level (yours)" on the Plan page and
-save it. From then on it arrives here with the brief and you will not be asked again. Only
-then go on to the phases below.
+**Then ask about this work** — the part that changes with every group of tasks: which ticket,
+the goal, which of the projects it touches, what has already been decided or tried, what must
+not change while it happens, what is still open.
 
-Example of what such a text looks like (an example, not this organisation):
+**Then hand back exactly two JSON documents, each in its own fenced \`\`\`json block, in this
+order and with nothing else between them but one line saying which is which.** No prose version,
+no Markdown: these are pasted into fields, not read.
 
+1. The organisation and the projects, in this shape:
+
+\`\`\`json
 ${example.trim()}
+\`\`\`
+
+2. This work, in this shape:
+
+\`\`\`json
+${workExample.trim()}
+\`\`\`
+
+**Then tell the operator, in one short paragraph, exactly what to do with them:** open the
+"Plan from JSON" page in copilot-operator, paste the first into **"The organisation and the
+projects"**, paste the second into **"This work"**, and press nothing else — both save
+themselves. Then press **"Copy the brief"** again and paste the result back here as a new
+conversation. From then on both documents arrive with the brief, you will not ask these
+questions again, and you can go straight to the task. Say this even if they did not ask.
 `.trim();
 
-const ORG_INTERVIEW_BG = (example: string) => `
-## Организацията: още не е описана — направи това първо
+const ORG_INTERVIEW_BG = (example: string, workExample: string) => `
+## Още нищо не е записано — направи това преди всичко останало
 
-Операторът още не е написал как работи организацията му, така че нищо по-долу не може да
-спазва правилата ѝ. Преди всичко друго го разпитай, на малки групи въпроси, за:
+Операторът още не ти е казал как работи организацията му, нито каква е тази работа, така че
+нищо по-долу не може да спазва нито едното, нито другото. Това се случва веднъж. Разпитай го на
+малки групи въпроси и после му върни два документа, които той ще постави в приложението и ще
+пази.
+
+**Питай за организацията** — частта, която ще е вярна с месеци:
 
 - **Откъде идва работата**: системата за ticket-и (Azure DevOps, Jira, GitHub, имейл…), как
   изглежда един ticket, как се наричат критериите за приемане, кой ги пише.
 - **Къде е информацията**: OneDrive, SharePoint, Teams, wiki, папка с документи — какво можеш
   да търсиш през този чат и какво трябва да ти бъде дадено.
-- **Хранилищата и машината**: кои проекти, дали огледалото на Desktop-а е включено и как се
-  казват папките му, какво никога не бива да се пипа.
+- **Проектите**: за всеки — име, абсолютен път, какво е, кои папки в него имат значение, как
+  можеш да прочетеш кода му от този чат, и командите, с които се строи, пуска и тества.
+  Пътищата под „Проектите на тази машина" по-горе са тези, които приложението знае; питай какво
+  всъщност е всеки от тях.
 - **Правила**: именуване на клонове, стил на комит съобщенията, как се прави pull request и кой
-  го преглежда, команда за тестовете и правила за покритие, стандарти за код, линтери и
-  форматери, именуване на файлове и папки, шаблони и скелети, които трябва да се ползват,
+  го преглежда, командата за тестовете и правилото за покритие, стандарти за код, линтери и
+  форматери, именуване на файлове и папки, шаблоните и скелетите, които трябва да се ползват,
   definition of done.
 - **Хора**: кого се пита преди промяна по общ компонент; кой одобрява.
+- **Какво никога не бива да се пипа.**
 
-После напиши отговорите като един текст със заглавие „## Организацията", в стила на примера
-по-долу, и помоли оператора да го постави в „Организационно ниво (ваше)" на страницата „План
-от JSON" и да го запази. От тогава нататък той идва тук със заданието и няма да питаш пак. Чак
-след това продължи с фазите по-долу.
+**После питай за тази работа** — частта, която се сменя с всяка група задачи: кой ticket, каква
+е целта, кои от проектите засяга, какво вече е решено или пробвано, какво не бива да се променя
+междувременно, какво още е отворено.
 
-Пример как изглежда такъв текст (пример, не тази организация):
+**После върни точно два JSON документа, всеки в свой ограден \`\`\`json блок, в този ред, и
+между тях само по един ред, който казва кой кой е.** Без версия в проза и без Markdown: те се
+поставят в полета, не се четат.
 
+1. Организацията и проектите, в тази форма:
+
+\`\`\`json
 ${example.trim()}
+\`\`\`
+
+2. Тази работа, в тази форма:
+
+\`\`\`json
+${workExample.trim()}
+\`\`\`
+
+**После кажи на оператора с един кратък абзац какво точно да направи с тях:** да отвори
+страницата „План от JSON" в copilot-operator, да постави първия в **„Организацията и
+проектите"**, втория в **„Тази работа"**, и да не натиска нищо друго — и двете се запазват сами.
+После да натисне пак **„Копирай заданието"** и да постави резултата тук като нов разговор.
+Оттам нататък и двата документа идват със заданието, няма да задаваш тези въпроси отново и
+можеш да минеш направо към задачата. Кажи това, дори да не те е питал.
 `.trim();
 
-function organisationSection(text: string | undefined, example: string | undefined, lang: 'en' | 'bg'): string {
+function workSection(text: string | undefined, lang: 'en' | 'bg'): string {
   const body = (text ?? '').trim();
-  if (body) return `\n${body}\n`;
+  if (!body) return '';
+  const head =
+    lang === 'bg'
+      ? `## Тази работа
+
+Какво е тази група задачи, според оператора. Отнася се за сега, не за организацията изобщо.`
+      : `## This work
+
+What this group of tasks is, in the operator's words. It is about now, not about the organisation in general.`;
+  return `
+${head}
+
+${body}
+`;
+}
+
+/**
+ * The operator's own text about the organisation and the projects, verbatim — or, while there
+ * is none, the interview that produces it.
+ *
+ * The first time the brief is copied there is nothing here, and a persona that went on planning
+ * would plan against conventions it never learned. So in that case the brief carries a phase
+ * before all others: ask, then hand back the two documents and say where they go. Once saved,
+ * the text is here and the interview is not.
+ */
+function organisationSection(
+  text: string | undefined,
+  example: string | undefined,
+  lang: 'en' | 'bg',
+  workExample: string | undefined,
+): string {
+  const body = (text ?? '').trim();
+  const head = lang === 'bg' ? '## Организацията и проектите' : '## The organisation and the projects';
+  if (body) return `
+${head}
+
+${body}
+`;
   const sample = (example ?? '').trim();
   if (!sample) return '';
-  return `\n${lang === 'bg' ? ORG_INTERVIEW_BG(sample) : ORG_INTERVIEW_EN(sample)}\n`;
+  const workSample = (workExample ?? '').trim();
+  return `
+${lang === 'bg' ? ORG_INTERVIEW_BG(sample, workSample) : ORG_INTERVIEW_EN(sample, workSample)}
+`;
 }
 
 /** The field table, with the git rows in the places they belong among the others. */
@@ -677,7 +774,10 @@ function rowsBg(): string[][] {
   return [...FIELD_ROWS_BG.slice(0, -2), ...VCS_ROWS_BG.slice(0, 1), ...FIELD_ROWS_BG.slice(-2), ...VCS_ROWS_BG.slice(1)];
 }
 
-function buildEn(projects: KnownProject[], organisation?: string, organisationExample?: string): string {
+type OperatorContext = { organisation?: string; example?: string; work?: string; workExample?: string };
+
+function buildEn(projects: KnownProject[], ctx: OperatorContext = {}): string {
+  const { organisation, example: organisationExample, work, workExample } = ctx;
   const rows = rowsEn();
 
   return `
@@ -699,7 +799,13 @@ actually does, because it changes what a good task looks like:
   browser login will hang the task.
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
-${projectsSectionEn(projects)}${organisationSection(organisation, organisationExample, 'en')}
+
+**End every message by saying what happens next.** One line, at the bottom, naming the next
+thing *the operator* does or the next thing *you* need from them: what to paste where, what to
+press, which question you are waiting on. Never stop on a finished answer and leave them to
+work out whether it is their turn — that is how a conversation that was going well turns into
+"what now?".
+${projectsSectionEn(projects)}${organisationSection(organisation, organisationExample, 'en', workExample)}${workSection(work, 'en')}
 ## Your job, in order
 
 Four phases. Do not skip ahead: the JSON is the last thing you write, and every value in it
@@ -803,7 +909,8 @@ ${AFTER_EN}
 `.trim();
 }
 
-function buildBg(projects: KnownProject[], organisation?: string, organisationExample?: string): string {
+function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
+  const { organisation, example: organisationExample, work, workExample } = ctx;
   const rows = rowsBg();
 
   return `
@@ -825,7 +932,13 @@ function buildBg(projects: KnownProject[], organisation?: string, organisationEx
   браузър, ще увисне.
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
-${projectsSectionBg(projects)}${organisationSection(organisation, organisationExample, 'bg')}
+
+**Завършвай всяко съобщение с това какво следва.** Един ред най-долу, който назовава следващото
+нещо, което *операторът* прави, или следващото нещо, което ти *искаш* от него: какво къде да
+постави, какво да натисне, на кой въпрос чакаш отговор. Никога не спирай на готов отговор и не
+го оставяй сам да гадае негов ли е ходът — така разговор, който е вървял добре, свършва с
+„и сега какво?".
+${projectsSectionBg(projects)}${organisationSection(organisation, organisationExample, 'bg', workExample)}${workSection(work, 'bg')}
 ## Какво трябва да направиш, по ред
 
 Четири фази. Не прескачай: JSON-ът е последното, което пишеш, и всяка стойност в него идва
@@ -947,5 +1060,8 @@ export function planBrief(opts: BriefOptions | string = {}): string {
   const projects = typeof opts === 'string' ? [] : (opts.projects ?? []);
   const organisation = typeof opts === 'string' ? undefined : opts.organisation;
   const example = typeof opts === 'string' ? undefined : opts.organisationExample;
-  return lang === 'bg' ? buildBg(projects, organisation, example) : buildEn(projects, organisation, example);
+  const work = typeof opts === 'string' ? undefined : opts.work;
+  const workExample = typeof opts === 'string' ? undefined : opts.workExample;
+  const ctx = { organisation, example, work, workExample };
+  return lang === 'bg' ? buildBg(projects, ctx) : buildEn(projects, ctx);
 }

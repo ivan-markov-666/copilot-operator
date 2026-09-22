@@ -61,37 +61,44 @@ for (const lang of ['en', 'bg'] as const) {
  * model is told to use them as written and still to ask which of them the work is about.
  */
 /*
- * The persona has three jobs and two levels.
+ * The persona has three jobs, and the operator's part of it is two texts.
  *
  * Planning the JSON was the whole brief; a task that failed then left the operator alone with
- * the register. The software part now says how to read the three exports and the failure
- * words, and how to check the finished run against the ticket. The organisation's part — where
- * tickets come from, what to search, how the machine is laid out — is the operator's text and
- * goes in verbatim, under its own heading, only when given.
+ * the register. The software part now also says how to read the three exports and the failure
+ * words, and how to check the finished run against the ticket. The operator's part is split:
+ * the organisation with its projects, written once and read for months, and this work, replaced
+ * whenever the work is. While either is empty the brief interviews first and asks for both back
+ * as JSON, naming the field each goes in.
  */
-console.log('\n--- the persona plans, runs and validates, and carries the organisation text ---');
+console.log('\n--- the persona plans, runs and validates, and carries the operator two texts ---');
 for (const lang of ['en', 'bg'] as const) {
-  const withOrg = planBrief({ lang, organisation: '## The organisation\n\nTickets come from JIRA-PAY. Search the Payments wiki first.' });
+  const withOrg = planBrief({ lang, organisation: 'Tickets come from JIRA-PAY. Search the Payments wiki first.', work: 'PBI-77: add the export button.' });
   const bare = planBrief({ lang });
   console.log(
     `${lang}`,
-    '| reads exports:', /whyItFailed/.test(withOrg) && /(runner|runner)/.test(withOrg) ? 'yes' : 'NO',
+    '| reads exports:', /whyItFailed/.test(withOrg) ? 'yes' : 'NO',
     '| failure words:', /limit-reached/.test(withOrg) && /blocked/.test(withOrg) ? 'yes' : 'NO',
     '| validates against the ticket:', /(claimed only|само твърдение)/.test(withOrg) ? 'yes' : 'NO',
     '| takes a ticket:', /(acceptance\s+criteria|критериите\s+за\s+приемане)/.test(withOrg) ? 'yes' : 'NO',
-    '| org text in:', withOrg.includes('JIRA-PAY') && withOrg.includes('Payments wiki') ? 'yes' : 'NO',
-    '| org text absent when not given:', !bare.includes('JIRA-PAY') ? 'yes' : 'NO',
-    '| org before the job list:', withOrg.indexOf('JIRA-PAY') < withOrg.indexOf(lang === 'en' ? '## Your job, in order' : '## Какво трябва да направиш') ? 'yes' : 'NO',
+    '| always says what is next:', /(End every message by saying what happens next|Завършвай всяко съобщение с това какво следва)/.test(withOrg) ? 'yes' : 'NO',
   );
-  // Nothing written yet: the brief interviews first, showing the shipped text as an example only.
-  const asking = planBrief({ lang, organisationExample: '## The organisation\n\nEXAMPLE-ONLY text.' });
-  const notAsking = planBrief({ lang, organisation: 'Real text.', organisationExample: 'EXAMPLE-ONLY' });
+  console.log(
+    `${lang} two texts`,
+    '| organisation in:', withOrg.includes('JIRA-PAY') && /(## The organisation and the projects|## Организацията и проектите)/.test(withOrg) ? 'yes' : 'NO',
+    '| work in:', withOrg.includes('PBI-77') && /(## This work|## Тази работа)/.test(withOrg) ? 'yes' : 'NO',
+    '| organisation first:', withOrg.indexOf('JIRA-PAY') < withOrg.indexOf(lang === 'en' ? '## Your job, in order' : '## Какво трябва да направиш') ? 'yes' : 'NO',
+    '| neither when not given:', !bare.includes('JIRA-PAY') && !bare.includes('PBI-77') ? 'yes' : 'NO',
+  );
+  const asking = planBrief({ lang, organisationExample: '{ "organisation": "EXAMPLE-ONLY" }', workExample: '{ "work": "WORK-EXAMPLE-ONLY" }' });
+  const notAsking = planBrief({ lang, organisation: 'Real text.', organisationExample: 'EXAMPLE-ONLY', workExample: 'WORK-EXAMPLE-ONLY' });
   console.log(
     `${lang} interview`,
-    '| asks when empty:', /(not described yet|още не е описана)/.test(asking) && asking.includes('EXAMPLE-ONLY') ? 'yes' : 'NO',
+    '| asks when empty:', /(before anything else|преди всичко останало)/.test(asking) ? 'yes' : 'NO',
+    '| shows both examples:', asking.includes('EXAMPLE-ONLY') && asking.includes('WORK-EXAMPLE-ONLY') ? 'yes' : 'NO',
+    '| asks for two JSON documents:', /(exactly two JSON documents|точно два JSON документа)/.test(asking) ? 'yes' : 'NO',
+    '| says where each goes:', /(Plan from JSON|План от JSON)/.test(asking) && /(This work|Тази работа)/.test(asking) ? 'yes' : 'NO',
     '| names the conventions:', /(branch naming|именуване на клонове)/.test(asking) && /(pull request)/.test(asking) ? 'yes' : 'NO',
-    '| says where to paste:', /(Organisation level \(yours\)|Организационно ниво \(ваше\))/.test(asking) ? 'yes' : 'NO',
-    '| silent once written:', !/(not described yet|още не е описана)/.test(notAsking) && !notAsking.includes('EXAMPLE-ONLY') ? 'yes' : 'NO',
+    '| silent once written:', !/(before anything else|преди всичко останало)/.test(notAsking) && !notAsking.includes('EXAMPLE-ONLY') ? 'yes' : 'NO',
     '| is Kerrigan:', /Kerrigan/.test(asking) ? 'yes' : 'NO',
   );
 }

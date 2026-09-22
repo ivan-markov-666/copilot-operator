@@ -10,6 +10,7 @@ import type { Response } from 'express';
 import { Observable } from 'rxjs';
 import { OperatorService } from './operator.service.js';
 import type { TaskCheck } from '../session/model.js';
+import type { ContextKind } from '../session/store.js';
 
 type Msg = { data: string; type?: string; id?: string };
 
@@ -25,6 +26,12 @@ function fail(e: unknown): never {
  * nothing about names. The fix is the standard pair: an ASCII fallback for anything old, and
  * `filename*` with the real name percent-encoded for every current browser.
  */
+/** The two kinds, checked here so a path cannot name a file of its own choosing. */
+function asContextKind(kind: string): ContextKind {
+  if (kind !== 'organisation' && kind !== 'work') throw new BadRequestException('kind must be organisation or work');
+  return kind;
+}
+
 function contentDisposition(fileName: string): string {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
@@ -385,27 +392,31 @@ export class OperatorController {
    * conversation and the answers belong to a session rather than to the whole document.
    */
   @Get('plan/brief')
-  async planBrief(@Query('lang') lang?: string): Promise<{ text: string; software: string; organisation: string; customised: boolean; example: string }> {
+  async planBrief(@Query('lang') lang?: string): Promise<unknown> {
     return await this.ops.planBrief({ lang: lang ?? 'en' });
   }
 
-  // --- the organisation's part of the plan persona -------------------------------------
+  // --- the operator's own two texts for the plan persona -------------------------------
 
-  @Get('organisation')
-  organisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
-    return this.ops.getOrganisation(lang ?? 'en');
+  /**
+   * `organisation` is how the company works and where the projects are, which changes rarely;
+   * `work` is what this group of tasks is about, which changes whenever the work does.
+   */
+  @Get('context/:kind')
+  context(@Param('kind') kind: string, @Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
+    return this.ops.getContext(asContextKind(kind), lang ?? 'en');
   }
 
-  @Put('organisation')
-  async setOrganisation(@Body() body: { content: string }): Promise<{ ok: true }> {
+  @Put('context/:kind')
+  async setContext(@Param('kind') kind: string, @Body() body: { content: string }): Promise<{ ok: true }> {
     if (typeof body?.content !== 'string') throw new BadRequestException('content must be text');
-    await this.ops.setOrganisation(body.content);
+    await this.ops.setContext(asContextKind(kind), body.content);
     return { ok: true };
   }
 
-  @Delete('organisation')
-  resetOrganisation(@Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
-    return this.ops.resetOrganisation(lang ?? 'en');
+  @Delete('context/:kind')
+  resetContext(@Param('kind') kind: string, @Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
+    return this.ops.resetContext(asContextKind(kind), lang ?? 'en');
   }
 
   /** Checks a pasted plan without importing anything, and says what it would duplicate. */

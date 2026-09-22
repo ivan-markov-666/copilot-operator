@@ -34,6 +34,7 @@ import { buildPlanExport, buildDomainExport, buildBotExport, exportFileName, typ
 import { mirrorAllProjects, removeProjectMirrors, contextRoot } from '../context/desktopMirror.js';
 import { describeMirror } from '../context/projectMirror.js';
 import { buildStory, type Story } from '../session/story.js';
+import type { ContextKind } from '../session/store.js';
 import type { ProjectMirrorSelection } from '../config/schema.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions } from '../plan/brief.js';
@@ -322,20 +323,20 @@ export class OperatorService {
 
   // --- the organisation's part of the plan persona -------------------------------------
 
-  async getOrganisation(lang: string): Promise<{ content: string; customised: boolean; example: string }> {
+  async getContext(kind: ContextKind, lang: string): Promise<{ content: string; customised: boolean; example: string }> {
     await this.init();
-    return await this.store.getOrganisation(lang === 'bg' ? 'bg' : 'en');
+    return await this.store.getContext(kind, lang === 'bg' ? 'bg' : 'en');
   }
 
-  async setOrganisation(content: string): Promise<void> {
+  async setContext(kind: ContextKind, content: string): Promise<void> {
     await this.init();
-    await this.store.setOrganisation(content);
+    await this.store.setContext(kind, content);
   }
 
-  async resetOrganisation(lang: string): Promise<{ content: string; customised: boolean; example: string }> {
+  async resetContext(kind: ContextKind, lang: string): Promise<{ content: string; customised: boolean; example: string }> {
     await this.init();
-    await this.store.resetOrganisation();
-    return await this.store.getOrganisation(lang === 'bg' ? 'bg' : 'en');
+    await this.store.resetContext(kind);
+    return await this.store.getContext(kind, lang === 'bg' ? 'bg' : 'en');
   }
 
   // --- level 2 presets ------------------------------------------------------------------
@@ -1137,7 +1138,16 @@ export class OperatorService {
    * by path, and the organisation's part (the operator's, edited on the plan page). Returned
    * whole for copying and in parts for showing, so the page can say which is which.
    */
-  async planBrief(opts: BriefOptions): Promise<{ text: string; software: string; organisation: string; customised: boolean; example: string }> {
+  async planBrief(opts: BriefOptions): Promise<{
+    text: string;
+    software: string;
+    organisation: string;
+    customised: boolean;
+    example: string;
+    work: string;
+    workCustomised: boolean;
+    workExample: string;
+  }> {
     // The machine's projects go into the brief by absolute path, so a plan across a front
     // end, a back end and a test suite is written with the folders that exist rather than
     // with three paths the chat model had to ask for and the operator typed from memory.
@@ -1147,13 +1157,23 @@ export class OperatorService {
       ...(project.rootDir ? [{ name: '', rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
       ...project.others.map((o) => ({ name: o.name, rootDir: o.rootDir, repo: o.repoOk, isDefault: false })),
     ];
-    const organisation = await this.getOrganisation(lang);
+    const [organisation, work] = await Promise.all([this.getContext('organisation', lang), this.getContext('work', lang)]);
     return {
-      text: planBrief({ lang, projects, organisation: organisation.content, organisationExample: organisation.example }),
+      text: planBrief({
+        lang,
+        projects,
+        organisation: organisation.content,
+        organisationExample: organisation.example,
+        work: work.content,
+        workExample: work.example,
+      }),
       software: planBrief({ lang, projects }),
       organisation: organisation.content,
       customised: organisation.customised,
       example: organisation.example,
+      work: work.content,
+      workCustomised: work.customised,
+      workExample: work.example,
     };
   }
 
