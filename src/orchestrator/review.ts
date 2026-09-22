@@ -527,7 +527,7 @@ ${machineNote}` : contract);
           cwd: deps.cwd,
           logDir: dir,
           repoDir: deps.repoDir,
-          deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns),
+          deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms),
           signal,
           defaultShell,
         });

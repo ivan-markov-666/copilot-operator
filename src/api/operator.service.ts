@@ -872,6 +872,7 @@ export class OperatorService {
       mode,
       denyPatterns: cfg.execution.denyPatterns,
       allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
+      allowedPrograms: cfg.execution.allowedPrograms,
     };
     const controller = new AbortController();
     const authorizer: StepAuthorizer =
@@ -1536,7 +1537,7 @@ export class OperatorService {
     return `${head}\n… (${more}; the whole file is kept in the run\'s artifacts folder)`;
   }
 
-  private webAuthorizer(policy: { mode: 'confirm' | 'unattended'; denyPatterns: string[]; allowedScriptExtensions: string[] }, signal: AbortSignal): StepAuthorizer {
+  private webAuthorizer(policy: { mode: 'confirm' | 'unattended'; denyPatterns: string[]; allowedScriptExtensions: string[]; allowedPrograms: string[] }, signal: AbortSignal): StepAuthorizer {
     return makeAuthorizer(policy, (step, ctx) =>
       new Promise<PolicyDecision>((resolvePromise) => {
         // The operator may have pressed "run the rest without asking" on an earlier step.

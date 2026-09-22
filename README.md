@@ -42,6 +42,62 @@ secret-shaped strings — tokens, keys, passwords in assignments and URLs, priva
 are redacted from every report before it is uploaded, always, with `report.redactPatterns`
 applied on top. Running it in a dedicated Windows account or Windows Sandbox is recommended.
 
+### What it will not run
+
+Some things are refused whatever the task or the configuration says, because a security team
+watching the machine cannot tell this tool's use of them from an attacker's, and would be right
+not to try. The list lives in `src/exec/dangerous.ts`, is not part of the configuration schema,
+and cannot be edited away; `execution.denyPatterns` is the operator's own list and is applied on
+top of it — it can add, never subtract.
+
+| Refused | The ordinary way instead |
+|---|---|
+| `certutil`, `bitsadmin` | read or convert files with PowerShell; download in a step of its own |
+| `wscript`, `cscript`, `mshta` | run the tool itself; never `.js`, `.vbs` or `.hta` as code |
+| `regsvr32`, `rundll32`, `installutil`, `forfiles` | call the program directly |
+| `-EncodedCommand`, base64 decoded into code, `Invoke-Expression` | write the command out in full |
+| fetching code and running it in one line (`iwr … \| iex`) | write the commands as steps |
+| running anything out of `%TEMP%` | work inside the project folder |
+| antivirus exclusions, scheduled tasks, Run keys, new services | nothing here should outlive the run |
+
+The same screening reads the *contents* of a script before it is started, not only its name, and
+a name hidden rather than written — a caret or empty quotes inside a word, a name assembled from
+pieces, one resolved by wildcard — is refused as the hiding it is.
+
+### How a run is regulated
+
+Four rules decide what a step may do, and each is recorded with the run that it governed:
+
+- **Files are data, not code.** A file the chat attaches is downloaded, hashed and kept. It is
+  *not* executed: `execution.allowRunningDownloads` is off by default, and while it is off no
+  reply can cause an attachment to run, whatever the step asks for.
+- **Only the declared toolchain runs.** `execution.allowedPrograms` names the programs a command
+  may start — the shells, the JavaScript, .NET, Java, Python, Go and Rust tools, `git`, and a few
+  Windows utilities. A command that starts anything else is refused and sent back with the reason.
+  An empty list turns the gate off. This is a floor against the unknown binary, not a boundary:
+  allowing `node` allows `node -e`.
+- **Autonomy is graded.** An unattended run carries strictly more restrictions than a watched one,
+  because the thing that makes a watched run safe is a person reading each line. Unattended
+  requires a non-empty allowlist, and refuses an allowed program used to evaluate a string
+  (`node -e`, `python -c`) or a shell wrapped in a shell (`cmd /c …`) — the forms that escape the
+  allowlist by construction.
+- **An administrator can set a floor the operator cannot lower.** A `policy.lock.json` beside the
+  configuration may forbid unattended runs, cap the allowlist, force downloads to stay
+  unexecutable and add deny patterns. Every field only ever tightens, and the runner never writes
+  the file. A machine without one behaves exactly as before.
+
+Every task writes `policy.json` into its run folder and a `POLICY` block into its log: the mode,
+the allowlist and its digest, whether downloads could execute, digests of the deny list and of the
+built-in refusals, whether a lock was in force and what it changed, and the account the run used.
+So "what was this permitted to do at the time" is answered from the run folder rather than from a
+configuration file that has been edited since.
+
+**The honest limit.** All of the above is pattern matching and configuration. It raises the cost
+of the ordinary accident and the ordinary injected instruction; it is not a security boundary, and
+a determined attacker with a language model to write for them will find a phrasing none of it
+anticipated. The boundary is a separate Windows account or a sandbox, and nothing here replaces
+it.
+
 ## Requirements
 
 - Windows 10 or 11

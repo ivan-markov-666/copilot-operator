@@ -435,6 +435,7 @@ program
       mode: cfg.execution.mode,
       denyPatterns: cfg.execution.denyPatterns,
       allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
+      allowedPrograms: cfg.execution.allowedPrograms,
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

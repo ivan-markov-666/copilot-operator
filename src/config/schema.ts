@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
+import { applyPolicyLock, readPolicyLock, type LockOutcome } from './lockedPolicy.js';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -145,6 +146,62 @@ export const RunConfigSchema = z.object({
        */
       continueOnFailure: z.boolean().default(false),
       allowedScriptExtensions: z.array(z.string()).default(['.ps1', '.cmd', '.bat']),
+      /**
+       * Whether a downloaded file may be executed at all, as opposed to only saved.
+       *
+       * Off by default, and deliberately so. A `download` step carries a `run` flag, but that
+       * flag is written by the language model, in the same reply as the file it wants run, so it
+       * is not the operator's decision — it is the driven thing deciding whether the thing it
+       * just fetched may execute. That is no gate at all, and it is exactly the shape a security
+       * team reads as a loader: an automation process fetches a script and runs it. So execution
+       * needs a second key, this one, which only a person editing the config can turn, and a
+       * machine that never turns it on cannot be talked into running an attachment by any reply.
+       *
+       * With it off, a download step still downloads: the file is saved to the run's artifacts
+       * folder, hashed and kept, and the result says so. What it does not do is start it. The
+       * ordinary way to run logic is a `command` step, or a file committed to the project and run
+       * by path — both of which were written down before the run and are not fetched mid-task.
+       */
+      allowRunningDownloads: z.boolean().default(false),
+      /**
+       * The external programs a command may start. The one gate in this runner that names what is
+       * allowed rather than what is not: for a tool whose whole job is to build and test software,
+       * the toolchain is a finite, nameable set, where the things that could go wrong are not. A
+       * command whose head is a program not on this list is refused and sent back to the chat with
+       * the reason, so a legitimate tool this project happens to need is a one-line addition here,
+       * not a hole to be left open for everyone. See `exec/programs.ts` for how a head is found and
+       * why a cmdlet, an alias or a keyword is never mistaken for a program.
+       *
+       * This is not a boundary — allowing `node` allows `node -e`, and it sits on top of
+       * `dangerous.ts`, never instead of it. It raises the floor against the unknown binary and the
+       * living-off-the-land tool the deny list has not caught up with. An empty list turns it off.
+       *
+       * The default covers the common JavaScript, .NET, Java, Python, Go and Rust toolchains, the
+       * shells, git, and the handful of Windows utilities a build or test legitimately reaches for.
+       * A project that needs more adds it; a machine that wants none clears the list.
+       */
+      allowedPrograms: z
+        .array(z.string())
+        .default([
+          // shells (a step may wrap one; the inner text is still screened by dangerous.ts)
+          'pwsh', 'powershell', 'cmd',
+          // JavaScript / TypeScript
+          'node', 'npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'corepack', 'deno', 'bun',
+          'tsc', 'tsx', 'ts-node', 'vite', 'next', 'eslint', 'prettier',
+          'jest', 'vitest', 'mocha', 'playwright', 'cypress',
+          // .NET
+          'dotnet',
+          // Java / JVM
+          'java', 'javac', 'mvn', 'mvnw', 'gradle', 'gradlew',
+          // Python
+          'python', 'python3', 'py', 'pip', 'pip3', 'pytest', 'poetry', 'uv', 'ruff', 'black', 'mypy',
+          // Go / Rust
+          'go', 'gofmt', 'cargo', 'rustc', 'rustup',
+          // version control
+          'git',
+          // ordinary Windows inspection and housekeeping a build or test reaches for
+          'where', 'findstr', 'tasklist', 'taskkill', 'netstat', 'robocopy', 'xcopy', 'tar', 'curl', 'docker', 'docker-compose',
+        ]),
       denyPatterns: z
         .array(z.string())
         .default([
@@ -327,6 +384,8 @@ export type RunConfig = z.infer<typeof RunConfigSchema>;
 export type ResolvedConfig = RunConfig & {
   configPath: string;
   baseDir: string;
+  /** What `policy.lock.json` tightened, or that there was none. See `lockedPolicy.ts`. */
+  policyLock: LockOutcome;
   resolved: {
     profileDir: string;
     cwd: string;
@@ -357,10 +416,31 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
       );
     }
   }
+  /*
+   * The administrator's floor, applied here because this is the one function both the terminal's
+   * `run.yaml` and the API's `data/settings.json` pass through. Applying it anywhere further in
+   * would mean applying it twice and trusting both; applying it further out would mean one of the
+   * two entrances missing it, which is how a gate comes to be enforced on the surface somebody
+   * happened to test. See `lockedPolicy.ts` for what a lock may and may not do.
+   */
+  const lock = await readPolicyLock(baseDir);
+  const { policy, outcome } = applyPolicyLock(
+    {
+      mode: cfg.execution.mode,
+      allowedPrograms: cfg.execution.allowedPrograms,
+      allowRunningDownloads: cfg.execution.allowRunningDownloads,
+      allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
+      denyPatterns: cfg.execution.denyPatterns,
+    },
+    lock,
+  );
+
   return {
     ...cfg,
+    execution: { ...cfg.execution, ...policy },
     configPath,
     baseDir,
+    policyLock: outcome,
     resolved: {
       profileDir: expandPath(cfg.copilot.profileDir, baseDir),
       cwd: expandPath(cfg.execution.cwd, baseDir),

@@ -199,7 +199,7 @@ reply is tagged `json`. A short sentence before or after it is fine. The block i
   "status": "continue",
   "steps": [
     { "id": 1, "type": "command", "shell": "pwsh", "cmd": "Get-Service -Name wuauserv | Format-List Name,Status" },
-    { "id": 2, "type": "download", "file": "collect-logs.ps1", "run": true, "shell": "pwsh", "args": ["-Days", "7"] }
+    { "id": 2, "type": "download", "file": "collect-logs.ps1", "args": [] }
   ],
   "notes": "One or two sentences for the human reading the log.",
   "summary": ""
@@ -227,8 +227,12 @@ because most machines have PowerShell 7; a machine that does not is said so in t
 and on that machine the example is wrong and the message is right.
 
 A `download` step: `id`, `type` `"download"`, `file` the exact name of a file you attached
-to this same reply, `run` true to execute it after saving, `shell` when `run` is true,
-`args` an array of strings, `[]` when none. Optional: `expect`, `timeoutSec`, `idleTimeoutSec`.
+to this same reply, `args` an array of strings, `[]` when none. By default a downloaded file is
+**saved, not executed**: the runner writes it to the run's folder, hashes it and hands it back,
+and does not start it. The `run` flag exists but is off unless the operator has turned execution
+on for this machine, so do not rely on it — put logic you need to run in `command` steps, or in a
+file you commit to the project and then run by path. `shell` applies only if it does run. Optional:
+`expect`, `timeoutSec`, `idleTimeoutSec`.
 
 **`notes`** is for the human. Keep it under three sentences.
 
@@ -370,9 +374,22 @@ from an attacker's, and they will be right to ask. There is an ordinary way to d
 | `regsvr32`, `rundll32`, `installutil` | call the program itself |
 | `forfiles` | `Get-ChildItem` with a loop |
 | `-EncodedCommand`, base64 decoded into code, `Invoke-Expression` | write the command out in full |
-| fetching code and running it in one line (`iwr … \| iex`) | download to a file in one step, run it in the next |
+| fetching code and running it in one line (`iwr … \| iex`) | put the commands in a command step; a downloaded file is saved, not run |
 | running anything out of `%TEMP%` | work inside the project folder |
 | antivirus exclusions, scheduled tasks, Run keys, new services | nothing here should outlive the run; say in `notes` if it truly must |
+
+This machine also runs **only the project's declared toolchain** — the shells, `node`/`npm`/`npx`
+and the JavaScript, .NET, Java, Python, Go and Rust tools, `git`, and a few ordinary Windows
+utilities. A command that starts a program outside that set is refused and told which program and
+where the operator can allow it. Stay within the toolchain the task's work actually needs; if a
+build or test genuinely requires another program, say so in `notes` rather than reaching for an
+unusual binary.
+
+In an **unattended run** two further things are refused, because nobody is reading the steps as
+they go: using an allowed program to evaluate code given as a string (`node -e`, `python -c`), and
+wrapping one shell inside another (`cmd /c …`, `powershell -Command …`). Both hide the real work
+from every check the runner has. Write the commands out as steps, or put the code in a file the
+project keeps and run that file.
 
 A refused step comes back to you with the reason and the line. Do not try to work around it,
 and do not encode, rename or split a refused command to get it past: rewrite the step to do the

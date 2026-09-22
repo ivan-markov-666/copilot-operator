@@ -32,7 +32,8 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, commandRefusal, scriptRefusal } from '../exec/policy.js';
+import { describeStep, commandRefusal, scriptRefusal, downloadWillRun } from '../exec/policy.js';
+import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -571,6 +572,33 @@ export async function runTask(
     work.ownCheckout ? 'warn' : 'info',
   );
 
+  /*
+   * What was allowed, recorded beside what was run.
+   *
+   * The run folder has always held the commands and their exit codes, and never the rules they
+   * were judged against, so answering "what was this permitted to do at the time" meant reading a
+   * config that had been edited since. Written here rather than with the environment above because
+   * the working directory is part of the answer and is only settled now. See `policyManifest.ts`.
+   */
+  const manifest = collectPolicyManifest({
+    mode: cfg.execution.mode,
+    allowedPrograms: cfg.execution.allowedPrograms,
+    allowRunningDownloads: cfg.execution.allowRunningDownloads,
+    allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
+    denyPatterns: cfg.execution.denyPatterns,
+    cwd: work.cwd,
+    lock: cfg.policyLock,
+  });
+  await writeFile(log.path('policy.json'), JSON.stringify(manifest, null, 2), 'utf8').catch(() => undefined);
+  await record('POLICY', describePolicyManifest(manifest));
+  sink.event(
+    'policy',
+    { mode: manifest.mode, allowlist: manifest.allowlist.enforced, allowlistDigest: manifest.allowlist.digest, downloadsMayRun: manifest.downloads.mayRun },
+    `policy: ${manifest.mode}, allowlist ${manifest.allowlist.enforced ? `${manifest.allowlist.count} programs (${manifest.allowlist.digest})` : 'NOT ENFORCED'}, ` +
+      `downloads ${manifest.downloads.mayRun ? 'may run' : 'saved only'}`,
+    manifest.mode === 'unattended' || !manifest.allowlist.enforced || manifest.downloads.mayRun ? 'warn' : 'info',
+  );
+
   // Not when the project is this runner's own checkout: every process of the runner would
   // then look like a leftover.
   processesBefore = work.ownCheckout ? null : await snapshotProcesses(work.cwd).catch(() => null);
@@ -740,7 +768,7 @@ export async function runTask(
         cwd: work.cwd,
         logDir: log.path('checks'),
         signal: deps.signal,
-        deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns),
+        deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms),
         repoDir: willCommit ? repoDirOf(session) : undefined,
         // The same shell a step that named none is given, so the gate and the work it judges
         // cannot have been read by different interpreters.
@@ -1335,8 +1363,25 @@ export async function runTask(
             results.push(refusedResult(step, `download failed: ${(e as Error).message}`));
             continue;
           }
-          if (!step.run) {
-            results.push({ ...refusedResult(step, 'saved only'), exitCode: 0, outcome: 'completed', stderr: '', stdout: `Saved to ${scriptPath}\n` });
+          // Whether this file runs at all is not `step.run`'s to decide on its own: that flag is
+          // written by the model, in the same reply as the file. Execution also requires the
+          // operator to have turned it on (`execution.allowRunningDownloads`), and by default they
+          // have not, so a download is saved and handed back — never started — unless both agree.
+          // See `downloadWillRun`. The message distinguishes the two save-only cases, because one
+          // is the model's own choice and the other is a policy it should stop trying to work past.
+          if (!downloadWillRun(step, cfg.execution.allowRunningDownloads)) {
+            const note = step.run
+              ? 'not run: running downloaded files is turned off on this machine ' +
+                '(execution.allowRunningDownloads). Put the logic in command steps, or commit the ' +
+                'file to the project and run it by path; do not re-attach it to get it executed.'
+              : 'saved only, as the step asked.';
+            results.push({
+              ...refusedResult(step, note),
+              exitCode: 0,
+              outcome: 'completed',
+              stderr: '',
+              stdout: `Saved to ${scriptPath}\n${step.run ? `${note}\n` : ''}`,
+            });
             continue;
           }
 
