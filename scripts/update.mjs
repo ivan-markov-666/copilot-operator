@@ -168,12 +168,17 @@ if (checkOnly) {
  * script, in a checkout somebody is about to run the bot from. If the two histories have really
  * diverged, that is a decision for a person with the log in front of them.
  */
+const before = git('rev-parse', 'HEAD').out;
 if (incoming) {
   if (!git('pull', '--ff-only').ok) {
     die('the pull could not fast-forward.', 'This checkout and the remote have both moved. Look with: git log --oneline --graph --all -20');
   }
   log('update', 'now at ' + git('log', '--oneline', '-1').out);
 }
+
+/** What the pull actually changed, so the slow steps can be skipped when they would do nothing. */
+const changed = incoming ? git('diff', '--name-only', before, 'HEAD').raw.split(/\r?\n/).filter(Boolean) : [];
+const depsChanged = changed.some((f) => /(^|\/)package(-lock)?\.json$/.test(f));
 
 // --- 6. dependencies and the build --------------------------------------------------------------
 /*
@@ -189,8 +194,24 @@ if (!incoming && !process.argv.includes('--rebuild')) {
   process.exit(0);
 }
 
-log('install', 'npm install');
-if (!run(NPM, ['install'], { stdio: 'inherit' }).ok) die('npm install failed; the checkout is updated but not usable yet.');
+/*
+ * `npm ci` when the dependencies moved, and nothing at all when they did not.
+ *
+ * `npm install` is the friendlier command and the wrong one here, for the reason this script
+ * exists: it is allowed to rewrite `package-lock.json`, and a rewritten lockfile is a tracked
+ * file that now differs from the commit — so the next update reports a local change nobody made
+ * and puts it in a stash. `npm ci` installs exactly what the lockfile says and never edits it.
+ * It is slower, because it empties `node_modules` first; that only matters on the rare pull that
+ * actually moves a dependency, and this skips it entirely on the ones that do not.
+ */
+if (!depsChanged && incoming && !process.argv.includes('--rebuild')) {
+  log('install', 'no dependency changed in what came in; nothing to install');
+} else {
+  log('install', 'npm ci');
+  if (!run(NPM, ['ci'], { stdio: 'inherit' }).ok) {
+    die('npm ci failed; the checkout is updated but not usable yet.', 'If it complains that the lockfile is out of step, run: npm install');
+  }
+}
 
 /*
  * The build is not optional, and skipping it is the mistake that looks like a bug in the new

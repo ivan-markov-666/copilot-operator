@@ -94,7 +94,16 @@ reinstalls and rebuilds — because a `dist/` older than its `src/` runs the pre
 reports the previous version's bugs.
 
 Run it with `--check` first if you want to see what it would do. When nothing has come in it
-installs and builds nothing; `--rebuild` forces both.
+installs and builds nothing; `--rebuild` forces both. It uses `npm ci`, and only when the pull
+actually moved a dependency: `npm install` may rewrite `package-lock.json`, and a rewritten
+lockfile is a tracked file that differs from the commit — which is one of the phantom local
+changes this is here to stop.
+
+**`npm warn allow-scripts ... esbuild`** on a machine whose npm requires install scripts to be
+approved is expected and usually harmless. esbuild gets its Windows binary from an optional
+dependency (`@esbuild/win32-x64`), which installs without any script; the blocked `postinstall`
+only revalidates it. Check with `npx tsx --version` — if that answers, `npm run check` will run.
+If it does not, `npm approve-scripts esbuild` and install again.
 
 If files looked modified that you never edited, that was line endings: two Windows machines, one
 with `core.autocrlf` set and one without. `.gitattributes` settles it.
