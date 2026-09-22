@@ -26,12 +26,16 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, cpSync, mkdirSync, readdirSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { compareRemote, remoteChangedMessage, signatureVerdict, updateRecord, REMOTE_PIN, UPDATE_LOG } from './updateTrust.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWin = process.platform === 'win32';
 const checkOnly = process.argv.includes('--check');
+const acceptRemote = process.argv.includes('--accept-remote');
+const requireSigned = process.argv.includes('--require-signed');
 
 const log = (tag, line) => process.stdout.write('[' + tag + '] ' + line + '\n');
 const die = (line, hint) => {
@@ -67,6 +71,29 @@ if (!remote.out) die('This checkout has no remote, so there is nowhere to update
 
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD').out || 'HEAD';
 log('update', 'checkout at ' + root);
+
+/*
+ * Who this update trusts, checked before a single byte is fetched.
+ *
+ * Whoever controls the remote controls what this bot runs, so a remote that has changed since the
+ * last update is a question for a person and not a thing to be noticed afterwards in a diff. Trust
+ * on first use: the first run records what is there, because there is nothing to compare against.
+ * See `updateTrust.mjs`.
+ */
+const remoteUrl = git('remote', 'get-url', remote.out.split(/\s+/)[0]).out;
+const pinPath = join(root, 'data', REMOTE_PIN);
+let pinned = '';
+try {
+  pinned = readFileSync(pinPath, 'utf8').trim();
+} catch {
+  /* never updated from here before */
+}
+const remoteVerdict = compareRemote(pinned, remoteUrl);
+if (remoteVerdict === 'changed' && !acceptRemote) die(remoteChangedMessage(pinned, remoteUrl));
+if (remoteVerdict === 'changed') log('trust', 'the remote changed and you accepted it: ' + pinned + '  ->  ' + remoteUrl);
+if (remoteVerdict === 'first-use') log('trust', 'first update from ' + remoteUrl + '; recording it, and a later change will stop and ask');
+if (remoteVerdict === 'same') log('trust', 'remote is the one this checkout last updated from: ' + remoteUrl);
+log('trust', 'an update installs and builds whatever arrives, so this remote is what this bot trusts');
 log('update', 'branch ' + branch + (checkOnly ? '   (checking only; nothing will be changed)' : ''));
 
 // --- 1. refuse while the bot is running -----------------------------------------------------
@@ -174,6 +201,48 @@ if (incoming) {
     die('the pull could not fast-forward.', 'This checkout and the remote have both moved. Look with: git log --oneline --graph --all -20');
   }
   log('update', 'now at ' + git('log', '--oneline', '-1').out);
+}
+
+/*
+ * The signature on what just arrived, when the deployment asks for one.
+ *
+ * Off unless `--require-signed`, because this project does not sign its commits and a gate that
+ * always fails is a gate somebody removes. It is here so an organisation running a fork that *is*
+ * signed can make the updater refuse anything else. Checked after the pull rather than before,
+ * because the commit being judged is the one now at HEAD.
+ */
+let signatureNote = 'not-required';
+if (requireSigned) {
+  const v = git('verify-commit', 'HEAD');
+  const verdict = signatureVerdict(v.ok, v.err);
+  signatureNote = verdict.ok ? 'verified' : 'failed';
+  if (!verdict.ok) {
+    die('--require-signed was given and ' + verdict.detail + '.', 'Put the checkout back with:  git reset --hard ' + before);
+  }
+  log('trust', verdict.detail);
+}
+
+/*
+ * What happened, written where the pull cannot reach it. `data/` is per-install and git-ignored,
+ * so the record of an update survives the update it describes — which is the only way it is worth
+ * anything when somebody asks, months later, when this checkout last changed and from where.
+ */
+try {
+  mkdirSync(join(root, 'data'), { recursive: true });
+  appendFileSync(
+    join(root, 'data', UPDATE_LOG),
+    updateRecord({
+      remote: remoteUrl,
+      from: before,
+      to: git('rev-parse', 'HEAD').out,
+      incoming: incoming ? incoming.split(/\s*\n\s*/).filter(Boolean).length : 0,
+      signed: signatureNote,
+    }) + '\n',
+    'utf8',
+  );
+  writeFileSync(pinPath, remoteUrl + '\n', 'utf8');
+} catch (e) {
+  log('trust', 'could not write the update record: ' + (e && e.message ? e.message : String(e)));
 }
 
 /** What the pull actually changed, so the slow steps can be skipped when they would do nothing. */

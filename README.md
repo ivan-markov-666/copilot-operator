@@ -128,6 +128,29 @@ built-in refusals, whether a lock was in force and what it changed, and the acco
 So "what was this permitted to do at the time" is answered from the run folder rather than from a
 configuration file that has been edited since.
 
+### What an update trusts
+
+`npm run update` fetches commits, fast-forwards onto them, installs what the lockfile names and
+builds the result — and that result is the thing that runs commands on this machine. Its trust
+boundary is one sentence: **whoever controls the remote controls this bot.** Three things make that
+checkable rather than implied.
+
+- **The remote is pinned.** The address a checkout last updated from is recorded in
+  `data/update-remote`. If `origin` now points somewhere else the update stops before anything is
+  fetched, prints both addresses, and asks. Trust on first use — the first update records what is
+  there. Accept a deliberate move with `npm run update -- --accept-remote`.
+- **Signatures, if your fork has them.** `npm run update -- --require-signed` refuses a HEAD that
+  git cannot verify, and tells an unsigned commit apart from a bad signature. Off by default,
+  because this project does not sign its commits and a check that always fails is a check that gets
+  removed; it is here so an organisation whose fork *is* signed can make it mean something.
+- **Every update is written down.** A line in `data/update-log.jsonl`: when, from which remote,
+  which commit to which, how many came in, and whether a signature was demanded. `data/` is
+  git-ignored, so the record survives the pull it describes.
+
+None of this verifies what the code *does*. A signed commit from a compromised maintainer is a
+signed commit. It narrows "anything that can reach the network" to "whoever holds the remote this
+checkout was installed from", and says so out loud.
+
 **The honest limit.** Everything above except the first rule is pattern matching and configuration.
 It raises the cost of the ordinary accident and the ordinary injected instruction; it is not a
 security boundary, and a determined attacker with a language model to write for them will find a
