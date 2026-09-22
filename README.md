@@ -95,6 +95,31 @@ Five rules decide what a step may do, and each is recorded with the run that it 
   unexecutable and add deny patterns. Every field only ever tightens, and the runner never writes
   the file. A machine without one behaves exactly as before.
 
+### The local API is not open to everything on the machine
+
+The API binds `127.0.0.1` only, and that was once taken to mean it needed no authentication. It
+did. Two callers were always reachable: any page the operator has open in their ordinary browser,
+which can issue requests to `127.0.0.1:4000` — CORS stops it reading the reply, which is no comfort
+once a request has started a session — and any other process on the machine. So every request is
+checked three ways before it reaches a route:
+
+- the **`Host`** header must name this loopback port, which is what catches DNS rebinding — the
+  attacker's domain made to resolve to `127.0.0.1` is same-origin to the browser but still carries
+  its own name here;
+- a present **`Origin`** must be the configured UI, since only a browser sets it and a page cannot
+  forge it;
+- a per-install **token**, generated on first start into `data/api-token` (git-ignored), sent as
+  `Authorization: Bearer`, `x-cop-token`, or a `token` query parameter for the two cases that
+  cannot carry a header — `EventSource` and a plain `<a download>`.
+
+`npm start` creates the token before either process starts and hands it to the UI. `GET
+/api/health` stays open so that "is it up yet" is still answerable. To rotate the token, delete the
+file and restart.
+
+This does not contain a process already running as the operator — nothing at this layer can, since
+that process can read the file. It moves the API from "anything on this machine, and several things
+off it" to "something that can read a file in the install".
+
 Every task writes `policy.json` into its run folder and a `POLICY` block into its log: the mode,
 the allowlist and its digest, whether downloads could execute, digests of the deny list and of the
 built-in refusals, whether a lock was in force and what it changed, and the account the run used.

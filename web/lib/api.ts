@@ -3,6 +3,26 @@
  */
 export const API = process.env.NEXT_PUBLIC_COP_API ?? 'http://127.0.0.1:4000/api';
 
+/**
+ * The API's per-install token.
+ *
+ * Baked in at build time by `npm start`, which reads it from `data/api-token` and hands it to the
+ * web build. It is not a secret from the person using this UI — they own the file — it is what
+ * stops every *other* caller: a page on another site that the operator happens to have open, and
+ * any process on the machine that cannot read the install. See `src/api/security.ts`.
+ */
+export const API_TOKEN = process.env.NEXT_PUBLIC_COP_TOKEN ?? '';
+
+/**
+ * The token as a query parameter, for the two kinds of request that cannot carry a header:
+ * `EventSource`, which has no way to set one, and a plain `<a download>`, which is the browser
+ * fetching a URL on its own. Everything else sends it as a header instead.
+ */
+export function withToken(url: string): string {
+  if (!API_TOKEN) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(API_TOKEN)}`;
+}
+
 export type TaskStatus =
   | 'queued'
   | 'running'
@@ -567,7 +587,11 @@ export type SessionEvent = {
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      'content-type': 'application/json',
+      ...(API_TOKEN ? { 'x-cop-token': API_TOKEN } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
@@ -664,7 +688,7 @@ export const api = {
     call<{ ok: boolean }>(`/approvals/${approvalId}`, { method: 'POST', body: JSON.stringify({ action }) }),
   setRunMode: (id: string, mode: 'confirm' | 'unattended') =>
     call<{ ok: boolean; mode?: string }>(`/sessions/${id}/mode`, { method: 'POST', body: JSON.stringify({ mode }) }),
-  streamUrl: (id: string) => `${API}/sessions/${id}/stream`,
+  streamUrl: (id: string) => withToken(`${API}/sessions/${id}/stream`),
 
   /** The batch in progress, or the last one that ran. Null when none ever has. */
   batch: () => call<BatchState | null>('/batch').then((b) => b ?? null),
@@ -759,7 +783,7 @@ export const api = {
   downloadBundle: async (tasks: Array<{ sessionId: string; taskId: string }>): Promise<string> => {
     const res = await fetch(`${API}/export/bundle`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(API_TOKEN ? { 'x-cop-token': API_TOKEN } : {}) },
       body: JSON.stringify({ tasks }),
     });
     if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
@@ -795,10 +819,10 @@ export const api = {
     if (where.run) q.set('run', where.run);
     if (where.session) q.set('session', where.session);
     if (where.task) q.set('task', where.task);
-    return `${API}/export/${kind}?${q.toString()}`;
+    return withToken(`${API}/export/${kind}?${q.toString()}`);
   },
   debugExportUrl: (sessionIds: string[]) =>
-    `${API}/debug/export${sessionIds.length > 0 ? `?sessions=${encodeURIComponent(sessionIds.join(','))}` : ''}`,
+    withToken(`${API}/debug/export${sessionIds.length > 0 ? `?sessions=${encodeURIComponent(sessionIds.join(','))}` : ''}`),
 
   /** Can version control do its job in this session right now? */
   vcsStatus: (id: string) => call<VcsStatus>(`/sessions/${id}/vcs`),

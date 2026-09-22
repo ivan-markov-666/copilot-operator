@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
+import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { SaveLog } from '../../saveLog';
 import { fmtDuration } from '../../../lib/api';
@@ -1358,9 +1358,13 @@ function ExportPanel({ session }: { session: Session }) {
   // Nothing ticked means everything: one fewer click for the common case, and the button
   // labels say which it is, so it is never a guess.
   const selection = picked.length > 0 ? picked : ran.map((x) => x.id);
+  // A plain <a download> cannot set a header, so this one carries the token in the query, the
+  // same way the stream and the other exports do. See `withToken` in web/lib/api.ts.
   const href = (variant: 'full' | 'outcome') =>
-    `${API}/sessions/${session.id}/export?variant=${variant}` +
-    (picked.length > 0 ? `&tasks=${encodeURIComponent(picked.join(','))}` : '');
+    withToken(
+      `${API}/sessions/${session.id}/export?variant=${variant}` +
+        (picked.length > 0 ? `&tasks=${encodeURIComponent(picked.join(','))}` : ''),
+    );
 
   const toggle = (id: string) =>
     setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));

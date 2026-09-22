@@ -14,9 +14,11 @@
  * involved and nothing has to be escaped.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWin = process.platform === 'win32';
@@ -116,7 +118,31 @@ if (build.status !== 0) {
   process.exit(build.status ?? 1);
 }
 
-// 2. Start both.
+// 2. The API's per-install token, made here so it exists before either process starts.
+//
+// The API would create it itself, but then the web build would race it for the file and a fresh
+// install could compile the UI with an empty token and fail every request with a 401 that looks
+// like a bug in the API. Created first, read by both. See `src/api/security.ts`.
+const dataDir = process.env.COP_DATA_DIR ?? resolve(root, 'data');
+mkdirSync(dataDir, { recursive: true });
+const tokenPath = join(dataDir, 'api-token');
+let apiToken = '';
+try {
+  apiToken = readFileSync(tokenPath, 'utf8').trim();
+} catch {
+  /* not there yet */
+}
+if (!apiToken) {
+  apiToken = randomBytes(32).toString('hex');
+  writeFileSync(tokenPath, `${apiToken}
+`, { encoding: 'utf8', mode: 0o600 });
+  log('start', `made an API token in ${tokenPath}`);
+}
+// Next inlines NEXT_PUBLIC_* at compile time, and in dev it compiles on demand, so having it in
+// the environment before `next dev` starts is enough.
+process.env.NEXT_PUBLIC_COP_TOKEN = apiToken;
+
+// 3. Start both.
 const children = [];
 
 function start(tag, args, cwd) {

@@ -10,8 +10,11 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'node:path';
 import { AppModule } from './app.module.js';
 import { OperatorService } from './operator.service.js';
+import { ensureApiToken, localApiGuard } from './security.js';
+import { botRootDir } from '../exec/workDir.js';
 
 const PORT = Number(process.env.COP_API_PORT ?? 4000);
 const WEB_ORIGIN = process.env.COP_WEB_ORIGIN ?? 'http://localhost:3210';
@@ -37,6 +40,18 @@ async function main(): Promise<void> {
     exposedHeaders: ['content-disposition'],
   });
   app.setGlobalPrefix('api');
+
+  /*
+   * Who may drive this. Mounted before routing so it covers every route including the SSE stream,
+   * and so that no controller has to remember. See `security.ts` for why "it is only on localhost"
+   * was never the whole answer — a page in the operator's ordinary browser and any other process
+   * on the machine were both callers all along.
+   */
+  const dataDir = process.env.COP_DATA_DIR ?? join(botRootDir(), 'data');
+  const token = await ensureApiToken(dataDir);
+  const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1')];
+  app.use(localApiGuard({ token, port: PORT, allowedOrigins }));
+
   await app.listen(PORT, '127.0.0.1');
 
   // Close whatever the previous process left open before anyone can look at it, rather than
@@ -44,6 +59,7 @@ async function main(): Promise<void> {
   await app.get(OperatorService).bootstrap();
 
   console.log(`copilot-operator api listening on http://127.0.0.1:${PORT}/api  (web origin ${WEB_ORIGIN})`);
+  console.log(`  requests need the token in ${join(dataDir, 'api-token')} — the UI is given it by \`npm start\``);
 }
 
 /*
