@@ -17,7 +17,8 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { runStep, type RunResult, type Shell } from './runner.js';
+import { runStep, type RunResult } from './runner.js';
+import { resolveShell, type Shell, type ShellProblem } from './shells.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { findSuspicious, suspiciousDetail } from '../vcs/commitHygiene.js';
 import type { TaskCheck } from '../session/model.js';
@@ -39,6 +40,18 @@ export type CheckOutcome = {
   exitCode?: number;
   /** Trimmed output of the command, when there was one. */
   output?: string;
+  /** The shell the command was given to, and the executable that was started. */
+  shell?: Shell;
+  shellPath?: string;
+  /**
+   * Set when the check could not be decided because of the machine rather than the work: the
+   * shell it asked for, or the only shell there was, could not be started.
+   *
+   * It still counts as failed — a gate that opens when it breaks is the one behaviour a gate
+   * must never have — but it is not an attempt at the task, and whoever counts attempts is
+   * expected to look at this before counting one.
+   */
+  environmentProblem?: ShellProblem;
 };
 
 export type CheckRunOptions = {
@@ -52,6 +65,17 @@ export type CheckRunOptions = {
   deny?: (command: string, shell: Shell) => string | null;
   /** The repository whose working tree `commit-clean` looks at. Absent means the check passes. */
   repoDir?: string;
+  /**
+   * The shell a check that names none of its own is given.
+   *
+   * It is passed in rather than worked out here, because the point is that it is the same value
+   * a step that names no shell is given: `execution.defaultShell`, already held against what this
+   * machine has. Worked out separately the two would agree only by coincidence — set the default
+   * to `cmd` on a machine that also has PowerShell 7 and a step would run in `cmd` while the check
+   * judging it ran in `pwsh`, which is a gate answering a question nobody asked. Absent means the
+   * first shell the machine has, which is what a caller with no configuration to offer wants.
+   */
+  defaultShell?: Shell;
 };
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -96,7 +120,19 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     const command = (check.run ?? '').trim();
     if (!command) return fail('this check asks about a command but names none');
 
-    const shell = (check.shell ?? 'pwsh') as Shell;
+    /*
+     * Which shell this check runs in, asked of the same place a task step asks.
+     *
+     * A check used to fall back to `pwsh` here on its own, which is how a machine without
+     * PowerShell 7 came to fail every check with a spawn error while the same commands ran
+     * happily in `cmd`. It is resolved before the deny list rather than inside `runStep`
+     * because the gate below is told which shell it is screening for, and because a check that
+     * cannot run at all should say so without a process being started.
+     */
+    const chosen = resolveShell(check.shell ?? opts.defaultShell);
+    if (!chosen.ok) return fail(chosen.problem.message, { environmentProblem: chosen.problem });
+    const { shell, path: shellPath } = chosen.resolved;
+
     const refused = opts.deny?.(command, shell);
     if (refused) return fail(`the command was refused before it ran: ${refused}`);
 
@@ -105,7 +141,10 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
       result = await runStep(
         {
           id: 900 + index,
-          shell,
+          // What the check asked for, or the standing default when it asked for nothing: the
+          // runner resolves it again from the same inventory, so the two cannot disagree, and
+          // the result then records what was wanted as well as what ran.
+          shell: check.shell ?? opts.defaultShell,
           command,
           cwd: (check.cwd ?? '').trim() || opts.cwd,
           hardTimeoutMs: opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
@@ -118,7 +157,14 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     }
 
     const output = shorten(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`);
-    const seen = { exitCode: result.exitCode, output };
+    const seen = { exitCode: result.exitCode, output, shell: result.shell, shellPath: result.shellPath };
+
+    // The shell was there when the run began and would not start when it was wanted. Nothing
+    // about the work has been learned, so this is reported as what it is rather than as a
+    // command that failed.
+    if (result.shellProblem) {
+      return fail(result.shellProblem.message, { ...seen, environmentProblem: result.shellProblem });
+    }
 
     if (result.outcome !== 'completed') {
       return fail(`the command ended ${result.outcome} rather than finishing`, seen);
@@ -193,6 +239,19 @@ export async function runChecks(checks: TaskCheck[], opts: CheckRunOptions): Pro
     out.push(await runCheck(check, i, opts));
   }
   return out;
+}
+
+/**
+ * Whether a round of checks was decided by the machine rather than by the work.
+ *
+ * The first such problem is the answer: several checks on a machine with no PowerShell 7 all
+ * hit the same missing interpreter, and repeating one sentence per check helps nobody. A
+ * caller that gets something back here is being told that this round was not an attempt at the
+ * task, that it should not cost the task one of its rounds, and that there is nothing worth
+ * sending to a language model — an interpreter it cannot install is not a thing it can fix.
+ */
+export function environmentProblemIn(outcomes: CheckOutcome[]): ShellProblem | null {
+  return outcomes.find((o) => o.environmentProblem)?.environmentProblem ?? null;
 }
 
 /** A short line per check, for the live log and the task record. */

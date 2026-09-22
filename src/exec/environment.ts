@@ -15,6 +15,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { release, type as osType } from 'node:os';
 
+import { availableShells, detectShells, type Shell, type ShellInventory } from './shells.js';
+
 export type Environment = {
   collectedAt: string;
   os: string;
@@ -23,6 +25,13 @@ export type Environment = {
   git: string | null;
   pwsh: string | null;
   powershell: string | null;
+  /**
+   * Which shells this machine has and where, which is a different question from the versions
+   * above: those say what a PowerShell answered when asked, this says what the runner will
+   * find when it goes to start one, and a run that died of a missing interpreter is diagnosed
+   * from the second and not the first.
+   */
+  shells: ShellInventory;
   edge: { path: string; version: string | null } | null;
 };
 
@@ -56,6 +65,7 @@ export function collectEnvironment(fresh = false): Environment {
     git: probe('git', ['--version'])?.replace(/^git version\s*/i, '') ?? null,
     pwsh: probe('pwsh', ['-NoProfile', '-NonInteractive', '-Command', psVersion]),
     powershell: probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', psVersion]),
+    shells: detectShells({ fresh }),
     edge: edgePath
       ? { path: edgePath, version: probe('powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Item '${edgePath}').VersionInfo.ProductVersion`]) }
       : null,
@@ -64,14 +74,28 @@ export function collectEnvironment(fresh = false): Environment {
 }
 
 /** The manifest as a block of `name : version` lines, for the task log. */
-export function describeEnvironment(e: Environment): string {
+export function describeEnvironment(e: Environment, defaultShell: Shell | undefined): string {
+  const at = (shell: 'pwsh' | 'powershell' | 'cmd'): string => (e.shells.found[shell] ? ` at ${e.shells.found[shell]}` : '');
+  /*
+   * What a command that named no shell was actually handed to.
+   *
+   * `execution.defaultShell` decides it whenever the machine has that shell, and only when it has
+   * not does the order take over. Reporting the order's answer regardless was wrong in the one
+   * case somebody would be reading this line to understand: a default of `cmd` on a machine that
+   * also has PowerShell 7 would be written down here as `pwsh`, which is the opposite of what ran.
+   */
+  const fallback = (defaultShell && e.shells.found[defaultShell] ? defaultShell : availableShells(e.shells)[0]) ?? null;
   return [
     `os         : ${e.os}`,
     `node       : ${e.node}`,
     `npm        : ${e.npm ?? '(not found)'}`,
     `git        : ${e.git ?? '(not found)'}`,
-    `pwsh       : ${e.pwsh ?? '(not found)'}`,
-    `powershell : ${e.powershell ?? '(not found)'}`,
+    `pwsh       : ${e.pwsh ?? '(not found)'}${at('pwsh')}`,
+    `powershell : ${e.powershell ?? '(not found)'}${at('powershell')}`,
+    `cmd        : ${e.shells.found.cmd ?? '(not found)'}`,
+    // The one line somebody reads when a step ran and behaved unlike the machine it was written
+    // on: which interpreter a command that named no shell was handed to.
+    `shell used : ${fallback ?? '(none — nothing can be run on this machine)'} when a step or a check names none`,
     `edge       : ${e.edge ? `${e.edge.version ?? '(version unknown)'} at ${e.edge.path}` : '(not found)'}`,
     `collected  : ${e.collectedAt}`,
   ].join('\n');

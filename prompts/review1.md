@@ -168,7 +168,9 @@ is tagged `json`. A sentence around it is fine.
 - `fail` — you ran things, and something is wrong. No steps, at least one finding.
 
 **`steps`** are the same shape the implementer uses: `id` (integer from 1, increasing within
-the reply), `type` `"command"`, `shell` `"pwsh"` or `"cmd"`, `cmd` one single line. Optional:
+the reply), `type` `"command"`, `shell` `"pwsh"`, `"powershell"` or `"cmd"`, `cmd` one single
+line. Leave `shell` out unless the command needs a particular one: the runner then uses the
+best shell this machine has, and a shell it has not got gets the step refused. Optional:
 `expect` `"fast"` or `"long"`, `timeoutSec`, `idleTimeoutSec`. Mark a build or a test run
 `"expect": "long"`.
 

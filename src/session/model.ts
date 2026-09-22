@@ -10,6 +10,7 @@
  * run folder the task points at.
  */
 import type { ChatPointer } from '../transport/chatSession.js';
+import type { ShellInventory } from '../exec/shells.js';
 
 export type TaskStatus =
   | 'queued'
@@ -47,6 +48,20 @@ export type TaskEnvironment = {
   git: string | null;
   pwsh: string | null;
   powershell: string | null;
+  /**
+   * Which shells the machine had, and where. Optional because a task recorded before the runner
+   * looked for them has no answer to give, and inventing one would be worse than the gap.
+   */
+  shells?: ShellInventory;
+  /**
+   * Which shell a step or a check that named none actually got on this run.
+   *
+   * Optional for the same reason `shells` is, and worth storing rather than deriving: deriving it
+   * needs `execution.defaultShell`, which is not in the record, and two readers deriving it
+   * separately is how the environment manifest and the export came to name different shells for
+   * one run.
+   */
+  defaultShell?: 'pwsh' | 'powershell' | 'cmd';
   edge: { path: string; version: string | null } | null;
 };
 

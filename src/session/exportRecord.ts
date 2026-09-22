@@ -20,6 +20,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task } from './model.js';
 import { describeDeviations, describeDisputes } from '../protocol/replySchema.js';
+import { SHELL_ORDER, availableShells } from '../exec/shells.js';
 
 export type ExportVariant = 'full' | 'outcome';
 
@@ -134,6 +135,24 @@ function versionControlLines(task: Task, session: Session): string[] {
   return lines;
 }
 
+/**
+ * Which shells the machine had when the task ran, as lines in the record.
+ *
+ * Worth the four lines because of the failure it explains. A task whose commands were written
+ * for PowerShell 7 on a machine that has not got it fails in a way that reads like bad work —
+ * every command dead, nothing accomplished — and the only thing that says otherwise is what was
+ * installed at the time. Read weeks later, on a different machine, that is not recoverable from
+ * anywhere else.
+ */
+function shellLines(task: Task): string[] {
+  const shells = task.environment?.shells;
+  if (!shells) return [];
+  const lines = SHELL_ORDER.map((shell) => `${shell.padEnd(11)}: ${shells.found[shell] ?? '(not installed)'}`);
+  const fallback = task.environment?.defaultShell ?? availableShells(shells)[0];
+  lines.push(`default    : ${fallback ?? '(none — this machine could run nothing)'} for a step or check that named no shell`);
+  return lines;
+}
+
 /** One task's section of the document. */
 async function sectionFor(task: Task, index: number, input: ExportInput): Promise<string> {
   const parts: string[] = [];
@@ -152,6 +171,12 @@ async function sectionFor(task: Task, index: number, input: ExportInput): Promis
 
   parts.push(`\n${THIN}\nVERSION CONTROL\n${THIN}`);
   parts.push(versionControlLines(task, input.session).join('\n'));
+
+  const shells = shellLines(task);
+  if (shells.length > 0) {
+    parts.push(`\n${THIN}\nSHELLS ON THE MACHINE\n${THIN}`);
+    parts.push(shells.join('\n'));
+  }
 
   /*
    * What the second opinion concluded, kept in the record because it is the part a reader

@@ -498,6 +498,18 @@ function BatchPanel({
     onChange();
   };
 
+  const pause = async () => {
+    await api.pauseBatch();
+    setMsg(t('batch.pausing'));
+    onChange();
+  };
+
+  const resume = async () => {
+    await api.resumeBatch();
+    setMsg('');
+    onChange();
+  };
+
   // Sessions the chosen model would change, named before the run rather than discovered after.
   const overridden = chosen.filter((s) => (s.model ?? '') !== model).length;
   // And the ones where a review model would have nothing to do, because the review is off.
@@ -702,9 +714,21 @@ function BatchPanel({
 
       {running && (
         <div className="row">
-          <button onClick={() => void stop()} disabled={batch?.stopping}>
+          {/* The gentler of the two comes first: it is the one somebody wants after a failure,
+              and the one that costs nothing to press. */}
+          {batch?.pausing ? (
+            <button className="primary" onClick={() => void resume()} disabled={batch?.stopping} title={t('batch.resumeWhy')}>
+              {t('batch.resume')}
+            </button>
+          ) : (
+            <button onClick={() => void pause()} disabled={batch?.stopping} title={t('batch.pauseWhy')}>
+              {t('batch.pause')}
+            </button>
+          )}
+          <button onClick={() => void stop()} disabled={batch?.stopping} title={t('batch.stopWhy')}>
             {t('batch.stop')}
           </button>
+          {batch?.pausing && !batch?.stopping && <span className="muted small">{t('batch.pausing')}</span>}
           {/*
             The model the run is actually on, said out loud here because the picker it was
             chosen with is hidden for the duration. A control that vanishes with no replacement

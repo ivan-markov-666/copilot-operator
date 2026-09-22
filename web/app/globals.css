@@ -694,6 +694,44 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .story-box .live { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .story-box .live .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: live-pulse 1.6s ease-in-out infinite; }
 
+/*
+ * The same pulse, on the button that opens a task that is running right now.
+ *
+ * It is the one affordance that says the thing behind the button is still moving: a record of
+ * something finished and a window on something happening read identically otherwise, and the
+ * operator only finds out which they have after pressing.
+ */
+button .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: live-pulse 1.6s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+/* A row of one-word links, explained. The button is small on purpose: it is an offer, not a step. */
+.info-dot {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: calc(11px * var(--scale));
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+}
+.info-panel { flex-basis: 100%; margin-top: 6px; }
+.info-panel dl { margin: 6px 0 0; }
+.info-panel dt { font-weight: 600; margin-top: 6px; }
+.info-panel dd { margin: 0 0 0 14px; opacity: 0.85; }
+
+/* The tick box on a finished task, while a selection is being made. */
+.flow .head .pick { margin: 0 2px 0 0; flex: 0 0 auto; }
+
 /* A folded folder that holds something named in the two lists. */
 .chip.inside { font-size: calc(10.5px * var(--scale)); opacity: 0.85; }
 .chip.inside.out { color: var(--bad); border-color: var(--bad); }

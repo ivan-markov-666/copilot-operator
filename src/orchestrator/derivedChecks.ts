@@ -40,13 +40,13 @@ export type DerivedValidation = {
  */
 export async function validateDerivedChecks(
   findings: Array<ReviewFinding & { id: string }>,
-  opts: { cwd: string; logDir: string; repoDir?: string; deny?: CheckRunOptions['deny']; signal?: AbortSignal },
+  opts: { cwd: string; logDir: string; repoDir?: string; deny?: CheckRunOptions['deny']; signal?: AbortSignal; defaultShell?: CheckRunOptions['defaultShell'] },
 ): Promise<DerivedValidation> {
   const out: DerivedValidation = { kept: [], refused: [] };
   for (const [i, finding] of findings.entries()) {
     if (!finding.check) continue;
     const check: TaskCheck = { ...finding.check, name: derivedCheckName(finding.id, finding.check.name) };
-    const outcome = await runCheck(check, 500 + i, { cwd: opts.cwd, logDir: join(opts.logDir, 'derived'), repoDir: opts.repoDir, deny: opts.deny, signal: opts.signal });
+    const outcome = await runCheck(check, 500 + i, { cwd: opts.cwd, logDir: join(opts.logDir, 'derived'), repoDir: opts.repoDir, deny: opts.deny, signal: opts.signal, defaultShell: opts.defaultShell });
     (outcome.passed ? out.refused : out.kept).push({ finding, check, outcome });
   }
   return out;

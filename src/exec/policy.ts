@@ -14,7 +14,7 @@
  */
 import { extname } from 'node:path';
 import type { Step } from '../protocol/replySchema.js';
-import type { Shell } from './runner.js';
+import { effectiveShell, type Shell } from './shells.js';
 import { findShellExecuteTrap } from './shellExecuteTrap.js';
 
 export type PolicyDecision =
@@ -29,10 +29,12 @@ export type PolicyConfig = {
 };
 
 export function describeStep(step: Step, scriptPath?: string): string {
+  // The shell it will really be read by, not the one this file used to assume: a line in the
+  // log that names an interpreter the machine has not got explains the wrong failure.
   if (step.type === 'command') {
-    return `[${step.shell ?? 'pwsh'}] ${step.cmd}`;
+    return `[${effectiveShell(step.shell)}] ${step.cmd}`;
   }
-  const how = step.run ? `run with ${step.shell ?? 'pwsh'}` : 'save only';
+  const how = step.run ? `run with ${effectiveShell(step.shell)}` : 'save only';
   return `[download] ${step.file} (${how}${step.args.length ? ` ${step.args.join(' ')}` : ''})${
     scriptPath ? ` -> ${scriptPath}` : ''
   }`;
@@ -80,7 +82,9 @@ export function commandRefusal(
  */
 export function staticCheck(step: Step, cfg: PolicyConfig, env: NodeJS.ProcessEnv = process.env): PolicyDecision | null {
   if (step.type === 'command') {
-    const reason = commandRefusal(step.cmd, (step.shell ?? 'pwsh') as Shell, cfg.denyPatterns, env);
+    // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`
+    // are shell-specific, so screening for one interpreter and running in another finds nothing.
+    const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, env);
     return reason ? { action: 'skip', reason } : null;
   }
 

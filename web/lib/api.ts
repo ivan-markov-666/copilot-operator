@@ -479,6 +479,8 @@ export type BatchState = {
   /** Whether the sessions are a chain ('stop') or separate pieces of work ('continue'). */
   onFailure: 'stop' | 'continue';
   stopping: boolean;
+  /** Asked to hold after the task that is running, rather than after its current step. */
+  pausing: boolean;
   running: boolean;
   sessions: BatchSession[];
 };
@@ -523,6 +525,20 @@ export type Story = {
   entries: StoryEntry[];
   close?: { status: string; summary?: string; reason?: string; checks?: TaskCheckResult[] };
   live: boolean;
+};
+
+/**
+ * Where a log went when it was saved rather than opened.
+ *
+ * `revealed` is false and `note` says why on a machine that has no Explorer to open: the file
+ * is on disk either way, and the path is most of what the operator wanted.
+ */
+export type SavedLog = {
+  path: string;
+  dir: string;
+  fileName: string;
+  revealed: boolean;
+  note?: string;
 };
 
 /** Which of the operator's two standing texts: the slow one, or the one per group of tasks. */
@@ -613,6 +629,20 @@ export const api = {
     `${API}/sessions/${id}/tasks/${taskId}/log${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
   taskFileUrl: (id: string, taskId: string, kind: string, name: string, runId?: string) =>
     `${API}/sessions/${id}/tasks/${taskId}/files/${kind}/${encodeURIComponent(name)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
+  /*
+   * The same two things, saved to the Desktop and shown in Explorer instead of opened in a
+   * tab. The URLs above are what the UI falls back to when this refuses, so both stay.
+   */
+  saveTaskLog: (id: string, taskId: string, runId?: string) =>
+    call<SavedLog>(`/sessions/${id}/tasks/${taskId}/log${runId ? `?run=${encodeURIComponent(runId)}` : ''}`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  saveTaskFile: (id: string, taskId: string, kind: string, name: string, runId?: string) =>
+    call<SavedLog>(
+      `/sessions/${id}/tasks/${taskId}/files/${kind}/${encodeURIComponent(name)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
+      { method: 'POST', body: '{}' },
+    ),
 
   start: (id: string, mode: 'confirm' | 'unattended', name?: string) =>
     call<{ started: boolean; reason?: string }>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode, name }) }),
@@ -646,7 +676,13 @@ export const api = {
       // onto all of them before the run starts.
       body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name }),
     }),
+  /** What the run would be called if nothing is typed, so the field can start there. */
+  suggestedRunName: (sessionIds: string[]) =>
+    call<{ name: string }>(`/batch/name?sessions=${encodeURIComponent(sessionIds.join(','))}`),
   stopBatch: () => call<{ stopping: boolean }>('/batch/stop', { method: 'POST', body: '{}' }),
+  /** Holds the run after the task that is running finishes. The rest of the queue stays as it is. */
+  pauseBatch: () => call<{ pausing: boolean }>('/batch/pause', { method: 'POST', body: '{}' }),
+  resumeBatch: () => call<{ pausing: boolean }>('/batch/resume', { method: 'POST', body: '{}' }),
 
   /**
    * The text to hand to a chat model so it writes a plan.
@@ -703,6 +739,48 @@ export const api = {
    * One of the three JSON views: `plan` (what was asked, importable again), `domain` (what
    * happened to the work), `bot` (what the runner did) — of a task, a session or a whole run.
    */
+  /**
+   * All three views of the tasks that were ticked, saved as one file.
+   *
+   * Fetched rather than linked, because the selection travels in a body: the response is turned
+   * into a blob and handed to a link that clicks itself, which is what a download link would
+   * have done anyway. The name the API chose is kept — it says what is in the file and when it
+   * was taken, and a browser's "export (3).json" says neither.
+   */
+  downloadBundle: async (tasks: Array<{ sessionId: string; taskId: string }>): Promise<string> => {
+    const res = await fetch(`${API}/export/bundle`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tasks }),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
+    // The header carries both forms. The encoded one is the accurate one and is tried first; the
+    // plain one has had everything outside ASCII replaced and is the fallback, used as-is,
+    // because running decodeURIComponent over a name that was never encoded is how a stray %
+    // turns a filename into an exception.
+    const disposition = res.headers.get('content-disposition') ?? '';
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    const plain = /filename="([^"]+)"/i.exec(disposition)?.[1];
+    let fileName = plain ?? 'copilot-operator-bundle.json';
+    if (encoded) {
+      try {
+        fileName = decodeURIComponent(encoded);
+      } catch {
+        /* keep the plain one */
+      }
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoked on the next tick: revoking it in the same one has been known to cancel the save.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return fileName;
+  },
+
   exportUrl: (kind: 'plan' | 'domain' | 'bot', where: { run?: string; session?: string; task?: string }) => {
     const q = new URLSearchParams();
     if (where.run) q.set('run', where.run);

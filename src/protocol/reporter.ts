@@ -62,7 +62,12 @@ function outcomeSummary(r: RunResult): string {
     case 'idle-timeout':
       return `step ${r.id} produced no output and was stopped`;
     case 'aborted':
-      return `step ${r.id} aborted by the operator`;
+      // Exit -4 is `refusedResult`: the runner declined it — a deny pattern, a repeat, damaged
+      // text, a shell that is not here — and it never reached a process. Calling all of those
+      // "aborted by the operator" told the model a person had stopped it, which is a reason to
+      // wait rather than to write the step again, and the reason it could act on was in the
+      // stderr underneath a sentence contradicting it.
+      return r.exitCode === -4 ? `step ${r.id} was not run; see why under it` : `step ${r.id} aborted by the operator`;
     case 'spawn-error':
       return `step ${r.id} could not be started`;
   }

@@ -213,6 +213,18 @@ export class OperatorController {
     res.type('text/plain; charset=utf-8').send(text);
   }
 
+  /**
+   * The same log, saved to the Desktop and shown in Explorer, which is what the operator
+   * actually wants it for. The GET above stays as it is: it is where this falls back to when
+   * the machine refuses to write the file, or when there is no Desktop to write it to.
+   */
+  @Post('sessions/:id/tasks/:taskId/log')
+  async saveTaskLog(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
+    const saved = await this.ops.saveTaskLog(id, taskId, run).catch(fail);
+    if (!saved) throw new NotFoundException('This task has not produced a log yet.');
+    return saved;
+  }
+
   /** The attempt as a story: what was sent, answered, run and how it ended. `run` picks an earlier attempt. */
   @Get('sessions/:id/tasks/:taskId/story')
   async taskStory(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
@@ -245,6 +257,21 @@ export class OperatorController {
       return;
     }
     res.type('text/plain; charset=utf-8').send(text);
+  }
+
+  /** A task's own file, saved to the Desktop and shown in Explorer, exactly as its log is. */
+  @Post('sessions/:id/tasks/:taskId/files/:kind/:name')
+  async saveTaskFile(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @Param('kind') kind: 'reports' | 'artifacts' | 'replies',
+    @Param('name') name: string,
+    @Query('run') run?: string,
+  ): Promise<unknown> {
+    if (!['reports', 'artifacts', 'replies'].includes(kind)) throw new BadRequestException('kind must be reports, artifacts or replies');
+    const saved = await this.ops.saveTaskFile(id, taskId, kind, name, run).catch(fail);
+    if (!saved) throw new NotFoundException('That file is not there.');
+    return saved;
   }
 
   /**
@@ -285,6 +312,30 @@ export class OperatorController {
     const ids = (sessions ?? '').split(',').map((x) => x.trim()).filter(Boolean);
     try {
       const { fileName, content } = await this.ops.debugExport(ids);
+      res.type('application/json; charset=utf-8');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.send(content);
+    } catch (e) {
+      res.status(400).send((e as Error).message);
+    }
+  }
+
+  /**
+   * All three views of a set of tasks the operator ticked, as one file.
+   *
+   * A POST rather than a GET, which makes it the odd one out among the exports and is the right
+   * odd one out: the others name a run, a session or a task and fit in a query string, while this
+   * names every task that was chosen, and a register with sixty finished tasks in it would put a
+   * selection past what a URL can carry. The browser saves the body with a download link made
+   * from a blob, so nothing about the operator's side of it changes.
+   */
+  @Post('export/bundle')
+  async exportBundle(@Res() res: Response, @Body() body: { tasks?: Array<{ sessionId?: string; taskId?: string }> }): Promise<void> {
+    const pairs = (body?.tasks ?? [])
+      .map((x) => ({ sessionId: (x?.sessionId ?? '').trim(), taskId: (x?.taskId ?? '').trim() }))
+      .filter((x) => x.sessionId && x.taskId);
+    try {
+      const { fileName, content } = await this.ops.exportBundle(pairs);
       res.type('application/json; charset=utf-8');
       res.setHeader('content-disposition', contentDisposition(fileName));
       res.send(content);
@@ -346,6 +397,19 @@ export class OperatorController {
    * `onFailure` is about the sessions, not the tasks inside them: `stop` gives up on the rest
    * once a session fails, `continue` works through all of them.
    */
+  /**
+   * What this run would be called if nobody typed anything, so the page can show it first.
+   *
+   * The same answer `startBatch` would reach on its own, asked before the fact rather than after,
+   * because a name the operator can see and correct is worth more than a name that appears in the
+   * register once it is too late to argue with.
+   */
+  @Get('batch/name')
+  suggestRunName(@Query('sessions') sessions?: string): Promise<{ name: string }> {
+    const ids = (sessions ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    return this.ops.suggestRunName(ids).then((name) => ({ name }));
+  }
+
   @Post('batch/start')
   startBatch(
     @Body()
@@ -379,6 +443,22 @@ export class OperatorController {
   @Post('batch/stop')
   stopBatch(): Promise<unknown> {
     return this.ops.stopBatch();
+  }
+
+  /**
+   * Holds the run after the task that is running finishes, rather than after its current step.
+   *
+   * The pair of them are one switch from the page's point of view, so they are one route each
+   * rather than one route with a flag: a request that says what it wants cannot be misread.
+   */
+  @Post('batch/pause')
+  pauseBatch(): Promise<unknown> {
+    return this.ops.pauseBatch();
+  }
+
+  @Post('batch/resume')
+  resumeBatch(): Promise<unknown> {
+    return this.ops.resumeBatch();
   }
 
   // --- plans ---------------------------------------------------------------------------------

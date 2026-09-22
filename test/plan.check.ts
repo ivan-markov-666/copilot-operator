@@ -458,8 +458,20 @@ if (noRoot.ok) {
   console.log('files left off    :', session?.mirror.enabled === false, '(expect true)');
 }
 
+/*
+ * Everything the four imports above left behind, counted.
+ *
+ * Written out per import rather than as one number, because one number is what went stale: it
+ * read 4 from the day it was written and stayed 4 when the read-only section arrived and
+ * imported a whole copy of the example for the sake of one flag on one task. Nothing failed —
+ * the line only prints — so a count that had been wrong for weeks went on being read as right.
+ * Adding an import above means adding its sessions here.
+ */
 console.log('\n--- sessions in the store ---');
-console.log('total             :', (await store.listSessions()).length, '(expect 4)');
+const expectedSessions = 2 /* the example */ + 2 /* the read-only copy of it */ + 1 /* chained */ + 1 /* no root */;
+const sessionsInStore = (await store.listSessions()).length;
+console.log('total             :', sessionsInStore, `(expect ${expectedSessions}: 2 from the example, 2 from the read-only copy of it, 1 chained, 1 without a root)`);
+if (sessionsInStore !== expectedSessions) process.exitCode = 1;
 console.log('none running      :', (await store.listSessions()).every((s) => s.status === 'idle'));
 
 await rm(data, { recursive: true, force: true });

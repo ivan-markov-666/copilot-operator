@@ -21,7 +21,8 @@ import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from
 import { isDownloadStep, resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
-import { runChecks, failureMessage, failureReport, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
+import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type ShellProblem } from '../exec/shells.js';
+import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
@@ -56,8 +57,22 @@ export type RunDeps = {
   store: SessionStore;
   bus: EventBus;
   authorizer: StepAuthorizer;
-  /** Set to stop after the current step. */
+  /** Set to stop after the current step. The task it interrupts ends `aborted`. */
   signal?: AbortSignal;
+  /**
+   * Asked between tasks: whether to hold the queue here.
+   *
+   * The difference from `signal` is what happens to the task that is running, and it is the
+   * whole reason both exist. Aborting is for stopping something that has gone wrong — it cuts
+   * in after the current step, the task ends `aborted`, and whatever it was halfway through
+   * doing stays halfway done. Pausing is for a person who wants to think: the task finishes
+   * properly, its checks run, its review runs, it commits, and only then does the queue stop,
+   * with the rest of it still queued and a conversation that can be re-entered.
+   *
+   * So this is read here and nowhere deeper. Pushing it down into the step loop would make it
+   * the other thing.
+   */
+  shouldPause?: () => boolean;
   /**
    * The press of a start button this run belongs to, written onto every task it reaches.
    *
@@ -75,6 +90,19 @@ function checksFailedReason(outcomes: CheckOutcome[]): string {
     : `the task reported itself as done, but these checks did not pass: ${failed
         .map((o) => `${o.check.name} (${o.detail})`)
         .join('; ')}`;
+}
+
+/**
+ * Why a task ended because of the machine rather than because of the work.
+ *
+ * Said in the task's own reason, in full, because this is the one failure whose fix is not in
+ * the repository: somebody has to install an interpreter or change a setting, and a reason that
+ * only said "the checks did not pass" would send them looking in the wrong place entirely.
+ */
+function shellProblemReason(problem: ShellProblem | null): string {
+  return problem
+    ? `this machine could not run it: ${problem.message}`
+    : 'this machine could not run the commands this task needed, and no usable shell was found';
 }
 
 /**
@@ -133,7 +161,7 @@ function blockedReason(tried: string[], needed?: string): string {
 function refusedResult(step: Step, reason: string): RunResult {
   return {
     id: step.id,
-    shell: (step.shell ?? 'pwsh') as RunResult['shell'],
+    shell: effectiveShell(step.shell),
     command: describeStep(step),
     exitCode: -4,
     outcome: 'aborted',
@@ -492,14 +520,36 @@ export async function runTask(
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\n`, 'utf8');
 
+  /*
+   * Which shell a step or a check gets when it names none, decided here and once.
+   *
+   * The configured default is a preference and not an instruction — nothing about this task
+   * chose it — so on a machine that has not got it the run falls through the order rather than
+   * spending the task on spawn errors. It is said out loud when it happens: a run whose commands
+   * were written for PowerShell and were read by `cmd` is a run somebody will want to know about
+   * before they start reading the output.
+   */
+  const shells = detectShells();
+  const defaultShell = preferredShell(cfg.execution.defaultShell, shells);
+  if (defaultShell !== cfg.execution.defaultShell) {
+    sink.event('shell-fallback', { configured: cfg.execution.defaultShell, using: defaultShell, available: availableShells(shells) },
+      `${cfg.execution.defaultShell} is not installed on this machine, so anything that names no shell runs in ${defaultShell} ` +
+        `(found: ${availableShells(shells).join(', ') || 'nothing'})`, 'warn');
+  }
+
   // Which world this run got: the machine's tools, so a difference between two runs of one
   // plan has somewhere to be read from. Once per process; the probes are child processes.
   const environment = collectEnvironment();
   await writeFile(log.path('environment.json'), JSON.stringify(environment, null, 2), 'utf8').catch(() => undefined);
-  await record('ENVIRONMENT', describeEnvironment(environment));
+  await record('ENVIRONMENT', describeEnvironment(environment, defaultShell));
   await setTask((t) => {
-    t.environment = environment;
+    // The shell this run resolved to, kept with the rest of the machine, so the export and the
+    // manifest read one fact rather than each deciding it again from a config neither has.
+    t.environment = { ...environment, defaultShell };
   });
+
+  /** A shell that could not be started, kept so the task can end on it rather than retry it. */
+  let environmentProblem: ShellProblem | null = null;
 
   /*
    * Where this session's commands run, decided once and before anything is sent.
@@ -596,6 +646,7 @@ export async function runTask(
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
       readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
+      shellNote: shellNote(shells, defaultShell),
     });
     await setTask((t) => {
       t.firstMessage = opening.firstMessage;
@@ -670,17 +721,19 @@ export async function runTask(
      * Whether "done" is accepted, decided by the operator's checks rather than by the reply.
      *
      * Returns `accept` when there is nothing to check or everything passed, `retry` when the
-     * failures have been sent back for Copilot to fix, and `give-up` when it has had its
-     * rounds. The checks run here, at the end, and not as steps: they are not work, they are
-     * the question of whether the work happened, and a task cannot be trusted to answer that
-     * about itself.
+     * failures have been sent back for Copilot to fix, `give-up` when it has had its rounds,
+     * and `environment` when the machine could not run the checks at all. The checks run here,
+     * at the end, and not as steps: they are not work, they are the question of whether the work
+     * happened, and a task cannot be trusted to answer that about itself.
      */
-    const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up'> => {
+    const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up' | 'environment'> => {
       const checks = [...(task.checks ?? []), ...activeChecks(reviewChecks), ...(willCommit ? [COMMIT_CLEAN_CHECK] : [])];
       if (checks.length === 0) return 'accept';
 
-      checkRounds += 1;
-      sink.event('checks-started', { round: checkRounds, count: checks.length },
+      // Counted only once the round turns out to have been a real attempt. A round that died of
+      // a missing interpreter asked nothing of the work and must not cost the task one.
+      const round = checkRounds + 1;
+      sink.event('checks-started', { round, count: checks.length },
         `checking the task against ${checks.length} condition(s)`);
 
       const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
@@ -689,6 +742,9 @@ export async function runTask(
         signal: deps.signal,
         deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns),
         repoDir: willCommit ? repoDirOf(session) : undefined,
+        // The same shell a step that named none is given, so the gate and the work it judges
+        // cannot have been read by different interpreters.
+        defaultShell,
       }));
 
       for (const o of outcomes) {
@@ -704,6 +760,25 @@ export async function runTask(
       await setTask((t) => {
         t.checkResults = outcomes.map((o) => ({ name: o.check.name, passed: o.passed, detail: o.detail }));
       });
+
+      /*
+       * The machine, not the work.
+       *
+       * Sending this back to the chat would be asking a language model to install an
+       * interpreter, and it would do what it always does with an instruction it cannot carry
+       * out: try something else, fail the same way, and use up the rounds. So the round is not
+       * counted, nothing is sent, and the task ends on a reason that names what is missing. It
+       * is reported once even when every check hit the same wall, because one sentence about
+       * one missing interpreter is the whole of what there is to say.
+       */
+      const problem = environmentProblemIn(outcomes);
+      if (problem) {
+        environmentProblem = problem;
+        sink.event('checks-environment', { round, requested: problem.requested, available: problem.available, checks: outcomes.filter((o) => o.environmentProblem).map((o) => o.check.name) },
+          problem.message, 'error');
+        return 'environment';
+      }
+      checkRounds = round;
 
       for (const o of outcomes) {
         sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail },
@@ -1077,7 +1152,7 @@ export async function runTask(
 
       const parsed = parseReply(lastMarkdown, {
         stopMarker: cfg.copilot.stopMarker,
-        defaultShell: cfg.execution.defaultShell,
+        defaultShell,
       });
 
       if (!parsed.ok) {
@@ -1178,6 +1253,9 @@ export async function runTask(
 
       if (done && reply.steps.length === 0) {
         const verdict = await gateOnChecks();
+        if (verdict === 'environment') {
+          return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
+        }
         if (verdict === 'give-up') {
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
@@ -1233,6 +1311,8 @@ export async function runTask(
       let aborted = false;
       /** How many of this iteration's steps were turned away for being repeats. */
       let repeatsRefused = 0;
+      /** Steps refused because they named a shell this machine has not got. */
+      let shellRefused = 0;
 
       for (const step of reply.steps) {
         if (signal?.aborted) {
@@ -1266,6 +1346,29 @@ export async function runTask(
             results.push(refusedResult(step, `${damage}. ${damageGuidance()}`));
             continue;
           }
+        }
+
+        /*
+         * The step named a shell this machine has not got.
+         *
+         * Refused, never substituted — a command written for PowerShell and quietly handed to
+         * `cmd` does not fail, it does something else — but refused the way a deny pattern is
+         * refused, as one step, and not the way a missing shell under a *check* is: as the end of
+         * the task. The difference is who chose the shell. A check's shell is the operator's, set
+         * in a plan the chat cannot edit, so nothing the chat does next can help and the task
+         * stops on it. A step's shell is the chat's own, and the contract it works to shows
+         * `"shell": "pwsh"` in its one example, so on a machine without PowerShell 7 the chat will
+         * write that on its first try almost every time. Telling it what the machine actually has
+         * and letting it write the step again is the whole mechanism of this bot; killing the task
+         * instead would make the machine this change was written for worse off than before it.
+         */
+        const named = resolveShell(step.shell);
+        if (!named.ok) {
+          shellRefused += 1;
+          sink.event('step-shell-missing', { id: step.id, requested: named.problem.requested, available: named.problem.available },
+            `step ${step.id} asked for a shell this machine has not got: ${named.problem.message}`, 'warn');
+          results.push(refusedResult(step, refusalForChat(named.problem, defaultShell)));
+          continue;
         }
 
         // Refused before the operator is asked to approve it, because a step that cannot teach
@@ -1305,11 +1408,11 @@ export async function runTask(
         const hard = Math.min(step.timeoutSec ?? (long ? cfg.execution.longCommandTimeoutSec : cfg.execution.commandTimeoutSec), cap);
         const idle = Math.min(step.idleTimeoutSec ?? (long ? cfg.execution.longIdleTimeoutSec : cfg.execution.idleTimeoutSec), cap);
 
-        sink.event('step-started', { id: step.id }, `running step ${step.id}: ${describeStep(step, scriptPath)}`);
+        sink.event('step-started', { id: step.id, shell: step.shell ?? defaultShell }, `running step ${step.id}: ${describeStep(step, scriptPath)}`);
         const result = await runStep(
           {
             id: step.id,
-            shell: (step.shell ?? cfg.execution.defaultShell) as RunResult['shell'],
+            shell: step.shell ?? defaultShell,
             command: step.type === 'command' ? step.cmd : (scriptPath as string),
             scriptArgs: step.type === 'download' ? step.args : undefined,
             cwd: work.cwd,
@@ -1333,14 +1436,32 @@ export async function runTask(
           signature,
           sameInARow: previous && previous.signature === signature ? previous.sameInARow + 1 : 1,
         });
-        sink.event('step-finished', { id: step.id, outcome: result.outcome, exitCode: result.exitCode, durationMs: result.durationMs },
+        sink.event('step-finished', { id: step.id, outcome: result.outcome, exitCode: result.exitCode, durationMs: result.durationMs, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
+
+        /*
+         * The shell itself would not start. The same rule as in the check gate applies, for the
+         * same reason: nothing was learned about the work, and the next message would be asking
+         * the model to fix an interpreter. The iteration stops here and the task ends on it.
+         */
+        if (result.shellProblem) {
+          environmentProblem = result.shellProblem;
+          sink.event('step-environment', { id: step.id, requested: result.requestedShell ?? null, available: result.shellProblem.available },
+            result.shellProblem.message, 'error');
+          break;
+        }
 
         if (cfg.execution.stopOnFailure && result.exitCode !== 0) {
           sink.event('stop-on-failure', { id: step.id }, 'stopping the iteration: stopOnFailure is set', 'warn');
           break;
         }
         await pacer.settle();
+      }
+
+      // Ended before the report is written and sent: there is nobody to send it to who could
+      // do anything with it, and the reason on the task says what to install or set instead.
+      if (environmentProblem) {
+        return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
       }
 
       // --- report back ---------------------------------------------------------------
@@ -1373,18 +1494,39 @@ export async function runTask(
        * loop, and the task is ended here rather than left to burn through its iterations and
        * die with a message about a limit that explains nothing.
        */
-      if (reply.steps.length > 0 && repeatsRefused === reply.steps.length) {
+      // A whole iteration of steps naming an interpreter that is not here is the same signature
+      // as a whole iteration of repeats: the refusal was read and written past. Counted with
+      // them rather than given a mechanism of its own, because the answer is the same one.
+      const refusedEverything = repeatsRefused + shellRefused;
+      /*
+       * Which of the two it was, when it has to be said in a sentence.
+       *
+       * An iteration can be all repeats, all missing shells, or one of each — and the third case
+       * is the one that lies if it is not named. Reported as "every step was a repeat" it also
+       * printed an empty list of repeated commands, because the shell-refused step never reached
+       * the fingerprint and there was nothing to list.
+       */
+      const allRepeats = shellRefused === 0;
+      const allNamedAMissingShell = repeatsRefused === 0;
+      if (reply.steps.length > 0 && refusedEverything === reply.steps.length) {
         stalled += 1;
         sink.event('iteration-stalled', { stalled, limit: maxStalledIterations },
-          `every step this iteration was a repeat (${stalled}/${maxStalledIterations})`, 'warn');
+          `every step this iteration ${allRepeats ? 'was a repeat' : allNamedAMissingShell ? 'named a shell this machine has not got' : 'was a repeat or named a shell this machine has not got'} (${stalled}/${maxStalledIterations})`, 'warn');
         if (stalled >= maxStalledIterations) {
           const repeated = [...seen.entries()]
             .filter(([, v]) => v.sameInARow >= maxCommandRepeats)
             .map(([cmd]) => cmd.slice(0, 120));
           return await finish(
             'blocked',
-            `the same command(s) were sent again after being refused for repetition, ${stalled} iteration(s) running, ` +
-              `so the task was ended rather than left to run out of iterations. Repeated: ${repeated.join(' | ')}`,
+            allRepeats
+              ? `the same command(s) were sent again after being refused for repetition, ${stalled} iteration(s) running, ` +
+                `so the task was ended rather than left to run out of iterations. Repeated: ${repeated.join(' | ')}`
+              : allNamedAMissingShell
+                ? `every step named a shell this machine has not got, ${stalled} iteration(s) running, after the chat was ` +
+                  'told which shells are here. The task was ended rather than left to run out of iterations.'
+                : `every step was either a repeat or named a shell this machine has not got, ${stalled} iteration(s) ` +
+                  `running, so the task was ended rather than left to run out of iterations.` +
+                  (repeated.length > 0 ? ` Repeated: ${repeated.join(' | ')}` : ''),
             reply.summary,
             lastMarkdown,
           );
@@ -1397,6 +1539,18 @@ export async function runTask(
       runnerNotes = [];
       // Said in the message as well as in the step's own output, because a refusal buried in an
       // attached file is a refusal that gets read after the next command has been written.
+      if (shellRefused > 0) {
+        const here = availableShells(shells);
+        covering +=
+          here.length === 0
+            ? `\n\n${shellRefused} of the ${reply.steps.length} step(s) were not run: this machine has no Windows ` +
+              'shell the runner can find, so nothing can be run on it. End the task with status "blocked", and fill ' +
+              '"tried" — the format wants two entries there — with what you attempted and this refusal.'
+            : `\n\n${shellRefused} of the ${reply.steps.length} step(s) were not run: they named a shell this ` +
+              `machine has not got. This machine has ${here.join(' and ')}. Send the same work again with ` +
+              `"shell": "${defaultShell}", or leave "shell" out — both give you ${defaultShell} — and write the ` +
+              'commands for that shell.';
+      }
       if (repeatsRefused > 0) {
         covering +=
           `\n\n${repeatsRefused} of the ${reply.steps.length} step(s) were not run: they repeat a command ` +
@@ -1434,6 +1588,9 @@ export async function runTask(
 
       if (done) {
         const verdict = await gateOnChecks();
+        if (verdict === 'environment') {
+          return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
+        }
         if (verdict === 'give-up') {
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
@@ -1478,7 +1635,7 @@ export async function runSession(
      */
     transport?: CopilotTransport;
   },
-): Promise<{ ran: number; lastStatus?: TaskOutcome['status'] }> {
+): Promise<{ ran: number; lastStatus?: TaskOutcome['status']; paused: boolean }> {
   const { cfg, store, bus } = deps;
   let session = await store.getSession(sessionId);
   if (!session) throw new Error(`Session ${sessionId} does not exist.`);
@@ -1486,7 +1643,7 @@ export async function runSession(
   const queued = session.tasks.filter((t) => t.status === 'queued');
   if (queued.length === 0) {
     bus.publish({ sessionId, type: 'session-idle', level: 'info', message: 'no queued tasks' });
-    return { ran: 0 };
+    return { ran: 0, paused: false };
   }
 
   await store.updateSession(sessionId, (s) => {
@@ -1501,6 +1658,8 @@ export async function runSession(
   let transport: CopilotTransport | null = borrowed;
   let ran = 0;
   let lastStatus: TaskOutcome['status'] | undefined;
+  /** Whether the queue stopped because the operator asked it to hold, rather than because it ended. */
+  let paused = false;
 
   try {
     session = await joinGroupConversation(store, session, bus);
@@ -1524,6 +1683,12 @@ export async function runSession(
 
     for (const queuedTask of queued) {
       if (deps.signal?.aborted) break;
+      if (deps.shouldPause?.()) {
+        paused = true;
+        bus.publish({ sessionId, type: 'session-paused', level: 'info',
+          message: `paused by the operator after ${ran} task(s); the rest stay queued and the conversation is kept` });
+        break;
+      }
       session = (await store.getSession(sessionId)) as Session;
       const task = session.tasks.find((t) => t.id === queuedTask.id);
       if (!task || task.status !== 'queued') continue;
@@ -1564,6 +1729,22 @@ export async function runSession(
           if (again) again.autoRetries = (again.autoRetries ?? 0) + 1;
         });
         await chat.newChat();
+        /*
+         * The picker belongs to the conversation, so a new conversation has lost the choice.
+         *
+         * The model is applied once, before the first task, because that is where the
+         * conversation is opened — and this is the other place one is opened, so it has to be
+         * applied again here. Without it a session that asked for a particular model ran its
+         * retries on whatever the chat opens on, which is "Auto", and the record went on saying
+         * it was the model the session asked for. The review has always done this for its own
+         * fresh conversations a few hundred lines up; this path simply never did.
+         */
+        const freshModel = await applySessionModel(chat, session, bus);
+        if (session.model?.trim()) {
+          session = await store.updateSession(sessionId, (s) => {
+            s.modelInUse = freshModel;
+          });
+        }
         const fresh = session.tasks.find((x) => x.id === task.id);
         if (!fresh) break;
         outcome = await runTask(chat, session, fresh, deps);
@@ -1606,5 +1787,5 @@ export async function runSession(
     });
     bus.publish({ sessionId, type: 'session-finished', level: 'info', message: `${ran} task(s) ran` });
   }
-  return { ran, lastStatus };
+  return { ran, lastStatus, paused };
 }

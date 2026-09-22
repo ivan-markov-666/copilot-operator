@@ -59,7 +59,7 @@ function fileLabel(label: string): string {
   return label.replace(/[^\p{L}\p{N}._ -]/gu, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'export';
 }
 
-export function exportFileName(kind: ExportKind, label: string): string {
+export function exportFileName(kind: ExportKind | 'bundle', label: string): string {
   return `copilot-operator-${kind}-${fileLabel(label)}-${stamp()}.json`;
 }
 
@@ -458,5 +458,53 @@ export async function buildBotExport(
     about: `copilot-operator, the runner: ${scope.label}. The environment, every transcript event, every step with its exit code, the transport's retries, what was reaped, what the review machinery did. Read the domain export for what the task was about.`,
     machine,
     tasks,
+  };
+}
+
+// ------------------------------------------------------------------------------------------
+// bundle: all three views of the same chosen tasks, in one file
+// ------------------------------------------------------------------------------------------
+
+/**
+ * The three exports of one chosen set of tasks, in a single document.
+ *
+ * The three are downloaded separately because they answer separate questions, and that is right
+ * when the question is known. It is wrong for the thing the operator actually does most: hand a
+ * failure to a chat model and ask what happened. That needs all three — the plan says what was
+ * asked, the work says what the chat did with it, the runner says what the machine did — and
+ * until now it meant three downloads, three attachments, and remembering which was which.
+ *
+ * **The three stay whole rather than being interleaved per task.** Merging them into one array
+ * of tasks, each carrying its plan, its work and its runner, reads better and is the wrong
+ * trade: the plan export's whole point is that it goes back in through the import page, and a
+ * plan folded inside a fourth format is a plan nothing can read. So this is a wrapper, each
+ * part exactly the document it would have been on its own, and anything that could read one of
+ * them still can.
+ *
+ * `work` and `runner` are what the interface calls them. Inside the code they are `domain` and
+ * `bot`, which is a naming the operator has never been shown and should not meet here.
+ */
+export async function buildBundleExport(
+  scope: ExportScope,
+  runsDir: string,
+  machine: { node: string; platform: string; cwd: string; limits: Record<string, unknown> },
+): Promise<Record<string, unknown>> {
+  const pairs = tasksOf(scope);
+  return {
+    exportedAt: new Date().toISOString(),
+    about:
+      `copilot-operator, all three views of ${pairs.length} chosen task(s): ${scope.label}. ` +
+      '`plan` is what was asked, in the format that imports again; `work` is what happened to it; ' +
+      '`runner` is what the machine did. Read `work` first, then `runner` when the machine is the suspect.',
+    chosen: pairs.map(({ session, task }) => ({
+      session: session.name,
+      sessionId: session.id,
+      task: task.title,
+      taskId: task.id,
+      status: task.status,
+    })),
+    plan: buildPlanExport(scope),
+    work: await buildDomainExport(scope, runsDir),
+    runner: await buildBotExport(scope, runsDir, machine),
   };
 }

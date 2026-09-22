@@ -8,13 +8,17 @@
  *   npm run check:environment
  */
 import { collectEnvironment, describeEnvironment } from '../src/exec/environment.js';
+import { preferredShell } from '../src/exec/shells.js';
 
 const started = Date.now();
 const env = collectEnvironment();
 const took = Date.now() - started;
 
 console.log('--- the manifest ---');
-console.log(describeEnvironment(env).split('\n').map((l) => '  ' + l).join('\n'));
+// The effective default is passed in on purpose: it is not optional on the real call either,
+// because a caller that forgets it silently gets the shell the order picks rather than the one
+// the configuration asked for.
+console.log(describeEnvironment(env, preferredShell('pwsh')).split('\n').map((l) => '  ' + l).join('\n'));
 console.log('\nnode matches this process :', env.node === process.versions.node, '(expect true)');
 console.log('git was found             :', env.git !== null, '(expect true on a machine that runs the bot)');
 console.log('a PowerShell was found    :', env.pwsh !== null || env.powershell !== null, '(expect true)');

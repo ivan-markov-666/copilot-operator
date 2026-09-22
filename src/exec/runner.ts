@@ -13,18 +13,26 @@
  *
  * Output is streamed to disk as it arrives, so a killed step still reports everything it
  * managed to print. Nothing is buffered in memory only.
+ *
+ * Which shell a step runs in is not decided here. It is decided in `shells.ts`, for steps and
+ * post-task checks alike, and this module only carries the answer out again in the result —
+ * what was asked for, what it ran in, and the executable that was actually started — because a
+ * run that behaved oddly is usually a run that was read by an interpreter nobody looked at.
  */
 import { spawn } from 'node:child_process';
-import { createWriteStream, type WriteStream } from 'node:fs';
+import { createWriteStream, existsSync, type WriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-export type Shell = 'pwsh' | 'powershell' | 'cmd';
+import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type Shell, type ShellProblem } from './shells.js';
+
+export type { Shell } from './shells.js';
 
 export type RunRequest = {
   /** Step id from the Copilot reply, used in logs and in the report. */
   id: number;
-  shell: Shell;
+  /** The shell this was written for. Left out when nothing named one, and then one is chosen. */
+  shell?: Shell;
   /** A single command line, or, for a downloaded script, the file to run. */
   command: string;
   /** Present when `command` is a script path rather than an inline command. */
@@ -41,11 +49,23 @@ export type RunRequest = {
 
 export type RunResult = {
   id: number;
+  /** The shell the command was given to. */
   shell: Shell;
+  /** What was asked for, or null when nothing named a shell and the runner chose one. */
+  requestedShell?: Shell | null;
+  /** The executable that was started, which is the part a diagnosis usually turns on. */
+  shellPath?: string;
   command: string;
   exitCode: number;
   /** Why the step ended. */
   outcome: 'completed' | 'hard-timeout' | 'idle-timeout' | 'aborted' | 'spawn-error';
+  /**
+   * Set when the step never ran, or died at birth, because of the machine rather than the work.
+   *
+   * A caller that sees this must not treat it as a failed attempt at the task: there is nothing
+   * for a language model to fix in a missing interpreter.
+   */
+  shellProblem?: ShellProblem;
   durationMs: number;
   stdout: string;
   stderr: string;
@@ -71,22 +91,30 @@ const HEARTBEAT_EVERY_MS = 30_000;
 /** Cap on what is held in memory and echoed into the report body. */
 const MAX_CAPTURE_CHARS = 200_000;
 
-function shellInvocation(req: RunRequest): { file: string; args: string[] } {
-  const isScript = Array.isArray(req.scriptArgs);
-  switch (req.shell) {
-    case 'pwsh':
-    case 'powershell': {
-      const file = req.shell === 'pwsh' ? 'pwsh.exe' : 'powershell.exe';
-      const base = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'];
-      return isScript
-        ? { file, args: [...base, '-File', req.command, ...(req.scriptArgs ?? [])] }
-        : { file, args: [...base, '-Command', req.command] };
-    }
-    case 'cmd':
-      return isScript
-        ? { file: 'cmd.exe', args: ['/d', '/c', req.command, ...(req.scriptArgs ?? [])] }
-        : { file: 'cmd.exe', args: ['/d', '/s', '/c', req.command] };
-  }
+/**
+ * The result of a step that never started because the machine has no shell for it.
+ *
+ * Shaped like a spawn error, because that is what it would have been a moment later, and with
+ * the problem attached so that whoever is counting attempts can see this one does not count.
+ */
+function unrunnable(req: RunRequest, problem: ShellProblem): RunResult {
+  return {
+    id: req.id,
+    // What it would have run in, which on a machine with nothing installed is only a name.
+    shell: effectiveShell(req.shell),
+    requestedShell: req.shell ?? null,
+    shellPath: '',
+    shellProblem: problem,
+    command: req.command,
+    exitCode: -2,
+    outcome: 'spawn-error',
+    durationMs: 0,
+    stdout: '',
+    stderr: `[runner] the command was not run: ${problem.message}\n`,
+    truncated: false,
+    logPath: '',
+    lastOutputAgoMs: 0,
+  };
 }
 
 /**
@@ -112,6 +140,12 @@ export async function runStep(
   const idleTimeoutMs = req.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   const startedAt = Date.now();
 
+  // Every path into the shell goes through here, which is what makes a step and a post-task
+  // check incapable of disagreeing about which interpreter their commands were read by.
+  const choice = resolveShell(req.shell);
+  if (!choice.ok) return unrunnable(req, choice.problem);
+  const resolved = choice.resolved;
+
   await mkdir(dirname(req.logPath), { recursive: true });
   const log: WriteStream = createWriteStream(req.logPath, { flags: 'a' });
   /*
@@ -123,9 +157,9 @@ export async function runStep(
    * step itself, so losing a line of it is the smallest possible failure and is treated as one.
    */
   log.on('error', () => undefined);
-  log.write(`# step ${req.id} shell=${req.shell} cwd=${req.cwd}\n# ${req.command}\n`);
+  log.write(`# step ${req.id} shell=${resolved.shell} exe=${resolved.path} cwd=${req.cwd}\n# ${req.command}\n`);
 
-  const { file, args } = shellInvocation(req);
+  const { file, args } = invocationFor(resolved, req.command, req.scriptArgs);
 
   return await new Promise<RunResult>((resolve) => {
     let stdout = '';
@@ -135,6 +169,8 @@ export async function runStep(
     let lastLine = '';
     let lastOutputAt = Date.now();
     let settled = false;
+    /** Set when the shell itself would not start, which is not a failure of the command. */
+    let shellProblem: ShellProblem | undefined;
 
     // PowerShell colours its output with ANSI escapes, which then travel to Copilot inside
     // the report as `ESC[32;1m` noise around every value. NO_COLOR is honoured by
@@ -156,7 +192,10 @@ export async function runStep(
       log.end(`\n# outcome=${outcome} exit=${exitCode} durationMs=${Date.now() - startedAt}\n`);
       resolve({
         id: req.id,
-        shell: req.shell,
+        shell: resolved.shell,
+        requestedShell: resolved.requested,
+        shellPath: resolved.path,
+        shellProblem,
         command: req.command,
         exitCode,
         outcome,
@@ -199,6 +238,23 @@ export async function runStep(
 
     child.on('error', (err) => {
       stderr += `\n[runner] failed to start: ${String(err)}\n`;
+      /*
+       * ENOENT here is usually the interpreter — `spawn` never got as far as reading what it was
+       * given — and that is worth saying plainly, because the one thing that must not happen next
+       * is the task treating it as work that failed and trying again.
+       *
+       * It is not always the interpreter, though, and Windows makes the two indistinguishable
+       * from the error alone. A `cwd` that does not exist raises ENOENT as well, and Node writes
+       * the *executable's* name into the message while doing it: `spawn cmd.exe ENOENT` for a
+       * directory that was simply never created. A step or a check pointed at a folder an earlier
+       * step was supposed to make would then close the task with a sentence about PowerShell not
+       * being installed — false, and worse than false, because an environment fault is never sent
+       * back to the chat and the chat is the only thing that could have created the folder. So
+       * the two are told apart by the one fact that separates them: whether the executable is
+       * still where detection found it.
+       */
+      const enoent = (err as NodeJS.ErrnoException).code === 'ENOENT';
+      if (enoent && !existsSync(resolved.path)) shellProblem = missingShellProblem(resolved);
       finish('spawn-error', -2);
     });
     child.on('close', (code) => finish('completed', code ?? -1));

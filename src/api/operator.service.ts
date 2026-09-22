@@ -30,7 +30,8 @@ import { newId, tidyVcsPlan } from '../session/model.js';
 import { runSession, openBrowser } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
-import { buildPlanExport, buildDomainExport, buildBotExport, exportFileName, type ExportKind, type ExportScope } from '../session/exports.js';
+import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, type ExportKind, type ExportScope } from '../session/exports.js';
+import { suggestRunName } from '../session/runName.js';
 import { mirrorAllProjects, removeProjectMirrors, contextRoot } from '../context/desktopMirror.js';
 import { describeMirror } from '../context/projectMirror.js';
 import { buildStory, type Story } from '../session/story.js';
@@ -70,6 +71,7 @@ import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
+import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { Settings } from './settings.js';
 import type { ResolvedConfig } from '../config/schema.js';
 
@@ -92,6 +94,8 @@ export type RunTally = {
   failedTitles: string[];
   /** Set when the run itself threw, rather than a task inside it failing. */
   error?: string;
+  /** Whether the queue stopped because the operator asked it to hold between tasks. */
+  paused?: boolean;
 };
 
 /**
@@ -127,6 +131,15 @@ export type BatchState = {
   /** `stop` gives up on the rest when a session fails; `continue` works through them all. */
   onFailure: 'stop' | 'continue';
   stopping: boolean;
+  /**
+   * Asked to hold after the task that is running, rather than after its current step.
+   *
+   * Kept apart from `stopping` because the two do different things to the work in flight: a stop
+   * cuts in and leaves the task `aborted` halfway through whatever it was doing, while a pause
+   * lets it finish, check itself, be reviewed and commit, and only then holds. Both leave the
+   * rest of the queue alone; it is the task in the middle that tells them apart.
+   */
+  pausing: boolean;
   running: boolean;
   sessions: BatchSession[];
 };
@@ -583,6 +596,55 @@ export class OperatorService {
   }
 
   /**
+   * The same log, written to the Desktop and shown in Explorer instead of to the browser.
+   *
+   * What the operator does with a log is hand it to the chat that orchestrates the effort, so
+   * the useful end of the journey is a file under the cursor, not a page in a tab. The reading
+   * is delegated to `taskLog` rather than repeated here: that method already decides which run
+   * folder this task is allowed to open, and a second copy of that decision is a second place
+   * for it to be got wrong.
+   */
+  async saveTaskLog(sessionId: string, taskId: string, runId?: string): Promise<SavedLog | null> {
+    const text = await this.taskLog(sessionId, taskId, runId);
+    if (text === null) return null;
+    return await saveAndReveal(text, await this.namingFor(sessionId, taskId, runId));
+  }
+
+  /** One of a task's own files, saved and revealed the same way. They are logs by another name. */
+  async saveTaskFile(
+    sessionId: string,
+    taskId: string,
+    kind: 'reports' | 'artifacts' | 'replies',
+    name: string,
+    runId?: string,
+  ): Promise<SavedLog | null> {
+    const text = await this.taskFile(sessionId, taskId, kind, name, runId);
+    if (text === null) return null;
+    return await saveAndReveal(text, { ...(await this.namingFor(sessionId, taskId, runId)), file: name });
+  }
+
+  /**
+   * What a saved file is named after.
+   *
+   * An earlier attempt is named from its own snapshot rather than from the task as it stands
+   * now: a task can be edited between attempts, and a file called after today's title would
+   * claim the old log answered a question it was never asked.
+   */
+  private async namingFor(sessionId: string, taskId: string, runId?: string): Promise<LogNaming> {
+    const s = await this.store.getSession(sessionId);
+    const t = s?.tasks.find((x) => x.id === taskId);
+    const chosen = resolveRunId(t, runId);
+    const earlier = chosen && t && chosen !== t.runId ? (t.attempts ?? []).findIndex((a) => a.runId === chosen) : -1;
+    const attempt = earlier >= 0 ? earlier + 1 : (t?.attempt ?? 1);
+    return {
+      session: s?.name ?? sessionId,
+      task: (earlier >= 0 ? t?.attempts?.[earlier]?.title : t?.title) ?? taskId,
+      // A task that has only ever run once has nothing to be told apart from.
+      attempt: attempt > 1 ? attempt : undefined,
+    };
+  }
+
+  /**
    * The record of selected tasks as one downloadable document.
    *
    * `taskIds` empty means every task of the session that has actually run. A queued task has
@@ -690,6 +752,57 @@ export class OperatorService {
     return { fileName: exportFileName(kind, scope.label), content: JSON.stringify(document, null, 2) };
   }
 
+  /**
+   * All three views of a set of tasks the operator picked by hand, in one file.
+   *
+   * The pairs carry their session because a selection spans runs and sessions — that is the
+   * point of it — so a task id on its own would not say which session's task it is. Unknown
+   * pairs are dropped rather than refused: a register left open while a session is deleted
+   * elsewhere should still hand over the tasks that are still there, and the document says
+   * which ones it holds.
+   */
+  async exportBundle(pairs: Array<{ sessionId: string; taskId: string }>): Promise<{ fileName: string; content: string }> {
+    await this.init();
+    if (pairs.length === 0) throw new Error('Choose at least one task.');
+
+    const wanted = new Map<string, Set<string>>();
+    for (const { sessionId, taskId } of pairs) {
+      const set = wanted.get(sessionId) ?? new Set<string>();
+      set.add(taskId);
+      wanted.set(sessionId, set);
+    }
+
+    const sessions: Session[] = [];
+    for (const sessionId of wanted.keys()) {
+      const session = await this.store.getSession(sessionId);
+      if (session) sessions.push(session);
+    }
+    const found = sessions.flatMap((s) => s.tasks.filter((t) => wanted.get(s.id)?.has(t.id)));
+    if (found.length === 0) throw new Error('None of the chosen tasks still exists.');
+
+    // Named after what was chosen rather than after a run, because a selection is not a run: it
+    // may be one task of one, or a task from each of three.
+    const label =
+      found.length === 1 && sessions.length === 1
+        ? `${sessions[0].name}-${found[0].title}`
+        : sessions.length === 1
+          ? `${sessions[0].name}-${found.length}-tasks`
+          : `${found.length}-tasks-${sessions.length}-sessions`;
+
+    const cfg = await this.settings.load();
+    const document = await buildBundleExport(
+      { sessions, taskFilter: (s, t) => !!wanted.get(s.id)?.has(t.id), label },
+      cfg.resolved.runsDir,
+      {
+        node: process.versions.node,
+        platform: process.platform,
+        cwd: cfg.resolved.cwd,
+        limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, mode: cfg.execution.mode } },
+      },
+    );
+    return { fileName: exportFileName('bundle', label), content: JSON.stringify(document, null, 2) };
+  }
+
   // --- running --------------------------------------------------------------------------
 
   isRunning(sessionId: string): boolean {
@@ -706,7 +819,10 @@ export class OperatorService {
     // holds that turn, so a single session asking for it now is refused where the reason can
     // still be read, rather than three minutes later in a stack trace.
     if (this.batch?.running) return { started: false, reason: 'a batch of sessions is running' };
-    const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, ...(name?.trim() ? { name: name.trim() } : {}) };
+    // A run nobody named is named after what it is a run of, rather than left to show up in the
+    // register as "Unnamed run" beside five others of the same description.
+    const chosenName = name?.trim() || (await this.suggestRunName([sessionId]));
+    const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
     // A run of one is still a run, and it records the same thing a batch does, so that going
     // back and starting again from a task works the same whether one session was started or six.
     await this.store.updateSession(sessionId, (s) => {
@@ -770,12 +886,15 @@ export class OperatorService {
       bus: this.bus,
       authorizer,
       signal: controller.signal,
+      // Read between tasks, so the one in flight finishes properly first. The batch owns the
+      // flag, because a pause is about the whole run and not about this session.
+      shouldPause: () => !!this.batch?.pausing,
       // The session decides whether its tasks are one chain or a set of independent checks.
       continueOnFailure: session.onFailure === 'continue',
       transport,
       runGroup,
     })
-      .then(() => this.tally(sessionId, queuedIds))
+      .then(async (outcome) => ({ ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused }))
       .catch(async (e: unknown) => {
         this.bus.publish({ sessionId, type: 'run-failed', level: 'error', message: (e as Error).message });
         return { ...(await this.tally(sessionId, queuedIds)), error: (e as Error).message };
@@ -864,6 +983,14 @@ export class OperatorService {
    * the sessions as a chain, `continue` treats them as separate pieces of work that happen to
    * have been started together.
    */
+  /**
+   * What to call a run nobody named. The rule and the reasoning are in `session/runName.ts`;
+   * this only fetches the sessions it needs to answer over.
+   */
+  async suggestRunName(sessionIds: string[], about?: string): Promise<string> {
+    return suggestRunName(await this.store.listSessions(), sessionIds, about);
+  }
+
   async startBatch(
     sessionIds: string[],
     mode: 'confirm' | 'unattended' = 'confirm',
@@ -884,6 +1011,10 @@ export class OperatorService {
     if (this.batch?.running) return { started: false, reason: 'a batch is already running' };
     const wanted = [...new Set(sessionIds.map((s) => s.trim()).filter(Boolean))];
     if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
+    // Worked out here rather than asked of the operator again: every way into this — the run
+    // panel, continuing after a failure, "Run again from here" — either has a field they may
+    // have left empty or has no field at all.
+    const chosenName = name?.trim() || (await this.suggestRunName(wanted));
     if (wanted.some((id) => this.running.has(id))) {
       return { started: false, reason: 'one of the selected sessions is already running on its own' };
     }
@@ -929,10 +1060,11 @@ export class OperatorService {
     this.batch = {
       id: newId('b-'),
       startedAt: new Date().toISOString(),
-      ...(name?.trim() ? { name: name.trim() } : {}),
+      name: chosenName,
       mode,
       onFailure,
       stopping: false,
+      pausing: false,
       running: true,
       sessions,
     };
@@ -941,6 +1073,47 @@ export class OperatorService {
   }
 
   /** Stops the session that is running now and leaves the rest of the batch unstarted. */
+  /**
+   * Holds the run after the task that is running, and lets that task finish first.
+   *
+   * Not a stop: the task in flight runs its checks, is reviewed and commits, exactly as it would
+   * have. What is held is the queue behind it, and the sessions after this one, both of which
+   * stay as they are — so continuing is the same act it always was, and the button for it is the
+   * one already on the register.
+   *
+   * It does not release the browser early either. The run ends when the current task does, and
+   * the window closes with it, because the Edge profile is single-writer and a run that sat
+   * holding it would stop every other session from doing anything at all.
+   */
+  async pauseBatch(): Promise<{ pausing: boolean }> {
+    const batch = this.batch;
+    if (!batch?.running || batch.stopping) return { pausing: false };
+    batch.pausing = true;
+    this.bus.publish({
+      sessionId: batch.sessions.find((s) => s.state === 'running')?.sessionId ?? batch.id,
+      type: 'batch-pausing',
+      level: 'info',
+      message: 'pausing: the task that is running will finish, and the rest of the queue stays as it is',
+      data: { batchId: batch.id },
+    });
+    return { pausing: true };
+  }
+
+  /** Takes the hold off a run that has not ended yet, so the queue carries on where it was. */
+  async resumeBatch(): Promise<{ pausing: boolean }> {
+    const batch = this.batch;
+    if (!batch?.running || !batch.pausing) return { pausing: false };
+    batch.pausing = false;
+    this.bus.publish({
+      sessionId: batch.sessions.find((s) => s.state === 'running')?.sessionId ?? batch.id,
+      type: 'batch-resumed',
+      level: 'info',
+      message: 'the hold is off; the queue carries on',
+      data: { batchId: batch.id },
+    });
+    return { pausing: false };
+  }
+
   async stopBatch(): Promise<{ stopping: boolean }> {
     const batch = this.batch;
     if (!batch?.running) return { stopping: false };
@@ -1048,6 +1221,14 @@ export class OperatorService {
           entry.reason = 'the batch was stopped before this session started';
           continue;
         }
+        // A hold applies to the sessions that have not started as well as to the queue inside
+        // the one that has. They are left exactly as they were, which is what makes continuing
+        // afterwards the same act as continuing after anything else.
+        if (batch.pausing) {
+          entry.state = 'skipped';
+          entry.reason = 'the run was paused before this session started; its tasks are still queued';
+          continue;
+        }
 
         entry.state = 'running';
         this.bus.publish({
@@ -1075,6 +1256,9 @@ export class OperatorService {
         } else if (tally.failed > 0) {
           entry.state = 'failed';
           entry.reason = `${tally.failed} task(s) did not finish: ${tally.failedTitles.join(', ')}`;
+        } else if (tally.paused) {
+          entry.state = 'stopped';
+          entry.reason = `paused after ${tally.ran} task(s); ${tally.leftQueued} still queued`;
         } else if (batch.stopping || tally.leftQueued > 0) {
           entry.state = 'stopped';
           entry.reason = `${tally.leftQueued} task(s) never started`;
@@ -1641,6 +1825,15 @@ export class OperatorService {
       plan.sessions.map((x) => x.id),
       opts.mode ?? plan.mode,
       opts.onFailure ?? plan.onFailure,
+      undefined,
+      undefined,
+      // Named after the task it goes back to, which is the one thing this run is about and the
+      // only thing a heading could usefully say. There is no field to type into on a task card,
+      // so leaving it to the operator meant leaving it blank every time.
+      await this.suggestRunName(
+        plan.sessions.map((x) => x.id),
+        plan.from.title,
+      ),
     );
     return { started: started.started, reason: started.reason, requeued, restored, batch: started.batch };
   }

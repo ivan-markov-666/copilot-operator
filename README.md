@@ -128,6 +128,18 @@ Design and findings:
 - [`docs/tech-stack-research.md`](docs/tech-stack-research.md) — why Playwright and not the alternatives
 - [`docs/deferred.md`](docs/deferred.md) — designed, argued and deliberately not built yet, with the reasoning kept
 
+### What the planning persona knows
+
+The brief the UI hands to a chat model — the Kerrigan persona — carries the names of this
+application's own screens and controls, so it can tell the operator to press "Create the sessions
+and tasks" rather than "import the plan". They live in `src/plan/systemGuide.ts` and are embedded
+in the brief by `src/plan/brief.ts`, and `test/guide.check.ts` pins every one of them to
+`web/lib/strings.ts` in both languages. Renaming a control in the interface therefore breaks that
+check by name, and a new control the operator would ever be told to press has to be added to the
+guide as well, or the persona does not know it exists. The same check reads the pages themselves,
+so a label that is still in the dictionary but that nothing renders any more fails too, and it
+holds the labels the brief quotes in its own prose to the same standard.
+
 ## Notable findings
 
 These cost real investigation and are worth knowing before touching the code.

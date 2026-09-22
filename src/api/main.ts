@@ -21,7 +21,21 @@ async function main(): Promise<void> {
   // A plan pasted from a chat carries every task's text at once, which the 100 KB default
   // refuses with a message about entity size that says nothing about plans.
   app.useBodyParser('json', { limit: '5mb' });
-  app.enableCors({ origin: [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1')] });
+  app.enableCors({
+    origin: [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1')],
+    /*
+     * The one header the page has to be able to read.
+     *
+     * A browser hands script only a handful of response headers across origins, and
+     * `content-disposition` is not among them unless it is named here. The UI is on
+     * `localhost:3210` and this is on `127.0.0.1:4000`, so every fetch is cross-origin: without
+     * this, a download built from a blob cannot find out what the file is called, and the
+     * carefully composed `copilot-operator-bundle-2-tasks-2-sessions-<stamp>.json` arrives as
+     * whatever the client guessed. The plain `<a download>` exports never noticed, because the
+     * browser reads the header itself for those and never shows it to the page.
+     */
+    exposedHeaders: ['content-disposition'],
+  });
   app.setGlobalPrefix('api');
   await app.listen(PORT, '127.0.0.1');
 

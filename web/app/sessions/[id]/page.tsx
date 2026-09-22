@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { API, api, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
+import { SaveLog } from '../../saveLog';
 import { fmtDuration } from '../../../lib/api';
 import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
 import { useNow } from '../../../lib/useNow';
@@ -1468,6 +1469,7 @@ function TaskForm({
 // One task
 // ---------------------------------------------------------------------------------------
 
+
 function TaskCard({
   session,
   task,
@@ -1584,10 +1586,11 @@ function TaskCard({
     names.length > 0 && (
       <div>
         <span className="muted">{t(label)} </span>
+        {/* A report or a downloaded script is a log by another name, so it is saved the same way. */}
         {names.map((n) => (
-          <a key={n} href={api.taskFileUrl(session.id, task.id, kind, n)} target="_blank" rel="noreferrer" style={{ marginRight: 10 }}>
-            {n}
-          </a>
+          <span key={n} style={{ marginRight: 10 }}>
+            <SaveLog label={n} save={() => api.saveTaskFile(session.id, task.id, kind, n)} />
+          </span>
         ))}
       </div>
     );
@@ -1603,8 +1606,15 @@ function TaskCard({
         {(task.attempt ?? 1) > 1 && <span className="chip">{t('task.attemptN', { n: task.attempt ?? 1 })}</span>}
         {task.iterations > 0 && <span className="muted small">{t('task.iterations', { n: task.iterations })}</span>}
         {task.runId && (
-          <button className={showStory ? '' : 'quiet'} onClick={() => setShowStory((v) => !v)} title={t('story.why')}>
-            {showStory ? t('story.hide') : t('story.show')}
+          <button
+            className={showStory ? '' : 'quiet'}
+            onClick={() => setShowStory((v) => !v)}
+            title={isLive(task) ? t('story.showLiveWhy') : t('story.why')}
+          >
+            {/* A task being worked on right now says so, and pulses: what is behind the button is
+                different in kind from a record of something finished. */}
+            {isLive(task) && !showStory && <span className="dot" aria-hidden="true" />}
+            {showStory ? t('story.hide') : isLive(task) ? t('story.showLive') : t('story.show')}
           </button>
         )}
         {editable && (
@@ -1897,11 +1907,7 @@ function TaskCard({
                     <strong>{t('task.attemptN', { n: i + 1 })}</strong>
                     <span className={`badge ${a.status}`}>{t(`status.${a.status}` as Key)}</span>
                     {a.iterations > 0 && <span className="muted">{t('task.iterations', { n: a.iterations })}</span>}
-                    {a.runId && (
-                      <a href={api.taskLogUrl(session.id, task.id, a.runId)} target="_blank" rel="noreferrer">
-                        {t('task.log')}
-                      </a>
-                    )}
+                    {a.runId && <SaveLog label={t('save.attemptLog')} save={() => api.saveTaskLog(session.id, task.id, a.runId)} />}
                   </div>
                   <div className="muted">
                     {a.startedAt ? t('task.started', { t: fmtTime(a.startedAt) }) : ''}
@@ -1964,9 +1970,7 @@ function TaskCard({
             <details onToggle={(e) => (e.currentTarget as HTMLDetailsElement).open && void loadFiles()}>
               <summary>{t('task.files')}</summary>
               <div className="row small" style={{ margin: '6px 0' }}>
-                <a href={api.taskLogUrl(session.id, task.id)} target="_blank" rel="noreferrer">
-                  {t('task.log')}
-                </a>
+                <SaveLog label={t('save.log')} save={() => api.saveTaskLog(session.id, task.id)} />
               </div>
               {files && (
                 <div className="small">

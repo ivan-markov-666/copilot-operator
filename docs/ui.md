@@ -121,6 +121,37 @@ it has priority; the composition only makes the boundary visible.
 by the schema whenever the status is `done`; a `done` reply without one is sent back. The UI
 shows it as the outcome of the task. The stop word alone no longer ends a task.
 
+## What the planning persona knows about these screens
+
+The brief `/import` hands to a chat model carries a written description of every screen here, so
+the persona can tell the operator to press **Create the sessions and tasks** rather than "import
+the plan". That description lives in `src/plan/systemGuide.ts`: one entry per screen with its
+route, and under it every control an operator would ever be told to press or read back, each with
+its label in English and in Bulgarian and one sentence saying what it does. `src/plan/brief.ts`
+embeds the rendered form of it with `systemGuideSection(lang)`, behind an instruction to quote
+those words exactly and to name nothing that is not in the list.
+
+The labels are a second copy of the ones in `web/lib/strings.ts`, because `src/` is the Node
+server build and cannot import a browser module out of the Next workspace with no bundler in the
+way. `test/guide.check.ts` — `npm run check:guide` — is what keeps the copy honest: it holds every
+label and every section heading the guide quotes against that dictionary, key by key, in both
+languages, and fails on the first character of difference.
+
+The check goes two steps further, because matching the dictionary turned out not to be enough.
+It reads `web/app` and `web/lib` and treats the pages as the authority: a key that is still in the
+dictionary but that no page renders any more counts as a failure, since a label can be word for
+word correct and belong to a control that was replaced — which is exactly what happened when the
+log links became "save the log" buttons and three entries went on describing links that had gone.
+And it reads the brief itself, where the phase scripts quote labels in prose (`**"Check it"**`,
+`**„Провери“**`) rather than through the guide; every one of those quotes has to be the current
+text of something on a screen too.
+
+The contract, then: **a control renamed in `web/lib/strings.ts` is also renamed in
+`src/plan/systemGuide.ts`**, and the check names the key when it is not. A new control the
+operator would ever be told to press has to be added there too, or the persona does not know it
+exists and will send them looking for something else. A control that disappears comes out — of the
+guide and of the brief's prose alike.
+
 ## What a task keeps
 
 Everything is under `runs/<runId>/` and the UI links to it:

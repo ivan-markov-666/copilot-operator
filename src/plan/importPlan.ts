@@ -12,6 +12,7 @@
 import type { SessionStore } from '../session/store.js';
 import { DEFAULT_MIRROR, DEFAULT_VCS } from '../session/store.js';
 import type { Session } from '../session/model.js';
+import { availableShells, detectShells, type Shell } from '../exec/shells.js';
 import type { Plan, PlanSession, PlanTask } from './schema.js';
 
 export type ImportedSession = {
@@ -75,6 +76,44 @@ export function plannedSessionSignature(session: PlanSession): string {
 }
 
 /**
+ * Checks that name a shell this machine has not got.
+ *
+ * A warning rather than a refusal, which is the line this importer already draws: a plan is
+ * refused for what is wrong with the document and warned about for what is wrong with running
+ * it here. The document is fine — `shell: "pwsh"` is a legal thing for a plan to ask for — and
+ * the same plan is correct on the machine it was written for, so refusing it would be refusing
+ * the wrong thing. But a check that asks for an interpreter this machine cannot start will end
+ * its task on a configuration error rather than on the work, and the moment to hear that is now,
+ * while the queue is still sitting in front of somebody, and not four tasks into a run.
+ *
+ * One line per missing shell, not one per check: the fix is the same for all of them.
+ */
+function unavailableShellWarnings(plan: Plan): string[] {
+  const inventory = detectShells();
+  const here = availableShells(inventory);
+  const asked = new Map<Shell, string[]>();
+
+  for (const session of plan.sessions) {
+    for (const task of session.tasks) {
+      for (const check of task.checks) {
+        if (!check.shell || inventory.found[check.shell]) continue;
+        asked.set(check.shell, [...(asked.get(check.shell) ?? []), `"${check.name}" in "${task.title}"`]);
+      }
+    }
+  }
+
+  return [...asked].map(([shell, checks]) => {
+    const named = checks.slice(0, 3).join(', ');
+    return (
+      `${checks.length} check(s) ask to run in ${shell}, which is not installed on this machine: ${named}` +
+      `${checks.length > 3 ? `, and ${checks.length - 3} more` : ''}. ` +
+      `They will end their task with a configuration error rather than run. Install ${shell}, or edit those checks to ` +
+      `use one of the shells that are here${here.length > 0 ? ` (${here.join(', ')})` : ''}.`
+    );
+  });
+}
+
+/**
  * Creates everything the plan describes.
  *
  * `defaultModel` is what a session starts on when the plan does not name one, which keeps an
@@ -82,7 +121,7 @@ export function plannedSessionSignature(session: PlanSession): string {
  */
 export async function importPlan(store: SessionStore, plan: Plan, defaultModel = '', defaultReviewModel = ''): Promise<ImportResult> {
   const sessions: ImportedSession[] = [];
-  const warnings: string[] = [];
+  const warnings: string[] = [...unavailableShellWarnings(plan)];
 
   /*
    * One conversation for the whole plan, when it asked for that.

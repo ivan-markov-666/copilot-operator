@@ -87,6 +87,14 @@ export const CheckInput = z
       },
     ),
     run: z.string().trim().optional(),
+    /**
+     * The shell to run it in. Left out is the usual answer and the better one.
+     *
+     * A check that names a shell is asking for that shell and nothing else: on a machine without
+     * it the check does not quietly run somewhere else, it ends its task with a configuration
+     * error saying what is missing. Left out, it takes whatever the machine has, in the order
+     * pwsh, powershell, cmd. See `exec/shells.ts`.
+     */
     shell: z.enum(['pwsh', 'powershell', 'cmd']).optional(),
     cwd: z.string().trim().optional(),
     file: z.string().trim().optional(),

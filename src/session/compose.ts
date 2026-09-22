@@ -41,6 +41,14 @@ export type ComposeInput = {
    * describes a state of the world that does not hold is worse than one that says nothing.
    */
   vcsNote?: string;
+  /**
+   * What this machine's shells are, when they are not what the contract's example assumes.
+   *
+   * Composed rather than written into the contract for the same reason `vcsNote` is: it is only
+   * true on some machines, and a contract describing a world that does not hold is worse than one
+   * that says nothing. Absent on a machine with PowerShell 7, which is most of them.
+   */
+  shellNote?: string;
 };
 
 const LEVEL2_HEADER = '## Project instructions (level 2)';
@@ -56,7 +64,7 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.readOnlyNote, input.vcsNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.vcsNote, input.shellNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
 

@@ -26,6 +26,7 @@ import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } fro
 import { describeFindings, findingId, isGrounded, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
+import { effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell } from '../exec/shells.js';
 import { describeStep, commandRefusal } from '../exec/policy.js';
 import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
@@ -339,6 +340,13 @@ export async function runReview(
   let stepsRun = 0;
   let iterations = 0;
   let formatRetries = 0;
+  /**
+   * The shell a review step gets when it names none.
+   *
+   * The same answer the implementer's steps get, from the same place: a reviewer that ran the
+   * build in a different interpreter from the one that built it is not reviewing the same thing.
+   */
+  const defaultShell = preferredShell(cfg.execution.defaultShell);
   /** A check that passes on the defective state is sent back once; after that it is dropped. */
   let derivedRetried = false;
   /** A finding whose basis is not in the task is sent back once; after that it is dropped. */
@@ -354,7 +362,12 @@ export async function runReview(
     // The contract first, on its own, exactly as a session does it: the handshake reply is not
     // parsed, it only proves the conversation is alive and listening.
     await pacer.throttleSend();
-    let before = await transport.sendAndConfirm(contract);
+    // The machine's shells, when they are not what the contract's example assumes — the same note
+    // the implementer's conversation opens with, for a conversation working to the same example.
+    const machineNote = shellNote(undefined, defaultShell);
+    let before = await transport.sendAndConfirm(machineNote ? `${contract}
+
+${machineNote}` : contract);
     await transport.waitForReply(before);
 
     await pacer.throttleSend();
@@ -379,7 +392,7 @@ export async function runReview(
         };
       }
 
-      const parsed = parseReview(markdown, { defaultShell: cfg.execution.defaultShell });
+      const parsed = parseReview(markdown, { defaultShell });
       if (!parsed.ok) {
         formatRetries += 1;
         deps.event('review-format-error', { round, reason: parsed.reason, detail: parsed.detail },
@@ -516,6 +529,7 @@ export async function runReview(
           repoDir: deps.repoDir,
           deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns),
           signal,
+          defaultShell,
         });
         if (validation.refused.length > 0 && !derivedRetried) {
           derivedRetried = true;
@@ -553,20 +567,20 @@ export async function runReview(
       for (const step of review.steps) {
         if (signal?.aborted) break;
         if (step.type !== 'command') {
-          results.push(refused(step.id, 'a review runs commands only; it does not download or execute files'));
+          results.push(refused(step.id, 'a review runs commands only; it does not download or execute files', '(not run)', step.shell));
           continue;
         }
 
         const damage = findLikelyDamage(step.cmd);
         if (damage) {
-          results.push(refused(step.id, `${damage}. ${damageGuidance()}`, step.cmd));
+          results.push(refused(step.id, `${damage}. ${damageGuidance()}`, step.cmd, step.shell));
           continue;
         }
 
         deps.event('review-step-proposed', { round, id: step.id, description: describeStep(step) }, `review step ${step.id}: ${describeStep(step)}`);
         const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations });
         if (decision.action !== 'run') {
-          results.push(refused(step.id, decision.reason, step.cmd));
+          results.push(refused(step.id, decision.reason, step.cmd, step.shell));
           if (decision.action === 'abort') break;
           continue;
         }
@@ -576,10 +590,27 @@ export async function runReview(
         const hard = Math.min(step.timeoutSec ?? (long ? cfg.execution.longCommandTimeoutSec : cfg.execution.commandTimeoutSec), cap);
         const idle = Math.min(step.idleTimeoutSec ?? (long ? cfg.execution.longIdleTimeoutSec : cfg.execution.idleTimeoutSec), cap);
 
+        /*
+         * The same refusal the implementer's steps get, for the same reason.
+         *
+         * A reviewer works to `prompts/review1.md`, whose worked example also names `pwsh`, so on
+         * a machine without PowerShell 7 it writes `pwsh` and its step cannot run. Left to
+         * `runStep` it came back carrying the operator's sentence — install PowerShell 7, set
+         * `execution.defaultShell` — uploaded to a conversation that can do neither, and the
+         * review spent its rounds on it.
+         */
+        const named = resolveShell(step.shell);
+        if (!named.ok) {
+          deps.event('review-step-shell-missing', { round, id: step.id, requested: named.problem.requested, available: named.problem.available },
+            `review step ${step.id} asked for a shell this machine has not got: ${named.problem.message}`, 'warn');
+          results.push(refused(step.id, refusalForChat(named.problem, defaultShell), step.cmd, step.shell));
+          continue;
+        }
+
         const result = await runStep(
           {
             id: step.id,
-            shell: (step.shell ?? cfg.execution.defaultShell) as RunResult['shell'],
+            shell: step.shell ?? defaultShell,
             command: step.cmd,
             cwd: deps.cwd,
             hardTimeoutMs: hard * 1000,
@@ -590,7 +621,7 @@ export async function runReview(
         );
         stepsRun += 1;
         results.push(result);
-        deps.event('review-step-finished', { round, id: step.id, outcome: result.outcome, exitCode: result.exitCode },
+        deps.event('review-step-finished', { round, id: step.id, outcome: result.outcome, exitCode: result.exitCode, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `review step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
         await pacer.settle();
       }
@@ -659,10 +690,16 @@ export function refusedChecksMessage(refused: Array<{ id: string; detail: string
 }
 
 /** A step the review did not run, in the shape the reporter expects. */
-function refused(id: number, reason: string, command = '(not run)'): RunResult {
+function refused(id: number, reason: string, command = '(not run)', requested?: Shell): RunResult {
   return {
     id,
-    shell: 'pwsh',
+    // The shell it would have run in, rather than the one this file used to name: a report line
+    // that says `pwsh` on a machine without it sends the reader after the wrong problem. The
+    // step's own choice comes first, because a step that named `cmd` and was refused was never
+    // going to run in anything else, and labelling it with the machine's fallback would be the
+    // same lie the other way round.
+    shell: effectiveShell(requested),
+    requestedShell: requested ?? null,
     command,
     exitCode: -4,
     outcome: 'aborted',

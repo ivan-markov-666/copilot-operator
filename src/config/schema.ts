@@ -120,6 +120,14 @@ export const RunConfigSchema = z.object({
   execution: z
     .object({
       mode: z.enum(['confirm', 'unattended']).default('confirm'),
+      /**
+       * The shell a step or a check runs in when it names none of its own.
+       *
+       * A preference rather than an instruction. A machine without PowerShell 7 falls through to
+       * Windows PowerShell and then to `cmd` rather than failing every command with a spawn
+       * error over a default nobody chose for this particular task. A shell that a reply or a
+       * plan does name for itself is honoured or refused and never exchanged — see `exec/shells.ts`.
+       */
       defaultShell: z.enum(['pwsh', 'powershell', 'cmd']).default('pwsh'),
       cwd: z.string().default('.'),
       commandTimeoutSec: z.number().int().positive().default(300),

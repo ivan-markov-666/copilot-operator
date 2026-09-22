@@ -217,8 +217,14 @@ reply is tagged `json`. A short sentence before or after it is fine. The block i
 for more work in the same reply is a contradiction, and the runner rejects it.
 
 A `command` step: `id` (integer, from 1, increasing within the reply), `type` `"command"`,
-`shell` `"pwsh"` or `"cmd"`, `cmd` one single line. Optional: `expect` `"fast"` or
-`"long"`, `timeoutSec`, `idleTimeoutSec`.
+`shell` `"pwsh"`, `"powershell"` (Windows PowerShell 5.1) or `"cmd"`, `cmd` one single line.
+Optional: `expect` `"fast"` or `"long"`, `timeoutSec`, `idleTimeoutSec`.
+
+**`shell` is best left out.** The runner then uses the best shell this machine actually has. Name
+one only when the command needs that one in particular — and a shell this machine has not got gets
+the step refused and sent back, not quietly swapped for another. The example above says `"pwsh"`
+because most machines have PowerShell 7; a machine that does not is said so in the opening message,
+and on that machine the example is wrong and the message is right.
 
 A `download` step: `id`, `type` `"download"`, `file` the exact name of a file you attached
 to this same reply, `run` true to execute it after saving, `shell` when `run` is true,

@@ -16,6 +16,9 @@ import { api, fmtDuration, type RegistryEntry, type TaskStatus } from '../../lib
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
 import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
+import { SaveLog } from '../saveLog';
+import { RowInfo } from '../rowInfo';
+import { RunControls } from '../runControls';
 import { RichText } from '../richText';
 import { useTaskActions } from '../taskActions';
 import { confirmDialog } from '../dialog';
@@ -313,6 +316,9 @@ export default function HistoryPage() {
             <section className="panel">
               <h2>{t('reg.upcoming')}</h2>
               <p className="muted small">{t('reg.upcomingHint')}</p>
+              {/* Holding or stopping the run belongs next to continuing it: they are the three
+                  things an operator does to a run in flight, and this is the page they watch it on. */}
+              <RunControls onChange={() => void load()} />
               <ContinueRun entries={shown} onChange={() => void load()} />
               {upcoming.length === 0 ? (
                 <div className="empty">{t('reg.noUpcoming')}</div>
@@ -341,12 +347,19 @@ function Flow({
   upcoming = false,
   sizes,
   onChange,
+  picking,
 }: {
   entries: RegistryEntry[];
   upcoming?: boolean;
   /** How many tasks each run held, so a row can say who it went out with. */
   sizes?: Map<string, number>;
   onChange?: () => void;
+  /**
+   * Set while the operator is choosing tasks for one file. Absent means no tick boxes at all,
+   * which is the ordinary state: a register is for reading, and a column of empty boxes down a
+   * page nobody is selecting from is a question nobody asked.
+   */
+  picking?: { picked: Set<string>; toggle: (key: string) => void };
 }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
@@ -391,6 +404,15 @@ function Flow({
         return (
           <li key={`${e.sessionId}-${e.taskId}`} className={`${e.status}${isNext ? ' next' : ''}`}>
             <div className="head">
+              {picking && (
+                <input
+                  type="checkbox"
+                  className="pick"
+                  aria-label={e.title}
+                  checked={picking.picked.has(`${e.sessionId}:${e.taskId}`)}
+                  onChange={() => picking.toggle(`${e.sessionId}:${e.taskId}`)}
+                />
+              )}
               <strong>{e.title}</strong>
               <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
               {isNext && <span className="chip">{t('reg.next')}</span>}
@@ -502,9 +524,7 @@ function Flow({
                         {a.iterations > 0 && <span className="muted">{t('reg.iterations', { n: a.iterations })}</span>}
                         {a.durationMs !== undefined && <span className="muted">{t('reg.took', { d: fmtDuration(a.durationMs) })}</span>}
                         {a.runId && (
-                          <a href={api.taskLogUrl(e.sessionId, e.taskId, a.runId)} target="_blank" rel="noreferrer">
-                            {t('reg.attemptLog')}
-                          </a>
+                          <SaveLog label={t('save.attemptLog')} save={() => api.saveTaskLog(e.sessionId, e.taskId, a.runId)} />
                         )}
                       </div>
                       <div className="when">
@@ -526,11 +546,7 @@ function Flow({
 
             <div className="row small" style={{ marginTop: 6 }}>
               <Link href={`/sessions/${e.sessionId}#${e.taskId}`}>{t('reg.openTask')}</Link>
-              {e.runId && (
-                <a href={api.taskLogUrl(e.sessionId, e.taskId)} target="_blank" rel="noreferrer">
-                  {t('reg.openLog')}
-                </a>
-              )}
+              {e.runId && <SaveLog label={t('save.log')} save={() => api.saveTaskLog(e.sessionId, e.taskId)} />}
               {e.chatUrl && (
                 <a href={e.chatUrl} target="_blank" rel="noreferrer">
                   {t('home.col.chat')}
@@ -542,9 +558,17 @@ function Flow({
                * has run — a passed task is exactly what somebody compares a failed one against.
                */}
               {e.startedAt && <ExportLinks where={{ session: e.sessionId, task: e.taskId }} />}
+              <RowInfo />
               {e.runId && (
-                <button className={storyOpen.has(e.taskId) ? '' : 'quiet'} onClick={() => flipStory(e.taskId)} title={t('story.why')}>
-                  {storyOpen.has(e.taskId) ? t('story.hide') : t('story.show')}
+                <button
+                  className={storyOpen.has(e.taskId) ? '' : 'quiet'}
+                  onClick={() => flipStory(e.taskId)}
+                  title={isLive(e) ? t('story.showLiveWhy') : t('story.why')}
+                >
+                  {/* A task being worked on right now says so, and pulses, because what is behind
+                      the button is different in kind: not a record, a window on it happening. */}
+                  {isLive(e) && !storyOpen.has(e.taskId) && <span className="dot" aria-hidden="true" />}
+                  {storyOpen.has(e.taskId) ? t('story.hide') : isLive(e) ? t('story.showLive') : t('story.show')}
                 </button>
               )}
               {FAILED_STATUSES.includes(e.status) && !e.sessionRunning && (
@@ -587,6 +611,7 @@ function Flow({
     </>
   );
 }
+
 
 /** The three JSON downloads, as a tight group of links with what each one answers on hover. */
 function ExportLinks({ where }: { where: { run?: string; session?: string; task?: string } }) {
@@ -649,25 +674,100 @@ function RunHeading({ run }: { run: Run }) {
 function PastByRun({ entries, sizes, onChange }: { entries: RegistryEntry[]; sizes: Map<string, number>; onChange: () => void }) {
   const { t } = useT();
   const grouped = useMemo(() => groupIntoRuns(entries), [entries]);
+  /*
+   * Choosing is a mode, and it is off until it is asked for.
+   *
+   * The selection is held here rather than inside each run's fold, because the question it
+   * answers crosses them: the three tasks worth handing over together are as often one from each
+   * of three runs as three from one. A fold that closed and forgot what was ticked in it would
+   * make exactly the case this exists for impossible.
+   */
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const keyOf = (e: RegistryEntry) => `${e.sessionId}:${e.taskId}`;
+  const toggle = (key: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // A task that never ran has no work and no runner to export, so it is not offered.
+  const choosable = entries.filter((e) => e.startedAt);
+  const chosen = [...picked];
+
+  const download = async () => {
+    setBusy(true);
+    setErr('');
+    setMsg('');
+    try {
+      const name = await api.downloadBundle(
+        chosen.map((key) => {
+          const [sessionId, taskId] = key.split(':');
+          return { sessionId, taskId };
+        }),
+      );
+      setMsg(t('reg.bundleSaved', { name }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selection = picking ? { picked, toggle } : undefined;
+
   return (
     <>
+      <div className="row small" style={{ marginBottom: 8 }}>
+        {picking ? (
+          <>
+            <button className="quiet" onClick={() => { setPicking(false); setPicked(new Set()); setMsg(''); setErr(''); }}>
+              {t('reg.pickDone')}
+            </button>
+            <button className="quiet" onClick={() => setPicked(new Set(choosable.map(keyOf)))}>
+              {t('reg.pickAll')}
+            </button>
+            <button className="quiet" onClick={() => setPicked(new Set())}>
+              {t('reg.pickNone')}
+            </button>
+            <span className="muted">{picked.size > 0 ? t('reg.pickedN', { n: picked.size }) : t('reg.pickedNone')}</span>
+            {picked.size > 0 && (
+              <button className="primary" disabled={busy} onClick={() => void download()} title={t('reg.bundleWhy')}>
+                {t('reg.bundle', { n: picked.size })}
+              </button>
+            )}
+          </>
+        ) : (
+          <button className="quiet" onClick={() => setPicking(true)} title={t('reg.pickWhy')}>
+            {t('reg.pick')}
+          </button>
+        )}
+        {msg && <span className="muted">{msg}</span>}
+        {err && <span className="err">{err}</span>}
+      </div>
       {grouped.runs.map((run, i) => (
-        <details key={run.id} className="run-fold" open={i === 0}>
+        <details key={run.id} className="run-fold" open={i === 0 || picking}>
           <summary>
             <RunHeading run={run} />
           </summary>
-          <Flow entries={run.entries} sizes={sizes} onChange={onChange} />
+          <Flow entries={run.entries} sizes={sizes} onChange={onChange} picking={selection} />
         </details>
       ))}
       {grouped.loose.length > 0 && (
-        <details className="run-fold" open={grouped.runs.length === 0}>
+        <details className="run-fold" open={grouped.runs.length === 0 || picking}>
           <summary>
             <div className="run-heading">
               <h2 style={{ margin: 0 }}>{t('reg.notInARun')}</h2>
               <p className="muted small" style={{ margin: '4px 0 0' }}>{t('reg.notInARunHint')}</p>
             </div>
           </summary>
-          <Flow entries={grouped.loose} sizes={sizes} onChange={onChange} />
+          <Flow entries={grouped.loose} sizes={sizes} onChange={onChange} picking={selection} />
         </details>
       )}
     </>
@@ -824,7 +924,16 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     (a, b) => (a.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) - (b.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) || a.position - b.position,
   );
   const sessionIds = [...new Set(ordered.map((e) => e.sessionId))];
-  const name = ordered.map((e) => e.runGroup?.name).find(Boolean);
+  /*
+   * What this run will be called, suggested by the API and editable here.
+   *
+   * It used to take the previous run's name verbatim, so two attempts at the same work appeared
+   * in the register under one heading and could not be told apart — and where the first run had
+   * no name, the second had none either and read as "Unnamed run". The suggestion is the API's
+   * rather than this page's because "Run again from here", which starts the same kind of run from
+   * a task card, has no field to type into and needs the same answer.
+   */
+  const [name, setName] = useState('');
   const label =
     chainFailed.length > 0
       ? t('reg.continueWithFailed', { f: chainFailed.length, n: upcoming.length, s: sessionIds.length })
@@ -834,6 +943,12 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     setPicked(new Set(looseFailed.map((e) => e.taskId)));
     setOpen(true);
     setMsg('');
+    // Asked for when the panel opens rather than kept in step with every tick: what is chosen
+    // below changes which tasks run, not what the run is about.
+    void api
+      .suggestedRunName(sessionIds)
+      .then((r) => setName(r.name))
+      .catch(() => undefined);
   };
 
   const start = async (mode: 'confirm' | 'unattended') => {
@@ -842,7 +957,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     setMsg('');
     try {
       for (const e of requeue) await api.rerunTask(e.sessionId, e.taskId);
-      const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name);
+      const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name.trim() || undefined);
       setMsg(r.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
       setOpen(false);
       onChange();
@@ -907,15 +1022,35 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
               </ul>
             </div>
           )}
+          <div style={{ marginTop: 8 }}>
+            <label htmlFor="continue-run-name">{t('batch.runName')}</label>
+            <input
+              id="continue-run-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('batch.runNamePlaceholder')}
+              disabled={busy}
+            />
+            <p className="why">{t('reg.continueNameWhy')}</p>
+          </div>
           <div className="small" style={{ marginTop: 6 }}>
             {t('reg.continueSummary', { q: upcoming.length, r: requeue.length, s: sessionIds.length })}
           </div>
+          {/*
+            The unattended button is the left one, and the left one is the loud one.
+
+            The styles did not move: the primary is still the left slot and the plain button
+            still the right one. Only which choice sits in each did, so a hand that learned the
+            old order lands on a differently worded button rather than on a silently different
+            behaviour.
+          */}
           <div className="row" style={{ marginTop: 8 }}>
-            <button className="primary" disabled={busy || sessionIds.length === 0} onClick={() => void start('confirm')}>
-              {t('reg.continueGo')}
-            </button>
-            <button disabled={busy || sessionIds.length === 0} onClick={() => void start('unattended')} title={t('reg.continueUnattendedWhy')}>
+            <button className="primary" disabled={busy || sessionIds.length === 0} onClick={() => void start('unattended')} title={t('reg.continueUnattendedWhy')}>
               {t('reg.continueUnattended')}
+            </button>
+            <button disabled={busy || sessionIds.length === 0} onClick={() => void start('confirm')} title={t('reg.continueWhy')}>
+              {t('reg.continueGo')}
             </button>
             <button className="quiet" disabled={busy} onClick={() => setOpen(false)}>
               {t('dialog.cancel')}
