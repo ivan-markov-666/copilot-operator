@@ -1647,6 +1647,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesEn: 'How many times a blocked task is retried in a brand-new chat before the verdict stands; 0 turns it off.',
             doesBg: 'Колко пъти блокирана задача се пуска отново в нов чат, преди присъдата да остане; 0 го изключва.',
           },
+          {
+            key: 'exec.isolation',
+            kind: 'field',
+            en: 'Where the bot runs',
+            bg: 'Къде върви ботът',
+            doesEn:
+              "The operator's statement about what contains this runner: this account, a separate low-privilege Windows account, Windows Sandbox, or a VM. It gates unattended runs — while it says this account, a run with nobody watching is refused — and it is recorded with every run beside the account the process actually held.",
+            doesBg:
+              'Твърдението на оператора какво огражда този runner: този акаунт, отделен Windows акаунт с малки права, Windows Sandbox или виртуална машина. То управлява пусканията без надзор — докато казва „този акаунт“, пускане без човек се отказва — и се записва с всяко пускане до акаунта, който процесът наистина е държал.',
+          },
         ],
       },
     ],

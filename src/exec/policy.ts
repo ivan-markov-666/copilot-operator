@@ -132,6 +132,38 @@ export function scriptRefusal(fileName: string, body: string, denyPatterns: stri
 }
 
 /**
+ * Why an unattended run may not begin at all, or null.
+ *
+ * Both conditions are about the same thing: an unattended run has given up the person who made
+ * every other rule survivable, so the two things that stand in for them have to be there. Nowhere
+ * to run and nobody watching is refused outright; an empty allowlist and nobody watching means
+ * nothing at all limits a step.
+ *
+ * Asked in two places on purpose. At the entrance — `start`, `startBatch`, the CLI, and the button
+ * that turns a running session unattended — so the operator is told once, before anything begins,
+ * what to set and where. And again in `staticCheck`, because the entrance is a courtesy and the
+ * step gate is the rule: a path that reached execution another way still finds it there.
+ *
+ * It is deliberately *not* a warning. The first version of this refused each step as it arrived,
+ * which technically held the line and in practice turned the ordinary "Run sessions" button into a
+ * run where every step came back refused — a gate that breaks the working bot is a gate that gets
+ * switched off, and the fix was to make the condition reachable rather than to soften it.
+ */
+export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowedPrograms' | 'isolation'>): string | null {
+  if (cfg.mode !== 'unattended') return null;
+  const unisolated = unattendedIsolationRefusal(cfg.mode, cfg.isolation ?? 'none');
+  if (unisolated) return unisolated;
+  if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) {
+    return (
+      'refused: an unattended run requires execution.allowedPrograms to name the programs this project ' +
+      'may start. With the allowlist empty and nobody watching, nothing limits what a step can run. ' +
+      'Fill in the allowlist, or run this task step by step.'
+    );
+  }
+  return null;
+}
+
+/**
  * Applies the automatic rules. Returns null when the step is acceptable so far, or a
  * decision when it is refused without asking anyone.
  */
@@ -156,19 +188,10 @@ export function staticCheck(step: Step, cfg: PolicyConfig, env: NodeJS.ProcessEn
      * and a person can judge it. Unwatched, it makes the list meaningless.
      */
     if (cfg.mode === 'unattended') {
-      // Nobody watching and nothing containing: the one combination that is refused outright,
-      // before any question about what the command happens to say. See `isolation.ts`.
-      const unisolated = unattendedIsolationRefusal(cfg.mode, cfg.isolation ?? 'none');
-      if (unisolated) return { action: 'skip', reason: unisolated };
-      if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) {
-        return {
-          action: 'skip',
-          reason:
-            'refused: an unattended run requires execution.allowedPrograms to name the programs this project ' +
-            'may start. With the allowlist empty and nobody watching, nothing limits what a step can run. ' +
-            'Fill in the allowlist, or run this task in confirm mode.',
-        };
-      }
+      // The same rule the run was supposed to have been stopped by before it ever started. Kept
+      // here as well as at the entrance, because this is the one path nothing can go round.
+      const precondition = unattendedPrecondition(cfg);
+      if (precondition) return { action: 'skip', reason: precondition };
       const inline = inlineCodeRefusal(step.cmd);
       if (inline) return { action: 'skip', reason: inline };
     }

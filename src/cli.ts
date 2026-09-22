@@ -22,6 +22,7 @@ import { runSession } from './orchestrator/taskRunner.js';
 import { SessionStore } from './session/store.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
+import { unattendedPrecondition } from './exec/policy.js';
 import { mirrorProject, describeMirror, listSelectableDirs } from './context/projectMirror.js';
 import { isOwnCheckout } from './exec/workDir.js';
 import { defaultExportDir, desktopIsSynced, resolveDesktopDir } from './context/contextFiles.js';
@@ -420,6 +421,17 @@ program
       throw new Error(`${cfg.configPath} has no "task". Add one, inline or as { file: ... }.`);
     }
     if (cfg.execution.mode === 'unattended') {
+      /*
+       * Refused here rather than a hundred lines later as a run whose every step comes back
+       * refused. The step gate holds the same rule; this is so the answer arrives before a browser
+       * is opened, and names the setting to change. See `unattendedPrecondition`.
+       */
+      const blocked = unattendedPrecondition({
+        mode: 'unattended',
+        allowedPrograms: cfg.execution.allowedPrograms,
+        isolation: cfg.execution.isolation,
+      });
+      if (blocked) throw new Error(`${blocked}\n\nOr drop --unattended and approve the steps as they come.`);
       console.log('UNATTENDED: commands written by Copilot will run without asking.');
     }
 

@@ -75,7 +75,9 @@ Five rules decide what a step may do, and each is recorded with the run that it 
   runner records what it *can* read — the account, and whether the process holds High or System
   integrity — and says so when the two disagree. While `isolation` is `none`, an unattended run
   will not start: nobody watching and nothing containing is the one combination this refuses to be.
-  `cop doctor` and the System page show the same assessment.
+  Set it under **Settings → Execution → Where the bot runs**, and `cop doctor` and the System page
+  show the same assessment. A fresh install says `none`, so the unattended **Run sessions** button
+  is refused until you have arranged something and said so; **Step by step** is unaffected.
 
 - **Files are data, not code.** A file the chat attaches is downloaded, hashed and kept. It is
   *not* executed: `execution.allowRunningDownloads` is off by default, and while it is off no

@@ -17,6 +17,7 @@ import {
   unattendedIsolationRefusal,
   type IsolationSignals,
 } from '../src/exec/isolation.js';
+import { unattendedPrecondition } from '../src/exec/policy.js';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -70,6 +71,25 @@ check('nor on a separate account', unattendedIsolationRefusal('unattended', 'sep
 console.log('\n--- the description never upgrades a claim to a finding ---');
 check('the claim is labelled as claimed', describeIsolation(none).includes('claimed'), true);
 check('and the account is shown separately', describeIsolation(none).includes('account'), true);
+
+console.log('\n--- the precondition every entrance asks, and the step gate asks again ---');
+// The first version refused each step as it arrived, which held the line and turned the ordinary
+// "Run sessions" button into a run where every step came back refused. The rule did not change;
+// where it is asked did. These cases pin both the rule and the order of its two reasons.
+const full = { allowedPrograms: ['node'], isolation: 'sandbox' as const };
+check('confirm never has a precondition', unattendedPrecondition({ ...full, mode: 'confirm', isolation: 'none' }), null);
+check('unattended, isolated and allowlisted, may begin', unattendedPrecondition({ ...full, mode: 'unattended' }), null);
+const noIso = unattendedPrecondition({ ...full, mode: 'unattended', isolation: 'none' });
+check('unattended with no isolation may not', noIso !== null, true);
+check('and is told which setting', noIso !== null && noIso.includes('execution.isolation'), true);
+const noProgs = unattendedPrecondition({ mode: 'unattended', allowedPrograms: [], isolation: 'sandbox' });
+check('unattended with no allowlist may not', noProgs !== null, true);
+check('and is told which setting', noProgs !== null && noProgs.includes('execution.allowedPrograms'), true);
+const both = unattendedPrecondition({ mode: 'unattended', allowedPrograms: [], isolation: 'none' });
+check('with both wrong, isolation is named first', both !== null && both.includes('execution.isolation'), true);
+// A missing claim is the same as saying none: a config written before this existed does not get
+// unattended runs for free.
+check('an absent claim counts as none', unattendedPrecondition({ mode: 'unattended', allowedPrograms: ['node'] }) !== null, true);
 
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;

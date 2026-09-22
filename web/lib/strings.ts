@@ -73,6 +73,13 @@ export const dict = {
     'exec.retryBlockedTimes': 'times, then accept the verdict',
     'exec.retryBlockedWhy':
       'The runner cannot tell why a task blocked: the prompt, the machine, or the chat itself — a long conversation whose early turns Copilot can no longer see. A fresh chat, with the contract sent again, cures a cause in the chat and nothing else. A task that comes back done was blocked by the chat; one that blocks again was not, and both attempts stay on its record. 0 turns this off.',
+    'exec.isolation': 'Where the bot runs',
+    'exec.isolationNone': 'Nowhere in particular — this account',
+    'exec.isolationAccount': 'A separate low-privilege Windows account',
+    'exec.isolationSandbox': 'Windows Sandbox',
+    'exec.isolationVm': 'A virtual machine',
+    'exec.isolationWhy':
+      'Commands written by the model run as whoever this process is. Saying so here is what lets a run go unattended: with "nowhere in particular" chosen, a run without a person watching is refused, because nobody watching and nothing containing is the combination this will not be. It is your statement, not a check — the runner records it, notes the account it actually holds, and says so when the two disagree.',
     'exec.save': 'Save',
     'exec.saved': 'Saved. Applies to runs started from now on.',
     'story.show': 'What happened',
@@ -1043,6 +1050,13 @@ export const dict = {
     'exec.retryBlockedTimes': 'пъти, после приеми присъдата',
     'exec.retryBlockedWhy':
       'Runner-ът не може да отсъди защо задача е блокирала: prompt-ът, машината или самият чат — дълъг разговор, чиито ранни ходове Copilot вече не вижда. Нов чат, с изпратен наново договор, лекува причина в чата и нищо друго. Задача, която след това е готова, е била блокирана от чата; задача, която блокира пак, не е, и двата опита остават в записа ѝ. 0 го изключва.',
+    'exec.isolation': 'Къде върви ботът',
+    'exec.isolationNone': 'Никъде специално — в този акаунт',
+    'exec.isolationAccount': 'Отделен Windows акаунт с малки права',
+    'exec.isolationSandbox': 'Windows Sandbox',
+    'exec.isolationVm': 'Виртуална машина',
+    'exec.isolationWhy':
+      'Командите, написани от модела, вървят като този процес. Да го кажете тук е това, което позволява пускане без надзор: при избрано „никъде специално“ пускане без човек се отказва, защото никой да не гледа и нищо да не огражда е комбинацията, която това няма да бъде. Това е ваше твърдение, не проверка — runner-ът го записва, отбелязва акаунта, който всъщност държи, и казва, когато двете не съвпадат.',
     'exec.save': 'Запази',
     'exec.saved': 'Запазено. Важи за пускания, започнати от сега нататък.',
     'story.show': 'Какво се случи',

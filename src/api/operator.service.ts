@@ -70,6 +70,7 @@ import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConfl
 import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
+import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
@@ -82,7 +83,13 @@ import type { ResolvedConfig } from '../config/schema.js';
  * the run changes, and the deny list keeps applying either way, because that gate is in the
  * policy and runs before anyone is asked.
  */
-type Running = { controller: AbortController; startedAt: string; mode: 'confirm' | 'unattended' };
+type Running = {
+  controller: AbortController;
+  startedAt: string;
+  mode: 'confirm' | 'unattended';
+  /** The policy this run started under, so "run the rest without asking" can be judged against it. */
+  policy: PolicyConfig;
+};
 
 type Waiting = { approval: PendingApproval; resolve: (d: PolicyDecision) => void };
 
@@ -876,11 +883,19 @@ export class OperatorService {
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
     };
+    /*
+     * An unattended run that cannot legally execute anything is stopped here, where the operator
+     * is looking, rather than starting and returning every step refused. The step gate holds the
+     * same rule and is what actually enforces it; this is so the answer arrives once, before a
+     * browser is opened and a conversation is started, and names the setting to change.
+     */
+    const precondition = unattendedPrecondition(policy);
+    if (precondition) return { started: false, reason: precondition, done: Promise.resolve(idle) };
     const controller = new AbortController();
     const authorizer: StepAuthorizer =
       mode === 'unattended' ? unattendedAuthorizer(policy) : this.webAuthorizer(policy, controller.signal);
 
-    this.running.set(sessionId, { controller, startedAt: new Date().toISOString(), mode });
+    this.running.set(sessionId, { controller, startedAt: new Date().toISOString(), mode, policy });
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
 
     const done = runSession(sessionId, {
@@ -1498,10 +1513,20 @@ export class OperatorService {
    * on screen asking a question nobody will answer again is the one outcome this must not
    * produce. Going back to `confirm` only affects steps that have not been proposed yet.
    */
-  setRunMode(sessionId: string, mode: 'confirm' | 'unattended'): { ok: boolean; mode?: 'confirm' | 'unattended' } {
+  setRunMode(sessionId: string, mode: 'confirm' | 'unattended'): { ok: boolean; mode?: 'confirm' | 'unattended'; reason?: string } {
     const run = this.running.get(sessionId);
     if (!run) return { ok: false };
     if (run.mode === mode) return { ok: true, mode };
+
+    /*
+     * "Run the rest without asking" is a request to become an unattended run, so it answers to the
+     * same preconditions as one started that way. Refusing here keeps the button honest: it cannot
+     * hand out an autonomy the run would not have been allowed to start with.
+     */
+    if (mode === 'unattended') {
+      const blocked = unattendedPrecondition({ ...run.policy, mode });
+      if (blocked) return { ok: false, reason: blocked };
+    }
 
     run.mode = mode;
     this.bus.publish({

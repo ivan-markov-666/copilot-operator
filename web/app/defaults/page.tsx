@@ -22,6 +22,9 @@ import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
 import { DirTree } from '../dirTree';
 
+/** What the operator says contains the runner. Mirrors `execution.isolation` in the config. */
+type Isolation = 'none' | 'separate-account' | 'sandbox' | 'vm';
+
 export default function DefaultsPage() {
   const { t } = useT();
   /*
@@ -551,6 +554,7 @@ function ExecutionSection() {
   const { t } = useT();
   const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
   const [retries, setRetries] = useState(2);
+  const [isolation, setIsolation] = useState<Isolation>('none');
   const [saved, setSaved] = useState(2);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -561,10 +565,19 @@ function ExecutionSection() {
       .settings()
       .then((s) => {
         setRaw(s.raw);
-        const limits = (s.resolved.limits ?? {}) as { retryBlockedInFreshChat?: number };
+        /*
+         * Read from `raw`, which is the settings file, and not from `resolved`, which carries only
+         * the resolved *paths* (profileDir, cwd, runsDir…) and never had an `execution` or `limits`
+         * on it at all. Reading it there did not fail, it silently fell through to the default, so
+         * the retry field showed 2 on a machine that had saved 0 and the value it displayed was
+         * never the value in force. Both fields now read the branch they write back to.
+         */
+        const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as { retryBlockedInFreshChat?: number };
         const n = typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2;
         setRetries(n);
         setSaved(n);
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation };
+        setIsolation(exec.isolation ?? 'none');
       })
       .catch((e) => setErr((e as Error).message));
   }, []);
@@ -588,6 +601,29 @@ function ExecutionSection() {
     }
   };
   const saveLater = useDebouncedSave(save);
+
+  /*
+   * Its own saver, because it writes a different branch of the settings and because it is the one
+   * field here that changes what a run is allowed to do rather than how hard it tries. Saved
+   * immediately on choosing, like the other selects on this page.
+   */
+  const saveIsolation = async (value: Isolation) => {
+    if (!raw) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const execution = { ...((raw.execution as Record<string, unknown>) ?? {}), isolation: value };
+      const next = { ...raw, execution };
+      await api.saveSettings(next);
+      setRaw(next);
+      setMsg(t('exec.saved'));
+      setErr('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="panel" id="execution">
@@ -613,8 +649,26 @@ function ExecutionSection() {
         />
         <span className="muted small">{t('exec.retryBlockedTimes')}</span>
       </div>
-      <SavedNote msg={msg} />
       <p className="why">{t('exec.retryBlockedWhy')}</p>
+
+      <label htmlFor="isolation">{t('exec.isolation')}</label>
+      <select
+        id="isolation"
+        value={isolation}
+        onChange={(e) => {
+          const v = e.target.value as Isolation;
+          setIsolation(v);
+          void saveIsolation(v);
+        }}
+        disabled={busy || !raw}
+      >
+        <option value="none">{t('exec.isolationNone')}</option>
+        <option value="separate-account">{t('exec.isolationAccount')}</option>
+        <option value="sandbox">{t('exec.isolationSandbox')}</option>
+        <option value="vm">{t('exec.isolationVm')}</option>
+      </select>
+      <SavedNote msg={msg} />
+      <p className="why">{t('exec.isolationWhy')}</p>
     </div>
   );
 }
