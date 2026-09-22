@@ -439,6 +439,7 @@ function ProjectFolders({
       <DirTree
         rootDir={rootDir}
         respectGitignore={respectGitignore}
+        includeEnvFiles={includeEnvFiles}
         include={lines(include)}
         exclude={lines(exclude)}
         onChange={(inc, exc) => {

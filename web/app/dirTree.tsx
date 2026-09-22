@@ -42,6 +42,20 @@ function buildTree(paths: string[]): Node[] {
 
 type State = 'in' | 'inherited' | 'out' | 'out-inherited' | 'none';
 
+/**
+ * What a folder holds that the eye cannot see while it is folded.
+ *
+ * A folder carved out of an included parent disappears the moment its parent is collapsed, and
+ * then the two lists say one thing and the tree shows another. So a folded row carries the
+ * count of what is named inside it, and the row is marked when any of it is excluded — the
+ * case that matters, because an exclusion inside an inclusion is the one a reader will
+ * otherwise miss.
+ */
+function insideOf(path: string, include: string[], exclude: string[]): { included: number; excluded: number } {
+  const under = (list: string[]) => list.filter((p) => p !== path && isUnder(p, path)).length;
+  return { included: under(include), excluded: under(exclude) };
+}
+
 function stateOf(path: string, include: string[], exclude: string[]): State {
   if (exclude.includes(path)) return 'out';
   if (exclude.some((e) => e !== path && isUnder(path, e))) return 'out-inherited';
@@ -53,12 +67,15 @@ function stateOf(path: string, include: string[], exclude: string[]): State {
 export function DirTree({
   rootDir,
   respectGitignore,
+  includeEnvFiles,
   include,
   exclude,
   onChange,
 }: {
   rootDir: string;
   respectGitignore: boolean;
+  /** Only for the note below: what is left out without anyone typing it. */
+  includeEnvFiles?: boolean;
   include: string[];
   exclude: string[];
   onChange: (include: string[], exclude: string[]) => void;
@@ -126,6 +143,8 @@ export function DirTree({
       {nodes.map((n) => {
         const state = stateOf(n.path, inc, exc);
         const isOpen = open.has(n.path);
+        const inside = insideOf(n.path, inc, exc);
+        const hidden = !isOpen && n.children.length > 0 && (inside.included > 0 || inside.excluded > 0);
         return (
           <li key={n.path} className={`dir ${state}`}>
             <div className="dir-row">
@@ -161,6 +180,15 @@ export function DirTree({
               <button type="button" className={`dir-out${state === 'out' ? ' on' : ''}`} onClick={() => toggleExclude(n.path)} title={state === 'out' ? t('tree.unexclude') : t('tree.exclude')}>
                 −
               </button>
+              {hidden && (
+                <span className={`chip inside${inside.excluded > 0 ? ' out' : ''}`} title={t('tree.insideWhy')}>
+                  {inside.excluded > 0 && inside.included > 0
+                    ? t('tree.insideBoth', { i: inside.included, e: inside.excluded })
+                    : inside.excluded > 0
+                      ? t('tree.insideOut', { n: inside.excluded })
+                      : t('tree.insideIn', { n: inside.included })}
+                </span>
+              )}
             </div>
             {isOpen && n.children.length > 0 && render(n.children)}
           </li>
@@ -180,6 +208,24 @@ export function DirTree({
         <span className="muted small">{t('tree.hint')}</span>
       </div>
       {err && <div className="err small">{err}</div>}
+      {/*
+        What is left out that nobody typed.
+
+        The exclude list holds what the operator named, and it would be wrong to write these
+        into it: they follow the two switches, and a copy of them in the field would go on
+        excluding after a switch was turned off. So they are said here instead, where the
+        question "what will actually be copied" is being asked.
+      */}
+      <p className="muted small" style={{ marginTop: 6 }}>
+        {t('tree.alsoOut')}{' '}
+        {[
+          respectGitignore ? t('tree.alsoGitignore') : null,
+          includeEnvFiles === false ? t('tree.alsoEnv') : null,
+          t('tree.alsoAlways'),
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
       {dirs !== null && !stale && (dirs.length === 0 ? <p className="muted small">{t('mirror.noDirs')}</p> : render(tree))}
     </div>
   );

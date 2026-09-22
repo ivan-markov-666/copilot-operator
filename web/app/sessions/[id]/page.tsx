@@ -1106,6 +1106,7 @@ function MirrorPanel({ session, onChange }: { session: Session; onChange: () => 
       <DirTree
         rootDir={rootDir}
         respectGitignore={respectGitignore}
+        includeEnvFiles={includeEnvFiles}
         include={include.split('\n')}
         exclude={exclude.split('\n')}
         onChange={(inc, exc) => {

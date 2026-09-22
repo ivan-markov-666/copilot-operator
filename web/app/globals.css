@@ -693,3 +693,7 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .option-inline { display: inline-flex; align-items: center; gap: 6px; }
 .story-box .live { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .story-box .live .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: live-pulse 1.6s ease-in-out infinite; }
+
+/* A folded folder that holds something named in the two lists. */
+.chip.inside { font-size: calc(10.5px * var(--scale)); opacity: 0.85; }
+.chip.inside.out { color: var(--bad); border-color: var(--bad); }
