@@ -66,7 +66,16 @@ pieces, one resolved by wildcard — is refused as the hiding it is.
 
 ### How a run is regulated
 
-Four rules decide what a step may do, and each is recorded with the run that it governed:
+Five rules decide what a step may do, and each is recorded with the run that it governed:
+
+- **Say where the bot runs, and an unattended run needs an answer.** `execution.isolation` is what
+  you have arranged — `none`, `separate-account`, `sandbox` or `vm` — and it defaults to `none`,
+  because that is the truth on a machine where nobody has arranged anything. It is recorded as a
+  claim, never as a finding: a process cannot see the boundary it is inside. Beside the claim the
+  runner records what it *can* read — the account, and whether the process holds High or System
+  integrity — and says so when the two disagree. While `isolation` is `none`, an unattended run
+  will not start: nobody watching and nothing containing is the one combination this refuses to be.
+  `cop doctor` and the System page show the same assessment.
 
 - **Files are data, not code.** A file the chat attaches is downloaded, hashed and kept. It is
   *not* executed: `execution.allowRunningDownloads` is off by default, and while it is off no
@@ -92,11 +101,12 @@ built-in refusals, whether a lock was in force and what it changed, and the acco
 So "what was this permitted to do at the time" is answered from the run folder rather than from a
 configuration file that has been edited since.
 
-**The honest limit.** All of the above is pattern matching and configuration. It raises the cost
-of the ordinary accident and the ordinary injected instruction; it is not a security boundary, and
-a determined attacker with a language model to write for them will find a phrasing none of it
-anticipated. The boundary is a separate Windows account or a sandbox, and nothing here replaces
-it.
+**The honest limit.** Everything above except the first rule is pattern matching and configuration.
+It raises the cost of the ordinary accident and the ordinary injected instruction; it is not a
+security boundary, and a determined attacker with a language model to write for them will find a
+phrasing none of it anticipated. The boundary is the first rule — a separate low-privilege Windows
+account, Windows Sandbox or a VM — and the runner can record whether you have arranged one, refuse
+to run unwatched until you have, and never do it for you.
 
 ## Requirements
 

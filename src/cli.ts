@@ -27,6 +27,7 @@ import { isOwnCheckout } from './exec/workDir.js';
 import { defaultExportDir, desktopIsSynced, resolveDesktopDir } from './context/contextFiles.js';
 import { Url } from './transport/locators.js';
 import { findEdgeUsingProfile } from './transport/profileLock.js';
+import { assessIsolation, readIsolationSignals, type IsolationClaim } from './exec/isolation.js';
 
 const program = new Command();
 program
@@ -229,6 +230,22 @@ program
       }
     };
     const settings = readJson('settings.json');
+
+    /*
+     * Where the bot is running, which is the only thing that actually contains a command once it
+     * runs. Reported here rather than left to the README, because a machine that ignored the
+     * recommendation looked exactly like one that had followed it. The claim is the operator's;
+     * `doctor` only says what it can see and where the two disagree. See `exec/isolation.ts`.
+     */
+    const posture = assessIsolation(
+      (settings?.execution as { isolation?: IsolationClaim } | undefined)?.isolation ?? 'none',
+      readIsolationSignals(),
+    );
+    say(
+      posture.warnings.length === 0,
+      `isolation: ${posture.claim}, running as ${posture.signals.user}${posture.signals.elevated === true ? ' (ELEVATED)' : ''}`,
+    );
+    for (const concern of posture.warnings) say(false, `  ${concern}`);
     const models = readJson('models.json') as { options?: Array<{ name: string }> } | null;
     const copilot = (settings?.copilot as { defaultModel?: string; defaultReviewModel?: string } | undefined) ?? {};
     const wanted: Array<[string, string]> = [
@@ -436,6 +453,7 @@ program
       denyPatterns: cfg.execution.denyPatterns,
       allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
       allowedPrograms: cfg.execution.allowedPrograms,
+      isolation: cfg.execution.isolation,
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

@@ -103,7 +103,10 @@ for (const cmd of [
 console.log('\n--- the rules apply only where nobody is watching ---');
 const base = { denyPatterns: [] as string[], allowedScriptExtensions: ['.ps1'], allowedPrograms: ALLOWED };
 const watched = { ...base, mode: 'confirm' as const };
-const unwatched = { ...base, mode: 'unattended' as const };
+// An unattended policy must declare its isolation before any of these rules are reached at all —
+// see `isolation.ts`. These cases are about what an unattended run refuses *once* it is allowed to
+// start, so they say where they are running.
+const unwatched = { ...base, mode: 'unattended' as const, isolation: 'separate-account' as const };
 const evalStep: Step = { id: 1, type: 'command', shell: 'pwsh', cmd: 'node -e "console.log(1)"' };
 const plainStep: Step = { id: 2, type: 'command', shell: 'pwsh', cmd: 'npm run build' };
 
@@ -113,11 +116,18 @@ check('unattended still runs ordinary work', staticCheck(plainStep, unwatched), 
 check('confirm runs ordinary work', staticCheck(plainStep, watched), null);
 
 console.log('\n--- unattended with no allowlist is refused outright ---');
-const noList = { ...base, allowedPrograms: [] as string[], mode: 'unattended' as const };
+const noList = { ...base, allowedPrograms: [] as string[], mode: 'unattended' as const, isolation: 'separate-account' as const };
 const decision = staticCheck(plainStep, noList);
 check('an unattended run needs a list', decision?.action, 'skip');
 check('and says why', decision?.action === 'skip' && decision.reason.includes('allowedPrograms'), true);
 check('confirm with no list is unaffected', staticCheck(plainStep, { ...base, allowedPrograms: [], mode: 'confirm' as const }), null);
+
+console.log('\n--- but isolation is asked first of all ---');
+// Ordering matters for the message somebody reads: "you have not said where this runs" is the
+// useful answer, not "your allowlist is empty", when both are true.
+const nowhere = staticCheck(plainStep, { ...base, allowedPrograms: [], mode: 'unattended' as const });
+check('unattended with no isolation is refused', nowhere?.action, 'skip');
+check('and the reason is the isolation, not the list', nowhere?.action === 'skip' && nowhere.reason.includes('needs somewhere to run'), true);
 
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;

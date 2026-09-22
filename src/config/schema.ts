@@ -164,6 +164,20 @@ export const RunConfigSchema = z.object({
        */
       allowRunningDownloads: z.boolean().default(false),
       /**
+       * What the operator has arranged to contain this runner. An assertion, recorded as one.
+       *
+       * Every other setting here is a rule about what a command may say; this one is about the only
+       * thing that contains a command once it runs. A process cannot see the boundary it is inside,
+       * so it cannot check this — it can only record what was claimed, note the account it actually
+       * holds, and say when the two disagree. See `exec/isolation.ts`.
+       *
+       * `none` is the default because it is the truth on a machine where nobody has arranged
+       * anything, and a default that flattered the situation would be worse than none. Its one
+       * consequence: an unattended run will not start while it is `none`, because nobody watching
+       * and nothing containing is the combination this runner refuses to be.
+       */
+      isolation: z.enum(['none', 'separate-account', 'sandbox', 'vm']).default('none'),
+      /**
        * The external programs a command may start. The one gate in this runner that names what is
        * allowed rather than what is not: for a tool whose whole job is to build and test software,
        * the toolchain is a finite, nameable set, where the things that could go wrong are not. A

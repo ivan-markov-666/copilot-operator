@@ -69,6 +69,7 @@ import type { PolicyDecision } from '../exec/policy.js';
 import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConflicts, DEFAULT_IGNORE_DIRS } from '../context/projectMirror.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
+import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
@@ -873,6 +874,7 @@ export class OperatorService {
       denyPatterns: cfg.execution.denyPatterns,
       allowedScriptExtensions: cfg.execution.allowedScriptExtensions,
       allowedPrograms: cfg.execution.allowedPrograms,
+      isolation: cfg.execution.isolation,
     };
     const controller = new AbortController();
     const authorizer: StepAuthorizer =
@@ -2210,6 +2212,13 @@ export class OperatorService {
       runsDir: cfg.resolved.runsDir,
       dataDir: this.dataDir,
       mode: cfg.execution.mode,
+      /*
+       * Where the bot is running. The only thing that actually contains a command once it runs, and
+       * until now the one thing the System page could not show: a machine that ignored the README's
+       * recommendation looked exactly like one that had followed it. The claim is the operator's and
+       * is shown as a claim; the signals are what can be read. See `exec/isolation.ts`.
+       */
+      isolation: assessIsolation(cfg.execution.isolation, readIsolationSignals()),
       folderDialog: process.platform === 'win32',
       alwaysIgnoredDirs: DEFAULT_IGNORE_DIRS,
     };

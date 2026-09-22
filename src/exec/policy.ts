@@ -18,6 +18,7 @@ import { effectiveShell, type Shell } from './shells.js';
 import { dangerousInScript, dangerousRefusal } from './dangerous.js';
 import { findShellExecuteTrap } from './shellExecuteTrap.js';
 import { inlineCodeRefusal, programRefusal } from './programs.js';
+import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
 
 export type PolicyDecision =
   | { action: 'run' }
@@ -30,6 +31,8 @@ export type PolicyConfig = {
   allowedScriptExtensions: string[];
   /** The programs a command may start. Empty disables the allowlist. See `programs.ts`. */
   allowedPrograms: string[];
+  /** What the operator says contains this runner. See `isolation.ts`. Defaults to none. */
+  isolation?: IsolationClaim;
 };
 
 export function describeStep(step: Step, scriptPath?: string): string {
@@ -153,6 +156,10 @@ export function staticCheck(step: Step, cfg: PolicyConfig, env: NodeJS.ProcessEn
      * and a person can judge it. Unwatched, it makes the list meaningless.
      */
     if (cfg.mode === 'unattended') {
+      // Nobody watching and nothing containing: the one combination that is refused outright,
+      // before any question about what the command happens to say. See `isolation.ts`.
+      const unisolated = unattendedIsolationRefusal(cfg.mode, cfg.isolation ?? 'none');
+      if (unisolated) return { action: 'skip', reason: unisolated };
       if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) {
         return {
           action: 'skip',

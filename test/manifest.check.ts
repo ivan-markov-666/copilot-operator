@@ -10,6 +10,7 @@
  */
 import { collectPolicyManifest, describePolicyManifest, digestOf } from '../src/exec/policyManifest.js';
 import { DANGEROUS_TECHNIQUES } from '../src/exec/dangerous.js';
+import { assessIsolation } from '../src/exec/isolation.js';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -26,6 +27,7 @@ const base = {
   allowedScriptExtensions: ['.ps1'],
   denyPatterns: ['a', 'b'],
   cwd: 'C:\\Projects\\thing',
+  isolation: assessIsolation('separate-account', { user: 'bot', computer: 'BOX', elevated: false, windowsSandbox: false }),
 };
 
 console.log('--- a digest ignores order but not content ---');
@@ -53,9 +55,16 @@ check('every technique is counted', safe.builtIn.count, DANGEROUS_TECHNIQUES.len
 check('and digested', safe.builtIn.digest, digestOf(DANGEROUS_TECHNIQUES.map((t) => t.name)));
 check('a changed floor is a changed digest', safe.builtIn.digest === digestOf([...DANGEROUS_TECHNIQUES.map((t) => t.name), 'something-new']), false);
 
-console.log('\n--- it does not claim what it cannot know ---');
-check('isolation is explicitly undetermined', safe.isolation.includes('not determined here'), true);
-check('and the prose repeats it', describePolicyManifest(safe).includes('not determined here'), true);
+console.log('\n--- isolation is carried as a claim beside what could be seen ---');
+check('the claim is recorded as claimed', safe.isolation.claim, 'separate-account');
+check('with the account actually held', safe.isolation.signals.user, 'bot');
+check('and the prose labels it a claim', describePolicyManifest(safe).includes('claimed'), true);
+const unisolated = collectPolicyManifest(
+  { ...base, isolation: assessIsolation('none', { user: 'ivan', computer: 'BOX', elevated: true, windowsSandbox: false }) },
+  env,
+);
+check('no isolation raises concerns', unisolated.isolation.warnings.length > 0, true);
+check('and elevation is spelled out', describePolicyManifest(unisolated).includes('every command runs elevated'), true);
 
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;

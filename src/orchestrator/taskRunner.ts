@@ -34,6 +34,7 @@ import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../pro
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, commandRefusal, scriptRefusal, downloadWillRun } from '../exec/policy.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
+import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -580,7 +581,12 @@ export async function runTask(
    * config that had been edited since. Written here rather than with the environment above because
    * the working directory is part of the answer and is only settled now. See `policyManifest.ts`.
    */
+  const isolation = assessIsolation(cfg.execution.isolation, readIsolationSignals());
+  for (const concern of isolation.warnings) {
+    sink.event('isolation', { claim: isolation.claim, elevated: isolation.signals.elevated }, concern, 'warn');
+  }
   const manifest = collectPolicyManifest({
+    isolation,
     mode: cfg.execution.mode,
     allowedPrograms: cfg.execution.allowedPrograms,
     allowRunningDownloads: cfg.execution.allowRunningDownloads,
