@@ -14,7 +14,7 @@
  * test suite — which every folder field then offers by name and the plan brief lists by path.
  */
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, type ModelCatalogue, type ProjectDefault, type ProjectMirrorSelection } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
@@ -24,18 +24,99 @@ import { DirTree } from '../dirTree';
 
 export default function DefaultsPage() {
   const { t } = useT();
+  /*
+   * One model list for the whole page.
+   *
+   * The two model sections each read the catalogue for themselves, so "Read the list from
+   * Copilot" in one of them left the other showing what had been read before — and the review
+   * section, which is exactly where a different model is worth choosing, had no way to read it
+   * at all. Reading the picker opens the browser with the bot's profile, so it must happen once
+   * and be shared, not twice.
+   */
+  const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
+
+  useEffect(() => {
+    api.models().then(setCatalogue).catch(() => undefined);
+  }, []);
+
+  const refreshModels = async () => {
+    if (!(await confirmDialog(t('model.refreshConfirm')))) return;
+    setRefreshing(true);
+    setRefreshMsg(t('model.refreshing'));
+    try {
+      const fresh = await api.models().then(() => api.refreshModels());
+      setCatalogue(fresh);
+      setRefreshMsg(fresh.options.length === 0 ? (fresh.note ?? t('model.none')) : t('model.refreshed', { n: fresh.options.length }));
+    } catch (e) {
+      setRefreshMsg((e as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const shared = { catalogue, setCatalogue, refreshModels, refreshing, refreshMsg };
 
   return (
     <>
       <div className="panel">
         <h2>{t('def.title')}</h2>
         <p className="muted small">{t('def.intro')}</p>
+        <p className="why">{t('def.autoSave')}</p>
       </div>
       <ProjectSection />
-      <ModelSection />
-      <ReviewModelSection />
+      <ModelSection {...shared} />
+      <ReviewModelSection {...shared} />
       <ExecutionSection />
     </>
+  );
+}
+
+/** What the two model sections share: one catalogue, one way to read it again. */
+type SharedModels = {
+  catalogue: ModelCatalogue | null;
+  setCatalogue: (c: ModelCatalogue) => void;
+  refreshModels: () => Promise<void>;
+  refreshing: boolean;
+  refreshMsg: string;
+};
+
+/**
+ * Saves a value a moment after the typing stops, and on demand.
+ *
+ * Every field on this page used to end in a Save button, and a page of Save buttons is a page
+ * of ways to lose an edit: change the folder, forget the button, wonder later why the session
+ * started somewhere else. A select or a checkbox is a decision the moment it moves, so it is
+ * written at once; text needs the pause, or every keystroke would be a request.
+ */
+function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): (value: T) => void {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef(save);
+  latest.current = save;
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+  return (value: T) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => void latest.current(value), ms);
+  };
+}
+
+/** The button that does nothing anyone needs, and says so. */
+function SavedNote({ msg, onSave }: { msg: string; onSave?: () => void }) {
+  const { t } = useT();
+  return (
+    <div className="row" style={{ marginTop: 6 }}>
+      {onSave && (
+        <button className="quiet" onClick={onSave} title={t('def.saveAnywayWhy')}>
+          {t('def.saveAnyway')}
+        </button>
+      )}
+      <span className="muted small" role="status">
+        {msg || t('def.savedAutomatically')}
+      </span>
+    </div>
   );
 }
 
@@ -47,6 +128,7 @@ function ProjectSection() {
   const { t } = useT();
   const [project, setProject] = useState<ProjectDefault | null>(null);
   const [dir, setDir] = useState('');
+  const [name, setName] = useState('');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,6 +142,7 @@ function ProjectSection() {
       const p = await api.project();
       setProject(p);
       setDir(p.rootDir);
+      setName(p.name);
       setErr('');
     } catch (e) {
       setErr((e as Error).message);
@@ -89,6 +172,9 @@ function ProjectSection() {
   };
 
   const saveDefault = (value: string) => save({ rootDir: value }, (p) => (p.rootDir ? t('proj.saved', { dir: p.rootDir }) : t('proj.cleared')));
+  const saveName = (value: string) => save({ name: value }, () => t('proj.nameSaved'));
+  const dirLater = useDebouncedSave(saveDefault);
+  const nameLater = useDebouncedSave(saveName);
 
   const browse = async (into: (path: string) => void, start: string) => {
     setBusy(true);
@@ -136,6 +222,23 @@ function ProjectSection() {
         </div>
       )}
 
+      {/* The name first, because it is what the project is called everywhere else: the Desktop
+          folder, the file names inside it, and the list the plan brief hands to Kerrigan. */}
+      <label htmlFor="proj-name">{t('proj.nameField')}</label>
+      <input
+        id="proj-name"
+        type="text"
+        value={name}
+        onChange={(e) => {
+          setName(e.target.value);
+          nameLater(e.target.value);
+        }}
+        onBlur={() => void saveName(name)}
+        placeholder={dir ? dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : t('proj.namePlaceholder')}
+        disabled={busy}
+      />
+      <p className="why">{t('proj.nameWhy')}</p>
+
       <label htmlFor="proj-dir">{t('proj.field')}</label>
       <div className="row">
         <input
@@ -143,25 +246,22 @@ function ProjectSection() {
           type="text"
           className="grow"
           value={dir}
-          onChange={(e) => setDir(e.target.value)}
+          onChange={(e) => {
+            setDir(e.target.value);
+            dirLater(e.target.value);
+          }}
+          onBlur={() => void saveDefault(dir)}
           placeholder="C:\Projects\my-app"
           disabled={busy}
         />
         <button onClick={() => void browse((p) => void saveDefault(p), dir)} disabled={busy}>
           {t('mirror.browse')}
         </button>
-        <button className="primary" onClick={() => void saveDefault(dir)} disabled={busy || dir.trim() === (project?.rootDir ?? '')}>
-          {t('proj.save')}
-        </button>
         <button className="quiet" onClick={() => void saveDefault('')} disabled={busy || !project?.rootDir}>
           {t('proj.clear')}
         </button>
       </div>
-      {msg && (
-        <div className="muted small" role="status" style={{ marginTop: 6 }}>
-          {msg}
-        </div>
-      )}
+      <SavedNote msg={msg} />
 
       {project && !project.rootDir && <p className="muted small" style={{ marginTop: 8 }}>{t('proj.none')}</p>}
 
@@ -294,9 +394,25 @@ function ProjectFolders({
   const [includeEnvFiles, setIncludeEnvFiles] = useState(value?.includeEnvFiles ?? false);
 
   const lines = (text: string) => text.split('\n').map((s) => s.trim()).filter(Boolean);
+  const [msg, setMsg] = useState('');
+
+  const write = async (next: Partial<ProjectMirrorSelection>) => {
+    const sel: ProjectMirrorSelection = {
+      includeDirs: lines(include),
+      excludeDirs: lines(exclude),
+      respectGitignore,
+      includeEnvFiles,
+      ...next,
+    };
+    await onSave(sel);
+    setMsg(t('proj.foldersSaved'));
+  };
+  const writeLater = useDebouncedSave(write);
+
   const toggleEnv = async (on: boolean) => {
     if (on && !(await confirmDialog(t('mirror.envWarn')))) return;
     setIncludeEnvFiles(on);
+    void write({ includeEnvFiles: on });
   };
 
   return (
@@ -309,7 +425,15 @@ function ProjectFolders({
         </div>
         <div className="grow">
           <label>{t('mirror.exclude')}</label>
-          <textarea value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder={'src/generated'} style={{ minHeight: 70 }} />
+          <textarea
+            value={exclude}
+            onChange={(e) => {
+              setExclude(e.target.value);
+              writeLater({ excludeDirs: lines(e.target.value) });
+            }}
+            placeholder={'src/generated'}
+            style={{ minHeight: 70 }}
+          />
         </div>
       </div>
       <DirTree
@@ -324,7 +448,14 @@ function ProjectFolders({
       />
       <div className="option">
         <label>
-          <input type="checkbox" checked={respectGitignore} onChange={(e) => setRespectGitignore(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={respectGitignore}
+            onChange={(e) => {
+              setRespectGitignore(e.target.checked);
+              void write({ respectGitignore: e.target.checked });
+            }}
+          />
           <span>{t('mirror.gitignore')}</span>
         </label>
       </div>
@@ -334,15 +465,7 @@ function ProjectFolders({
           <span>{t('mirror.env')}</span>
         </label>
       </div>
-      <div className="row" style={{ marginTop: 6 }}>
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() => void onSave({ includeDirs: lines(include), excludeDirs: lines(exclude), respectGitignore, includeEnvFiles })}
-        >
-          {t('proj.foldersSave')}
-        </button>
-      </div>
+      <SavedNote msg={busy ? '' : msg} />
     </div>
   );
 }
@@ -376,16 +499,16 @@ function ExecutionSection() {
       .catch((e) => setErr((e as Error).message));
   }, []);
 
-  const save = async () => {
+  const save = async (value: number) => {
     if (!raw) return;
     setBusy(true);
     setMsg('');
     try {
-      const limits = { ...((raw.limits as Record<string, unknown>) ?? {}), retryBlockedInFreshChat: retries };
+      const limits = { ...((raw.limits as Record<string, unknown>) ?? {}), retryBlockedInFreshChat: value };
       const next = { ...raw, limits };
       await api.saveSettings(next);
       setRaw(next);
-      setSaved(retries);
+      setSaved(value);
       setMsg(t('exec.saved'));
       setErr('');
     } catch (e) {
@@ -394,6 +517,7 @@ function ExecutionSection() {
       setBusy(false);
     }
   };
+  const saveLater = useDebouncedSave(save);
 
   return (
     <div className="panel" id="execution">
@@ -408,16 +532,18 @@ function ExecutionSection() {
           min={0}
           max={5}
           value={retries}
-          onChange={(e) => setRetries(Math.max(0, Math.min(5, Number(e.target.value) || 0)))}
+          onChange={(e) => {
+            const n = Math.max(0, Math.min(5, Number(e.target.value) || 0));
+            setRetries(n);
+            saveLater(n);
+          }}
+          onBlur={() => retries !== saved && void save(retries)}
           style={{ width: 90 }}
           disabled={busy || !raw}
         />
         <span className="muted small">{t('exec.retryBlockedTimes')}</span>
-        <button className="primary" onClick={() => void save()} disabled={busy || !raw || retries === saved}>
-          {t('exec.save')}
-        </button>
-        {msg && <span className="muted small">{msg}</span>}
       </div>
+      <SavedNote msg={msg} />
       <p className="why">{t('exec.retryBlockedWhy')}</p>
     </div>
   );
@@ -427,52 +553,26 @@ function ExecutionSection() {
 // The models: one for the work, one for the second opinion
 // ---------------------------------------------------------------------------------------
 
-function ModelSection() {
+function ModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels) {
   const { t } = useT();
   const fmtTime = useFmtTime();
-  const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
-  const [chosen, setChosen] = useState('');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api
-      .models()
-      .then((c) => {
-        setCatalogue(c);
-        setChosen(c.defaultModel);
-      })
-      .catch((e) => setErr((e as Error).message));
-  }, []);
+  const chosen = catalogue?.defaultModel ?? '';
 
+  /** Chosen is saved. A model picker has no half-typed state to protect. */
   const save = async (name: string) => {
     setBusy(true);
     setMsg('');
     try {
       const saved = await api.setDefaultModel(name);
-      setCatalogue((c) => (c ? { ...c, defaultModel: saved.defaultModel } : c));
-      setChosen(saved.defaultModel);
+      if (catalogue) setCatalogue({ ...catalogue, defaultModel: saved.defaultModel });
       setMsg(saved.defaultModel ? t('def.modelSaved', { name: saved.defaultModel }) : t('def.modelCleared'));
       setErr('');
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const refresh = async () => {
-    if (!(await confirmDialog(t('model.refreshConfirm')))) return;
-    setBusy(true);
-    setMsg(t('model.refreshing'));
-    try {
-      const fresh = await api.refreshModels();
-      setCatalogue(fresh);
-      setMsg(fresh.options.length === 0 ? (fresh.note ?? t('model.none')) : t('model.refreshed', { n: fresh.options.length }));
-    } catch (e) {
-      setErr((e as Error).message);
-      setMsg('');
     } finally {
       setBusy(false);
     }
@@ -486,22 +586,22 @@ function ModelSection() {
 
       <label htmlFor="default-model">{t('def.modelField')}</label>
       <div className="row">
-        <ModelPicker id="default-model" chosen={chosen} onChange={setChosen} none={t('def.modelNone')} catalogue={catalogue} disabled={busy} />
-        <button className="primary" onClick={() => void save(chosen)} disabled={busy || chosen === (catalogue?.defaultModel ?? '')}>
-          {t('proj.save')}
-        </button>
-        <button className="quiet" onClick={() => void save('')} disabled={busy || !catalogue?.defaultModel}>
+        <ModelPicker
+          id="default-model"
+          chosen={chosen}
+          onChange={(name) => void save(name)}
+          none={t('def.modelNone')}
+          catalogue={catalogue}
+          disabled={busy || refreshing}
+        />
+        <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
           {t('proj.clear')}
         </button>
-        <button onClick={() => void refresh()} disabled={busy}>
+        <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
           {t('model.refresh')}
         </button>
       </div>
-      {msg && (
-        <div className="muted small" role="status" style={{ marginTop: 6 }}>
-          {msg}
-        </div>
-      )}
+      <SavedNote msg={msg || refreshMsg} />
 
       <p className="muted small" style={{ marginTop: 8 }}>
         {catalogue?.readAt
@@ -519,31 +619,20 @@ function ModelSection() {
   );
 }
 
-function ReviewModelSection() {
+function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels) {
   const { t } = useT();
-  const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
-  const [chosen, setChosen] = useState('');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api
-      .models()
-      .then((c) => {
-        setCatalogue(c);
-        setChosen(c.defaultReviewModel);
-      })
-      .catch((e) => setErr((e as Error).message));
-  }, []);
+  const chosen = catalogue?.defaultReviewModel ?? '';
 
   const save = async (name: string) => {
     setBusy(true);
     setMsg('');
     try {
       const saved = await api.setDefaultReviewModel(name);
-      setCatalogue((c) => (c ? { ...c, defaultReviewModel: saved.defaultReviewModel } : c));
-      setChosen(saved.defaultReviewModel);
+      if (catalogue) setCatalogue({ ...catalogue, defaultReviewModel: saved.defaultReviewModel });
       setMsg(saved.defaultReviewModel ? t('def.reviewSaved', { name: saved.defaultReviewModel }) : t('def.reviewCleared'));
       setErr('');
     } catch (e) {
@@ -563,12 +652,21 @@ function ReviewModelSection() {
 
       <label htmlFor="default-review-model">{t('def.reviewField')}</label>
       <div className="row">
-        <ModelPicker id="default-review-model" chosen={chosen} onChange={setChosen} none={t('def.reviewNone')} catalogue={catalogue} disabled={busy} />
-        <button className="primary" onClick={() => void save(chosen)} disabled={busy || chosen === (catalogue?.defaultReviewModel ?? '')}>
-          {t('proj.save')}
-        </button>
-        <button className="quiet" onClick={() => void save('')} disabled={busy || !catalogue?.defaultReviewModel}>
+        <ModelPicker
+          id="default-review-model"
+          chosen={chosen}
+          onChange={(name) => void save(name)}
+          none={t('def.reviewNone')}
+          catalogue={catalogue}
+          disabled={busy || refreshing}
+        />
+        <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
           {t('proj.clear')}
+        </button>
+        {/* The same list, read from the same place: a model chosen here is chosen from what
+            the chat actually offers, and reading it in one section updates the other. */}
+        <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
+          {t('model.refresh')}
         </button>
       </div>
       {sameAsWork && (
@@ -576,11 +674,7 @@ function ReviewModelSection() {
           {t('def.reviewSame')}
         </p>
       )}
-      {msg && (
-        <div className="muted small" role="status" style={{ marginTop: 6 }}>
-          {msg}
-        </div>
-      )}
+      <SavedNote msg={msg || refreshMsg} />
 
       <h3>{t('proj.affects')}</h3>
       <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>

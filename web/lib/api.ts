@@ -492,6 +492,8 @@ export type OtherProject = { name: string; rootDir: string; repoOk: boolean; rep
 /** The project folder new sessions start pointed at, whether it can carry version control, and the other folders by name. */
 export type ProjectDefault = {
   rootDir: string;
+  /** What the operator calls it. Empty means the folder's own name. */
+  name: string;
   repoOk: boolean;
   repoProblem?: string;
   others: OtherProject[];
@@ -718,6 +720,7 @@ export const api = {
   /** A field left out is kept; an empty `rootDir` clears the default. */
   setProject: (patch: {
     rootDir?: string;
+    name?: string;
     others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
     mirrorToDesktop?: boolean;
     mirror?: ProjectMirrorSelection;

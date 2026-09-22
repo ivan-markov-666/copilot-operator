@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 
 import { SessionStore } from '../src/session/store.js';
 import { EventBus } from '../src/session/events.js';
-import { git, repoState, commitAll, branchNameFrom } from '../src/vcs/git.js';
+import { git, repoState, commitAll, branchNameFrom, porcelainPaths } from '../src/vcs/git.js';
 import { prepareForTask, commitTaskResult, commitMessage, sessionBranches } from '../src/vcs/taskVcs.js';
 import { looksGenerated, findSuspicious } from '../src/vcs/commitHygiene.js';
 import { runCheck, COMMIT_CLEAN_CHECK } from '../src/exec/checks.js';
@@ -248,3 +248,22 @@ console.log('event                     :', events.find((e) => e.startsWith('vcs-
 
 await rm(repo, { recursive: true, force: true });
 await rm(data, { recursive: true, force: true });
+
+/*
+ * The paths out of `git status --porcelain`, after this runner has trimmed the output.
+ *
+ * Every git result is trimmed here, which eats the leading space that porcelain puts in front
+ * of a file modified in the working tree — on the first line only. Cutting three fixed
+ * characters then ate the first letter of the path with it: the operator was told about
+ * "ules-engine/docs" and the commit-hygiene check searched a list whose first entry could read
+ * "ode_modules". Both shapes are parsed here, because both reach the parser.
+ */
+console.log('\n--- porcelain paths survive the trim ---');
+const rawStatus = ' M rules-engine/docs/a.md\n?? node_modules/x.js\nM  src/b.ts\nMM src/c.ts\nR  old.ts -> new.ts\n D gone.ts';
+const expected = ['rules-engine/docs/a.md', 'node_modules/x.js', 'src/b.ts', 'src/c.ts', 'old.ts -> new.ts', 'gone.ts'];
+for (const [what, text] of [['as git prints it', rawStatus], ['trimmed, as the helper returns it', rawStatus.trim()]] as const) {
+  const got = porcelainPaths(text);
+  const ok = got.length === expected.length && got.every((p, i) => p === expected[i]);
+  console.log(`${what.padEnd(36)}: ${ok ? 'every path whole' : `WRONG — ${JSON.stringify(got)}`}`);
+}
+console.log('empty output                        :', porcelainPaths('').length === 0 ? 'no paths' : 'WRONG');

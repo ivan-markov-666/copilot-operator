@@ -41,6 +41,8 @@ import { planBrief, type BriefOptions } from '../plan/brief.js';
 /** The folders the operator works in: the default new sessions start on, and the rest by name. */
 export type ProjectDefault = {
   rootDir: string;
+  /** What the operator calls it. Empty means the folder's own name. */
+  name: string;
   repoOk: boolean;
   repoProblem?: string;
   others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection }>;
@@ -1646,6 +1648,7 @@ export class OperatorService {
     });
     return {
       rootDir,
+      name: (cfg.project?.name ?? '').trim(),
       repoOk: rootDir !== '' && problem === null,
       ...(problem ? { repoProblem: problem } : {}),
       others,
@@ -1689,6 +1692,7 @@ export class OperatorService {
    */
   async setProject(patch: {
     rootDir?: string;
+    name?: string;
     others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
     mirrorToDesktop?: boolean;
     mirror?: ProjectMirrorSelection;
@@ -1696,11 +1700,13 @@ export class OperatorService {
     const raw = await this.settings.raw();
     const current = ((raw.project as Record<string, unknown>) ?? {}) as {
       rootDir?: string;
+      name?: string;
       others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
       mirrorToDesktop?: boolean;
       mirror?: ProjectMirrorSelection;
     };
     const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
+    const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
     if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
 
     const others = (patch.others ?? current.others ?? []).map((o) => ({
@@ -1721,7 +1727,7 @@ export class OperatorService {
 
     const mirrorToDesktop = patch.mirrorToDesktop ?? current.mirrorToDesktop ?? false;
     const mirror = patch.mirror ?? current.mirror;
-    const cfg = await this.settings.save({ ...raw, project: { ...current, rootDir, others, mirrorToDesktop, ...(mirror ? { mirror } : {}) } });
+    const cfg = await this.settings.save({ ...raw, project: { ...current, rootDir, name, others, mirrorToDesktop, ...(mirror ? { mirror } : {}) } });
 
     /*
      * The switch acts at once, both ways. On: every project's folder appears on the Desktop

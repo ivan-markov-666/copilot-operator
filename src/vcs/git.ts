@@ -64,7 +64,7 @@ export async function repoState(dir: string): Promise<RepoState> {
   const branch = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const head = await git(dir, ['rev-parse', 'HEAD']);
   const status = await git(dir, ['status', '--porcelain']);
-  const changed = status.stdout ? status.stdout.split('\n').map((l) => l.slice(3).trim()).filter(Boolean) : [];
+  const changed = porcelainPaths(status.stdout);
 
   return {
     isRepo: true,
@@ -89,12 +89,28 @@ export async function repoState(dir: string): Promise<RepoState> {
 export async function workingTreePaths(dir: string, limit = 20_000): Promise<string[]> {
   const status = await git(dir, ['status', '--porcelain', '--untracked-files=all']);
   if (!status.ok || !status.stdout) return [];
-  return status.stdout
-    .split('\n')
-    .map((l) => l.slice(3).trim())
+  return porcelainPaths(status.stdout)
     .map((p) => (p.includes(' -> ') ? p.slice(p.indexOf(' -> ') + 4) : p))
-    .filter(Boolean)
     .slice(0, limit);
+}
+
+/**
+ * The paths out of `git status --porcelain`, whatever happened to the leading space.
+ *
+ * Porcelain puts two status characters and a space in front of every path, and the first of
+ * those characters is a space for a file modified in the working tree but not staged: ` M
+ * src/x.ts`. This runner trims every git result, which eats that leading space on the first
+ * line only — and cutting a fixed three characters then ate the first letter of the path with
+ * it. The operator saw "There are uncommitted changes (ules-engine/docs…)" and, worse, the
+ * commit-hygiene check was looking for `node_modules` in a list where the first entry could
+ * read `ode_modules`. So the status characters are matched rather than counted.
+ */
+export function porcelainPaths(stdout: string): string[] {
+  if (!stdout) return [];
+  return stdout
+    .split('\n')
+    .map((l) => l.replace(/^\s*[A-Z?!ADMRTUC ]{1,2}\s+/, '').trim())
+    .filter(Boolean);
 }
 
 /** Is git usable at all on this machine? */

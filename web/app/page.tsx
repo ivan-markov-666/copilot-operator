@@ -415,12 +415,13 @@ function BatchPanel({
       setVcsProblems([]);
       return;
     }
-    void Promise.all(
-      ids.map(async (id) => {
-        const status = await api.vcsStatus(id).catch(() => null as VcsStatus | null);
-        return { id, status };
-      }),
-    ).then((results) => {
+    const check = async () => {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const status = await api.vcsStatus(id).catch(() => null as VcsStatus | null);
+          return { id, status };
+        }),
+      );
       if (cancelled) return;
       setVcsProblems(
         results
@@ -430,9 +431,22 @@ function BatchPanel({
             problem: r.status?.problem ?? '',
           })),
       );
-    });
+    };
+    void check();
+    /*
+     * Asked again every ten seconds while something is ticked.
+     *
+     * "Commit or stash them first" is an instruction, and the operator goes and does it — in
+     * another window, without touching this page. Read once at selection time, the warning
+     * then sat there over a repository that had been clean for minutes, and the only way to
+     * clear it was to untick and tick again. Ten seconds is slow enough not to ask the file
+     * system three times a second with the session poll, and quick enough that the message
+     * goes on its own once the thing it asks for is done.
+     */
+    const timer = setInterval(() => void check(), 10_000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
     // `sessions` is only read for a name here; re-running on every poll would ask the API a
     // question about the file system three times a second.

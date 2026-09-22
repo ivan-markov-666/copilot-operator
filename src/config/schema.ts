@@ -177,6 +177,14 @@ export const RunConfigSchema = z.object({
       /** Absolute path to the project folder. Empty means no default has been chosen. */
       rootDir: z.string().default(''),
       /**
+       * What to call it. Empty means the folder's own name, which is what this used to be
+       * always — fine until the Desktop mirror started naming a folder per project and the
+       * plan brief started listing them, where "rules-tests" is a path and "the test suite"
+       * is what the operator calls it. The other projects have had a name from the start; the
+       * default one had nowhere to put it.
+       */
+      name: z.string().trim().default(''),
+      /**
        * The other folders this operator works in, each with a short name: a front end, a back
        * end, the test suite. They are not defaults — a new session still starts on `rootDir` —
        * and they are not sessions. They exist for two readers: every folder field in the app

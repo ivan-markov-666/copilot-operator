@@ -491,12 +491,15 @@ export class OperatorController {
     @Body()
     body: {
       rootDir?: string;
+      name?: string;
       others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
       mirrorToDesktop?: boolean;
       mirror?: ProjectMirrorSelection;
     },
   ): Promise<unknown> {
-    return this.ops.setProject({ rootDir: body?.rootDir, others: body?.others, mirrorToDesktop: body?.mirrorToDesktop, mirror: body?.mirror }).catch(fail);
+    return this.ops
+      .setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others, mirrorToDesktop: body?.mirrorToDesktop, mirror: body?.mirror })
+      .catch(fail);
   }
 
   /**

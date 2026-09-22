@@ -712,6 +712,14 @@ const dict = {
     'def.title': 'What every new session starts with',
     'def.intro':
       'Three things are chosen here once instead of in every session: the folders being worked on, the model that does the work, and the model that reviews it. Sessions keep their own copies, so any of them can be changed afterwards without touching these.',
+    'def.autoSave': 'Everything on this page saves itself as you change it. There is nothing to press.',
+    'def.savedAutomatically': 'saved as you type',
+    'def.saveAnyway': 'Save',
+    'def.saveAnywayWhy': 'It is already saved. This button exists for the comfort of pressing one.',
+    'proj.nameField': 'Name of the project',
+    'proj.namePlaceholder': 'the folder\'s own name',
+    'proj.nameWhy': 'What this project is called everywhere else: its folder on the Desktop, the name in front of every mirrored file, and the list Kerrigan is given. Empty means the folder\'s own name.',
+    'proj.nameSaved': 'Name saved.',
     'def.reviewTitle': 'Model for the review',
     'def.reviewIntro':
       "The model a new session's independent review starts on. A different model from the one doing the work is the cheapest way to make the second opinion genuinely second: a fresh conversation removes attachment to the work, not the model's blind spots.",
@@ -1600,6 +1608,14 @@ const dict = {
     'def.title': 'С какво тръгва всяка нова сесия',
     'def.intro':
       'Тук се избират веднъж три неща, вместо във всяка сесия: папките, по които се работи, моделът, който върши работата, и моделът, който я проверява. Сесиите си пазят собствени копия, така че всяка от тях може да бъде променена после, без това да пипа зададеното тук.',
+    'def.autoSave': 'Всичко на тази страница се запазва само, докато го променяте. Няма какво да натискате.',
+    'def.savedAutomatically': 'запазва се, докато пишете',
+    'def.saveAnyway': 'Запази',
+    'def.saveAnywayWhy': 'Вече е запазено. Този бутон съществува заради удоволствието да натиснеш бутон.',
+    'proj.nameField': 'Име на проекта',
+    'proj.namePlaceholder': 'името на самата папка',
+    'proj.nameWhy': 'Как се казва този проект навсякъде другаде: папката му на Desktop-а, името пред всеки копиран файл и списъкът, който получава Kerrigan. Празно означава името на самата папка.',
+    'proj.nameSaved': 'Името е запазено.',
     'def.reviewTitle': 'Модел за рецензията',
     'def.reviewIntro':
       'Моделът, с който тръгва независимата рецензия на новата сесия. Модел, различен от този, който върши работата, е най-евтиният начин второто мнение наистина да е второ: новият разговор маха привързаността към работата, но не и слепите петна на модела.',
