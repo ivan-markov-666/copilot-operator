@@ -1,0 +1,26 @@
+# Line endings, settled once, because the alternative is what it was.
+#
+# This project is worked on from two Windows machines, and neither had anything to say about
+# line endings: no .gitattributes here, and `core.autocrlf` set on one checkout and not on the
+# other. The result is a file that is byte-identical in content showing up as modified on one
+# machine and not the other, and a `git pull` that stops on "local changes would be overwritten"
+# for edits nobody made. It is the commonest reason an update is frightening.
+#
+# `text=auto` lets git decide what is text, store it with LF in the repository, and hand each
+# machine whatever its checkout wants in the working tree. Nothing about the working tree changes
+# on the machine you are reading this on; what changes is that the two machines now agree.
+* text=auto
+
+# Written and read by Windows shells, where CRLF is not cosmetic.
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# Never to be touched: a line-ending rewrite inside one of these is corruption.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary

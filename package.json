@@ -45,7 +45,8 @@
     "check:guide": "tsx test/guide.check.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck --workspace web",
     "check:bundle": "tsx test/bundle.check.ts",
-    "check:runname": "tsx test/runname.check.ts"
+    "check:runname": "tsx test/runname.check.ts",
+    "update": "node scripts/update.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",

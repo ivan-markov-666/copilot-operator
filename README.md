@@ -73,6 +73,32 @@ The two can also run separately: `npm run api` (NestJS on 127.0.0.1:4000) and `n
 Create a session, add tasks with their level 2 instructions, press Run, approve each step
 from the page, read the summary when it finishes. See [`docs/ui.md`](docs/ui.md).
 
+### Updating a machine that has been used
+
+```bash
+npm run update              # back up, pull, install, build
+npm run update -- --check   # say what would happen, change nothing
+```
+
+**A pull cannot lose what you have entered.** Everything this program records lives in `data/`
+(settings, sessions, level 2 presets, a customised level 1, the organisation and work texts, the
+model list) and `runs/` (every log, report and artifact of every task). Both are in `.gitignore`,
+every write in `src/` goes to one of them or to the Desktop, and git does not know they exist.
+
+What a pull *can* do is refuse to start. `npm run update` deals with each reason in turn: it
+copies `data/` to `data-backups/<timestamp>/` before touching anything, refuses to run while the
+bot is (swapping the code under a run in flight is the one thing here that could really break
+something), puts any local edits to tracked files into a named stash and tells you the command to
+get them back, pulls **fast-forward only** so no merge is ever made on your behalf, and then
+reinstalls and rebuilds — because a `dist/` older than its `src/` runs the previous version and
+reports the previous version's bugs.
+
+Run it with `--check` first if you want to see what it would do. When nothing has come in it
+installs and builds nothing; `--rebuild` forces both.
+
+If files looked modified that you never edited, that was line endings: two Windows machines, one
+with `core.autocrlf` set and one without. `.gitattributes` settles it.
+
 ### The terminal, for one task
 
 ```bash

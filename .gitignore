@@ -1,6 +1,7 @@
 *.log
 artifacts/
 data/
+data-backups/
 dist/
 node_modules/
 profile/
@@ -13,3 +14,4 @@ web/tsconfig.tsbuildinfo
 .env.*
 !.env.example
 /.next/
+run.yaml
