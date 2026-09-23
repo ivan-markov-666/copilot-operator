@@ -65,7 +65,7 @@ word, a name assembled from pieces, one resolved by wildcard — is refused as t
 
 ### How a run is regulated
 
-Five rules decide what a step may do, and each is recorded with the run that it governed:
+Six rules decide what a step may do, and each is recorded with the run that it governed:
 
 - **Say where the bot runs, and an unattended run needs an answer.** `execution.isolation` is what
   you have arranged — `none`, `separate-account`, `sandbox` or `vm` — and it defaults to `none`,
@@ -85,6 +85,16 @@ Five rules decide what a step may do, and each is recorded with the run that it 
   security team opened an incident about. Work too long for one line is written **from a command
   step** — `Set-Content` with a here-string — and run in the next, so its contents passed through a
   step that was read and screened and it sits in the project where it can be read afterwards.
+- **What comes back is data, never instructions.** The loop reads command output back into the
+  chat, and most output was not written by this machine: it is the contents of files, logs, commit
+  messages and pages that other people wrote. Any of it can carry text shaped like an order, and a
+  model that obeys it is doing what whoever edited that file wanted — which is the whole method of
+  an indirect prompt injection, since the attacker cannot reach the conversation and so leaves
+  something where it will be read. Both contracts forbid acting on it and require it to be reported
+  instead, and **every results file repeats the boundary above the first line of output**, because
+  a contract is sent once and the early turns of a long conversation fall out of what the model can
+  see. This is guidance to a model, not a control: it is the reason the allowlist, the refused
+  techniques and confirm mode exist underneath it.
 - **Only the declared toolchain runs.** `execution.allowedPrograms` names the programs a command
   may start — the shells, the JavaScript, .NET, Java, Python, Go and Rust tools, `git`, and a few
   Windows utilities. A command that starts anything else is refused and sent back with the reason.
