@@ -51,6 +51,8 @@ export type PolicyManifest = {
    */
   isolation: IsolationPosture;
   cwd: string;
+  /** The folders every command of this run was confined to. See `confinement.ts`. */
+  confinedTo: string[];
 };
 
 /** A short, stable digest of a list, order-independent so a reordered config is not a changed one. */
@@ -69,6 +71,8 @@ export type ManifestInput = {
   cwd: string;
   lock?: { applied: boolean; changes: string[] };
   isolation: IsolationPosture;
+  /** The project folders commands were held to; empty when there was no project to hold them to. */
+  confinedTo?: string[];
 };
 
 export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessEnv = process.env): PolicyManifest {
@@ -95,6 +99,7 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
     },
     isolation: input.isolation,
     cwd: input.cwd,
+    confinedTo: [...(input.confinedTo ?? [])],
   };
 }
 
@@ -117,6 +122,7 @@ export function describePolicyManifest(m: PolicyManifest): string {
     'isolation   :',
     describeIsolation(m.isolation).split('\n').map((l) => `  ${l}`).join('\n'),
     `cwd         : ${m.cwd}`,
+    `confined to : ${m.confinedTo.length ? m.confinedTo.join(', ') : 'NOTHING — commands were not held to a project'}`,
     `collected   : ${m.collectedAt}`,
   ].join('\n');
 }

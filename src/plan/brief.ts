@@ -1251,6 +1251,12 @@ bot actually does, because it changes what a good task looks like:
   reads it and decides the next step. This repeats until Copilot writes a final summary.
 - Nothing is interactive. A command that waits for a keypress, opens an editor or needs a
   browser login will hang the task.
+- **Only the project folders.** The runner refuses any command, check or file path that reaches
+  outside the session's folder and the projects listed below — reading as well as writing — and
+  anything that manages the machine: the registry, services, the network, users, installs that
+  land outside the project. So every path you write into a prompt, a \`cwd\` or a check is inside a
+  project folder, and a task that needs something on the machine is a question for the operator,
+  not a step. A check that reaches outside is refused before it runs and fails the task.
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
 
@@ -1457,6 +1463,12 @@ function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
   чете и решава следващата стъпка. Това се повтаря, докато Copilot не напише финално резюме.
 - Нищо не е интерактивно. Команда, която чака клавиш, отваря редактор или иска вход през
   браузър, ще увисне.
+- **Само папките на проектите.** Runner-ът отказва всяка команда, проверка или път към файл, който
+  излиза извън папката на сесията и проектите, изброени по-долу — и за четене, и за запис — и всичко,
+  което управлява машината: регистъра, услугите, мрежата, потребителите, инсталации извън проекта.
+  Затова всеки път, който пишеш в задача, в \`cwd\` или в проверка, е в папка на проект, а задача, на
+  която трябва нещо от машината, е въпрос към оператора, не стъпка. Проверка, която излиза навън, се
+  отказва, преди да се изпълни, и проваля задачата.
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
 

@@ -33,6 +33,13 @@ export type DerivedValidation = {
   kept: Array<{ finding: ReviewFinding & { id: string }; check: TaskCheck; outcome: CheckOutcome }>;
   /** The check passed on the work as it is, so it does not capture the defect. */
   refused: Array<{ finding: ReviewFinding & { id: string }; check: TaskCheck; outcome: CheckOutcome }>;
+  /**
+   * The runner refused the check itself — outside the project, or a refused command — so it never
+   * ran. It is kept out of both lists above: "kept only if it fails now" would have kept it, since a
+   * refusal reports as a failure, and a check that can never run would then fail the task forever.
+   * The finding stands without it.
+   */
+  blocked: Array<{ finding: ReviewFinding & { id: string }; check: TaskCheck; outcome: CheckOutcome }>;
 };
 
 /**
@@ -40,14 +47,31 @@ export type DerivedValidation = {
  */
 export async function validateDerivedChecks(
   findings: Array<ReviewFinding & { id: string }>,
-  opts: { cwd: string; logDir: string; repoDir?: string; deny?: CheckRunOptions['deny']; signal?: AbortSignal; defaultShell?: CheckRunOptions['defaultShell'] },
+  opts: {
+    cwd: string;
+    logDir: string;
+    repoDir?: string;
+    deny?: CheckRunOptions['deny'];
+    roots?: CheckRunOptions['roots'];
+    signal?: AbortSignal;
+    defaultShell?: CheckRunOptions['defaultShell'];
+  },
 ): Promise<DerivedValidation> {
-  const out: DerivedValidation = { kept: [], refused: [] };
+  const out: DerivedValidation = { kept: [], refused: [], blocked: [] };
   for (const [i, finding] of findings.entries()) {
     if (!finding.check) continue;
     const check: TaskCheck = { ...finding.check, name: derivedCheckName(finding.id, finding.check.name) };
-    const outcome = await runCheck(check, 500 + i, { cwd: opts.cwd, logDir: join(opts.logDir, 'derived'), repoDir: opts.repoDir, deny: opts.deny, signal: opts.signal, defaultShell: opts.defaultShell });
-    (outcome.passed ? out.refused : out.kept).push({ finding, check, outcome });
+    const outcome = await runCheck(check, 500 + i, {
+      cwd: opts.cwd,
+      logDir: join(opts.logDir, 'derived'),
+      repoDir: opts.repoDir,
+      deny: opts.deny,
+      roots: opts.roots,
+      signal: opts.signal,
+      defaultShell: opts.defaultShell,
+    });
+    if (outcome.refusedBeforeRunning) out.blocked.push({ finding, check, outcome });
+    else (outcome.passed ? out.refused : out.kept).push({ finding, check, outcome });
   }
   return out;
 }

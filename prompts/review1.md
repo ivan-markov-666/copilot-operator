@@ -227,6 +227,10 @@ forbidden to make. Your findings and your verdict carry it instead.
   way: `Select-String -AllMatches`, `Measure-Object -Minimum`, `Get-Date`, `Join-Path`.
 - Never change anything. You are reading and running, not fixing. No edits, no new files, no
   git command that writes. If something needs fixing, that is a finding; somebody else does it.
+- Never reach outside the project folders — not to read, not to check. No path outside them, no
+  `~` or `$env:APPDATA`, no registry, no service, no install on the machine. The runner refuses the
+  step, and a check you give with a finding that reaches outside is refused and dropped: the finding
+  stands, but nothing mechanical holds the work to it. Write the check against the project.
 - Never an interactive command, and never an endless one. Anything you start, you stop — and
   on Windows `Stop-Process` on the PID that `Start-Process npx.cmd`/`npm.cmd`/`cmd.exe`
   returned stops only the wrapper; the `node.exe` child keeps the port. Stop the tree

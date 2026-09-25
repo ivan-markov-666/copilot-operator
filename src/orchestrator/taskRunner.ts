@@ -35,6 +35,7 @@ import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, commandRefusal } from '../exec/policy.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
+import { projectRoots, type Confinement } from '../exec/confinement.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -581,12 +582,27 @@ export async function runTask(
    * config that had been edited since. Written here rather than with the environment above because
    * the working directory is part of the answer and is only settled now. See `policyManifest.ts`.
    */
+  /*
+   * The project folders, decided once for the whole task: this session's own, and every folder
+   * registered in Settings, because work across a front end, a back end and its tests is one piece
+   * of work and a test suite legitimately starts the application next door. Every command this task
+   * runs — the implementer's steps and checks, the reviewer's steps and derived checks — is held to
+   * them. Built here and handed down rather than rebuilt at each gate, so no gate can have a
+   * different idea of where the project ends. See `confinement.ts`.
+   */
+  const confinement: Confinement = {
+    roots: projectRoots([work.cwd, cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)]),
+    cwd: work.cwd,
+  };
+  sink.event('confinement', { roots: confinement.roots }, `commands are confined to ${confinement.roots.join(', ')}`);
+
   const isolation = assessIsolation(cfg.execution.isolation, readIsolationSignals());
   for (const concern of isolation.warnings) {
     sink.event('isolation', { claim: isolation.claim, elevated: isolation.signals.elevated }, concern, 'warn');
   }
   const manifest = collectPolicyManifest({
     isolation,
+    confinedTo: confinement.roots,
     mode: cfg.execution.mode,
     allowedPrograms: cfg.execution.allowedPrograms,
     denyPatterns: cfg.execution.denyPatterns,
@@ -772,7 +788,9 @@ export async function runTask(
         cwd: work.cwd,
         logDir: log.path('checks'),
         signal: deps.signal,
-        deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms),
+        deny: (command, shell, cwd) =>
+          commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms, process.env, { roots: confinement.roots, cwd }),
+        roots: confinement.roots,
         repoDir: willCommit ? repoDirOf(session) : undefined,
         // The same shell a step that named none is given, so the gate and the work it judges
         // cannot have been read by different interpreters.
@@ -951,6 +969,7 @@ export async function runTask(
           dir: log.path('review', String(reviewRounds)),
           round: reviewRounds,
           cwd: work.cwd,
+          roots: confinement.roots,
           changedFiles,
           deliverable,
           deviations,
@@ -1362,7 +1381,7 @@ export async function runTask(
           t.status = 'waiting-approval';
         });
         sink.event('step-proposed', { id: step.id, description: describeStep(step) }, `step ${step.id}: ${describeStep(step)}`);
-        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations });
+        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement });
         await setTask((t) => {
           t.status = 'running';
         });

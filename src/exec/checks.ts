@@ -15,7 +15,8 @@
  */
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { isWithin } from './confinement.js';
 
 import { runStep, type RunResult } from './runner.js';
 import { resolveShell, type Shell, type ShellProblem } from './shells.js';
@@ -35,6 +36,12 @@ export const COMMIT_CLEAN_CHECK: TaskCheck = { name: 'nothing installed, built, 
 export type CheckOutcome = {
   check: TaskCheck;
   passed: boolean;
+  /**
+   * Set when the check never ran because the runner refused it: the command on the refused list,
+   * or a folder or file outside the project. Not a verdict on the work — a verdict on the check —
+   * and a caller deciding whether a check "fails now" must not read it as one.
+   */
+  refusedBeforeRunning?: boolean;
   /** One sentence saying what was expected and what was found. */
   detail: string;
   exitCode?: number;
@@ -61,8 +68,18 @@ export type CheckRunOptions = {
   signal?: AbortSignal;
   /** Ceiling per check. Checks are meant to be quick; a slow one is usually a mistake. */
   timeoutMs?: number;
-  /** Refuses a command before it runs, the same gate the steps go through. */
-  deny?: (command: string, shell: Shell) => string | null;
+  /**
+   * Refuses a command before it runs, the same gate the steps go through. Given the folder the
+   * check will really run in — its own `cwd` when it names one — because that is what a relative
+   * path in the command is resolved against, and so what decides whether it stays in the project.
+   */
+  deny?: (command: string, shell: Shell, cwd: string) => string | null;
+  /**
+   * The project folders. A check's own `cwd`, and the file a file check reads, must lie inside
+   * them: a derived check is written by a model, and a `file-contains` on somebody's key would put
+   * the key in the report that goes back to the chat. Absent means no confinement, as in a test.
+   */
+  roots?: string[];
   /** The repository whose working tree `commit-clean` looks at. Absent means the check passes. */
   repoDir?: string;
   /**
@@ -116,6 +133,18 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
       : fail(suspiciousDetail(found), { output: found.map((s) => `${s.path}\t${s.reason}`).join('\n') });
   }
 
+  /*
+   * Where this check really runs, decided once. The command runs here and a file check's relative
+   * path is resolved against it — the same folder for both, so the path confined is the path read.
+   * A relative `file` used to be read relative to wherever the runner itself was started, which is
+   * this bot's own checkout: it pointed nowhere useful, and it would have made the path checked and
+   * the path read two different paths.
+   */
+  const cwd = resolve(opts.cwd, (check.cwd ?? '').trim() || '.');
+  if (opts.roots && opts.roots.length > 0 && !isWithin(cwd, opts.roots)) {
+    return fail(`the check was refused before it ran: its working folder ${cwd} is outside the project folders (${opts.roots.join(', ')})`, { refusedBeforeRunning: true });
+  }
+
   if (needsCommand(check)) {
     const command = (check.run ?? '').trim();
     if (!command) return fail('this check asks about a command but names none');
@@ -133,8 +162,8 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     if (!chosen.ok) return fail(chosen.problem.message, { environmentProblem: chosen.problem });
     const { shell, path: shellPath } = chosen.resolved;
 
-    const refused = opts.deny?.(command, shell);
-    if (refused) return fail(`the command was refused before it ran: ${refused}`);
+    const refused = opts.deny?.(command, shell, cwd);
+    if (refused) return fail(`the command was refused before it ran: ${refused}`, { refusedBeforeRunning: true });
 
     let result: RunResult;
     try {
@@ -146,7 +175,7 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
           // the result then records what was wanted as well as what ran.
           shell: check.shell ?? opts.defaultShell,
           command,
-          cwd: (check.cwd ?? '').trim() || opts.cwd,
+          cwd,
           hardTimeoutMs: opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
           logPath: join(opts.logDir, `check-${index + 1}.txt`),
         },
@@ -203,8 +232,12 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     }
   }
 
-  const file = (check.file ?? '').trim();
-  if (!file) return fail('this check asks about a file but names none');
+  const named = (check.file ?? '').trim();
+  if (!named) return fail('this check asks about a file but names none');
+  const file = resolve(cwd, named);
+  if (opts.roots && opts.roots.length > 0 && !isWithin(file, opts.roots)) {
+    return fail(`the check was refused before it ran: ${file} is outside the project folders (${opts.roots.join(', ')})`, { refusedBeforeRunning: true });
+  }
 
   switch (check.expect) {
     case 'file-exists':

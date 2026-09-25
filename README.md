@@ -110,6 +110,50 @@ Six rules decide what a step may do, and each is recorded with the run that it g
   only ever tightens, and the runner never writes the file. A machine without one behaves exactly
   as before.
 
+### Only the project folders
+
+Every command a task runs — the implementer's steps and checks, the reviewer's steps and the checks
+it derives — is held to the **project folders**: the session's own folder and every project
+registered in Settings, so a test suite may still start the application from the repository next
+to it. Refused before it runs:
+
+- a path outside them — absolute, a network share, `..` that climbs out, a `cd` to the root — and
+  anything built from the operator's profile or the system: `~`, `$HOME`, `$env:USERPROFILE`,
+  `$env:APPDATA`, `$env:TEMP`, `%TEMP%` and the rest. **Reads as well as writes**: what a step prints
+  goes to the chat, so reading a key outside the project is sending it there;
+- the registry and the other drives that are not files (`HKLM:`, `HKCU:`, `Cert:`);
+- managing the computer: services, the network and firewall, local users, the clock, Windows
+  features, disks, machine-wide PowerShell modules;
+- installs that land outside the project — `npm -g`, `dotnet tool -g`, `cargo install`,
+  `go install`, `pip install` into the machine's Python. The same tools installed into the project
+  (`npm install -D`, a local tool manifest, a `.venv`) stay open.
+
+A check's own folder and the file a file check reads are held to the same folders, and a relative
+file path is read from the project rather than from wherever the runner was started. A check the
+reviewer derives that reaches outside is dropped rather than kept: the finding stands, the check
+does not. Every run records the folders it was confined to in its `policy.json`.
+
+**What this cannot do.** It reads what a step *says*, which is exactly the point — whatever the chat
+proposes that reaches outside the project is not run. It cannot see what a program does once it is
+running: `node build.js`, `npm run x` and a test suite can read and write anywhere the account can,
+and so can a path assembled from variables at run time. That confinement is the operating system's
+to give, and it is the real one:
+
+1. Create a **standard** (not administrator) local Windows account for the bot, and sign it in to
+   Copilot once with `cop login`.
+2. Give it modify rights on the project folders and nothing else:
+   `icacls "C:\Projects\my-app" /grant botuser:(OI)(CI)M`.
+3. **Check what it already has.** Folders created directly under `C:\` usually let every signed-in
+   user modify them by default, which would hand the bot every project there, not just yours to
+   give. Look with `icacls C:\Projects` and remove the broad grant where it should not be.
+4. Your own profile — `.ssh`, the browser, OneDrive — is private to you by default; confirm the bot
+   account cannot open `C:\Users\<you>`.
+5. Run the bot as that account, and set **Settings → Execution → Where the bot runs** to
+   *A separate low-privilege Windows account*.
+
+Windows Sandbox, with only the project folders mapped in, gives the same guarantee with less to set
+up and nothing left behind.
+
 ### The local API is not open to everything on the machine
 
 The API binds `127.0.0.1` only, and that was once taken to mean it needed no authentication. It

@@ -8,6 +8,7 @@
  */
 import type { Step } from '../protocol/replySchema.js';
 import { staticCheck, describeStep, type PolicyConfig, type PolicyDecision } from './policy.js';
+import type { Confinement } from './confinement.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -15,6 +16,8 @@ export type AuthorizeContext = {
   sessionId?: string;
   taskId?: string;
   iteration: number;
+  /** The project folders and where the step runs. See `confinement.ts`. */
+  confinement?: Confinement;
 };
 
 export interface StepAuthorizer {
@@ -28,7 +31,7 @@ export function makeAuthorizer(
 ): StepAuthorizer {
   return {
     async authorize(step, ctx) {
-      const blocked = staticCheck(step, cfg);
+      const blocked = staticCheck(step, cfg, undefined, ctx.confinement);
       if (blocked) return blocked;
       if (cfg.mode === 'unattended') return { action: 'run' };
       return await ask(step, ctx);

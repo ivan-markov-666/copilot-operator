@@ -61,6 +61,12 @@ export type ReviewDeps = {
   round: number;
   /** Where the reviewer's commands run: the session's project, the same as the implementer's. */
   cwd: string;
+  /**
+   * The project folders the reviewer's commands are held to — the same ones as the implementer's.
+   * A reviewer reads and runs for a living, and a derived check is written by a model: both are
+   * exactly as able to reach outside the project as the work they judge. See `confinement.ts`.
+   */
+  roots: string[];
   /** The files the task changed, as version control recorded them. */
   changedFiles: string[];
   /** The closing account, given only when it is the product. See `Deliverable`. */
@@ -527,7 +533,9 @@ ${machineNote}` : contract);
           cwd: deps.cwd,
           logDir: dir,
           repoDir: deps.repoDir,
-          deny: (command, shell) => commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms),
+          deny: (command, shell, cwd) =>
+            commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms, process.env, { roots: deps.roots, cwd }),
+          roots: deps.roots,
           signal,
           defaultShell,
         });
@@ -539,6 +547,10 @@ ${machineNote}` : contract);
           const b = await transport.sendAndConfirm(refusedChecksMessage(validation.refused.map((r) => ({ id: r.finding.id, detail: r.outcome.detail }))));
           markdown = (await transport.waitForReply(b)).markdown;
           continue;
+        }
+        for (const b of validation.blocked) {
+          deps.event('review-check-blocked', { round, finding: b.finding.id, detail: b.outcome.detail },
+            `the check given with ${b.finding.id} was refused by the runner and never ran; dropped, the finding stands without it — ${b.outcome.detail}`, 'warn');
         }
         for (const r of validation.refused) {
           deps.event('review-check-dropped', { round, finding: r.finding.id }, `the check given with ${r.finding.id} still passes on the defective state; dropped`, 'warn');
@@ -578,7 +590,12 @@ ${machineNote}` : contract);
         }
 
         deps.event('review-step-proposed', { round, id: step.id, description: describeStep(step) }, `review step ${step.id}: ${describeStep(step)}`);
-        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations });
+        const decision = await authorizer.authorize(step, {
+          sessionId: session.id,
+          taskId: task.id,
+          iteration: iterations,
+          confinement: { roots: deps.roots, cwd: deps.cwd },
+        });
         if (decision.action !== 'run') {
           results.push(refused(step.id, decision.reason, step.cmd, step.shell));
           if (decision.action === 'abort') break;

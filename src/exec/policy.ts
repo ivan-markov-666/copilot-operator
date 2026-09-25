@@ -18,6 +18,7 @@ import { dangerousRefusal } from './dangerous.js';
 import { findShellExecuteTrap } from './shellExecuteTrap.js';
 import { inlineCodeRefusal, programRefusal } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
+import { confinementRefusal, type Confinement } from './confinement.js';
 
 export type PolicyDecision =
   | { action: 'run' }
@@ -65,6 +66,12 @@ export function commandRefusal(
   denyPatterns: string[],
   allowedPrograms: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
+  /**
+   * The project folders and where this command runs. Absent only where there is no project to
+   * speak of — a check run by hand, a test of some other rule. Every path that runs a command for a
+   * task passes it: the implementer's steps and checks, and the reviewer's steps and derived checks.
+   */
+  confinement?: Confinement,
 ): string | null {
   // The built-in refusals first, because the operator's list can add to them and must not be
   // able to stand in for them: a config written before they existed, or edited since, still gets
@@ -73,6 +80,13 @@ export function commandRefusal(
   if (technique) return technique;
   const hit = matchDenyPattern(command, denyPatterns);
   if (hit) return `matches deny pattern /${hit}/`;
+  // Where it reaches, before which program it is: a binary named by a path outside the project is
+  // better refused for being outside than for not being on a list, and a cmdlet — which the
+  // allowlist never sees — is only caught here. See `confinement.ts`.
+  if (confinement) {
+    const reach = confinementRefusal(command, confinement);
+    if (reach) return reach;
+  }
   // The allowlist after the known-bad floor and the operator's deny list, so their precise
   // messages win, and this catches the long tail neither of them was ever going to enumerate: a
   // program that is simply not part of this project's toolchain. See `programs.ts`.
@@ -119,10 +133,15 @@ export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowed
  * Applies the automatic rules. Returns null when the step is acceptable so far, or a
  * decision when it is refused without asking anyone.
  */
-export function staticCheck(step: Step, cfg: PolicyConfig, env: NodeJS.ProcessEnv = process.env): PolicyDecision | null {
+export function staticCheck(
+  step: Step,
+  cfg: PolicyConfig,
+  env: NodeJS.ProcessEnv = process.env,
+  confinement?: Confinement,
+): PolicyDecision | null {
   // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`
   // are shell-specific, so screening for one interpreter and running in another finds nothing.
-  const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env);
+  const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env, confinement);
   if (reason) return { action: 'skip', reason };
 
   /*

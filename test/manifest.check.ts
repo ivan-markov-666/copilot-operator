@@ -66,5 +66,11 @@ const unisolated = collectPolicyManifest(
 check('no isolation raises concerns', unisolated.isolation.warnings.length > 0, true);
 check('and elevation is spelled out', describePolicyManifest(unisolated).includes('every command runs elevated'), true);
 
+console.log('\n--- the folders commands were held to are recorded ---');
+const confined = collectPolicyManifest({ ...base, confinedTo: ['C:\\Projects\\thing', 'C:\\Projects\\api'] }, env);
+check('the folders are kept', confined.confinedTo.length, 2);
+check('and named in the log block', describePolicyManifest(confined).includes('C:\\Projects\\api'), true);
+check('an unconfined run says so plainly', describePolicyManifest(safe).includes('NOTHING'), true);
+
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;
