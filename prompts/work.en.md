@@ -6,7 +6,7 @@
     "tickets": [
       { "id": "PBI-1234", "title": "…", "acceptanceCriteria": ["…", "…"] }
     ],
-    "projects": ["the names, from the organisation document, that this work touches"],
+    "projects": ["the paths, from the organisation document, that this work touches"],
     "context": "what somebody picking this up would otherwise have to be told: decisions already taken, where the work left off, what an earlier attempt tried",
     "constraints": [
       "what must not change while this work happens",

@@ -26,9 +26,11 @@ function fail(e: unknown): never {
  * nothing about names. The fix is the standard pair: an ASCII fallback for anything old, and
  * `filename*` with the real name percent-encoded for every current browser.
  */
-/** The two kinds, checked here so a path cannot name a file of its own choosing. */
+/** The three kinds, checked here so a path cannot name a file of its own choosing. */
 function asContextKind(kind: string): ContextKind {
-  if (kind !== 'organisation' && kind !== 'work') throw new BadRequestException('kind must be organisation or work');
+  if (kind !== 'organisation' && kind !== 'persona' && kind !== 'work') {
+    throw new BadRequestException('kind must be organisation, persona or work');
+  }
   return kind;
 }
 

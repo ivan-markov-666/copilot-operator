@@ -274,6 +274,23 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         ],
       },
       {
+        headingKey: 'plan.personaPart',
+        en: 'The persona (agent) that carries out the tasks',
+        bg: 'Персона (агент) за разработка на задачите',
+        controls: [
+          {
+            key: 'plan.ctxClear',
+            kind: 'button',
+            en: 'Empty this',
+            bg: 'Изпразни',
+            doesEn:
+              'The same button under the second box: wipes the persona, so the brief asks for one again before any plan is written. A session already imported keeps the persona it was created with.',
+            doesBg:
+              'Същият бутон под второто поле: изтрива персоната, за да поиска заданието нова, преди да се пише план. Вече импортирана сесия пази персоната, с която е създадена.',
+          },
+        ],
+      },
+      {
         headingKey: 'plan.workPart',
         en: 'This work',
         bg: 'Тази работа',
@@ -283,8 +300,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Empty this',
             bg: 'Изпразни',
-            doesEn: 'The same button under the second box: wipes the description of the work in hand.',
-            doesBg: 'Същият бутон под второто поле: изтрива описанието на текущата работа.',
+            doesEn: 'The same button under the third box: wipes the description of the work in hand.',
+            doesBg: 'Същият бутон под третото поле: изтрива описанието на текущата работа.',
           },
         ],
       },

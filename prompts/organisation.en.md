@@ -1,10 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "organisation": {
-    "name": "the team or company this work belongs to",
     "tickets": {
       "system": "where work comes from: Azure DevOps, Jira, GitHub Issues, email…",
-      "whatATicketLooksLike": "what a ticket is called, what it always carries, who writes it",
+      "whatATicketLooksLike": "what a ticket always carries, and what a task needs out of it",
       "acceptanceCriteria": "where the acceptance criteria live and what they are called"
     },
     "sources": [
@@ -23,8 +22,8 @@
       "definitionOfDone": "what makes a piece of work finished here"
     },
     "people": [
-      "who must be asked before a shared component changes",
-      "who signs off"
+      "a change that needs somebody's say-so before it is made, and whose",
+      "who signs the finished work off"
     ],
     "doNotTouch": [
       "anything the bot must never change"
@@ -32,12 +31,13 @@
   },
   "projects": [
     {
-      "name": "the short name this project goes by",
       "path": "C:\\Projects\\example",
-      "what": "one sentence: what this project is",
+      "what": "one sentence: what this project does",
       "structure": "the folders that matter and what lives in them",
-      "howToReachItFromTheChat": "attached files, or the Desktop mirror at Desktop/copilot-operator-context/<project>/ where a file is named after its path with -- for each folder and .txt on the end, the project's name in front: example--src--main.ts.txt is src/main.ts in the project example",
+      "prerequisites": "what must be installed, running or set before it builds: runtimes, services, environment variables",
       "runsWith": "the commands that build, start and test it",
+      "knownPitfalls": "what goes wrong here that is not obvious from the code, and what to do about it",
+      "howToReachItFromTheChat": "attached files, or the Desktop mirror at Desktop/copilot-operator-context/<project>/ where a file is named after its path with -- for each folder and .txt on the end, with the prefix the app gives this project in front: example--src--main.ts.txt is src/main.ts",
       "versionControl": "whether the runner may branch and commit here"
     }
   ]

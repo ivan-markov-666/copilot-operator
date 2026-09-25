@@ -43,15 +43,26 @@ const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
 export const DEFAULT_REVIEW: ReviewSettings = { enabled: true, model: '' };
 
 /**
- * The two standing texts the operator gives the plan persona, kept apart because they change
- * at different rates.
+ * The three standing texts the operator gives the plan persona: the parts of Kerrigan that come
+ * from the person using her rather than from this project. Kept apart because they change at
+ * different rates and answer different questions.
  *
- * `organisation` is the slow one: how the company works, and where the projects are. Written
- * once and read for months. `work` is the fast one: what this group of tasks is about, which
- * ticket, which constraints — replaced whenever the work changes. Kept in one field they were
- * edited together, and the half that never changes was rewritten every time the other did.
+ * `organisation` is the slow one: what anybody doing a task here would need to know — how things
+ * are built and tested, the conventions, where information lives, what must not be touched.
+ * Written once and read for months. Deliberately not "who the company is": the name of an
+ * organisation or a project helps with no task, and a field that asked for it filled up with it.
+ *
+ * `persona` is the approach: what the agent that carries out the tasks is responsible for, the
+ * phases it works through, and what it hands back at the end. Nameless on purpose — it is a way of
+ * working, not a character — and swappable, because a refactor, an audit and a test suite each
+ * want a different one. It is the one text of the three that reaches execution directly: it is
+ * written into every task's level 2 when a plan is imported (see `composeLevel2`).
+ *
+ * `work` is the fast one: what this group of tasks is about, which ticket, which constraints —
+ * replaced whenever the work changes. Kept in one field with the others they were edited
+ * together, and the parts that never change were rewritten every time the one that does did.
  */
-export type ContextKind = 'organisation' | 'work';
+export type ContextKind = 'organisation' | 'persona' | 'work';
 
 export const DEFAULT_VCS: VersionControl = {
   enabled: true,

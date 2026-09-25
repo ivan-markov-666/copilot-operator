@@ -21,6 +21,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task, TaskCheck } from './model.js';
+import { withoutPersona } from '../plan/importPlan.js';
 
 export type ExportKind = 'plan' | 'domain' | 'bot';
 
@@ -85,9 +86,23 @@ function splitLevel2(level2: string): { goal: string; level2: string } {
 }
 
 /** The level 2 most of a session's tasks carry, which is the one the plan gave the session. */
+/**
+ * A task's level 2 as the plan wrote it: the operator's persona taken off the front.
+ *
+ * The import puts the persona that was in force on every task. The plan export is for importing
+ * again, where the persona in the field *then* is the one that should apply — so it is lifted out
+ * here, exactly, by its closing line. Left in, it would sit in front of the session's goal, the goal
+ * would no longer be found at the head of the text, and a second import would add a second persona
+ * on top of the first. The record exports keep it: they describe what ran, and the approach is part
+ * of what ran.
+ */
+function planLevel2(t: Task): string {
+  return withoutPersona(t.level2).trim();
+}
+
 function commonLevel2(tasks: Task[]): string {
   const counts = new Map<string, number>();
-  for (const t of tasks) counts.set(t.level2.trim(), (counts.get(t.level2.trim()) ?? 0) + 1);
+  for (const t of tasks) counts.set(planLevel2(t), (counts.get(planLevel2(t)) ?? 0) + 1);
   let best = '';
   let n = 0;
   for (const [text, count] of counts) {
@@ -155,7 +170,7 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
         tasks: tasks.map((t) => {
           const p = splitPrompt(t.prompt);
           const task: Record<string, unknown> = { title: t.title, prompt: p.prompt, expected: p.expected };
-          if (t.level2.trim() !== level2) task.level2 = t.level2.trim();
+          if (planLevel2(t) !== level2) task.level2 = planLevel2(t);
           if (t.vcsPlan?.branch || t.vcsPlan?.commitMessage) {
             task.vcs = { ...(t.vcsPlan.branch ? { branch: t.vcsPlan.branch } : {}), ...(t.vcsPlan.commitMessage ? { commitMessage: t.vcsPlan.commitMessage } : {}) };
           }

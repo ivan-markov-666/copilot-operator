@@ -172,11 +172,14 @@ export default function ImportPage() {
           <textarea readOnly value={software} style={{ minHeight: 380, marginTop: 10 }} />
         </details>
 
-        {/* The operator's two texts. Separate because they change at different rates: the
-            organisation and its projects are written once and read for months, while the work
-            is replaced whenever the work is. Kept in one field, the half that never changes was
-            rewritten every time the other did. */}
+        {/* The operator's three texts — the parts of Kerrigan that come from the person using her.
+            Separate because they change at different rates and answer different questions: how
+            work is done here (written once, read for months), how the tasks are carried out (the
+            approach, swapped when a different kind of work needs a different one), and this work
+            (replaced whenever the work is). The persona sits between the other two because it is
+            chosen for the work but outlives any one piece of it. */}
         <ContextField kind="organisation" onSaved={() => setContextVersion((v) => v + 1)} />
+        <ContextField kind="persona" onSaved={() => setContextVersion((v) => v + 1)} />
         <ContextField kind="work" onSaved={() => setContextVersion((v) => v + 1)} />
       </div>
 
@@ -434,8 +437,8 @@ function ContextField({ kind, onSaved }: { kind: ContextKind; onSaved: () => voi
     }
   };
 
-  const label = kind === 'organisation' ? t('plan.orgPart') : t('plan.workPart');
-  const hint = kind === 'organisation' ? t('plan.orgHint') : t('plan.workHint');
+  const label = kind === 'organisation' ? t('plan.orgPart') : kind === 'persona' ? t('plan.personaPart') : t('plan.workPart');
+  const hint = kind === 'organisation' ? t('plan.orgHint') : kind === 'persona' ? t('plan.personaHint') : t('plan.workHint');
 
   return (
     <details style={{ marginTop: 8 }} open>

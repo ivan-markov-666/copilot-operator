@@ -227,10 +227,17 @@ for (const [lang, pattern] of [['en', /\*\*"([^"]+)"\*\*/g], ['bg', /\*\*„([^�
    * only the settled version left exactly those labels unpinned, which is the version a first-time
    * operator never sees and every first-time operator gets.
    */
-  const settled = planBrief({ lang, organisation: 'the organisation', work: 'this work' });
-  const firstRun = planBrief({ lang, organisationExample: '{}', workExample: '{}' });
+  const settled = planBrief({ lang, organisation: 'the organisation', persona: 'the persona', work: 'this work' });
+  const firstRun = planBrief({ lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' });
+  /*
+   * The third state, and the reason it is here is the same as the second's. With the organisation
+   * written but no persona yet, the brief carries a short step of its own asking for one — and that
+   * step quotes the persona field and the copy button, which neither of the other two states do.
+   */
+  const personaMissing = planBrief({ lang, organisation: 'the organisation', personaExample: '{}', work: 'this work' });
   const brief = `${settled}
-${firstRun}`;
+${firstRun}
+${personaMissing}`;
   const quoted = [...new Set([...brief.matchAll(pattern)].map((m) => flatten(m[1])))];
   const unknown = quoted.filter((q) => !onScreen.has(q));
   for (const q of unknown) {

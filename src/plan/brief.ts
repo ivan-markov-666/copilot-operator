@@ -47,6 +47,14 @@ export type BriefOptions = {
   /** The shipped example of an organisation text, shown inside the interview while `organisation` is empty. */
   organisationExample?: string;
   /**
+   * The operator's persona for the agent that carries out the tasks: its responsibilities, its
+   * approach, its phases, the result it hands back. Nameless and swappable. Kerrigan plans
+   * against it; the import writes it into every task's level 2 (see `composeLevel2`).
+   */
+  persona?: string;
+  /** The shipped example of a persona, shown while `persona` is empty. */
+  personaExample?: string;
+  /**
    * The operator's text for *this* group of tasks: the ticket, the goal, what an earlier
    * attempt tried, what must not change while it happens. Replaced whenever the work changes,
    * which is why it is not part of `organisation`.
@@ -865,46 +873,73 @@ const PHASE4_BG = `
  * operator to paste and save it on the plan page. Once saved, the text is here and the
  * interview is not; delete the text and the interview is back.
  */
-const ORG_INTERVIEW_EN = (example: string, workExample: string) => `
+const ORG_INTERVIEW_EN = (example: string, personaExample: string, workExample: string) => `
 ## Phase 0 — nothing has been written down yet, so do this before anything else
 
-Say you are in phase 0. The operator has not yet told you how their organisation works or what
-this work is, so nothing below can respect either. Phase 0 happens once ever: once the two
-documents are saved they arrive with every copy of this brief, and every later conversation starts
-at phase 1. Interview them, in small batches, and then hand back two documents they will paste
-into the app and keep.
+Say you are in phase 0. The operator has not yet told you how work is done where they are, how
+the tasks should be carried out, or what this work is, so nothing below can respect any of it.
+There are three parts of you that come from the operator rather than from this brief, and phase 0
+collects all three. It happens once ever: once they are saved they arrive with every copy of this
+brief, and every later conversation starts at phase 1. Interview in small batches, then hand back
+the documents they will paste into the app and keep.
 
-**Ask about the organisation** — the part that will be true for months:
+**First, how work is done here** — the part that will be true for months. You are not collecting a
+description of the company. **Do not ask what the organisation or a project is called:** a name
+helps with no task, and a field that asks for one fills up with it. Ask for what somebody sitting
+down to do a task here would otherwise have to find out the hard way:
 
 - **Where work comes from**: the ticket system (Azure DevOps, Jira, GitHub, email…), what a
-  ticket looks like, what the acceptance criteria are called, who writes them.
+  ticket always carries, what the acceptance criteria are called and where they live.
 - **Where information lives**: OneDrive, SharePoint, Teams, a wiki, a docs folder — what you
   may search through this chat, and what you must be given.
-- **The projects**: for each one, its name, its absolute path, what it is, the folders inside
-  it that matter, how you can read its code from this chat, and the commands that build, start
-  and test it. The paths under "Projects on this machine" above are the ones the app knows; ask
-  what each one actually is.
+- **The projects**, each by its absolute path — the paths under "Projects on this machine" above
+  are the ones the app knows; ask what each one actually *does*. For each: the folders that matter,
+  what must be installed, running or set before it builds, the commands that build, start and test
+  it, how you can read its code from this chat, and **what goes wrong there that is not obvious from
+  the code** — that last one is worth more than everything else on the list.
 - **Conventions**: branch naming, commit message style, how a pull request is made and who
   reviews it, the test command and any coverage rule, coding standards, linters and formatters,
   file and folder naming, the templates and scaffolds that must be used, definition of done.
-- **People**: who must be asked before a shared component changes; who signs off.
+- **Whose say-so**: which changes need somebody's agreement before they are made; who signs off.
 - **What must never be touched.**
 
+**Then, how the tasks are carried out** — the approach of the agent that will do the work. This one
+you expect **ready-made**: ask whether the operator already has one. If they do, they paste it into
+its own field and you do not rewrite it. If they do not, build it with them by asking, until each of
+these is clear:
+
+- **What it is responsible for** in this work — and, as plainly, what it is not.
+- **Its approach**: cautious or quick, how much it verifies before it claims anything, whether it
+  may change code or only read it, when it stops and reports rather than guesses.
+- **Its phases**: the stages it works through, what happens in each, and what shows each is done.
+- **The result**: what it hands back at the end, in what form, and how it will be judged.
+
+**Never give it a name**, and never write it as a character — no "You are Alex, a senior…". It is a
+way of working, not somebody: nameless is what lets the operator swap it for a different one when a
+different kind of work needs a different approach.
+
 **Then ask about this work** — the part that changes with every group of tasks: which ticket,
-the goal, which of the projects it touches, what has already been decided or tried, what must
-not change while it happens, what is still open.
+the goal, which of the projects it touches (by path), what has already been decided or tried, what
+must not change while it happens, what is still open.
 
-**Then hand back exactly two JSON documents, each in its own fenced \`\`\`json block, in this
-order and with nothing else between them but one line saying which is which.** No prose version,
-no Markdown: these are pasted into fields, not read.
+**Then hand back the JSON documents, each in its own fenced \`\`\`json block, in this order and
+with nothing else between them but one line saying which is which.** No prose version, no Markdown:
+these are pasted into fields, not read. Leave out the second one if the operator is pasting a
+persona of their own.
 
-1. The organisation and the projects, in this shape:
+1. How work is done here, in this shape:
 
 \`\`\`json
 ${example.trim()}
 \`\`\`
 
-2. This work, in this shape:
+2. How the tasks are carried out, in this shape:
+
+\`\`\`json
+${personaExample.trim()}
+\`\`\`
+
+3. This work, in this shape:
 
 \`\`\`json
 ${workExample.trim()}
@@ -914,55 +949,81 @@ ${workExample.trim()}
 
 1. Open \`/import\` — **"Plan from JSON"** in the navigation.
 2. Paste the first document into **"The organisation and the projects"**.
-3. Paste the second into **"This work"**.
-4. Press nothing: both boxes are **"saved as you type"**.
-5. Press **"Copy the brief"** and paste the result into a new conversation with me.
+3. Paste the second — or their own — into **"The persona (agent) that carries out the tasks"**.
+4. Paste the third into **"This work"**.
+5. Press nothing: the boxes are **"saved as you type"**.
+6. Press **"Copy the brief"** and paste the result into a new conversation with me.
 
-From then on both documents arrive with the brief, phase 0 is over for good, and the next
+From then on the documents arrive with the brief, phase 0 is over for good, and the next
 conversation opens at phase 1. Say this even if they did not ask.
 `.trim();
 
-const ORG_INTERVIEW_BG = (example: string, workExample: string) => `
+const ORG_INTERVIEW_BG = (example: string, personaExample: string, workExample: string) => `
 ## Фаза 0 — още нищо не е записано, затова направи това преди всичко останало
 
-Кажи, че си във фаза 0. Операторът още не ти е казал как работи организацията му, нито каква е
-тази работа, така че нищо по-долу не може да спазва нито едното, нито другото. Фаза 0 се случва
-веднъж завинаги: щом двата документа са запазени, те идват с всяко копие на това задание, а всеки
-следващ разговор тръгва от фаза 1. Разпитай го на малки групи въпроси и после му върни два
-документа, които той ще постави в приложението и ще пази.
+Кажи, че си във фаза 0. Операторът още не ти е казал как се работи при него, как да се изпълняват
+задачите, нито каква е тази работа, така че нищо по-долу не може да спазва нищо от това. Има три
+части от теб, които идват от оператора, а не от това задание, и фаза 0 събира и трите. Случва се
+веднъж завинаги: щом са запазени, те идват с всяко копие на заданието, а всеки следващ разговор
+тръгва от фаза 1. Разпитвай на малки групи въпроси и после върни документите, които той ще постави
+в приложението и ще пази.
 
-**Питай за организацията** — частта, която ще е вярна с месеци:
+**Първо — как се работи тук**, частта, която ще е вярна с месеци. Не събираш описание на фирмата.
+**Не питай как се казва организацията или някой проект:** името не помага на никоя задача, а поле,
+което пита за него, се пълни с него. Питай за това, което човек, седнал да свърши задача тук, иначе
+би научил по трудния начин:
 
-- **Откъде идва работата**: системата за ticket-и (Azure DevOps, Jira, GitHub, имейл…), как
-  изглежда един ticket, как се наричат критериите за приемане, кой ги пише.
+- **Откъде идва работата**: системата за ticket-и (Azure DevOps, Jira, GitHub, имейл…), какво
+  носи винаги един ticket, как се наричат критериите за приемане и къде са.
 - **Къде е информацията**: OneDrive, SharePoint, Teams, wiki, папка с документи — какво можеш
   да търсиш през този чат и какво трябва да ти бъде дадено.
-- **Проектите**: за всеки — име, абсолютен път, какво е, кои папки в него имат значение, как
-  можеш да прочетеш кода му от този чат, и командите, с които се строи, пуска и тества.
-  Пътищата под „Проектите на тази машина" по-горе са тези, които приложението знае; питай какво
-  всъщност е всеки от тях.
+- **Проектите**, всеки по абсолютния му път — пътищата под „Проектите на тази машина" по-горе са
+  тези, които приложението знае; питай какво всъщност *прави* всеки от тях. За всеки: кои папки
+  имат значение, какво трябва да е инсталирано, пуснато или зададено, преди да се строи, командите,
+  с които се строи, пуска и тества, как можеш да прочетеш кода му от този чат, и **какво се чупи
+  там, без да личи от кода** — последното струва повече от всичко друго в списъка.
 - **Правила**: именуване на клонове, стил на комит съобщенията, как се прави pull request и кой
   го преглежда, командата за тестовете и правилото за покритие, стандарти за код, линтери и
   форматери, именуване на файлове и папки, шаблоните и скелетите, които трябва да се ползват,
   definition of done.
-- **Хора**: кого се пита преди промяна по общ компонент; кой одобрява.
+- **Чие съгласие**: кои промени искат нечие съгласие, преди да се направят; кой одобрява.
 - **Какво никога не бива да се пипа.**
 
+**После — как се изпълняват задачите**, подходът на агента, който ще върши работата. Него го
+очакваш **наготово**: питай дали операторът вече има такъв. Ако има, той го поставя в неговото поле
+и ти не го пренаписваш. Ако няма, изградете го заедно, като питаш, докато всяко от тези стане ясно:
+
+- **За какво отговаря** в тази работа — и също толкова ясно, за какво не.
+- **Подходът му**: предпазливо или бързо, колко проверява, преди да твърди нещо, дали може да
+  променя код или само да го чете, кога спира и докладва, вместо да гадае.
+- **Фазите му**: етапите, през които минава, какво става във всеки и какво показва, че е свършен.
+- **Резултатът**: какво предава накрая, в какъв вид и по какво ще се съди.
+
+**Никога не му давай име** и никога не го пиши като герой — без „Ти си Алекс, старши…". Това е начин
+на работа, не някой: без име е това, което позволява на оператора да го смени с друг, когато друг вид
+работа иска друг подход.
+
 **После питай за тази работа** — частта, която се сменя с всяка група задачи: кой ticket, каква
-е целта, кои от проектите засяга, какво вече е решено или пробвано, какво не бива да се променя
-междувременно, какво още е отворено.
+е целта, кои от проектите засяга (по път), какво вече е решено или пробвано, какво не бива да се
+променя междувременно, какво още е отворено.
 
-**После върни точно два JSON документа, всеки в свой ограден \`\`\`json блок, в този ред, и
-между тях само по един ред, който казва кой кой е.** Без версия в проза и без Markdown: те се
-поставят в полета, не се четат.
+**После върни JSON документите, всеки в свой ограден \`\`\`json блок, в този ред, и между тях само
+по един ред, който казва кой кой е.** Без версия в проза и без Markdown: те се поставят в полета, не
+се четат. Пропусни втория, ако операторът поставя своя собствена персона.
 
-1. Организацията и проектите, в тази форма:
+1. Как се работи тук, в тази форма:
 
 \`\`\`json
 ${example.trim()}
 \`\`\`
 
-2. Тази работа, в тази форма:
+2. Как се изпълняват задачите, в тази форма:
+
+\`\`\`json
+${personaExample.trim()}
+\`\`\`
+
+3. Тази работа, в тази форма:
 
 \`\`\`json
 ${workExample.trim()}
@@ -972,11 +1033,12 @@ ${workExample.trim()}
 
 1. Отвори \`/import\` — **„План от JSON“** в навигацията.
 2. Постави първия документ в **„Организацията и проектите“**.
-3. Постави втория в **„Тази работа“**.
-4. Не натискай нищо друго: под двете полета пише **„запазва се, докато пишете“**.
-5. Натисни **„Копирай заданието“** и постави резултата в нов разговор с мен.
+3. Постави втория — или своя собствен — в **„Персона (агент) за разработка на задачите“**.
+4. Постави третия в **„Тази работа“**.
+5. Не натискай нищо друго: под полетата пише **„запазва се, докато пишете“**.
+6. Натисни **„Копирай заданието“** и постави резултата в нов разговор с мен.
 
-Оттам нататък и двата документа идват със заданието, фаза 0 е приключила завинаги, а следващият
+Оттам нататък документите идват със заданието, фаза 0 е приключила завинаги, а следващият
 разговор отваря на фаза 1. Кажи това, дори да не те е питал.
 `.trim();
 
@@ -1012,6 +1074,7 @@ function organisationSection(
   example: string | undefined,
   lang: 'en' | 'bg',
   workExample: string | undefined,
+  personaExample: string | undefined,
 ): string {
   const body = (text ?? '').trim();
   const head = lang === 'bg' ? '## Организацията и проектите' : '## The organisation and the projects';
@@ -1031,8 +1094,121 @@ ${body}
   const sample = (example ?? '').trim();
   if (!sample) return '';
   const workSample = (workExample ?? '').trim();
+  const personaSample = (personaExample ?? '').trim();
   return `
-${lang === 'bg' ? ORG_INTERVIEW_BG(sample, workSample) : ORG_INTERVIEW_EN(sample, workSample)}
+${lang === 'bg' ? ORG_INTERVIEW_BG(sample, personaSample, workSample) : ORG_INTERVIEW_EN(sample, personaSample, workSample)}
+`;
+}
+
+/**
+ * How the tasks are carried out: the operator's persona for the agent that does the work.
+ *
+ * Three states, because each asks something different of Kerrigan.
+ *
+ * Present: it is one of her parts for this work. She plans so the tasks follow its phases, the
+ * `expected` and the checks match the result it promises, and nothing it is not responsible for is
+ * handed to it. She does **not** copy it into `level2`: the app writes it into every task's level 2
+ * itself when the plan is imported (see `composeLevel2`), verbatim, so a copy of hers would reach the
+ * working chat twice and a paraphrase of hers would contradict the real one.
+ *
+ * Missing while the rest of phase 0 is done: a short step of its own, before phase 1 — ask whether
+ * the operator has one, and if not build it with them. Not folded into planning, because a plan
+ * written before the approach is known is a plan written against a guess.
+ *
+ * Missing along with everything else: nothing here, because the full phase 0 already asks for it.
+ */
+function personaSection(
+  text: string | undefined,
+  example: string | undefined,
+  lang: 'en' | 'bg',
+  organisationDone: boolean,
+): string {
+  const body = (text ?? '').trim();
+  if (body) {
+    return lang === 'bg'
+      ? `
+## Как се изпълняват задачите
+
+Персоната на оператора за агента, който върши работата: за какво отговаря, как работи, през какви
+фази минава и какво предава накрая. Тя е част от теб за тази работа. Планирай така, че задачите да
+следват фазите ѝ, \`expected\` и проверките да съвпадат с резултата, който тя обещава, и нищо, за което
+тя не отговаря, да не ѝ се възлага.
+
+**Не я копирай в \`level2\`.** Приложението сам я вписва дословно в level 2 на всяка задача, когато
+планът се импортира — твое копие би стигнало до работния чат два пъти, а твой преразказ би
+противоречал на истинската. Ако някоя задача има нужда от различен подход, кажи го на оператора: той
+сменя персоната и импортира наново.
+
+${body}
+`
+      : `
+## How the tasks are carried out
+
+The operator's persona for the agent that does the work: what it is responsible for, how it works,
+the phases it goes through and what it hands back at the end. It is part of you for this work. Plan
+so the tasks follow its phases, \`expected\` and the checks match the result it promises, and nothing
+it is not responsible for is handed to it.
+
+**Do not copy it into \`level2\`.** The app writes it verbatim into every task's level 2 itself when
+the plan is imported — a copy of yours would reach the working chat twice, and a paraphrase of yours
+would contradict the real one. If some task needs a different approach, tell the operator: they swap
+the persona and import again.
+
+${body}
+`;
+  }
+  // With the organisation still unwritten, the full phase 0 asks for the persona as well.
+  if (!organisationDone) return '';
+  const sample = (example ?? '').trim();
+  return lang === 'bg'
+    ? `
+## Преди фаза 1 — липсва подходът
+
+Кажи, че си тук, а не във фаза 1. Как се работи тук вече е записано, но още няма персона за агента,
+който ще изпълнява задачите — а план, написан преди подходът да е ясен, е план срещу догадка. Очакваш
+я **наготово**: питай дали операторът вече има такава. Ако има, той я поставя в полето и ти не я
+пренаписваш. Ако няма, изградете я заедно, като питаш, докато стане ясно за какво отговаря агентът и
+за какво не, как работи, през какви фази минава и какво предава накрая.
+
+**Никога не ѝ давай име** и не я пиши като герой. Това е начин на работа, не някой — без име е това,
+което позволява да се смени с друга, когато друга работа иска друг подход.
+
+Ако я изграждате заедно, върни я в един ограден \`\`\`json блок, в тази форма:
+
+\`\`\`json
+${sample}
+\`\`\`
+
+После кажи на оператора, като номерирани стъпки и нищо друго:
+
+1. Отвори \`/import\` — **„План от JSON“** в навигацията.
+2. Постави я в **„Персона (агент) за разработка на задачите“**.
+3. Натисни **„Копирай заданието“** и постави резултата в нов разговор с мен.
+`
+    : `
+## Before phase 1 — the approach is missing
+
+Say you are here, not in phase 1. How work is done here is already written, but there is no persona
+yet for the agent that will carry out the tasks — and a plan written before the approach is known is
+a plan written against a guess. You expect it **ready-made**: ask whether the operator already has
+one. If they do, they paste it into its field and you do not rewrite it. If they do not, build it with
+them by asking, until it is clear what the agent is responsible for and what it is not, how it works,
+the phases it goes through, and what it hands back at the end.
+
+**Never give it a name**, and do not write it as a character. It is a way of working, not somebody —
+nameless is what lets it be swapped for another when different work needs a different approach.
+
+If you build it together, hand it back in one fenced \`\`\`json block, in this shape:
+
+\`\`\`json
+${sample}
+\`\`\`
+
+Then tell the operator, as numbered steps and nothing else:
+
+1. Open \`/import\` — **"Plan from JSON"** in the navigation.
+2. Paste it into **"The persona (agent) that carries out the tasks"**.
+3. Press **"Copy the brief"** and paste the result into a new conversation with me.
 `;
 }
 
@@ -1045,10 +1221,17 @@ function rowsBg(): string[][] {
   return [...FIELD_ROWS_BG.slice(0, -2), ...VCS_ROWS_BG.slice(0, 1), ...FIELD_ROWS_BG.slice(-2), ...VCS_ROWS_BG.slice(1)];
 }
 
-type OperatorContext = { organisation?: string; example?: string; work?: string; workExample?: string };
+type OperatorContext = {
+  organisation?: string;
+  example?: string;
+  persona?: string;
+  personaExample?: string;
+  work?: string;
+  workExample?: string;
+};
 
 function buildEn(projects: KnownProject[], ctx: OperatorContext = {}): string {
-  const { organisation, example: organisationExample, work, workExample } = ctx;
+  const { organisation, example: organisationExample, persona, personaExample, work, workExample } = ctx;
   const rows = rowsEn();
 
   return `
@@ -1084,7 +1267,7 @@ conversation that was going well turns into "what now?".
 **Keep it short.** Anything the operator has to do is a numbered list: one action to a line, the
 page named by its route, the control named by its exact label in quotes. No explanation inside a
 step; if a reason is needed at all, it goes on one line after the list.
-${projectsSectionEn(projects)}${organisationSection(organisation, organisationExample, 'en', workExample)}${workSection(work, 'en')}
+${projectsSectionEn(projects)}${organisationSection(organisation, organisationExample, 'en', workExample, personaExample)}${personaSection(persona, personaExample, 'en', Boolean((organisation ?? '').trim()))}${workSection(work, 'en')}
 ${GUIDE_RULE_EN}
 
 ${systemGuideSection('en')}
@@ -1092,13 +1275,13 @@ ${systemGuideSection('en')}
 ## Your job, in order: five phases
 
 Five phases, and the operator is told which one you are in. Two of them are skipped rather than
-worked through: phase 0 when the organisation and the projects are already written above, and
+worked through: phase 0 when the organisation and the persona are already written above, and
 phase 3 when nothing failed. Do not run ahead, either: no JSON is written before phase 2, and
 every value in it comes from an answer given in phase 1, not from a guess.
 
 | Phase | What it is | When it happens |
 |---|---|---|
-| 0 | The organisation and the projects | Once, ever. Skipped when that text is already above |
+| 0 | How work is done here, how the tasks are carried out, this work | Once, ever. Skipped when the organisation and the persona are already above |
 | 1 | This piece of work, and the run to be written for it | Every time, before any JSON |
 | 2 | The JSON, the buttons that turn it into a run, and the run itself | Every time |
 | 3 | A task did not end done: diagnose, then propose | Only when one did not |
@@ -1254,7 +1437,7 @@ ${PHASE4_EN}
 }
 
 function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
-  const { organisation, example: organisationExample, work, workExample } = ctx;
+  const { organisation, example: organisationExample, persona, personaExample, work, workExample } = ctx;
   const rows = rowsBg();
 
   return `
@@ -1290,7 +1473,7 @@ ${VCS_RULE_BG}
 **Бъди кратък.** Всичко, което операторът трябва да направи, е номериран списък: по едно
 действие на ред, страницата — назована с маршрута си, контролът — с точния си надпис в кавички.
 Без обяснения вътре в стъпката; ако изобщо трябва причина, тя е един ред след списъка.
-${projectsSectionBg(projects)}${organisationSection(organisation, organisationExample, 'bg', workExample)}${workSection(work, 'bg')}
+${projectsSectionBg(projects)}${organisationSection(organisation, organisationExample, 'bg', workExample, personaExample)}${personaSection(persona, personaExample, 'bg', Boolean((organisation ?? '').trim()))}${workSection(work, 'bg')}
 ${GUIDE_RULE_BG}
 
 ${systemGuideSection('bg')}
@@ -1298,13 +1481,13 @@ ${systemGuideSection('bg')}
 ## Какво трябва да направиш, по ред: пет фази
 
 Пет фази, и операторът знае в коя си. Две от тях се прескачат, вместо да се минават: фаза 0,
-когато организацията и проектите вече са написани по-горе, и фаза 3, когато нищо не се е
+когато организацията и персоната вече са написани по-горе, и фаза 3, когато нищо не се е
 провалило. И не бързай напред: JSON не се пише преди фаза 2, а всяка стойност в него идва от
 отговор, даден във фаза 1, не от предположение.
 
 | Фаза | Какво е | Кога се случва |
 |---|---|---|
-| 0 | Организацията и проектите | Веднъж завинаги. Прескача се, когато текстът вече е по-горе |
+| 0 | Как се работи тук, как се изпълняват задачите, тази работа | Веднъж завинаги. Прескача се, когато организацията и персоната вече са по-горе |
 | 1 | Тази конкретна работа и пускането, което ще се напише за нея | Всеки път, преди какъвто и да е JSON |
 | 2 | JSON-ът, бутоните, които го превръщат в пускане, и самото пускане | Всеки път |
 | 3 | Задача не е завършила готова: диагноза, после предложение | Само когато има такава |
@@ -1476,8 +1659,10 @@ export function planBrief(opts: BriefOptions | string = {}): string {
   const projects = typeof opts === 'string' ? [] : (opts.projects ?? []);
   const organisation = typeof opts === 'string' ? undefined : opts.organisation;
   const example = typeof opts === 'string' ? undefined : opts.organisationExample;
+  const persona = typeof opts === 'string' ? undefined : opts.persona;
+  const personaExample = typeof opts === 'string' ? undefined : opts.personaExample;
   const work = typeof opts === 'string' ? undefined : opts.work;
   const workExample = typeof opts === 'string' ? undefined : opts.workExample;
-  const ctx = { organisation, example, work, workExample };
+  const ctx = { organisation, example, persona, personaExample, work, workExample };
   return lang === 'bg' ? buildBg(projects, ctx) : buildEn(projects, ctx);
 }

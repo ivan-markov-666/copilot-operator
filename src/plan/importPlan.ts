@@ -36,6 +36,48 @@ const EXPECTED_HEADER = '### Expected result';
 const GOAL_HEADER = '## Goal of this session';
 
 /**
+ * The heading the operator's persona gets when it opens a task's level 2.
+ *
+ * A way of working, not a character, so it is headed by what it is for rather than by a name —
+ * the operator's persona is nameless on purpose, so that it can be swapped for another when a
+ * different kind of work needs a different approach.
+ */
+export const PERSONA_HEADER = '## How to carry out this work';
+
+/**
+ * The line that closes the persona, written out rather than inferred.
+ *
+ * The persona is free text the operator wrote, and it may carry headings and rules of its own, so
+ * "up to the next heading" would cut it wherever it happened to use one. The plan export has to lift
+ * it back out exactly — an exported plan imported again must get the persona that is in the field at
+ * that moment, not the old one and the new one stacked — and an explicit end is the only thing that
+ * makes that exact. It reads as a plain aside to the model that sees it.
+ */
+export const PERSONA_END = '(end of how to carry out this work)';
+
+/** The persona as it opens a task's level 2, or nothing when there is none. */
+export function personaBlock(persona: string): string {
+  const body = persona.trim();
+  return body ? `${PERSONA_HEADER}\n\n${body}\n\n${PERSONA_END}` : '';
+}
+
+/**
+ * A level 2 with any persona block at its head taken off.
+ *
+ * Used both ways round: by the plan export, so the file it writes is the plan without the approach
+ * that happened to be in force, and by `composeLevel2`, so a plan that already carries a persona —
+ * hand-written, or exported from somewhere that did not strip it — gets the current one instead of a
+ * second one.
+ */
+export function withoutPersona(level2: string): string {
+  const text = level2.trimStart();
+  if (!text.startsWith(PERSONA_HEADER)) return level2;
+  const end = text.indexOf(PERSONA_END);
+  if (end < 0) return level2;
+  return text.slice(end + PERSONA_END.length).replace(/^\s+/, '');
+}
+
+/**
  * The text of one task as Copilot will receive it.
  *
  * The prompt and the acceptance bar are joined here rather than in the schema so that the
@@ -49,11 +91,30 @@ export function composePrompt(task: PlanTask): string {
   return `${prompt}\n\n${EXPECTED_HEADER}\n\n${expected}`;
 }
 
-/** Level 2 for one task: its own if it has any, otherwise the session's, goal first. */
-export function composeLevel2(session: PlanSession, task: PlanTask): string {
-  const own = task.level2.trim();
+/**
+ * Level 2 for one task: the operator's persona first, then its own instructions if it has any,
+ * otherwise the session's, goal first.
+ *
+ * The persona goes on every task, whichever branch the rest takes, because it is how *all* of this
+ * work is carried out — a task with instructions of its own replaces the session's instructions,
+ * not the approach. It is written in here rather than sent separately so that it travels with every
+ * task: level 2 is repeated with each task in the conversation, and a long conversation loses its
+ * early turns, which is where a once-sent persona would have been. It sits inside level 2 and so
+ * under level 1, which it cannot change — the persona is the operator's approach, not a way round
+ * the runner's contract.
+ */
+export function composeLevel2(session: PlanSession, task: PlanTask, persona = ''): string {
+  const rest = level2Without(session, task);
+  const block = personaBlock(persona);
+  if (!block) return rest;
+  return rest ? `${block}\n\n${rest}` : block;
+}
+
+/** The task's own level 2 if it has any, otherwise the session's, goal first — persona excluded. */
+function level2Without(session: PlanSession, task: PlanTask): string {
+  const own = withoutPersona(task.level2).trim();
   if (own) return own;
-  const shared = session.level2.trim();
+  const shared = withoutPersona(session.level2).trim();
   const goal = session.goal.trim();
   if (!goal) return shared;
   return shared ? `${GOAL_HEADER}\n\n${goal}\n\n${shared}` : `${GOAL_HEADER}\n\n${goal}`;
@@ -119,7 +180,14 @@ function unavailableShellWarnings(plan: Plan): string[] {
  * `defaultModel` is what a session starts on when the plan does not name one, which keeps an
  * imported session behaving like one made by hand in the UI.
  */
-export async function importPlan(store: SessionStore, plan: Plan, defaultModel = '', defaultReviewModel = ''): Promise<ImportResult> {
+export async function importPlan(
+  store: SessionStore,
+  plan: Plan,
+  defaultModel = '',
+  defaultReviewModel = '',
+  /** The operator's persona at the moment of import, written into every task's level 2. */
+  persona = '',
+): Promise<ImportResult> {
   const sessions: ImportedSession[] = [];
   const warnings: string[] = [...unavailableShellWarnings(plan)];
 
@@ -167,7 +235,7 @@ export async function importPlan(store: SessionStore, plan: Plan, defaultModel =
     for (const task of planned.tasks) {
       const added = await store.addTask(created.id, {
         title: task.title,
-        level2: composeLevel2(planned, task),
+        level2: composeLevel2(planned, task, persona),
         prompt: composePrompt(task),
         // Kept even when version control is off for this session: the operator may turn it on
         // afterwards, and throwing away a name the plan chose would make that a worse session

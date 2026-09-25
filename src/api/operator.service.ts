@@ -1345,6 +1345,9 @@ export class OperatorService {
     organisation: string;
     customised: boolean;
     example: string;
+    persona: string;
+    personaCustomised: boolean;
+    personaExample: string;
     work: string;
     workCustomised: boolean;
     workExample: string;
@@ -1358,13 +1361,19 @@ export class OperatorService {
       ...(project.rootDir ? [{ name: project.name, rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
       ...project.others.map((o) => ({ name: o.name, rootDir: o.rootDir, repo: o.repoOk, isDefault: false })),
     ];
-    const [organisation, work] = await Promise.all([this.getContext('organisation', lang), this.getContext('work', lang)]);
+    const [organisation, persona, work] = await Promise.all([
+      this.getContext('organisation', lang),
+      this.getContext('persona', lang),
+      this.getContext('work', lang),
+    ]);
     return {
       text: planBrief({
         lang,
         projects,
         organisation: organisation.content,
         organisationExample: organisation.example,
+        persona: persona.content,
+        personaExample: persona.example,
         work: work.content,
         workExample: work.example,
       }),
@@ -1372,6 +1381,9 @@ export class OperatorService {
       organisation: organisation.content,
       customised: organisation.customised,
       example: organisation.example,
+      persona: persona.content,
+      personaCustomised: persona.customised,
+      personaExample: persona.example,
       work: work.content,
       workCustomised: work.customised,
       workExample: work.example,
@@ -1461,7 +1473,20 @@ export class OperatorService {
     if (!check.ok) return { ok: false, check };
 
     const cfg = await this.settings.load();
-    const result = await importPlan(this.store, check.plan, (cfg.copilot.defaultModel ?? '').trim(), (cfg.copilot.defaultReviewModel ?? '').trim());
+    /*
+     * The persona in force right now is the one this import carries. Read here, once, and written
+     * into every task, so a session keeps the approach it was created with: changing the field
+     * afterwards changes the next import, not work already queued. The content does not depend on
+     * the language asked for; only the shipped example does.
+     */
+    const persona = (await this.getContext('persona', 'en')).content;
+    const result = await importPlan(
+      this.store,
+      check.plan,
+      (cfg.copilot.defaultModel ?? '').trim(),
+      (cfg.copilot.defaultReviewModel ?? '').trim(),
+      persona,
+    );
     return {
       ok: true,
       result: { ...result, warnings: [...check.warnings, ...result.warnings] },

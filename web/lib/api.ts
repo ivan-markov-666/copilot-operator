@@ -569,7 +569,8 @@ export type SavedLog = {
 };
 
 /** Which of the operator's two standing texts: the slow one, or the one per group of tasks. */
-export type ContextKind = 'organisation' | 'work';
+/** The three parts of Kerrigan that come from the operator. See `ContextKind` in the store. */
+export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
 
 export type SessionEvent = {
