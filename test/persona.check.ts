@@ -143,5 +143,20 @@ for (const lang of ['en', 'bg'] as const) {
   check(`${lang}: and does not ask what anything is called`, firstRun.includes(noOrgName), true);
 }
 
+console.log('\n--- the conversation opens with who she is, then the phase ---');
+for (const lang of ['en', 'bg'] as const) {
+  const greeting = lang === 'bg' ? 'Здравей, аз съм Kerrigan, Queen of Blades! Ще ти помагам с' : "Hello, I'm Kerrigan, Queen of Blades! I'll help you with";
+  const phaseRule = lang === 'bg' ? '**Казвай в коя фаза си.**' : '**Say which phase you are in.**';
+  // Every state a first conversation can begin in: nothing written, the persona missing, all written.
+  for (const [state, brief] of [
+    ['first run', planBrief({ lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' })],
+    ['persona missing', planBrief({ lang, organisation: 'org', personaExample: '{}', work: 'work' })],
+    ['all written', planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work' })],
+  ] as const) {
+    check(`${lang}, ${state}: the greeting is there`, brief.includes(greeting), true);
+    check(`${lang}, ${state}: and comes before the phase line`, brief.indexOf(greeting) < brief.indexOf(phaseRule), true);
+  }
+}
+
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;
