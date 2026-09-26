@@ -16,7 +16,7 @@
  *   the old rule      the brief no longer tells the model to letter anything
  */
 import { planBrief, type KnownProject } from '../src/plan/brief.js';
-import { SCRIPT, renderMessage } from '../src/plan/script.js';
+import { SCRIPT, renderMessage, PHASE_LINES, ON_RECORD_LINE } from '../src/plan/script.js';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -134,6 +134,9 @@ for (const lang of ['en', 'bg'] as const) {
           ? { lang, projects: PROJECTS, organisation: 'org', personaExample: '{}', work: 'work' }
           : { lang, projects: PROJECTS, organisation: 'org', persona: 'approach', work: 'work' },
     ), true);
+    // The second live test: a phase line copied from a section heading, and no way to say "all right".
+    check(`${lang}, ${state}: the phase lines are fixed`, PHASE_LINES[lang].every((l) => b.includes(`\`${l}\``)), true);
+    check(`${lang}, ${state}: the on-record answer line is given`, b.includes(ON_RECORD_LINE[lang]), true);
     // The rule that produced "А1 Б2" is gone, in both spellings.
     check(`${lang}, ${state}: nothing tells it to letter questions`, /А, Б, В|A, B, C|А1 Б2|A1 B2/.test(b), false);
   }

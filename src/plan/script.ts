@@ -65,7 +65,26 @@ export type ScriptMessage = {
   questions: Question[];
 };
 
-const OTHER: Text = { en: 'something else — say what', bg: 'друго — напиши какво' };
+/**
+ * The phase line, fixed. Left to the model it copied whatever heading was nearest — "Фаза 0 — още
+ * нищо не е записано, затова направи това преди всичко останало" is the brief's own section title —
+ * and named the same phase three ways in one conversation.
+ */
+export const PHASE_LINES: { en: string[]; bg: string[] } = {
+  en: ['Phase 0 — how work is done here', 'Before phase 1 — the approach', 'Phase 1 — this work', 'Phase 2 — the plan and the run', 'Phase 3 — why it did not end done', 'Phase 4 — the verdict'],
+  bg: ['Фаза 0 — как се работи тук', 'Преди фаза 1 — подходът', 'Фаза 1 — тази работа', 'Фаза 2 — планът и пускането', 'Фаза 3 — защо не завърши готова', 'Фаза 4 — присъдата'],
+};
+
+/**
+ * The last line of a message whose answers are partly on record already. Without it the operator
+ * facing five answered questions had no way to say "all of that is right" except to invent one.
+ */
+export const ON_RECORD_LINE: Text = {
+  en: 'If what is on record is right, answer `right`; otherwise write only the numbers you change, with the new answer.',
+  bg: 'Ако записаното е вярно, отговори `вярно`; иначе напиши само номерата, които променяш, с новия отговор.',
+};
+
+const OTHER: Text ={ en: 'something else — say what', bg: 'друго — напиши какво' };
 const OTHER_FOLDER: Text = { en: 'another folder — give its absolute path', bg: 'друга папка — напиши абсолютния ѝ път' };
 
 export const SCRIPT: ScriptMessage[] = [
@@ -637,9 +656,12 @@ export function scriptSection(stages: Stage[], projects: KnownProject[], lang: L
   добавиш след една опция *(препоръчвам — причината в няколко думи)*. Само ако имаш причина.
 - **Вече известно:** ако отговорът на въпрос вече е в документите на оператора по-горе, въпросът
   остава на мястото си, а под него пишеш \`Записано: …\`; на избор отбелязваш опцията с *(записано)*.
-  Операторът отговаря само ако иска да го промени.
+  Щом има поне едно \`Записано\`, последният ред на цитата е точно този: *${ON_RECORD_LINE.bg}*
+- **Редът за фазата** е точно един от тези, без нищо добавено: ${PHASE_LINES.bg.map((l) => `\`${l}\``).join(', ')}.
+  Не заглавието на раздела от това задание.
 - **Около цитата:** преди него — поздравът (само в първото съобщение) и редът за фазата; след него —
-  нищо. Последният му ред е това какво следва.
+  нищо: без „Очаквам отговорите ти“ и без „Когато си готов…“. Последният ред на цитата вече казва
+  какво следва. Същото важи за съобщенията, които не питат нищо: те свършват на последната си стъпка.
 - **Единственото място за твои въпроси** е мъгляв или липсващ отговор във фаза 1: тогава, преди
   настройките, пращаш едно съобщение с уточнения — само номерирани въпроси, 1, 2, 3, с опции 1.1, 1.2,
   когато отговорите могат да се изброят, и същия последен ред като тук.
@@ -662,9 +684,14 @@ for you: it says when the message is sent; the operator sees only what is quoted
   you may add after one option *(recommended — the reason in a few words)*. Only when you have one.
 - **Already known:** if the answer to a question is already in the operator's documents above, the
   question stays where it is and you write \`On record: …\` under it; on a choice you mark the option
-  *(on record)*. The operator answers only to change it.
+  *(on record)*. When there is at least one \`On record\`, the last line of the quotation is exactly:
+  *${ON_RECORD_LINE.en}*
+- **The phase line** is exactly one of these, with nothing added: ${PHASE_LINES.en.map((l) => `\`${l}\``).join(', ')}.
+  Not a section heading of this brief.
 - **Around the quotation:** before it, the greeting (first message only) and the phase line; after
-  it, nothing. Its last line is what happens next.
+  it, nothing: no "I look forward to your answers", no "When you are ready…". The quotation's last
+  line already says what happens next. The same holds for messages that ask nothing: they end on
+  their last step.
 - **The one place for questions of your own** is a vague or missing answer in phase 1: then, before
   the settings, you send one message of follow-ups — numbered questions only, 1, 2, 3, with options
   1.1, 1.2 where the answers can be listed, and the same last line as here.
