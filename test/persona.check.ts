@@ -169,7 +169,8 @@ console.log('\n--- what the first test of her taught ---');
   // Choices are numbered, and information is not.
   for (const lang of ['en', 'bg'] as const) {
     const b = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work' });
-    const rule = lang === 'bg' ? 'давай го като номерирани опции' : 'give it as numbered options';
+    // The questions themselves are pinned in script.check.ts; here, that the brief points at them.
+    const rule = lang === 'bg' ? 'Всеки въпрос, който задаваш, е в сценария' : 'Every question you ask is in the script';
     const notInfo = lang === 'bg' ? 'Когато **събираш информация**' : 'When you are **collecting information**';
     const noDeciding = lang === 'bg' ? 'Не решавай тези неща вместо оператора' : "Do not decide these on the operator's behalf";
     const approve = lang === 'bg' ? 'Така е добре: напиши JSON-а' : 'Right as it is: write the JSON';
@@ -213,7 +214,7 @@ for (const lang of ['en', 'bg'] as const) {
   const one = lang === 'bg' ? '1. Имам персона и ще я предоставя в следващото си чат съобщение, за да я валидираш.' : '1. I have a persona and will give it to you in my next chat message, for you to validate.';
   const two = lang === 'bg' ? '2. Нямам персона и искам да ми помогнеш да я създадем.' : '2. I do not have a persona and want you to help me create it.';
   const validate = lang === 'bg' ? 'вместо да я пренаписваш' : 'validate it rather than rewrite it';
-  const project = lang === 'bg' ? 'кой\nпроект или кое хранилище' : 'which project or repository';
+  const project = lang === 'bg' ? 'Кой проект или кое хранилище' : 'Which project or repository';
   const firstRun = planBrief({ lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' });
   const missing = planBrief({ lang, organisation: 'org', personaExample: '{}', work: 'work' });
   for (const [state, b] of [['phase 0', firstRun], ['before phase 1', missing]] as const) {
