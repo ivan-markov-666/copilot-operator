@@ -80,6 +80,12 @@ for (const m of SCRIPT) {
     byLang[lang] = tokens;
   }
   check(`${m.id}: English and Bulgarian number alike`, byLang.en!.join(' '), byLang.bg!.join(' '));
+  // A hint straight under a line is, to Markdown, the end of that line: it needs a blank line first.
+  for (const lang of ['en', 'bg'] as const) {
+    const lines = renderMessage(m, PROJECTS, lang);
+    const glued = lines.filter((l, i) => l.startsWith('   *') && lines[i - 1] !== '').length;
+    check(`${lang} ${m.id}: every hint is a paragraph of its own`, glued, 0);
+  }
 }
 
 console.log('\n--- a message with one choice numbers its options 1, 2 ---');
@@ -163,6 +169,11 @@ for (const lang of ['en', 'bg'] as const) {
     const others = (Object.keys(OPENING) as Array<keyof typeof OPENING>).filter((s) => s !== state);
     check(`${lang}, ${state}: and no other`, others.some((s) => b.includes(OPENING[s].greeting[lang])), false);
     check(`${lang}, ${state}: phases 3 and 4 wait for a run`, b.includes(lang === 'bg' ? 'Фаза 3 и фаза 4 започват само когато' : 'Phases 3 and 4 begin only when'), true);
+  }
+  // The whole first message is written out, greeting first: once the phase line came out above it.
+  for (const [state, b] of Object.entries(states) as Array<[keyof typeof OPENING, string]>) {
+    const phase = state === 'phase0' ? PHASE_LINES.p0 : state === 'persona' ? PHASE_LINES.beforeP1 : PHASE_LINES.p1;
+    check(`${lang}, ${state}: greeting, then the phase line`, b.includes(`> ${OPENING[state].greeting[lang]}\n>\n> ${phase[lang]}`), true);
   }
   // The persona messages belong to phase 0 inside the interview, and to "before phase 1" on their own.
   const persona = SCRIPT.find((m) => m.id === 'persona-build-approach')!;

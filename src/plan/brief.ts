@@ -36,7 +36,7 @@
  */
 import { PLAN_VERSION } from './schema.js';
 import { systemGuideSection } from './systemGuide.js';
-import { scriptSection, SCRIPT, OPENING, type Stage, type StartState } from './script.js';
+import { scriptSection, renderMessage, SCRIPT, OPENING, type Stage, type StartState } from './script.js';
 
 /** Why a run with nobody watching cannot start here, when it cannot. See `unattendedPrecondition`. */
 export type UnattendedBlock = 'isolation' | 'allowlist';
@@ -1290,7 +1290,10 @@ type OperatorContext = {
  * always, because every conversation plans, and may come back with a failed or a finished run.
  */
 function scriptStages(ctx: OperatorContext): Stage[] {
-  const state = startState(ctx);
+  return stagesFor(startState(ctx));
+}
+
+function stagesFor(state: StartState): Stage[] {
   const stages: Stage[] = ['phase1', 'phase3', 'phase4'];
   if (state !== 'phase1') stages.unshift(state);
   return stages;
@@ -1313,23 +1316,32 @@ function startState(ctx: OperatorContext): StartState {
  * record of a run that did not exist. Phases 3 and 4 are about a run, and a run only exists once the
  * operator says so in a later message — the brief is always the first one.
  */
-function openingSection(state: StartState, lang: 'en' | 'bg'): string {
+function openingSection(state: StartState, projects: KnownProject[], lang: 'en' | 'bg'): string {
   const { greeting, firstMessage } = OPENING[state];
   const first = SCRIPT.find((m) => m.id === firstMessage)!;
+  // The whole first message, written out: given the greeting and the name of the message to follow,
+  // one conversation put the phase line above the greeting. Shown whole, there is no order to decide.
+  const whole = [greeting[lang], '', ...renderMessage(first, projects, lang, stagesFor(state))]
+    .map((l) => (l ? `> ${l}` : '>'))
+    .join('\n');
   return lang === 'bg'
-    ? `**Как започва разговорът — точно така, без избор.** Първото ти съобщение — и само първото — е
-поздравът, на отделен ред, а после съобщението от сценария под заглавие *${first.when.bg}*:
+    ? `**Как започва разговорът — точно така, без избор.** Първото ти съобщение — и само първото — е точно
+това, в този ред: поздравът, после редът за фазата, после въпросите — с редовете „Вече казано“ и
+последния ред за тях, ако отговорите вече са в документите по-горе (правилото е в „Въпросите,
+дословно“):
 
-> ${greeting.bg}
+${whole}
 
 Следващите съобщения не поздравяват отново. **Фаза 3 и фаза 4 започват само когато операторът в
 по-късно съобщение каже, че пускане е приключило, или постави запис от него** (файловете „runner“,
 „работа“, „план“ или log). Дотогава няма какво да диагностицираш и какво да съдиш, и съобщенията им не
 се пращат.`
     : `**How the conversation starts — exactly this, with no choice.** Your first message — and only the
-first — is the greeting, on a line of its own, then the scripted message headed *${first.when.en}*:
+first — is exactly this, in this order: the greeting, then the phase line, then the questions — with
+the "Already said" lines and their last line when the answers are already in the documents above (the
+rule is in "The questions, word for word"):
 
-> ${greeting.en}
+${whole}
 
 Later messages do not greet again. **Phases 3 and 4 begin only when the operator, in a later message,
 says a run has finished or pastes a record of one** (the "runner", "work" or "plan" files, or a log).
@@ -1366,7 +1378,7 @@ bot actually does, because it changes what a good task looks like:
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
 
-${openingSection(startState(ctx), 'en')}
+${openingSection(startState(ctx), projects, 'en')}
 
 **Say which phase you are in.** Every message opens with its phase line — the scripted ones carry it
 in their first line — and nothing more ceremonious than that. The operator should never have to work
@@ -1590,7 +1602,7 @@ function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
 
-${openingSection(startState(ctx), 'bg')}
+${openingSection(startState(ctx), projects, 'bg')}
 
 **Казвай в коя фаза си.** Всяко съобщение започва с реда за фазата си — съобщенията от сценария го
 носят на първия си ред — и нищо по-тържествено от това. Операторът не бива да гадае още ли

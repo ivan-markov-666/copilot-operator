@@ -597,14 +597,17 @@ export const SCRIPT: ScriptMessage[] = [
         choose: { en: 'Which stages does it work through?', bg: 'През какви етапи минава?' },
         options: [
           {
-            en: 'Understand → Do → Prove → Report — for work that writes code',
-            bg: 'Разбери → Направи → Докажи → Докладвай — за работа, която пише код',
+            en: 'For work that writes code: Understand (reads the assignment and the code; done when it knows what is missing) → Do (writes the code; done when the code is in place) → Prove (writes a test for each behaviour and runs them all; done when they all pass) → Report (writes the summary; done when it names the files and carries the test output)',
+            bg: 'За работа, която пише код: Разбери (чете заданието и кода; свършено, когато знае какво липсва) → Направи (пише кода; свършено, когато кодът е на мястото си) → Докажи (пише тест за всяко поведение и пуска всички; свършено, когато всички минават) → Докладвай (пише резюмето; свършено, когато назовава файловете и съдържа изхода от тестовете)',
           },
           {
-            en: 'Reproduce with a test → Fix → Prove → Report — for bugs',
-            bg: 'Възпроизведи с тест → Поправи → Докажи → Докладвай — за бъгове',
+            en: 'For bugs: Reproduce (writes a test that fails because of the bug; done when it fails) → Fix (changes the code; done when that test passes) → Prove (runs all the tests; done when they all pass) → Report (the cause and the fix, with the test output)',
+            bg: 'За бъгове: Възпроизведи (пише тест, който пада заради бъга; свършено, когато тестът пада) → Поправи (променя кода; свършено, когато тестът минава) → Докажи (пуска всички тестове; свършено, когато всички минават) → Докладвай (причината и поправката, с изхода от тестовете)',
           },
-          { en: 'Read → Check → Report — for an audit, with no changes', bg: 'Прочети → Провери → Докладвай — за одит, без промени' },
+          {
+            en: 'For an audit, with no changes: Read (reads the code and the documents; done when everything needed is read) → Check (runs commands that prove or disprove each claim; done when each has a result) → Report (the findings, each with its evidence)',
+            bg: 'За одит, без промени: Прочети (чете кода и документите; свършено, когато всичко нужно е прочетено) → Провери (пуска команди, които доказват или опровергават всяко твърдение; свършено, когато всяко има резултат) → Докладвай (находките, всяка с доказателството си)',
+          },
         ],
         other: { en: 'something else — describe your stages', bg: 'друго — опиши етапите си' },
         hints: [
@@ -991,8 +994,12 @@ export function renderMessage(m: ScriptMessage, projects: KnownProject[], lang: 
   if (m.questions.length) lines.push('');
 
   // Hints sit under the question they belong to, indented into its list item and in italics, so the
-  // operator sees at a glance which lines they can skip.
-  const hintLines = (q: Question): string[] => (q.hints ?? []).map((h) => `   *${h[lang]}*`);
+  // operator sees at a glance which lines they can skip. Each is its own paragraph, a blank line
+  // before it: an indented line straight under a list item is, to Markdown, the same paragraph, and
+  // the first live run showed every "Example:" glued onto the end of its question.
+  const hintLines = (q: Question): string[] => (q.hints ?? []).flatMap((h) => ['', `   *${h[lang]}*`]);
+  // The options after hints need the same blank line, or they read as part of the last hint.
+  const beforeOptions = (q: Question): string[] => (q.hints?.length ? [''] : []);
 
   const single = m.questions.length === 1 && isChoose(m.questions[0]!);
   m.questions.forEach((q, i) => {
@@ -1005,10 +1012,10 @@ export function renderMessage(m: ScriptMessage, projects: KnownProject[], lang: 
     const last = q.options === 'projects' ? OTHER_FOLDER[lang] : q.other === false ? undefined : (q.other ?? OTHER)[lang];
     const options = last ? [...listed, last] : listed;
     if (single) {
-      lines.push(q.choose[lang], ...hintLines(q));
+      lines.push(q.choose[lang], ...hintLines(q), ...beforeOptions(q));
       options.forEach((o, j) => lines.push(`${j + 1}. ${o}`));
     } else {
-      lines.push(`${n}. ${q.choose[lang]}`, ...hintLines(q));
+      lines.push(`${n}. ${q.choose[lang]}`, ...hintLines(q), ...beforeOptions(q));
       options.forEach((o, j) => lines.push(`   - ${n}.${j + 1} ${o}`));
     }
   });
@@ -1052,8 +1059,9 @@ export function scriptSection(stages: Stage[], projects: KnownProject[], lang: L
 - **Препоръка:** на въпрос с опции, освен на тези за това какво операторът има или знае, може да
   добавиш след една опция *(препоръчвам — причината в няколко думи)*. Само ако имаш причина.
 - **Вече казано:** ако отговорът на въпрос вече е даден — в документите на оператора по-горе или
-  по-рано в този разговор — въпросът остава на мястото си, а под него пишеш
-  \`${ALREADY_SAID.bg} …\` с отговора; на избор отбелязваш опцията с *(вече казано)*. Последният ред
+  по-рано в този разговор — въпросът остава на мястото си, а под него, след празен ред и със същия
+  отстъп като редовете *Пример:*, пишеш \`${ALREADY_SAID.bg} …\` с отговора — отделен ред, не в края на
+  въпроса; на избор отбелязваш опцията с *(вече казано)*. Последният ред
   на цитата тогава е точно един от тези два: когато всеки въпрос е вече казан — *${ON_RECORD_ALL.bg}*
   — а когато само някои — *${ON_RECORD_MIXED.bg}*
 - **Около цитата:** преди него — само поздравът, и то само в първото съобщение; след него — нищо: без
@@ -1085,8 +1093,9 @@ what is quoted, without the \`>\`.
 - **Recommending:** on a question with options, except those about what the operator has or knows,
   you may add after one option *(recommended — the reason in a few words)*. Only when you have one.
 - **Already said:** if a question has already been answered — in the operator's documents above or
-  earlier in this conversation — the question stays where it is and you write
-  \`${ALREADY_SAID.en} …\` under it, with the answer; on a choice you mark the option *(already said)*.
+  earlier in this conversation — the question stays where it is and, under it, after a blank line
+  and indented like the *Example:* lines, you write \`${ALREADY_SAID.en} …\` with the answer — a line
+  of its own, not the end of the question; on a choice you mark the option *(already said)*.
   The last line of the quotation is then exactly one of these two: when every question is already
   answered — *${ON_RECORD_ALL.en}* — and when only some are — *${ON_RECORD_MIXED.en}*
 - **Around the quotation:** before it, only the greeting, and only in the first message; after it,
