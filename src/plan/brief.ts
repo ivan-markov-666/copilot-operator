@@ -970,10 +970,20 @@ down to do a task here would otherwise have to find out the hard way:
 - **Whose say-so**: which changes need somebody's agreement before they are made; who signs off.
 - **What must never be touched.**
 
-**Then, how the tasks are carried out** — the approach of the agent that will do the work. This one
-you expect **ready-made**: ask whether the operator already has one. If they do, they paste it into
-its own field and you do not rewrite it. If they do not, build it with them by asking, until each of
-these is clear:
+**Then, how the tasks are carried out** — the approach of the agent that will do the work. This one you expect **ready-made**, and you ask for it as exactly these two numbered options —
+worded like this, with no *(recommended)* on either, because whether they have one is a fact about
+them and not a thing to advise on, and with no third option:
+
+1. I have a persona and will give it to you in my next chat message, for you to validate.
+2. I do not have a persona and want you to help me create it.
+
+On **1**, wait for it. When it comes, validate it rather than rewrite it: say whether it makes clear
+what the agent is responsible for and what it is not, its approach, its phases with what shows each
+is done, and the result it hands back — and that it has no name and is not written as a character.
+Name what is missing or unclear, one line each, and let the operator fix their own text; then tell
+them it goes into its field. On **2**, build it with them by asking until each of these is clear —
+and where a question has a fixed set of answers (cautious or quick; may change code or only read it),
+give that as numbered options too:
 
 - **What it is responsible for** in this work — and, as plainly, what it is not.
 - **Its approach**: cautious or quick, how much it verifies before it claims anything, whether it
@@ -1056,9 +1066,20 @@ const ORG_INTERVIEW_BG = (example: string, personaExample: string, workExample: 
 - **Чие съгласие**: кои промени искат нечие съгласие, преди да се направят; кой одобрява.
 - **Какво никога не бива да се пипа.**
 
-**После — как се изпълняват задачите**, подходът на агента, който ще върши работата. Него го
-очакваш **наготово**: питай дали операторът вече има такъв. Ако има, той го поставя в неговото поле
-и ти не го пренаписваш. Ако няма, изградете го заедно, като питаш, докато всяко от тези стане ясно:
+**После — как се изпълняват задачите**, подходът на агента, който ще върши работата. Него го очакваш **наготово** и питаш за него точно с тези две номерирани опции — формулирани така,
+без *(препоръчвам)* на никоя, защото дали има персона е факт за оператора, не нещо за съветване, и без
+трета опция:
+
+1. Имам персона и ще я предоставя в следващото си чат съобщение, за да я валидираш.
+2. Нямам персона и искам да ми помогнеш да я създадем.
+
+При **1** — изчакай я. Когато дойде, валидирай я, вместо да я пренаписваш: кажи дали става ясно за какво
+отговаря агентът и за какво не, подходът му, фазите му и какво показва, че всяка е свършена, и
+резултатът, който предава — и че няма име и не е написана като герой. Назови какво липсва или е неясно,
+по един ред за всяко, и остави оператора сам да поправи текста си; после му кажи, че тя отива в своето
+поле. При **2** — изградете я заедно, като питаш, докато всяко от тези стане ясно, а където въпросът има
+краен брой отговори (предпазливо или бързо; може ли да променя код или само да го чете), давай и него
+като номерирани опции:
 
 - **За какво отговаря** в тази работа — и също толкова ясно, за какво не.
 - **Подходът му**: предпазливо или бързо, колко проверява, преди да твърди нещо, дали може да
@@ -1232,10 +1253,16 @@ ${body}
 ## Преди фаза 1 — липсва подходът
 
 Кажи, че си тук, а не във фаза 1. Как се работи тук вече е записано, но още няма персона за агента,
-който ще изпълнява задачите — а план, написан преди подходът да е ясен, е план срещу догадка. Очакваш
-я **наготово**: питай дали операторът вече има такава. Ако има, той я поставя в полето и ти не я
-пренаписваш. Ако няма, изградете я заедно, като питаш, докато стане ясно за какво отговаря агентът и
-за какво не, как работи, през какви фази минава и какво предава накрая.
+който ще изпълнява задачите — а план, написан преди подходът да е ясен, е план срещу догадка. Очакваш я **наготово** и питаш за нея точно с тези две номерирани опции, формулирани така, без
+*(препоръчвам)* и без трета опция:
+
+1. Имам персона и ще я предоставя в следващото си чат съобщение, за да я валидираш.
+2. Нямам персона и искам да ми помогнеш да я създадем.
+
+При **1** — изчакай я и после я валидирай, вместо да я пренаписваш: дали става ясно за какво отговаря
+агентът и за какво не, как работи, фазите му и какво показва, че всяка е свършена, и какво предава — и
+че няма име и не е герой. Назови какво липсва, по един ред за всяко, и остави оператора сам да поправи
+текста си. При **2** — изградете я заедно, като питаш, докато тези четири станат ясни.
 
 **Никога не ѝ давай име** и не я пиши като герой. Това е начин на работа, не някой — без име е това,
 което позволява да се смени с друга, когато друга работа иска друг подход.
@@ -1257,10 +1284,17 @@ ${sample}
 
 Say you are here, not in phase 1. How work is done here is already written, but there is no persona
 yet for the agent that will carry out the tasks — and a plan written before the approach is known is
-a plan written against a guess. You expect it **ready-made**: ask whether the operator already has
-one. If they do, they paste it into its field and you do not rewrite it. If they do not, build it with
-them by asking, until it is clear what the agent is responsible for and what it is not, how it works,
-the phases it goes through, and what it hands back at the end.
+a plan written against a guess. You expect it **ready-made**, and you ask for it as exactly these two numbered options, worded like
+this, with no *(recommended)* and no third option:
+
+1. I have a persona and will give it to you in my next chat message, for you to validate.
+2. I do not have a persona and want you to help me create it.
+
+On **1**, wait for it, then validate it rather than rewrite it: whether it makes clear what the agent
+is responsible for and what it is not, how it works, its phases and what shows each is done, and what
+it hands back — and that it has no name and is not a character. Name what is missing, one line each,
+and let the operator fix their own text. On **2**, build it with them by asking until those four are
+clear.
 
 **Never give it a name**, and do not write it as a character. It is a way of working, not somebody —
 nameless is what lets it be swapped for another when different work needs a different approach.
@@ -1365,9 +1399,15 @@ Several decisions in one message: letter the questions A, B, C… and number the
 the answer is \`A1 B2 C1\`; end with one line saying so. **Do not decide these on the operator's behalf
 and then ask them to confirm** — put the choice, with your recommendation, and let them pick.
 
-This is for choices only. When you are **collecting information** — which project, what the
-acceptance criteria are, how a project is built, what must not be touched — ask a plain question and
-take the answer in their words; there is no list of options for a fact you do not know yet.
+This is for every choice, including the ones that are really a pick from something already known:
+**which project or repository** is a choice among those listed under "Projects on this machine" —
+number them, with *another folder — give its absolute path* last — and so is anything else whose
+possible answers you can list. Mark *(recommended)* only when you have a reason to prefer one: a
+question about what the operator has or knows is not something to advise on, so it gets none. And
+offer a setting only once you know enough about the work to recommend well — ask about the work
+first. When you are **collecting information** — what the work is, what the acceptance criteria are,
+how a project is built, what must not be touched — ask a plain question and take the answer in their
+words; there is no list of options for a fact you do not know yet.
 ${projectsSectionEn(projects)}${machineSection(unattendedBlocked, 'en')}${organisationSection(organisation, organisationExample, 'en', workExample, personaExample)}${personaSection(persona, personaExample, 'en', Boolean((organisation ?? '').trim()))}${workSection(work, 'en')}
 ${GUIDE_RULE_EN}
 
@@ -1605,9 +1645,15 @@ ${VCS_RULE_BG}
 един ред, който го казва. **Не решавай тези неща вместо оператора, за да го питаш после дали е
 съгласен** — дай му избора с препоръката си и остави той да избере.
 
-Това е само за избори. Когато **събираш информация** — кой проект, какви са критериите за приемане,
-как се строи проектът, какво не бива да се пипа — задай обикновен въпрос и вземи отговора с неговите
-думи; за факт, който още не знаеш, няма списък с опции.
+Това важи за всеки избор, включително за онези, които всъщност са избор от вече известно: **кой
+проект или кое хранилище** е избор между изброените под „Проектите на тази машина" — номерирай ги, а
+последна да е *друга папка — напиши абсолютния ѝ път* — и същото важи за всичко друго, чиито възможни
+отговори можеш да изброиш. Отбелязвай *(препоръчвам)* само когато имаш причина да предпочетеш една:
+въпрос за това какво операторът има или знае не е нещо за съветване и не получава препоръка. И
+предлагай настройка чак когато знаеш достатъчно за работата, за да препоръчаш добре — първо питай за
+работата. Когато **събираш информация** — каква е работата, какви са критериите за приемане, как се
+строи проектът, какво не бива да се пипа — задай обикновен въпрос и вземи отговора с неговите думи; за
+факт, който още не знаеш, няма списък с опции.
 ${projectsSectionBg(projects)}${machineSection(unattendedBlocked, 'bg')}${organisationSection(organisation, organisationExample, 'bg', workExample, personaExample)}${personaSection(persona, personaExample, 'bg', Boolean((organisation ?? '').trim()))}${workSection(work, 'bg')}
 ${GUIDE_RULE_BG}
 

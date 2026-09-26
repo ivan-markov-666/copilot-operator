@@ -170,7 +170,7 @@ console.log('\n--- what the first test of her taught ---');
   for (const lang of ['en', 'bg'] as const) {
     const b = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work' });
     const rule = lang === 'bg' ? 'давай го като номерирани опции' : 'give it as numbered options';
-    const notInfo = lang === 'bg' ? 'Това е само за избори' : 'This is for choices only';
+    const notInfo = lang === 'bg' ? 'Когато **събираш информация**' : 'When you are **collecting information**';
     const noDeciding = lang === 'bg' ? 'Не решавай тези неща вместо оператора' : "Do not decide these on the operator's behalf";
     const approve = lang === 'bg' ? 'Така е добре: напиши JSON-а' : 'Right as it is: write the JSON';
     check(`${lang}: choices are numbered options`, b.includes(rule), true);
@@ -206,6 +206,23 @@ console.log('\n--- what the first test of her taught ---');
     const rule = lang === 'bg' ? 'никога папка вътре в него' : 'never a folder inside one';
     check(`${lang}: repoDir is a listed repository, never a subfolder`, withProjects.includes(rule), true);
   }
+}
+
+console.log('\n--- the persona is asked as exactly two options ---');
+for (const lang of ['en', 'bg'] as const) {
+  const one = lang === 'bg' ? '1. Имам персона и ще я предоставя в следващото си чат съобщение, за да я валидираш.' : '1. I have a persona and will give it to you in my next chat message, for you to validate.';
+  const two = lang === 'bg' ? '2. Нямам персона и искам да ми помогнеш да я създадем.' : '2. I do not have a persona and want you to help me create it.';
+  const validate = lang === 'bg' ? 'вместо да я пренаписваш' : 'validate it rather than rewrite it';
+  const project = lang === 'bg' ? 'кой\nпроект или кое хранилище' : 'which project or repository';
+  const firstRun = planBrief({ lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' });
+  const missing = planBrief({ lang, organisation: 'org', personaExample: '{}', work: 'work' });
+  for (const [state, b] of [['phase 0', firstRun], ['before phase 1', missing]] as const) {
+    check(`${lang}, ${state}: option 1 as written`, b.includes(one), true);
+    check(`${lang}, ${state}: option 2 as written`, b.includes(two), true);
+    check(`${lang}, ${state}: a given persona is validated, not rewritten`, b.includes(validate), true);
+  }
+  const settled = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work' });
+  check(`${lang}: a project is picked from a numbered list`, settled.replace(/\s+/g, ' ').includes(project.replace(/\s+/g, ' ')), true);
 }
 
 console.log('\nwrong:', wrong, '(expect 0)');
