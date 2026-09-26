@@ -1061,7 +1061,10 @@ export function scriptSection(stages: Stage[], projects: KnownProject[], lang: L
 - **Вече казано:** ако отговорът на въпрос вече е даден — в документите на оператора по-горе или
   по-рано в този разговор — въпросът остава на мястото си, а под него, след празен ред и със същия
   отстъп като редовете *Пример:*, пишеш \`${ALREADY_SAID.bg} …\` с отговора — отделен ред, не в края на
-  въпроса; на избор отбелязваш опцията с *(вече казано)*. Последният ред
+  въпроса; на избор отбелязваш опцията с *(вече казано)*. Отговорът е целият, не етикет: за
+  заданието — заглавието, целта и контекстът от „Тази работа“, не само заглавието; за критериите —
+  всеки от тях. Операторът потвърждава това, което вижда, и не може да потвърди нещо, което не е
+  показано. Последният ред
   на цитата тогава е точно един от тези два: когато всеки въпрос е вече казан — *${ON_RECORD_ALL.bg}*
   — а когато само някои — *${ON_RECORD_MIXED.bg}*
 - **Около цитата:** преди него — само поздравът, и то само в първото съобщение; след него — нищо: без
@@ -1095,7 +1098,10 @@ what is quoted, without the \`>\`.
 - **Already said:** if a question has already been answered — in the operator's documents above or
   earlier in this conversation — the question stays where it is and, under it, after a blank line
   and indented like the *Example:* lines, you write \`${ALREADY_SAID.en} …\` with the answer — a line
-  of its own, not the end of the question; on a choice you mark the option *(already said)*.
+  of its own, not the end of the question; on a choice you mark the option *(already said)*. The
+  answer is the whole of it, not a label: for the assignment, the title, the goal and the context from
+  "This work", not the title alone; for the criteria, every one of them. The operator confirms what
+  they see, and cannot confirm what is not shown.
   The last line of the quotation is then exactly one of these two: when every question is already
   answered — *${ON_RECORD_ALL.en}* — and when only some are — *${ON_RECORD_MIXED.en}*
 - **Around the quotation:** before it, only the greeting, and only in the first message; after it,
