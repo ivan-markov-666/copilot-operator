@@ -16,7 +16,7 @@
  *   the old rule      the brief no longer tells the model to letter anything
  */
 import { planBrief, type KnownProject } from '../src/plan/brief.js';
-import { SCRIPT, renderMessage, PHASE_LINES, ON_RECORD_LINE } from '../src/plan/script.js';
+import { SCRIPT, renderMessage, PHASE_LINES, ON_RECORD_ALL, ON_RECORD_MIXED, OPENING } from '../src/plan/script.js';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -134,12 +134,40 @@ for (const lang of ['en', 'bg'] as const) {
           ? { lang, projects: PROJECTS, organisation: 'org', personaExample: '{}', work: 'work' }
           : { lang, projects: PROJECTS, organisation: 'org', persona: 'approach', work: 'work' },
     ), true);
-    // The second live test: a phase line copied from a section heading, and no way to say "all right".
-    check(`${lang}, ${state}: the phase lines are fixed`, PHASE_LINES[lang].every((l) => b.includes(`\`${l}\``)), true);
-    check(`${lang}, ${state}: the on-record answer line is given`, b.includes(ON_RECORD_LINE[lang]), true);
+    // A phase line copied from a section heading, and no fixed way to answer what is already known.
+    check(`${lang}, ${state}: phase 1 messages open with the phase 1 line`, b.includes(`> ${PHASE_LINES.p1[lang]}\n>\n> 1.`), true);
+    check(`${lang}, ${state}: the all-known ending is given`, b.includes(ON_RECORD_ALL[lang]), true);
+    check(`${lang}, ${state}: and the mixed one`, b.includes(ON_RECORD_MIXED[lang]), true);
+    // Unfilled braces went out once, in a message about a run that did not exist.
+    check(`${lang}, ${state}: unfilled braces are never sent`, b.includes(lang === 'bg' ? 'непопълнени {скоби} не се изпраща никога' : 'unfilled {braces} is never sent'), true);
     // The rule that produced "А1 Б2" is gone, in both spellings.
     check(`${lang}, ${state}: nothing tells it to letter questions`, /А, Б, В|A, B, C|А1 Б2|A1 B2/.test(b), false);
   }
+}
+
+/*
+ * Where the conversation starts is decided by the brief's state, not by the model. With every document
+ * written, one conversation opened from phase 3 with two greetings glued together; now each state
+ * carries exactly one greeting, and it is the only greeting the brief contains.
+ */
+console.log('\n--- each state opens one way ---');
+for (const lang of ['en', 'bg'] as const) {
+  const states = {
+    phase0: planBrief({ lang, projects: PROJECTS, organisationExample: '{}', personaExample: '{}', workExample: '{}' }),
+    persona: planBrief({ lang, projects: PROJECTS, organisation: 'org', personaExample: '{}', work: 'work' }),
+    phase1: planBrief({ lang, projects: PROJECTS, organisation: 'org', persona: 'approach', work: 'work' }),
+  } as const;
+  for (const [state, b] of Object.entries(states) as Array<[keyof typeof OPENING, string]>) {
+    const own = OPENING[state].greeting[lang];
+    check(`${lang}, ${state}: its own greeting`, b.includes(`> ${own}`), true);
+    const others = (Object.keys(OPENING) as Array<keyof typeof OPENING>).filter((s) => s !== state);
+    check(`${lang}, ${state}: and no other`, others.some((s) => b.includes(OPENING[s].greeting[lang])), false);
+    check(`${lang}, ${state}: phases 3 and 4 wait for a run`, b.includes(lang === 'bg' ? 'Фаза 3 и фаза 4 започват само когато' : 'Phases 3 and 4 begin only when'), true);
+  }
+  // The persona messages belong to phase 0 inside the interview, and to "before phase 1" on their own.
+  const persona = SCRIPT.find((m) => m.id === 'persona-build-approach')!;
+  check(`${lang}: persona in the interview opens as phase 0`, renderMessage(persona, PROJECTS, lang, ['phase0', 'phase1'])[0], PHASE_LINES.p0[lang]);
+  check(`${lang}: persona on its own opens as before phase 1`, renderMessage(persona, PROJECTS, lang, ['persona', 'phase1'])[0], PHASE_LINES.beforeP1[lang]);
 }
 
 console.log('\nwrong:', wrong, '(expect 0)');

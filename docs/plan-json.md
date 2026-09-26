@@ -40,7 +40,7 @@ part** is this project's and does not change: what the bot is, the format, the e
 failure words, how to validate. The other two are the operator's, and they are separate because
 they change at different rates:
 
-- **The organisation and the projects** — how the company works (tickets, the sources Kerrigan
+- **How work is done here: the organisation and the projects** — how the company works (tickets, the sources Kerrigan
   may search, branch and commit conventions, how a pull request is made, standards, templates,
   who signs off) and, for each project, its path, what is inside it, and how Kerrigan can read
   its code from the chat. Written once and read for months.

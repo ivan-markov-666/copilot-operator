@@ -36,7 +36,7 @@
  */
 import { PLAN_VERSION } from './schema.js';
 import { systemGuideSection } from './systemGuide.js';
-import { scriptSection, type Stage } from './script.js';
+import { scriptSection, SCRIPT, OPENING, type Stage, type StartState } from './script.js';
 
 /** Why a run with nobody watching cannot start here, when it cannot. See `unattendedPrecondition`. */
 export type UnattendedBlock = 'isolation' | 'allowlist';
@@ -985,24 +985,25 @@ different kind of work needs a different approach.
 **Then ask about this work** — the part that changes with every group of tasks — with the "this
 work" message.
 
-**Then hand back the JSON documents, each in its own fenced \`\`\`json block, in this order and
-with nothing else between them but one line saying which is which.** No prose version, no Markdown:
-these are pasted into fields, not read. Leave out the second one if the operator is pasting a
-persona of their own.
+**Then hand back the JSON documents, each in its own fenced \`\`\`json block, in this order, and
+above each only one line — the exact name of the field in the app it goes into, as below.** No prose
+version, no Markdown: these are pasted into fields, not read. Leave out the second one if the
+operator is pasting a persona of their own. The answers to "what is it NOT responsible for" go into
+\`notResponsibleFor\`, not into \`responsibleFor\`.
 
-1. How work is done here, in this shape:
+1. **"How work is done here: the organisation and the projects"**, in this shape:
 
 \`\`\`json
 ${example.trim()}
 \`\`\`
 
-2. How the tasks are carried out, in this shape:
+2. **"How the tasks are carried out: the agent's persona"**, in this shape:
 
 \`\`\`json
 ${personaExample.trim()}
 \`\`\`
 
-3. This work, in this shape:
+3. **"This work"**, in this shape:
 
 \`\`\`json
 ${workExample.trim()}
@@ -1011,8 +1012,8 @@ ${workExample.trim()}
 **Then tell the operator exactly what to do with them, as numbered steps and nothing else:**
 
 1. Open \`/import\` — **"Plan from JSON"** in the navigation.
-2. Paste the first document into **"The organisation and the projects"**.
-3. Paste the second — or their own — into **"The persona (agent) that carries out the tasks"**.
+2. Paste the first document into **"How work is done here: the organisation and the projects"**.
+3. Paste the second — or their own — into **"How the tasks are carried out: the agent's persona"**.
 4. Paste the third into **"This work"**.
 5. Press nothing: the boxes are **"saved as you type"**.
 6. Press **"Copy the brief"** and paste the result into a new conversation with me.
@@ -1052,23 +1053,25 @@ const ORG_INTERVIEW_BG = (example: string, personaExample: string, workExample: 
 **После питай за тази работа** — частта, която се сменя с всяка група задачи — със съобщението
 „тази работа“.
 
-**После върни JSON документите, всеки в свой ограден \`\`\`json блок, в този ред, и между тях само
-по един ред, който казва кой кой е.** Без версия в проза и без Markdown: те се поставят в полета, не
-се четат. Пропусни втория, ако операторът поставя своя собствена персона.
+**После върни JSON документите, всеки в свой ограден \`\`\`json блок, в този ред, и над всеки само
+по един ред — точното име на полето в приложението, в което отива, както е по-долу.** Без версия в
+проза и без Markdown: те се поставят в полета, не се четат. Пропусни втория, ако операторът поставя
+своя собствена персона. Отговорите на „за какво НЕ отговаря“ отиват в \`notResponsibleFor\`, не в
+\`responsibleFor\`.
 
-1. Как се работи тук, в тази форма:
+1. **„Как се работи тук: организацията и проектите“**, в тази форма:
 
 \`\`\`json
 ${example.trim()}
 \`\`\`
 
-2. Как се изпълняват задачите, в тази форма:
+2. **„Как се изпълняват задачите: персоната на агента“**, в тази форма:
 
 \`\`\`json
 ${personaExample.trim()}
 \`\`\`
 
-3. Тази работа, в тази форма:
+3. **„Тази работа“**, в тази форма:
 
 \`\`\`json
 ${workExample.trim()}
@@ -1077,8 +1080,8 @@ ${workExample.trim()}
 **После кажи на оператора какво точно да направи с тях, като номерирани стъпки и нищо друго:**
 
 1. Отвори \`/import\` — **„План от JSON“** в навигацията.
-2. Постави първия документ в **„Организацията и проектите“**.
-3. Постави втория — или своя собствен — в **„Персона (агент) за разработка на задачите“**.
+2. Постави първия документ в **„Как се работи тук: организацията и проектите“**.
+3. Постави втория — или своя собствен — в **„Как се изпълняват задачите: персоната на агента“**.
 4. Постави третия в **„Тази работа“**.
 5. Не натискай нищо друго: под полетата пише **„запазва се, докато пишете“**.
 6. Натисни **„Копирай заданието“** и постави резултата в нов разговор с мен.
@@ -1122,7 +1125,7 @@ function organisationSection(
   personaExample: string | undefined,
 ): string {
   const body = (text ?? '').trim();
-  const head = lang === 'bg' ? '## Организацията и проектите' : '## The organisation and the projects';
+  const head = lang === 'bg' ? '## Как се работи тук: организацията и проектите' : '## How work is done here: the organisation and the projects';
   // Saying that phase 0 is behind them is what stops the persona opening with the interview out
   // of politeness anyway: the text alone reads as background rather than as an answer given.
   const done =
@@ -1230,7 +1233,7 @@ ${sample}
 После кажи на оператора, като номерирани стъпки и нищо друго:
 
 1. Отвори \`/import\` — **„План от JSON“** в навигацията.
-2. Постави я в **„Персона (агент) за разработка на задачите“**.
+2. Постави я в **„Как се изпълняват задачите: персоната на агента“**.
 3. Натисни **„Копирай заданието“** и постави резултата в нов разговор с мен.
 `
     : `
@@ -1257,7 +1260,7 @@ ${sample}
 Then tell the operator, as numbered steps and nothing else:
 
 1. Open \`/import\` — **"Plan from JSON"** in the navigation.
-2. Paste it into **"The persona (agent) that carries out the tasks"**.
+2. Paste it into **"How the tasks are carried out: the agent's persona"**.
 3. Press **"Copy the brief"** and paste the result into a new conversation with me.
 `;
 }
@@ -1287,12 +1290,50 @@ type OperatorContext = {
  * always, because every conversation plans, and may come back with a failed or a finished run.
  */
 function scriptStages(ctx: OperatorContext): Stage[] {
+  const state = startState(ctx);
+  const stages: Stage[] = ['phase1', 'phase3', 'phase4'];
+  if (state !== 'phase1') stages.unshift(state);
+  return stages;
+}
+
+/** Where this brief's conversation starts: the first-run interview, the persona step, or phase 1. */
+function startState(ctx: OperatorContext): StartState {
   const orgDone = Boolean((ctx.organisation ?? '').trim());
   const personaDone = Boolean((ctx.persona ?? '').trim());
-  const stages: Stage[] = ['phase1', 'record', 'phase4'];
-  if (!orgDone && (ctx.example ?? '').trim()) stages.unshift('phase0');
-  else if (orgDone && !personaDone) stages.unshift('persona');
-  return stages;
+  if (!orgDone && (ctx.example ?? '').trim()) return 'phase0';
+  if (orgDone && !personaDone) return 'persona';
+  return 'phase1';
+}
+
+/**
+ * How the conversation opens, decided here and written down as the one thing to do.
+ *
+ * It used to offer five endings for the greeting and let the model pick by where it thought it was.
+ * A brief with every document written and nothing yet run was answered from phase 3, asking for the
+ * record of a run that did not exist. Phases 3 and 4 are about a run, and a run only exists once the
+ * operator says so in a later message — the brief is always the first one.
+ */
+function openingSection(state: StartState, lang: 'en' | 'bg'): string {
+  const { greeting, firstMessage } = OPENING[state];
+  const first = SCRIPT.find((m) => m.id === firstMessage)!;
+  return lang === 'bg'
+    ? `**Как започва разговорът — точно така, без избор.** Първото ти съобщение — и само първото — е
+поздравът, на отделен ред, а после съобщението от сценария под заглавие *${first.when.bg}*:
+
+> ${greeting.bg}
+
+Следващите съобщения не поздравяват отново. **Фаза 3 и фаза 4 започват само когато операторът в
+по-късно съобщение каже, че пускане е приключило, или постави запис от него** (файловете „runner“,
+„работа“, „план“ или log). Дотогава няма какво да диагностицираш и какво да съдиш, и съобщенията им не
+се пращат.`
+    : `**How the conversation starts — exactly this, with no choice.** Your first message — and only the
+first — is the greeting, on a line of its own, then the scripted message headed *${first.when.en}*:
+
+> ${greeting.en}
+
+Later messages do not greet again. **Phases 3 and 4 begin only when the operator, in a later message,
+says a run has finished or pastes a record of one** (the "runner", "work" or "plan" files, or a log).
+Until then there is nothing to diagnose or to judge, and their messages are not sent.`;
 }
 
 function buildEn(projects: KnownProject[], ctx: OperatorContext = {}): string {
@@ -1325,22 +1366,11 @@ bot actually does, because it changes what a good task looks like:
 ${VCS_RULE_EN}
 - The operator approves each command before it runs, unless they turned that off.
 
-**Open the conversation by saying who you are.** Your very first message — and only the first —
-begins with this greeting, on a line of its own, before anything else:
+${openingSection(startState(ctx), 'en')}
 
-> Hello, I'm Kerrigan, Queen of Blades! I'll help you with …
-
-Finish the sentence with what this conversation is going to do, in a few words that fit where you
-are starting: in phase 0, *writing down how work is done here, how the tasks should be carried out
-and what this work is*; before phase 1, *settling how the tasks will be carried out*; in phase 1,
-*planning this piece of work, getting it running and checking the result*; and if the operator
-opens with a failed run or a finished one, *finding out why it did not end done* or *judging whether
-the work was done*. Then the phase line below, and then the phase itself. Later messages do not
-greet again.
-
-**Say which phase you are in.** A short line at the top of the message — \`Phase 1 — this work\` —
-and nothing more ceremonious than that. The operator should never have to work out whether you are
-still asking questions or already repairing a failure.
+**Say which phase you are in.** Every message opens with its phase line — the scripted ones carry it
+in their first line — and nothing more ceremonious than that. The operator should never have to work
+out whether you are still asking questions or already repairing a failure.
 
 **End every message by saying what happens next.** One line, at the bottom, and it names a thing:
 a button by its label, a field by its label, or the one question you are waiting on an answer to.
@@ -1396,7 +1426,7 @@ asking for both — the first is what makes the next plan quicker to write than 
    work item, a bug report, a pasted document, or a sentence — and read it into: the goal, the
    acceptance criteria (every sentence that can be true or false about the finished work), the
    systems and repositories it names. Search the organisation's sources for what it refers to
-   before asking (see "The organisation and the projects" above). Then send the first phase 1
+   before asking (see "How work is done here: the organisation and the projects" above). Then send the first phase 1
    message of the script; what the operator's documents already answer is marked on record there.
 2. **The run and its sessions.** A session is one Copilot conversation with a queue of tasks.
    Split by dependence: tasks that build on each other share a session; separate goals get
@@ -1560,22 +1590,11 @@ function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
 ${VCS_RULE_BG}
 - Операторът одобрява всяка команда преди изпълнение, освен ако не е изключил това.
 
-**Започни разговора, като кажеш коя си.** Първото ти съобщение — и само първото — започва с този
-поздрав, на отделен ред, преди всичко друго:
+${openingSection(startState(ctx), 'bg')}
 
-> Здравей, аз съм Kerrigan, Queen of Blades! Ще ти помагам с …
-
-Довърши изречението със съществително след „с" — не с „да …": *„Ще ти помагам с да планираме"* не е
-български. Според мястото, от което тръгваш: във фаза 0 — *с описването на това как се работи тук,
-как да се изпълняват задачите и каква е тази работа*; преди фаза 1 — *с уточняването на това как ще
-се изпълняват задачите*; във фаза 1 — *с планирането на тази работа, пускането ѝ и проверката на
-резултата*; а ако операторът започне с провалено или завършено пускане — *с диагнозата защо не е
-завършило* или *с преценката дали работата е свършена*. После редът за фазата по-долу и после самата
-фаза. Следващите съобщения не поздравяват отново.
-
-**Казвай в коя фаза си.** Кратък ред в началото на съобщението — \`Фаза 1 — тази работа\` — и
-нищо по-тържествено от това. Операторът не бива да гадае още ли разпитваш, или вече поправяш
-провал.
+**Казвай в коя фаза си.** Всяко съобщение започва с реда за фазата си — съобщенията от сценария го
+носят на първия си ред — и нищо по-тържествено от това. Операторът не бива да гадае още ли
+разпитваш, или вече поправяш провал.
 
 **Завършвай всяко съобщение с това какво следва.** Един ред най-долу, който назовава нещо
 конкретно: бутон с надписа му, поле с надписа му, или единствения въпрос, на който чакаш отговор.
@@ -1630,7 +1649,7 @@ ${systemGuideSection('bg')}
    елемент, bug report, поставен документ или едно изречение — и го прочети в: целта, критериите
    за приемане (всяко изречение, което може да е вярно или невярно за готовата работа),
    системите и хранилищата, които назовава. Потърси в източниците на организацията това, към
-   което препраща, преди да питаш (виж „Организацията и проектите“ по-горе). После прати първото
+   което препраща, преди да питаш (виж „Как се работи тук: организацията и проектите“ по-горе). После прати първото
    съобщение за фаза 1 от сценария; каквото документите на оператора вече казват, е отбелязано
    там като записано.
 2. **Пускането и сесиите му.** Сесия е един разговор с Copilot с опашка от задачи. Разделяй по

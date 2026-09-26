@@ -236,8 +236,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
       },
       {
         headingKey: 'plan.orgPart',
-        en: 'The organisation and the projects',
-        bg: 'Организацията и проектите',
+        en: 'How work is done here: the organisation and the projects',
+        bg: 'Как се работи тук: организацията и проектите',
         controls: [
           {
             key: 'plan.ctxEmpty',
@@ -275,8 +275,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
       },
       {
         headingKey: 'plan.personaPart',
-        en: 'The persona (agent) that carries out the tasks',
-        bg: 'Персона (агент) за разработка на задачите',
+        en: 'How the tasks are carried out: the agent\'s persona',
+        bg: 'Как се изпълняват задачите: персоната на агента',
         controls: [
           {
             key: 'plan.ctxClear',

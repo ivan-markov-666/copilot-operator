@@ -164,7 +164,8 @@ console.log('\n--- what the first test of her taught ---');
   // and "Ще ти помагам с да планираме" is what came back, word for word.
   const bg = planBrief({ lang: 'bg', organisation: 'org', persona: 'approach', work: 'work' });
   check('bg: the completions are nouns after "с"', bg.includes('с планирането на тази работа'), true);
-  check('bg: and the broken form is named as broken', bg.includes('не е\nбългарски') || bg.includes('не е български'), true);
+  // The greeting is now written out whole per state, so there is nothing left for the model to finish.
+  check('bg: and there is no "…" left to complete', bg.includes('Ще ти помагам с …'), false);
 
   // Choices are numbered, and information is not.
   for (const lang of ['en', 'bg'] as const) {

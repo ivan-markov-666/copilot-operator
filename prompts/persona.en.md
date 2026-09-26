@@ -2,8 +2,10 @@
   "version": 1,
   "persona": {
     "responsibleFor": [
-      "what the agent carrying out these tasks is accountable for",
-      "and, as plainly, what it is not: the thing it must leave to somebody else"
+      "what the agent carrying out these tasks is accountable for"
+    ],
+    "notResponsibleFor": [
+      "and, as plainly, what it is not accountable for: the thing it must leave to somebody else"
     ],
     "approach": "how it works: cautious or quick, how much it verifies before it claims anything, whether it may change code or only read it, when it stops and reports rather than guesses",
     "phases": [

@@ -843,9 +843,9 @@ export const dict = {
     'plan.personaWhy':
       'What you copy is one text in two parts. The software part is this project\'s and does not change: what the bot is, the plan format, how to read the register\'s exports when a task fails, and how to check the finished run against the assignment. The organisation part is yours: where tickets come from, which company sources to search, how your machine is laid out, your team\'s conventions. While it is empty, the brief tells Kerrigan to interview you about all of that first, write the text, and ask you to paste it below and save; once saved it travels with every copy and the questions stop. Delete it and they come back.',
     'plan.softwarePart': 'Software level (fixed)',
-    'plan.orgPart': 'The organisation and the projects',
+    'plan.orgPart': 'How work is done here: the organisation and the projects',
     'plan.orgHint': 'What anybody doing a task here would need to know: where tickets come from, where to search, the conventions and templates, and for each project its path, what it does, what it needs before it builds, how it is built and tested, and what goes wrong there. Not what the organisation or the projects are called — a name helps with no task. Written once and read for months. Paste here the first of the documents Kerrigan hands back.',
-    'plan.personaPart': 'The persona (agent) that carries out the tasks',
+    'plan.personaPart': 'How the tasks are carried out: the agent\'s persona',
     'plan.personaHint': 'How the agent that does the work goes about it: what it is responsible for and what it is not, its approach, the phases it works through, and what it hands back at the end. It has no name — it is a way of working, not a character — so you can swap it when different work needs a different approach. Written into every task when a plan is imported, so a session keeps the approach it was created with. Paste your own here, or the second of the documents Kerrigan hands back.',
     'plan.workPart': 'This work',
     'plan.workHint': 'What this group of tasks is about: the ticket, the goal, which projects it touches, what has already been decided or tried, what must not change meanwhile. Replaced whenever the work changes. Paste here the last of the documents Kerrigan hands back.',
@@ -1798,9 +1798,9 @@ export const dict = {
     'plan.personaWhy':
       'Това, което копирате, е един текст от три части. Софтуерната част е на този проект и не се променя: какво е ботът, форматът на плана, как се четат файловете от регистъра, когато задача се провали, и как се проверява готовото пускане спрямо заданието. Другите две са ваши и са разделени, защото се менят с различна скорост: организацията и проектите се пишат веднъж и се четат с месеци, а описанието на работата се сменя, когато се смени работата. Докато някое от двете е празно, заданието казва на Kerrigan първо да ви разпита и да върне и двете като JSON, с указание къде да ги поставите; веднъж запазени, те пътуват с всяко копие и въпросите спират.',
     'plan.softwarePart': 'Софтуерно ниво (фиксирано)',
-    'plan.orgPart': 'Организацията и проектите',
+    'plan.orgPart': 'Как се работи тук: организацията и проектите',
     'plan.orgHint': 'Каквото би трябвало да знае всеки, който върши задача тук: откъде идват ticket-ите, къде да се търси, правилата и шаблоните, а за всеки проект — пътят му, какво прави, какво му трябва, преди да се строи, как се строи и тества, и какво се чупи там. Не как се казват организацията или проектите — името не помага на никоя задача. Пише се веднъж и се чете с месеци. Тук поставете първия от документите, които Kerrigan връща.',
-    'plan.personaPart': 'Персона (агент) за разработка на задачите',
+    'plan.personaPart': 'Как се изпълняват задачите: персоната на агента',
     'plan.personaHint': 'Как агентът, който върши работата, подхожда към нея: за какво отговаря и за какво не, подходът му, фазите, през които минава, и какво предава накрая. Няма име — това е начин на работа, не герой — затова може да го смените, когато друга работа иска друг подход. Вписва се във всяка задача при импорт на план, така че сесията пази подхода, с който е създадена. Поставете тук своя собствена или втория от документите, които Kerrigan връща.',
     'plan.workPart': 'Тази работа',
     'plan.workHint': 'За какво е тази група задачи: ticket-ът, целта, кои проекти засяга, какво вече е решено или пробвано, какво не бива да се променя междувременно. Сменя се, когато се смени работата. Тук поставете последния от документите, които Kerrigan връща.',

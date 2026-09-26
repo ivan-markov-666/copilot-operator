@@ -84,7 +84,7 @@ for (const lang of ['en', 'bg'] as const) {
   );
   console.log(
     `${lang} two texts`,
-    '| organisation in:', withOrg.includes('JIRA-PAY') && /(## The organisation and the projects|## Организацията и проектите)/.test(withOrg) ? 'yes' : 'NO',
+    '| organisation in:', withOrg.includes('JIRA-PAY') && /(## How work is done here: the organisation and the projects|## Как се работи тук: организацията и проектите)/.test(withOrg) ? 'yes' : 'NO',
     '| work in:', withOrg.includes('PBI-77') && /(## This work|## Тази работа)/.test(withOrg) ? 'yes' : 'NO',
     '| organisation first:', withOrg.indexOf('JIRA-PAY') < withOrg.indexOf(lang === 'en' ? '## Your job, in order' : '## Какво трябва да направиш') ? 'yes' : 'NO',
     '| neither when not given:', !bare.includes('JIRA-PAY') && !bare.includes('PBI-77') ? 'yes' : 'NO',
