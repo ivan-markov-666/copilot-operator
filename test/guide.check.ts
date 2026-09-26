@@ -235,9 +235,16 @@ for (const [lang, pattern] of [['en', /\*\*"([^"]+)"\*\*/g], ['bg', /\*\*„([^�
    * step quotes the persona field and the copy button, which neither of the other two states do.
    */
   const personaMissing = planBrief({ lang, organisation: 'the organisation', personaExample: '{}', work: 'this work' });
+  /*
+   * And the machine's own state: on a machine where a run with nobody watching is refused, the brief
+   * tells Kerrigan which button to recommend instead, by its label — labels that appear in no other
+   * state of the brief.
+   */
+  const unattendedRefused = planBrief({ lang, organisation: 'the organisation', persona: 'the persona', work: 'this work', unattendedBlocked: 'isolation' });
   const brief = `${settled}
 ${firstRun}
-${personaMissing}`;
+${personaMissing}
+${unattendedRefused}`;
   const quoted = [...new Set([...brief.matchAll(pattern)].map((m) => flatten(m[1])))];
   const unknown = quoted.filter((q) => !onScreen.has(q));
   for (const q of unknown) {

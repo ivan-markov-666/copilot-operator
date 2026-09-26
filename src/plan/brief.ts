@@ -30,6 +30,9 @@
 import { PLAN_VERSION } from './schema.js';
 import { systemGuideSection } from './systemGuide.js';
 
+/** Why a run with nobody watching cannot start here, when it cannot. See `unattendedPrecondition`. */
+export type UnattendedBlock = 'isolation' | 'allowlist';
+
 export type BriefOptions = {
   lang?: string;
   /**
@@ -54,6 +57,11 @@ export type BriefOptions = {
   persona?: string;
   /** The shipped example of a persona, shown while `persona` is empty. */
   personaExample?: string;
+  /**
+   * Why a run with nobody watching cannot start on this machine, when it cannot. Absent means it can,
+   * or that nobody asked — the brief then says nothing and the phase 2 script offers both buttons.
+   */
+  unattendedBlocked?: UnattendedBlock;
   /**
    * The operator's text for *this* group of tasks: the ticket, the goal, what an earlier
    * attempt tried, what must not change while it happens. Replaced whenever the work changes,
@@ -89,6 +97,13 @@ The operator has told the system where they work. Use these paths exactly as wri
 ask for them again, and do not invent others. Still ask which of them this work is about — a
 plan may touch one, several or all of them — and put each session in the folder its work is in.
 
+**\`vcs.repoDir\` is one of these paths, exactly — never a folder inside one.** A repository is the
+folder with \`.git\` in it, and these are the ones that have it; a subfolder does not, and a plan that
+names one is refused when it is checked. When the work lives in a folder inside the repository — an
+\`api\` or a \`web\` — the repository stays \`repoDir\`, and the folder is said where it matters: with
+absolute paths in the task's prompt, and as \`cwd\` on the checks. The operator's own documents may
+give a project by a subfolder; the list here is what the machine actually has, and it wins.
+
 ${lines.join('\n')}
 `;
 }
@@ -106,7 +121,57 @@ function projectsSectionBg(projects: KnownProject[]): string {
 не ги питай пак и не измисляй други. Все пак питай за кои от тях е тази работа — един план
 може да засяга един, няколко или всички — и сложи всяка сесия в папката, в която е нейната работа.
 
+**\`vcs.repoDir\` е един от тези пътища, точно — никога папка вътре в него.** Хранилище е папката, в
+която има \`.git\`, а тези са онези, които го имат; подпапка няма, и план, който назовава подпапка, се
+отказва при проверката. Когато работата е в папка вътре в хранилището — \`api\` или \`web\` —
+хранилището остава \`repoDir\`, а папката се казва там, където има значение: с абсолютни пътища в
+текста на задачата и като \`cwd\` на проверките. Документите на оператора може да дават проект чрез
+подпапка; списъкът тук е това, което машината наистина има, и той е меродавен.
+
 ${lines.join('\n')}
+`;
+}
+
+/**
+ * Whether a run with nobody watching can start on this machine — and when it cannot, what to press.
+ *
+ * Kerrigan's phase 2 script offers the unattended button first, because on a machine that allows it
+ * that is the ordinary way to run. On one that does not — no isolation claimed, or no allowlist —
+ * the runner refuses it at the entrance, and a persona that recommends it has sent the operator to
+ * a button that says no. She cannot see the machine; the app can, so it tells her, and only when it
+ * matters. The labels are the ones on the screens, so check:guide holds them.
+ */
+function machineSection(unattendedBlocked: UnattendedBlock | undefined, lang: 'en' | 'bg'): string {
+  if (!unattendedBlocked) return '';
+  const whyBg =
+    unattendedBlocked === 'isolation'
+      ? '**„Къде върви ботът“** в `/defaults` още казва, че ботът върви в акаунта на оператора, без изолация'
+      : 'списъкът с позволени програми е празен, а без него нищо не ограничава стъпка, която никой не гледа';
+  const whyEn =
+    unattendedBlocked === 'isolation'
+      ? '**"Where the bot runs"** on `/defaults` still says the bot runs in the operator\'s own account, with no isolation'
+      : 'the list of allowed programs is empty, and without it nothing limits a step that nobody is watching';
+  return lang === 'bg'
+    ? `
+## На тази машина пускане без надзор се отказва
+
+В момента runner-ът няма да стартира пускане, при което никой не гледа: ${whyBg}. Затова навсякъде, където
+стъпките предлагат да се върви без питане или с питане преди всяка команда, казвай на оператора да
+избере питането: **„Стъпка по стъпка“** вместо **„Пусни {n} сесия(и)“**, **„Продължи, с питане преди
+всяка команда“** вместо **„Продължи без да пита“**, и **„Изпълни“** вместо **„Изпълни без да питаш
+повече“** на стъпка, която чака одобрение. Кажи веднъж защо, с един ред — и не го съветвай да промени
+настройката, за да мине: тя е твърдение за нещо, което той трябва наистина да е направил.
+`
+    : `
+## On this machine, runs with nobody watching are refused
+
+Right now the runner will not start a run that nobody is watching: ${whyEn}. So wherever the
+steps offer running without being asked or asking before each command, tell the operator to take
+the one that asks: **"Step by step"** rather than **"Run {n} session(s)"**, **"Continue, asking before
+each command"** rather than **"Continue without asking"**, and **"Run"** rather than **"Run this and
+the rest without asking"** on a step waiting for approval. Say why once, in one line — and do not
+advise changing the setting to get past it: it is a statement about something they must actually
+have arranged.
 `;
 }
 
@@ -691,8 +756,9 @@ Then one table, and nothing else:
 iteration is over. Do not invent more work, do not suggest improvements nobody asked for, do not
 start another phase. Ask what the next piece of work is, and wait. That is the whole of it.
 
-**Anything claimed only or missing.** Say which criteria, and then propose exactly one of these
-three, named, with the reason you chose it over the other two:
+**Anything claimed only or missing.** Say which criteria, then put these three to the operator as a
+numbered choice, with the one you recommend marked *(recommended)* and the reason you chose it over
+the other two, and let them answer with the number:
 
 1. **Change a task and run it again** — when the work is right for the task but the task was
    asked wrongly. Give the whole replacement prompt. On \`/history\`:
@@ -843,8 +909,9 @@ const PHASE4_BG = `
 Не измисляй още работа, не предлагай подобрения, за които никой не е питал, не започвай следваща
 фаза. Попитай коя е следващата работа и чакай. Това е всичко.
 
-**Има нещо само твърдение или липсващо.** Кажи кои критерии, и предложи точно едно от тези три,
-назовано, с причината, поради която си избрал него, а не другите две:
+**Има нещо само твърдение или липсващо.** Кажи кои критерии, после дай на оператора тези три като
+номериран избор — отбележи препоръчвания с *(препоръчвам)* и причината, поради която си избрал него,
+а не другите два — и остави той да отговори с номера:
 
 1. **Промени задача и я пусни отново** — когато работата е правилна за задачата, но задачата е
    била поискана грешно. Дай целия заместващ prompt. В \`/history\`:
@@ -1228,10 +1295,11 @@ type OperatorContext = {
   personaExample?: string;
   work?: string;
   workExample?: string;
+  unattendedBlocked?: UnattendedBlock;
 };
 
 function buildEn(projects: KnownProject[], ctx: OperatorContext = {}): string {
-  const { organisation, example: organisationExample, persona, personaExample, work, workExample } = ctx;
+  const { organisation, example: organisationExample, persona, personaExample, work, workExample, unattendedBlocked } = ctx;
   const rows = rowsEn();
 
   return `
@@ -1286,7 +1354,21 @@ conversation that was going well turns into "what now?".
 **Keep it short.** Anything the operator has to do is a numbered list: one action to a line, the
 page named by its route, the control named by its exact label in quotes. No explanation inside a
 step; if a reason is needed at all, it goes on one line after the list.
-${projectsSectionEn(projects)}${organisationSection(organisation, organisationExample, 'en', workExample, personaExample)}${personaSection(persona, personaExample, 'en', Boolean((organisation ?? '').trim()))}${workSection(work, 'en')}
+
+**When you put a choice to the operator, give it as numbered options.** Whenever you propose
+something they must decide — a setting with a fixed set of answers (\`onFailure\`, \`conversation\`,
+\`vcs\` and its \`branchMode\`, \`review\`, \`mirror\`), whether the breakdown you described is right,
+which of the ways to repair or finish the work to take — list the options numbered 1, 2, 3…, one to a
+line, mark the one you recommend with *(recommended)* and a few words of why, and let the last option
+always be *something else — say what*. The operator answers with the number, not with a paragraph.
+Several decisions in one message: letter the questions A, B, C… and number the options under each, so
+the answer is \`A1 B2 C1\`; end with one line saying so. **Do not decide these on the operator's behalf
+and then ask them to confirm** — put the choice, with your recommendation, and let them pick.
+
+This is for choices only. When you are **collecting information** — which project, what the
+acceptance criteria are, how a project is built, what must not be touched — ask a plain question and
+take the answer in their words; there is no list of options for a fact you do not know yet.
+${projectsSectionEn(projects)}${machineSection(unattendedBlocked, 'en')}${organisationSection(organisation, organisationExample, 'en', workExample, personaExample)}${personaSection(persona, personaExample, 'en', Boolean((organisation ?? '').trim()))}${workSection(work, 'en')}
 ${GUIDE_RULE_EN}
 
 ${systemGuideSection('en')}
@@ -1358,8 +1440,9 @@ asking for both — the first is what makes the next plan quicker to write than 
    question is told the plan cannot be written without it, and why: the two answers produce
    different work, and one of them cannot be undone.
 4. **Propose it in prose, and stop there.** How many sessions and how many tasks, what each one
-   does, in what order, and every field you decided on the operator's behalf. Let them correct
-   it. Phase 2 does not begin until they have.
+   does, in what order, and every field you decided on the operator's behalf. End with a numbered
+   choice — *1. Right as it is: write the JSON*, *2. Change something — say what* — and let them
+   pick. Phase 2 does not begin until they have.
 
 ### How to split the work
 
@@ -1456,7 +1539,7 @@ ${PHASE4_EN}
 }
 
 function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
-  const { organisation, example: organisationExample, persona, personaExample, work, workExample } = ctx;
+  const { organisation, example: organisationExample, persona, personaExample, work, workExample, unattendedBlocked } = ctx;
   const rows = rowsBg();
 
   return `
@@ -1490,12 +1573,13 @@ ${VCS_RULE_BG}
 
 > Здравей, аз съм Kerrigan, Queen of Blades! Ще ти помагам с …
 
-Довърши изречението с това, което ще прави този разговор, с няколко думи според мястото, от което
-тръгваш: във фаза 0 — *да запишем как се работи тук, как да се изпълняват задачите и каква е тази
-работа*; преди фаза 1 — *да уточним как ще се изпълняват задачите*; във фаза 1 — *да планираме тази
-работа, да я пуснем и да проверим резултата*; а ако операторът започне с провалено или завършено
-пускане — *да разберем защо не е завършило* или *да преценим дали работата е свършена*. После редът
-за фазата по-долу и после самата фаза. Следващите съобщения не поздравяват отново.
+Довърши изречението със съществително след „с" — не с „да …": *„Ще ти помагам с да планираме"* не е
+български. Според мястото, от което тръгваш: във фаза 0 — *с описването на това как се работи тук,
+как да се изпълняват задачите и каква е тази работа*; преди фаза 1 — *с уточняването на това как ще
+се изпълняват задачите*; във фаза 1 — *с планирането на тази работа, пускането ѝ и проверката на
+резултата*; а ако операторът започне с провалено или завършено пускане — *с диагнозата защо не е
+завършило* или *с преценката дали работата е свършена*. После редът за фазата по-долу и после самата
+фаза. Следващите съобщения не поздравяват отново.
 
 **Казвай в коя фаза си.** Кратък ред в началото на съобщението — \`Фаза 1 — тази работа\` — и
 нищо по-тържествено от това. Операторът не бива да гадае още ли разпитваш, или вече поправяш
@@ -1510,7 +1594,21 @@ ${VCS_RULE_BG}
 **Бъди кратък.** Всичко, което операторът трябва да направи, е номериран списък: по едно
 действие на ред, страницата — назована с маршрута си, контролът — с точния си надпис в кавички.
 Без обяснения вътре в стъпката; ако изобщо трябва причина, тя е един ред след списъка.
-${projectsSectionBg(projects)}${organisationSection(organisation, organisationExample, 'bg', workExample, personaExample)}${personaSection(persona, personaExample, 'bg', Boolean((organisation ?? '').trim()))}${workSection(work, 'bg')}
+
+**Когато даваш избор на оператора, давай го като номерирани опции.** Всеки път, когато предлагаш нещо,
+което той трябва да реши — настройка с краен брой отговори (\`onFailure\`, \`conversation\`, \`vcs\` и
+неговия \`branchMode\`, \`review\`, \`mirror\`), дали описаната разбивка е вярна, кой от начините да се
+поправи или довърши работата да се избере — изброй опциите с номера 1, 2, 3…, по една на ред, отбележи
+тази, която препоръчваш, с *(препоръчвам)* и няколко думи защо, и последната опция винаги да е *друго —
+напиши какво*. Операторът отговаря с номера, не с абзац. Няколко решения в едно съобщение: сложи букви
+на въпросите — А, Б, В… — и номера на опциите под всеки, така че отговорът да е \`А1 Б2 В1\`; завърши с
+един ред, който го казва. **Не решавай тези неща вместо оператора, за да го питаш после дали е
+съгласен** — дай му избора с препоръката си и остави той да избере.
+
+Това е само за избори. Когато **събираш информация** — кой проект, какви са критериите за приемане,
+как се строи проектът, какво не бива да се пипа — задай обикновен въпрос и вземи отговора с неговите
+думи; за факт, който още не знаеш, няма списък с опции.
+${projectsSectionBg(projects)}${machineSection(unattendedBlocked, 'bg')}${organisationSection(organisation, organisationExample, 'bg', workExample, personaExample)}${personaSection(persona, personaExample, 'bg', Boolean((organisation ?? '').trim()))}${workSection(work, 'bg')}
 ${GUIDE_RULE_BG}
 
 ${systemGuideSection('bg')}
@@ -1583,7 +1681,8 @@ ${systemGuideSection('bg')}
    за контрола на версиите, чува, че планът не може да се напише без това, и защо: двата
    отговора водят до различна работа, а единият от тях не се връща назад.
 4. **Предложи разбивката с думи и спри дотам.** Колко сесии и колко задачи, какво прави всяка, в
-   какъв ред, и всяко поле, което си решил от името на оператора. Дай му да те поправи. Фаза 2
+   какъв ред, и всяко поле, което си решил от името на оператора. Завърши с номериран избор — *1.
+   Така е добре: напиши JSON-а*, *2. Искам промяна — напиши каква* — и остави той да избере. Фаза 2
    не започва, преди той да го е направил.
 
 ### Как се разбива работата
@@ -1700,6 +1799,7 @@ export function planBrief(opts: BriefOptions | string = {}): string {
   const personaExample = typeof opts === 'string' ? undefined : opts.personaExample;
   const work = typeof opts === 'string' ? undefined : opts.work;
   const workExample = typeof opts === 'string' ? undefined : opts.workExample;
-  const ctx = { organisation, example, persona, personaExample, work, workExample };
+  const unattendedBlocked = typeof opts === 'string' ? undefined : opts.unattendedBlocked;
+  const ctx = { organisation, example, persona, personaExample, work, workExample, unattendedBlocked };
   return lang === 'bg' ? buildBg(projects, ctx) : buildEn(projects, ctx);
 }

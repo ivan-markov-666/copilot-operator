@@ -38,7 +38,7 @@ import { buildStory, type Story } from '../session/story.js';
 import type { ContextKind } from '../session/store.js';
 import type { ProjectMirrorSelection } from '../config/schema.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
-import { planBrief, type BriefOptions } from '../plan/brief.js';
+import { planBrief, type BriefOptions, type UnattendedBlock } from '../plan/brief.js';
 
 /** The folders the operator works in: the default new sessions start on, and the rest by name. */
 export type ProjectDefault = {
@@ -69,7 +69,7 @@ import type { PolicyDecision } from '../exec/policy.js';
 import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConflicts, DEFAULT_IGNORE_DIRS } from '../context/projectMirror.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
-import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
+import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } from '../exec/isolation.js';
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
@@ -1366,6 +1366,18 @@ export class OperatorService {
       this.getContext('persona', lang),
       this.getContext('work', lang),
     ]);
+    /*
+     * Whether a run with nobody watching can start here, asked of the same rule the runner applies
+     * at the entrance — so the brief cannot tell Kerrigan the unattended button works while the run
+     * refuses it, which is exactly what the first test of her did.
+     */
+    const cfg = await this.settings.load();
+    const unattendedRule = { mode: 'unattended' as const, allowedPrograms: cfg.execution.allowedPrograms, isolation: cfg.execution.isolation };
+    const unattendedBlocked: UnattendedBlock | undefined = !unattendedPrecondition(unattendedRule)
+      ? undefined
+      : unattendedIsolationRefusal('unattended', cfg.execution.isolation)
+        ? 'isolation'
+        : 'allowlist';
     return {
       text: planBrief({
         lang,
@@ -1376,6 +1388,7 @@ export class OperatorService {
         personaExample: persona.example,
         work: work.content,
         workExample: work.example,
+        unattendedBlocked,
       }),
       software: planBrief({ lang, projects }),
       organisation: organisation.content,

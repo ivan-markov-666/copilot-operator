@@ -158,5 +158,55 @@ for (const lang of ['en', 'bg'] as const) {
   }
 }
 
+console.log('\n--- what the first test of her taught ---');
+{
+  // The greeting is completed with a noun after "с": the first version suggested "да планираме",
+  // and "Ще ти помагам с да планираме" is what came back, word for word.
+  const bg = planBrief({ lang: 'bg', organisation: 'org', persona: 'approach', work: 'work' });
+  check('bg: the completions are nouns after "с"', bg.includes('с планирането на тази работа'), true);
+  check('bg: and the broken form is named as broken', bg.includes('не е\nбългарски') || bg.includes('не е български'), true);
+
+  // Choices are numbered, and information is not.
+  for (const lang of ['en', 'bg'] as const) {
+    const b = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work' });
+    const rule = lang === 'bg' ? 'давай го като номерирани опции' : 'give it as numbered options';
+    const notInfo = lang === 'bg' ? 'Това е само за избори' : 'This is for choices only';
+    const noDeciding = lang === 'bg' ? 'Не решавай тези неща вместо оператора' : "Do not decide these on the operator's behalf";
+    const approve = lang === 'bg' ? 'Така е добре: напиши JSON-а' : 'Right as it is: write the JSON';
+    check(`${lang}: choices are numbered options`, b.includes(rule), true);
+    check(`${lang}: information is still asked in words`, b.includes(notInfo), true);
+    check(`${lang}: settings are offered, not decided and then confirmed`, b.includes(noDeciding), true);
+    check(`${lang}: the breakdown ends with a numbered approval`, b.includes(approve), true);
+  }
+
+  // She cannot see the machine; the brief says when the unattended button would be refused.
+  for (const lang of ['en', 'bg'] as const) {
+    const open = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work' });
+    const refused = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work', unattendedBlocked: 'isolation' });
+    const noList = planBrief({ lang, organisation: 'org', persona: 'approach', work: 'work', unattendedBlocked: 'allowlist' });
+    const head = lang === 'bg' ? 'пускане без надзор се отказва' : 'runs with nobody watching are refused';
+    const ask = lang === 'bg' ? '**„Стъпка по стъпка“** вместо **„Пусни {n} сесия(и)“**' : '**"Step by step"** rather than **"Run {n} session(s)"**';
+    const why = lang === 'bg' ? 'Къде върви ботът' : 'Where the bot runs';
+    check(`${lang}: nothing is said where unattended runs are allowed`, open.includes(head), false);
+    check(`${lang}: where they are refused, it says so`, refused.includes(head), true);
+    check(`${lang}: and names the button to press instead`, refused.includes(ask), true);
+    check(`${lang}: and why — the isolation setting`, refused.includes(why), true);
+    check(`${lang}: an empty allowlist is given as its own reason`, noList.includes(head) && !noList.split(head)[1]!.slice(0, 400).includes(why), true);
+  }
+
+  // The repository is one of the listed ones, never a folder inside it.
+  for (const lang of ['en', 'bg'] as const) {
+    const withProjects = planBrief({
+      lang,
+      projects: [{ name: 'calculator-test', rootDir: 'C:/Projects/calculator-test', repo: true, isDefault: false }],
+      organisation: 'org',
+      persona: 'approach',
+      work: 'work',
+    });
+    const rule = lang === 'bg' ? 'никога папка вътре в него' : 'never a folder inside one';
+    check(`${lang}: repoDir is a listed repository, never a subfolder`, withProjects.includes(rule), true);
+  }
+}
+
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;
