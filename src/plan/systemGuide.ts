@@ -494,6 +494,26 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Пуска същите сесии, но спира преди всяка команда и чака решение.',
           },
           {
+            key: 'batch.notStartedTitle',
+            kind: 'note',
+            en: 'The run did not start',
+            bg: 'Пускането не тръгна',
+            doesEn:
+              'The box over the two run buttons when a press was refused, with the reason under it. Nothing was opened and nothing ran; read the reason before pressing again.',
+            doesBg:
+              'Карето над двата бутона за пускане, когато натискането е отказано, с причината под него. Нищо не е отваряно и нищо не е пускано; прочети причината, преди да натиснеш пак.',
+          },
+          {
+            key: 'batch.notStartedIsolation',
+            kind: 'link',
+            en: 'Settings → "Where the bot runs": choose where the bot runs, or accept unattended runs without isolation',
+            bg: 'Настройки → „Къде върви ботът“: изберете къде върви ботът или приемете пускане без надзор без изолация',
+            doesEn:
+              'Under that box when the refusal is about isolation: opens /defaults, where "Where the bot runs" decides whether a run with nobody watching may start here.',
+            doesBg:
+              'Под това каре, когато отказът е заради изолацията: отваря /defaults, където „Къде върви ботът“ решава дали тук може да тръгне пускане без надзор.',
+          },
+          {
             key: 'batch.stop',
             kind: 'button',
             en: 'Stop after the current step',

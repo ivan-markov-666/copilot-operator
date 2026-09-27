@@ -372,6 +372,15 @@ function BatchPanel({
 }) {
   const { t } = useT();
   const [msg, setMsg] = useState('');
+  /*
+   * Why the last press did not start a run, shown where it cannot be missed.
+   *
+   * It used to go into the same small muted line as "stopping…", in the server's English, under the
+   * whole panel — and a refusal read that way looked like nothing happening at all: an operator
+   * pressed "Run 1 session(s)", confirmed, and reported that nothing had happened, while the reason
+   * sat below the fold. A refusal is the answer to the press, so it is shown as one.
+   */
+  const [refusal, setRefusal] = useState('');
   const [model, setModel] = useState('');
   /*
    * The reviewer's model, separate from the one doing the work.
@@ -485,10 +494,11 @@ function BatchPanel({
         reviewModel || undefined,
         runName.trim() || runnable.map((s) => s.planName).find(Boolean) || undefined,
       );
-      setMsg(r.started ? '' : t('batch.notStarted', { reason: r.reason ?? '' }));
+      setMsg('');
+      setRefusal(r.started ? '' : r.reason ?? '');
       onChange();
     } catch (e) {
-      setMsg((e as Error).message);
+      setRefusal((e as Error).message);
     }
   };
 
@@ -692,6 +702,19 @@ function BatchPanel({
                 ))}
               </ul>
               <div className="muted small">{t('batch.vcsProblemWhy')}</div>
+            </div>
+          )}
+
+          {refusal && (
+            <div className="notice caution" role="alert">
+              <strong>{t('batch.notStartedTitle')}</strong>
+              <div className="small" style={{ marginTop: 4 }}>{refusal}</div>
+              {/* The one refusal with a setting behind it gets a way to that setting. */}
+              {/execution\.isolation/.test(refusal) && (
+                <div className="small" style={{ marginTop: 4 }}>
+                  <Link href="/defaults">{t('batch.notStartedIsolation')}</Link>
+                </div>
+              )}
             </div>
           )}
 
