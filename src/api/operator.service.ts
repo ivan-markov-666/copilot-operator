@@ -1055,6 +1055,24 @@ export class OperatorService {
       return { started: false, reason: 'none of the selected sessions has a queued task' };
     }
 
+    /*
+     * The same entrance rule `start` has, asked here too and for the same reason: before a browser
+     * is opened. It was missing, and the rule was only met inside the loop, per session, after the
+     * window was already up — so on a machine with no isolation the operator pressed the run
+     * button, watched Edge open, begin loading the chat and close again, and was told nothing: the
+     * session was quietly skipped with the reason held in a batch state nobody was looking at. Asked
+     * here, the refusal is the answer to the press, shown under the button that caused it.
+     */
+    {
+      const cfg = await this.settings.load();
+      const blocked = unattendedPrecondition({
+        mode,
+        allowedPrograms: cfg.execution.allowedPrograms,
+        isolation: cfg.execution.isolation,
+      });
+      if (blocked) return { started: false, reason: blocked };
+    }
+
     // One model for the whole run, chosen here rather than opened on every session first. It
     // is written onto the sessions instead of being held for the run, so what the session says
     // it will use and what it used are the same thing afterwards — including for anyone who
