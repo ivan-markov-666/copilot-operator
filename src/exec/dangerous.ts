@@ -64,7 +64,7 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
   {
     name: 'bitsadmin',
     pattern: /\bbitsadmin(\.exe)?\b/i,
-    why: 'bitsadmin transfers files in the background out of sight of the run log. Use Invoke-WebRequest to a file, in a step of its own.',
+    why: 'bitsadmin transfers files in the background out of sight of the run log. This runner downloads nothing; write what is needed in the step itself.',
   },
   {
     name: 'script-host',

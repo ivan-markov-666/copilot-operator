@@ -307,17 +307,25 @@ export function shellNote(inventory: ShellInventory = detectShells(), fallback?:
 /**
  * How one shell is asked to run one command.
  *
- * The flags are the ones the runner has always used and they are not incidental: no profile so
- * that a machine's own startup script cannot change what a step does, non-interactive so that a
- * prompt is an error rather than a hang, and the execution policy bypassed because a downloaded
- * script has already been through the policy gate that matters.
+ * The flags are not incidental: no profile so that a machine's own startup script cannot change
+ * what a step does, and non-interactive so that a prompt is an error rather than a hang.
+ *
+ * The execution policy is `RemoteSigned`, and it used to be `Bypass`. Bypass was there for the file
+ * steps — a script the chat attached was screened, saved and then run, and the policy was not meant
+ * to stand in the way of one already screened. File steps are gone; nothing is downloaded any more.
+ * What Bypass still did was switch off the one check Windows has for exactly what this runner must
+ * never do: running a script that came from the internet. `RemoteSigned` keeps everything a step
+ * legitimately runs — `npm`, which PowerShell reaches through `npm.ps1`, and any script a step wrote
+ * with Set-Content, both local — and refuses a script carrying the mark of the web unless it is
+ * signed. Checked on both shells before the change. It is also one flag fewer that looks, to a
+ * security team reading a process list, like somebody trying not to be stopped.
  */
 export function invocationFor(resolved: ResolvedShell, command: string, scriptArgs?: string[]): { file: string; args: string[] } {
   const isScript = Array.isArray(scriptArgs);
   switch (resolved.shell) {
     case 'pwsh':
     case 'powershell': {
-      const base = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'];
+      const base = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned'];
       return isScript
         ? { file: resolved.path, args: [...base, '-File', command, ...(scriptArgs ?? [])] }
         : { file: resolved.path, args: [...base, '-Command', command] };

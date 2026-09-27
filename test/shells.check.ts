@@ -118,7 +118,8 @@ check('and does not rename what was asked for', effectiveShell('pwsh', withoutPw
 
 console.log('\n--- how each shell is invoked, unchanged ---');
 const psCall = invocationFor({ requested: 'pwsh', shell: 'pwsh', path: 'P:\\pwsh.exe' }, 'Get-Date');
-check('pwsh takes -Command', psCall.args.join(' '), '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command Get-Date');
+// RemoteSigned, not Bypass: nothing is downloaded, and a script marked as from the web must not run.
+check('pwsh takes -Command', psCall.args.join(' '), '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -Command Get-Date');
 check('at the executable that was resolved', psCall.file, 'P:\\pwsh.exe');
 const cmdCall = invocationFor({ requested: null, shell: 'cmd', path: 'C:\\cmd.exe' }, 'echo hi');
 check('cmd takes /d /s /c', cmdCall.args.join(' '), '/d /s /c echo hi');
