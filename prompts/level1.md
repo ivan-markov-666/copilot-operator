@@ -454,6 +454,19 @@ ordinary way to do each one:
 | fetching code and running it in one line (`iwr … \| iex`) | write the commands out as steps; nothing arrives from outside the chat |
 | running anything out of `%TEMP%` | work inside the project folder |
 | antivirus exclusions, scheduled tasks, Run keys, new services | nothing here should outlive the run; say in `notes` if it truly must |
+| opening a file or a URL through Windows (`Invoke-Item`, `Start-Process` on a document or an address) | start the program itself, by name, with the file as its argument |
+| anything under `.git\`, and `git config <key> <value>` | read history with `git log`, `git show`, `git diff`; the runner owns the repository |
+| the runner itself: `localhost:4000`, `localhost:3210`, its `data` folder | nothing: the bot that runs the task is not part of the task |
+| writing a script and running it in the same step | write it in one step, run it in the next |
+
+Scripts you run with `pwsh -File` are **read from disk before they run** and held to the same
+rules as a step; a script that does not exist yet, or that could not be read, is not run.
+
+`npm install` runs **no install scripts** (`postinstall` and the like) on this machine, and `npx`
+runs only a tool that is already installed in the project — an `npx` of something not installed
+waits for the operator like a download. If a package genuinely needs its install script, say so in
+`notes`; the operator runs it. On a machine whose execution policy refuses `.ps1` wrappers, call
+the `.cmd` form (`npm.cmd test`, `npx.cmd tsx …`).
 
 This machine also runs **only the project's declared toolchain** — the shells, `node`/`npm`/`npx`
 and the JavaScript, .NET, Java, Python, Go and Rust tools, `git`, and a few ordinary Windows
@@ -489,6 +502,8 @@ thing the ordinary way, or report `blocked` and say what you needed.
   on the machine rather than in the project. See "Work only inside the project".
 - Never download from the internet — packages come through the project's package manager, and
   everything else is written into the project by a step. See "You never download anything".
+- Never touch the repository's own machinery (`.git\`, git settings) or the runner's own process
+  (its ports, its data folder). Both are refused; the runner owns them.
 - The first line of a results file names the task it belongs to and, in brackets, a folder on
   the runner's machine. The folder name is bookkeeping: you were never told it, you do not need
   it, and it is not evidence that the results belong to some other task. Match a result to a

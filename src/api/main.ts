@@ -15,6 +15,7 @@ import { AppModule } from './app.module.js';
 import { OperatorService } from './operator.service.js';
 import { ensureApiToken, localApiGuard } from './security.js';
 import { botRootDir } from '../exec/workDir.js';
+import { secureDataDir } from './dataAcl.js';
 
 const PORT = Number(process.env.COP_API_PORT ?? 4000);
 const WEB_ORIGIN = process.env.COP_WEB_ORIGIN ?? 'http://localhost:3210';
@@ -48,6 +49,12 @@ async function main(): Promise<void> {
    * on the machine were both callers all along.
    */
   const dataDir = process.env.COP_DATA_DIR ?? join(botRootDir(), 'data');
+  // Before the token is read: a token any local account can read guards nothing. See `dataAcl.ts`.
+  const acl = secureDataDir(dataDir);
+  if (!acl.ok) {
+    console.error(`copilot-operator api will not start: ${acl.reason}`);
+    process.exit(1);
+  }
   const token = await ensureApiToken(dataDir);
   const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1')];
   app.use(localApiGuard({ token, port: PORT, allowedOrigins }));
@@ -59,7 +66,7 @@ async function main(): Promise<void> {
   await app.get(OperatorService).bootstrap();
 
   console.log(`copilot-operator api listening on http://127.0.0.1:${PORT}/api  (web origin ${WEB_ORIGIN})`);
-  console.log(`  requests need the token in ${join(dataDir, 'api-token')} — the UI is given it by \`npm start\``);
+  console.log(`  requests need the token in ${join(dataDir, 'api-token')} — the UI is given it once, by the link \`npm start\` prints`);
 }
 
 /*

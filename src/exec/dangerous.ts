@@ -124,6 +124,20 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
     why: 'a build or test step has no reason to outlive the run. Anything that survives a reboot is persistence and is for a person to set up deliberately.',
   },
   {
+    name: 'handler-launch',
+    /*
+     * Opening a file with whatever program Windows has registered for it — `Invoke-Item`, its alias
+     * `ii`, or `Start-Process` given a document rather than a program — and opening a URL, which
+     * starts the operator's browser. A build or a test starts the tool it needs by name; it never
+     * asks the shell to "open" something. Asking is how a `.hta`, a `.js` or a `.lnk` ends up run by
+     * `mshta`, the script host or whatever a shortcut points at, under this runner as the parent,
+     * and how a page ends up in the signed-in browser with the bot's process behind it.
+     */
+    pattern:
+      /\b(Invoke-Item|ii)\s+\S|\b(Start-Process|saps|start)\s+(?:-\w+\s+)*(?:-FilePath\s+)?["']?(?:[^\s"']+\.(hta|vbs|vbe|js|jse|wsf|wsh|lnk|url|scr|cpl|msc|reg|inf|msi|msp|chm|pif)\b|https?:\/\/|ms-\w+:|file:\/\/)/i,
+    why: 'a file opened through its registered handler, or a URL opened in the browser, runs whatever Windows has registered for it under this runner. Start the program itself, by name, with the file as its argument.',
+  },
+  {
     name: 'obfuscated-name',
     /*
      * Not a technique but the shape of hiding one, and worth more than chasing names.

@@ -32,7 +32,7 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, commandRefusal } from '../exec/policy.js';
+import { describeStep, checkCommandRefusal } from '../exec/policy.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { projectRoots, type Confinement } from '../exec/confinement.js';
@@ -802,10 +802,15 @@ export async function runTask(
       const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
         cwd: work.cwd,
         tracker,
+        passEnv: cfg.execution.passEnv,
         logDir: log.path('checks'),
         signal: deps.signal,
-        deny: (command, shell, cwd) =>
-          commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms, process.env, { roots: confinement.roots, cwd }),
+        /*
+         * A check runs at the gate with nobody asked, so a download in one — a plan's own check or a
+         * reviewer's — is refused rather than held: there is no approval screen here. Requests to
+         * this machine are not downloads and still run. See `network.ts`.
+         */
+        deny: (command, shell, cwd) => checkCommandRefusal(command, shell, cfg.execution, { roots: confinement.roots, cwd }),
         roots: confinement.roots,
         repoDir: willCommit ? repoDirOf(session) : undefined,
         // The same shell a step that named none is given, so the gate and the work it judges
@@ -965,7 +970,7 @@ export async function runTask(
           (deliverable ? `; the closing summary goes with it as the product (${deliverable.why})` : ''));
 
       // What is running before the review, so that what the review leaves is its own.
-      const beforeReview: ProcessSnapshot | null = processesBefore ? await snapshotProcesses(work.cwd).catch(() => null) : null;
+      const beforeReview: ProcessSnapshot | null = processesBefore ? await snapshotProcesses(work.cwd, processesBefore.since).catch(() => null) : null;
       let roundLeftovers: Array<{ name: string; ports: number[] }> = [];
       let outcome: ReviewOutcome;
       try {
@@ -1429,6 +1434,7 @@ export async function runTask(
             hardTimeoutMs: hard * 1000,
             idleTimeoutMs: idle * 1000,
             logPath: log.path('steps', `${iterations}-${step.id}.log`),
+            passEnv: cfg.execution.passEnv,
           },
           {
             signal,

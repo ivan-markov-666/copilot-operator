@@ -58,10 +58,31 @@ top of it — it can add, never subtract.
 | fetching code and running it in one line (`iwr … \| iex`) | write the commands as steps |
 | running anything out of `%TEMP%` | work inside the project folder |
 | antivirus exclusions, scheduled tasks, Run keys, new services | nothing here should outlive the run |
+| opening a file or URL through its registered handler (`Invoke-Item`, `Start-Process` on a document) | start the program by name |
+| writing under `.git\`, or `git config <key> <value>` | the runner owns the repository; read history with git |
+| reaching the runner itself (its ports, its data folder, its key) | nothing: the bot is not part of the task |
 
 Every step is a command and every command is read in full before it runs, so there is nowhere for
 any of this to arrive unread. A name hidden rather than written — a caret or empty quotes inside a
-word, a name assembled from pieces, one resolved by wildcard — is refused as the hiding it is.
+word, a name assembled from pieces, one resolved by wildcard — is refused as the hiding it is. A
+script a step runs with `pwsh -File` is read from disk at the gate and held to the same rules; a
+step that writes a script and runs it in the same line is refused, so that the file read is the
+file run. What `Start-Process` is asked to start is judged like any other program on the line.
+
+**Nothing is downloaded on the bot's own account.** A step that fetches from the internet —
+`Invoke-WebRequest`, `Invoke-RestMethod`, `curl`, `wget`, `Start-BitsTransfer`, the .NET web
+clients, `ftp`/`scp`, a package named by URL or git address, `npx` of a tool not installed in the
+project, `docker pull` — is neither refused nor run: it waits on the approval screen, in every
+mode, unattended included, and "run the rest without asking" does not answer it. A check that
+fetches is refused, since a check runs with nobody asked. Requests to this machine (`localhost`,
+`127.0.0.1`) and the project's own package managers are not held. `npm install` runs with
+`ignore-scripts`: a package's install script is code fetched and executed unread, and it does not
+run here.
+
+**A step sees a named environment, not the bot's.** Commands are given the variables Windows and
+the toolchains need (`src/exec/stepEnv.ts`) plus whatever `execution.passEnv` names — never the
+API token, never whatever else the operator's shell held. The runner's own git runs with hooks,
+fsmonitor and optional locks off, so nothing a task placed in the repository runs as the runner.
 
 ### How a run is regulated
 
@@ -171,13 +192,21 @@ checked three ways before it reaches a route:
   `Authorization: Bearer`, `x-cop-token`, or a `token` query parameter for the two cases that
   cannot carry a header — `EventSource` and a plain `<a download>`.
 
-`npm start` creates the token before either process starts and hands it to the UI. `GET
-/api/health` stays open so that "is it up yet" is still answerable. To rotate the token, delete the
-file and restart.
+`npm start` creates the token before either process starts and prints a link ending in
+`#token=…`; open it once in the browser, which keeps the token in its own storage — it is no longer
+compiled into the page, where anything able to fetch a script from `localhost:3210` could read it.
+The web server binds `127.0.0.1` only. `GET /api/health` stays open so that "is it up yet" is still
+answerable. To rotate the token, delete the file and restart.
+
+The `data` folder — token, settings, sessions, the level-1 contract — is narrowed at start to the
+operator's account and SYSTEM, and the API refuses to start while any other account can open it:
+under `C:\Projects` a folder otherwise inherits *Authenticated Users: Modify*, which is every
+account on the machine. A step never sees the token (see above) and is refused for naming the API's
+ports or the data folder.
 
 This does not contain a process already running as the operator — nothing at this layer can, since
 that process can read the file. It moves the API from "anything on this machine, and several things
-off it" to "something that can read a file in the install".
+off it" to "the operator's own account, through a browser that was handed the key".
 
 Every task writes `policy.json` into its run folder and a `POLICY` block into its log: the mode,
 the allowlist and its digest, that the chat cannot supply files, digests of the deny list and of the

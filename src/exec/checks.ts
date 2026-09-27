@@ -66,6 +66,8 @@ export type CheckRunOptions = {
   cwd: string;
   /** Records the shells the checks start, so what they leave running is known to be the bot's. */
   tracker?: ProcessTracker;
+  /** Variables a check's command is given beyond the fixed set. See `stepEnv.ts`. */
+  passEnv?: string[];
   /** Where the raw output of each check command goes. */
   logDir: string;
   signal?: AbortSignal;
@@ -181,6 +183,7 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
           cwd,
           hardTimeoutMs: opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
           logPath: join(opts.logDir, `check-${index + 1}.txt`),
+          passEnv: opts.passEnv,
         },
         { signal: opts.signal, tracker: opts.tracker },
       );

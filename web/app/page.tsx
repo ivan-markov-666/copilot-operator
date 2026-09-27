@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus } from '../lib/api';
+import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus } from '../lib/api';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { ModelHint } from './defaultHints';
@@ -20,6 +20,8 @@ export default function SessionsPage() {
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [apiUp, setApiUp] = useState<boolean | null>(null);
+  // No key in this browser yet: every request is refused, which is not the API being down.
+  const [noToken, setNoToken] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -35,8 +37,10 @@ export default function SessionsPage() {
       // start button would send.
       setSelected((prev) => prev.filter((id) => list.some((s) => s.id === id)));
       setApiUp(true);
+      setNoToken(false);
       setError('');
     } catch (e) {
+      setNoToken(!apiToken());
       setApiUp(false);
       setError((e as Error).message);
     }
@@ -175,7 +179,13 @@ export default function SessionsPage() {
 
   return (
     <>
-      {apiUp === false && (
+      {noToken && (
+        <div className="panel">
+          <strong>{t('home.noToken')}</strong>
+          <div className="muted small">{t('home.noTokenHint', { cmd: 'npm start' })}</div>
+        </div>
+      )}
+      {apiUp === false && !noToken && (
         <div className="panel">
           <strong>{t('home.apiDown')}</strong>
           <div className="muted small">

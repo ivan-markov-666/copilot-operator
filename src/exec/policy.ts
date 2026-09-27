@@ -19,6 +19,8 @@ import { findShellExecuteTrap } from './shellExecuteTrap.js';
 import { inlineCodeRefusal, programRefusal } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
 import { confinementRefusal, type Confinement } from './confinement.js';
+import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
+import { scriptFileRefusal } from './scriptFiles.js';
 
 export type PolicyDecision =
   | { action: 'run' }
@@ -32,6 +34,8 @@ export type PolicyConfig = {
   allowedPrograms: string[];
   /** What the operator says contains this runner. See `isolation.ts`. Defaults to none. */
   isolation?: IsolationClaim;
+  /** An administrator's `policy.lock.json` forbids unattended runs on this machine. */
+  lockedToConfirm?: boolean;
 };
 
 export function describeStep(step: Step): string {
@@ -53,6 +57,30 @@ export function matchDenyPattern(text: string, patterns: string[]): string | nul
   return null;
 }
 
+
+/**
+ * A step that reaches into the repository's own machinery: a path inside `.git`, or a git setting
+ * written to stay. Built in, like `dangerous.ts`, because the operator's deny list is editable and
+ * this is not a matter of taste.
+ *
+ * Found on 2026-09-27: the runner's own git — the branch before a task, `add` and `commit` after
+ * it, `status` for the commit-clean check — runs whatever hooks, filters and fsmonitor the
+ * repository's config names. A step could write `.git\hooks\post-checkout`, or `git config
+ * core.fsmonitor <program>`, and the *runner* would then execute it: no approval, no allowlist, no
+ * step log. The runner now starts git with those switched off (`src/vcs/git.ts`); this stops the
+ * step from setting them up in the first place. Reading history through git is unaffected — the
+ * contract already tells the chat to use git commands, never the folder.
+ */
+export function repositoryInternalsRefusal(command: string): string | null {
+  const intoGitDir = /(^|[\s'"=(\\/,;])\.git[\\/]/i.test(command);
+  const setting = /\bgit\s+(?:-C\s+\S+\s+)?config\s+(?:(?:--(?:local|global|system|worktree)|--file\s+\S+)\s+)?(?:(?:set|unset)\s+)?[A-Za-z][\w.-]*\s+[^\s|;-]/i.test(command);
+  if (!intoGitDir && !setting) return null;
+  return (
+    "refused: this reaches into the repository's own machinery (the .git folder, or a git setting written to stay). " +
+    'The runner owns the repository and runs git itself; hooks and settings placed there would run as the runner. ' +
+    'Read history with git commands (git log, git show, git diff) and leave .git alone.'
+  );
+}
 
 /**
  * Why a command line must not run, or null. The one gate for a step's command and for a
@@ -78,6 +106,11 @@ export function commandRefusal(
   // them. See `dangerous.ts` for what is on the list and why each one is.
   const technique = dangerousRefusal(command);
   if (technique) return technique;
+  // Before the operator's list: no configuration makes it right for a step to drive the bot.
+  const self = botSelfRefusal(command);
+  if (self) return self;
+  const internals = repositoryInternalsRefusal(command);
+  if (internals) return internals;
   const hit = matchDenyPattern(command, denyPatterns);
   if (hit) return `matches deny pattern /${hit}/`;
   // Where it reaches, before which program it is: a binary named by a path outside the project is
@@ -92,7 +125,52 @@ export function commandRefusal(
   // program that is simply not part of this project's toolchain. See `programs.ts`.
   const offlist = programRefusal(command, allowedPrograms);
   if (offlist) return offlist;
-  return findShellExecuteTrap(command, shell, env);
+  const trap = findShellExecuteTrap(command, shell, env);
+  if (trap) return trap;
+  /*
+   * The scripts this line runs, read from disk and put through the same gate as the line. Only
+   * where the command's folder is known: that is every path that runs a command for a task.
+   */
+  if (confinement) {
+    return scriptFileRefusal(command, confinement.cwd, (text) =>
+      dangerousRefusal(text) ??
+      botSelfRefusal(text) ??
+      repositoryInternalsRefusal(text) ??
+      (matchDenyPattern(text, denyPatterns) ? `matches deny pattern /${matchDenyPattern(text, denyPatterns)}/` : null) ??
+      confinementRefusal(text, confinement) ??
+      programRefusal(text, allowedPrograms),
+    );
+  }
+  return null;
+}
+
+/**
+ * The gate for a check's command — the task's own checks and the reviewer's — which runs with
+ * nobody asked. A download in one is therefore refused rather than held, and the scripts it runs
+ * are read like a step's. One function, so the two callers cannot drift apart again (they had: the
+ * reviewer's checks refused downloads, the plan's did not).
+ */
+export function checkCommandRefusal(
+  command: string,
+  shell: Shell,
+  cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms'>,
+  confinement: Confinement,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const refusal = commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms, env, confinement);
+  if (refusal) return refusal;
+  const network = networkFetchReason(command, confinement.cwd) ?? scriptNetworkReason(command, confinement.cwd);
+  return network ? networkFetchRefusal(network) : null;
+}
+
+/** A fetch inside a script the line runs — held or refused exactly as one on the line would be. */
+export function scriptNetworkReason(command: string, cwd: string): string | null {
+  let found: string | null = null;
+  scriptFileRefusal(command, cwd, (text) => {
+    found = networkFetchReason(text, cwd);
+    return null;
+  });
+  return found;
 }
 
 
@@ -115,8 +193,11 @@ export function commandRefusal(
  * run where every step came back refused — a gate that breaks the working bot is a gate that gets
  * switched off, and the fix was to make the condition reachable rather than to soften it.
  */
-export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowedPrograms' | 'isolation'>): string | null {
+export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowedPrograms' | 'isolation' | 'lockedToConfirm'>): string | null {
   if (cfg.mode !== 'unattended') return null;
+  if (cfg.lockedToConfirm) {
+    return 'refused: this machine\'s policy.lock.json forbids unattended runs. Run this task step by step.';
+  }
   const unisolated = unattendedIsolationRefusal(cfg.mode, cfg.isolation ?? 'none');
   if (unisolated) return unisolated;
   if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) {

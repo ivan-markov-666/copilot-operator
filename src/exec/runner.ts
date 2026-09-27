@@ -26,6 +26,7 @@ import { dirname } from 'node:path';
 
 import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type Shell, type ShellProblem } from './shells.js';
 import { stopTree, type ProcessTracker } from './processes.js';
+import { stepEnvironment } from './stepEnv.js';
 
 export type { Shell } from './shells.js';
 
@@ -46,6 +47,8 @@ export type RunRequest = {
   /** Where the raw streams are written. */
   logPath: string;
   env?: NodeJS.ProcessEnv;
+  /** Variables to pass beyond the fixed set, by name. See `stepEnv.ts`. */
+  passEnv?: string[];
 };
 
 export type RunResult = {
@@ -120,8 +123,8 @@ function unrunnable(req: RunRequest, problem: ShellProblem): RunResult {
 
 /**
  * The longest a step that is being stopped may take before its result is given anyway. The stop
- * itself is Ctrl+C, a grace period, Ctrl+Break, another, then `/F` (see `processes.ts`), which with
- * reading the process table twice comes to about fifteen seconds at worst; this is the ceiling on
+ * itself is `taskkill /T`, a grace period, then `/F` (see `processes.ts`), which with reading the
+ * process table comes to about ten seconds at worst; this is the ceiling on
  * waiting for it, so that a stop that itself hangs cannot hang the task.
  */
 const STOP_CEILING_MS = 30_000;
@@ -175,7 +178,9 @@ export async function runStep(
     // PowerShell 7 and by most modern tools, and was verified to produce clean output here.
     const child = spawn(file, args, {
       cwd: req.cwd,
-      env: { NO_COLOR: '1', TERM: 'dumb', ...(req.env ?? process.env) },
+      // Named, not inherited: a step must not see the bot's own token or whatever else the
+      // operator's shell holds. See `stepEnv.ts`.
+      env: stepEnvironment(req.env ?? process.env, req.passEnv),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -265,7 +270,7 @@ export async function runStep(
     child.on('close', (code) => (stopping ? finish(stopping.outcome, stopping.exitCode) : finish('completed', code ?? -1)));
 
     /*
-     * Stops the step's whole tree — Ctrl+C, then Ctrl+Break, then `/F` — and gives the result only
+     * Stops the step's whole tree — `taskkill /T`, then `/F` — and gives the result only
      * once it is down, so the next step does not start while this one still holds a port or a
      * file. It used to be `taskkill /T /F` at once, which is TerminateProcess: no handler runs, and a
      * dev server or a test runner is cut off mid-write.
@@ -273,12 +278,12 @@ export async function runStep(
     const stop = (outcome: RunResult['outcome'], exitCode: number, why: string): void => {
       if (stopping || settled) return;
       stopping = { outcome, exitCode };
-      stderr += `\n[runner] ${why}, stopping the process tree (Ctrl+C, then Ctrl+Break, then forced)\n`;
+      stderr += `\n[runner] ${why}, stopping the process tree (asked to close, then forced)\n`;
       clearTimeout(hardTimer);
       clearInterval(idleTimer);
       const ceiling = setTimeout(() => finish(outcome, exitCode), STOP_CEILING_MS);
       const pid = child.pid;
-      void (pid ? stopTree(pid) : Promise.resolve())
+      void (pid ? stopTree(pid, startedAt) : Promise.resolve())
         .catch(() => undefined)
         .finally(() => {
           clearTimeout(ceiling);

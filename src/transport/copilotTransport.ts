@@ -243,6 +243,13 @@ export class CopilotTransport {
        * business having. Refused here, a download is cancelled by the browser before it is written.
        */
       acceptDownloads: false,
+      /*
+       * Edge keeps its own sandbox. Playwright starts Chromium with `--no-sandbox` unless told
+       * otherwise, and a browser without its sandbox, started by node.exe with a debugging channel
+       * open, is the shape endpoint tooling looks for when a program is after the cookies of a
+       * signed-in session. The automation does not need the sandbox off.
+       */
+      chromiumSandbox: true,
       viewport: null,
       args: ['--start-maximized'],
     });

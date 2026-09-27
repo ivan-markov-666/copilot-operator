@@ -23,7 +23,9 @@ const NOT_A_VALUE = new Set(['string', 'number', 'boolean', 'null', 'undefined',
 const SHAPES: Shape[] = [
   {
     name: 'private key block',
-    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    // Up to its END line, or to the end of the text when output was cut before it: a key whose
+    // last line fell past the capture limit is still a key.
+    pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$(?![\s\S]))/g,
     replace: '-----BEGIN PRIVATE KEY----- [REDACTED] -----END PRIVATE KEY-----',
   },
   { name: 'JWT', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: '[REDACTED JWT]' },
@@ -32,15 +34,32 @@ const SHAPES: Shape[] = [
   { name: 'GitHub token', pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, replace: '[REDACTED GITHUB TOKEN]' },
   { name: 'Slack token', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, replace: '[REDACTED SLACK TOKEN]' },
   { name: 'Azure key', pattern: /\b(AccountKey|SharedAccessSignature)=[^;\s"']+/gi, replace: '$1=[REDACTED]' },
-  { name: 'credentials in a URL', pattern: /(https?:\/\/)[^\s/:@]+:[^\s/@]+@/gi, replace: '$1[REDACTED]@' },
+  { name: 'Azure SAS signature', pattern: /([?&]sig=)[A-Za-z0-9%+/=]{16,}/g, replace: '$1[REDACTED]' },
+  { name: 'API key (sk-)', pattern: /\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}/g, replace: '[REDACTED KEY]' },
+  { name: 'Google API key', pattern: /\bAIza[0-9A-Za-z_-]{30,}/g, replace: '[REDACTED GOOGLE KEY]' },
+  { name: 'npm token', pattern: /\bnpm_[A-Za-z0-9]{30,}/g, replace: '[REDACTED NPM TOKEN]' },
+  // Any scheme, not only http: `postgres://user:pass@`, `mongodb+srv://`, `redis://`, `amqp://`.
+  { name: 'credentials in a URL', pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, replace: '$1[REDACTED]@' },
+  {
+    name: 'secret in an environment listing',
+    // `Get-ChildItem env:` and `set` print NAME and value in columns, with no `=` or `:` between —
+    // the one shape the assignment rule below cannot see.
+    pattern: /^([ \t]*[A-Za-z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CONN\w*STRING)[A-Za-z0-9_]*)([ \t]{2,})(\S.*)$/gim,
+    replace: '$1$2[REDACTED]',
+  },
   {
     name: 'secret assignment',
     // `password=...`, `api_key: ...`, `"client_secret": "..."` — the name is kept, the value goes.
     // The separator is kept as written — `": "` in JSON, `=` in a connection string — so the
     // line still reads as what it was.
-    pattern: /\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|private[_-]?key|token)\b(["']?\s*[=:]\s*)(["']?)([^\s"';,]{8,})\3/gi,
+    //
+    // The name may be part of a longer one — `DB_PASSWORD`, `GITHUB_TOKEN`, `_authToken`,
+    // `AWS_SECRET_ACCESS_KEY` — which is how environments and config files spell them; matching the
+    // bare word only let every one of those through. Six characters is short enough for a real
+    // password and long enough to leave `token: null` and `pwd: ok` alone.
+    pattern: /\b([A-Za-z0-9_]*?(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|private[_-]?key|token)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(["']?)([^\s"';,]{6,})\3/gi,
     replace: (_m: string, name: string, sep: string, quote: string, value: string) =>
-      NOT_A_VALUE.has(value.toLowerCase()) ? _m : `${name}${sep}${quote}[REDACTED]${quote}`,
+      NOT_A_VALUE.has(value.toLowerCase()) || value.startsWith('[REDACTED') ? _m : `${name}${sep}${quote}[REDACTED]${quote}`,
   },
 ];
 

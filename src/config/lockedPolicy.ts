@@ -49,7 +49,16 @@ export type LockablePolicy = {
 };
 
 /** What the lock changed, so the run log and the manifest can say it rather than imply it. */
-export type LockOutcome = { applied: boolean; changes: string[] };
+export type LockOutcome = {
+  applied: boolean;
+  changes: string[];
+  /**
+   * The lock's ceiling on the mode, carried to every place a run is started or switched. Rewriting
+   * `execution.mode` alone was not enough: the API takes the mode from the request, so a lock that
+   * said `confirm` never stopped the unattended button (found 2026-09-27).
+   */
+  maxMode?: 'confirm' | 'unattended';
+};
 
 function lowerSet(values: string[]): Set<string> {
   return new Set(values.map((v) => v.trim().toLowerCase()).filter(Boolean));
@@ -96,7 +105,7 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
     }
   }
 
-  return { policy: next, outcome: { applied: true, changes } };
+  return { policy: next, outcome: { applied: true, changes, maxMode: lock.maxMode } };
 }
 
 /**

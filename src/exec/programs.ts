@@ -120,8 +120,12 @@ export function commandHeads(command: string): string[] {
     }
     if (expectStart && !/\s/.test(ch) && !boundaries.has(ch) && ch !== ')' && ch !== '}') {
       const { text, end } = readToken(i);
-      if (text) heads.push(text);
       i = end;
+      // A dot-source — `. .\script.ps1` — runs the file that follows in the current scope. The
+      // dot is not what runs; the next token is, and it is the one the allowlist has to see.
+      // (`& .\script.ps1` already works this way because `&` is a boundary.)
+      if (text === '.') continue;
+      if (text) heads.push(text);
       expectStart = false;
       continue;
     }
@@ -203,7 +207,55 @@ const INLINE_CODE: Array<{ what: string; pattern: RegExp }> = [
   { what: 'a nested cmd', pattern: /\bcmd(\.exe)?\s+(\/\S+\s+)*?\/c\b/i },
 ];
 
+/** Shells whose start through `Start-Process` is a nested shell however the arguments are spelled. */
+const SHELLS = new Set(['pwsh', 'powershell', 'cmd', 'wsl', 'bash', 'sh']);
+
+/**
+ * The programs a line asks `Start-Process` (or `saps`, or `start` at the head of a statement) to
+ * start. The cmdlet takes its program as `-FilePath`, or as the first argument that is not a
+ * switch; the arguments the program gets sit in `-ArgumentList`, where neither `commandHeads` nor
+ * the nested-shell patterns above can see them — which is why a shell started this way is judged
+ * by its name alone. Best effort, like `commandHeads`: switches that take a value are skipped with
+ * it, the handful that take none are skipped alone.
+ */
+export function startProcessTargets(command: string): string[] {
+  const targets: string[] = [];
+  const NO_VALUE = new Set(['wait', 'nonewwindow', 'passthru', 'usenewenvironment', 'loaduserprofile', 'confirm', 'whatif', 'verbose', 'debug']);
+  const re = /(?:\b(Start-Process|saps)\b|(?:^|[|;&(\n{])\s*(start))\s+([^|;\n)]*)/gi;
+  for (const m of command.matchAll(re)) {
+    const rest = m[3] ?? '';
+    const tokens = rest.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    let target: string | null = null;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const t = tokens[i]!;
+      if (t.startsWith('-')) {
+        const name = t.slice(1).replace(/:.*$/, '').toLowerCase();
+        if (name === 'filepath' || name === 'path') {
+          target = t.includes(':') ? t.slice(t.indexOf(':') + 1) : (tokens[i + 1] ?? null);
+          break;
+        }
+        if (!NO_VALUE.has(name) && !t.includes(':')) i += 1;
+        continue;
+      }
+      target = t;
+      break;
+    }
+    if (target) targets.push(target.replace(/^["']|["']$/g, ''));
+  }
+  return targets;
+}
+
 export function inlineCodeRefusal(command: string): string | null {
+  for (const target of startProcessTargets(command)) {
+    const program = externalProgram(target);
+    if (program && SHELLS.has(program)) {
+      return (
+        `refused in an unattended run: Start-Process starting \`${program}\` is a shell inside a shell, whose real ` +
+        `command sits in -ArgumentList where no check can see it. Start the program itself (Start-Process node ...), ` +
+        `or run this task in confirm mode where a person reads the line.`
+      );
+    }
+  }
   for (const { what, pattern } of INLINE_CODE) {
     if (pattern.test(command)) {
       return (
@@ -230,7 +282,8 @@ export function programRefusal(command: string, allowedPrograms: string[]): stri
   const allowed = new Set(
     allowedPrograms.map((p) => p.trim().toLowerCase().replace(/\.(exe|com|bat|cmd|ps1|msi)$/i, '')).filter(Boolean),
   );
-  for (const head of commandHeads(command)) {
+  // What `Start-Process` is asked to start is a program this line starts, as much as a head is.
+  for (const head of [...commandHeads(command), ...startProcessTargets(command)]) {
     const program = externalProgram(head);
     if (program && !allowed.has(program)) {
       return (

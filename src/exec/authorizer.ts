@@ -10,6 +10,7 @@ import type { Step } from '../protocol/replySchema.js';
 import { staticCheck, describeStep, type PolicyConfig, type PolicyDecision } from './policy.js';
 import type { Confinement } from './confinement.js';
 import { networkFetchReason, networkFetchRefusal } from './network.js';
+import { scriptNetworkReason } from './policy.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -48,7 +49,8 @@ export function makeAuthorizer(cfg: PolicyConfig, ask: Ask): StepAuthorizer {
     async authorize(step, ctx) {
       const blocked = staticCheck(step, cfg, undefined, ctx.confinement);
       if (blocked) return blocked;
-      const network = networkFetchReason(step.cmd);
+      const cwd = ctx.confinement?.cwd;
+      const network = networkFetchReason(step.cmd, cwd) ?? (cwd ? scriptNetworkReason(step.cmd, cwd) : null);
       if (network) return await ask(step, ctx, { network });
       if (cfg.mode === 'unattended') return { action: 'run' };
       return await ask(step, ctx);

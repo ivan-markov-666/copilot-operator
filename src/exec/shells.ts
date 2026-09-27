@@ -310,22 +310,21 @@ export function shellNote(inventory: ShellInventory = detectShells(), fallback?:
  * The flags are not incidental: no profile so that a machine's own startup script cannot change
  * what a step does, and non-interactive so that a prompt is an error rather than a hang.
  *
- * The execution policy is `RemoteSigned`, and it used to be `Bypass`. Bypass was there for the file
- * steps — a script the chat attached was screened, saved and then run, and the policy was not meant
- * to stand in the way of one already screened. File steps are gone; nothing is downloaded any more.
- * What Bypass still did was switch off the one check Windows has for exactly what this runner must
- * never do: running a script that came from the internet. `RemoteSigned` keeps everything a step
- * legitimately runs — `npm`, which PowerShell reaches through `npm.ps1`, and any script a step wrote
- * with Set-Content, both local — and refuses a script carrying the mark of the web unless it is
- * signed. Checked on both shells before the change. It is also one flag fewer that looks, to a
- * security team reading a process list, like somebody trying not to be stopped.
+ * No `-ExecutionPolicy` at all, since 2026-09-27. It was `Bypass` for the file steps that no longer
+ * exist, then `RemoteSigned` for a day. The operator's decision: the machine's own policy applies,
+ * whatever it is. On a company laptop that policy is set by the administrators, and a process that
+ * overrides it on every command line — even to a value they would agree with — is exactly the
+ * process their tooling is told to look at; and a policy the runner cannot change is one more thing
+ * a security review can take at face value. The cost is on a machine set to `Restricted` or
+ * `AllSigned`: the `.ps1` shims that npm and its kin install are then refused, and the chat is told
+ * (in the contract) to call the `.cmd` form of the tool instead.
  */
 export function invocationFor(resolved: ResolvedShell, command: string, scriptArgs?: string[]): { file: string; args: string[] } {
   const isScript = Array.isArray(scriptArgs);
   switch (resolved.shell) {
     case 'pwsh':
     case 'powershell': {
-      const base = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned'];
+      const base = ['-NoProfile', '-NonInteractive'];
       return isScript
         ? { file: resolved.path, args: [...base, '-File', command, ...(scriptArgs ?? [])] }
         : { file: resolved.path, args: [...base, '-Command', command] };

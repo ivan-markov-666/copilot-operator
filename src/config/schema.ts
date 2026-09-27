@@ -65,6 +65,11 @@ const GIT_SOMETIMES_WRITES =
   'branch\\s+(?:-[dDmMfu]\\b|--(?:delete|move|copy|force|set-upstream-to|unset-upstream))|' +
   'tag\\s+(?:-d\\b|-f\\b|--(?:delete|force))|' +
   'config\\s+(?:--unset|--unset-all|--replace-all|--add|--rename-section|--remove-section|--edit)|' +
+  // Setting a value in the plain form — `git config <key> <value>`, with or without a scope — and
+  // git 2.46's subcommands. A key set this way (core.hooksPath, core.fsmonitor, a filter) is code
+  // the runner's own git would then run; see src/vcs/git.ts.
+  'config\\s+(?:--(?:local|global|system|worktree)\\s+|--file\\s+\\S+\\s+)?[A-Za-z][\\w.-]*\\s+[^\\s|;]|' +
+  'config\\s+(?:set|unset|rename-section|remove-section|edit)\\b|' +
   'reflog\\s+(?:delete|expire)|' +
   'notes\\s+(?:add|append|edit|remove|copy|prune)';
 
@@ -176,6 +181,12 @@ export const RunConfigSchema = z.object({
        * shells, git, and the handful of Windows utilities a build or test legitimately reaches for.
        * A project that needs more adds it; a machine that wants none clears the list.
        */
+      /**
+       * Environment variables a command step is given beyond the fixed set in `stepEnv.ts`, by name.
+       * Steps no longer inherit the bot's environment; a project that needs, say, DATABASE_URL names
+       * it here. The bot's own keys (COP_*) are never passed whatever is listed.
+       */
+      passEnv: z.array(z.string()).default([]),
       allowedPrograms: z
         .array(z.string())
         .default([

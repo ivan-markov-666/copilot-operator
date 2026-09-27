@@ -48,8 +48,11 @@
  * the *ordinary* way of downloading, the one a chat reaches for first, in front of a person.
  */
 
-/** One way of fetching: what it is called in the reason, and how it is recognised. */
-type NetworkFetcher = { name: string; pattern: RegExp };
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+
+/** One way of fetching: what it is called in the reason, how it is recognised, what to do instead. */
+type NetworkFetcher = { name: string; pattern: RegExp; instead?: string };
 
 const FETCHERS: NetworkFetcher[] = [
   { name: 'Invoke-WebRequest', pattern: /\b(Invoke-WebRequest|iwr)\b/i },
@@ -62,7 +65,61 @@ const FETCHERS: NetworkFetcher[] = [
   { name: '.NET web client', pattern: /\b(WebClient|HttpClient|HttpWebRequest|WebRequest)\b/i },
   // Requires something after the name, so that the word in prose or a path segment is not a hit.
   { name: 'file transfer', pattern: /\b(s?ftp|tftp|scp|aria2c)(\.exe)?\s+\S/i },
+  /*
+   * Package managers fetching something that is not a package from the project's registry: a
+   * package named by URL or by a git address, a runner (`npx`, `pnpm dlx`, `bunx`) given a package
+   * that is not installed in the project, a Go module run by address, a container image. Each
+   * downloads code and runs it in the same breath, which is the two-step form in one step.
+   * `npx <installed tool>` is the ordinary way to run a project's own tools and is not held: whether
+   * the tool is installed is checked on disk (`installedInProject`).
+   */
+  {
+    name: 'a package from a URL or a repository',
+    pattern: /\b(npm|pnpm|yarn|bun|pip3?|uv|poetry)(\.cmd|\.exe)?\s+(install|add|i)\b[^|;\n]*?(https?:\/\/|git\+|github:|gitlab:|bitbucket:|git:\/\/|ssh:\/\/|git@)/i,
+    instead: "name the package as the registry knows it, or say in `notes` what is needed and end `blocked`",
+  },
+  {
+    name: 'a package runner fetching a package',
+    // Any argument at all, flags included: whether the tool is installed decides, not the spelling.
+    pattern: /\b(npx|pnpx|bunx)(\.cmd|\.exe)?\s+\S|\b(pnpm|yarn)(\.cmd)?\s+dlx\s+|\bnpm(\.cmd)?\s+exec\s+/i,
+    instead: 'install the tool into the project first (`npm install -D <tool>`); a tool that is installed is run without asking',
+  },
+  { name: 'go run of a module by address', pattern: /\bgo(\.exe)?\s+run\s+\S+@/i, instead: 'add the module to go.mod and run it from there' },
+  {
+    name: 'a container image',
+    pattern: /\bdocker(\.exe)?\s+(pull|run|create|build)\b|\bdocker(\.exe)?\s+compose\s+(up|run|build|pull)\b/i,
+    instead: 'say in `notes` which image is needed; the operator pulls it',
+  },
 ];
+
+/**
+ * Whether the tool `npx` (or its kin) is asked to run is already installed in the project, found by
+ * walking up from `cwd` the way npx itself does. Absent, npx downloads it — and that is the case
+ * that waits for the operator.
+ */
+function installedInProject(command: string, cwd: string | undefined): boolean {
+  if (!cwd) return false;
+  const m = /\b(?:npx|pnpx|bunx)(?:\.cmd|\.exe)?\s+(?:(?:--yes|-y|--no|--quiet|-q)\s+)*(?:(?:-p|--package)\s+\S+\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(command)
+    ?? /\b(?:pnpm|yarn)(?:\.cmd)?\s+dlx\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(command)
+    ?? /\bnpm(?:\.cmd)?\s+exec\s+(?:--\s+)?(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(command);
+  if (!m) return false;
+  if (/\s(-p|--package)\s/i.test(command)) return false;
+  const spec = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+  if (!spec || spec.startsWith('-')) return false;
+  // `tsx@4.19` names a version; `@scope/name` starts with `@`. Strip a trailing version only.
+  const name = spec.startsWith('@') ? spec.replace(/(.)@[^@]*$/, '$1') : spec.replace(/@.*$/, '');
+  if (/[\\/:]/.test(name.replace(/^@[^/]+\//, ''))) return false;
+  const bin = name.startsWith('@') ? name.split('/')[1] ?? '' : name;
+  let dir = resolve(cwd);
+  for (let i = 0; i < 12; i += 1) {
+    const modules = join(dir, 'node_modules');
+    if (existsSync(join(modules, name, 'package.json')) || existsSync(join(modules, '.bin', `${bin}.cmd`)) || existsSync(join(modules, '.bin', bin))) return true;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return false;
+}
 
 /** Hosts that are this machine. Anything else is somewhere else. */
 function isLoopback(host: string): boolean {
@@ -116,16 +173,43 @@ export function onlyLoopbackTargets(command: string): boolean {
  * The sentence is the one the approval screen and the log print, and — when there is nobody to
  * ask — the one the chat receives, so it says what was recognised and what to do instead.
  */
-export function networkFetchReason(command: string): string | null {
+export function networkFetchReason(command: string, cwd?: string): string | null {
   const hit = FETCHERS.find((f) => f.pattern.test(command));
   if (!hit) return null;
+  if (hit.name === 'a package runner fetching a package' && installedInProject(command, cwd)) return null;
   if (onlyLoopbackTargets(command)) return null;
   return (
     `fetches from the network (${hit.name}). The bot does not download files on its own, because a later ` +
     'step could run what arrived; this step waits for the operator to allow it. Requests to this machine ' +
     '(localhost, 127.0.0.1) are not held. Packages come in through the project\'s own tools (npm, dotnet, ' +
-    'pip into a .venv), which are not held either.'
+    'pip into a .venv), which are not held either.' +
+    (hit.instead ? ` Instead: ${hit.instead}.` : '')
   );
+}
+
+/**
+ * The bot's own API and UI, and the file that holds their key. The loopback exemption above exists
+ * so a task can check a server *it* started; it must not become the way a step reaches the process
+ * that approves its steps. Found on 2026-09-27: with the token in its environment, a step could call
+ * `127.0.0.1:4000` and answer its own held download. The token is no longer passed (`stepEnv.ts`);
+ * this refuses the attempt as well, so a step that goes looking gets a reason instead of a 401.
+ */
+export function botSelfRefusal(command: string, ports: number[] = botPorts()): string | null {
+  const port = `(?:${ports.map((p) => String(Math.trunc(p))).join('|')})`;
+  const host = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0|::1)`;
+  if (new RegExp(String.raw`${host}\s*:\s*${port}(?!\d)`, 'i').test(command) || /\bapi-token\b|\bdev-pids\.json\b/i.test(command)) {
+    return (
+      'refused: this reaches the bot itself — its API, its web page or its key. A task works on its own project; ' +
+      'the bot that runs it is not part of the work. Use a different port for a server the task starts.'
+    );
+  }
+  return null;
+}
+
+/** The ports the bot's API and web page listen on. */
+export function botPorts(env: NodeJS.ProcessEnv = process.env): number[] {
+  const api = Number(env.COP_API_PORT ?? 4000);
+  return [...new Set([Number.isFinite(api) ? api : 4000, 4000, 3210])];
 }
 
 /** What the chat is told when a fetch was held and nobody was there to allow it. */

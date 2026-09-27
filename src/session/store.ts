@@ -183,7 +183,7 @@ export class SessionStore {
   }
 
   async deletePreset(name: string): Promise<void> {
-    await rm(join(this.presetsDir, `${name}.md`), { force: true });
+    await rm(join(this.presetsDir, `${safePresetName(name)}.md`), { force: true });
   }
 
   // --- sessions -------------------------------------------------------------------------
@@ -217,7 +217,7 @@ export class SessionStore {
   }
 
   async getSession(id: string): Promise<Session | null> {
-    return await this.readSession(join(this.sessionsDir, `${id}.json`));
+    return await this.readSession(join(this.sessionsDir, `${safeName(id)}.json`));
   }
 
   async createSession(name: string, mirror: Partial<MirrorSettings> = {}): Promise<Session> {
@@ -239,11 +239,11 @@ export class SessionStore {
   }
 
   async saveSession(session: Session): Promise<void> {
-    await this.atomicWrite(join(this.sessionsDir, `${session.id}.json`), JSON.stringify(session, null, 2));
+    await this.atomicWrite(join(this.sessionsDir, `${safeName(session.id)}.json`), JSON.stringify(session, null, 2));
   }
 
   async deleteSession(id: string): Promise<void> {
-    await rm(join(this.sessionsDir, `${id}.json`), { force: true });
+    await rm(join(this.sessionsDir, `${safeName(id)}.json`), { force: true });
   }
 
   /** Applies a change under a fresh read, so two writers cannot clobber each other. */
@@ -490,4 +490,27 @@ export class SessionStore {
       }
     }
   }
+}
+
+/**
+ * A session id as it may appear in a file name, or an error.
+ *
+ * Ids, and preset names (see `safePresetName`), arrive from URL parameters. Found on 2026-09-27: `DELETE /sessions/:id` and `DELETE
+ * /presets/:name` joined them straight into a path, and Express decodes `%5C` and `%2F`, so
+ * `..\..\<anything>` reached a `.json` or `.md` file anywhere the process could write. The ids this
+ * store makes are letters, digits, `-`, `_` and `.` (not leading); anything else is not one of them.
+ */
+export function safeName(value: string): string {
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}$/.test(value) || value.includes('..')) {
+    throw new Error(`Not a valid name: ${JSON.stringify(value).slice(0, 80)}`);
+  }
+  return value;
+}
+
+/** A preset name as `savePreset` allows it — letters in any script, digits, space, `.`, `_`, `-` — never a path. */
+export function safePresetName(value: string): string {
+  if (!/^[\p{L}\p{N}_ -][\p{L}\p{N}._ -]{0,199}$/u.test(value) || value.includes('..')) {
+    throw new Error(`Not a valid preset name: ${JSON.stringify(value).slice(0, 80)}`);
+  }
+  return value;
 }

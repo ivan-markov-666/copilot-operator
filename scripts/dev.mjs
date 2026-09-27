@@ -8,11 +8,13 @@
  * Both children are stopped when this process ends, including on Ctrl+C, and when either of
  * them dies the other is stopped too, so there is never a half-running pair to clean up by
  * hand. A plain kill only reaches a wrapper, not the server it spawned, which is exactly how a
- * stale Next.js kept port 3210 busy once already, so the whole tree is stopped — and asked first:
- * Ctrl+C, then Ctrl+Break, and `taskkill /F` only for what is still there. The API holds the Edge
- * window through Playwright, which closes it properly on Ctrl+C and cannot on /F. The children run
- * in consoles of their own (`windowsHide`), so the Ctrl+C pressed in this terminal does not reach
- * them by itself; `stopTree` in `src/exec/processes.ts` does it, loaded from the build.
+ * stale Next.js kept port 3210 busy once already, so the whole tree is stopped: `taskkill /T`
+ * first, which asks, and `taskkill /T /F` only for what is still there after a grace period.
+ *
+ * The API token is never put in the web build or in the API's environment: anything able to read
+ * either — a command step the bot is running, among others — could otherwise drive the API. The
+ * web page is handed it once, through a link printed below whose `#token=` part stays in the
+ * browser. See `web/lib/api.ts`.
  *
  * `tsc` and `next` are invoked as node scripts rather than through npm, so no shell is
  * involved and nothing has to be escaped.
@@ -28,33 +30,37 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWin = process.platform === 'win32';
 const open = process.argv.includes('--open');
 
-/**
- * The runner's own way of stopping a process tree, from the last build. Absent before the first
- * build, or if that build is broken; then everything falls back to `taskkill /T /F`, which is what
- * this script always did.
- */
-async function loadStopTree() {
-  if (!isWin) return null;
+const alive = (pid) => {
   try {
-    const mod = await import(new URL('../dist/src/exec/processes.js', import.meta.url).href);
-    return typeof mod.stopTree === 'function' ? mod.stopTree : null;
-  } catch {
-    return null;
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
   }
+};
+
+/** Stops one process tree: `taskkill /T`, up to five seconds to close, then `taskkill /T /F`. */
+async function stopTreeOf(pid) {
+  spawnSync('taskkill', ['/pid', String(pid), '/T'], { stdio: 'ignore', windowsHide: true });
+  const until = Date.now() + 5_000;
+  while (Date.now() < until && alive(pid)) await new Promise((r) => setTimeout(r, 200));
+  if (alive(pid)) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
 }
 
-/** Stops one process tree: gently when the build is there, by force when it is not. */
-async function stopTreeOf(pid) {
-  const stopTree = await loadStopTree();
-  if (stopTree) {
-    try {
-      await stopTree(Number(pid));
-      return;
-    } catch {
-      /* fall through to force */
-    }
+/*
+ * The processes this script started, written down so a later start knows which port holders are
+ * a previous run of this starter. It used to decide by whether a holder's command line named this
+ * folder — ownership by place, which is also true of anything the operator started by hand here.
+ */
+const dataDirEarly = process.env.COP_DATA_DIR ?? resolve(root, 'data');
+const pidFile = join(dataDirEarly, 'dev-pids.json');
+function readPidFile() {
+  try {
+    const list = JSON.parse(readFileSync(pidFile, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
   }
-  spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
 }
 
 const API_URL = 'http://127.0.0.1:4000/api';
@@ -112,19 +118,29 @@ checkInstall();
 //    ours it is stopped here; anything else is reported and left alone.
 if (isWin) {
   const script = `
-    $ports = 4000, 3210
-    $conns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }
+    $conns = Get-NetTCPConnection -State Listen -LocalPort 4000, 3210 -ErrorAction SilentlyContinue
     foreach ($c in $conns) {
       $p = Get-CimInstance Win32_Process -Filter "ProcessId = $($c.OwningProcess)"
+      $parent = if ($p) { $p.ParentProcessId } else { 0 }
+      $made = if ($p -and $p.CreationDate) { [DateTimeOffset]::new($p.CreationDate).ToUnixTimeMilliseconds() } else { 0 }
       $cmd = if ($p) { $p.CommandLine } else { '' }
-      Write-Output ("{0}|{1}|{2}" -f $c.LocalPort, $c.OwningProcess, $cmd)
+      Write-Output ("{0}|{1}|{2}|{3}|{4}" -f $c.LocalPort, $c.OwningProcess, $parent, $made, $cmd)
     }`;
-  const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+  // Without PSModulePath: started from a PowerShell 7 terminal, Windows PowerShell would otherwise
+  // look for its own modules in PowerShell 7's folders and fail to load them. See src/exec/winps.ts.
+  const psEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== 'psmodulepath'));
+  const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, env: psEnv });
   const lines = (res.stdout ?? '').split(/\r?\n/).filter((l) => l.includes('|'));
+  const recorded = readPidFile();
   let blocked = false;
   for (const line of lines) {
-    const [port, pid, cmd = ''] = line.split('|');
-    const ours = cmd.replace(/\\/g, '/').toLowerCase().includes(root.replace(/\\/g, '/').toLowerCase());
+    const [port, pid, parent, made, ...rest] = line.split('|');
+    const cmd = rest.join('|');
+    // Ours when the holder, or the process that started it (Next's server is a child of `next dev`),
+    // is one this script recorded, and the holder is no older than that record: an id alone is reused.
+    const ours = recorded.some(
+      (r) => (String(r.pid) === pid || String(r.pid) === parent) && Number(made) >= Number(r.startedAt) - 5_000,
+    );
     if (ours) {
       log('start', `port ${port} is held by a previous run of this project (pid ${pid}); stopping it`);
       await stopTreeOf(pid);
@@ -156,8 +172,21 @@ if (build.status !== 0) {
 // The API would create it itself, but then the web build would race it for the file and a fresh
 // install could compile the UI with an empty token and fail every request with a 401 that looks
 // like a bug in the API. Created first, read by both. See `src/api/security.ts`.
-const dataDir = process.env.COP_DATA_DIR ?? resolve(root, 'data');
+const dataDir = dataDirEarly;
 mkdirSync(dataDir, { recursive: true });
+/*
+ * The folder holds the token, the settings and every session, and under C:\Projects it inherits
+ * "Authenticated Users: Modify" — every account on the machine. Narrowed to this account and
+ * SYSTEM before the token is written; the API checks it again when it starts and refuses to run
+ * with it wider. See `src/api/dataAcl.ts`.
+ */
+if (isWin) {
+  const who = `${process.env.USERDOMAIN ?? ''}\\${process.env.USERNAME ?? ''}`;
+  spawnSync('icacls', [dataDir, '/inheritance:r', '/grant:r', `${who}:(OI)(CI)F`, '/grant:r', '*S-1-5-18:(OI)(CI)F'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+}
 const tokenPath = join(dataDir, 'api-token');
 let apiToken = '';
 try {
@@ -171,15 +200,19 @@ if (!apiToken) {
 `, { encoding: 'utf8', mode: 0o600 });
   log('start', `made an API token in ${tokenPath}`);
 }
-// Next inlines NEXT_PUBLIC_* at compile time, and in dev it compiles on demand, so having it in
-// the environment before `next dev` starts is enough.
-process.env.NEXT_PUBLIC_COP_TOKEN = apiToken;
+/*
+ * What each child is given. Neither gets the token: the API reads it from its own file, and the web
+ * page is handed it by the link printed below. Next's usage telemetry is switched off — it is
+ * traffic from this machine to a third party that nobody asked for.
+ */
+const childEnv = { ...process.env, NEXT_TELEMETRY_DISABLED: '1' };
+delete childEnv.NEXT_PUBLIC_COP_TOKEN;
 
 // 3. Start both.
 const children = [];
 
 function start(tag, args, cwd) {
-  const child = spawn(process.execPath, args, { cwd, env: process.env, windowsHide: true });
+  const child = spawn(process.execPath, args, { cwd, env: childEnv, windowsHide: true });
   children.push({ tag, child });
   const pipe = (stream) => {
     let buf = '';
@@ -200,10 +233,18 @@ function start(tag, args, cwd) {
 }
 
 start('api', [resolve(root, 'dist/src/api/main.js')], root);
-start('web', [bin('next/dist/bin/next'), 'dev', '-p', '3210'], resolve(root, 'web'));
+// Bound to this machine only. Without -H, `next dev` listens on every network interface, which
+// puts the UI on the office network and brings up a firewall prompt for node.exe.
+start('web', [bin('next/dist/bin/next'), 'dev', '-p', '3210', '-H', '127.0.0.1'], resolve(root, 'web'));
+try {
+  writeFileSync(pidFile, JSON.stringify(children.map(({ tag, child }) => ({ tag, pid: child.pid, startedAt: Date.now() }))), 'utf8');
+} catch {
+  /* only costs the next start the ability to tell a leftover of this one */
+}
 
 log('start', `api  ${API_URL}`);
 log('start', `web  ${WEB_URL}`);
+log('start', `open once in your browser, to give it the API key: ${WEB_URL}/#token=${apiToken}`);
 log('start', 'Ctrl+C stops both');
 
 if (open) {
@@ -226,7 +267,7 @@ async function shutdown(code = 0) {
   await Promise.all(
     children.map(async ({ tag, child }) => {
       if (child.exitCode !== null) return;
-      log(tag, 'stopping (Ctrl+C first, forced only if it does not stop)');
+      log(tag, 'stopping (asked to close first, forced only if it does not)');
       if (isWin && child.pid) await stopTreeOf(child.pid);
       else child.kill('SIGTERM');
     }),

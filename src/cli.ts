@@ -430,6 +430,7 @@ program
         mode: 'unattended',
         allowedPrograms: cfg.execution.allowedPrograms,
         isolation: cfg.execution.isolation,
+      lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       });
       if (blocked) throw new Error(`${blocked}\n\nOr drop --unattended and approve the steps as they come.`);
       console.log('UNATTENDED: commands written by Copilot will run without asking.');
@@ -465,6 +466,7 @@ program
       denyPatterns: cfg.execution.denyPatterns,
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
+      lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

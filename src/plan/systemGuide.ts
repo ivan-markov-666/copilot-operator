@@ -418,6 +418,21 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
       'Списъкът с всички сесии на машината: тук се създава сесия, тук се отмятат няколко и тръгват една след друга, и тук спряна стъпка чака решение.',
     sections: [
       {
+        headingKey: null,
+        en: 'Shown only when this browser has not been given the API key',
+        bg: 'Показва се само когато този браузър още няма ключа за API-то',
+        controls: [
+          {
+            key: 'home.noToken',
+            kind: 'note',
+            en: 'This browser does not have the key to the API yet.',
+            bg: 'Този браузър още няма ключа за API-то.',
+            doesEn: 'The page cannot reach the API until the link npm start printed (ending in #token=…) has been opened once in this browser.',
+            doesBg: 'Страницата не може да стигне до API-то, докато връзката, която npm start отпечата (завършва на #token=…), не бъде отворена веднъж в този браузър.',
+          },
+        ],
+      },
+      {
         headingKey: 'home.new',
         en: 'New session',
         bg: 'Нова сесия',

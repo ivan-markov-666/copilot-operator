@@ -15,6 +15,7 @@
 import { writeFileSync, readFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { winPsEnv } from '../exec/winps.js';
 
 export type ProfileUser = { pid: number; commandLine: string };
 
@@ -31,6 +32,7 @@ export function findEdgeUsingProfile(profileDir: string): ProfileUser[] | 'unkno
     `Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress`;
 
   const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    env: winPsEnv(),
     encoding: 'utf8',
     windowsHide: true,
     timeout: 15_000,

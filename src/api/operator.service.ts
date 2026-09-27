@@ -881,6 +881,7 @@ export class OperatorService {
       denyPatterns: cfg.execution.denyPatterns,
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
+      lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
     };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
@@ -1075,6 +1076,7 @@ export class OperatorService {
         mode,
         allowedPrograms: cfg.execution.allowedPrograms,
         isolation: cfg.execution.isolation,
+      lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       });
       if (blocked) return { started: false, reason: blocked };
     }
@@ -1396,7 +1398,7 @@ export class OperatorService {
      * refuses it, which is exactly what the first test of her did.
      */
     const cfg = await this.settings.load();
-    const unattendedRule = { mode: 'unattended' as const, allowedPrograms: cfg.execution.allowedPrograms, isolation: cfg.execution.isolation };
+    const unattendedRule = { mode: 'unattended' as const, allowedPrograms: cfg.execution.allowedPrograms, isolation: cfg.execution.isolation, lockedToConfirm: cfg.policyLock?.maxMode === 'confirm' };
     const unattendedBlocked: UnattendedBlock | undefined = !unattendedPrecondition(unattendedRule)
       ? undefined
       : unattendedIsolationRefusal('unattended', cfg.execution.isolation)

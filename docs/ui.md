@@ -349,9 +349,10 @@ again; or just delete `web/.next` and reload.
 `scripts/dev.mjs` is the starter. It builds first because Nest needs the decorator metadata
 only `tsc` emits, prefixes each process's output with `[api]` or `[web]`, and stops both when
 either exits or on Ctrl+C. It stops the whole tree, because a plain kill reaches only the npm
-wrapper and leaves the real server holding its port — Ctrl+C first, then Ctrl+Break, and
-`taskkill /T /F` only for what is still running, using `stopTree` from the last build (before
-the first build it can only force).
+wrapper and leaves the real server holding its port — `taskkill /T` first, and `taskkill /T /F`
+only for what is still running after a few seconds. It also prints a link ending in `#token=…`:
+open it once in the browser to hand the page the API key, which is no longer compiled into the
+page (see `web/lib/api.ts`).
 
 The API is bound to `127.0.0.1` and the UI to `localhost`. They must stay that way: this
 process drives the operator's own signed-in browser and runs commands on this machine.

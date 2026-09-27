@@ -26,6 +26,7 @@
  * phone, and it is the one case where refusing costs a little and allowing costs everything.
  */
 import { spawnSync } from 'node:child_process';
+import { winPsEnv } from './winps.js';
 
 /**
  * What the operator says they have arranged. An assertion, not a finding.
@@ -75,17 +76,40 @@ const INTEGRITY_LOW = 'S-1-16-4096';
 
 let cached: IsolationSignals | null = null;
 
-/** `whoami /groups`, or null when it cannot be run. Separated so a test can supply its own. */
-function whoamiGroups(): string | null {
+/**
+ * Whether the process holds an elevated (administrator) token, told in the integrity-level SID the
+ * rest of this file reads, or null when it cannot be asked. Separated so a test can supply its own.
+ *
+ * It used to run `whoami /groups`. `whoami.exe` started by another program is on nearly every
+ * endpoint product's list of account-discovery indicators, and this runs on company laptops, so it
+ * asks .NET instead, inside the one Windows PowerShell call: a principal is in the Administrators
+ * role only when its token is elevated — a UAC-filtered token answers no. The answer is `True` or
+ * `False` whatever the language of Windows, and is mapped onto the high and medium integrity SIDs
+ * so that `elevationFrom` stays the single reading of it.
+ */
+function elevationProbe(): string | null {
   try {
-    const r = spawnSync('whoami', ['/groups'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
-    return r.status === 0 && typeof r.stdout === 'string' ? r.stdout : null;
+    const r = spawnSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 15_000, env: winPsEnv() },
+    );
+    if (r.status !== 0 || typeof r.stdout !== 'string') return null;
+    const answer = r.stdout.trim();
+    if (answer === 'True') return INTEGRITY_HIGH;
+    if (answer === 'False') return INTEGRITY_MEDIUM;
+    return null;
   } catch {
     return null;
   }
 }
 
-/** Reads the integrity level out of `whoami /groups` output by SID. Exported for the check. */
+/** Reads the integrity level out of text by SID. Exported for the check. */
 export function elevationFrom(groups: string | null): boolean | null {
   if (!groups) return null;
   if (groups.includes(INTEGRITY_SYSTEM) || groups.includes(INTEGRITY_HIGH)) return true;
@@ -95,7 +119,7 @@ export function elevationFrom(groups: string | null): boolean | null {
 
 export function readIsolationSignals(
   env: NodeJS.ProcessEnv = process.env,
-  groups: () => string | null = whoamiGroups,
+  groups: () => string | null = elevationProbe,
   fresh = false,
 ): IsolationSignals {
   if (cached && !fresh) return cached;

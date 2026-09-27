@@ -28,8 +28,7 @@ import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import type { ProcessTracker } from '../exec/processes.js';
 import { effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell } from '../exec/shells.js';
-import { describeStep, commandRefusal } from '../exec/policy.js';
-import { networkFetchReason, networkFetchRefusal } from '../exec/network.js';
+import { describeStep, checkCommandRefusal } from '../exec/policy.js';
 import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
@@ -543,16 +542,12 @@ ${machineNote}` : contract);
            * at a gate. The finding stands without it, as for any check the runner will not run.
            * See `network.ts`.
            */
-          deny: (command, shell, cwd) => {
-            const refusal = commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms, process.env, { roots: deps.roots, cwd });
-            if (refusal) return refusal;
-            const network = networkFetchReason(command);
-            return network ? networkFetchRefusal(network) : null;
-          },
+          deny: (command, shell, cwd) => checkCommandRefusal(command, shell, cfg.execution, { roots: deps.roots, cwd }),
           roots: deps.roots,
           signal,
           defaultShell,
           tracker: deps.tracker,
+          passEnv: cfg.execution.passEnv,
         });
         if (validation.refused.length > 0 && !derivedRetried) {
           derivedRetried = true;
@@ -648,6 +643,7 @@ ${machineNote}` : contract);
             hardTimeoutMs: hard * 1000,
             idleTimeoutMs: idle * 1000,
             logPath: join(dir, 'steps', `${iterations}-${step.id}.log`),
+            passEnv: cfg.execution.passEnv,
           },
           { signal, tracker: deps.tracker },
         );

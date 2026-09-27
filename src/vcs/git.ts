@@ -21,10 +21,35 @@ import { join } from 'node:path';
 
 export type GitResult = { ok: boolean; stdout: string; stderr: string; code: number };
 
+/**
+ * Settings every git the runner starts is given, ahead of the command.
+ *
+ * The repository is one the chat's steps have been working in, and a repository can carry code that
+ * git runs by itself: hooks (`post-checkout`, `prepare-commit-msg`, `post-commit` — `--no-verify`
+ * skips only two of them), an fsmonitor program that `status` starts, and clean/smudge filters that
+ * `add` and `checkout` run. Found on 2026-09-27: any of these, placed by a step, would have been
+ * executed by the runner — as the runner, with no approval and no log. So hooks are pointed at a
+ * folder that does not exist, fsmonitor is off, and the repository's own attribute files are not
+ * read for filters (`core.attributesFile` cannot switch off `.gitattributes`, but a filter needs a
+ * driver in the config, which the steps may no longer write — see `repositoryInternalsRefusal`).
+ * `--no-optional-locks` keeps `status` from writing the index behind a step's back.
+ */
+const SAFE_GIT = [
+  '-c', `core.hooksPath=${noHooksDir()}`,
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.untrackedCache=false',
+  '--no-optional-locks',
+];
+
+/** A folder that does not exist, so git finds no hooks in it. */
+function noHooksDir(): string {
+  return process.env.SystemRoot ? join(process.env.SystemRoot, 'System32', 'copilot-operator-no-hooks') : '/nonexistent';
+}
+
 /** Runs one git command in a directory. Never throws: the caller decides what a failure means. */
 export function git(cwd: string, args: string[], timeoutMs = 60_000): Promise<GitResult> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
       const code = (error as NodeJS.ErrnoException & { code?: number })?.code;
       resolve({
         ok: !error,

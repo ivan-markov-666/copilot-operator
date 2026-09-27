@@ -46,7 +46,9 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
 /** Windows PowerShell first: it is always present and its dialog is the familiar one. */
 function shellCandidates(): Array<{ exe: string; args: string[] }> {
   return [
-    { exe: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-STA', '-WindowStyle', 'Hidden', '-Command', SCRIPT] },
+    // No `-WindowStyle Hidden`: a hidden PowerShell is the first thing endpoint tooling hunts for, and
+    // the process is already started without a window (`windowsHide`), so the flag added nothing.
+    { exe: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-STA', '-Command', SCRIPT] },
     { exe: 'pwsh.exe', args: ['-NoProfile', '-NonInteractive', '-STA', '-Command', SCRIPT] },
   ];
 }

@@ -160,7 +160,7 @@ Rules:
 Implemented in `src/exec/runner.ts`.
 
 - Which shell, and where it is, is decided in one place: `src/exec/shells.ts`. It finds `pwsh.exe`, `powershell.exe` and `cmd.exe` on PATH and in their usual install locations when the run starts, and every path into a shell — a Copilot step, a post-task check, a reviewer's step, the deny gate's guess at what will read a command — asks it the same question. A shell named by name and not installed is **refused** with what is missing and what is here, never swapped for another interpreter that would read the same command differently. A step or a check that names nothing takes `execution.defaultShell` when the machine has it and otherwise falls through `pwsh`, `powershell`, `cmd`.
-- `spawn(<the resolved absolute path>, args, { cwd, windowsHide: true })`. For `pwsh` and `powershell`: `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <cmd>`; for downloaded scripts: `-File <path> <args>`; for `cmd`: `/d /s /c <cmd>`.
+- `spawn(<the resolved absolute path>, args, { cwd, windowsHide: true })`. For `pwsh` and `powershell`: `-NoProfile -NonInteractive -Command <cmd>` (no execution-policy override: the machine's own policy applies); for `cmd`: `/d /s /c <cmd>`.
 - A shell that will not start is classified as the **machine** rather than as the work: it does not consume a check-retry round, it is reported once, and the task ends on a reason naming what to install. A `cwd` that does not exist raises the same `ENOENT` on Windows and is deliberately told apart from it by whether the executable is still on disk, because that one is work the chat can fix. On a machine without PowerShell 7 the opening message says so, so the chat does not write `"shell": "pwsh"` from the contract's example and lose a round to it.
 - Steps run **sequentially in the order given**; a failing step does not stop the run (Copilot decides), unless `stopOnFailure: true`.
 - Policy gate before every step: deny list regexes (`Remove-Item .* -Recurse`, `format `, `reg (add|delete)`, `Stop-Computer`, ...), optional allow list. In confirm mode the user sees the step and presses Enter / `s` to skip / `q` to abort.
@@ -188,9 +188,11 @@ Other properties that matter for long steps:
   printed. Nothing lives only in memory.
 - **The whole process tree is stopped, and asked first.** `child.kill()` signals only the
   shell, and a test runner's children (node, dotnet, java) would survive it and keep holding
-  the console. So the tree is read from the process table and each process is sent Ctrl+C,
-  then Ctrl+Break, and only what is still there after the grace periods gets `taskkill /F`
-  (`stopTree` in `src/exec/processes.ts`). The result is given once the tree is down.
+  the console. So the tree is read from the process table — only the processes created since
+  the step began — and each is given `taskkill /T` (the polite form) and a grace period before
+  `taskkill /T /F` (`stopTree` in `src/exec/processes.ts`). A console server has no window to
+  close politely and ends forced; it is always one the bot itself started. The result is given
+  once the tree is down.
 - **What a task leaves running is stopped only if the bot started it.** Every shell a step,
   check or review starts is recorded; after the task, a new process is the bot's only if its
   chain of parents reaches one of those shells. A process the operator started by hand in the

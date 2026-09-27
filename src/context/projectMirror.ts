@@ -162,9 +162,18 @@ export type MirrorResult = {
 /** Files the program owns in the target folder and must never delete as "stale". */
 const RESERVED_TARGET_NAMES = new Set(['.cop-manifest.json']);
 
+/**
+ * Files that hold secrets by convention, never copied to the Desktop unless the operator says so.
+ * `.env` was the only one until 2026-09-27; a key file, an `.npmrc` with a registry token or a
+ * `credentials.json` are secrets just the same, and the Desktop is on its way to OneDrive.
+ */
 function isEnvFile(path: string): boolean {
   const name = basename(path).toLowerCase();
-  return name === '.env' || name.startsWith('.env.');
+  if (name === '.env' || name.startsWith('.env.')) return true;
+  if (/\.(pem|pfx|p12|key|jks|keystore|kdbx|ppk)$/.test(name)) return true;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/.test(name)) return true;
+  return ['.npmrc', '.netrc', '.pypirc', 'credentials.json', 'secrets.json', 'service-account.json', '.htpasswd'].includes(name)
+    || /(^|\.)secrets?\.(json|ya?ml|toml|xml)$/.test(name);
 }
 
 /**

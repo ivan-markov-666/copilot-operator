@@ -113,7 +113,8 @@ for (const [label, text, secret] of leaks) {
 }
 const kept = ['interface User { password: string; token?: string }', 'the token was rejected', 'Password: required', 'https://example.com/path'];
 for (const text of kept) console.log(`  ${'left alone'.padEnd(16)} ${redactSecrets(text) === text ? 'yes' : 'CHANGED'}   ${text}`);
-console.log('  own patterns on top   ', redactSecrets('token=abc123 user=ivan', ['token=\\w+']) === '[REDACTED] user=ivan' ? 'yes' : 'NO');
+// A name the built-in shapes do not know, so it is the operator's pattern that removes it.
+console.log('  own patterns on top   ', redactSecrets('ticket=abc123 user=ivan', ['ticket=\\w+']) === '[REDACTED] user=ivan' ? 'yes' : 'NO');
 console.log('  counted by shape      ', JSON.stringify(findSecrets('Password=Sup3rS3cret! and AKIAIOSFODNN7EXAMPLE and password: string')));
 const leaky = await writeReport([mk(1, 'completed', 0, 'AccountKey=abcdef0123456789==;\n')], {
   runId: 'leak',

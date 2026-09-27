@@ -3,15 +3,34 @@
  */
 export const API = process.env.NEXT_PUBLIC_COP_API ?? 'http://127.0.0.1:4000/api';
 
+/** Where this browser keeps the token once it has been handed over. */
+const TOKEN_KEY = 'cop-api-token';
+
 /**
- * The API's per-install token.
+ * The API's per-install token, as this browser was given it.
  *
- * Baked in at build time by `npm start`, which reads it from `data/api-token` and hands it to the
- * web build. It is not a secret from the person using this UI — they own the file — it is what
- * stops every *other* caller: a page on another site that the operator happens to have open, and
- * any process on the machine that cannot read the install. See `src/api/security.ts`.
+ * It used to be compiled into the page's JavaScript by `npm start`. That made it readable by
+ * anything able to ask `localhost:3210` for a script — including a command step the bot itself was
+ * running, which could then drive the API that approves its own steps. So it is no longer in any
+ * file the web server hands out. `npm start` prints a link, `http://localhost:3210/#token=…`; the
+ * part after `#` never leaves the browser (it is not sent to the server and not logged), and the
+ * page moves it into this browser's storage and removes it from the address bar. Opened once per
+ * browser. See `src/api/security.ts` for what the token guards.
  */
-export const API_TOKEN = process.env.NEXT_PUBLIC_COP_TOKEN ?? '';
+export function apiToken(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const m = /(?:^#|&)token=([0-9a-f]{16,})/i.exec(window.location.hash);
+    if (m) {
+      window.localStorage.setItem(TOKEN_KEY, m[1]!);
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      return m[1]!;
+    }
+    return window.localStorage.getItem(TOKEN_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
 
 /**
  * The token as a query parameter, for the two kinds of request that cannot carry a header:
@@ -19,8 +38,9 @@ export const API_TOKEN = process.env.NEXT_PUBLIC_COP_TOKEN ?? '';
  * fetching a URL on its own. Everything else sends it as a header instead.
  */
 export function withToken(url: string): string {
-  if (!API_TOKEN) return url;
-  return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(API_TOKEN)}`;
+  const token = apiToken();
+  if (!token) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
 }
 
 export type TaskStatus =
@@ -590,7 +610,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       'content-type': 'application/json',
-      ...(API_TOKEN ? { 'x-cop-token': API_TOKEN } : {}),
+      ...(apiToken() ? { 'x-cop-token': apiToken() } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -784,7 +804,7 @@ export const api = {
   downloadBundle: async (tasks: Array<{ sessionId: string; taskId: string }>): Promise<string> => {
     const res = await fetch(`${API}/export/bundle`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(API_TOKEN ? { 'x-cop-token': API_TOKEN } : {}) },
+      headers: { 'content-type': 'application/json', ...(apiToken() ? { 'x-cop-token': apiToken() } : {}) },
       body: JSON.stringify({ tasks }),
     });
     if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
