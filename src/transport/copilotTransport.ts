@@ -767,6 +767,34 @@ Current URL: ${url}`);
     return this.p.locator(selector).filter({ hasText: new RegExp(`^${escapeForRegExp(name)}`, 'i') }).first();
   }
 
+  /**
+   * Chooses one row of the open picker.
+   *
+   * A row inside a submenu is clicked on the element itself, in the page, and not with the mouse.
+   * A mouse click first travels to the row, and on the way it crosses the other rows of the menu
+   * above; Fluent opens or re-renders their submenus as the pointer passes, the row being aimed at
+   * is replaced, and Playwright starts again — "element is not stable", "element was detached from
+   * the DOM, retrying" — for as long as the page's default timeout allows. Live, that was 38
+   * seconds of a window stuck on the model menu with "GPT 5.6 Think deeper" in plain sight, until
+   * the window was closed and the task failed with "Target page, context or browser has been
+   * closed". A click dispatched on the element does not move the pointer, so nothing closes under
+   * it.
+   *
+   * Either way the attempt is short: the caller reads the model button back to decide whether the
+   * choice took, so a click that did not land costs seconds and says so, rather than a minute.
+   */
+  private async clickMenuRow(name: string, inSubmenu: boolean): Promise<void> {
+    const row = this.menuRow(name);
+    if (inSubmenu) {
+      const dispatched = await row
+        .evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (dispatched) return;
+    }
+    await row.click({ timeout: 8_000 }).catch(() => undefined);
+  }
+
   /** Closes the picker, submenu included. */
   private async closeMenu(): Promise<void> {
     for (let i = 0; i < 3; i += 1) {
@@ -816,6 +844,7 @@ Current URL: ${url}`);
     const wanted = (r: MenuRow): boolean => r.name.toLowerCase() === name.toLowerCase();
 
     let target = top.find((r) => wanted(r) && !r.opensSubmenu);
+    const inSubmenu = !target;
     if (!target) {
       const topNames = new Set(top.map((r) => r.name.toLowerCase()));
       for (const group of top.filter((r) => r.opensSubmenu)) {
@@ -843,7 +872,7 @@ Current URL: ${url}`);
       return { ok: false, current: before, reason: `"${name}" is shown but not available right now.` };
     }
 
-    await this.menuRow(target.name).click();
+    await this.clickMenuRow(target.name, inSubmenu);
     await this.p.waitForTimeout(1_000);
     const after = await this.currentModel();
 
