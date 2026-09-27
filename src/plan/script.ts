@@ -805,6 +805,10 @@ export const SCRIPT: ScriptMessage[] = [
       { en: 'Session `{name}`: {goal}', bg: 'Сесия `{име}`: {цел}' },
       { en: '- Task `{title}`: {what it does}. Checks: {which}.', bg: '- Задача `{заглавие}`: {какво прави}. Проверки: {какви}.' },
       {
+        en: 'Criterion → check: {each criterion of the assignment, and the check that fails until it holds}.',
+        bg: 'Критерий → проверка: {всеки критерий от заданието и проверката, която пада, докато той не е изпълнен}.',
+      },
+      {
         en: 'Settings: version control {…}; if a task fails {…}; if a session fails {…}; chats {…}; review {…}; files for the chat {…}; run name {…}.',
         bg: 'Настройки: контрол на версиите {…}; при провал на задача {…}; при провал на сесия {…}; чатове {…}; рецензия {…}; файлове към чата {…}; име на пускането {…}.',
       },

@@ -534,6 +534,22 @@ check that names one the machine has not got ends the task. Write checks that ar
 certain: a compile, a test run, a file that must exist, a string that must appear. Do not try
 to check things that need judgement — "the code is clean", "the summary is good" — because
 nothing here can decide them, and a check that cannot fail is worse than no check.
+
+**Ask of every check: would it pass if the task did nothing?** If it would, it proves nothing about
+this task, and it is not a check of it. The traps that look like proof and are not:
+
+- **A test run's exit code alone.** A test runner with no tests, or with only the old ones, exits 0.
+  Make the check fail without the new tests: require at least as many passing tests as the criteria
+  this task covers (with \`node --test\`, \`output-matches\` on \`pass ([5-9]|\\d{2,})\` for five), and
+  \`fail 0\` in the output.
+- **A file that exists.** It proves the file, not what is in it. Pair it with a check that runs the
+  behaviour, or with \`file-contains\` on the one thing only the new work would put there.
+- **Something that was already true.** An old test passing, a folder already there. Checked before the
+  task, the answer would have been the same.
+
+The strongest check runs the behaviour the criterion names and looks for its result — the test that
+feeds the criterion's own input passing, or the command's own output carrying the value the criterion expects. Every
+criterion of the assignment is covered by at least one check that fails until the work is done.
 `.trim();
 
 const CHECKS_BG = `
@@ -563,6 +579,21 @@ const CHECKS_BG = `
 трябва да се появи. Не се опитвай да проверяваш неща, които искат преценка — „кодът е чист“,
 „резюмето е добро“ — защото нищо тук не може да ги реши, а проверка, която не може да падне, е
 по-лоша от никаква проверка.
+
+**За всяка проверка се питай: би ли минала, ако задачата не направи нищо?** Ако би, тя не доказва
+нищо за тази задача и не е нейна проверка. Капаните, които изглеждат като доказателство, а не са:
+
+- **Само кодът на изход от тестовете.** Тестове без нито един тест или само със старите излизат с 0.
+  Направи проверката такава, че да пада без новите тестове: поне толкова минаващи теста, колкото
+  критерии покрива задачата (с \`node --test\` — \`output-matches\` на \`pass ([5-9]|\\d{2,})\` за пет), и
+  \`fail 0\` в изхода.
+- **Файл, който съществува.** Доказва файла, не съдържанието му. Сложи до нея проверка, която пуска
+  поведението, или \`file-contains\` с единственото нещо, което само новата работа би сложила там.
+- **Нещо, което и без това е вярно.** Стар тест, който минава, папка, която вече я има. Проверено
+  преди задачата, отговорът щеше да е същият.
+
+Най-силната проверка пуска поведението, което критерият назовава, и търси резултата му — тестът, който подава\nвхода от самия критерий, минава, или изходът на командата съдържа стойността, която критерият очаква. Всеки критерий от заданието е
+покрит поне от една проверка, която пада, докато работата не е свършена.
 `.trim();
 
 const MIRROR_EN = `
@@ -1475,8 +1506,10 @@ asking for both — the first is what makes the next plan quicker to write than 
    why: the two answers produce different work, and one of them cannot be undone.
 4. **Propose it in prose, and stop there**, with the breakdown message: how many sessions and
    tasks, what each one does, in what order, and every field you decided on the operator's
-   behalf. It ends with *1. Right as it is: write the JSON.* and *2.*, a change. Phase 2 does not
-   begin until they have picked.
+   behalf. Before you send it, ask of every check the question under "checks" — would it pass if
+   the task did nothing? — and replace any that would; the "Criterion → check" line shows the
+   operator that each criterion has one that would not. It ends with *1. Right as it is: write the
+   JSON.* and *2.*, a change. Phase 2 does not begin until they have picked.
 
 ### How to split the work
 
@@ -1701,8 +1734,10 @@ ${systemGuideSection('bg')}
    назад.
 4. **Предложи разбивката с думи и спри дотам**, със съобщението за разбивката: колко сесии и
    задачи, какво прави всяка, в какъв ред, и всяко поле, което си решил от името на оператора.
-   Завършва с *1. Така е добре: напиши JSON-а.* и *2.* — промяна. Фаза 2 не започва, преди той да е
-   избрал.
+   Преди да го пратиш, задай за всяка проверка въпроса от „checks“ — би ли минала, ако задачата не
+   направи нищо? — и замени всяка, която би; редът „Критерий → проверка“ показва на оператора, че
+   всеки критерий има такава, която не би. Завършва с *1. Така е добре: напиши JSON-а.* и *2.* —
+   промяна. Фаза 2 не започва, преди той да е избрал.
 
 ### Как се разбива работата
 

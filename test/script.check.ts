@@ -146,6 +146,9 @@ for (const lang of ['en', 'bg'] as const) {
     check(`${lang}, ${state}: and the mixed one`, b.includes(ON_RECORD_MIXED[lang]), true);
     // "Already said" once showed the ticket's title alone, which the operator cannot confirm as the assignment.
     check(`${lang}, ${state}: already said is the whole answer`, b.includes(lang === 'bg' ? 'Отговорът е целият, не етикет' : 'The\n  answer is the whole of it, not a label'), true);
+    // A check that passes with the task undone proved nothing in a live plan, and the operator caught it.
+    check(`${lang}, ${state}: every check is asked whether it would pass with nothing done`, b.includes(lang === 'bg' ? 'би ли минала, ако задачата не направи нищо?' : 'would it pass if the task did nothing?'), true);
+    check(`${lang}, ${state}: and the breakdown maps each criterion to its check`, b.includes(lang === 'bg' ? 'Критерий → проверка:' : 'Criterion → check:'), true);
     // Unfilled braces went out once, in a message about a run that did not exist.
     check(`${lang}, ${state}: unfilled braces are never sent`, b.includes(lang === 'bg' ? 'непопълнени {скоби} не се изпраща никога' : 'unfilled {braces} is never sent'), true);
     // The rule that produced "А1 Б2" is gone, in both spellings.
