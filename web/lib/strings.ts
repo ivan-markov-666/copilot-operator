@@ -168,7 +168,7 @@ export const dict = {
     // home
     'home.apiDown': 'The API is not reachable.',
     'home.noToken': 'This browser does not have the key to the API yet.',
-    'home.noTokenHint': 'Open the link that {cmd} printed in its terminal, the one ending in #token=…, once in this browser.',
+    'home.noTokenHint': 'Start the interface with {cmd}, which hands it the key; started any other way it has none.',
     'home.apiHint': 'Start it from the project folder with {cmd}. Expected at {url}.',
     'home.new': 'New session',
     'home.newHint':
@@ -1152,7 +1152,7 @@ export const dict = {
 
     'home.apiDown': 'API-то не отговаря.',
     'home.noToken': 'Този браузър още няма ключа за API-то.',
-    'home.noTokenHint': 'Отворете веднъж в този браузър връзката, която {cmd} отпечата в терминала — тази, която завършва на #token=….',
+    'home.noTokenHint': 'Пуснете интерфейса с {cmd}, който му дава ключа; пуснат по друг начин, той няма такъв.',
     'home.apiHint': 'Пуснете го от папката на проекта с {cmd}. Очаква се на {url}.',
     'home.new': 'Нова сесия',
     'home.newHint':

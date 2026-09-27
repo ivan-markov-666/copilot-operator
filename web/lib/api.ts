@@ -18,7 +18,7 @@ const TOKEN_KEY = 'cop-api-token';
  * browser. See `src/api/security.ts` for what the token guards.
  */
 export function apiToken(): string {
-  if (typeof window === 'undefined') return '';
+  if (typeof window === 'undefined') return process.env.NEXT_PUBLIC_COP_TOKEN ?? '';
   try {
     const m = /(?:^#|&)token=([0-9a-f]{16,})/i.exec(window.location.hash);
     if (m) {
@@ -26,7 +26,8 @@ export function apiToken(): string {
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
       return m[1]!;
     }
-    return window.localStorage.getItem(TOKEN_KEY) ?? '';
+    // A key handed over by the #token= link wins; otherwise the one `npm start` built in.
+    return window.localStorage.getItem(TOKEN_KEY) || (process.env.NEXT_PUBLIC_COP_TOKEN ?? '');
   } catch {
     return '';
   }

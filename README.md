@@ -201,10 +201,9 @@ checked three ways before it reaches a route:
   `Authorization: Bearer`, `x-cop-token`, or a `token` query parameter for the two cases that
   cannot carry a header — `EventSource` and a plain `<a download>`.
 
-`npm start` creates the token before either process starts and prints a link ending in
-`#token=…`; open it once in the browser, which keeps the token in its own storage — it is no longer
-compiled into the page, where anything able to fetch a script from `localhost:3210` could read it.
-The web server binds `127.0.0.1` only. `GET /api/health` stays open so that "is it up yet" is still
+`npm start` creates the token before either process starts and hands it to the web process only —
+not to the API, whose environment command steps used to inherit, so a step never sees it; a step
+that names the API's or the UI's port is refused. The web server binds `127.0.0.1` only. `GET /api/health` stays open so that "is it up yet" is still
 answerable. To rotate the token, delete the file and restart.
 
 The `data` folder — token, settings, sessions, the level-1 contract — is narrowed at start to the

@@ -11,10 +11,9 @@
  * stale Next.js kept port 3210 busy once already, so the whole tree is stopped: `taskkill /T`
  * first, which asks, and `taskkill /T /F` only for what is still there after a grace period.
  *
- * The API token is never put in the web build or in the API's environment: anything able to read
- * either — a command step the bot is running, among others — could otherwise drive the API. The
- * web page is handed it once, through a link printed below whose `#token=` part stays in the
- * browser. See `web/lib/api.ts`.
+ * The API token goes to the web process only, never into the API's environment: every command
+ * step the bot runs is started from the API, and a step that could read the token could drive the
+ * API that approves its own steps. See `web/lib/api.ts` and `src/exec/stepEnv.ts`.
  *
  * `tsc` and `next` are invoked as node scripts rather than through npm, so no shell is
  * involved and nothing has to be escaped.
@@ -211,8 +210,8 @@ delete childEnv.NEXT_PUBLIC_COP_TOKEN;
 // 3. Start both.
 const children = [];
 
-function start(tag, args, cwd) {
-  const child = spawn(process.execPath, args, { cwd, env: childEnv, windowsHide: true });
+function start(tag, args, cwd, extraEnv = {}) {
+  const child = spawn(process.execPath, args, { cwd, env: { ...childEnv, ...extraEnv }, windowsHide: true });
   children.push({ tag, child });
   const pipe = (stream) => {
     let buf = '';
@@ -235,7 +234,12 @@ function start(tag, args, cwd) {
 start('api', [resolve(root, 'dist/src/api/main.js')], root);
 // Bound to this machine only. Without -H, `next dev` listens on every network interface, which
 // puts the UI on the office network and brings up a firewall prompt for node.exe.
-start('web', [bin('next/dist/bin/next'), 'dev', '-p', '3210', '-H', '127.0.0.1'], resolve(root, 'web'));
+// The web page is given the token at build time, as it always was, so the UI works with no extra
+// step. Only the web process gets it: the API — whose environment every command step used to
+// inherit — does not, and a step that reaches for ports 3210 or 4000 is refused (network.ts).
+start('web', [bin('next/dist/bin/next'), 'dev', '-p', '3210', '-H', '127.0.0.1'], resolve(root, 'web'), {
+  NEXT_PUBLIC_COP_TOKEN: apiToken,
+});
 try {
   writeFileSync(pidFile, JSON.stringify(children.map(({ tag, child }) => ({ tag, pid: child.pid, startedAt: Date.now() }))), 'utf8');
 } catch {
@@ -244,7 +248,6 @@ try {
 
 log('start', `api  ${API_URL}`);
 log('start', `web  ${WEB_URL}`);
-log('start', `open once in your browser, to give it the API key: ${WEB_URL}/#token=${apiToken}`);
 log('start', 'Ctrl+C stops both');
 
 if (open) {
