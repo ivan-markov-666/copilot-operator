@@ -1670,9 +1670,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Where the bot runs',
             bg: 'Къде върви ботът',
             doesEn:
-              "The operator's statement about what contains this runner: this account, a separate low-privilege Windows account, Windows Sandbox, or a VM. It gates unattended runs — while it says this account, a run with nobody watching is refused — and it is recorded with every run beside the account the process actually held.",
+              "The operator's statement about what contains this runner: this account, a separate low-privilege Windows account, Windows Sandbox, or a VM. It gates unattended runs — while it says this account, a run with nobody watching is refused, unless the operator chose \"this account — I accept unattended runs without isolation\", which allows it on their responsibility — and it is recorded with every run beside the account the process actually held.",
             doesBg:
-              'Твърдението на оператора какво огражда този runner: този акаунт, отделен Windows акаунт с малки права, Windows Sandbox или виртуална машина. То управлява пусканията без надзор — докато казва „този акаунт“, пускане без човек се отказва — и се записва с всяко пускане до акаунта, който процесът наистина е държал.',
+              'Твърдението на оператора какво огражда този runner: този акаунт, отделен Windows акаунт с малки права, Windows Sandbox или виртуална машина. То управлява пусканията без надзор — докато казва „този акаунт“, пускане без човек се отказва, освен ако операторът не е избрал „в този акаунт — приемам пускане без надзор без изолация“, което го позволява на негова отговорност — и се записва с всяко пускане до акаунта, който процесът наистина е държал.',
           },
         ],
       },

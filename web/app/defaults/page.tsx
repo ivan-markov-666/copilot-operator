@@ -23,7 +23,7 @@ import { ModelPicker } from '../modelPicker';
 import { DirTree } from '../dirTree';
 
 /** What the operator says contains the runner. Mirrors `execution.isolation` in the config. */
-type Isolation = 'none' | 'separate-account' | 'sandbox' | 'vm';
+type Isolation = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm';
 
 export default function DefaultsPage() {
   const { t } = useT();
@@ -663,6 +663,7 @@ function ExecutionSection() {
         disabled={busy || !raw}
       >
         <option value="none">{t('exec.isolationNone')}</option>
+        <option value="none-accepted">{t('exec.isolationNoneAccepted')}</option>
         <option value="separate-account">{t('exec.isolationAccount')}</option>
         <option value="sandbox">{t('exec.isolationSandbox')}</option>
         <option value="vm">{t('exec.isolationVm')}</option>

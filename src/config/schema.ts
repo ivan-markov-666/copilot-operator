@@ -158,7 +158,7 @@ export const RunConfigSchema = z.object({
        * consequence: an unattended run will not start while it is `none`, because nobody watching
        * and nothing containing is the combination this runner refuses to be.
        */
-      isolation: z.enum(['none', 'separate-account', 'sandbox', 'vm']).default('none'),
+      isolation: z.enum(['none', 'none-accepted', 'separate-account', 'sandbox', 'vm']).default('none'),
       /**
        * The external programs a command may start. The one gate in this runner that names what is
        * allowed rather than what is not: for a tool whose whole job is to build and test software,

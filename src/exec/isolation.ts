@@ -27,8 +27,18 @@
  */
 import { spawnSync } from 'node:child_process';
 
-/** What the operator says they have arranged. An assertion, not a finding. */
-export type IsolationClaim = 'none' | 'separate-account' | 'sandbox' | 'vm';
+/**
+ * What the operator says they have arranged. An assertion, not a finding.
+ *
+ * `none-accepted` is `none` with a decision attached: nothing contains the runner, and the operator
+ * has said, in so many words, that unattended runs may go ahead anyway, on their responsibility. It
+ * exists because the only other way through the refusal below was to claim an isolation that was not
+ * there — and a false claim is worse than an honest risk, since it is written into every run's
+ * record as if it were true. This value is recorded as what it is. A policy lock can still forbid
+ * unattended runs outright with `maxMode`, so an organisation that does not accept the risk keeps
+ * the rule whatever the operator picks here.
+ */
+export type IsolationClaim = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm';
 
 export type IsolationSignals = {
   user: string;
@@ -114,11 +124,17 @@ export function forgetIsolationSignals(): void {
 export function assessIsolation(claim: IsolationClaim, signals: IsolationSignals): IsolationPosture {
   const warnings: string[] = [];
 
-  if (claim === 'none') {
+  if (claim === 'none' || claim === 'none-accepted') {
     warnings.push(
       'this run is not isolated: commands written by the model run as the ordinary user, with that ' +
         "user's files, tokens and network access. Set execution.isolation once you have arranged a " +
         'separate low-privilege account, Windows Sandbox or a VM.',
+    );
+  }
+  if (claim === 'none-accepted') {
+    warnings.push(
+      'the operator has accepted unattended runs without isolation: a run with nobody watching may go ahead ' +
+        'here, and nothing but the allowlist and the refusal rules limits what its steps reach.',
     );
   }
   if (signals.elevated === true) {
@@ -158,14 +174,21 @@ export function unattendedIsolationRefusal(mode: 'confirm' | 'unattended', claim
     'refused: an unattended run needs somewhere to run. With execution.isolation set to "none" there is ' +
     'nobody watching the steps and nothing limiting what they reach, which is the one combination this ' +
     'runner will not start. Run this task in confirm mode, or set execution.isolation once the bot has a ' +
-    'separate low-privilege account, Windows Sandbox or a VM of its own.'
+    'separate low-privilege account, Windows Sandbox or a VM of its own — or, if you accept the risk, to ' +
+    '"none-accepted" ("This account — I accept unattended runs without isolation" in Settings).'
   );
 }
 
 /** The posture as lines for the task log and `cop doctor`. */
 export function describeIsolation(p: IsolationPosture): string {
   return [
-    `claimed     : ${p.claim}${p.claim === 'none' ? ' (the operator has not arranged any)' : ''}`,
+    `claimed     : ${p.claim}${
+      p.claim === 'none'
+        ? ' (the operator has not arranged any)'
+        : p.claim === 'none-accepted'
+          ? ' (none arranged; the operator accepts unattended runs anyway)'
+          : ''
+    }`,
     `account     : ${p.signals.user} on ${p.signals.computer}${p.signals.windowsSandbox ? ' (Windows Sandbox)' : ''}`,
     `elevated    : ${p.signals.elevated === null ? 'could not be determined' : p.signals.elevated ? 'YES — every command runs elevated' : 'no'}`,
     ...(p.warnings.length ? ['concerns    :', ...p.warnings.map((w) => `  - ${w}`)] : ['concerns    : none']),

@@ -91,5 +91,17 @@ check('with both wrong, isolation is named first', both !== null && both.include
 // unattended runs for free.
 check('an absent claim counts as none', unattendedPrecondition({ mode: 'unattended', allowedPrograms: ['node'] }) !== null, true);
 
+console.log('\n--- no isolation, with the risk accepted in so many words ---');
+// The only other way past the refusal was to claim an isolation that was not there, which would be
+// written into every run as if it were true. This is the honest way, and it is recorded as itself.
+const accepted = assessIsolation('none-accepted', plain);
+check('unattended may begin when the operator accepted the risk', unattendedIsolationRefusal('unattended', 'none-accepted'), null);
+check('but the allowlist still has to be there', unattendedPrecondition({ mode: 'unattended', allowedPrograms: [], isolation: 'none-accepted' }) !== null, true);
+check('the run is still called not isolated', accepted.warnings.some((w) => w.includes('not isolated')), true);
+check('and the acceptance is said too', accepted.warnings.some((w) => w.includes('accepted unattended runs')), true);
+check('the description does not dress it up', describeIsolation(accepted).includes('none arranged'), true);
+check('plain none still refuses', unattendedIsolationRefusal('unattended', 'none') !== null, true);
+check('and its refusal names the way through', (unattendedIsolationRefusal('unattended', 'none') ?? '').includes('none-accepted'), true);
+
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;
