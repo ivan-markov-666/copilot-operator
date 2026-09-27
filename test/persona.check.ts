@@ -193,6 +193,10 @@ console.log('\n--- what the first test of her taught ---');
     check(`${lang}: where they are refused, it says so`, refused.includes(head), true);
     check(`${lang}: and names the button to press instead`, refused.includes(ask), true);
     check(`${lang}: and why — the isolation setting`, refused.includes(why), true);
+    // The phase 2 script itself names the right button, not only the section beside it.
+    const offersRefused = lang === 'bg' ? 'Натисни **„Пусни {n} сесия(и)“**, за да върви без питане' : 'Press **"Run {n} session(s)"** to let it work without being asked';
+    check(`${lang}: where refused, phase 2 does not offer the refused button`, refused.includes(offersRefused), false);
+    check(`${lang}: where allowed, it still does`, open.includes(offersRefused), true);
     check(`${lang}: an empty allowlist is given as its own reason`, noList.includes(head) && !noList.split(head)[1]!.slice(0, 400).includes(why), true);
   }
 

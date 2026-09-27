@@ -184,6 +184,31 @@ have arranged.
 }
 
 /**
+ * Step 10 of phase 2, and the line that ends it, written for this machine.
+ *
+ * The section above tells Kerrigan which button to recommend where a run with nobody watching is
+ * refused, but the phase 2 script beside it still offered both, and a live conversation copied the
+ * script: "press Run 1 session(s) to let it work without being asked, or Step by step" — the first of
+ * which this machine refuses. A script the model copies verbatim has to be right as written.
+ */
+function runStepEn(blocked: UnattendedBlock | undefined): string {
+  return blocked
+    ? '10. Press **"Step by step"** and approve every command; **"Run {n} session(s)"** is refused on this machine.'
+    : '10. Press **"Run {n} session(s)"** to let it work without being asked, or **"Step by step"** to\n    approve every command.';
+}
+function runStepBg(blocked: UnattendedBlock | undefined): string {
+  return blocked
+    ? '10. Натисни **„Стъпка по стъпка“** и одобрявай всяка команда; **„Пусни {n} сесия(и)“** се отказва на тази машина.'
+    : '10. Натисни **„Пусни {n} сесия(и)“**, за да върви без питане, или **„Стъпка по стъпка“**, за да\n    одобряваш всяка команда.';
+}
+function runNextEn(blocked: UnattendedBlock | undefined): string {
+  return blocked ? 'press **"Step by step"**' : 'press **"Run {n} session(s)"**';
+}
+function runNextBg(blocked: UnattendedBlock | undefined): string {
+  return blocked ? 'да натисне **„Стъпка по стъпка“**' : 'да натисне **„Пусни {n} сесия(и)“**';
+}
+
+/**
  * A filled-in plan, used as the example in every language.
  *
  * Deliberately not minimal: it shows two sessions, a dependent and an independent one, one
@@ -1556,8 +1581,7 @@ sections below this one, with nothing after it.
 8. Choose **"Model for this run"** and **"Model that reviews the work"**.
 9. Under **"If a session fails"**, press **"Stop, and leave the rest as they are"** or
    **"Carry on with the next session"**.
-10. Press **"Run {n} session(s)"** to let it work without being asked, or **"Step by step"** to
-    approve every command.
+${runStepEn(unattendedBlocked)}
 11. Watch it on \`/history\` — **"Task register"**.
 
 Step 6 opens \`/\` with exactly the new sessions ticked, which is why the run is started there and
@@ -1569,8 +1593,8 @@ to press and why you wrote what you wrote.
 what a button does, what a badge means, where a setting lives — and answer them from the screens
 listed above and from nothing else. If the answer is not there, say it is not there.
 
-End phase 2 the way every message ends, on the thing that happens next: press **"Run {n}
-session(s)"** and watch \`/history\`. Nothing more is wanted from you until a task ends as
+End phase 2 the way every message ends, on the thing that happens next: ${runNextEn(unattendedBlocked)}
+and watch \`/history\`. Nothing more is wanted from you until a task ends as
 something other than **"done"**.
 
 ### The format
@@ -1783,8 +1807,7 @@ ${systemGuideSection('bg')}
 8. Избери **„Модел за това изпълнение“** и **„Модел, който проверява работата“**.
 9. Под **„Ако сесия се провали“** натисни **„Спри и остави останалите както са“** или
    **„Продължи със следващата сесия“**.
-10. Натисни **„Пусни {n} сесия(и)“**, за да върви без питане, или **„Стъпка по стъпка“**, за да
-    одобряваш всяка команда.
+${runStepBg(unattendedBlocked)}
 11. Следи го в \`/history\` — **„Регистър на задачите“**.
 
 Стъпка 6 отваря \`/\` с отметнати точно новите сесии — затова пускането се стартира оттам, а не
@@ -1796,8 +1819,8 @@ ${systemGuideSection('bg')}
 какво прави даден бутон, какво значи даден етикет, къде живее дадена настройка — и отговаряй от
 изброените по-горе екрани и от нищо друго. Ако отговорът не е там, кажи, че не е там.
 
-Завърши фаза 2 така, както завършва всяко съобщение — с това, което следва: да натисне
-**„Пусни {n} сесия(и)“** и да следи \`/history\`. Повече от теб не се иска, докато задача не
+Завърши фаза 2 така, както завършва всяко съобщение — с това, което следва: ${runNextBg(unattendedBlocked)}
+и да следи \`/history\`. Повече от теб не се иска, докато задача не
 завърши по начин, различен от **„готова“**.
 
 ### Форматът
