@@ -10,6 +10,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:package": "node scripts/build-package.mjs",
+    "prepack": "node scripts/build-package.mjs",
     "check:pacing": "tsx test/pacing.check.ts",
     "check:runner": "tsx test/runner.check.ts",
     "check:chat": "tsx test/chat.check.ts",
@@ -18,7 +20,7 @@
     "cop": "tsx src/cli.ts",
     "check:parser": "tsx test/parser.check.ts",
     "check:report": "tsx test/report.check.ts",
-    "check": "npm run check:parser && npm run check:damage && npm run check:session && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:vcs && npm run check:plan && npm run check:checks && npm run check:workdir && npm run check:processes && npm run check:environment && npm run check:clock && npm run check:crash && npm run check:clipboard && npm run check:restart && npm run check:review && npm run check:chat && npm run check:context && npm run check:pacing && npm run check:shells && npm run check:save && npm run check:guide && npm run check:bundle && npm run check:runname && npm run check:dangerous && npm run check:programs && npm run check:manifest && npm run check:lock && npm run check:isolation && npm run check:security && npm run check:update && npm run check:persona && npm run check:script && npm run check:batch && npm run check:confinement && npm run check:network && npm run check:hardening",
+    "check": "npm run check:parser && npm run check:damage && npm run check:session && npm run check:report && npm run check:runner && npm run check:mirror && npm run check:vcs && npm run check:plan && npm run check:checks && npm run check:workdir && npm run check:processes && npm run check:environment && npm run check:clock && npm run check:crash && npm run check:clipboard && npm run check:restart && npm run check:review && npm run check:chat && npm run check:context && npm run check:pacing && npm run check:shells && npm run check:save && npm run check:guide && npm run check:bundle && npm run check:runname && npm run check:dangerous && npm run check:programs && npm run check:manifest && npm run check:lock && npm run check:isolation && npm run check:security && npm run check:update && npm run check:persona && npm run check:script && npm run check:batch && npm run check:confinement && npm run check:network && npm run check:hardening && npm run check:package",
     "probe": "tsx scripts/probe-locators.ts",
     "check:damage": "tsx test/damage.check.ts",
     "api": "npm run build && node dist/src/api/main.js",
@@ -58,7 +60,8 @@
     "check:batch": "tsx test/batch.check.ts",
     "check:confinement": "tsx test/confinement.check.ts",
     "check:network": "tsx test/network.check.ts",
-    "check:hardening": "tsx test/hardening.check.ts"
+    "check:hardening": "tsx test/hardening.check.ts",
+    "check:package": "tsx test/package.check.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",
@@ -85,13 +88,22 @@
   "bin": {
     "cop": "dist/src/cli.js"
   },
-  "main": "dist/src/cli.js",
   "files": [
-    "dist",
+    "dist/src",
+    "dist/web",
     "prompts",
-    "run.example.yaml",
     "README.md",
     "LICENSE"
+  ],
+  "os": [
+    "win32"
+  ],
+  "keywords": [
+    "copilot",
+    "microsoft-365",
+    "automation",
+    "playwright",
+    "agent"
   ],
   "workspaces": [
     "web"

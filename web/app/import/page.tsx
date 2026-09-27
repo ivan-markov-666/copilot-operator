@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, type ContextKind, type PlanCheck, type PlanImport } from '../../lib/api';
+import { api, type ContextKind, type PlanCheck, type PlanImport, sessionHref } from '../../lib/api';
 import { confirmDialog } from '../dialog';
 import { useT, useFmtTime } from '../../lib/i18n';
 
@@ -273,7 +273,7 @@ export default function ImportPage() {
             <ul>
               {(check?.duplicates ?? []).map((d) => (
                 <li key={d.sessionId}>
-                  <Link href={`/sessions/${d.sessionId}`}>
+                  <Link href={sessionHref(d.sessionId)}>
                     {t('plan.duplicateRow', { name: d.name, tasks: d.tasks, when: fmtTime(d.createdAt) })}
                   </Link>
                 </li>
@@ -315,7 +315,7 @@ export default function ImportPage() {
                 const created = imported?.result.sessions[i];
                 return (
                   <tr key={`${s.name}-${i}`}>
-                    <td>{created ? <Link href={`/sessions/${created.id}`}>{s.name}</Link> : s.name}</td>
+                    <td>{created ? <Link href={sessionHref(created.id)}>{s.name}</Link> : s.name}</td>
                     <td className="small">
                       {s.tasks.length}
                       <div className="muted small">{s.tasks.join(', ')}</div>

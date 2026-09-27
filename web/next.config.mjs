@@ -5,6 +5,12 @@ import { dirname } from 'node:path';
 const nextConfig = {
   reactStrictMode: true,
   /*
+   * `COP_EXPORT=1` builds the interface as static files, which is what the npm package carries
+   * and what the API serves itself (scripts/build-package.mjs). Without it this is the ordinary
+   * dev server `npm start` runs in a clone.
+   */
+  ...(process.env.COP_EXPORT === '1' ? { output: 'export', distDir: '.next-export' } : {}),
+  /*
    * The workspace root, which is the repository root and not this folder.
    *
    * This app is the `web` workspace of the repository above it, so npm hoists `next` itself to

@@ -32,6 +32,12 @@
  * finished starting, it says nothing but the time, and requiring a token to ask "are you up" would
  * make the start-up race harder to debug for no gain.
  *
+ * The web interface, when this process serves it (an install from npm, `cop start`): its pages are
+ * static files and answer without a token — the host check still applies, so a rebound domain gets
+ * nothing — and every page hands the browser the token as a cookie scoped to `/api`, HttpOnly (no
+ * script reads it) and SameSite=Strict (no other site's page sends it). The page's own requests
+ * then carry it by themselves, the stream and the downloads included, and no URL ever holds it.
+ *
  * The honest limit, since this is the file somebody will quote: none of this contains a process
  * already running as the operator. It raises the floor from "anything on this machine, and quite a
  * few things off it" to "something that can read a file in the install". The boundary is still the
@@ -101,8 +107,28 @@ export function tokenMatches(presented: string | undefined, expected: string): b
   return timingSafeEqual(a, b);
 }
 
-/** The token a request presents, from any of the three places one can be carried. */
+/** The cookie the served interface is given the token in. */
+export const TOKEN_COOKIE = 'cop_token';
+
+/** Whether a path is the web interface rather than the API. */
+export function isInterfacePath(path: string): boolean {
+  return path !== '/api' && !path.startsWith('/api/');
+}
+
+/** The `Set-Cookie` value that hands a served page the token. */
+export function tokenCookie(token: string): string {
+  return `${TOKEN_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/api`;
+}
+
+/** The token a request presents, from any of the places one can be carried. */
 export function presentedToken(req: Pick<Request, 'headers' | 'query'>): string | undefined {
+  const cookie = req.headers.cookie;
+  if (typeof cookie === 'string') {
+    for (const part of cookie.split(';')) {
+      const [name, ...rest] = part.trim().split('=');
+      if (name === TOKEN_COOKIE && rest.join('=').trim()) return rest.join('=').trim();
+    }
+  }
   const auth = req.headers.authorization;
   if (typeof auth === 'string' && /^bearer\s+/i.test(auth)) return auth.replace(/^bearer\s+/i, '').trim();
   const header = req.headers['x-cop-token'];
@@ -134,7 +160,13 @@ export async function ensureApiToken(dataDir: string): Promise<string> {
   return token;
 }
 
-export type GuardOptions = { token: string; port: number; allowedOrigins: string[] };
+export type GuardOptions = {
+  token: string;
+  port: number;
+  allowedOrigins: string[];
+  /** This process serves the prebuilt web interface itself (an npm install). */
+  servesInterface?: boolean;
+};
 
 export type GuardVerdict = { ok: true } | { ok: false; status: number; reason: string; detail: string };
 
@@ -160,6 +192,9 @@ export function judgeRequest(
     return { ok: false, status: 403, reason: 'origin', detail: `requests from ${origin} are not accepted by this API` };
   }
   if (OPEN_PATHS.includes(req.path)) return { ok: true };
+  // The interface's own files: answered to the right host with no token, since they are how the
+  // browser gets one. Only when this process serves them; see `localApiGuard`.
+  if (opts.servesInterface && isInterfacePath(req.path)) return { ok: true };
   const presented = presentedToken({ headers: req.headers as Request['headers'], query: (req.query ?? {}) as Request['query'] });
   if (!tokenMatches(presented, opts.token)) {
     return {
@@ -167,8 +202,10 @@ export function judgeRequest(
       status: 401,
       reason: 'token',
       detail:
-        'this API needs the token kept in data/api-token, as an Authorization: Bearer header, an ' +
-        'x-cop-token header, or a token query parameter. Restart with `npm start` and the UI is given it.',
+        'this API needs the token kept in data/api-token (.copilot-operator/data/api-token when installed from npm), ' +
+        'as an Authorization: Bearer header, ' +
+        'an x-cop-token header, or a token query parameter. Open the interface from `npx cop start` (or ' +
+        '`npm start` in a clone) and it is given the token.',
     };
   }
   return { ok: true };
@@ -188,6 +225,7 @@ export function localApiGuard(opts: GuardOptions) {
     }
     const verdict = judgeRequest({ path: req.path, headers: req.headers as Record<string, unknown>, query: req.query as Record<string, unknown> }, opts);
     if (verdict.ok) {
+      if (opts.servesInterface && isInterfacePath(req.path)) res.setHeader('Set-Cookie', tokenCookie(opts.token));
       next();
       return;
     }

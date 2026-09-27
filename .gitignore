@@ -15,3 +15,6 @@ web/tsconfig.tsbuildinfo
 !.env.example
 /.next/
 run.yaml
+web/out/
+web/.next-export/
+*.tgz

@@ -20,6 +20,7 @@
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { installLayout } from '../config/layout.js';
 import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport } from '../transport/copilotTransport.js';
 import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
@@ -341,7 +342,8 @@ export async function runReview(
   const { cfg, authorizer, signal, pacer, dir, round } = deps;
   await mkdir(dir, { recursive: true });
 
-  const contract = await readFile(join(process.cwd(), 'prompts', 'review1.md'), 'utf8').catch(() => '');
+  // From the program's own prompts, wherever it is installed — not from the folder it was started in.
+  const contract = await readFile(join(installLayout().promptsDir, 'review1.md'), 'utf8').catch(() => '');
   if (!contract.trim()) {
     return { verdict: 'error', findings: [], stepsRun: 0, iterations: 0, problem: 'the reviewer contract (prompts/review1.md) could not be read' };
   }

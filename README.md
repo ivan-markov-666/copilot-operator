@@ -330,7 +330,28 @@ to run unwatched until you have, and never do it for you.
 - Microsoft Edge, already installed
 - A Microsoft 365 Copilot account, signed in once by the user
 
-## Getting started
+## Installing it in a project
+
+```bash
+npm install --save-dev copilot-operator
+npx cop login --account you@tenant.org   # sign in once; the Edge profile is reused across projects
+npx cop start --open                     # the API and the interface, on http://127.0.0.1:4000/
+```
+
+Installed this way, the bot belongs to the project it is installed in. Its records — settings,
+sessions, the API key, every run's logs — go to `.copilot-operator/` in the project, which carries
+its own `.gitignore`, so the project's git never sees it and the bot's version control finds a
+clean tree. The interface ships prebuilt and is served by the same process on one port; there is no
+second server and nothing is compiled on the machine. `npx cop start --port 4100` picks another
+port. `npm update copilot-operator` updates it; `npm run update` is for a clone.
+
+The bot is then inside the folders its own steps may write, so a step that reaches for
+`node_modules/copilot-operator`, for `.copilot-operator`, or that installs, updates or removes the
+bot as a package is refused. What no rule can see is a step that rewrites the project's
+`package.json` with a different version of the bot for a later `npm install` to fetch; the commit
+the bot makes after the task shows such a change, and it is worth a look before the next install.
+
+## Working on it from a clone
 
 ```bash
 npm install                                          # root and the web workspace

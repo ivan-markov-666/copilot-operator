@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus } from '../lib/api';
+import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus, sessionHref } from '../lib/api';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { ModelHint } from './defaultHints';
@@ -74,7 +74,7 @@ export default function SessionsPage() {
     try {
       const s = await api.createSession(name || 'session');
       setName('');
-      window.location.href = `/sessions/${s.id}`;
+      window.location.href = sessionHref(s.id);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -307,7 +307,7 @@ export default function SessionsPage() {
                       />
                     </td>
                     <td>
-                      <Link href={`/sessions/${s.id}`}>{s.name}</Link>
+                      <Link href={sessionHref(s.id)}>{s.name}</Link>
                     </td>
                     <td>
                       {s.tasks.length} <span className="muted small">{t('home.tasksDetail', { done, queued })}</span>
@@ -835,7 +835,7 @@ function BatchPanel({
               {batch.sessions.map((s) => (
                 <tr key={s.sessionId} className={`batch-row ${s.state}`}>
                   <td>
-                    <Link href={`/sessions/${s.sessionId}`}>{s.name}</Link>
+                    <Link href={sessionHref(s.sessionId)}>{s.name}</Link>
                   </td>
                   <td>
                     <span className={`badge ${badgeFor(s.state)}`}>{t(`batch.state.${s.state}` as Key)}</span>
@@ -896,7 +896,7 @@ function HomeApproval({
     <div className="approval">
       <div className="row">
         <strong>{t('approval.title', { n: approval.stepId })}</strong>
-        <Link href={`/sessions/${approval.sessionId}`}>{sessionName}</Link>
+        <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>

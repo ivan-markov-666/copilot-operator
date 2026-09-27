@@ -14,10 +14,11 @@ import { join } from 'node:path';
 import { AppModule } from './app.module.js';
 import { OperatorService } from './operator.service.js';
 import { ensureApiToken, localApiGuard } from './security.js';
-import { botRootDir } from '../exec/workDir.js';
 import { secureDataDir } from './dataAcl.js';
 import { pruneRuns } from '../session/retention.js';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { installLayout } from '../config/layout.js';
 
 const PORT = Number(process.env.COP_API_PORT ?? 4000);
 const WEB_ORIGIN = process.env.COP_WEB_ORIGIN ?? 'http://localhost:3210';
@@ -50,7 +51,19 @@ async function main(): Promise<void> {
    * was never the whole answer — a page in the operator's ordinary browser and any other process
    * on the machine were both callers all along.
    */
-  const dataDir = process.env.COP_DATA_DIR ?? join(botRootDir(), 'data');
+  const layout = installLayout();
+  const dataDir = layout.dataDir;
+  await mkdir(dataDir, { recursive: true });
+  if (layout.mode === 'package') {
+    /*
+     * The records folder sits inside the project, so it must be invisible to the project's git:
+     * version control refuses to branch on a tree with untracked files, and the records are not
+     * the project's work. A `.gitignore` of `*` inside the folder says so without touching the
+     * project's own .gitignore.
+     */
+    const ignore = join(layout.homeDir, '.gitignore');
+    if (!existsSync(ignore)) await writeFile(ignore, '*\n', 'utf8');
+  }
   // Before the token is read: a token any local account can read guards nothing. See `dataAcl.ts`.
   const acl = secureDataDir(dataDir);
   if (!acl.ok) {
@@ -58,8 +71,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const token = await ensureApiToken(dataDir);
-  const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1')];
-  app.use(localApiGuard({ token, port: PORT, allowedOrigins }));
+  // The dev UI's origin, and this process's own for the interface it serves itself.
+  const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1'), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
+  app.use(localApiGuard({ token, port: PORT, allowedOrigins, servesInterface: layout.webDir !== null }));
+  if (layout.webDir) {
+    // The prebuilt interface, from the package: one process, one port, no dev server.
+    app.useStaticAssets(layout.webDir, { extensions: ['html'], index: 'index.html' });
+  }
 
   await app.listen(PORT, '127.0.0.1');
 
@@ -88,8 +106,14 @@ async function main(): Promise<void> {
   const pruned = await pruneRuns(cfg.resolved.runsDir, cfg.runsRetentionDays);
   if (pruned.length > 0) console.log(`  removed ${pruned.length} run folder(s) older than ${cfg.runsRetentionDays} days (runsRetentionDays)`);
 
-  console.log(`copilot-operator api listening on http://127.0.0.1:${PORT}/api  (web origin ${WEB_ORIGIN})`);
-  console.log(`  requests need the token in ${join(dataDir, 'api-token')} — the UI is given it once, by the link \`npm start\` prints`);
+  if (layout.webDir) {
+    console.log(`copilot-operator is running for ${layout.projectRoot}`);
+    console.log(`  open http://127.0.0.1:${PORT}/ in your browser`);
+    console.log(`  records are kept in ${layout.homeDir}`);
+  } else {
+    console.log(`copilot-operator api listening on http://127.0.0.1:${PORT}/api  (web origin ${WEB_ORIGIN})`);
+    console.log(`  requests need the token in ${join(dataDir, 'api-token')}; npm start hands it to the UI`);
+  }
 }
 
 /*

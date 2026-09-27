@@ -10,6 +10,7 @@ import { Injectable } from '@nestjs/common';
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { installLayout } from '../config/layout.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW } from '../session/store.js';
 import { EventBus } from '../session/events.js';
@@ -279,10 +280,16 @@ export type RegistryEntry = {
 
 @Injectable()
 export class OperatorService {
-  readonly projectRoot = resolve(process.env.COP_PROJECT_ROOT ?? process.cwd());
-  readonly dataDir = resolve(process.env.COP_DATA_DIR ?? join(this.projectRoot, 'data'));
-  readonly settings = new Settings(this.projectRoot, this.dataDir);
-  readonly store = new SessionStore(this.dataDir, join(this.projectRoot, 'prompts', 'level1.md'));
+  /** Where this install keeps its prompts and its records. See `config/layout.ts`. */
+  readonly layout = installLayout();
+  readonly projectRoot = this.layout.projectRoot;
+  readonly dataDir = this.layout.dataDir;
+  readonly settings = new Settings(
+    this.projectRoot,
+    this.dataDir,
+    this.layout.mode === 'package' ? { runsDir: this.layout.runsDir, level1File: join(this.layout.promptsDir, 'level1.md') } : {},
+  );
+  readonly store = new SessionStore(this.dataDir, join(this.layout.promptsDir, 'level1.md'));
   readonly bus = new EventBus();
 
   private readonly running = new Map<string, Running>();

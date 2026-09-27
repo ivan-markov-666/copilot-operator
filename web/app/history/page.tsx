@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { api, fmtDuration, type RegistryEntry, type TaskStatus } from '../../lib/api';
+import { api, fmtDuration, type RegistryEntry, type TaskStatus, sessionHref } from '../../lib/api';
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
 import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
@@ -481,7 +481,7 @@ function Flow({
             </div>
 
             <div className="when">
-              <Link href={`/sessions/${e.sessionId}`}>{e.sessionName}</Link>
+              <Link href={sessionHref(e.sessionId)}>{e.sessionName}</Link>
               {' · '}
               {e.startedAt ? t('task.started', { t: fmtTime(e.startedAt) }) : t('task.added', { t: fmtTime(e.createdAt) })}
               {e.finishedAt ? ` · ${t('task.finished', { t: fmtTime(e.finishedAt) })}` : ''}
@@ -545,7 +545,7 @@ function Flow({
             {actions.message && <p className="what small">{actions.message}</p>}
 
             <div className="row small" style={{ marginTop: 6 }}>
-              <Link href={`/sessions/${e.sessionId}#${e.taskId}`}>{t('reg.openTask')}</Link>
+              <Link href={sessionHref(e.sessionId, e.taskId)}>{t('reg.openTask')}</Link>
               {e.runId && <SaveLog label={t('save.log')} save={() => api.saveTaskLog(e.sessionId, e.taskId)} />}
               {e.chatUrl && (
                 <a href={e.chatUrl} target="_blank" rel="noreferrer">
@@ -866,7 +866,7 @@ function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
             id="new-task-session"
             value=""
             onChange={(e) => {
-              if (e.target.value) window.location.href = `/sessions/${e.target.value}#new-task`;
+              if (e.target.value) window.location.href = sessionHref(e.target.value, 'new-task');
             }}
             style={{ width: 'auto', minWidth: 200 }}
           >
@@ -1092,10 +1092,10 @@ function ListView({ entries }: { entries: RegistryEntry[] }) {
           {entries.map((e) => (
             <tr key={`${e.sessionId}-${e.taskId}`}>
               <td>
-                <Link href={`/sessions/${e.sessionId}#${e.taskId}`}>{e.title}</Link>
+                <Link href={sessionHref(e.sessionId, e.taskId)}>{e.title}</Link>
               </td>
               <td>
-                <Link href={`/sessions/${e.sessionId}`}>{e.sessionName}</Link>
+                <Link href={sessionHref(e.sessionId)}>{e.sessionName}</Link>
               </td>
               <td>
                 <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>

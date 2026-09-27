@@ -202,6 +202,23 @@ export function botSelfRefusal(command: string, ports: number[] = botPorts(), ro
   const folded = command.replace(/\//g, '\\').toLowerCase();
   const own = root.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
   const reachesRecords = ['data', 'runs', 'data-backups'].some((d) => folded.includes(`${own}\\${d}`));
+  /*
+   * Installed from npm, the bot is a dependency of the very project it works on: its code sits in
+   * the project's `node_modules`, its records in the project's `.copilot-operator`, and both are
+   * inside the folders a step may write. A step that edited the bot's code or contract, or swapped
+   * its version, would be changing what runs the next task. So the bot's folders are refused by any
+   * spelling of the path, and so is installing, updating or removing the bot as a package.
+   */
+  const reachesPackage =
+    /node_modules[\\/]+(?:@[^\\/\s]+[\\/]+)?copilot-operator(?![\w-])/i.test(command) ||
+    /(?:^|[\s'"`=(\\/,;])\.copilot-operator(?:[\\/\s'"`;|)]|$)/i.test(command) ||
+    /\b(?:npm|pnpm|yarn|bun)(?:\.cmd|\.exe)?\b[^|;\n]*\b(?:i|install|add|ci|un|uninstall|remove|rm|r|update|up|upgrade|link|ln)\b[^|;\n]*(?:^|\s|@[^\s/]+\/)copilot-operator(?![\w-])/i.test(command);
+  if (reachesPackage) {
+    return (
+      "refused: this reaches the bot's own package — its code in node_modules, its records in .copilot-operator, or " +
+      'its installation. The bot that runs the task is not part of the work; leave both folders and the dependency alone.'
+    );
+  }
   if (reachesRecords || new RegExp(String.raw`${host}\s*:\s*${port}(?!\d)`, 'i').test(command) || /\bapi-token\b|\bdev-pids\.json\b/i.test(command)) {
     return (
       'refused: this reaches the bot itself — its API, its web page or its key. A task works on its own project; ' +

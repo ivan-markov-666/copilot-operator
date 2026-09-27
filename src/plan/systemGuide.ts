@@ -707,7 +707,7 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
   },
 
   {
-    route: '/sessions/[id]',
+    route: '/sessions/view?id=…',
     nameEn: 'One session',
     nameBg: 'Една сесия',
     purposeEn:

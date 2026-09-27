@@ -3,6 +3,11 @@
  */
 export const API = process.env.NEXT_PUBLIC_COP_API ?? 'http://127.0.0.1:4000/api';
 
+/** The address of a session's page, with an optional in-page anchor (a task id, `new-task`). */
+export function sessionHref(id: string, anchor?: string): string {
+  return `/sessions/view?id=${encodeURIComponent(id)}${anchor ? `#${anchor}` : ''}`;
+}
+
 /** Where this browser keeps the token once it has been handed over. */
 const TOKEN_KEY = 'cop-api-token';
 

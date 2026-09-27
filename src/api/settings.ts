@@ -15,6 +15,12 @@ export class Settings {
   constructor(
     readonly projectRoot: string,
     readonly dataDir: string,
+    /**
+     * Defaults that depend on how the program is installed, applied under whatever the file says.
+     * A package keeps its runs in the project's records folder and reads its contract from the
+     * package; a checkout's own defaults (`./runs`, `prompts/level1.md`) need nothing here.
+     */
+    private readonly installDefaults: Record<string, unknown> = {},
   ) {
     this.path = join(dataDir, 'settings.json');
   }
@@ -32,12 +38,12 @@ export class Settings {
   /** Parsed, defaulted and resolved against the project root. */
   async load(): Promise<ResolvedConfig> {
     const raw = await this.raw();
-    return await loadConfigObject({ ...raw, dataDir: this.dataDir }, this.projectRoot, this.path);
+    return await loadConfigObject({ ...this.installDefaults, ...raw, dataDir: this.dataDir }, this.projectRoot, this.path);
   }
 
   /** Validates before saving, so a bad edit is rejected rather than stored. */
   async save(value: Record<string, unknown>): Promise<ResolvedConfig> {
-    const resolved = await loadConfigObject({ ...value, dataDir: this.dataDir }, this.projectRoot, this.path);
+    const resolved = await loadConfigObject({ ...this.installDefaults, ...value, dataDir: this.dataDir }, this.projectRoot, this.path);
     await mkdir(dirname(this.path), { recursive: true });
     await writeFile(this.path, JSON.stringify(value, null, 2), 'utf8');
     return resolved;

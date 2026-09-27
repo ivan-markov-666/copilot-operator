@@ -12,7 +12,8 @@ import { Command } from 'commander';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { installLayout } from './config/layout.js';
+import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -37,6 +38,28 @@ program
   .version('0.1.0');
 
 const DEFAULT_PROFILE = expandPath('~/AppData/Local/copilot-operator/edge-profile', process.cwd());
+
+program
+  .command('start')
+  .description('start copilot-operator for this project: the API and the web interface, on 127.0.0.1')
+  .option('--port <port>', 'the port to listen on', '4000')
+  .option('--open', 'open the interface in the default browser once it is up')
+  .action(async (opts: { port: string; open?: boolean }) => {
+    process.env.COP_API_PORT = String(Number(opts.port) || 4000);
+    // The API runs in this process; importing it starts it. See src/api/main.ts.
+    await import('./api/main.js');
+    if (opts.open) {
+      const url = `http://127.0.0.1:${process.env.COP_API_PORT}/`;
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        const up = await fetch(`${url}api/health`).then((r) => r.ok).catch(() => false);
+        if (up) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // Explorer hands an address to the default browser; no shell, no `start`.
+      spawn('explorer.exe', [url], { stdio: 'ignore', detached: true, windowsHide: true }).unref();
+    }
+  });
 
 program
   .command('logout')
@@ -247,7 +270,7 @@ program
         : `npm cannot reach ${registry} — behind a proxy, set it for npm (npm config set proxy / https-proxy) or HTTPS_PROXY; every plan starts with npm install`,
     );
 
-    const dataDir = join(process.cwd(), 'data');
+    const dataDir = installLayout().dataDir;
     const readJson = (file: string): Record<string, unknown> | null => {
       try {
         return JSON.parse(readFileSync(join(dataDir, file), 'utf8')) as Record<string, unknown>;
@@ -364,7 +387,7 @@ program
   .action(async (opts: { profile: string; url: string; json?: boolean; set?: string }) => {
     const transport = new CopilotTransport({
       profileDir: opts.profile,
-      transportDir: join(process.cwd(), 'runs', '_models'),
+      transportDir: join(installLayout().runsDir, '_models'),
       chatUrl: opts.url,
       channel: 'msedge',
       headless: false,

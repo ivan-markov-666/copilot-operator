@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
@@ -23,9 +23,23 @@ import { useTaskActions } from '../../taskActions';
 // The page
 // ---------------------------------------------------------------------------------------
 
-export default function SessionPage() {
+/*
+ * The session's page. Its address is `/sessions/view?id=<id>` rather than `/sessions/<id>`: the
+ * interface an npm install carries is built once, as static files, and a static build cannot hold a
+ * page for every session id there will ever be. A query string is read in the browser instead.
+ * `useSearchParams` needs a Suspense boundary in such a build, hence the wrapper.
+ */
+export default function SessionPageRoute() {
+  return (
+    <Suspense fallback={null}>
+      <SessionPage />
+    </Suspense>
+  );
+}
+
+function SessionPage() {
   const { t } = useT();
-  const { id } = useParams<{ id: string }>();
+  const id = useSearchParams().get('id') ?? '';
   const [session, setSession] = useState<Session | null>(null);
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [presets, setPresets] = useState<Preset[]>([]);
