@@ -805,8 +805,8 @@ export const SCRIPT: ScriptMessage[] = [
       { en: 'Session `{name}`: {goal}', bg: 'Сесия `{име}`: {цел}' },
       { en: '- Task `{title}`: {what it does}. Checks: {which}.', bg: '- Задача `{заглавие}`: {какво прави}. Проверки: {какви}.' },
       {
-        en: 'Criterion → check: {each criterion of the assignment, and the check that fails until it holds}.',
-        bg: 'Критерий → проверка: {всеки критерий от заданието и проверката, която пада, докато той не е изпълнен}.',
+        en: 'Criterion → check: {each criterion of the assignment → the check on the output that names it — for a test, "✔ " and the test named after the criterion}.',
+        bg: 'Критерий → проверка: {всеки критерий от заданието → проверката по изхода, която го назовава — за тест, „✔ “ и тестът, кръстен на критерия}.',
       },
       {
         en: 'Settings: version control {…}; if a task fails {…}; if a session fails {…}; chats {…}; review {…}; files for the chat {…}; run name {…}.',

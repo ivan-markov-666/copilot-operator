@@ -95,9 +95,11 @@ for (const lang of ['en', 'bg'] as const) {
     `${lang} interview`,
     '| asks when empty:', /(before anything else|преди всичко останало)/.test(asking) ? 'yes' : 'NO',
     '| shows both examples:', asking.includes('EXAMPLE-ONLY') && asking.includes('WORK-EXAMPLE-ONLY') ? 'yes' : 'NO',
-    '| asks for two JSON documents:', /(exactly two JSON documents|точно два JSON документа)/.test(asking) ? 'yes' : 'NO',
+    // Three documents since the persona became one of the operator's parts, each headed by its field.
+    '| asks for the JSON documents:', /(hand back the JSON documents|върни JSON документите)/.test(asking) ? 'yes' : 'NO',
     '| says where each goes:', /(Plan from JSON|План от JSON)/.test(asking) && /(This work|Тази работа)/.test(asking) ? 'yes' : 'NO',
-    '| names the conventions:', /(branch naming|именуване на клонове)/.test(asking) && /(pull request)/.test(asking) ? 'yes' : 'NO',
+    // The conventions are asked in the script now, as options, rather than listed in prose.
+    '| names the conventions:', /(How are git branches named|Как се именуват git клоновете)/.test(asking) && /(pull request)/.test(asking) ? 'yes' : 'NO',
     '| silent once written:', !/(before anything else|преди всичко останало)/.test(notAsking) && !notAsking.includes('EXAMPLE-ONLY') ? 'yes' : 'NO',
     '| is Kerrigan:', /Kerrigan/.test(asking) ? 'yes' : 'NO',
   );

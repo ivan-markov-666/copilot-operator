@@ -462,6 +462,9 @@ export function checkPlan(text: string): PlanCheck {
     return { ok: false, warnings, issues: parsed.error.issues.map((i) => ({ path: pathOf(i.path), message: i.message })) };
   }
 
+  const weak = weakCheckIssues(parsed.data);
+  if (weak.length) return { ok: false, warnings, issues: weak };
+
   return {
     ok: true,
     plan: parsed.data,
@@ -492,6 +495,42 @@ function indexCheckWarnings(plan: Plan): string[] {
             'untracked until the runner commits after the task, and the task may not git add, so this check cannot pass. ' +
             'Use "file-exists" for a file the task writes; the index is right only for what earlier tasks committed.',
         );
+      });
+    });
+  });
+  return out;
+}
+
+/**
+ * A task whose every check would pass with the task's work not done is refused.
+ *
+ * `file-exists` proves a file, not what is in it; a bare exit code of a test run is 0 when there are
+ * no tests at all, and 0 again with only the old ones. A plan built entirely from those can finish
+ * "done" with nothing proven, and it did: twice in a row the planning model wrote "npm test exits 0"
+ * against five acceptance criteria — the second time after the brief had named this very trap — and
+ * both times the operator had to catch it and dictate the fix. The brief teaches the rule; this is
+ * the part that does not depend on a model having learned it. It is an error rather than a warning
+ * because errors are what the operator copies back to the chat with one button, and the brief tells
+ * the chat to fix exactly those.
+ *
+ * Only tasks that have checks are judged: a task with none (a read-only report, a task with nothing
+ * to run) was allowed before and is not what this is about. `exit-nonzero` is not weak — it proves a
+ * refusal — and anything that reads output or file contents is where proof can live.
+ */
+const WEAK_EXPECT = new Set(['file-exists', 'file-missing', 'exit-zero']);
+
+function weakCheckIssues(plan: Plan): PlanIssue[] {
+  const out: PlanIssue[] = [];
+  plan.sessions.forEach((s, i) => {
+    s.tasks.forEach((t, j) => {
+      if (!t.checks.length || !t.checks.every((c) => WEAK_EXPECT.has(c.expect))) return;
+      out.push({
+        path: `sessions[${i}].tasks[${j}].checks`,
+        message:
+          `every check of "${t.title}" would pass with the task's work not done: a file that exists proves the file, not what is in it, ` +
+          'and a test run exits 0 with no tests at all. Add a check that reads output or contents only the finished work produces — ' +
+          'name each test after its acceptance criterion and use "output-contains" on the test runner\'s output for that test passing ' +
+          '(with node --test, the line starts with ✔), or "output-matches" on the count of passing tests.',
       });
     });
   });

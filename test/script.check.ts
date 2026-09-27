@@ -15,7 +15,8 @@
  *   the projects      offered as the machine's own list, in order, with "another folder" last
  *   the old rule      the brief no longer tells the model to letter anything
  */
-import { planBrief, type KnownProject } from '../src/plan/brief.js';
+import { planBrief, planExample, type KnownProject } from '../src/plan/brief.js';
+import { checkPlan } from '../src/plan/schema.js';
 import { SCRIPT, renderMessage, PHASE_LINES, ON_RECORD_ALL, ON_RECORD_MIXED, OPENING } from '../src/plan/script.js';
 
 let wrong = 0;
@@ -184,6 +185,30 @@ for (const lang of ['en', 'bg'] as const) {
   const persona = SCRIPT.find((m) => m.id === 'persona-build-approach')!;
   check(`${lang}: persona in the interview opens as phase 0`, renderMessage(persona, PROJECTS, lang, ['phase0', 'phase1'])[0], PHASE_LINES.p0[lang]);
   check(`${lang}: persona on its own opens as before phase 1`, renderMessage(persona, PROJECTS, lang, ['persona', 'phase1'])[0], PHASE_LINES.beforeP1[lang]);
+}
+
+/*
+ * A task whose checks all pass with its work not done is refused at import. Twice the planning model
+ * wrote "npm test exits 0" and "the file exists" against real acceptance criteria, the second time
+ * after the brief had named the trap; this is the guard that does not depend on the model.
+ */
+console.log('\n--- a task proven by nothing is refused ---');
+{
+  const withTask = (checks: unknown[]) => {
+    const p = JSON.parse(JSON.stringify(planExample())) as { sessions: Array<{ tasks: Array<{ checks?: unknown[] }> }> };
+    p.sessions[0]!.tasks[0]!.checks = checks;
+    return checkPlan(JSON.stringify(p));
+  };
+  const exists = { name: 'exists', expect: 'file-exists', file: 'C:\\x\\a.js' };
+  const exits = { name: 'runs', expect: 'exit-zero', run: 'npm test', cwd: 'C:\\x' };
+  const named = { name: 'named', expect: 'output-contains', run: 'npm test', cwd: 'C:\\x', value: '✔ adds two numbers' };
+  const weakOnly = withTask([exists, exits]);
+  check('the example plan itself passes', checkPlan(JSON.stringify(planExample())).ok, true);
+  check('file-exists and exit-zero alone are refused', weakOnly.ok, false);
+  check('and the refusal says how to fix it', !weakOnly.ok && weakOnly.issues.some((i) => i.message.includes('output-contains')), true);
+  check('one check on the output is enough', withTask([exists, exits, named]).ok, true);
+  check('a task with no checks is not judged', withTask([]).ok, true);
+  check('exit-nonzero proves a refusal and is not weak', withTask([{ name: 'refuses', expect: 'exit-nonzero', run: 'node bad.js', cwd: 'C:\\x' }]).ok, true);
 }
 
 console.log('\nwrong:', wrong, '(expect 0)');

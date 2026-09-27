@@ -227,7 +227,7 @@ export function planExample(): Record<string, unknown> {
         `In ${root}, add a CSV writer for invoices at src/invoices/csv.ts. It takes the existing Invoice[] ` +
         'type and returns a string with a header row and one row per invoice, with the columns number, date, ' +
         'customer, net, vat, gross. Amounts use a dot as the decimal separator and no thousands separator. Do not ' +
-        'wire it into anything yet.',
+        'wire it into anything yet. Add a unit test named exactly "two invoices give the six columns in order".',
       expected:
         '`npx tsc --noEmit` passes and a new unit test that writes two invoices produces exactly the six columns ' +
         'above, in that order.',
@@ -236,6 +236,16 @@ export function planExample(): Record<string, unknown> {
         { name: 'typescript compiles', expect: 'exit-zero', run: 'npx tsc --noEmit', cwd: root },
         { name: 'the writer exists', expect: 'file-exists', file: `${root}\\src\\invoices\\csv.ts` },
         { name: 'the unit tests pass', expect: 'exit-zero', run: 'npm test', cwd: root },
+        // The check that proves the behaviour: the test named after the criterion, seen passing.
+        // The three above would all pass with the writer empty, and the importer refuses a task
+        // whose checks are only of those kinds.
+        {
+          name: 'two invoices give the six columns in order',
+          expect: 'output-contains',
+          run: 'npm test',
+          cwd: root,
+          value: '✔ two invoices give the six columns in order',
+        },
       ],
       vcs: { branch: 'invoice-csv-writer', commitMessage: 'Add a CSV writer for invoices' },
     },
@@ -572,9 +582,15 @@ this task, and it is not a check of it. The traps that look like proof and are n
 - **Something that was already true.** An old test passing, a folder already there. Checked before the
   task, the answer would have been the same.
 
-The strongest check runs the behaviour the criterion names and looks for its result — the test that
-feeds the criterion's own input passing, or the command's own output carrying the value the criterion expects. Every
-criterion of the assignment is covered by at least one check that fails until the work is done.
+**The recipe, criterion by criterion.** Tell the task, in its prompt, to name each test after the
+criterion it proves — the criterion's own words. Then the check for that criterion is
+\`output-contains\` on the test run with that name as it appears when the test passes: with
+\`node --test\` a passing test's line starts with \`✔ \`, so the value is \`✔ \` and the name. That check
+fails while the test is missing and while it fails, and passes only when that criterion holds. A
+check a task's plan cannot do without: **a plan in which every check of a task is \`file-exists\`,
+\`file-missing\` or \`exit-zero\` is refused when it is checked**, because all three pass with the
+work not done.
+Every criterion of the assignment is covered by at least one check that fails until the work is done.
 `.trim();
 
 const CHECKS_BG = `
@@ -617,8 +633,14 @@ const CHECKS_BG = `
 - **Нещо, което и без това е вярно.** Стар тест, който минава, папка, която вече я има. Проверено
   преди задачата, отговорът щеше да е същият.
 
-Най-силната проверка пуска поведението, което критерият назовава, и търси резултата му — тестът, който подава\nвхода от самия критерий, минава, или изходът на командата съдържа стойността, която критерият очаква. Всеки критерий от заданието е
-покрит поне от една проверка, която пада, докато работата не е свършена.
+**Рецептата, критерий по критерий.** Кажи на задачата в текста ѝ да кръсти всеки тест с думите на
+критерия, който доказва. Тогава проверката за този критерий е \`output-contains\` върху пускането на
+тестовете с това име, както излиза, когато тестът мине: с \`node --test\` редът на минал тест започва с
+\`✔ \`, така че стойността е \`✔ \` и името. Такава проверка пада, докато тестът липсва и докато пада, и
+минава само когато критерият е изпълнен. Без това не може: **план, в който всички проверки на някоя
+задача са \`file-exists\`, \`file-missing\` или \`exit-zero\`, се отказва при проверката**, защото и
+трите минават без свършена работа.
+Всеки критерий от заданието е покрит поне от една проверка, която пада, докато работата не е свършена.
 `.trim();
 
 const MIRROR_EN = `
