@@ -69,7 +69,7 @@ program
 
     const transport = new CopilotTransport({
       profileDir: opts.profile,
-      downloadsDir: join(opts.profile, '_downloads'),
+      transportDir: join(opts.profile, '_transport'),
       chatUrl: opts.url,
       channel: 'msedge',
       headless: false,
@@ -130,7 +130,7 @@ program
   .action(async (opts: { profile: string; url: string }) => {
     const transport = new CopilotTransport({
       profileDir: opts.profile,
-      downloadsDir: join(opts.profile, '_downloads'),
+      transportDir: join(opts.profile, '_transport'),
       chatUrl: opts.url,
       channel: 'msedge',
       headless: false,
@@ -339,7 +339,7 @@ program
   .action(async (opts: { profile: string; url: string; json?: boolean; set?: string }) => {
     const transport = new CopilotTransport({
       profileDir: opts.profile,
-      downloadsDir: join(process.cwd(), 'runs', '_models'),
+      transportDir: join(process.cwd(), 'runs', '_models'),
       chatUrl: opts.url,
       channel: 'msedge',
       headless: false,

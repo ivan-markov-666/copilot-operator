@@ -21,7 +21,7 @@ import { parseChatId } from './chatSession.js';
 
 export type TransportOptions = {
   profileDir: string;
-  downloadsDir: string;
+  transportDir: string;
   chatUrl: string;
   channel: 'msedge' | 'chrome' | 'chromium';
   headless: boolean;
@@ -230,13 +230,19 @@ export class CopilotTransport {
     // report a closed browser with no explanation.
     this.lock = acquireProfileLock(this.opts.profileDir);
     await mkdir(this.opts.profileDir, { recursive: true });
-    await mkdir(this.opts.downloadsDir, { recursive: true });
+    await mkdir(this.opts.transportDir, { recursive: true });
 
     this.context = await chromium.launchPersistentContext(this.opts.profileDir, {
       channel: this.opts.channel,
       headless: this.opts.headless,
-      acceptDownloads: true,
-      downloadsPath: this.opts.downloadsDir,
+      /*
+       * No downloads, at the level of the browser itself. The runner takes a reply as text only —
+       * the JSON of command steps, copied out of the answer — and has taken nothing else since file
+       * steps were removed. Nothing in this code clicks a download link, but the window was still
+       * opened willing to accept one, so a click from anywhere would have saved a file the bot had no
+       * business having. Refused here, a download is cancelled by the browser before it is written.
+       */
+      acceptDownloads: false,
       viewport: null,
       args: ['--start-maximized'],
     });
@@ -397,7 +403,7 @@ Current URL: ${url}`);
   async handleBlocker(found: BlockerFinding): Promise<boolean> {
     const { kind, reason } = found;
     // Evidence first: whatever happens next, there is a picture of what the page looked like.
-    await this.dumpFailure(join(this.opts.downloadsDir, '..', 'failures'), `blocker-${kind}-${Date.now()}`)
+    await this.dumpFailure(join(this.opts.transportDir, '..', 'failures'), `blocker-${kind}-${Date.now()}`)
       .catch(() => undefined);
 
     if (kind === 'error-banner') {
@@ -1190,7 +1196,7 @@ Current URL: ${url}`);
     }
 
     if (!sawNewTurn || !last.finished) {
-      await this.dumpFailure(join(this.opts.downloadsDir, '..', 'failures'), 'reply-timeout').catch(
+      await this.dumpFailure(join(this.opts.transportDir, '..', 'failures'), 'reply-timeout').catch(
         () => undefined,
       );
       throw new Error(
@@ -1210,6 +1216,9 @@ Current URL: ${url}`);
     }
 
     const attachments = await this.lastMessageAttachmentNames();
+    // A reply that carries a file is told nothing by being ignored, and neither is the operator; the
+    // file is not fetched, and the log says so by name. The contract already tells the chat why.
+    if (attachments.length) this.emit('reply-files-ignored', { files: attachments });
     const codeBlocksDom = await this.lastAnswerCodeBlocks();
     const { markdown, degraded } = await this.copyLastReply();
     this.emit('reply-received', {

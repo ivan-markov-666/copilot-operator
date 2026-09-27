@@ -209,12 +209,12 @@ class Sink {
 export async function openBrowser(
   cfg: ResolvedConfig,
   bus: EventBus,
-  downloadsDir: string,
+  transportDir: string,
   sessionId: string,
 ): Promise<CopilotTransport> {
   const transport = new CopilotTransport({
     profileDir: cfg.resolved.profileDir,
-    downloadsDir,
+    transportDir,
     chatUrl: cfg.copilot.url,
     channel: cfg.copilot.channel,
     headless: cfg.copilot.headless,
@@ -229,11 +229,13 @@ export async function openBrowser(
           'The bot will not touch it and is waiting for you.',
         'verification-cleared': 'Verification cleared, continuing.',
         'error-banner': 'The chat reported a transient error; reloading the page.',
+        'reply-files-ignored':
+          'The reply came with a file attached. It was not downloaded and will not be run: the runner takes only the text of a reply.',
       };
       bus.publish({
         sessionId,
         type: `browser:${event}`,
-        level: event === 'verification-required' ? 'warn' : 'info',
+        level: event === 'verification-required' || event === 'reply-files-ignored' ? 'warn' : 'info',
         message: spoken[event],
         data: detail,
       });

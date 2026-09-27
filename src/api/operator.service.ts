@@ -2128,7 +2128,7 @@ export class OperatorService {
     const cfg = await this.settings.load();
     const transport = new CopilotTransport({
       profileDir: cfg.resolved.profileDir,
-      downloadsDir: join(cfg.resolved.runsDir, '_models'),
+      transportDir: join(cfg.resolved.runsDir, '_models'),
       chatUrl: cfg.copilot.url,
       channel: cfg.copilot.channel,
       headless: cfg.copilot.headless,

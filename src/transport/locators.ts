@@ -41,8 +41,8 @@ export const TestId = {
  * touches a native Windows file dialog.
  *
  * Its `accept` list includes `.txt` and `text/plain`, which is what the runner reports use.
- * Also accepted, should we ever need them: .log, .json, .csv, .md, .xml, .yml, .ps1 is NOT
- * in the list, so downloaded scripts cannot be re-uploaded as-is - rename to .txt or .log.
+ * Also accepted, should we ever need them: .log, .json, .csv, .md, .xml, .yml. .ps1 is NOT
+ * in the list. Uploads are the runner's own reports; nothing is ever downloaded.
  */
 export const Upload = {
   /** Hidden `<input type="file" multiple>`. */
@@ -159,6 +159,9 @@ export const Css = {
    * A file Copilot generated for download. It is a plain anchor with a blob href,
    * a `download` attribute and `target="_blank"`, which is why nothing useful shows
    * on hover. `aria-label` and `download` both carry the file name.
+   *
+   * Read only to name what was ignored: the runner never clicks it, and the browser is
+   * opened with downloads refused.
    */
   downloadLink: 'a[download]',
   downloadLinkBlob: 'a[href^="blob:"]',

@@ -30,9 +30,9 @@
  *                                  log is that they can.
  *   fetch and run                  `DownloadString`/`DownloadFile` into execution, `iwr | iex`.
  *                                  Code that arrives at run time was never approved by anybody.
- *   execution out of Temp          Nothing this runner legitimately does lives there: downloaded
- *                                  scripts go to the run's own `artifacts/` folder, under the
- *                                  project, where they are hashed and kept.
+ *   execution out of Temp          Nothing this runner legitimately does lives there: it downloads
+ *                                  nothing, and the code a task runs is written into the project
+ *                                  by a command step, where it can be read.
  *   tampering and persistence      Defender exclusions, scheduled tasks, Run keys, new services.
  *                                  A build step does not need to outlive the build.
  *
@@ -103,7 +103,7 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
   {
     name: 'fetch-and-run',
     pattern: /(DownloadString|DownloadFile)\s*\(|\b(Invoke-WebRequest|iwr|curl|wget)\b[^|\n]*\|\s*(iex|Invoke-Expression|bash|sh|pwsh|powershell)\b/i,
-    why: 'code fetched at run time was approved by nobody. Download to a file in a step of its own, so it is hashed and kept, and run it in the next one.',
+    why: 'code fetched at run time was approved by nobody. Write the code out in the step itself — a here-string with Set-Content into a file in the project — and run that file in the next step.',
   },
   {
     name: 'run-from-temp',
@@ -111,7 +111,7 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
     // `$env:LOCALAPPDATA\\Temp`, `C:\\Windows\\Temp`, `/tmp/`. Matching the one literal spelling
     // `\\AppData\\Local\\Temp` was matching one of several.
     pattern: /(%TEMP%|\$env:TEMP|[\\\/]Temp[\\\/]|\/tmp\/)[^\s"';|]*\.(exe|js|jse|vbs|vbe|ps1|bat|cmd|hta|wsf|scr|dll|msi)\b/i,
-    why: 'this runner never executes anything out of Temp: what it downloads goes to the run\'s own artifacts folder, hashed and kept. A binary or script run from Temp is the shape of a dropper.',
+    why: 'this runner never executes anything out of Temp, and it downloads nothing: the code a task runs is written into the project by a command step. A binary or script run from Temp is the shape of a dropper.',
   },
   {
     name: 'defender-tampering',
@@ -144,10 +144,10 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
 /**
  * Why this text must not be run, or null.
  *
- * The same function answers for a command line and for the body of a downloaded script, because
- * the distinction never mattered to the machine: `pwsh -File payload.ps1` and the `certutil`
- * line inside `payload.ps1` produce the same process tree, and only one of them was ever being
- * looked at.
+ * It was written to answer for a command line and for the body of a downloaded script alike, since
+ * `pwsh -File payload.ps1` and the `certutil` line inside `payload.ps1` produce the same process
+ * tree. There are no downloaded scripts any more; a script a task runs is written by a command
+ * step whose text passes through here first.
  */
 export function dangerousRefusal(text: string): string | null {
   for (const technique of DANGEROUS_TECHNIQUES) {

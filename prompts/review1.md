@@ -146,7 +146,10 @@ something that was never in the work.
 ## The format
 
 Every reply is **exactly one** fenced code block tagged `json`, and nothing else in the reply
-is tagged `json`. A sentence around it is fine.
+is tagged `json`. A sentence around it is fine. **Never attach a file**: the runner takes only
+the text of your reply, and does not fetch, save or run anything attached to it. Anything you
+need on disk to check the work, write it with a `command` step — `Set-Content` with a here-string
+into a file inside the project — and run it in the next step.
 
 ```json
 {

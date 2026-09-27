@@ -14,6 +14,9 @@
  *
  *   npm run check:dangerous
  */
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { dangerousRefusal, DANGEROUS_TECHNIQUES } from '../src/exec/dangerous.js';
 import { commandRefusal, describeStep } from '../src/exec/policy.js';
 
@@ -154,6 +157,24 @@ const shown = describeStep(step);
 check('the description is the command itself', shown.includes('npm run build'), true);
 check('and names the shell it will be read by', shown.includes('pwsh'), true);
 console.log('  it reads:', shown);
+
+/*
+ * The runner takes a reply as text and nothing else. File steps went in September; the browser was
+ * still opened willing to accept a download, and the reviewer's contract never said "do not attach".
+ * Both are pinned here, in the file that exists for the incident that started all of this, so the
+ * one line that closes downloads cannot be put back quietly.
+ */
+console.log('\n--- nothing is downloaded, and both contracts say so ---');
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const transport = readFileSync(join(root, 'src', 'transport', 'copilotTransport.ts'), 'utf8');
+  check('the browser refuses downloads', /acceptDownloads:\s*false/.test(transport), true);
+  check('and has nowhere to save one', /downloadsPath\s*:/.test(transport), false);
+  for (const contract of ['level1.md', 'review1.md']) {
+    const text = readFileSync(join(root, 'prompts', contract), 'utf8');
+    check(`${contract} tells the chat never to attach a file`, /never attach a file/i.test(text), true);
+  }
+}
 
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;
