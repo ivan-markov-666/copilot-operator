@@ -427,7 +427,7 @@ async function botTask(session: Session, task: Task, runsDir: string): Promise<R
       rounds: byType.get('checks-started') ?? 0,
       fromReviews: task.reviewChecks,
     },
-    processes: { leftovers: task.leftovers, reaped: events.filter((e) => e.type === 'processes-reaped').map(trimmed) },
+    processes: { leftovers: task.leftovers, reaped: events.filter((e) => e.type === 'processes-reaped').map(trimmed), notOurs: events.filter((e) => e.type === 'processes-not-ours').map(trimmed) },
     mirror: events.filter((e) => String(e.type).startsWith('mirror')).map(trimmed),
     review: {
       verdict: task.review?.verdict,

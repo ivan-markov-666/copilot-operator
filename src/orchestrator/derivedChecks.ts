@@ -55,6 +55,7 @@ export async function validateDerivedChecks(
     roots?: CheckRunOptions['roots'];
     signal?: AbortSignal;
     defaultShell?: CheckRunOptions['defaultShell'];
+    tracker?: CheckRunOptions['tracker'];
   },
 ): Promise<DerivedValidation> {
   const out: DerivedValidation = { kept: [], refused: [], blocked: [] };
@@ -69,6 +70,7 @@ export async function validateDerivedChecks(
       roots: opts.roots,
       signal: opts.signal,
       defaultShell: opts.defaultShell,
+      tracker: opts.tracker,
     });
     if (outcome.refusedBeforeRunning) out.blocked.push({ finding, check, outcome });
     else (outcome.passed ? out.refused : out.kept).push({ finding, check, outcome });

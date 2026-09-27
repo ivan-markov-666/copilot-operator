@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path';
 import { isWithin } from './confinement.js';
 
 import { runStep, type RunResult } from './runner.js';
+import type { ProcessTracker } from './processes.js';
 import { resolveShell, type Shell, type ShellProblem } from './shells.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { findSuspicious, suspiciousDetail } from '../vcs/commitHygiene.js';
@@ -63,6 +64,8 @@ export type CheckOutcome = {
 
 export type CheckRunOptions = {
   cwd: string;
+  /** Records the shells the checks start, so what they leave running is known to be the bot's. */
+  tracker?: ProcessTracker;
   /** Where the raw output of each check command goes. */
   logDir: string;
   signal?: AbortSignal;
@@ -179,7 +182,7 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
           hardTimeoutMs: opts.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS,
           logPath: join(opts.logDir, `check-${index + 1}.txt`),
         },
-        { signal: opts.signal },
+        { signal: opts.signal, tracker: opts.tracker },
       );
     } catch (e) {
       return fail(`the check could not be run: ${(e as Error).message}`);

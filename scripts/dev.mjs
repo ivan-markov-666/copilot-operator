@@ -5,10 +5,14 @@
  *   npm start            build the API, then run both
  *   npm run dev          the same, and open the UI in the default browser
  *
- * Both children are killed when this process ends, including on Ctrl+C, and when either of
+ * Both children are stopped when this process ends, including on Ctrl+C, and when either of
  * them dies the other is stopped too, so there is never a half-running pair to clean up by
- * hand. On Windows that needs taskkill with /T: a plain kill only reaches a wrapper, not the
- * server it spawned, which is exactly how a stale Next.js kept port 3210 busy once already.
+ * hand. A plain kill only reaches a wrapper, not the server it spawned, which is exactly how a
+ * stale Next.js kept port 3210 busy once already, so the whole tree is stopped — and asked first:
+ * Ctrl+C, then Ctrl+Break, and `taskkill /F` only for what is still there. The API holds the Edge
+ * window through Playwright, which closes it properly on Ctrl+C and cannot on /F. The children run
+ * in consoles of their own (`windowsHide`), so the Ctrl+C pressed in this terminal does not reach
+ * them by itself; `stopTree` in `src/exec/processes.ts` does it, loaded from the build.
  *
  * `tsc` and `next` are invoked as node scripts rather than through npm, so no shell is
  * involved and nothing has to be escaped.
@@ -23,6 +27,35 @@ import { dirname, join, resolve } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWin = process.platform === 'win32';
 const open = process.argv.includes('--open');
+
+/**
+ * The runner's own way of stopping a process tree, from the last build. Absent before the first
+ * build, or if that build is broken; then everything falls back to `taskkill /T /F`, which is what
+ * this script always did.
+ */
+async function loadStopTree() {
+  if (!isWin) return null;
+  try {
+    const mod = await import(new URL('../dist/src/exec/processes.js', import.meta.url).href);
+    return typeof mod.stopTree === 'function' ? mod.stopTree : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Stops one process tree: gently when the build is there, by force when it is not. */
+async function stopTreeOf(pid) {
+  const stopTree = await loadStopTree();
+  if (stopTree) {
+    try {
+      await stopTree(Number(pid));
+      return;
+    } catch {
+      /* fall through to force */
+    }
+  }
+  spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+}
 
 const API_URL = 'http://127.0.0.1:4000/api';
 const WEB_URL = 'http://localhost:3210';
@@ -94,7 +127,7 @@ if (isWin) {
     const ours = cmd.replace(/\\/g, '/').toLowerCase().includes(root.replace(/\\/g, '/').toLowerCase());
     if (ours) {
       log('start', `port ${port} is held by a previous run of this project (pid ${pid}); stopping it`);
-      spawnSync('taskkill', ['/pid', pid, '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      await stopTreeOf(pid);
     } else {
       log('start', `port ${port} is in use by pid ${pid}: ${cmd.slice(0, 100) || '(unknown)'}`);
       blocked = true;
@@ -161,7 +194,7 @@ function start(tag, args, cwd) {
   pipe(child.stderr);
   child.on('exit', (code) => {
     log(tag, `exited with code ${code}`);
-    shutdown(code ?? 1);
+    void shutdown(code ?? 1);
   });
   return child;
 }
@@ -187,21 +220,33 @@ if (open) {
 
 // 3. Stop both, whatever ends first.
 let stopping = false;
-function shutdown(code = 0) {
+async function shutdown(code = 0) {
   if (stopping) return;
   stopping = true;
-  for (const { tag, child } of children) {
-    if (child.exitCode !== null) continue;
-    log(tag, 'stopping');
-    if (isWin && child.pid) {
-      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    } else {
-      child.kill('SIGTERM');
-    }
-  }
-  setTimeout(() => process.exit(code), 300);
+  await Promise.all(
+    children.map(async ({ tag, child }) => {
+      if (child.exitCode !== null) return;
+      log(tag, 'stopping (Ctrl+C first, forced only if it does not stop)');
+      if (isWin && child.pid) await stopTreeOf(child.pid);
+      else child.kill('SIGTERM');
+    }),
+  );
+  process.exit(code);
 }
 
-process.on('SIGINT', () => shutdown(0));
-process.on('SIGTERM', () => shutdown(0));
-process.on('exit', () => shutdown(0));
+/*
+ * The last resort, and the only thing `exit` allows: it cannot wait, so whatever the orderly stop
+ * above has not reached by now is forced. Normally that is nothing — `shutdown` exits only once
+ * both are down.
+ */
+function forceRemaining() {
+  for (const { child } of children) {
+    if (child.exitCode !== null || !child.pid) continue;
+    if (isWin) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    else child.kill('SIGKILL');
+  }
+}
+
+process.on('SIGINT', () => void shutdown(0));
+process.on('SIGTERM', () => void shutdown(0));
+process.on('exit', forceRemaining);

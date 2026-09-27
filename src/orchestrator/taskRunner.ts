@@ -26,7 +26,7 @@ import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
-import { snapshotProcesses, reapLeftovers, describeLeftovers, type ProcessSnapshot } from '../exec/processes.js';
+import { snapshotProcesses, reapLeftovers, describeLeftovers, ProcessTracker, type ProcessSnapshot } from '../exec/processes.js';
 import { collectEnvironment, describeEnvironment } from '../exec/environment.js';
 import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
@@ -428,11 +428,24 @@ export async function runTask(
    * told apart and stopped. Taken once the working directory is known; null means "do not".
    */
   let processesBefore: ProcessSnapshot | null = null;
+  /**
+   * Every shell this task starts — its steps, its checks, its reviews' steps and checks — so that
+   * what is stopped afterwards is what the bot started, and nothing the operator started by hand in
+   * the same folder. See `processes.ts`.
+   */
+  const tracker = new ProcessTracker();
   /** Stops what appeared since a snapshot, tied to the project, writes it on the task, and says what it was. */
   const reap = async (since: ProcessSnapshot | null, by: string): Promise<Array<{ name: string; ports: number[] }>> => {
     if (!since) return [];
-    const result = await reapLeftovers(work.cwd, since).catch(() => null);
-    if (!result || (result.killed.length === 0 && result.failed.length === 0)) return [];
+    const result = await reapLeftovers(work.cwd, since, tracker).catch(() => null);
+    if (!result) return [];
+    if (result.notOurs.length > 0) {
+      sink.event('processes-not-ours', { by, count: result.notOurs.length, pids: result.notOurs.map((l) => l.pid) },
+        `${result.notOurs.length} new process(es) in the project folder were not started by the bot, so they were left running: ` +
+          result.notOurs.map((l) => `${l.name} pid ${l.pid}${l.ports.length > 0 ? ` (port ${l.ports.join(', ')})` : ''}`).join('; '),
+        'info');
+    }
+    if (result.killed.length === 0 && result.failed.length === 0) return [];
     const all = [...result.killed, ...result.failed].map((l) => ({ pid: l.pid, name: l.name, command: l.command.slice(0, 300), ports: l.ports, by }));
     await setTask((t) => {
       t.leftovers = [...(t.leftovers ?? []), ...all];
@@ -788,6 +801,7 @@ export async function runTask(
 
       const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
         cwd: work.cwd,
+        tracker,
         logDir: log.path('checks'),
         signal: deps.signal,
         deny: (command, shell, cwd) =>
@@ -972,6 +986,7 @@ export async function runTask(
           round: reviewRounds,
           cwd: work.cwd,
           roots: confinement.roots,
+          tracker,
           changedFiles,
           deliverable,
           deviations,
@@ -1417,6 +1432,7 @@ export async function runTask(
           },
           {
             signal,
+            tracker,
             onHeartbeat: ({ elapsedMs, idleMs, lastLine }) =>
               sink.event('step-heartbeat', { id: step.id, elapsedMs, idleMs, lastLine },
                 `step ${step.id} still running: ${Math.round(elapsedMs / 1000)}s elapsed, ${Math.round(idleMs / 1000)}s since output${lastLine ? ` — ${lastLine.slice(0, 60)}` : ''}`),

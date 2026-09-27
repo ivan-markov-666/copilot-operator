@@ -186,9 +186,15 @@ Other properties that matter for long steps:
 
 - **Output streams to disk as it arrives.** A killed step still reports everything it
   printed. Nothing lives only in memory.
-- **The whole process tree is killed**, via `taskkill /T /F`. `child.kill()` signals only
-  the shell, and a test runner's children (node, dotnet, java) would survive it and keep
-  holding the console.
+- **The whole process tree is stopped, and asked first.** `child.kill()` signals only the
+  shell, and a test runner's children (node, dotnet, java) would survive it and keep holding
+  the console. So the tree is read from the process table and each process is sent Ctrl+C,
+  then Ctrl+Break, and only what is still there after the grace periods gets `taskkill /F`
+  (`stopTree` in `src/exec/processes.ts`). The result is given once the tree is down.
+- **What a task leaves running is stopped only if the bot started it.** Every shell a step,
+  check or review starts is recorded; after the task, a new process is the bot's only if its
+  chain of parents reaches one of those shells. A process the operator started by hand in the
+  same folder is reported and left running.
 - **Heartbeat every 30 s** with elapsed time, idle time, bytes produced and the last line
   printed, so the human watching the console can see a suite is alive.
 - Each step reports an `outcome`: `completed`, `hard-timeout`, `idle-timeout`, `aborted`

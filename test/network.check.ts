@@ -72,6 +72,8 @@ for (const cmd of [
   'irm http://[::1]:8080/status',
   'Get-ChildItem .\\src -Recurse -Filter *.ts',
   'npm test -- --grep "retries"',
+  // The worked example review1.md gives the reviewer: a POST to a server it started on this machine.
+  "$p = Start-Process -FilePath 'npx.cmd' -ArgumentList 'tsx','src/main.ts' -PassThru; try { Start-Sleep 5; (Invoke-WebRequest -Uri http://127.0.0.1:4300/calculate -Method Post -ContentType application/json -Body '{\"a\":9,\"b\":3,\"op\":\"/\"}').StatusCode } finally { taskkill /PID $p.Id /T /F }",
 ]) {
   check(`runs: ${cmd.slice(0, 70)}`, networkFetchReason(cmd), null);
 }

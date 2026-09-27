@@ -26,6 +26,7 @@ import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } fro
 import { describeFindings, findingId, isGrounded, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
+import type { ProcessTracker } from '../exec/processes.js';
 import { effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell } from '../exec/shells.js';
 import { describeStep, commandRefusal } from '../exec/policy.js';
 import { networkFetchReason, networkFetchRefusal } from '../exec/network.js';
@@ -68,6 +69,8 @@ export type ReviewDeps = {
    * exactly as able to reach outside the project as the work they judge. See `confinement.ts`.
    */
   roots: string[];
+  /** The task's record of the shells the bot started. See `processes.ts`. */
+  tracker?: ProcessTracker;
   /** The files the task changed, as version control recorded them. */
   changedFiles: string[];
   /** The closing account, given only when it is the product. See `Deliverable`. */
@@ -549,6 +552,7 @@ ${machineNote}` : contract);
           roots: deps.roots,
           signal,
           defaultShell,
+          tracker: deps.tracker,
         });
         if (validation.refused.length > 0 && !derivedRetried) {
           derivedRetried = true;
@@ -645,7 +649,7 @@ ${machineNote}` : contract);
             idleTimeoutMs: idle * 1000,
             logPath: join(dir, 'steps', `${iterations}-${step.id}.log`),
           },
-          { signal },
+          { signal, tracker: deps.tracker },
         );
         stepsRun += 1;
         results.push(result);

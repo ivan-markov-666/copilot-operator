@@ -25,6 +25,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type Shell, type ShellProblem } from './shells.js';
+import { stopTree, type ProcessTracker } from './processes.js';
 
 export type { Shell } from './shells.js';
 
@@ -118,23 +119,20 @@ function unrunnable(req: RunRequest, problem: ShellProblem): RunResult {
 }
 
 /**
- * Kills the whole process tree.
- *
- * `child.kill()` only signals the shell. A test runner spawns node, java, dotnet and
- * friends underneath it, and those survive and keep holding the console. On Windows the
- * only reliable answer is taskkill with /T.
+ * The longest a step that is being stopped may take before its result is given anyway. The stop
+ * itself is Ctrl+C, a grace period, Ctrl+Break, another, then `/F` (see `processes.ts`), which with
+ * reading the process table twice comes to about fifteen seconds at worst; this is the ceiling on
+ * waiting for it, so that a stop that itself hangs cannot hang the task.
  */
-function killTree(pid: number): void {
-  try {
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-  } catch {
-    /* the process is already gone */
-  }
-}
+const STOP_CEILING_MS = 30_000;
 
 export async function runStep(
   req: RunRequest,
-  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat } = {},
+  /**
+   * `tracker` records the shell this step starts, which is what later lets the runner tell the
+   * processes the bot started from ones the operator started by hand. See `processes.ts`.
+   */
+  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat; tracker?: ProcessTracker } = {},
 ): Promise<RunResult> {
   const hardTimeoutMs = req.hardTimeoutMs ?? DEFAULT_HARD_TIMEOUT_MS;
   const idleTimeoutMs = req.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
@@ -181,10 +179,15 @@ export async function runStep(
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (child.pid) opts.tracker?.started(child.pid);
+
+    /** Set once the runner has decided to stop the step, so the process exiting reports why. */
+    let stopping: { outcome: RunResult['outcome']; exitCode: number } | null = null;
 
     const finish = (outcome: RunResult['outcome'], exitCode: number): void => {
       if (settled) return;
       settled = true;
+      if (child.pid) opts.tracker?.ended(child.pid);
       clearInterval(heartbeat);
       clearTimeout(hardTimer);
       clearInterval(idleTimer);
@@ -257,19 +260,39 @@ export async function runStep(
       if (enoent && !existsSync(resolved.path)) shellProblem = missingShellProblem(resolved);
       finish('spawn-error', -2);
     });
-    child.on('close', (code) => finish('completed', code ?? -1));
+    // While the runner is stopping the step the process exiting is the stop working, not the step
+    // completing, so the reason recorded is the runner's.
+    child.on('close', (code) => (stopping ? finish(stopping.outcome, stopping.exitCode) : finish('completed', code ?? -1)));
+
+    /*
+     * Stops the step's whole tree — Ctrl+C, then Ctrl+Break, then `/F` — and gives the result only
+     * once it is down, so the next step does not start while this one still holds a port or a
+     * file. It used to be `taskkill /T /F` at once, which is TerminateProcess: no handler runs, and a
+     * dev server or a test runner is cut off mid-write.
+     */
+    const stop = (outcome: RunResult['outcome'], exitCode: number, why: string): void => {
+      if (stopping || settled) return;
+      stopping = { outcome, exitCode };
+      stderr += `\n[runner] ${why}, stopping the process tree (Ctrl+C, then Ctrl+Break, then forced)\n`;
+      clearTimeout(hardTimer);
+      clearInterval(idleTimer);
+      const ceiling = setTimeout(() => finish(outcome, exitCode), STOP_CEILING_MS);
+      const pid = child.pid;
+      void (pid ? stopTree(pid) : Promise.resolve())
+        .catch(() => undefined)
+        .finally(() => {
+          clearTimeout(ceiling);
+          finish(outcome, exitCode);
+        });
+    };
 
     const hardTimer = setTimeout(() => {
-      stderr += `\n[runner] hard timeout after ${Math.round(hardTimeoutMs / 1000)}s, killing process tree\n`;
-      if (child.pid) killTree(child.pid);
-      finish('hard-timeout', -1);
+      stop('hard-timeout', -1, `hard timeout after ${Math.round(hardTimeoutMs / 1000)}s`);
     }, hardTimeoutMs);
 
     const idleTimer = setInterval(() => {
       if (Date.now() - lastOutputAt < idleTimeoutMs) return;
-      stderr += `\n[runner] no output for ${Math.round(idleTimeoutMs / 1000)}s, treating as hung, killing process tree\n`;
-      if (child.pid) killTree(child.pid);
-      finish('idle-timeout', -1);
+      stop('idle-timeout', -1, `no output for ${Math.round(idleTimeoutMs / 1000)}s, treating as hung`);
     }, Math.min(idleTimeoutMs, 30_000));
 
     const heartbeat = setInterval(() => {
@@ -283,9 +306,7 @@ export async function runStep(
     }, HEARTBEAT_EVERY_MS);
 
     const onAbort = (): void => {
-      stderr += '\n[runner] aborted by the user\n';
-      if (child.pid) killTree(child.pid);
-      finish('aborted', -3);
+      stop('aborted', -3, 'aborted by the user');
     };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
   });
