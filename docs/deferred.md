@@ -47,6 +47,15 @@ Then a model that never learned the status is pushed into it by its own refused 
 the easy way round disappears. **These refusals are worth having on their own,** before any of
 the rest exists, and are where the work should start.
 
+**Related, built on 2026-09-27: downloads are held for the operator** (`src/exec/network.ts`).
+A step that fetches from the internet — `Invoke-WebRequest`, `curl`, `wget`,
+`Start-BitsTransfer` and the rest — is neither refused nor run: it waits on the approval screen,
+in every mode, unattended included. That is the same idea as this section (the step names the
+channel, the operator decides) but deliberately the smaller mechanism: it uses the approval that
+already exists, so the run holds the browser while it waits, which is what confirm mode has always
+done. When `needs-operator` is built, "fetch this for me" is a natural thing for it to carry, and
+a held download could become one instead of a step waiting on screen. Nothing here depends on it.
+
 ### How it resumes
 
 A pause must **release the browser**. The Edge profile is single-writer, so a task sitting in a

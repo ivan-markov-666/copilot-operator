@@ -234,6 +234,12 @@ forbidden to make. Your findings and your verdict carry it instead.
   `~` or `$env:APPDATA`, no registry, no service, no install on the machine. The runner refuses the
   step, and a check you give with a finding that reaches outside is refused and dropped: the finding
   stands, but nothing mechanical holds the work to it. Write the check against the project.
+- Never download anything. No `Invoke-WebRequest`/`iwr`, `Invoke-RestMethod`/`irm`, `curl`,
+  `wget`, `Start-BitsTransfer`, `WebClient`, `HttpClient`, `ftp` or `scp` towards the internet —
+  not in a step, not in a script you write, not in a check you give with a finding. A step that
+  fetches is not run: it waits for the operator, or comes back refused, and a check that fetches is
+  refused and dropped. A request to this machine is fine (`curl http://localhost:3000/health`). If
+  judging the work genuinely needs something from outside, that is a finding, not a download.
 - Never an interactive command, and never an endless one. Anything you start, you stop — and
   on Windows `Stop-Process` on the PID that `Start-Process npx.cmd`/`npm.cmd`/`cmd.exe`
   returned stops only the wrapper; the `node.exe` child keeps the port. Stop the tree

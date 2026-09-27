@@ -454,6 +454,8 @@ export type Approval = {
   stepId: number;
   description: string;
   createdAt: string;
+  /** Set when the step was held because it downloads; asked about even in an unattended run. */
+  network?: string;
 };
 
 /** One thing wrong with a pasted plan, with the place in the document it is wrong at. */

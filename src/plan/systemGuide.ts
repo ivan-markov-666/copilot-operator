@@ -596,8 +596,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Run this and the rest without asking',
             bg: 'Изпълни без да питаш повече',
-            doesEn: 'Runs it and stops asking about every command after it until this run ends.',
-            doesBg: 'Изпълнява я и спира да пита за следващите команди до края на това пускане.',
+            doesEn: 'Runs it and stops asking about every command after it until this run ends, except a command that downloads from the internet. Not offered on such a command.',
+            doesBg: 'Изпълнява я и спира да пита за следващите команди до края на това пускане, освен за команда, която тегли от интернет. Не се предлага на такава команда.',
+          },
+          {
+            key: 'approval.network',
+            kind: 'note',
+            en: 'This command downloads from the internet. The bot never does that on its own, even in a run that does not ask, because a later step could run what arrived. Run it only if you know what it fetches and why.',
+            bg: 'Тази команда тегли от интернет. Ботът никога не го прави сам, дори при пускане без питане, защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
+            doesEn: 'Shown on a step that fetches from the network. Such a step waits here in every run, including one that does not ask; requests to localhost and package installs through npm or dotnet do not.',
+            doesBg: 'Показва се на стъпка, която тегли от мрежата. Такава стъпка чака тук при всяко пускане, включително без питане; заявки към localhost и пакети през npm или dotnet не чакат.',
           },
           {
             key: 'approval.skip',

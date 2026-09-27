@@ -318,13 +318,16 @@ function ApprovalBar({ approval, onDecided }: { approval: Approval; onDecided: (
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
+      {approval.network && <p className="reason small">{t('approval.network')}</p>}
       <div className="row">
         <button className="primary" disabled={busy} onClick={() => void decide('run')}>
           {t('approval.run')}
         </button>
-        <button disabled={busy} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
-          {t('approval.runAll')}
-        </button>
+        {!approval.network && (
+          <button disabled={busy} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
+            {t('approval.runAll')}
+          </button>
+        )}
         <button disabled={busy} onClick={() => void decide('skip')}>
           {t('approval.skip')}
         </button>

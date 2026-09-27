@@ -28,6 +28,7 @@ import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell } from '../exec/shells.js';
 import { describeStep, commandRefusal } from '../exec/policy.js';
+import { networkFetchReason, networkFetchRefusal } from '../exec/network.js';
 import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
@@ -533,8 +534,18 @@ ${machineNote}` : contract);
           cwd: deps.cwd,
           logDir: dir,
           repoDir: deps.repoDir,
-          deny: (command, shell, cwd) =>
-            commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms, process.env, { roots: deps.roots, cwd }),
+          /*
+           * A check the reviewer writes is kept with the task and run at every later gate with no
+           * one asked, so a fetch in one is refused rather than held: there is no approval screen
+           * at a gate. The finding stands without it, as for any check the runner will not run.
+           * See `network.ts`.
+           */
+          deny: (command, shell, cwd) => {
+            const refusal = commandRefusal(command, shell, cfg.execution.denyPatterns, cfg.execution.allowedPrograms, process.env, { roots: deps.roots, cwd });
+            if (refusal) return refusal;
+            const network = networkFetchReason(command);
+            return network ? networkFetchRefusal(network) : null;
+          },
           roots: deps.roots,
           signal,
           defaultShell,

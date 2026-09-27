@@ -571,7 +571,10 @@ export type SessionEvent = {
   data?: Record<string, unknown>;
 };
 
-/** A step waiting for a human decision in confirm mode. */
+/**
+ * A step waiting for a human decision: every step in confirm mode, and in any mode a step that
+ * fetches from the network (see `src/exec/network.ts`).
+ */
 export type PendingApproval = {
   id: string;
   sessionId: string;
@@ -579,6 +582,11 @@ export type PendingApproval = {
   stepId: number;
   description: string;
   createdAt: string;
+  /**
+   * Set when the step was held because it downloads: the reason, as the log prints it. Such a step
+   * is asked about even in an unattended run, and "run the rest without asking" does not answer it.
+   */
+  network?: string;
 };
 
 export function newId(prefix = ''): string {

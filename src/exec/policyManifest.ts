@@ -38,6 +38,11 @@ export type PolicyManifest = {
    * and the reader having to work out whether that means no or means nobody wrote it down.
    */
   chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command';
+  /**
+   * What happens to a step that downloads. A constant for the same reason `chatFiles` is one: the
+   * question gets asked, and the answer should be on the page. See `network.ts`.
+   */
+  networkFetch: typeof NETWORK_FETCH;
   denyPatterns: { count: number; digest: string };
   /** The built-in floor, which no configuration can switch off. A changed digest is a changed floor. */
   builtIn: { count: number; digest: string; names: string[] };
@@ -64,6 +69,9 @@ export function digestOf(values: string[]): string {
   return createHash('sha256').update(canonical).digest('hex').slice(0, 12);
 }
 
+export const NETWORK_FETCH =
+  "a command that fetches from the network (Invoke-WebRequest, Invoke-RestMethod, curl, wget, Start-BitsTransfer, .NET web clients, ftp/scp) is held for the operator in every mode; with nobody to ask it is refused. Requests to localhost and the project's package managers are not held" as const;
+
 export type ManifestInput = {
   mode: 'confirm' | 'unattended';
   allowedPrograms: string[];
@@ -89,6 +97,7 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
       programs: [...input.allowedPrograms],
     },
     chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command',
+    networkFetch: NETWORK_FETCH,
     denyPatterns: { count: input.denyPatterns.length, digest: digestOf(input.denyPatterns) },
     builtIn: { count: names.length, digest: digestOf(names), names },
     lock: input.lock ?? { applied: false, changes: [] },
@@ -109,6 +118,7 @@ export function describePolicyManifest(m: PolicyManifest): string {
     `mode        : ${m.mode}${m.mode === 'unattended' ? ' (no person saw the steps as they ran)' : ' (a person approved each step)'}`,
     `allowlist   : ${m.allowlist.enforced ? `${m.allowlist.count} programs, digest ${m.allowlist.digest}` : 'NOT ENFORCED — any program could be started'}`,
     `chat files : ${m.chatFiles}`,
+    `downloads   : ${m.networkFetch}`,
     `deny list   : ${m.denyPatterns.count} patterns, digest ${m.denyPatterns.digest}`,
     `built-in    : ${m.builtIn.count} refused techniques, digest ${m.builtIn.digest} (cannot be switched off)`,
     `lock        : ${

@@ -64,7 +64,7 @@ function sameFolder(a: string, b: string): boolean {
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { gitAvailable, repoUnusableReason } from '../vcs/git.js';
-import { makeAuthorizer, unattendedAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
+import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConflicts, DEFAULT_IGNORE_DIRS } from '../context/projectMirror.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
@@ -891,8 +891,14 @@ export class OperatorService {
     const precondition = unattendedPrecondition(policy);
     if (precondition) return { started: false, reason: precondition, done: Promise.resolve(idle) };
     const controller = new AbortController();
-    const authorizer: StepAuthorizer =
-      mode === 'unattended' ? unattendedAuthorizer(policy) : this.webAuthorizer(policy, controller.signal);
+    /*
+     * The same authorizer in both modes. It used to be `unattendedAuthorizer` here for an unattended
+     * run, which has no way to ask anybody; but a step that fetches from the network is put to the
+     * operator whatever the mode (see `network.ts`), and the approval screen is where that happens.
+     * `makeAuthorizer` reads `policy.mode` on every step, so an unattended run still asks about
+     * nothing else.
+     */
+    const authorizer: StepAuthorizer = this.webAuthorizer(policy, controller.signal);
 
     this.running.set(sessionId, { controller, startedAt: new Date().toISOString(), mode, policy });
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
@@ -1606,6 +1612,8 @@ export class OperatorService {
     if (mode === 'unattended') {
       for (const [id, w] of this.waiting) {
         if (w.approval.sessionId !== sessionId) continue;
+        // A fetch waits for its own answer: "run the rest without asking" is not an answer to it.
+        if (w.approval.network) continue;
         this.waiting.delete(id);
         w.resolve({ action: 'run' });
       }
@@ -1619,12 +1627,13 @@ export class OperatorService {
 
 
   private webAuthorizer(policy: { mode: 'confirm' | 'unattended'; denyPatterns: string[]; allowedPrograms: string[] }, signal: AbortSignal): StepAuthorizer {
-    return makeAuthorizer(policy, (step, ctx) =>
+    return makeAuthorizer(policy, (step, ctx, held) =>
       new Promise<PolicyDecision>((resolvePromise) => {
         // The operator may have pressed "run the rest without asking" on an earlier step.
         // This is checked per step rather than captured once, which is what makes the switch
-        // take effect from the very next step instead of the next run.
-        if (this.running.get(ctx.sessionId ?? '')?.mode === 'unattended') {
+        // take effect from the very next step instead of the next run. A held step is the
+        // exception: it is asked about in an unattended run too, which is the point of holding it.
+        if (!held && this.running.get(ctx.sessionId ?? '')?.mode === 'unattended') {
           resolvePromise({ action: 'run' });
           return;
         }
@@ -1636,6 +1645,7 @@ export class OperatorService {
           stepId: step.id,
           description: `[${step.shell ?? 'pwsh'}] ${step.cmd}`,
           createdAt: new Date().toISOString(),
+          ...(held ? { network: held.network } : {}),
         };
         if (signal.aborted) {
           resolvePromise({ action: 'abort', reason: 'stopped by the operator' });
@@ -1643,7 +1653,10 @@ export class OperatorService {
         }
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });
         this.bus.publish({ sessionId: approval.sessionId, taskId: approval.taskId, type: 'approval-requested', level: 'warn',
-          message: `waiting for approval: ${approval.description}`, data: { ...approval } });
+          message: held
+            ? `held for the operator — ${held.network}: ${approval.description}`
+            : `waiting for approval: ${approval.description}`,
+          data: { ...approval } });
       }),
     );
   }

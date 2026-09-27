@@ -251,9 +251,11 @@ export const dict = {
     'approval.run': 'Run',
     'approval.runAll': 'Run this and the rest without asking',
     'approval.runAllWhy':
-      'Answers this step with Run and stops asking for every step after it, for the rest of this run. Commands on the deny list are still refused.',
+      'Answers this step with Run and stops asking for every step after it, for the rest of this run. Commands on the deny list are still refused, and a command that downloads from the internet still asks.',
     'approval.runAllConfirm':
-      'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused. Continue?',
+      'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused, and a command that downloads from the internet still asks. Continue?',
+    'approval.network':
+      'This command downloads from the internet. The bot never does that on its own, even in a run that does not ask, because a later step could run what arrived. Run it only if you know what it fetches and why.',
     'approval.skip': 'Skip',
     'approval.abort': 'Abort task',
 
@@ -1228,9 +1230,11 @@ export const dict = {
     'approval.run': 'Изпълни',
     'approval.runAll': 'Изпълни без да питаш повече',
     'approval.runAllWhy':
-      'Отговаря на тази стъпка с Изпълни и престава да пита за следващите до края на това изпълнение. Забранените команди пак се отказват.',
+      'Отговаря на тази стъпка с Изпълни и престава да пита за следващите до края на това изпълнение. Забранените команди пак се отказват, а команда, която тегли от интернет, пак пита.',
     'approval.runAllConfirm':
-      'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват. Продължавате ли?',
+      'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват, а команда, която тегли от интернет, пак пита. Продължавате ли?',
+    'approval.network':
+      'Тази команда тегли от интернет. Ботът никога не го прави сам, дори при пускане без питане, защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
     'approval.skip': 'Пропусни',
     'approval.abort': 'Прекрати задачата',
 
