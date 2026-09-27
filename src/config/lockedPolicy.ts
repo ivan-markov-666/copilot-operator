@@ -28,6 +28,7 @@
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { IsolationClaim } from '../exec/isolation.js';
 
 export const POLICY_LOCK_FILE = 'policy.lock.json';
 
@@ -36,16 +37,38 @@ export const PolicyLockSchema = z
     maxMode: z.enum(['confirm', 'unattended']).optional(),
     allowedPrograms: z.array(z.string()).optional(),
     denyPatterns: z.array(z.string()).optional(),
+    /** `true` treats the claim `none-accepted` as `none`: unattended runs need real isolation here. */
+    requireIsolation: z.boolean().optional(),
+    /** `false` switches the Desktop mirror off, whatever the settings say. */
+    allowDesktopMirror: z.boolean().optional(),
+    /** `false` keeps `.env` files out of every mirror and every attachment. */
+    allowEnvFiles: z.boolean().optional(),
+    /** A ceiling on `execution.passEnv`: the only variables a step may be given beyond the fixed set. */
+    passEnv: z.array(z.string()).optional(),
+    /** What `npm run update` must insist on: signed commits, and one remote no flag can override. */
+    update: z
+      .object({
+        requireSigned: z.boolean().optional(),
+        remote: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
 export type PolicyLock = z.infer<typeof PolicyLockSchema>;
 
-/** The parts of `execution` a lock governs. */
+/** The parts of the configuration a lock governs. The optional ones are absent in a test of the first three. */
 export type LockablePolicy = {
   mode: 'confirm' | 'unattended';
   allowedPrograms: string[];
   denyPatterns: string[];
+  isolation?: IsolationClaim;
+  passEnv?: string[];
+  mirrorToDesktop?: boolean;
+  projectMirrorEnabled?: boolean;
+  includeEnvFiles?: boolean;
+  mirrorIncludeEnvFiles?: boolean;
 };
 
 /** What the lock changed, so the run log and the manifest can say it rather than imply it. */
@@ -105,6 +128,30 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
     }
   }
 
+  if (lock.requireIsolation && next.isolation === 'none-accepted') {
+    next.isolation = 'none';
+    changes.push('isolation "none-accepted" treated as "none" (the lock requires real isolation for unattended runs)');
+  }
+  if (lock.allowDesktopMirror === false && (next.mirrorToDesktop || next.projectMirrorEnabled)) {
+    next.mirrorToDesktop = false;
+    next.projectMirrorEnabled = false;
+    changes.push('the Desktop mirror switched off by the lock');
+  }
+  if (lock.allowEnvFiles === false && (next.includeEnvFiles || next.mirrorIncludeEnvFiles)) {
+    next.includeEnvFiles = false;
+    next.mirrorIncludeEnvFiles = false;
+    changes.push('.env files kept out of every mirror by the lock');
+  }
+  if (lock.passEnv && next.passEnv) {
+    // Not `intersect`: an empty operator list here means "nothing extra", the tightest setting.
+    const allowed = lowerSet(lock.passEnv);
+    const kept = next.passEnv.filter((v) => allowed.has(v.trim().toLowerCase()));
+    if (kept.length !== next.passEnv.length) {
+      changes.push(`passEnv narrowed from ${next.passEnv.length} to ${kept.length} variable(s) by the lock`);
+      next.passEnv = kept;
+    }
+  }
+
   return { policy: next, outcome: { applied: true, changes, maxMode: lock.maxMode } };
 }
 
@@ -116,7 +163,34 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
  * than no lock is a lock everybody believes in.
  */
 export async function readPolicyLock(baseDir: string): Promise<PolicyLock | null> {
-  const path = join(baseDir, POLICY_LOCK_FILE);
+  return await readPolicyLockAt(join(baseDir, POLICY_LOCK_FILE));
+}
+
+/**
+ * Where a machine-wide lock lives: `%ProgramData%\copilot-operator\policy.lock.json`, a folder an
+ * administrator can protect and the operator cannot edit. A lock beside the install (the form
+ * this started with) is honoured too, but the install folder is the operator's own, so a company
+ * that means "not on this machine" puts the file here. Null where there is no ProgramData.
+ */
+export function machineLockPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const base = env.ProgramData ?? env.PROGRAMDATA;
+  return base ? join(base, 'copilot-operator', POLICY_LOCK_FILE) : null;
+}
+
+/** Every lock that applies: the machine-wide one, then the install's own. Each is malformed-fatal. */
+export async function readPolicyLocks(baseDir: string, env: NodeJS.ProcessEnv = process.env): Promise<PolicyLock[]> {
+  const out: PolicyLock[] = [];
+  const machine = machineLockPath(env);
+  if (machine) {
+    const lock = await readPolicyLockAt(machine);
+    if (lock) out.push(lock);
+  }
+  const local = await readPolicyLock(baseDir);
+  if (local) out.push(local);
+  return out;
+}
+
+async function readPolicyLockAt(path: string): Promise<PolicyLock | null> {
   let text: string;
   try {
     text = await readFile(path, 'utf8');

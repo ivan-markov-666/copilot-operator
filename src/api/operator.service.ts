@@ -903,6 +903,17 @@ export class OperatorService {
 
     this.running.set(sessionId, { controller, startedAt: new Date().toISOString(), mode, policy });
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
+    // Said at the start of every run, in both modes, because it is the one fact about this tool a
+    // data-protection team needs and the one an operator forgets: the reports leave the machine.
+    this.bus.publish({
+      sessionId,
+      type: 'upload-notice',
+      level: 'info',
+      message:
+        "every report of this run — each step's terminal output, the check results, the reviewer's transcripts — and any " +
+        "mirrored project files are uploaded into the Copilot chat and stored in the signed-in account's OneDrive and " +
+        'Copilot history, inside the tenant; secret-shaped strings are redacted first',
+    });
 
     const done = runSession(sessionId, {
       cfg: { ...cfg, execution: { ...cfg.execution, mode } } as ResolvedConfig,
@@ -913,6 +924,9 @@ export class OperatorService {
       // Read between tasks, so the one in flight finishes properly first. The batch owns the
       // flag, because a pause is about the whole run and not about this session.
       shouldPause: () => !!this.batch?.pausing,
+      // The mode as it is now, not as it was: "run the rest without asking" changes it mid-run,
+      // and the policy.json of a later task must say so.
+      currentMode: () => this.running.get(sessionId)?.mode ?? mode,
       // The session decides whether its tasks are one chain or a set of independent checks.
       continueOnFailure: session.onFailure === 'continue',
       transport,
@@ -2150,6 +2164,7 @@ export class OperatorService {
       replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
       signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
       humanWaitMs: cfg.copilot.humanWaitSec * 1000,
+      keepFailurePage: cfg.copilot.keepFailurePage,
     });
 
     try {

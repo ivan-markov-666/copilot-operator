@@ -41,6 +41,15 @@ secret-shaped strings — tokens, keys, passwords in assignments and URLs, priva
 are redacted from every report before it is uploaded, always, with `report.redactPatterns`
 applied on top. Running it in a dedicated Windows account or Windows Sandbox is recommended.
 
+**Where the reports go.** Every report — the terminal output of every step, the check results,
+the reviewer's transcripts — and any files the project mirror attaches are uploaded into the
+Copilot chat, which stores them in the signed-in account's OneDrive for Business and in the
+Copilot conversation history. They stay inside the company's own Microsoft 365 tenant, under its
+Purview DLP policies, sensitivity labels, retention and eDiscovery; nothing goes to any other
+service. A company deploying this should tell its data-protection and DLP teams so, and set
+`runsRetentionDays` so the local copies under `runs/` follow the same retention rule. The run
+log says it at the start of every run.
+
 ### What it will not run
 
 Some things are refused whatever the task or the configuration says, because a security team
@@ -214,6 +223,77 @@ built-in refusals, whether a lock was in force and what it changed, and the acco
 So "what was this permitted to do at the time" is answered from the run folder rather than from a
 configuration file that has been edited since.
 
+### Before a company deploys it
+
+A compliance review against the common frameworks (CIS Controls v8, NIST SP 800-53, ISO/IEC
+27001 Annex A, the Microsoft baselines) was run on 2026-09-27. Nothing in the software is a
+hidden mechanism; what follows is what a company has to decide, approve or configure before it
+runs this on managed laptops, because no code change can decide it for them.
+
+**Approvals to obtain.**
+
+- *Identity and licensing.* The bot drives a licensed person's Microsoft 365 Copilot through
+  Edge, not through the API. Microsoft documents the API as the supported way to automate
+  Copilot; driving the web client is not documented as supported, and a per-user licence is
+  not meant to be shared or driven by a service identity. Ask the Microsoft contact whether the
+  intended use is acceptable under the licence, and decide which person's identity signs in —
+  one licensed identity per operator, never a shared one. Every prompt, upload and Purview
+  record is attributed to that identity.
+- *Conditional Access.* The bot's Edge runs a profile of its own under
+  `%LOCALAPPDATA%\copilot-operator`, started by `node.exe` with Playwright's debugging channel.
+  A tenant's sign-in frequency, compliant-device and managed-browser policies may refuse it or
+  pause it for sign-in; and an Edge policy that forbids remote debugging or forces extensions
+  stops it outright. Test on one managed device before rolling out; where the baseline cannot
+  be relaxed, run it in a VM or Windows Sandbox outside the baseline's scope.
+- *Data protection.* See "Where the reports go" above. Where the law requires it, record the
+  processing (a DPIA where automated tooling that stores every command's output and sends it to
+  an AI service triggers one; works-council consultation where tooling that records employees'
+  actions requires it). Mirrored source may carry personal data in fixtures and exports.
+- *AI-use policy.* Commands written by a language model execute on the endpoint. Confirm mode
+  keeps a person on every line; unattended mode removes that person and is the decision most
+  AI-governance policies want recorded. `policy.lock.json` can forbid it machine-wide.
+- *Security operations.* Tell the SOC what to expect: `node.exe` starting PowerShell (every
+  step, as `-Command` text, which PowerShell logging records verbatim) and `taskkill`; Edge
+  started by `node.exe` over a debugging pipe; updates pulled from a git remote. Register the
+  install so the process chain is known rather than investigated.
+
+**Configuration to set** — as an administrator, in `%ProgramData%\copilot-operator\policy.lock.json`,
+which the operator cannot edit (the same file beside the install is honoured too):
+
+```json
+{
+  "maxMode": "confirm",
+  "requireIsolation": true,
+  "allowDesktopMirror": false,
+  "allowEnvFiles": false,
+  "passEnv": [],
+  "allowedPrograms": ["pwsh", "powershell", "cmd", "node", "npm", "npx", "git", "dotnet"],
+  "update": { "requireSigned": true, "remote": "https://git.example.com/tools/copilot-operator.git" }
+}
+```
+
+Every field only tightens; `update` makes `npm run update` insist on signed commits and refuse
+any other remote. Keep `data/` and `runs/` on a local disk (`COP_DATA_DIR`, `runsDir`), set
+`runsRetentionDays`, and fork the repository internally so updates come from a remote the
+company controls.
+
+**Keeping it patched.** Dependencies are pinned in `package-lock.json`; `npm audit` reports
+known vulnerabilities in them, and `npm run update` brings in whatever the remote has fixed.
+Node.js and Edge are patched by the machine's own update process. Nothing here watches for
+end-of-support runtimes — that is the deploying company's asset management.
+
+**Stopping it.** "Stop" on a session cuts in after the current step and ends the task
+`aborted`; "Pause" lets the task in flight finish and holds the queue. Ctrl+C in the `npm start`
+terminal stops the API and the UI; processes a step started are stopped with the task (asked
+first, forced after a few seconds), and the run log names any it could not. To end the bot's
+access: `cop logout` signs its profile out, deleting `data/api-token` and restarting rotates the
+API key, `cop login --fresh` deletes the profile.
+
+**Where it does not fit.** On a fleet that enforces PowerShell Constrained Language Mode the
+bot's own probes degrade gracefully (permissions are read through `Get-Acl`; elevation reads as
+unknown), but the model's steps themselves run constrained, and most builds will not. That is a
+fleet to run the bot outside of, in a VM, not one to request exceptions on.
+
 ### What an update trusts
 
 `npm run update` fetches commits, fast-forwards onto them, installs what the lockfile names and
@@ -274,6 +354,24 @@ The two can also run separately: `npm run api` (NestJS on 127.0.0.1:4000) and `n
 
 Create a session, add tasks with their level 2 instructions, press Run, approve each step
 from the page, read the summary when it finishes. See [`docs/ui.md`](docs/ui.md).
+
+### Removing it from a machine
+
+Nothing is installed system-wide, nothing runs at start-up, no service and no scheduled task
+exist. What the software leaves, and where:
+
+| What | Where | Remove |
+|---|---|---|
+| settings, sessions, the API token, level-1 and context texts | `data/` in the checkout | delete the folder |
+| every run's logs, reports and failure screenshots | `runs/` in the checkout | delete the folder (or set `runsRetentionDays`) |
+| backups taken by `npm run update` | `data-backups/` in the checkout | delete the folder |
+| the bot's own Edge profile, with its Microsoft 365 session | `%LOCALAPPDATA%\copilot-operator\edge-profile` | sign out in that window (`cop login --fresh` deletes it) and delete the folder |
+| the API key the browser was handed | the browser's storage for `localhost:3210` | clear site data for that origin |
+| logs saved on request, and the optional project mirror | `Desktop\copilot-operator-logs`, the mirror folder in Settings | delete them; they may already be in OneDrive |
+| the reports uploaded to Copilot | the account's OneDrive and Copilot chat history | delete the conversations, or let the tenant's retention run |
+| a machine-wide policy lock, if an administrator placed one | `%ProgramData%\copilot-operator\policy.lock.json` | the administrator removes it |
+
+The permissions the API set on `data/` and `runs/` (owner and SYSTEM only) go with the folders.
 
 ### Updating a machine that has been used
 

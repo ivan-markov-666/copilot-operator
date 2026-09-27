@@ -89,8 +89,9 @@ async function main(): Promise<void> {
   const context: BrowserContext = await chromium.launchPersistentContext(PROFILE_DIR, {
     channel: 'msedge',
     headless: false,
-    acceptDownloads: true,
-    downloadsPath: join(outDir, 'downloads'),
+    // The same posture as the bot's own browser: downloads refused, the sandbox kept.
+    acceptDownloads: false,
+    chromiumSandbox: true,
     viewport: null,
     args: ['--start-maximized'],
   });

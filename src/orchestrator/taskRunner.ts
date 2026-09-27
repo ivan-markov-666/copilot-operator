@@ -83,6 +83,12 @@ export type RunDeps = {
    * across all of them, and only the caller that started them knows that.
    */
   runGroup?: TaskRunGroup;
+  /**
+   * The mode the run is in as this task begins. "Run the rest without asking" switches a run to
+   * unattended half-way, and until 2026-09-27 the policy.json of every later task still said a
+   * person had approved each step. The service that holds the switch answers this.
+   */
+  currentMode?: () => 'confirm' | 'unattended';
 };
 
 /** Why a task that was reported as done is being closed as failed. */
@@ -221,6 +227,7 @@ export async function openBrowser(
     replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
     signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
     humanWaitMs: cfg.copilot.humanWaitSec * 1000,
+    keepFailurePage: cfg.copilot.keepFailurePage,
     onEvent: (event, detail) => {
       const spoken: Record<string, string> = {
         'sign-in-required': 'The chat is asking you to sign in. Do it in the open Edge window; the run is waiting.',
@@ -618,7 +625,7 @@ export async function runTask(
   const manifest = collectPolicyManifest({
     isolation,
     confinedTo: confinement.roots,
-    mode: cfg.execution.mode,
+    mode: deps.currentMode?.() ?? cfg.execution.mode,
     allowedPrograms: cfg.execution.allowedPrograms,
     denyPatterns: cfg.execution.denyPatterns,
     cwd: work.cwd,

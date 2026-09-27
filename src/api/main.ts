@@ -16,6 +16,8 @@ import { OperatorService } from './operator.service.js';
 import { ensureApiToken, localApiGuard } from './security.js';
 import { botRootDir } from '../exec/workDir.js';
 import { secureDataDir } from './dataAcl.js';
+import { pruneRuns } from '../session/retention.js';
+import { mkdir } from 'node:fs/promises';
 
 const PORT = Number(process.env.COP_API_PORT ?? 4000);
 const WEB_ORIGIN = process.env.COP_WEB_ORIGIN ?? 'http://localhost:3210';
@@ -63,7 +65,28 @@ async function main(): Promise<void> {
 
   // Close whatever the previous process left open before anyone can look at it, rather than
   // waiting for the first request to trigger it.
-  await app.get(OperatorService).bootstrap();
+  const ops = app.get(OperatorService);
+  await ops.bootstrap();
+
+  /*
+   * runs/ holds every step's raw output and, on a failure, a screenshot of the signed-in page —
+   * as much the bot's records as data/ is, and until 2026-09-27 left with whatever permissions its
+   * parent folder had. Narrowed the same way, and pruned to the configured retention.
+   */
+  const cfg = await ops.settings.load();
+  await mkdir(cfg.resolved.runsDir, { recursive: true });
+  const runsAcl = secureDataDir(cfg.resolved.runsDir);
+  if (!runsAcl.ok) {
+    console.error(`copilot-operator api will not start: ${runsAcl.reason}`);
+    process.exit(1);
+  }
+  for (const [name, dir] of [['data', dataDir], ['runs', cfg.resolved.runsDir]] as Array<[string, string]>) {
+    if (/onedrive/i.test(dir) || /^\\\\/.test(dir)) {
+      console.warn(`  warning: the ${name} folder (${dir}) is under OneDrive or on a network share; keep the bot's records on a local disk (COP_DATA_DIR, runsDir)`);
+    }
+  }
+  const pruned = await pruneRuns(cfg.resolved.runsDir, cfg.runsRetentionDays);
+  if (pruned.length > 0) console.log(`  removed ${pruned.length} run folder(s) older than ${cfg.runsRetentionDays} days (runsRetentionDays)`);
 
   console.log(`copilot-operator api listening on http://127.0.0.1:${PORT}/api  (web origin ${WEB_ORIGIN})`);
   console.log(`  requests need the token in ${join(dataDir, 'api-token')} — the UI is given it once, by the link \`npm start\` prints`);

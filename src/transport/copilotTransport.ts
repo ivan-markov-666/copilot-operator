@@ -31,6 +31,8 @@ export type TransportOptions = {
   humanWaitMs?: number;
   /** Called with human-readable progress, so the CLI can show what is happening. */
   onEvent?: (event: string, detail?: Record<string, unknown>) => void;
+  /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
+  keepFailurePage?: boolean;
 };
 
 export type ReplyCapture = {
@@ -1379,9 +1381,13 @@ Current URL: ${url}`);
     }
 
     await this.p.screenshot({ path: join(dir, `${tag}.png`), fullPage: true }).catch(() => undefined);
-    const html = await this.p.content().catch(() => '');
-    if (html.length > 0) {
-      await writeFile(join(dir, `${tag}.html`), html, 'utf8').catch(() => undefined);
+    // The page's HTML carries the account's other conversation titles and its sign-in state, so it
+    // is written only when the operator has asked for it; the screenshot and the URL always are.
+    if (this.opts.keepFailurePage) {
+      const html = await this.p.content().catch(() => '');
+      if (html.length > 0) {
+        await writeFile(join(dir, `${tag}.html`), html, 'utf8').catch(() => undefined);
+      }
     }
     await writeFile(join(dir, `${tag}.url.txt`), this.p.url(), 'utf8').catch(() => undefined);
     this.emit('failure-dumped', { dir, tag, url: this.p.url() });

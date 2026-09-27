@@ -50,6 +50,7 @@
 
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { botRootDir } from './workDir.js';
 
 /** One way of fetching: what it is called in the reason, how it is recognised, what to do instead. */
 type NetworkFetcher = { name: string; pattern: RegExp; instead?: string };
@@ -194,10 +195,14 @@ export function networkFetchReason(command: string, cwd?: string): string | null
  * `127.0.0.1:4000` and answer its own held download. The token is no longer passed (`stepEnv.ts`);
  * this refuses the attempt as well, so a step that goes looking gets a reason instead of a 401.
  */
-export function botSelfRefusal(command: string, ports: number[] = botPorts()): string | null {
+export function botSelfRefusal(command: string, ports: number[] = botPorts(), root: string = botRootDir()): string | null {
   const port = `(?:${ports.map((p) => String(Math.trunc(p))).join('|')})`;
   const host = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0|::1)`;
-  if (new RegExp(String.raw`${host}\s*:\s*${port}(?!\d)`, 'i').test(command) || /\bapi-token\b|\bdev-pids\.json\b/i.test(command)) {
+  // The folders the bot keeps its records in, by path: its data, its runs, its update backups.
+  const folded = command.replace(/\//g, '\\').toLowerCase();
+  const own = root.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
+  const reachesRecords = ['data', 'runs', 'data-backups'].some((d) => folded.includes(`${own}\\${d}`));
+  if (reachesRecords || new RegExp(String.raw`${host}\s*:\s*${port}(?!\d)`, 'i').test(command) || /\bapi-token\b|\bdev-pids\.json\b/i.test(command)) {
     return (
       'refused: this reaches the bot itself — its API, its web page or its key. A task works on its own project; ' +
       'the bot that runs it is not part of the work. Use a different port for a server the task starts.'

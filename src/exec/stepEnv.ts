@@ -44,12 +44,21 @@ const PASSED = [
   'LANG', 'LC_ALL', 'TZ',
 ];
 
+/** Names that pass whatever they are called: a toolchain's telemetry switch is always the operator's to set. */
+const PASSED_BY_SHAPE = /telemetry|_optout$|^do_not_track$|_nologo$/i;
+
 const FORCED: Record<string, string> = {
   NO_COLOR: '1',
   TERM: 'dumb',
   npm_config_ignore_scripts: 'true',
   YARN_ENABLE_SCRIPTS: '0',
+  // No toolchain reports home from a step: a company's opt-outs, set for every build tool that
+  // honours them, so that the step's own traffic is the project's and nothing else.
   NEXT_TELEMETRY_DISABLED: '1',
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+  DOTNET_NOLOGO: '1',
+  POWERSHELL_TELEMETRY_OPTOUT: '1',
+  DO_NOT_TRACK: '1',
 };
 
 /** Names a step must never be given, even if the operator lists them: the bot's own keys. */
@@ -60,7 +69,7 @@ export function stepEnvironment(from: NodeJS.ProcessEnv = process.env, extra: st
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(from)) {
     if (v === undefined || NEVER.test(k)) continue;
-    if (wanted.has(k.toLowerCase())) out[k] = v;
+    if (wanted.has(k.toLowerCase()) || PASSED_BY_SHAPE.test(k)) out[k] = v;
   }
   return { ...out, ...FORCED };
 }

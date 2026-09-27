@@ -10,7 +10,6 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "login": "tsx scripts/login.ts",
     "check:pacing": "tsx test/pacing.check.ts",
     "check:runner": "tsx test/runner.check.ts",
     "check:chat": "tsx test/chat.check.ts",

@@ -35,7 +35,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWin = process.platform === 'win32';
 const checkOnly = process.argv.includes('--check');
 const acceptRemote = process.argv.includes('--accept-remote');
-const requireSigned = process.argv.includes('--require-signed');
+let requireSigned = process.argv.includes('--require-signed');
 
 const log = (tag, line) => process.stdout.write('[' + tag + '] ' + line + '\n');
 const die = (line, hint) => {
@@ -45,12 +45,53 @@ const die = (line, hint) => {
 };
 
 /*
- * npm is a `.cmd` on Windows, which `spawn` cannot start by that name. The usual answer is
- * `shell: true`, and Node now warns about it for good reason: with a shell, the arguments are
- * concatenated rather than escaped. Naming the `.cmd` directly gets the same result with no
- * shell and no warning.
+ * npm is a `.cmd` on Windows, and Node refuses to start a `.cmd` without a shell (EINVAL, since
+ * the 2024 fix for CVE-2024-27980) — verified 2026-09-27: `npm run update` had been failing at
+ * its first npm call. The shell-free way is to run npm's own JavaScript entry with the node that
+ * is running this script; it ships beside node.exe in every Windows install. Where it is not
+ * there, the .cmd runs through a shell with these fixed, literal arguments.
  */
-const NPM = isWin ? 'npm.cmd' : 'npm';
+function npmInvocation(args) {
+  if (!isWin) return { file: 'npm', args, shell: false };
+  const cli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (existsSync(cli)) return { file: process.execPath, args: [cli, ...args], shell: false };
+  return { file: 'npm.cmd', args, shell: true };
+}
+
+/*
+ * What an administrator's policy lock says about updates, read here as plain JSON because this
+ * script runs before anything is built. Two things it can insist on: signed commits, which turns
+ * `--require-signed` on whatever the command line says, and one remote, which `--accept-remote`
+ * cannot talk the updater out of. The machine-wide file (%ProgramData%\copilot-operator) is read
+ * first, the install's own second; the first remote named wins. See src/config/lockedPolicy.ts.
+ */
+function readUpdateLock() {
+  const candidates = [
+    process.env.ProgramData ? join(process.env.ProgramData, 'copilot-operator', 'policy.lock.json') : null,
+    join(root, 'policy.lock.json'),
+  ].filter(Boolean);
+  const out = { requireSigned: false, remote: null };
+  for (const path of candidates) {
+    if (!existsSync(path)) continue;
+    let lock;
+    try {
+      lock = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (e) {
+      die(path + ' is not valid JSON: ' + e.message, 'A lock that cannot be read must not be a lock that is skipped.');
+    }
+    const update = lock && lock.update;
+    if (!update) continue;
+    if (update.requireSigned) out.requireSigned = true;
+    if (!out.remote && typeof update.remote === 'string' && update.remote) out.remote = update.remote;
+  }
+  return out;
+}
+const normaliseRemote = (url) => String(url).trim().toLowerCase().replace(/\.git$/, '').replace(/\/+$/, '');
+const updateLock = readUpdateLock();
+if (updateLock.requireSigned && !requireSigned) {
+  requireSigned = true;
+  log('trust', 'the policy lock requires signed commits');
+}
 
 /** A command, run here, with its output captured. No shell is ever involved. */
 function run(file, args, opts = {}) {
@@ -90,6 +131,12 @@ try {
 }
 const remoteVerdict = compareRemote(pinned, remoteUrl);
 if (remoteVerdict === 'changed' && !acceptRemote) die(remoteChangedMessage(pinned, remoteUrl));
+if (updateLock.remote && normaliseRemote(updateLock.remote) !== normaliseRemote(remoteUrl)) {
+  die(
+    'the policy lock names ' + updateLock.remote + ' as the only remote to update from; origin is ' + remoteUrl + '.',
+    'An administrator set this; --accept-remote does not override it.',
+  );
+}
 if (remoteVerdict === 'changed') log('trust', 'the remote changed and you accepted it: ' + pinned + '  ->  ' + remoteUrl);
 if (remoteVerdict === 'first-use') log('trust', 'first update from ' + remoteUrl + '; recording it, and a later change will stop and ask');
 if (remoteVerdict === 'same') log('trust', 'remote is the one this checkout last updated from: ' + remoteUrl);
@@ -135,6 +182,12 @@ if (existsSync(dataDir) && readdirSync(dataDir).length > 0) {
     const target = join(root, 'data-backups', backupName);
     mkdirSync(target, { recursive: true });
     cpSync(dataDir, target, { recursive: true });
+    // The copy holds the API token and every session; it gets the same narrowing data/ gets at
+    // start (src/api/dataAcl.ts), rather than the wide permissions this folder inherits.
+    if (isWin) {
+      const who = (process.env.USERDOMAIN || '') + '\\' + (process.env.USERNAME || '');
+      spawnSync('icacls', [join(root, 'data-backups'), '/inheritance:r', '/grant:r', who + ':(OI)(CI)F', '/grant:r', '*S-1-5-18:(OI)(CI)F'], { stdio: 'ignore', windowsHide: true });
+    }
     log('backup', 'data/ copied to data-backups/' + backupName + '/');
   }
 } else {
@@ -277,7 +330,8 @@ if (!depsChanged && incoming && !process.argv.includes('--rebuild')) {
   log('install', 'no dependency changed in what came in; nothing to install');
 } else {
   log('install', 'npm ci');
-  if (!run(NPM, ['ci'], { stdio: 'inherit' }).ok) {
+  const ci = npmInvocation(['ci']);
+  if (!run(ci.file, ci.args, { stdio: 'inherit', shell: ci.shell }).ok) {
     die('npm ci failed; the checkout is updated but not usable yet.', 'If it complains that the lockfile is out of step, run: npm install');
   }
 }
@@ -289,7 +343,8 @@ if (!depsChanged && incoming && !process.argv.includes('--rebuild')) {
  * down. All of them quietly answer with the previous version.
  */
 log('build', 'npm run build');
-if (!run(NPM, ['run', 'build'], { stdio: 'inherit' }).ok) {
+const build = npmInvocation(['run', 'build']);
+if (!run(build.file, build.args, { stdio: 'inherit', shell: build.shell }).ok) {
   die('the build failed. The update is in place; the error above is in the new code.');
 }
 

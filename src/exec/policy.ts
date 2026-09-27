@@ -74,7 +74,14 @@ export function matchDenyPattern(text: string, patterns: string[]): string | nul
 export function repositoryInternalsRefusal(command: string): string | null {
   const intoGitDir = /(^|[\s'"=(\\/,;])\.git[\\/]/i.test(command);
   const setting = /\bgit\s+(?:-C\s+\S+\s+)?config\s+(?:(?:--(?:local|global|system|worktree)|--file\s+\S+)\s+)?(?:(?:set|unset)\s+)?[A-Za-z][\w.-]*\s+[^\s|;-]/i.test(command);
-  if (!intoGitDir && !setting) return null;
+  // `git -c key=value <command>` sets the key for that one command — and some keys name a program
+  // git then starts (hooks, fsmonitor, the pager, the editor, credential helpers, filters, diff and
+  // merge drivers, aliases), which the allowlist never sees. Those keys are refused inline as well.
+  const inline =
+    /\bgit\b[^|;\n]*?\s-c\s*["']?(?:core\.(?:hooksPath|fsmonitor|sshCommand|gitProxy|editor|pager|askPass|alternateRefsCommand|attributesFile)|credential\.|gpg\.|diff\.[^\s=]*\.(?:command|textconv)|difftool\.|mergetool\.|merge\.[^\s=]*\.driver|filter\.|alias\.|sequence\.editor|uploadpack\.|receive\.|http\.proxy|url\.)/i.test(
+      command,
+    );
+  if (!intoGitDir && !setting && !inline) return null;
   return (
     "refused: this reaches into the repository's own machinery (the .git folder, or a git setting written to stay). " +
     'The runner owns the repository and runs git itself; hooks and settings placed there would run as the runner. ' +

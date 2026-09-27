@@ -39,6 +39,31 @@ program
 const DEFAULT_PROFILE = expandPath('~/AppData/Local/copilot-operator/edge-profile', process.cwd());
 
 program
+  .command('logout')
+  .description("sign the bot's browser profile out of Microsoft 365; the profile itself stays")
+  .option('-p, --profile <dir>', 'profile directory', DEFAULT_PROFILE)
+  .action(async (opts: { profile: string }) => {
+    const transport = new CopilotTransport({
+      profileDir: opts.profile,
+      transportDir: join(opts.profile, '_transport'),
+      chatUrl: 'https://m365.cloud.microsoft/chat',
+      channel: 'msedge',
+      headless: false,
+      replyTimeoutMs: 60_000,
+      signInTimeoutMs: 60_000,
+      humanWaitMs: 60_000,
+      onEvent: (e) => process.stdout.write(`  ${e}\n`),
+    });
+    await transport.open();
+    try {
+      await transport.signOut();
+      console.log('Signed out. The profile folder is still there; `cop login --fresh` deletes it.');
+    } finally {
+      await transport.close();
+    }
+  });
+
+program
   .command('login')
   .description('open Edge with the bot profile and wait for you to sign in')
   .option('-p, --profile <dir>', 'profile directory', DEFAULT_PROFILE)

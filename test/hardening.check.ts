@@ -23,7 +23,11 @@ import { redactSecrets } from '../src/exec/redaction.js';
 import { safeName, safePresetName } from '../src/session/store.js';
 import { invocationFor, resolveShell } from '../src/exec/shells.js';
 import { git } from '../src/vcs/git.js';
-import { applyPolicyLock } from '../src/config/lockedPolicy.js';
+import { applyPolicyLock, readPolicyLocks, PolicyLockSchema } from '../src/config/lockedPolicy.js';
+import { principalsInSddl } from '../src/api/dataAcl.js';
+import { dmtfOf } from '../src/exec/processes.js';
+import { pruneRuns } from '../src/session/retention.js';
+import { utimes } from 'node:fs/promises';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -146,6 +150,87 @@ for (const [what, text, secret] of [
 }
 check('a type listing is left alone', redactSecrets('interface User { password: string; token?: string }'), 'interface User { password: string; token?: string }');
 check('PATH in a listing is left alone', redactSecrets('PATH              C:\\x'), 'PATH              C:\\x');
+
+console.log('\n--- what a corporate configuration must not break (Constrained Language Mode) ---');
+{
+  // The permission check reads SDDL, which Get-Acl gives in every language mode; the aliases are
+  // expanded so that "SY" and "S-1-5-18" are one principal, and a deny entry is not access.
+  const own = 'S-1-5-21-1-2-3-1000';
+  check('aliases and SIDs are read alike', principalsInSddl('O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;' + own + ')').sort(), ['S-1-5-18', own].sort());
+  check('Authenticated Users is somebody else', principalsInSddl('D:(A;OICIID;0x1301bf;;;AU)').includes('S-1-5-11'), true);
+  check('a deny entry is not access', principalsInSddl('D:(D;;FA;;;BU)(A;;FA;;;SY)'), ['S-1-5-18']);
+  check('a SACL after the DACL is not read as access', principalsInSddl('D:(A;;FA;;;SY)S:(AU;SA;FA;;;WD)'), ['S-1-5-18']);
+  // The process-table filter is built here, not by a .NET converter PowerShell may not allow.
+  check('a WMI datetime literal, in UTC', dmtfOf(Date.UTC(2026, 8, 27, 13, 5, 9, 250)), '20260927130509.250000+000');
+}
+
+console.log('\n--- an administrator\'s lock outside the install is honoured first ---');
+{
+  const base = mkdtempSync(join(tmpdir(), 'cop-lock-'));
+  const programData = join(base, 'ProgramData');
+  mkdirSync(join(programData, 'copilot-operator'), { recursive: true });
+  writeFileSync(join(programData, 'copilot-operator', 'policy.lock.json'), JSON.stringify({ maxMode: 'confirm' }), 'utf8');
+  writeFileSync(join(base, 'policy.lock.json'), JSON.stringify({ allowedPrograms: ['node'] }), 'utf8');
+  const locks = await readPolicyLocks(base, { ProgramData: programData });
+  check('both locks are read, the machine-wide one first', locks.map((l) => (l.maxMode ? 'machine' : 'install')), ['machine', 'install']);
+  check('with no ProgramData only the install\'s counts', (await readPolicyLocks(base, {})).length, 1);
+  rmSync(base, { recursive: true, force: true });
+}
+
+console.log('\n--- run folders follow the retention rule ---');
+{
+  const runs = mkdtempSync(join(tmpdir(), 'cop-runs-'));
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.UTC(2026, 8, 27);
+  for (const [name, ageDays] of [['old-session', 40], ['recent-session', 3], ['_browser', 400]] as Array<[string, number]>) {
+    mkdirSync(join(runs, name));
+    writeFileSync(join(runs, name, 'x.txt'), 'x', 'utf8');
+    const when = new Date(now - ageDays * day);
+    await utimes(join(runs, name), when, when);
+  }
+  check('nothing is removed while retention is off', await pruneRuns(runs, 0, now), []);
+  check('older folders go, recent ones and the bot\'s own stay', await pruneRuns(runs, 30, now), ['old-session']);
+  check('and they are really gone', [existsSync(join(runs, 'old-session')), existsSync(join(runs, 'recent-session')), existsSync(join(runs, '_browser'))], [false, true, true]);
+  rmSync(runs, { recursive: true, force: true });
+}
+
+console.log('\n--- the second compliance round ---');
+{
+  // `git -c` with a key that names a program is the config write in another spelling.
+  check('git -c core.hooksPath is refused', refused(repositoryInternalsRefusal('git -c core.hooksPath=.h status')), true);
+  check('git -c credential.helper is refused', refused(repositoryInternalsRefusal("git -c credential.helper='!x' fetch")), true);
+  check('git -c core.quotepath is not', repositoryInternalsRefusal('git -c core.quotepath=off log --oneline'), null);
+  check('git commit -c <commit> is not', repositoryInternalsRefusal('git commit -c HEAD~1'), null);
+  // The bot's own record folders, by path, wherever the project is.
+  check("the bot's data folder is refused by path", refused(botSelfRefusal('Get-Content C:\\bot\\data\\settings.json', [4000], 'C:\\bot')), true);
+  check("its runs folder too", refused(botSelfRefusal('dir C:/bot/runs', [4000], 'C:\\bot')), true);
+  check('a project folder named data elsewhere is not', botSelfRefusal('Get-Content C:\\proj\\data\\seed.json', [4000], 'C:\\bot'), null);
+  // Telemetry switches travel, and the common opt-outs are set.
+  const env = stepEnvironment({ PATH: 'p', VSCODE_TELEMETRY_LEVEL: 'off', SOMETOOL_OPTOUT: '1', HOMEBREW_NO_ANALYTICS: '1' });
+  check('a *TELEMETRY* variable passes', env.VSCODE_TELEMETRY_LEVEL, 'off');
+  check('an *_OPTOUT variable passes', env.SOMETOOL_OPTOUT, '1');
+  check('an unrelated one still does not', 'HOMEBREW_NO_ANALYTICS' in env, false);
+  check('the common opt-outs are set', [env.DOTNET_CLI_TELEMETRY_OPTOUT, env.POWERSHELL_TELEMETRY_OPTOUT, env.DO_NOT_TRACK], ['1', '1', '1']);
+  // The lock reaches the settings that move data, and the updater.
+  const lock = PolicyLockSchema.parse({ requireIsolation: true, allowDesktopMirror: false, allowEnvFiles: false, passEnv: ['DATABASE_URL'], update: { requireSigned: true, remote: 'https://git.example.com/x.git' } });
+  const { policy, outcome } = applyPolicyLock(
+    { mode: 'confirm', allowedPrograms: ['node'], denyPatterns: [], isolation: 'none-accepted', passEnv: ['DATABASE_URL', 'AWS_SECRET'], mirrorToDesktop: true, projectMirrorEnabled: true, includeEnvFiles: true, mirrorIncludeEnvFiles: true },
+    lock,
+  );
+  check('none-accepted becomes none', policy.isolation, 'none');
+  check('the Desktop mirror is off', [policy.mirrorToDesktop, policy.projectMirrorEnabled], [false, false]);
+  check('.env files are out', [policy.includeEnvFiles, policy.mirrorIncludeEnvFiles], [false, false]);
+  check('passEnv is narrowed to the ceiling', policy.passEnv, ['DATABASE_URL']);
+  check('and every change is on the record', outcome.changes.length, 4);
+  check('the update fields parse', lock.update?.requireSigned, true);
+  let strict = false;
+  try {
+    PolicyLockSchema.parse({ allowDownloads: true });
+  } catch {
+    strict = true;
+  }
+  check('an unknown field is an error, not a shrug', strict, true);
+}
 
 console.log('\n--- no execution-policy override on the command line ---');
 {

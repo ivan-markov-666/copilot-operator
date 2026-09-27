@@ -297,10 +297,13 @@ OneDrive for Business, and the chip id confirms it is stored in SharePoint. Ever
 bot sends therefore lands in the user's OneDrive. Terminal output can contain host names,
 paths, user names and sometimes secrets, so:
 
-- the README states this plainly,
-- confirm mode shows it once at the start of a run,
-- `report.redactPatterns` lets the user strip values before upload,
-- `report.keepUploads` (default `false`) is a placeholder for a later cleanup pass.
+- the README says so under "Safety" ("Where the reports go"),
+- every run publishes an `upload-notice` event at its start, in both modes, saying where the
+  reports will land,
+- secret-shaped strings are always redacted (`src/exec/redaction.ts`) and `report.redactPatterns`
+  lets the user strip more before upload,
+- `runsRetentionDays` removes the local copies under `runs/` after the configured time; the
+  copies in OneDrive and the chat history follow the tenant's own retention.
 
 Size handling:
 

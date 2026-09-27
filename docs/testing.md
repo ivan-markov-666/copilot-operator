@@ -17,12 +17,9 @@ cd copilot-operator
 npm install
 ```
 
-`npm install` also downloads Playwright's own Chromium, a few hundred megabytes, which this
-project does not use because it drives the installed Edge. To skip it:
-
-```bash
-set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 && npm install
-```
+`npm install` does not download a browser: the `playwright` package has no install script that
+does, and this project drives the Edge that is already on the machine (`channel: 'msedge'`).
+Nothing needs `npx playwright install`.
 
 Then:
 

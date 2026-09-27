@@ -134,8 +134,20 @@ function parseJsonList<T>(text: string | null): T[] {
 
 /** Windows FILETIME (100 ns since 1601) to milliseconds since 1970. */
 const fromFileTime = (ft: number): number => (ft > 0 ? Math.round(ft / 10_000 - 11_644_473_600_000) : 0);
-/** Milliseconds since 1970 to FILETIME, for the filter. */
-const toFileTime = (ms: number): number => Math.max(0, Math.round((ms + 11_644_473_600_000) * 10_000));
+
+/**
+ * A moment as WMI's own datetime literal, `yyyymmddHHMMSS.mmmmmm+000`, in UTC. Built here rather
+ * than by PowerShell's ManagementDateTimeConverter, which Constrained Language Mode does not allow
+ * and which corporate machines commonly enforce (verified 2026-09-27). Exported for the check.
+ */
+export function dmtfOf(ms: number): string {
+  const d = new Date(Math.max(0, ms));
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0');
+  return (
+    `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}` +
+    `${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.${p(d.getUTCMilliseconds(), 3)}000+000`
+  );
+}
 
 /** Slack either side of a recorded start or end: the table's clock and ours are read separately. */
 const SLACK_MS = 2_000;
@@ -145,10 +157,9 @@ const SLACK_MS = 2_000;
  * older than the bot's work are never read at all.
  */
 export async function processTable(since: number): Promise<ProcessRow[]> {
-  const from = toFileTime(since - SLACK_MS);
+  const from = dmtfOf(since - SLACK_MS);
   const text = await powershell(
-    `$from = [Management.ManagementDateTimeConverter]::ToDmtfDateTime([DateTime]::FromFileTimeUtc(${from}).ToLocalTime()); ` +
-      `Get-CimInstance Win32_Process -Filter "CreationDate >= '$from'" | Select-Object ProcessId, ParentProcessId, Name, CommandLine, ` +
+    `Get-CimInstance Win32_Process -Filter "CreationDate >= '${from}'" | Select-Object ProcessId, ParentProcessId, Name, CommandLine, ` +
       "@{n='Created';e={ if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 } }} | ConvertTo-Json -Compress",
   );
   return parseJsonList<{ ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null; Created: number }>(text)

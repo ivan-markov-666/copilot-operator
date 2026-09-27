@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
-import { applyPolicyLock, readPolicyLock, type LockOutcome } from './lockedPolicy.js';
+import { applyPolicyLock, readPolicyLocks, type LockOutcome, type LockablePolicy } from './lockedPolicy.js';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -113,6 +113,12 @@ export const RunConfigSchema = z.object({
       signInTimeoutSec: z.number().int().positive().default(900),
       humanWaitSec: z.number().int().positive().default(900),
       headless: z.boolean().default(false),
+      /**
+       * Whether a failure dump keeps the full HTML of the signed-in page. Off since 2026-09-27: the
+       * page carries the titles of the account's other conversations and its sign-in state, and
+       * runs/ is a folder on disk. The screenshot and the URL are always kept.
+       */
+      keepFailurePage: z.boolean().default(false),
     })
     .prefault({}),
 
@@ -382,6 +388,13 @@ export const RunConfigSchema = z.object({
     .prefault({}),
 
   runsDir: z.string().default('./runs'),
+  /**
+   * Days a session's run folder is kept before the API removes it at start; 0 keeps everything.
+   * Off by default because nothing here should delete an operator's records without their say —
+   * but a company with a retention rule sets it once and the records follow the rule. See
+   * `src/session/retention.ts`.
+   */
+  runsRetentionDays: z.number().int().min(0).default(0),
   /** Sessions, level-2 presets and the edited level-1 contract live here. */
   dataDir: z.string().default('./data'),
 });
@@ -430,19 +443,45 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
    * two entrances missing it, which is how a gate comes to be enforced on the surface somebody
    * happened to test. See `lockedPolicy.ts` for what a lock may and may not do.
    */
-  const lock = await readPolicyLock(baseDir);
-  const { policy, outcome } = applyPolicyLock(
-    {
-      mode: cfg.execution.mode,
-      allowedPrograms: cfg.execution.allowedPrograms,
-      denyPatterns: cfg.execution.denyPatterns,
-    },
-    lock,
-  );
+  // The machine-wide lock first, the install's own second; each only tightens, so the order is
+  // for the record, not the result. See `readPolicyLocks`.
+  const locks = await readPolicyLocks(baseDir);
+  let policy: LockablePolicy = {
+    mode: cfg.execution.mode,
+    allowedPrograms: cfg.execution.allowedPrograms,
+    denyPatterns: cfg.execution.denyPatterns,
+    isolation: cfg.execution.isolation,
+    passEnv: cfg.execution.passEnv,
+    mirrorToDesktop: cfg.project.mirrorToDesktop,
+    projectMirrorEnabled: cfg.projectMirror.enabled,
+    includeEnvFiles: cfg.project.mirror?.includeEnvFiles ?? cfg.project.others.some((o) => o.mirror?.includeEnvFiles === true),
+    mirrorIncludeEnvFiles: cfg.projectMirror.includeEnvFiles,
+  };
+  const outcome: LockOutcome = { applied: false, changes: [] };
+  for (const lock of locks) {
+    const applied = applyPolicyLock(policy, lock);
+    policy = applied.policy;
+    outcome.applied = true;
+    outcome.changes.push(...applied.outcome.changes);
+    if (applied.outcome.maxMode === 'confirm' || (applied.outcome.maxMode && !outcome.maxMode)) outcome.maxMode = applied.outcome.maxMode;
+  }
 
   return {
     ...cfg,
-    execution: { ...cfg.execution, ...policy },
+    execution: {
+      ...cfg.execution,
+      mode: policy.mode,
+      allowedPrograms: policy.allowedPrograms,
+      denyPatterns: policy.denyPatterns,
+      isolation: policy.isolation ?? cfg.execution.isolation,
+      passEnv: policy.passEnv ?? cfg.execution.passEnv,
+    },
+    project: lockedProject(cfg.project, policy),
+    projectMirror: {
+      ...cfg.projectMirror,
+      enabled: policy.projectMirrorEnabled ?? cfg.projectMirror.enabled,
+      includeEnvFiles: policy.mirrorIncludeEnvFiles ?? cfg.projectMirror.includeEnvFiles,
+    },
     configPath,
     baseDir,
     policyLock: outcome,
@@ -457,6 +496,18 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
       mirrorRootDir: cfg.projectMirror.rootDir ? expandPath(cfg.projectMirror.rootDir, baseDir) : undefined,
       mirrorTargetDir: cfg.projectMirror.targetDir ? expandPath(cfg.projectMirror.targetDir, baseDir) : undefined,
     },
+  };
+}
+
+/** The project section with what the lock decided: the Desktop mirror switch and the .env selections. */
+function lockedProject(project: RunConfig['project'], policy: LockablePolicy): RunConfig['project'] {
+  const envOff = policy.includeEnvFiles === false;
+  const fix = <M extends { includeEnvFiles: boolean } | undefined>(m: M): M => (m && envOff ? { ...m, includeEnvFiles: false } : m);
+  return {
+    ...project,
+    mirrorToDesktop: policy.mirrorToDesktop ?? project.mirrorToDesktop,
+    mirror: fix(project.mirror),
+    others: project.others.map((o) => ({ ...o, mirror: fix(o.mirror) })),
   };
 }
 
