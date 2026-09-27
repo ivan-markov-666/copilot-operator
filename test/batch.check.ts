@@ -41,6 +41,29 @@ try {
   const after = await ops.store.getSession(s.id);
   check('the task is still queued', after?.tasks[0]?.status, 'queued');
   check('and no run was stamped on the session', after?.runGroup, undefined);
+
+  /*
+   * "Run the rest without asking", pressed during a watched run, must bring the unattended rules with
+   * it. It used to stop the asking while the rules went on believing a person was reading each line,
+   * so an allowed interpreter evaluating a string — the one thing the unattended rules add — ran
+   * unread. Driven through the service's own wiring: the same policy object the authorizer holds.
+   */
+  console.log('\n--- switching a watched run to unattended brings the unattended rules ---');
+  const internals = ops as unknown as {
+    running: Map<string, unknown>;
+    webAuthorizer(p: unknown, signal: AbortSignal): { authorize(step: unknown, ctx: unknown): Promise<{ action: string; reason?: string }> };
+  };
+  const policy = { mode: 'confirm' as 'confirm' | 'unattended', denyPatterns: [], allowedPrograms: ['node'], isolation: 'none-accepted' as const };
+  const controller = new AbortController();
+  const authorizer = internals.webAuthorizer(policy, controller.signal);
+  internals.running.set('switched', { controller, startedAt: new Date().toISOString(), mode: 'confirm', policy });
+  const switched = ops.setRunMode('switched', 'unattended');
+  check('the switch is allowed (risk accepted, allowlist present)', switched.ok, true);
+  const inline = await authorizer.authorize({ id: 1, type: 'command', cmd: 'node -e "require(\'fs\')"' }, { sessionId: 'switched', iteration: 1 });
+  check('an interpreter evaluating a string is now refused', inline.action, 'skip');
+  const plain = await authorizer.authorize({ id: 2, type: 'command', cmd: 'node --test' }, { sessionId: 'switched', iteration: 1 });
+  check('an ordinary command still runs without asking', plain.action, 'run');
+  internals.running.delete('switched');
 } finally {
   await rm(data, { recursive: true, force: true });
 }

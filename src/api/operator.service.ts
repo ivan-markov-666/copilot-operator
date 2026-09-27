@@ -1584,6 +1584,14 @@ export class OperatorService {
     }
 
     run.mode = mode;
+    /*
+     * The authorizer's rules read the mode from this same policy object, so it changes with the run.
+     * Without this line "run the rest without asking" stopped the asking but left the rules believing
+     * a person was watching: the extra unattended rule — no allowed interpreter evaluating a string,
+     * no shell inside a shell — was never applied to the steps that followed, exactly the steps no
+     * one would read.
+     */
+    run.policy.mode = mode;
     this.bus.publish({
       sessionId,
       type: 'run-mode-changed',
