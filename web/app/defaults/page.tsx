@@ -97,15 +97,86 @@ type SharedModels = {
  */
 function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): (value: T) => void {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<{ value: T } | null>(null);
   const latest = useRef(save);
   latest.current = save;
+  /*
+   * Leaving the page writes what is still waiting, rather than dropping it. It used to clear the
+   * timer, so a number typed and followed within the pause by a click on another tab was shown as
+   * accepted and never saved — "saved as you type" with the last thing typed missing.
+   */
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
+    if (pending.current) void latest.current(pending.current.value);
   }, []);
   return (value: T) => {
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void latest.current(value), ms);
+    pending.current = { value };
+    timer.current = setTimeout(() => {
+      pending.current = null;
+      void latest.current(value);
+    }, ms);
   };
+}
+
+/**
+ * A whole number between `min` and `max`, typed freely.
+ *
+ * The three number fields under Execution used to clamp on every keystroke: emptying the field
+ * to type a new value turned it into the minimum at once, and the digits typed next landed after
+ * it — select 60, delete it, type 10, and the field read 510 and then 200. The text is now the
+ * operator's while they type; `onChange` hears only a value that is already whole and in range,
+ * and the clamp happens once, when the field is left, where it can no longer fight the typing.
+ */
+function BoundedNumber({
+  id,
+  value,
+  min,
+  max,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+}) {
+  const [text, setText] = useState(String(value));
+  // A value that arrives from outside (the settings loading) replaces the text; one the typing
+  // produced is the same number and changes nothing.
+  useEffect(() => setText((current) => (whole(current) === value ? current : String(value))), [value]);
+  return (
+    <input
+      id={id}
+      type="number"
+      min={min}
+      max={max}
+      step={1}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = whole(e.target.value);
+        if (n !== null && n >= min && n <= max) onChange(n);
+      }}
+      onBlur={() => {
+        const n = whole(text);
+        const settled = n === null ? value : Math.max(min, Math.min(max, n));
+        setText(String(settled));
+        if (settled !== value) onChange(settled);
+      }}
+      style={{ width: 90 }}
+      disabled={disabled}
+    />
+  );
+}
+
+/** The text as a whole number, or null while it is empty, half-typed or fractional. */
+function whole(text: string): number | null {
+  if (text.trim() === '') return null;
+  const n = Number(text);
+  return Number.isInteger(n) ? n : null;
 }
 
 /** The button that does nothing anyone needs, and says so. */
@@ -556,21 +627,23 @@ function ProjectFolders({
 function ExecutionSection() {
   const { t } = useT();
   const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
+  // The settings as the last write left them, read synchronously by the next one. See `write`.
+  const rawRef = useRef<Record<string, unknown> | null>(null);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
   const [retries, setRetries] = useState(2);
   const [iterations, setIterations] = useState(60);
   const [minutes, setMinutes] = useState(240);
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [startMode, setStartMode] = useState<StartMode>('confirm');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
-  const [saved, setSaved] = useState(2);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     api
       .settings()
       .then((s) => {
+        rawRef.current = s.raw;
         setRaw(s.raw);
         /*
          * Read from `raw`, which is the settings file, and not from `resolved`, which carries only
@@ -584,9 +657,7 @@ function ExecutionSection() {
           maxIterations?: number;
           maxRunMinutes?: number;
         };
-        const n = typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2;
-        setRetries(n);
-        setSaved(n);
+        setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as {
@@ -601,69 +672,46 @@ function ExecutionSection() {
       .catch((e) => setErr((e as Error).message));
   }, []);
 
-  const save = async (value: number) => {
-    if (!raw) return;
-    setBusy(true);
-    setMsg('');
-    try {
-      const limits = { ...((raw.limits as Record<string, unknown>) ?? {}), retryBlockedInFreshChat: value };
-      const next = { ...raw, limits };
-      await api.saveSettings(next);
-      setRaw(next);
-      setSaved(value);
-      setMsg(t('exec.saved'));
-      setErr('');
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+  /*
+   * One field's value, written into the whole settings object.
+   *
+   * Every field here saves the whole object, so two writes in flight at once — a number field's
+   * pause ending while a select is being saved — would each start from the object as it was before
+   * the other, and the second would put back what the first had changed. They used to be kept
+   * apart by disabling every field while one saved, which also took the focus out of a number
+   * field in the middle of typing it: the pause fired a save, the field went grey, and the next
+   * digits went nowhere. Now each write waits for the one before and is built on the object that
+   * one produced, so nothing has to be disabled.
+   */
+  const write = (branch: 'limits' | 'execution', key: string, value: unknown): Promise<void> => {
+    const run = async () => {
+      const base = rawRef.current;
+      if (!base) return;
+      const next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } };
+      setMsg('');
+      try {
+        await api.saveSettings(next);
+        rawRef.current = next;
+        setRaw(next);
+        setMsg(t('exec.saved'));
+        setErr('');
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    };
+    const done = queue.current.then(run);
+    queue.current = done.catch(() => undefined);
+    return done;
   };
-  const saveLater = useDebouncedSave(save);
-
-  /** One of the two per-task ceilings, written to `limits` like the retry count. */
-  const saveLimit = async (key: 'maxIterations' | 'maxRunMinutes', value: number) => {
-    if (!raw) return;
-    setBusy(true);
-    setMsg('');
-    try {
-      const limits = { ...((raw.limits as Record<string, unknown>) ?? {}), [key]: value };
-      const next = { ...raw, limits };
-      await api.saveSettings(next);
-      setRaw(next);
-      setMsg(t('exec.saved'));
-      setErr('');
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const saveIterationsLater = useDebouncedSave((n: number) => saveLimit('maxIterations', n));
-  const saveMinutesLater = useDebouncedSave((n: number) => saveLimit('maxRunMinutes', n));
+  const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
+  const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
+  const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
 
   /*
-   * Its own saver, because it writes a different branch of the settings and because these are the
-   * fields here that change what a run is allowed to do rather than how hard it tries. Saved
+   * The fields that change what a run is allowed to do rather than how hard it tries. Saved
    * immediately on choosing, like the other selects on this page.
    */
-  const saveExecution = async (key: 'isolation' | 'mode' | 'networkFetch', value: string) => {
-    if (!raw) return;
-    setBusy(true);
-    setMsg('');
-    try {
-      const execution = { ...((raw.execution as Record<string, unknown>) ?? {}), [key]: value };
-      const next = { ...raw, execution };
-      await api.saveSettings(next);
-      setRaw(next);
-      setMsg(t('exec.saved'));
-      setErr('');
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch', value: string) => write('execution', key, value);
 
   return (
     <div className="panel" id="execution">
@@ -672,20 +720,16 @@ function ExecutionSection() {
       {err && <div className="err">{err}</div>}
       <label htmlFor="retry-blocked">{t('exec.retryBlocked')}</label>
       <div className="row">
-        <input
+        <BoundedNumber
           id="retry-blocked"
-          type="number"
+          value={retries}
           min={0}
           max={5}
-          value={retries}
-          onChange={(e) => {
-            const n = Math.max(0, Math.min(5, Number(e.target.value) || 0));
+          onChange={(n) => {
             setRetries(n);
-            saveLater(n);
+            saveRetriesLater(n);
           }}
-          onBlur={() => retries !== saved && void save(retries)}
-          style={{ width: 90 }}
-          disabled={busy || !raw}
+          disabled={!raw}
         />
         <span className="muted small">{t('exec.retryBlockedTimes')}</span>
       </div>
@@ -693,19 +737,16 @@ function ExecutionSection() {
 
       <label htmlFor="max-iterations">{t('exec.maxIterations')}</label>
       <div className="row">
-        <input
+        <BoundedNumber
           id="max-iterations"
-          type="number"
+          value={iterations}
           min={5}
           max={200}
-          value={iterations}
-          onChange={(e) => {
-            const n = Math.max(5, Math.min(200, Number(e.target.value) || 5));
+          onChange={(n) => {
             setIterations(n);
             saveIterationsLater(n);
           }}
-          style={{ width: 90 }}
-          disabled={busy || !raw}
+          disabled={!raw}
         />
         <span className="muted small">{t('exec.maxIterationsUnit')}</span>
       </div>
@@ -713,19 +754,16 @@ function ExecutionSection() {
 
       <label htmlFor="max-minutes">{t('exec.maxRunMinutes')}</label>
       <div className="row">
-        <input
+        <BoundedNumber
           id="max-minutes"
-          type="number"
+          value={minutes}
           min={10}
           max={1440}
-          value={minutes}
-          onChange={(e) => {
-            const n = Math.max(10, Math.min(1440, Number(e.target.value) || 10));
+          onChange={(n) => {
             setMinutes(n);
             saveMinutesLater(n);
           }}
-          style={{ width: 90 }}
-          disabled={busy || !raw}
+          disabled={!raw}
         />
         <span className="muted small">{t('exec.maxRunMinutesUnit')}</span>
       </div>
@@ -740,7 +778,7 @@ function ExecutionSection() {
           setIsolation(v);
           void saveExecution('isolation', v);
         }}
-        disabled={busy || !raw}
+        disabled={!raw}
       >
         <option value="none">{t('exec.isolationNone')}</option>
         <option value="none-accepted">{t('exec.isolationNoneAccepted')}</option>
@@ -765,7 +803,7 @@ function ExecutionSection() {
           setStartMode(v);
           void saveExecution('mode', v);
         }}
-        disabled={busy || !raw}
+        disabled={!raw}
       >
         <option value="confirm">{t('exec.startModeAsk')}</option>
         <option value="unattended">{t('exec.startModeAuto')}</option>
@@ -781,7 +819,7 @@ function ExecutionSection() {
           setNetworkFetch(v);
           void saveExecution('networkFetch', v);
         }}
-        disabled={busy || !raw}
+        disabled={!raw}
       >
         <option value="ask">{t('exec.networkFetchAsk')}</option>
         <option value="refuse">{t('exec.networkFetchRefuse')}</option>
