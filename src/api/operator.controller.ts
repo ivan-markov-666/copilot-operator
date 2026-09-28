@@ -356,9 +356,14 @@ export class OperatorController {
    * from a blob, so nothing about the operator's side of it changes.
    */
   @Post('export/bundle')
-  async exportBundle(@Res() res: Response, @Body() body: { tasks?: Array<{ sessionId?: string; taskId?: string }> }): Promise<void> {
+  async exportBundle(@Res() res: Response, @Body() body: { tasks?: Array<{ sessionId?: string; taskId?: string; attempt?: number }> }): Promise<void> {
     const pairs = (body?.tasks ?? [])
-      .map((x) => ({ sessionId: (x?.sessionId ?? '').trim(), taskId: (x?.taskId ?? '').trim() }))
+      .map((x) => ({
+        sessionId: (x?.sessionId ?? '').trim(),
+        taskId: (x?.taskId ?? '').trim(),
+        // One attempt of the task rather than the task as it is now; see `exportBundle`.
+        ...(Number.isInteger(x?.attempt) ? { attempt: x.attempt as number } : {}),
+      }))
       .filter((x) => x.sessionId && x.taskId);
     try {
       const { fileName, content } = await this.ops.exportBundle(pairs);

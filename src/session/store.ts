@@ -409,6 +409,8 @@ export class SessionStore {
           prompt: t.prompt,
           level2: t.level2,
           checkResults: t.checkResults,
+          checks: t.checks,
+          vcsPlan: t.vcsPlan,
           review: t.review,
           vcs: t.vcs,
         },

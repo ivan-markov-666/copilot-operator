@@ -31,7 +31,7 @@ import { newId, tidyVcsPlan } from '../session/model.js';
 import { runSession, openBrowser } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
-import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, type ExportKind, type ExportScope } from '../session/exports.js';
+import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, taskAtAttempt, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
 import { mirrorAllProjects, removeProjectMirrors, contextRoot } from '../context/desktopMirror.js';
 import { describeMirror } from '../context/projectMirror.js';
@@ -318,9 +318,10 @@ export class OperatorService {
           level: 'warn',
           message: `"${r.title}" was left unfinished by an earlier run and has been marked aborted`,
         });
-        // What it had changed goes onto its branch, as a finished task's would. See `commitInterrupted`.
-        await this.commitRecovered(r.sessionId, r.taskId).catch((e: unknown) =>
-          console.warn(`[api] could not commit the work of "${r.title}": ${(e as Error).message}`),
+        // What it had changed goes onto its branch, and its record into its run folder, as a
+        // finished task's would. See `commitInterrupted` and `writeAttemptRecord`.
+        await this.settleRecovered(r.sessionId, r.taskId).catch((e: unknown) =>
+          console.warn(`[api] could not settle "${r.title}": ${(e as Error).message}`),
         );
       }
       if (recovered.length > 0) {
@@ -330,19 +331,27 @@ export class OperatorService {
     return this.ready;
   }
 
-  /** Commits the work of one task the previous process left unfinished, and says so on the task. */
-  private async commitRecovered(sessionId: string, taskId: string): Promise<void> {
+  /**
+   * Closes the loose ends of one task the previous process left unfinished: commits its work on its
+   * branch, says so on the task, and writes the attempt's plan, work and runner into its run folder.
+   */
+  private async settleRecovered(sessionId: string, taskId: string): Promise<void> {
     const session = await this.store.getSession(sessionId);
     const task = session?.tasks.find((t) => t.id === taskId);
     if (!session || !task) return;
     const vcs = await commitInterrupted(session, task, task.reason ?? 'interrupted', this.bus);
-    if (!vcs?.commit) return;
-    await this.store.updateSession(sessionId, (s) => {
-      const t = s.tasks.find((x) => x.id === taskId);
-      if (!t) return;
-      t.vcs = vcs;
-      t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
-    });
+    const settled = vcs?.commit
+      ? await this.store.updateSession(sessionId, (s) => {
+          const t = s.tasks.find((x) => x.id === taskId);
+          if (!t) return;
+          t.vcs = vcs;
+          t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
+        })
+      : session;
+    const ended = settled.tasks.find((t) => t.id === taskId);
+    if (!ended) return;
+    const cfg = await this.settings.load();
+    await writeAttemptRecord(settled, ended, cfg.resolved.runsDir, exportMachine(cfg));
   }
 
   /** Runs the startup work now, so it does not wait for the first request. */
@@ -808,12 +817,7 @@ export class OperatorService {
         ? buildPlanExport(scope)
         : kind === 'domain'
           ? await buildDomainExport(scope, cfg.resolved.runsDir)
-          : await buildBotExport(scope, cfg.resolved.runsDir, {
-              node: process.versions.node,
-              platform: process.platform,
-              cwd: cfg.resolved.cwd,
-              limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, mode: cfg.execution.mode } },
-            });
+          : await buildBotExport(scope, cfg.resolved.runsDir, exportMachine(cfg));
     return { fileName: exportFileName(kind, scope.label), content: JSON.stringify(document, null, 2) };
   }
 
@@ -826,7 +830,7 @@ export class OperatorService {
    * elsewhere should still hand over the tasks that are still there, and the document says
    * which ones it holds.
    */
-  async exportBundle(pairs: Array<{ sessionId: string; taskId: string }>): Promise<{ fileName: string; content: string }> {
+  async exportBundle(pairs: Array<{ sessionId: string; taskId: string; attempt?: number }>): Promise<{ fileName: string; content: string }> {
     await this.init();
     if (pairs.length === 0) throw new Error('Choose at least one task.');
 
@@ -837,19 +841,32 @@ export class OperatorService {
       wanted.set(sessionId, set);
     }
 
+    /*
+     * A pair may name one attempt of its task — the button beside an earlier attempt does. That
+     * task is then exported as it stood for that attempt (`taskAtAttempt`): its text, its outcome,
+     * its run folder, and only the attempts before it.
+     */
     const sessions: Session[] = [];
     for (const sessionId of wanted.keys()) {
-      const session = await this.store.getSession(sessionId);
-      if (session) sessions.push(session);
+      let session = await this.store.getSession(sessionId);
+      if (!session) continue;
+      for (const pair of pairs.filter((x) => x.sessionId === sessionId && x.attempt !== undefined)) {
+        const task = session.tasks.find((t) => t.id === pair.taskId);
+        const asItWas = task ? taskAtAttempt(task, pair.attempt as number) : null;
+        if (task && !asItWas) throw new Error(`"${task.title}" has no attempt ${pair.attempt}.`);
+        if (asItWas) session = withTask(session, asItWas);
+      }
+      sessions.push(session);
     }
     const found = sessions.flatMap((s) => s.tasks.filter((t) => wanted.get(s.id)?.has(t.id)));
     if (found.length === 0) throw new Error('None of the chosen tasks still exists.');
 
     // Named after what was chosen rather than after a run, because a selection is not a run: it
     // may be one task of one, or a task from each of three.
+    const one = pairs.length === 1 ? pairs[0] : undefined;
     const label =
       found.length === 1 && sessions.length === 1
-        ? `${sessions[0].name}-${found[0].title}`
+        ? `${sessions[0].name}-${found[0].title}${one?.attempt !== undefined ? `-attempt-${one.attempt}` : ''}`
         : sessions.length === 1
           ? `${sessions[0].name}-${found.length}-tasks`
           : `${found.length}-tasks-${sessions.length}-sessions`;
@@ -858,12 +875,7 @@ export class OperatorService {
     const document = await buildBundleExport(
       { sessions, taskFilter: (s, t) => !!wanted.get(s.id)?.has(t.id), label },
       cfg.resolved.runsDir,
-      {
-        node: process.versions.node,
-        platform: process.platform,
-        cwd: cfg.resolved.cwd,
-        limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, mode: cfg.execution.mode } },
-      },
+      exportMachine(cfg),
     );
     return { fileName: exportFileName('bundle', label), content: JSON.stringify(document, null, 2) };
   }

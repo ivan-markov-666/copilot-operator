@@ -584,6 +584,9 @@ export const dict = {
     // saving a log to the Desktop, which is what a log is actually for
     'save.log': 'save the log',
     'save.attemptLog': "save this attempt's log",
+    'save.attemptRecord': 'download plan, work and runner of this attempt',
+    'save.attemptRecordWhy':
+      'This attempt as it ran — the text it was given, what it did, what the machine did — as one file, even if the task has been edited since. An attempt that did not end done also keeps these three as plan.json, work.json and runner.json in its run folder.',
     'save.saving': 'saving…',
     'save.why':
       'Writes the file into a folder on the Desktop and opens Explorer with it already selected, so it can be dragged straight into the chat that orchestrates the work.',
@@ -1590,6 +1593,9 @@ export const dict = {
 
     'save.log': 'запази log-а',
     'save.attemptLog': 'запази log-а на този опит',
+    'save.attemptRecord': 'изтегли план, работа и runner на този опит',
+    'save.attemptRecordWhy':
+      'Този опит, както е вървял — текстът, който е получил, какво е направил, какво е направила машината — в един файл, дори ако задачата е редактирана след това. Опит, който не е завършил готов, пази тези три и като plan.json, work.json и runner.json в папката на пускането си.',
     'save.saving': 'запазва се…',
     'save.why':
       'Записва файла в папка на десктопа и отваря Explorer с вече избран файл, за да може да се влачи направо в чата, който води работата.',

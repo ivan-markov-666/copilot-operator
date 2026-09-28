@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
-import { SaveLog } from '../../saveLog';
+import { AttemptRecord, SaveLog } from '../../saveLog';
 import { fmtDuration } from '../../../lib/api';
 import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
 import { useNow } from '../../../lib/useNow';
@@ -1919,6 +1919,7 @@ function TaskCard({
                     <span className={`badge ${a.status}`}>{t(`status.${a.status}` as Key)}</span>
                     {a.iterations > 0 && <span className="muted">{t('task.iterations', { n: a.iterations })}</span>}
                     {a.runId && <SaveLog label={t('save.attemptLog')} save={() => api.saveTaskLog(session.id, task.id, a.runId)} />}
+                    {a.runId && <AttemptRecord sessionId={session.id} taskId={task.id} attempt={i + 1} />}
                   </div>
                   <div className="muted">
                     {a.startedAt ? t('task.started', { t: fmtTime(a.startedAt) }) : ''}

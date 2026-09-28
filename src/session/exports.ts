@@ -18,7 +18,8 @@
  * All three exist for one task and for one run, because those are the two sizes a question
  * comes in: "why did this one fail" and "what did this whole run do".
  */
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task, TaskCheck } from './model.js';
 import { withoutPersona } from '../plan/importPlan.js';
@@ -177,12 +178,141 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           if (t.checks && t.checks.length > 0) task.checks = t.checks.map(planCheck);
           if (t.reviewEnabled === false) task.review = false;
           if (t.readOnly) task.readOnly = true;
+          const earlier = earlierPlans(t, level2);
+          if (earlier.length > 0) task.earlierAttempts = earlier;
           return task;
         }),
       };
       return session;
     }),
   };
+}
+
+/**
+ * What each earlier attempt of a task was asked, in the plan's own words.
+ *
+ * The plan is the task as it is now, and after "Edit and run again" that is not what the failed
+ * attempt ran: its text, its checks, its branch plan may all have changed. The attempt's own
+ * snapshot is here, beside it, so the plan of a failure can be read — and handed on — after the
+ * task has moved past it. Only what differs from the task as it stands is written out; an attempt
+ * that ran the same plan says so by its status alone. The importer ignores this key: a plan that
+ * comes back in is the current one.
+ */
+function earlierPlans(t: Task, sessionLevel2: string): Array<Record<string, unknown>> {
+  const current = splitPrompt(t.prompt);
+  return (t.attempts ?? []).map((a, i) => {
+    const out: Record<string, unknown> = { attempt: i + 1, status: a.status };
+    if (a.reason) out.reason = a.reason;
+    if (a.title !== t.title) out.title = a.title;
+    const p = splitPrompt(a.prompt);
+    if (p.prompt !== current.prompt) out.prompt = p.prompt;
+    if (p.expected !== current.expected) out.expected = p.expected;
+    const aLevel2 = planLevel2({ ...t, level2: a.level2 });
+    if (aLevel2 !== planLevel2(t)) out.level2 = aLevel2 === sessionLevel2 ? '' : aLevel2;
+    if (a.checks && JSON.stringify(a.checks) !== JSON.stringify(t.checks ?? [])) out.checks = a.checks.map(planCheck);
+    if (a.vcsPlan && JSON.stringify(a.vcsPlan) !== JSON.stringify(t.vcsPlan ?? {})) out.vcs = a.vcsPlan;
+    return out;
+  });
+}
+
+// ------------------------------------------------------------------------------------------
+// one attempt, as it was
+// ------------------------------------------------------------------------------------------
+
+/**
+ * The task as it stood for one of its attempts: that attempt's text, checks, outcome and run
+ * folder, with only the attempts before it as its history. The current attempt is the task
+ * itself. Null for an attempt the task never had.
+ *
+ * This is what lets every view above be taken of a past attempt without a second set of
+ * builders: the views read a task, and this hands them the task that attempt was.
+ */
+export function taskAtAttempt(task: Task, attempt: number): Task | null {
+  const current = task.attempt ?? 1;
+  if (attempt === current) return task;
+  if (!Number.isInteger(attempt) || attempt < 1 || attempt > current) return null;
+  const a = task.attempts?.[attempt - 1];
+  if (!a) return null;
+  return {
+    ...task,
+    attempt,
+    status: a.status,
+    runId: a.runId,
+    runGroup: a.runGroup,
+    startedAt: a.startedAt,
+    finishedAt: a.finishedAt,
+    iterations: a.iterations,
+    summary: a.summary,
+    reason: a.reason,
+    deviations: a.deviations,
+    disputes: a.disputes,
+    title: a.title,
+    prompt: a.prompt,
+    level2: a.level2,
+    checks: a.checks ?? task.checks,
+    vcsPlan: a.vcsPlan ?? task.vcsPlan,
+    checkResults: a.checkResults,
+    review: a.review,
+    vcs: a.vcs,
+    attempts: task.attempts?.slice(0, attempt - 1),
+    continuing: undefined,
+    finalReply: undefined,
+    firstMessage: undefined,
+    logFile: a.runId ? 'task-log.txt' : undefined,
+  };
+}
+
+/** The session with one of its tasks replaced, so a scope can be built around that version. */
+export function withTask(session: Session, task: Task): Session {
+  return { ...session, tasks: session.tasks.map((t) => (t.id === task.id ? task : t)) };
+}
+
+/** What the runner export says about the machine, from the configuration in force. */
+export function exportMachine(cfg: {
+  resolved: { cwd: string };
+  limits: Record<string, unknown>;
+  execution: { commandTimeoutSec: number; idleTimeoutSec: number; mode: string };
+}): { node: string; platform: string; cwd: string; limits: Record<string, unknown> } {
+  return {
+    node: process.versions.node,
+    platform: process.platform,
+    cwd: cfg.resolved.cwd,
+    limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, mode: cfg.execution.mode } },
+  };
+}
+
+/** The three files an attempt that did not end done leaves in its own run folder. */
+export const ATTEMPT_RECORD_FILES = { plan: 'plan.json', work: 'work.json', runner: 'runner.json' } as const;
+
+/**
+ * Writes the plan, work and runner views of an attempt into its run folder, and returns the folder.
+ *
+ * For an attempt that did not end done, written as it ends. The same three views can be
+ * downloaded at any time — but only while the task's record exists and still describes that
+ * attempt: a deleted task or session takes the record with it, and the files are then the only
+ * account of what the failure was asked, did and ran into. The run folder outlives both (it goes
+ * only by `runsRetentionDays`), which is why they are kept there, beside the transcript they are
+ * read from. Null when the attempt has no run folder, which is an attempt that never started.
+ */
+export async function writeAttemptRecord(
+  session: Session,
+  task: Task,
+  runsDir: string,
+  machine: { node: string; platform: string; cwd: string; limits: Record<string, unknown> },
+): Promise<string | null> {
+  if (!task.runId) return null;
+  const dir = join(runsDir, task.runId);
+  if (!existsSync(dir)) return null;
+  const scope: ExportScope = {
+    sessions: [withTask(session, task)],
+    taskFilter: (_s, t) => t.id === task.id,
+    label: `${session.name}-${task.title}-attempt-${task.attempt ?? 1}`,
+  };
+  const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
+  await writeFile(join(dir, ATTEMPT_RECORD_FILES.plan), json(buildPlanExport(scope)), 'utf8');
+  await writeFile(join(dir, ATTEMPT_RECORD_FILES.work), json(await buildDomainExport(scope, runsDir)), 'utf8');
+  await writeFile(join(dir, ATTEMPT_RECORD_FILES.runner), json(await buildBotExport(scope, runsDir, machine)), 'utf8');
+  return dir;
 }
 
 // ------------------------------------------------------------------------------------------

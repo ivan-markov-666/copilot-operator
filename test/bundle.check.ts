@@ -114,6 +114,72 @@ check('it says how many', about.includes('3 chosen task(s)'), false);
 check('it counts the chosen', about.includes('2 chosen task(s)'), true);
 check('it names all three parts', ['`plan`', '`work`', '`runner`'].every((w) => about.includes(w)), true);
 
+/*
+ * A failed attempt keeps its plan, work and runner. After "Edit and run again" the task on the
+ * record is the new text; the old attempt must still be exportable as it ran, the plan must carry
+ * it beside the current one without spoiling the import, and an attempt that did not end done
+ * leaves the three files in its own run folder.
+ */
+console.log('\n--- a failed attempt keeps its plan, work and runner ---');
+{
+  const s = await store.createSession('gamma');
+  const oldPrompt = 'Build the parser. This first version of the prompt missed the edge cases entirely.';
+  const newPrompt = 'Build the parser, and cover empty input and trailing commas, which the first try missed.';
+  const added = await store.addTask(s.id, { title: 'parser', prompt: oldPrompt, level2: '' });
+  await store.updateSession(s.id, (x) => {
+    x.vcs = { enabled: false, repoDir: '', branchMode: 'per-task', commitOnFinish: false, branchPrefix: 'cop/' };
+  });
+  await store.updateTask(s.id, added.id, (t) => {
+    t.status = 'failed';
+    t.reason = 'checks failed: parses-empty';
+    t.runId = 'run-parser';
+    t.startedAt = '2026-09-28T10:00:00.000Z';
+    t.finishedAt = '2026-09-28T10:05:00.000Z';
+    t.iterations = 4;
+    t.checks = [{ name: 'parses-empty', expect: 'exit-0', run: 'npm test' } as NonNullable<Task['checks']>[number]];
+  });
+  const { mkdir, writeFile, readFile } = await import('node:fs/promises');
+  const runsDir = join(dir, 'runs');
+  await mkdir(join(runsDir, 'run-parser'), { recursive: true });
+  await writeFile(join(runsDir, 'run-parser', 'transcript.jsonl'), `${JSON.stringify({ type: 'task-finished', level: 'info', status: 'failed' })}\n`);
+
+  await store.rerunTask(s.id, added.id, { prompt: newPrompt, checks: [] });
+  await store.updateTask(s.id, added.id, (t) => {
+    t.status = 'done';
+    t.runId = 'run-parser-a2';
+    t.startedAt = '2026-09-28T11:00:00.000Z';
+  });
+  const session = (await store.getSession(s.id)) as Session;
+  const task = session.tasks[0] as Task;
+
+  const { taskAtAttempt, withTask, writeAttemptRecord, buildPlanExport } = await import('../src/session/exports.js');
+  const first = taskAtAttempt(task, 1);
+  check('attempt 1 is the text it ran', first?.prompt, oldPrompt);
+  check('with its own outcome and run folder', [first?.status, first?.runId, first?.iterations], ['failed', 'run-parser', 4]);
+  check('with its own checks, not the edited ones', first?.checks?.map((c) => c.name), ['parses-empty']);
+  check('and no attempts after it', first?.attempts?.length ?? 0, 0);
+  check('an attempt it never had', taskAtAttempt(task, 5), null);
+
+  const plan = buildPlanExport({ sessions: [session], label: 'gamma' });
+  const planTask = ((plan.sessions as Array<{ tasks: Array<Record<string, unknown>> }>)[0]?.tasks ?? [])[0] ?? {};
+  const earlier = (planTask.earlierAttempts as Array<Record<string, unknown>> | undefined) ?? [];
+  check('the plan is the current text', planTask.prompt, newPrompt);
+  check('and carries the failed attempt beside it', [earlier[0]?.attempt, earlier[0]?.status, earlier[0]?.prompt], [1, 'failed', oldPrompt]);
+  const again = checkPlan(JSON.stringify(plan));
+  check('it still imports', again.ok, true);
+  check('without a warning about the history', again.warnings.filter((w) => w.includes('earlierAttempts')), []);
+
+  const folder = await writeAttemptRecord(withTask(session, first as Task), first as Task, runsDir, machine);
+  check('the record lands in the attempt folder', folder, join(runsDir, 'run-parser'));
+  const saved = JSON.parse(await readFile(join(runsDir, 'run-parser', 'plan.json'), 'utf8'));
+  check('plan.json is what that attempt was asked', saved.sessions?.[0]?.tasks?.[0]?.prompt, oldPrompt);
+  const work = await readFile(join(runsDir, 'run-parser', 'work.json'), 'utf8');
+  check('work.json says it failed', work.includes('checks failed: parses-empty'), true);
+  const runner = JSON.parse(await readFile(join(runsDir, 'run-parser', 'runner.json'), 'utf8'));
+  check('runner.json has its transcript', JSON.stringify(runner).includes('task-finished'), true);
+  check('an attempt with no run folder writes nothing', await writeAttemptRecord(session, { ...task, runId: undefined }, runsDir, machine), null);
+}
+
 await rm(dir, { recursive: true, force: true });
 
 console.log('\nwrong:', wrong, '(expect 0)');

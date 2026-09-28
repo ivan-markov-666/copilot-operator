@@ -16,7 +16,7 @@ import { api, fmtDuration, type RegistryEntry, type TaskStatus, sessionHref } fr
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
 import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
-import { SaveLog } from '../saveLog';
+import { AttemptRecord, SaveLog } from '../saveLog';
 import { RowInfo } from '../rowInfo';
 import { RunControls } from '../runControls';
 import { RichText } from '../richText';
@@ -527,6 +527,7 @@ function Flow({
                         {a.runId && (
                           <SaveLog label={t('save.attemptLog')} save={() => api.saveTaskLog(e.sessionId, e.taskId, a.runId)} />
                         )}
+                        {a.runId && <AttemptRecord sessionId={e.sessionId} taskId={e.taskId} attempt={a.attempt} />}
                       </div>
                       <div className="when">
                         {a.startedAt ? t('task.started', { t: fmtTime(a.startedAt) }) : ''}

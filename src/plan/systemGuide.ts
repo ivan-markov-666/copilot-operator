@@ -1550,6 +1550,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Запазва на десктопа log-а на конкретен по-ранен опит, а не на последния.',
           },
           {
+            key: 'save.attemptRecord',
+            kind: 'button',
+            en: 'download plan, work and runner of this attempt',
+            bg: 'изтегли план, работа и runner на този опит',
+            doesEn:
+              'Downloads one earlier attempt as it ran — the plan it was given, what happened to the work, what the runner did — as one file, even if the task was edited since. An attempt that did not end done also keeps the three as plan.json, work.json and runner.json in its run folder.',
+            doesBg:
+              'Изтегля един по-ранен опит, както е вървял — планът, който е получил, какво е станало с работата, какво е направил runner-ът — в един файл, дори ако задачата е редактирана след това. Опит, който не е завършил готов, пази трите и като plan.json, work.json и runner.json в папката на пускането си.',
+          },
+          {
             key: 'reg.retriedFreshDone',
             kind: 'badge',
             en: 'blocked, then done in a fresh chat ({n}×)',

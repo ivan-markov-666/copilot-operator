@@ -815,7 +815,7 @@ export const api = {
    * have done anyway. The name the API chose is kept — it says what is in the file and when it
    * was taken, and a browser's "export (3).json" says neither.
    */
-  downloadBundle: async (tasks: Array<{ sessionId: string; taskId: string }>): Promise<string> => {
+  downloadBundle: async (tasks: Array<{ sessionId: string; taskId: string; attempt?: number }>): Promise<string> => {
     const res = await fetch(`${API}/export/bundle`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(apiToken() ? { 'x-cop-token': apiToken() } : {}) },

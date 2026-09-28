@@ -47,6 +47,7 @@ import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStat
 import { mirrorProject, describeMirror } from '../context/projectMirror.js';
 import { projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
+import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
 export type TaskOutcome = {
   status: Extract<TaskStatus, 'done' | 'blocked' | 'failed' | 'aborted' | 'limit-reached'>;
@@ -551,6 +552,28 @@ export async function runTask(
     });
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
     await log.close();
+    /*
+     * An attempt that did not end done leaves its plan, work and runner views in its own folder,
+     * written after the transcript is closed so they carry all of it. See `writeAttemptRecord`.
+     * A failure to write them is reported and changes nothing about the outcome.
+     */
+    if (status !== 'done') {
+      const now = await store.getSession(session.id);
+      const ended = now?.tasks.find((x) => x.id === task.id);
+      if (now && ended) {
+        await writeAttemptRecord(now, ended, cfg.resolved.runsDir, exportMachine(cfg))
+          .then((dir) => {
+            if (dir) {
+              bus.publish({ sessionId: session.id, taskId: task.id, type: 'attempt-record', level: 'info',
+                message: `plan, work and runner of this attempt saved in ${dir}`, data: { dir } });
+            }
+          })
+          .catch((e: unknown) =>
+            bus.publish({ sessionId: session.id, taskId: task.id, type: 'attempt-record', level: 'warn',
+              message: `could not save the plan, work and runner of this attempt: ${(e as Error).message}` }),
+          );
+      }
+    }
     return { status, iterations, summary, reason };
   };
 

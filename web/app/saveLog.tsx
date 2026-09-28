@@ -19,7 +19,7 @@
 import { useState } from 'react';
 
 import { useT } from '../lib/i18n';
-import type { SavedLog } from '../lib/api';
+import { api, type SavedLog } from '../lib/api';
 
 export function SaveLog({ label, save }: { label: string; save: () => Promise<SavedLog> }) {
   const { t } = useT();
@@ -47,6 +47,45 @@ export function SaveLog({ label, save }: { label: string; save: () => Promise<Sa
       {/* Disabled while it runs: a second press would write a second copy of the same log. */}
       <button type="button" className="linkish" disabled={busy} title={t('save.why')} onClick={() => void press()}>
         {busy ? t('save.saving') : label}
+      </button>
+      {said && <span className={failed ? 'err small' : 'muted small'}>{said}</span>}
+    </>
+  );
+}
+
+/**
+ * The plan, work and runner of one earlier attempt, as one file.
+ *
+ * The task's own download describes the task as it is now, which after "Edit and run again" is
+ * not the attempt that failed. This one exports that attempt as it was — its text, its steps, its
+ * run folder — with only the attempts before it as history. Beside the attempt's log, because
+ * that is where somebody looking at a failure already is.
+ */
+export function AttemptRecord({ sessionId, taskId, attempt }: { sessionId: string; taskId: string; attempt: number }) {
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  const [failed, setFailed] = useState(false);
+
+  const press = async () => {
+    setBusy(true);
+    setSaid('');
+    try {
+      const name = await api.downloadBundle([{ sessionId, taskId, attempt }]);
+      setFailed(false);
+      setSaid(t('reg.bundleSaved', { name }));
+    } catch (e) {
+      setFailed(true);
+      setSaid(t('save.failed', { problem: (e as Error).message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button type="button" className="linkish" disabled={busy} title={t('save.attemptRecordWhy')} onClick={() => void press()}>
+        {busy ? t('save.saving') : t('save.attemptRecord')}
       </button>
       {said && <span className={failed ? 'err small' : 'muted small'}>{said}</span>}
     </>

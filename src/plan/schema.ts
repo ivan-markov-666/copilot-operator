@@ -212,6 +212,13 @@ const TaskInput = z.object({
    * branch so nothing is lost and the next task starts clean.
    */
   readOnly: z.boolean().default(false),
+  /**
+   * What earlier attempts of this task were asked, written by the plan export for a task that has
+   * been run more than once (`earlierPlans` in `session/exports.ts`). History, not instruction:
+   * accepted so that an exported plan imports again without a warning about it, and then ignored —
+   * an imported task starts from its current text, with no attempts behind it.
+   */
+  earlierAttempts: z.array(z.unknown()).optional(),
 });
 
 const SessionInput = z.object({

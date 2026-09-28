@@ -395,6 +395,14 @@ export type TaskAttempt = {
   level2: string;
   /** How the checks turned out for this attempt. */
   checkResults?: TaskCheckResult[];
+  /**
+   * The checks and the branch and commit plan this attempt ran under, for the same reason as the
+   * text above: "Edit and run again" can change them too, and the plan of a failed attempt that
+   * shows the conditions of the next one is not that attempt's plan. Absent on attempts recorded
+   * before 2026-09-28, which fall back to the task's current ones.
+   */
+  checks?: TaskCheck[];
+  vcsPlan?: TaskVcsPlan;
   /** What the independent review concluded about this attempt. */
   review?: TaskReview;
   /**
