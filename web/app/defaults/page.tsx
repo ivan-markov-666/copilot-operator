@@ -24,6 +24,8 @@ import { DirTree } from '../dirTree';
 
 /** What the operator says contains the runner. Mirrors `execution.isolation` in the config. */
 type Isolation = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm';
+type StartMode = 'confirm' | 'unattended';
+type NetworkFetch = 'ask' | 'refuse' | 'run';
 
 export default function DefaultsPage() {
   const { t } = useT();
@@ -558,6 +560,8 @@ function ExecutionSection() {
   const [iterations, setIterations] = useState(60);
   const [minutes, setMinutes] = useState(240);
   const [isolation, setIsolation] = useState<Isolation>('none');
+  const [startMode, setStartMode] = useState<StartMode>('confirm');
+  const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
   const [saved, setSaved] = useState(2);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -585,8 +589,14 @@ function ExecutionSection() {
         setSaved(n);
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation };
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as {
+          isolation?: Isolation;
+          mode?: StartMode;
+          networkFetch?: NetworkFetch;
+        };
         setIsolation(exec.isolation ?? 'none');
+        setStartMode(exec.mode ?? 'confirm');
+        setNetworkFetch(exec.networkFetch ?? 'ask');
       })
       .catch((e) => setErr((e as Error).message));
   }, []);
@@ -633,16 +643,16 @@ function ExecutionSection() {
   const saveMinutesLater = useDebouncedSave((n: number) => saveLimit('maxRunMinutes', n));
 
   /*
-   * Its own saver, because it writes a different branch of the settings and because it is the one
-   * field here that changes what a run is allowed to do rather than how hard it tries. Saved
+   * Its own saver, because it writes a different branch of the settings and because these are the
+   * fields here that change what a run is allowed to do rather than how hard it tries. Saved
    * immediately on choosing, like the other selects on this page.
    */
-  const saveIsolation = async (value: Isolation) => {
+  const saveExecution = async (key: 'isolation' | 'mode' | 'networkFetch', value: string) => {
     if (!raw) return;
     setBusy(true);
     setMsg('');
     try {
-      const execution = { ...((raw.execution as Record<string, unknown>) ?? {}), isolation: value };
+      const execution = { ...((raw.execution as Record<string, unknown>) ?? {}), [key]: value };
       const next = { ...raw, execution };
       await api.saveSettings(next);
       setRaw(next);
@@ -728,7 +738,7 @@ function ExecutionSection() {
         onChange={(e) => {
           const v = e.target.value as Isolation;
           setIsolation(v);
-          void saveIsolation(v);
+          void saveExecution('isolation', v);
         }}
         disabled={busy || !raw}
       >
@@ -738,8 +748,47 @@ function ExecutionSection() {
         <option value="sandbox">{t('exec.isolationSandbox')}</option>
         <option value="vm">{t('exec.isolationVm')}</option>
       </select>
-      <SavedNote msg={msg} />
       <p className="why">{t('exec.isolationWhy')}</p>
+
+      {/*
+        The two choices that make a run go without anybody. Placed after the isolation claim
+        because that claim is what allows an unattended run on this machine at all; these two only
+        decide how much such a run still asks. Both are about unattended runs: a step-by-step run
+        shows every step, whatever is chosen here.
+      */}
+      <label htmlFor="start-mode">{t('exec.startMode')}</label>
+      <select
+        id="start-mode"
+        value={startMode}
+        onChange={(e) => {
+          const v = e.target.value as StartMode;
+          setStartMode(v);
+          void saveExecution('mode', v);
+        }}
+        disabled={busy || !raw}
+      >
+        <option value="confirm">{t('exec.startModeAsk')}</option>
+        <option value="unattended">{t('exec.startModeAuto')}</option>
+      </select>
+      <p className="why">{t('exec.startModeWhy')}</p>
+
+      <label htmlFor="network-fetch">{t('exec.networkFetch')}</label>
+      <select
+        id="network-fetch"
+        value={networkFetch}
+        onChange={(e) => {
+          const v = e.target.value as NetworkFetch;
+          setNetworkFetch(v);
+          void saveExecution('networkFetch', v);
+        }}
+        disabled={busy || !raw}
+      >
+        <option value="ask">{t('exec.networkFetchAsk')}</option>
+        <option value="refuse">{t('exec.networkFetchRefuse')}</option>
+        <option value="run">{t('exec.networkFetchRun')}</option>
+      </select>
+      <SavedNote msg={msg} />
+      <p className="why">{t('exec.networkFetchWhy')}</p>
     </div>
   );
 }

@@ -82,7 +82,11 @@ file run. What `Start-Process` is asked to start is judged like any other progra
 `Invoke-WebRequest`, `Invoke-RestMethod`, `curl`, `wget`, `Start-BitsTransfer`, the .NET web
 clients, `ftp`/`scp`, a package named by URL or git address, `npx` of a tool not installed in the
 project, `docker pull` — is neither refused nor run: it waits on the approval screen, in every
-mode, unattended included, and "run the rest without asking" does not answer it. A check that
+mode, unattended included, and "run the rest without asking" does not answer it. That is the
+default, and the one stop an unattended run still makes; `execution.networkFetch` (Settings →
+Execution) may instead **refuse** it back to the chat with the reason, so the run never waits, or
+**run** it unread on a machine where that is acceptable. The choice applies only to unattended
+runs, and each task's policy manifest records which was in force. A check that
 fetches is refused, since a check runs with nobody asked. Requests to this machine (`localhost`,
 `127.0.0.1`) and the project's own package managers are not held. `npm install` runs with
 `ignore-scripts`: a package's install script is code fetched and executed unread, and it does not

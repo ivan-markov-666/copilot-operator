@@ -38,11 +38,14 @@ export type Ask = (step: Step, ctx: AuthorizeContext, held?: HeldFor) => Promise
 /**
  * Runs the static rules, then, unless unattended, asks the human through `ask`.
  *
- * A step that fetches from the network is the exception to "unless unattended": it is asked about
- * in every mode, with `held` saying why, because the runs nobody is watching are exactly the ones
- * in which a download followed by a second step that runs it would otherwise go unseen. `cfg` is
- * read on every call, not captured, so a run switched to unattended half-way is judged as one from
- * its next step on.
+ * A step that fetches from the network is the exception to "unless unattended": by default it is
+ * asked about in every mode, with `held` saying why, because the runs nobody is watching are
+ * exactly the ones in which a download followed by a second step that runs it would otherwise go
+ * unseen. The operator may choose otherwise for unattended runs (`cfg.networkFetch`): `refuse`
+ * answers the chat at once instead of waiting for anybody, `run` treats the fetch like any other
+ * step. Only for unattended runs — a watched run shows the fetch like every other step, and the
+ * person reading it is the whole point of watching. `cfg` is read on every call, not captured, so
+ * a run switched to unattended half-way is judged as one from its next step on.
  */
 export function makeAuthorizer(cfg: PolicyConfig, ask: Ask): StepAuthorizer {
   return {
@@ -51,7 +54,11 @@ export function makeAuthorizer(cfg: PolicyConfig, ask: Ask): StepAuthorizer {
       if (blocked) return blocked;
       const cwd = ctx.confinement?.cwd;
       const network = networkFetchReason(step.cmd, cwd) ?? (cwd ? scriptNetworkReason(step.cmd, cwd) : null);
-      if (network) return await ask(step, ctx, { network });
+      if (network) {
+        if (cfg.mode === 'unattended' && cfg.networkFetch === 'refuse') return { action: 'skip', reason: networkFetchRefusal(network) };
+        if (cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
+        return await ask(step, ctx, { network });
+      }
       if (cfg.mode === 'unattended') return { action: 'run' };
       return await ask(step, ctx);
     },
@@ -80,8 +87,10 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
  * Everything runs after the static rules. Only for runs the user explicitly marked so.
  *
  * A step held for a person (a network fetch) is refused here, with the reason, because this form
- * has nobody to ask. The web UI does not use it: its unattended runs keep the approval screen for
- * exactly those steps.
+ * has nobody to ask — `ask` and `refuse` come to the same thing at a terminal nobody is at. Only
+ * `networkFetch: run` lets one through, and that is decided in `makeAuthorizer` before this is
+ * reached. The web UI does not use it: its unattended runs keep the approval screen for exactly
+ * those steps.
  */
 export function unattendedAuthorizer(cfg: PolicyConfig): StepAuthorizer {
   return makeAuthorizer({ ...cfg, mode: 'unattended' }, async (_step, _ctx, held) =>

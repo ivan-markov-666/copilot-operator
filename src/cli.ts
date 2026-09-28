@@ -515,6 +515,7 @@ program
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
+      networkFetch: cfg.execution.networkFetch,
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

@@ -131,7 +131,32 @@ export const RunConfigSchema = z.object({
 
   execution: z
     .object({
+      /*
+       * For the terminal, the mode `cop run` uses without `--unattended`. For the API it is the
+       * operator's standing choice from Settings: `unattended` means an unattended start is not
+       * questioned again with "are you sure" — they said so once, on the Settings page, and asking
+       * at every press is exactly the interruption they switched off. Every start still names its
+       * own mode; this never turns a step-by-step press into an unattended run.
+       */
       mode: z.enum(['confirm', 'unattended']).default('confirm'),
+      /**
+       * What an unattended run does with a step that fetches from the network. See `network.ts`.
+       *
+       *   ask     it waits on the approval screen for the operator, as it did before this setting
+       *           existed — the one question an unattended run still asks.
+       *   refuse  it is not run, and the chat is told why at once and what to do instead, so the
+       *           run never stops to wait for anybody. The terminal's unattended form has always
+       *           done this, because it has nobody to ask.
+       *   run     it runs like every other step, with nobody having read it.
+       *
+       * `ask` is the default because the hold exists for a reason — a security team found
+       * model-written steps staging and running code on a work laptop — and a run that can fetch
+       * and then execute what arrived, unread, is the thing it was built to prevent. `run` is the
+       * operator's to choose on a machine where that is acceptable, and it is recorded in every
+       * task's policy manifest as exactly that. A step-by-step run is unaffected: every step
+       * there, a fetch included, is put in front of a person anyway.
+       */
+      networkFetch: z.enum(['ask', 'refuse', 'run']).default('ask'),
       /**
        * The shell a step or a check runs in when it names none of its own.
        *

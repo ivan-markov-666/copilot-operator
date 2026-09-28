@@ -644,6 +644,7 @@ export async function runTask(
     isolation,
     confinedTo: confinement.roots,
     mode: deps.currentMode?.() ?? cfg.execution.mode,
+    networkFetch: cfg.execution.networkFetch,
     allowedPrograms: cfg.execution.allowedPrograms,
     denyPatterns: cfg.execution.denyPatterns,
     cwd: work.cwd,

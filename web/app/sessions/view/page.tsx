@@ -17,6 +17,7 @@ import { DirTree } from '../../dirTree';
 import { TaskStory } from '../../taskStory';
 import { RichText } from '../../richText';
 import { confirmDialog } from '../../dialog';
+import { useUnattendedWithoutAsking } from '../../../lib/useUnattendedWithoutAsking';
 import { useTaskActions } from '../../taskActions';
 
 // ---------------------------------------------------------------------------------------
@@ -150,8 +151,10 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
   useEffect(() => setName(session.name), [session.name]);
   useEffect(() => setGroup(session.conversationGroup ?? ''), [session.conversationGroup]);
 
+  // Settings → Execution can say an unattended start needs no "are you sure"; see the hook.
+  const quietStart = useUnattendedWithoutAsking();
   const start = async (mode: 'confirm' | 'unattended') => {
-    if (mode === 'unattended' && !(await confirmDialog(t('session.unattendedConfirm')))) return;
+    if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('session.unattendedConfirm')))) return;
     const r = await api.start(session.id, mode, session.planName);
     setMsg(
       r.started

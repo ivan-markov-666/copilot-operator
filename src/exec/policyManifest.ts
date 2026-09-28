@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto';
 
 import { DANGEROUS_TECHNIQUES } from './dangerous.js';
 import { describeIsolation, type IsolationPosture } from './isolation.js';
+import type { NetworkFetchChoice } from './policy.js';
 
 export type PolicyManifest = {
   collectedAt: string;
@@ -39,10 +40,13 @@ export type PolicyManifest = {
    */
   chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command';
   /**
-   * What happens to a step that downloads. A constant for the same reason `chatFiles` is one: the
-   * question gets asked, and the answer should be on the page. See `network.ts`.
+   * What happens to a step that downloads, as it was in force for this task. Written out in words
+   * for the same reason `chatFiles` is: the question gets asked, and the answer should be on the
+   * page. It used to be a constant, when the answer could not change; since the operator can let an
+   * unattended run fetch without asking, the sentence is chosen from the mode and that choice, so a
+   * manifest never says "held" of a run in which nothing was. See `network.ts`.
    */
-  networkFetch: typeof NETWORK_FETCH;
+  networkFetch: string;
   denyPatterns: { count: number; digest: string };
   /** The built-in floor, which no configuration can switch off. A changed digest is a changed floor. */
   builtIn: { count: number; digest: string; names: string[] };
@@ -69,11 +73,24 @@ export function digestOf(values: string[]): string {
   return createHash('sha256').update(canonical).digest('hex').slice(0, 12);
 }
 
-export const NETWORK_FETCH =
-  "a command that fetches from the network (Invoke-WebRequest, Invoke-RestMethod, curl, wget, Start-BitsTransfer, .NET web clients, ftp/scp) is held for the operator in every mode; with nobody to ask it is refused. Requests to localhost and the project's package managers are not held" as const;
+const FETCHES = 'a command that fetches from the network (Invoke-WebRequest, Invoke-RestMethod, curl, wget, Start-BitsTransfer, .NET web clients, ftp/scp)';
+const NOT_HELD = "Requests to localhost and the project's package managers are not held";
+
+/**
+ * The manifest's sentence about downloads, for this mode and the operator's choice. A step-by-step
+ * run shows every step to a person, so the choice changes nothing there and is not mentioned.
+ */
+export function networkFetchStatement(mode: 'confirm' | 'unattended', choice: NetworkFetchChoice = 'ask'): string {
+  if (mode === 'confirm') return `${FETCHES} is shown to the operator with a note that it downloads, like every step of this run. ${NOT_HELD}`;
+  if (choice === 'refuse') return `${FETCHES} is refused back to the chat without running (execution.networkFetch: refuse). ${NOT_HELD}`;
+  if (choice === 'run') return `${FETCHES} RUNS WITHOUT ANYONE READING IT — the operator chose this (execution.networkFetch: run). Only the deny list and the built-in refusals applied`;
+  return `${FETCHES} is held for the operator even in this unattended run (execution.networkFetch: ask); with nobody to ask it is refused. ${NOT_HELD}`;
+}
 
 export type ManifestInput = {
   mode: 'confirm' | 'unattended';
+  /** The operator's choice for fetches in an unattended run. Absent means `ask`. */
+  networkFetch?: NetworkFetchChoice;
   allowedPrograms: string[];
   denyPatterns: string[];
   cwd: string;
@@ -97,7 +114,7 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
       programs: [...input.allowedPrograms],
     },
     chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command',
-    networkFetch: NETWORK_FETCH,
+    networkFetch: networkFetchStatement(input.mode, input.networkFetch),
     denyPatterns: { count: input.denyPatterns.length, digest: digestOf(input.denyPatterns) },
     builtIn: { count: names.length, digest: digestOf(names), names },
     lock: input.lock ?? { applied: false, changes: [] },

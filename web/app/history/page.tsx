@@ -22,6 +22,7 @@ import { RunControls } from '../runControls';
 import { RichText } from '../richText';
 import { useTaskActions } from '../taskActions';
 import { confirmDialog } from '../dialog';
+import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { TaskStory } from '../taskStory';
 
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
@@ -951,8 +952,10 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
       .catch(() => undefined);
   };
 
+  // Settings → Execution can say an unattended start needs no "are you sure"; see the hook.
+  const quietStart = useUnattendedWithoutAsking();
   const start = async (mode: 'confirm' | 'unattended') => {
-    if (mode === 'unattended' && !(await confirmDialog(t('batch.unattendedConfirm', { n: sessionIds.length })))) return;
+    if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('batch.unattendedConfirm', { n: sessionIds.length })))) return;
     setBusy(true);
     setMsg('');
     try {

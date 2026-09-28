@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus, sessionHref } from '../lib/api';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
 import { confirmDialog } from './dialog';
+import { useUnattendedWithoutAsking } from '../lib/useUnattendedWithoutAsking';
 import { ModelHint } from './defaultHints';
 
 export default function SessionsPage() {
@@ -480,8 +481,10 @@ function BatchPanel({
         ? { title: 'batch.nothingRunnable', why: 'batch.nothingRunnableWhy' }
         : null;
 
+  // Settings → Execution can say an unattended start needs no "are you sure"; see the hook.
+  const quietStart = useUnattendedWithoutAsking();
   const start = async (mode: 'confirm' | 'unattended') => {
-    if (mode === 'unattended' && !(await confirmDialog(t('batch.unattendedConfirm', { n: runnable.length })))) return;
+    if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('batch.unattendedConfirm', { n: runnable.length })))) return;
     try {
       const r = await api.startBatch(
         runnable.map((s) => s.id),

@@ -87,6 +87,17 @@ export const dict = {
     'exec.isolationVm': 'A virtual machine',
     'exec.isolationWhy':
       'Commands written by the model run as whoever this process is. Saying so here is what lets a run go unattended: with "nowhere in particular" chosen, a run without a person watching is refused, because nobody watching and nothing containing is the combination this will not be — unless you choose "I accept unattended runs without isolation", which allows it on your responsibility and is recorded with every run as exactly that. It is your statement, not a check — the runner records it, notes the account it actually holds, and says so when the two disagree.',
+    'exec.startMode': 'Starting a run without supervision',
+    'exec.startModeAsk': 'Ask "are you sure" every time',
+    'exec.startModeAuto': 'Start it without asking',
+    'exec.startModeWhy':
+      'The run buttons that work through the queue on their own ask "are you sure" before they start. Choose "Start it without asking" and they simply start — you decided once, here. "Step by step" is still there beside them, and the list of forbidden commands still applies. A run on this machine can only go without supervision if "Where the bot runs" above allows it.',
+    'exec.networkFetch': 'A command that downloads, in a run without supervision',
+    'exec.networkFetchAsk': 'Wait for me on the approval screen',
+    'exec.networkFetchRefuse': 'Refuse it and tell the chat why — the run never waits',
+    'exec.networkFetchRun': 'Run it without asking',
+    'exec.networkFetchWhy':
+      'Invoke-WebRequest, curl, wget and the like. Waiting for you is the one stop a run without supervision still makes. Refusing sends the chat the reason and what to do instead (the project’s package manager, or writing the file with a step), so the run goes on without you. Running it means a later step can run what arrived without anyone having read it — choose it only on a machine where that is acceptable; every task records the choice. npm, dotnet, pip and git are never held, and a step-by-step run shows every command whatever is chosen here.',
     'exec.save': 'Save',
     'exec.saved': 'Saved. Applies to runs started from now on.',
     'story.show': 'What happened',
@@ -263,7 +274,7 @@ export const dict = {
     'approval.runAllConfirm':
       'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused, and a command that downloads from the internet still asks. Continue?',
     'approval.network':
-      'This command downloads from the internet. The bot never does that on its own, even in a run that does not ask, because a later step could run what arrived. Run it only if you know what it fetches and why.',
+      'This command downloads from the internet. A run that does not ask still stops for this one (unless Settings → Execution says otherwise), because a later step could run what arrived. Run it only if you know what it fetches and why.',
     'approval.skip': 'Skip',
     'approval.abort': 'Abort task',
 
@@ -1096,6 +1107,17 @@ export const dict = {
     'exec.isolationVm': 'Виртуална машина',
     'exec.isolationWhy':
       'Командите, написани от модела, вървят като този процес. Да го кажете тук е това, което позволява пускане без надзор: при избрано „никъде специално“ пускане без човек се отказва, защото никой да не гледа и нищо да не огражда е комбинацията, която това няма да бъде — освен ако не изберете „приемам пускане без надзор без изолация“, което го позволява на ваша отговорност и се записва с всяко пускане точно като това. Това е ваше твърдение, не проверка — runner-ът го записва, отбелязва акаунта, който всъщност държи, и казва, когато двете не съвпадат.',
+    'exec.startMode': 'Пускане без надзор',
+    'exec.startModeAsk': 'Питай „сигурен ли си“ всеки път',
+    'exec.startModeAuto': 'Пускай, без да питаш',
+    'exec.startModeWhy':
+      'Бутоните, които минават през опашката сами, питат „сигурен ли си“, преди да тръгнат. Изберете „Пускай, без да питаш“ и те просто тръгват — решили сте веднъж, тук. „Стъпка по стъпка“ си остава до тях, а списъкът със забранени команди важи. Пускане без надзор на тази машина е възможно само ако „Къде върви ботът“ по-горе го позволява.',
+    'exec.networkFetch': 'Команда, която тегли от интернет, при пускане без надзор',
+    'exec.networkFetchAsk': 'Чакай ме на екрана за одобрение',
+    'exec.networkFetchRefuse': 'Откажи я и кажи на чата защо — пускането никога не чака',
+    'exec.networkFetchRun': 'Изпълни я, без да питаш',
+    'exec.networkFetchWhy':
+      'Invoke-WebRequest, curl, wget и подобни. Чакането за вас е единственото спиране, което пускане без надзор още прави. При отказ чатът получава причината и какво да направи вместо това (пакетния мениджър на проекта или файл, написан със стъпка), и пускането продължава без вас. При изпълнение следваща стъпка може да пусне изтегленото, без някой да го е прочел — изберете го само на машина, където това е приемливо; всяка задача записва избора. npm, dotnet, pip и git никога не се задържат, а при „стъпка по стъпка“ всяка команда се показва, каквото и да е избрано тук.',
     'exec.save': 'Запази',
     'exec.saved': 'Запазено. Важи за пускания, започнати от сега нататък.',
     'story.show': 'Какво се случи',
@@ -1268,7 +1290,7 @@ export const dict = {
     'approval.runAllConfirm':
       'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват, а команда, която тегли от интернет, пак пита. Продължавате ли?',
     'approval.network':
-      'Тази команда тегли от интернет. Ботът никога не го прави сам, дори при пускане без питане, защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
+      'Тази команда тегли от интернет. Пускане без питане също спира за нея (освен ако Настройки → Изпълнение не казва друго), защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
     'approval.skip': 'Пропусни',
     'approval.abort': 'Прекрати задачата',
 

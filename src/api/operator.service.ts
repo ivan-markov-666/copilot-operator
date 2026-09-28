@@ -920,6 +920,8 @@ export class OperatorService {
       allowedPrograms: cfg.execution.allowedPrograms,
       isolation: cfg.execution.isolation,
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
+      // Read once per run like the rest of the policy: a change in Settings applies from the next start.
+      networkFetch: cfg.execution.networkFetch,
     };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
@@ -1686,7 +1688,7 @@ export class OperatorService {
   }
 
 
-  private webAuthorizer(policy: { mode: 'confirm' | 'unattended'; denyPatterns: string[]; allowedPrograms: string[] }, signal: AbortSignal): StepAuthorizer {
+  private webAuthorizer(policy: PolicyConfig, signal: AbortSignal): StepAuthorizer {
     return makeAuthorizer(policy, (step, ctx, held) =>
       new Promise<PolicyDecision>((resolvePromise) => {
         // The operator may have pressed "run the rest without asking" on an earlier step.

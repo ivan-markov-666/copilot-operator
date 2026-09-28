@@ -643,16 +643,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Run this and the rest without asking',
             bg: 'Изпълни без да питаш повече',
-            doesEn: 'Runs it and stops asking about every command after it until this run ends, except a command that downloads from the internet. Not offered on such a command.',
-            doesBg: 'Изпълнява я и спира да пита за следващите команди до края на това пускане, освен за команда, която тегли от интернет. Не се предлага на такава команда.',
+            doesEn: 'Runs it and stops asking about every command after it until this run ends, except a command that downloads from the internet, which follows the choice in Settings → Execution. Not offered on such a command.',
+            doesBg: 'Изпълнява я и спира да пита за следващите команди до края на това пускане, освен за команда, която тегли от интернет — за нея важи изборът в Настройки → Изпълнение. Не се предлага на такава команда.',
           },
           {
             key: 'approval.network',
             kind: 'note',
-            en: 'This command downloads from the internet. The bot never does that on its own, even in a run that does not ask, because a later step could run what arrived. Run it only if you know what it fetches and why.',
-            bg: 'Тази команда тегли от интернет. Ботът никога не го прави сам, дори при пускане без питане, защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
-            doesEn: 'Shown on a step that fetches from the network. Such a step waits here in every run, including one that does not ask; requests to localhost and package installs through npm or dotnet do not.',
-            doesBg: 'Показва се на стъпка, която тегли от мрежата. Такава стъпка чака тук при всяко пускане, включително без питане; заявки към localhost и пакети през npm или dotnet не чакат.',
+            en: 'This command downloads from the internet. A run that does not ask still stops for this one (unless Settings → Execution says otherwise), because a later step could run what arrived. Run it only if you know what it fetches and why.',
+            bg: 'Тази команда тегли от интернет. Пускане без питане също спира за нея (освен ако Настройки → Изпълнение не казва друго), защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
+            doesEn: 'Shown on a step that fetches from the network. Such a step waits here in every run, including one that does not ask, unless Settings → Execution has chosen to refuse or run such commands in a run without supervision; requests to localhost and package installs through npm or dotnet never wait.',
+            doesBg: 'Показва се на стъпка, която тегли от мрежата. Такава стъпка чака тук при всяко пускане, включително без питане, освен ако в Настройки → Изпълнение не е избрано такива команди да се отказват или изпълняват при пускане без надзор; заявки към localhost и пакети през npm или dotnet никога не чакат.',
           },
           {
             key: 'approval.skip',
@@ -1772,6 +1772,26 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               "The operator's statement about what contains this runner: this account, a separate low-privilege Windows account, Windows Sandbox, or a VM. It gates unattended runs — while it says this account, a run with nobody watching is refused, unless the operator chose \"this account — I accept unattended runs without isolation\", which allows it on their responsibility — and it is recorded with every run beside the account the process actually held.",
             doesBg:
               'Твърдението на оператора какво огражда този runner: този акаунт, отделен Windows акаунт с малки права, Windows Sandbox или виртуална машина. То управлява пусканията без надзор — докато казва „този акаунт“, пускане без човек се отказва, освен ако операторът не е избрал „в този акаунт — приемам пускане без надзор без изолация“, което го позволява на негова отговорност — и се записва с всяко пускане до акаунта, който процесът наистина е държал.',
+          },
+          {
+            key: 'exec.startMode',
+            kind: 'select',
+            en: 'Starting a run without supervision',
+            bg: 'Пускане без надзор',
+            doesEn:
+              'Whether the run buttons that work through the queue on their own ask "are you sure" first ("Ask \"are you sure\" every time", the default) or simply start ("Start it without asking"). Step by step stays available beside them either way.',
+            doesBg:
+              'Дали бутоните, които минават през опашката сами, питат първо „сигурен ли си“ („Питай „сигурен ли си“ всеки път“, по подразбиране) или просто тръгват („Пускай, без да питаш“). „Стъпка по стъпка“ остава до тях и в двата случая.',
+          },
+          {
+            key: 'exec.networkFetch',
+            kind: 'select',
+            en: 'A command that downloads, in a run without supervision',
+            bg: 'Команда, която тегли от интернет, при пускане без надзор',
+            doesEn:
+              'What a run without supervision does with Invoke-WebRequest, curl, wget and the like: wait for the operator on the approval screen (the default), refuse it and tell the chat why so the run never waits, or run it without anyone reading it. Recorded in every task. A step-by-step run shows every command whatever is chosen.',
+            doesBg:
+              'Какво прави пускане без надзор с Invoke-WebRequest, curl, wget и подобни: чака оператора на екрана за одобрение (по подразбиране), отказва я и казва на чата защо, така че пускането никога не чака, или я изпълнява, без никой да я е прочел. Записва се във всяка задача. При „стъпка по стъпка“ всяка команда се показва, каквото и да е избрано.',
           },
         ],
       },

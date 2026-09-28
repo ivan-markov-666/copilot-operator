@@ -36,7 +36,15 @@ export type PolicyConfig = {
   isolation?: IsolationClaim;
   /** An administrator's `policy.lock.json` forbids unattended runs on this machine. */
   lockedToConfirm?: boolean;
+  /**
+   * What an unattended run does with a step that fetches from the network: put it to the operator,
+   * refuse it back to the chat, or run it. Absent means `ask`. A step-by-step run asks about every
+   * step whatever this says. See `execution.networkFetch` in `schema.ts`.
+   */
+  networkFetch?: NetworkFetchChoice;
 };
+
+export type NetworkFetchChoice = 'ask' | 'refuse' | 'run';
 
 export function describeStep(step: Step): string {
   // The shell it will really be read by, not the one this file used to assume: a line in the
