@@ -363,10 +363,26 @@ export class SessionStore {
    * the retry destroys exactly the thing that made the retry interesting. The run folder of
    * the old attempt is untouched too, because the next attempt gets a folder of its own.
    */
+  /**
+   * Queues a task that stopped at the runner's limit to carry on where it stopped: the same
+   * conversation, the same branch, a fresh count of messages. The attempt that stopped is kept on
+   * the record like any other.
+   */
+  async continueTask(sessionId: string, taskId: string): Promise<Task> {
+    const current = (await this.getSession(sessionId))?.tasks.find((x) => x.id === taskId);
+    if (!current) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
+    if (current.status !== 'limit-reached') {
+      throw new Error('Only a task that stopped at the runner\'s limit can be continued; run this one again instead.');
+    }
+    return await this.rerunTask(sessionId, taskId, {}, { fromAttempt: current.attempt ?? 1, stoppedBecause: current.reason });
+  }
+
   async rerunTask(
     sessionId: string,
     taskId: string,
     patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
+    /** Present when the new attempt carries on from the last one (see `continueTask`). */
+    continuing?: Task['continuing'],
   ): Promise<Task> {
     let result: Task | undefined;
     await this.updateSession(sessionId, (s) => {
@@ -408,6 +424,7 @@ export class SessionStore {
       t.attempt = (t.attempt ?? 1) + 1;
       t.status = 'queued';
       t.iterations = 0;
+      t.continuing = continuing;
       // Cleared so the next run starts from nothing and gets its own run folder.
       t.runId = undefined;
       t.runGroup = undefined;

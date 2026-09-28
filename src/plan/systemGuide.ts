@@ -1011,6 +1011,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Отваря формата за заглавието, ниво 2, текста, git имената и проверките на задачата.',
           },
           {
+            key: 'task.continue',
+            kind: 'button',
+            en: 'Continue in the same chat',
+            bg: 'Продължи в същия чат',
+            doesEn: 'Only on a task that stopped as limit reached: queues it to carry on in the same chat and on the same branch, with a fresh count of messages.',
+            doesBg: 'Само на задача, спряла като достигнат лимит: връща я в опашката да продължи в същия чат и клон, с нов брояч на съобщенията.',
+          },
+          {
             key: 'task.rerun',
             kind: 'button',
             en: 'Run again',
@@ -1731,6 +1739,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         en: 'Execution',
         bg: 'Изпълнение',
         controls: [
+          {
+            key: 'exec.maxIterations',
+            kind: 'field',
+            en: 'Most messages to the chat in one task',
+            bg: 'Най-много съобщения към чата в една задача',
+            doesEn: 'How many rounds one task may take (default 60) before it stops as limit reached; saved as you type.',
+            doesBg: 'Колко кръга може да отнеме една задача (по подразбиране 60), преди да спре като достигнат лимит; запазва се, докато пишете.',
+          },
+          {
+            key: 'exec.maxRunMinutes',
+            kind: 'field',
+            en: 'Longest a task may run',
+            bg: 'Най-дълго време за една задача',
+            doesEn: 'How many minutes one task may run (default 240) before it stops as limit reached; saved as you type.',
+            doesBg: 'Колко минути може да върви една задача (по подразбиране 240), преди да спре като достигнат лимит; запазва се, докато пишете.',
+          },
           {
             key: 'exec.retryBlocked',
             kind: 'field',

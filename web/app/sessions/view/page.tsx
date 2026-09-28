@@ -1523,6 +1523,18 @@ function TaskCard({
     (session.vcs?.enabled ?? false) &&
     (!!task.vcs?.baseCommit || (task.attempts ?? []).some((a) => a.vcs?.baseCommit));
 
+  // Only a task that stopped at the runner's limit can be carried on; anything else is run again.
+  const continuable = !active && task.status === 'limit-reached';
+  const carryOn = async () => {
+    if (!(await confirmDialog(t('task.continueConfirm', { title: task.title })))) return;
+    try {
+      await api.continueTask(session.id, task.id);
+      onChange();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+
   const rerun = async () => {
     if (!(await confirmDialog(t('task.rerunConfirm', { title: task.title })))) return;
     try {
@@ -1613,8 +1625,13 @@ function TaskCard({
             {editing ? t('task.cancel') : t('task.edit')}
           </button>
         )}
+        {continuable && (
+          <button className="primary" onClick={() => void carryOn()} title={t('task.continueWhy')}>
+            {t('task.continue')}
+          </button>
+        )}
         {rerunnable && (
-          <button className="primary" onClick={() => void rerun()} title={t('task.rerunWhy')}>
+          <button className={continuable ? '' : 'primary'} onClick={() => void rerun()} title={t('task.rerunWhy')}>
             {t('task.rerun')}
           </button>
         )}

@@ -181,6 +181,12 @@ export class OperatorController {
    * A body with `title`, `prompt` or `level2` edits the task on the way: the attempt that
    * already ran keeps the text it ran with, and the next one uses the new text.
    */
+  /** A task that stopped at the runner's limit carries on in its own conversation and branch. */
+  @Post('sessions/:id/tasks/:taskId/continue')
+  continueTask(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
+    return this.ops.continueTask(id, taskId).catch(fail);
+  }
+
   @Post('sessions/:id/tasks/:taskId/rerun')
   rerunTask(
     @Param('id') id: string,

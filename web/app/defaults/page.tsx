@@ -544,16 +544,19 @@ function ProjectFolders({
 }
 
 /**
- * How a run behaves when a task does not end done — the one number worth a field here.
+ * How a run behaves: how long a task may go on, and what happens when one does not end done.
  *
- * The rest of `limits` stays in the settings file: iterations, minutes, review rounds are
- * tuned once by whoever set the machine up. This one is a decision the operator meets after
- * every blocked task, so it sits where they can change it without opening a file.
+ * The retry count is a decision the operator meets after every blocked task. The two ceilings —
+ * iterations and minutes per task — are what a long task runs into, and until 2026-09-28 they were
+ * only in the settings file; a task cut off by them can be continued in its own chat ("Continue").
+ * The review rounds and the rest of `limits` stay in the file.
  */
 function ExecutionSection() {
   const { t } = useT();
   const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
   const [retries, setRetries] = useState(2);
+  const [iterations, setIterations] = useState(60);
+  const [minutes, setMinutes] = useState(240);
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [saved, setSaved] = useState(2);
   const [msg, setMsg] = useState('');
@@ -572,10 +575,16 @@ function ExecutionSection() {
          * the retry field showed 2 on a machine that had saved 0 and the value it displayed was
          * never the value in force. Both fields now read the branch they write back to.
          */
-        const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as { retryBlockedInFreshChat?: number };
+        const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as {
+          retryBlockedInFreshChat?: number;
+          maxIterations?: number;
+          maxRunMinutes?: number;
+        };
         const n = typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2;
         setRetries(n);
         setSaved(n);
+        setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
+        setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation };
         setIsolation(exec.isolation ?? 'none');
       })
@@ -601,6 +610,27 @@ function ExecutionSection() {
     }
   };
   const saveLater = useDebouncedSave(save);
+
+  /** One of the two per-task ceilings, written to `limits` like the retry count. */
+  const saveLimit = async (key: 'maxIterations' | 'maxRunMinutes', value: number) => {
+    if (!raw) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const limits = { ...((raw.limits as Record<string, unknown>) ?? {}), [key]: value };
+      const next = { ...raw, limits };
+      await api.saveSettings(next);
+      setRaw(next);
+      setMsg(t('exec.saved'));
+      setErr('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveIterationsLater = useDebouncedSave((n: number) => saveLimit('maxIterations', n));
+  const saveMinutesLater = useDebouncedSave((n: number) => saveLimit('maxRunMinutes', n));
 
   /*
    * Its own saver, because it writes a different branch of the settings and because it is the one
@@ -650,6 +680,46 @@ function ExecutionSection() {
         <span className="muted small">{t('exec.retryBlockedTimes')}</span>
       </div>
       <p className="why">{t('exec.retryBlockedWhy')}</p>
+
+      <label htmlFor="max-iterations">{t('exec.maxIterations')}</label>
+      <div className="row">
+        <input
+          id="max-iterations"
+          type="number"
+          min={5}
+          max={200}
+          value={iterations}
+          onChange={(e) => {
+            const n = Math.max(5, Math.min(200, Number(e.target.value) || 5));
+            setIterations(n);
+            saveIterationsLater(n);
+          }}
+          style={{ width: 90 }}
+          disabled={busy || !raw}
+        />
+        <span className="muted small">{t('exec.maxIterationsUnit')}</span>
+      </div>
+      <p className="why">{t('exec.maxIterationsWhy')}</p>
+
+      <label htmlFor="max-minutes">{t('exec.maxRunMinutes')}</label>
+      <div className="row">
+        <input
+          id="max-minutes"
+          type="number"
+          min={10}
+          max={1440}
+          value={minutes}
+          onChange={(e) => {
+            const n = Math.max(10, Math.min(1440, Number(e.target.value) || 10));
+            setMinutes(n);
+            saveMinutesLater(n);
+          }}
+          style={{ width: 90 }}
+          disabled={busy || !raw}
+        />
+        <span className="muted small">{t('exec.maxRunMinutesUnit')}</span>
+      </div>
+      <p className="why">{t('exec.maxRunMinutesWhy')}</p>
 
       <label htmlFor="isolation">{t('exec.isolation')}</label>
       <select

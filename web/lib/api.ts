@@ -208,6 +208,7 @@ export type Task = {
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;
+  continuing?: { fromAttempt: number; stoppedBecause?: string };
   /** Attempts that already finished, oldest first. */
   attempts?: TaskAttempt[];
   /** The press of a start button this task ran under. Tasks sharing one ran together. */
@@ -681,6 +682,7 @@ export const api = {
     call<Task>(`/sessions/${id}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteTask: (id: string, taskId: string) => call<{ ok: true }>(`/sessions/${id}/tasks/${taskId}`, { method: 'DELETE' }),
   /** Queues a finished task again, keeping the earlier attempt on the record. */
+  continueTask: (id: string, taskId: string) => call<Task>(`/sessions/${id}/tasks/${taskId}/continue`, { method: 'POST', body: '{}' }),
   rerunTask: (id: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {}) =>
     call<Task>(`/sessions/${id}/tasks/${taskId}/rerun`, { method: 'POST', body: JSON.stringify(patch) }),
   /** `runId` asks for one earlier attempt instead of the current one. */

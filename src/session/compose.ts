@@ -20,6 +20,8 @@ export type ComposeInput = {
   taskTitle: string;
   /** Position of the task in the session, from 1. */
   taskNumber: number;
+  /** Carrying on from an attempt that stopped at the runner's limit. See `Task.continuing`. */
+  continuing?: { fromAttempt: number; stoppedBecause?: string };
   contractAlreadySent: boolean;
   /**
    * Where the runner will execute the steps, as a fact for Copilot.
@@ -97,8 +99,29 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
   const taskBlock =
     `${TASK_HEADER} ${input.taskNumber}: ${input.taskTitle.trim() || 'untitled'}\n\n${input.prompt.trim()}`;
 
+  /*
+   * Carrying on in the same conversation: the assignment is already in it, so it is not sent
+   * again — sending it would read as a new task and start the work over. Only when the
+   * conversation was lost does the task go out in full, with a line saying it is a continuation.
+   */
+  if (input.continuing && input.contractAlreadySent) {
+    const why = input.continuing.stoppedBecause ? ` (${input.continuing.stoppedBecause})` : '';
+    const message =
+      `Continue task ${input.taskNumber}: ${input.taskTitle.trim() || 'untitled'}, in this same conversation. ` +
+      `It stopped because the runner's limit was reached${why} — not because anything failed. ` +
+      `The files are as you left them. Do not start over and do not repeat work that is done: start from ` +
+      `your plan, say in \`notes\` which stages are done and which one you are on, and carry on. ` +
+      `The assignment is the one you were given above; it has not changed. Step numbering restarts at 1.\n\n` +
+      `${runnerBlock(input)}`.trimEnd();
+    return { messages: [message], firstMessage: message };
+  }
+  const continuationLine = input.continuing
+    ? `\n\nThis continues an earlier attempt at this task that stopped at the runner's limit. The files are as ` +
+      `that attempt left them: look at what is already done before changing anything, and carry on from there.`
+    : '';
+
   if (!input.contractAlreadySent) {
-    const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}`;
+    const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}${continuationLine}`;
     return {
       messages: [input.level1.trim(), taskMessage],
       firstMessage: `${input.level1.trim()}\n\n---\n\n${taskMessage}`,
@@ -109,6 +132,6 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     `New task in this same conversation. The level 1 contract you received at the start of ` +
     `this conversation still applies unchanged: same format, same rules, same stop word, ` +
     `and a full "summary" when you finish. Step numbering restarts at 1.`;
-  const taskMessage = `${reminder}\n\n${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}`;
+  const taskMessage = `${reminder}\n\n${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}${continuationLine}`;
   return { messages: [taskMessage], firstMessage: taskMessage };
 }

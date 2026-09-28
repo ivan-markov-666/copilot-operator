@@ -327,8 +327,14 @@ export const RunConfigSchema = z.object({
 
   limits: z
     .object({
-      maxIterations: z.number().int().positive().default(30),
-      maxRunMinutes: z.number().int().positive().default(120),
+      /*
+       * Per task, and a guard against a task that loops, not against message volume: that is
+       * `pacing.maxMessagesPerHour`, which waits rather than stops. Raised from 30 and 120 on
+       * 2026-09-28 at the operator's decision — Copilot keeps a long conversation in view, and a
+       * task cut off at 30 had to start over. Both are set in Settings → Execution.
+       */
+      maxIterations: z.number().int().positive().default(60),
+      maxRunMinutes: z.number().int().positive().default(240),
       maxFormatRetries: z.number().int().nonnegative().default(2),
       maxMessageChars: z.number().int().positive().default(100_000),
       /**

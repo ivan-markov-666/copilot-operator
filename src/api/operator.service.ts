@@ -537,6 +537,21 @@ export class OperatorService {
    * the text it ran with, and only then is the new text applied. Editing in place would leave
    * the old attempt's summary sitting under a question that was never asked.
    */
+  /** "Continue" on a task that stopped at the runner's limit: same chat, same branch, fresh count. */
+  async continueTask(sessionId: string, taskId: string): Promise<Task> {
+    await this.init();
+    const task = await this.store.continueTask(sessionId, taskId);
+    this.bus.publish({
+      sessionId,
+      taskId,
+      type: 'task-requeued',
+      level: 'info',
+      message: `"${task.title}" is queued to continue where it stopped (attempt ${task.attempt ?? 1})`,
+      data: { attempt: task.attempt, continuing: true },
+    });
+    return task;
+  }
+
   async rerunTask(
     sessionId: string,
     taskId: string,

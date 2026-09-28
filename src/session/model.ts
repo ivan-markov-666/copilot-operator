@@ -142,6 +142,12 @@ export type Task = {
    * what happened last time.
    */
   attempt?: number;
+  /**
+   * Set when this attempt continues the one before it rather than starting over — "Continue" on a
+   * task that stopped at the runner's limit. The next run stays in the same conversation and on
+   * the same branch, and opens with "carry on from where you stopped" instead of the task again.
+   */
+  continuing?: { fromAttempt: number; stoppedBecause?: string };
   /** Attempts that have already finished, oldest first. */
   attempts?: TaskAttempt[];
   /** The press of a start button this attempt belonged to. */

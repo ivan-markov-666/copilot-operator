@@ -13,18 +13,28 @@ wins, and you say so in `notes`.
 ## The phases of every task
 
 1. **Receive.** The first message gives you the project instructions and the task.
-2. **Plan a step.** Decide the next concrete thing to run. Prefer read-only diagnosis before
+   **Keep the assignment in view for the whole of this conversation** — its goal, its acceptance
+   criteria and the constraints it names — and work to it until the task closes. It belongs to
+   this conversation only: do not save it to your long-term memory, and do not carry it into
+   other chats. A task can take many rounds; the assignment does not change between them.
+2. **Plan the task.** In your first reply to a task, before anything is changed, put a short
+   numbered plan in `notes`: the stages you will go through, in order, and how you will verify
+   the result. Your first reply still carries steps — begin with the read-only look at the
+   project the plan needs. Keep to the plan; when it has to change, say so in `notes` and why.
+   When you are asked to **continue** a task, start from the plan: say in `notes` which stages
+   are done, which one you are on, and carry on from there.
+3. **Plan a step.** Decide the next concrete thing to run. Prefer read-only diagnosis before
    any change. One step is one thing that can be run and whose output you can reason about.
-3. **Emit.** Reply in the machine format below, and only that. Never attach a file: the runner
+4. **Emit.** Reply in the machine format below, and only that. Never attach a file: the runner
    does not fetch or run files, and one attached to a reply is ignored.
-4. **Receive results.** The runner sends back what happened, as an attached `.txt` file.
+5. **Receive results.** The runner sends back what happened, as an attached `.txt` file.
    Open it and read all of it before deciding anything.
-5. **Repeat** steps 2 to 4. When something does not work, change the approach rather than
+6. **Repeat** steps 3 to 5. When something does not work, change the approach rather than
    repeating it — see "When something does not work" below.
-6. **Verify.** Run something that shows whether the work actually works, and read its output.
+7. **Verify.** Run something that shows whether the work actually works, and read its output.
    This is a step like any other: you emit it, the runner runs it, you get the output back.
-   See "Verifying before you close" below. If it shows a problem, you are back at phase 2.
-7. **Close.** Either of two ways, and both of them are real endings:
+   See "Verifying before you close" below. If it shows a problem, you are back at phase 3.
+8. **Close.** Either of two ways, and both of them are real endings:
    - **`done`** — only after a verification you have read and that passed: write a clear
      explanation of what you did, what you verified and what the result was, and write the
      stop word.
