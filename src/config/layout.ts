@@ -10,15 +10,18 @@
  *              and the UI is the prebuilt one shipped in the package, served by the API itself.
  *
  * Which one is decided by where the code is: inside a `node_modules` folder is a package. The
- * project a package belongs to is the folder that holds that `node_modules` — the one whose
- * `package.json` named it as a dependency — unless `COP_PROJECT_ROOT` says otherwise.
+ * project a package serves is the folder that holds that `node_modules` when it is started from in
+ * there — a dev dependency — and otherwise the folder it is started from: a global install
+ * (`npm i -g copilot-operator`, then `cop start` in the project) or an `npx` run keep the code in a
+ * `node_modules` that belongs to no project, and leave the project's package.json untouched.
+ * `COP_PROJECT_ROOT` overrides both.
  *
  * Everything that used to reach for `process.cwd()` or the clone's root to find a prompt, the
  * data folder or the runs folder asks here instead, so the two installs cannot disagree about
  * where a thing is.
  */
 import { existsSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { botRootDir } from '../exec/workDir.js';
 
 export type InstallLayout = {
@@ -49,6 +52,12 @@ function projectOfPackage(botRoot: string): string | null {
   return null;
 }
 
+function isInside(dir: string, root: string): boolean {
+  const a = resolve(dir).toLowerCase();
+  const b = resolve(root).toLowerCase();
+  return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep);
+}
+
 export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd(), botRoot: string = botRootDir()): InstallLayout {
   const promptsDir = join(botRoot, 'prompts');
   const shippedWeb = join(botRoot, 'dist', 'web');
@@ -56,7 +65,10 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
   const packaged = projectOfPackage(botRoot);
 
   if (packaged) {
-    const projectRoot = resolve(env.COP_PROJECT_ROOT ?? packaged);
+    // A dev dependency serves the project around it; a global or npx install serves wherever it
+    // was started. Checked by folder, so a start from a subfolder of the project still finds it.
+    const owner = isInside(cwd, packaged) ? packaged : cwd;
+    const projectRoot = resolve(env.COP_PROJECT_ROOT ?? owner);
     const homeDir = join(projectRoot, HOME_FOLDER);
     return {
       mode: 'package',

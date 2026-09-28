@@ -31,7 +31,7 @@ console.log('--- where things are ---');
   mkdirSync(join(pkg, 'dist', 'web'), { recursive: true });
   writeFileSync(join(pkg, 'dist', 'web', 'index.html'), '<html></html>', 'utf8');
 
-  const inPackage = installLayout({}, join(project, 'somewhere'), pkg);
+  const inPackage = installLayout({}, join(project, 'somewhere'), pkg); // started from inside the project
   check('inside node_modules is a package install', inPackage.mode, 'package');
   check('the project is the folder holding node_modules', inPackage.projectRoot, project);
   check('records go to the project', inPackage.dataDir, join(project, HOME_FOLDER, 'data'));
@@ -41,8 +41,18 @@ console.log('--- where things are ---');
 
   const scoped = join(project, 'node_modules', '@acme', 'copilot-operator');
   mkdirSync(scoped, { recursive: true });
-  check('a scoped install finds the same project', installLayout({}, base, scoped).projectRoot, project);
+  check('a scoped install finds the same project', installLayout({}, project, scoped).projectRoot, project);
   check('COP_PROJECT_ROOT still wins', installLayout({ COP_PROJECT_ROOT: base }, base, pkg).projectRoot, base);
+
+  // A global install: the code sits in npm's own node_modules, and `cop start` is run in the
+  // project. Found on 2026-09-28: the project used to come out as npm's global folder.
+  const globalPkg = join(base, 'AppData', 'Roaming', 'npm', 'node_modules', 'copilot-operator');
+  mkdirSync(globalPkg, { recursive: true });
+  const pw = join(base, 'playwright-tests');
+  const global = installLayout({}, pw, globalPkg);
+  check('a global install serves the folder it is started from', global.projectRoot, pw);
+  check('and keeps its records there', global.dataDir, join(pw, HOME_FOLDER, 'data'));
+  check('still a package install (prompts and interface from the package)', [global.mode, global.promptsDir], ['package', join(globalPkg, 'prompts')]);
 
   const clone = join(base, 'automate-365');
   mkdirSync(clone, { recursive: true });

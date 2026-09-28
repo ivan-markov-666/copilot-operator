@@ -345,6 +345,19 @@ clean tree. The interface ships prebuilt and is served by the same process on on
 second server and nothing is compiled on the machine. `npx cop start --port 4100` picks another
 port. `npm update copilot-operator` updates it; `npm run update` is for a clone.
 
+**Keeping it out of the project's repository.** A dev dependency is recorded in `package.json`
+and the lock file, which are committed. To leave the project untouched, install it globally and
+start it from the project's folder — the folder it is started from is the project:
+
+```bash
+npm install --global copilot-operator
+cd C:\path\to\your-project
+cop start --open
+```
+
+Nothing in the project changes except `.copilot-operator/`, which git does not see. The bot's own
+code is then outside the folders its steps may write, which is the safer of the two.
+
 The bot is then inside the folders its own steps may write, so a step that reaches for
 `node_modules/copilot-operator`, for `.copilot-operator`, or that installs, updates or removes the
 bot as a package is refused. What no rule can see is a step that rewrites the project's
