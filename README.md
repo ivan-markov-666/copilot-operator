@@ -351,6 +351,22 @@ bot as a package is refused. What no rule can see is a step that rewrites the pr
 `package.json` with a different version of the bot for a later `npm install` to fetch; the commit
 the bot makes after the task shows such a change, and it is worth a look before the next install.
 
+## Releasing a new version
+
+Publishing is done by GitHub Actions (`.github/workflows/publish.yml`), not from a laptop:
+
+```bash
+npm version patch          # or minor / major: updates package.json, commits, tags vX.Y.Z
+git push --follow-tags     # the tag starts the workflow: typecheck, checks, build, publish
+```
+
+The workflow publishes with npm's Trusted Publishing — no npm token is stored anywhere; npm accepts
+the package because it comes from this repository's `publish.yml` — and with provenance, so the
+package page on npm says which commit and which run built it. Set up once, after the first manual
+`npm publish`: on npmjs.com, the package's **Settings → Trusted Publisher → GitHub Actions**, with
+repository `ivan-markov-666/copilot-operator` and workflow `publish.yml`. A tag whose version does
+not match `package.json` stops the workflow before anything is built.
+
 ## Working on it from a clone
 
 ```bash

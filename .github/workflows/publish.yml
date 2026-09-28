@@ -1,0 +1,55 @@
+# Publishes copilot-operator to npm when a version tag is pushed.
+#
+#   npm version patch        # 0.1.0 -> 0.1.1: changes package.json, commits, tags v0.1.1
+#   git push --follow-tags   # the tag arrives here and this runs
+#
+# No npm token anywhere: npm's Trusted Publishing lets this one workflow in this one repository
+# publish the package, proved to npm with GitHub's own short-lived identity (OIDC), and the package
+# carries a provenance statement saying which commit and which run built it. Set up once on
+# npmjs.com: the package's Settings -> Trusted Publisher -> GitHub Actions, repository
+# ivan-markov-666/copilot-operator, workflow file publish.yml.
+#
+# Windows, because the package is Windows-only (`"os": ["win32"]`) and its checks drive real
+# Windows processes, PowerShell and git.
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write # the identity npm's Trusted Publishing checks; nothing else is granted
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
+
+      - name: The tag and package.json agree
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            Write-Error "tag ${{ github.ref_name }} does not match package.json version $version"
+            exit 1
+          }
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run check
+
+      # prepack builds the API, the CLI and the static interface (scripts/build-package.mjs).
+      - run: npm publish --provenance --access public
