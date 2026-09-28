@@ -22,10 +22,15 @@ import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
 import { scriptFileRefusal } from './scriptFiles.js';
 
+/*
+ * `by: 'operator'` marks a decision a person made on the approval screen or at the terminal; without
+ * it a skip or an abort is the runner's own refusal. The step's record says which, so the chat is
+ * never told a person stopped a step that a rule declined, or the other way round.
+ */
 export type PolicyDecision =
   | { action: 'run' }
-  | { action: 'skip'; reason: string }
-  | { action: 'abort'; reason: string };
+  | { action: 'skip'; reason: string; by?: 'operator' }
+  | { action: 'abort'; reason: string; by?: 'operator' };
 
 export type PolicyConfig = {
   mode: 'confirm' | 'unattended';
@@ -138,7 +143,7 @@ export function commandRefusal(
   // The allowlist after the known-bad floor and the operator's deny list, so their precise
   // messages win, and this catches the long tail neither of them was ever going to enumerate: a
   // program that is simply not part of this project's toolchain. See `programs.ts`.
-  const offlist = programRefusal(command, allowedPrograms);
+  const offlist = programRefusal(command, allowedPrograms, shell);
   if (offlist) return offlist;
   const trap = findShellExecuteTrap(command, shell, env);
   if (trap) return trap;

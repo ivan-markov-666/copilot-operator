@@ -62,7 +62,14 @@ export type RunResult = {
   command: string;
   exitCode: number;
   /** Why the step ended. */
-  outcome: 'completed' | 'hard-timeout' | 'idle-timeout' | 'aborted' | 'spawn-error';
+  /*
+   * `refused` is a step the runner declined — a policy, a deny pattern, a repeat, a missing shell —
+   * which never became a process and so has no exit code of its own. It is kept apart from
+   * `aborted` (a person stopped or skipped it) and from `completed` with a non-zero exit (it ran
+   * and failed), because the three call for different next moves: rewrite the step, wait for the
+   * person, or fix what the output shows.
+   */
+  outcome: 'completed' | 'hard-timeout' | 'idle-timeout' | 'aborted' | 'refused' | 'spawn-error';
   /**
    * Set when the step never ran, or died at birth, because of the machine rather than the work.
    *

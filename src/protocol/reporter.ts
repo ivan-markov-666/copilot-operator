@@ -61,13 +61,15 @@ function outcomeSummary(r: RunResult): string {
       return `step ${r.id} hit its time limit`;
     case 'idle-timeout':
       return `step ${r.id} produced no output and was stopped`;
+    case 'refused':
+      // The runner declined it — a policy, a deny pattern, a repeat, damaged text, a shell that is
+      // not here — and it never reached a process, so it has no exit code to report. Said as a
+      // refusal, apart from a step that ran and exited non-zero: the move after one is to write
+      // the step differently, after the other it is to read the output and fix the work.
+      return `step ${r.id} was refused by the runner and never ran (no exit code); the reason is under it`;
     case 'aborted':
-      // Exit -4 is `refusedResult`: the runner declined it — a deny pattern, a repeat, damaged
-      // text, a shell that is not here — and it never reached a process. Calling all of those
-      // "aborted by the operator" told the model a person had stopped it, which is a reason to
-      // wait rather than to write the step again, and the reason it could act on was in the
-      // stderr underneath a sentence contradicting it.
-      return r.exitCode === -4 ? `step ${r.id} was not run; see why under it` : `step ${r.id} aborted by the operator`;
+      // A person stopped or skipped it — a reason to carry on without it, not to rewrite it.
+      return r.exitCode === -4 ? `step ${r.id} was not run: the operator skipped or stopped it` : `step ${r.id} aborted by the operator`;
     case 'spawn-error':
       return `step ${r.id} could not be started`;
   }

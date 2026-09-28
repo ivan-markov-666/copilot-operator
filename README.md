@@ -132,8 +132,14 @@ Six rules decide what a step may do, and each is recorded with the run that it g
 - **Only the declared toolchain runs.** `execution.allowedPrograms` names the programs a command
   may start — the shells, the JavaScript, .NET, Java, Python, Go and Rust tools, `git`, and a few
   Windows utilities. A command that starts anything else is refused and sent back with the reason.
-  An empty list turns the gate off. This is a floor against the unknown binary, not a boundary:
-  allowing `node` allows `node -e`.
+  The programs are read the way PowerShell reads a line (`src/exec/commandHeads.ts`): strings,
+  operators, array values, method arguments and hashtable keys are not programs, and a command in a
+  script block, a subexpression, a string's `$( )` or after an assignment is still found. A line that
+  cannot be read with certainty — an unclosed quote or bracket, a program called through a variable
+  (`& $exe`) — is refused rather than guessed at. `cmd` steps are read by `cmd`'s own rules. A refused
+  step is reported to the chat as refused and never executed, with no exit code, apart from a
+  command that ran and failed. An empty list turns the gate off. This is a floor against the unknown
+  binary, not a boundary: allowing `node` allows `node -e`.
 - **Autonomy is graded.** An unattended run carries strictly more restrictions than a watched one,
   because the thing that makes a watched run safe is a person reading each line. Unattended
   requires a non-empty allowlist, and refuses an allowed program used to evaluate a string

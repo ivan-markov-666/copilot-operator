@@ -1054,7 +1054,7 @@ export class OperatorService {
     r.controller.abort();
     for (const [id, w] of this.waiting) {
       if (w.approval.sessionId === sessionId) {
-        w.resolve({ action: 'abort', reason: 'stopped by the operator' });
+        w.resolve({ action: 'abort', reason: 'stopped by the operator', by: 'operator' });
         this.waiting.delete(id);
       }
     }
@@ -1652,8 +1652,8 @@ export class OperatorService {
       action === 'run' || action === 'run-all'
         ? { action: 'run' }
         : action === 'skip'
-          ? { action: 'skip', reason: 'skipped by the operator' }
-          : { action: 'abort', reason: 'aborted by the operator' };
+          ? { action: 'skip', reason: 'skipped by the operator', by: 'operator' }
+          : { action: 'abort', reason: 'aborted by the operator', by: 'operator' };
     w.resolve(decision);
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
       message: `step ${w.approval.stepId}: ${action}`, data: { approvalId, action } });
@@ -1741,7 +1741,7 @@ export class OperatorService {
           ...(held ? { network: held.network } : {}),
         };
         if (signal.aborted) {
-          resolvePromise({ action: 'abort', reason: 'stopped by the operator' });
+          resolvePromise({ action: 'abort', reason: 'stopped by the operator', by: 'operator' });
           return;
         }
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });

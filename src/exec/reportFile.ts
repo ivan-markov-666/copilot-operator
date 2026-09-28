@@ -72,9 +72,12 @@ export function clip(text: string, maxChars: number): string {
 }
 
 function sectionFor(r: RunResult, maxOutputChars: number): string {
+  // A refused step never ran, so it is not given an exit code or a duration that could be read as
+  // a command that ran and failed; the header says what happened instead.
   const head =
-    `--- step ${r.id} (${r.shell}, ${r.outcome}, exit ${r.exitCode}, ` +
-    `${(r.durationMs / 1000).toFixed(1)}s)\n$ ${r.command}\n`;
+    r.outcome === 'refused'
+      ? `--- step ${r.id} (${r.shell}, REFUSED by the runner, never executed, no exit code)\n$ ${r.command}\n`
+      : `--- step ${r.id} (${r.shell}, ${r.outcome}, exit ${r.exitCode}, ` + `${(r.durationMs / 1000).toFixed(1)}s)\n$ ${r.command}\n`;
   const out = clip(r.stdout, maxOutputChars);
   const err = r.stderr.trim().length > 0 ? `[stderr]\n${clip(r.stderr, maxOutputChars)}\n` : '';
   const note = r.truncated ? `[note] output was truncated; the full stream is in ${r.logPath}\n` : '';

@@ -30,6 +30,8 @@
  */
 import { extname } from 'node:path';
 
+import { scanCommandHeads } from './commandHeads.js';
+
 /**
  * Windows executable extensions. A token carrying one of these names a program by file, whatever
  * the stem, so it is always checked; a token with any other extension (`config.json`, `app.ts`)
@@ -57,6 +59,7 @@ const SHELL_WORDS = new Set([
   'gi', 'gp', 'sp', 'si', 'gm', 'gu', 'gv', 'sv', 'select', 'where', 'foreach-object', 'where-object',
   'sort', 'group', 'measure', 'ft', 'fl', 'fw', 'fh', 'oh', 'out-host', 'tee',
   'sls', 'gcm', 'gmo', 'ipmo', 'man', 'help', 'more', 'h', 'history', 'r',
+  '%', '?', // ForEach-Object and Where-Object, as `ls | % { $_.Name }` writes them
   'gsv', 'gps', 'ps', 'kill', 'sleep', 'start', 'saps', 'spps', 'sasv', 'spsv',
   'iwr', 'irm', 'wget', 'curl', // PowerShell aliases for Invoke-WebRequest/Invoke-RestMethod; the raw .exe forms are allowlisted by name if wanted, and iwr|iex is caught by dangerous.ts
   // cmd built-ins
@@ -65,83 +68,13 @@ const SHELL_WORDS = new Set([
 ]);
 
 /**
- * The heads of every statement in a command line: the first token after the start and after each
- * separator that begins a new command (`|`, `;`, `&`, `&&`, `||`, a newline, a `(` sub-expression
- * or a `{` script block). Quote- and depth-aware so a separator inside `'...'`, `"..."` or an
- * argument list does not split a statement, and a back-tick before a newline continues it.
- *
- * Best effort by design. The point is to find the programs a line would obviously start, not to
- * be a PowerShell parser; a construction it cannot read yields no head for that fragment, and the
- * fragment then rests on `dangerous.ts` and the human, which is where the honest limit was always
- * going to be anyway.
+ * The name at the head of every command a line invokes. Read by `commandHeads.ts`, which follows
+ * PowerShell's command and expression modes (or `cmd`'s rules for a `cmd` step), so strings,
+ * operators, array values, method arguments and hashtable keys are not mistaken for programs, and
+ * a command nested in a script block, a subexpression or after an assignment is not missed.
  */
-export function commandHeads(command: string): string[] {
-  const heads: string[] = [];
-  const boundaries = new Set(['|', ';', '&', '\n', '(', '{']);
-  let expectStart = true;
-  let quote: string | null = null;
-  let i = 0;
-
-  const readToken = (from: number): { text: string; end: number } => {
-    let j = from;
-    let text = '';
-    let q: string | null = null;
-    while (j < command.length) {
-      const ch = command[j]!;
-      if (q) {
-        if (ch === q) q = null;
-        else text += ch;
-        j += 1;
-        continue;
-      }
-      if (ch === "'" || ch === '"') {
-        q = ch;
-        j += 1;
-        continue;
-      }
-      if (/\s/.test(ch) || boundaries.has(ch) || ch === ')' || ch === '}') break;
-      text += ch;
-      j += 1;
-    }
-    return { text, end: j };
-  };
-
-  while (i < command.length) {
-    const ch = command[i]!;
-    if (quote) {
-      if (ch === quote) quote = null;
-      i += 1;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      i += 1;
-      continue;
-    }
-    if (expectStart && !/\s/.test(ch) && !boundaries.has(ch) && ch !== ')' && ch !== '}') {
-      const { text, end } = readToken(i);
-      i = end;
-      // A dot-source — `. .\script.ps1` — runs the file that follows in the current scope. The
-      // dot is not what runs; the next token is, and it is the one the allowlist has to see.
-      // (`& .\script.ps1` already works this way because `&` is a boundary.)
-      if (text === '.') continue;
-      if (text) heads.push(text);
-      expectStart = false;
-      continue;
-    }
-    if (boundaries.has(ch)) {
-      // A back-tick immediately before a newline is a line continuation, not a new statement.
-      if (ch === '\n' && command[i - 1] === '`') {
-        i += 1;
-        continue;
-      }
-      expectStart = true;
-      i += 1;
-      continue;
-    }
-    i += 1;
-  }
-  return heads;
+export function commandHeads(command: string, shell?: string): string[] {
+  return scanCommandHeads(command, shell).heads;
 }
 
 /**
@@ -277,13 +210,27 @@ export function inlineCodeRefusal(command: string): string | null {
  * is a legitimate tool this project happens to need, and the fix is one line of config — not a
  * reason to weaken the gate for everyone.
  */
-export function programRefusal(command: string, allowedPrograms: string[]): string | null {
+export function programRefusal(command: string, allowedPrograms: string[], shell: string = 'pwsh'): string | null {
   if (!allowedPrograms || allowedPrograms.length === 0) return null;
   const allowed = new Set(
     allowedPrograms.map((p) => p.trim().toLowerCase().replace(/\.(exe|com|bat|cmd|ps1|msi)$/i, '')).filter(Boolean),
   );
+  /*
+   * Fail-closed: a line that cannot be read with certainty is a line whose programs are not known,
+   * and an allowlist that cannot name the programs has nothing to check them against. What makes
+   * a line uncertain — an unclosed string or bracket, a program chosen through a variable — is
+   * never needed by honest work, so refusing it costs a rewrite and guessing could cost the gate.
+   */
+  const scan = scanCommandHeads(command, shell);
+  if (scan.uncertain) {
+    return (
+      `refused: the runner could not tell which programs this line starts (${scan.uncertain}). ` +
+      'Write it so every program is named literally — close each quote and bracket, and call a program by its ' +
+      'name or a literal path rather than through a variable or an expression.'
+    );
+  }
   // What `Start-Process` is asked to start is a program this line starts, as much as a head is.
-  for (const head of [...commandHeads(command), ...startProcessTargets(command)]) {
+  for (const head of [...scan.heads, ...startProcessTargets(command)]) {
     const program = externalProgram(head);
     if (program && !allowed.has(program)) {
       return (

@@ -74,8 +74,8 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
     const rl = createInterface({ input: stdin, output: stdout });
     try {
       const answer = (await rl.question('  [Enter] run  [s] skip  [q] abort > ')).trim().toLowerCase();
-      if (answer === 'q') return { action: 'abort', reason: 'aborted by the operator' };
-      if (answer === 's') return { action: 'skip', reason: 'skipped by the operator' };
+      if (answer === 'q') return { action: 'abort', reason: 'aborted by the operator', by: 'operator' };
+      if (answer === 's') return { action: 'skip', reason: 'skipped by the operator', by: 'operator' };
       return { action: 'run' };
     } finally {
       rl.close();

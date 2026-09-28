@@ -609,7 +609,7 @@ ${machineNote}` : contract);
           confinement: { roots: deps.roots, cwd: deps.cwd },
         });
         if (decision.action !== 'run') {
-          results.push(refused(step.id, decision.reason, step.cmd, step.shell));
+          results.push(refused(step.id, decision.reason, step.cmd, step.shell, decision.by === 'operator' ? 'operator' : 'runner'));
           if (decision.action === 'abort') break;
           continue;
         }
@@ -720,7 +720,7 @@ export function refusedChecksMessage(refused: Array<{ id: string; detail: string
 }
 
 /** A step the review did not run, in the shape the reporter expects. */
-function refused(id: number, reason: string, command = '(not run)', requested?: Shell): RunResult {
+function refused(id: number, reason: string, command = '(not run)', requested?: Shell, by: 'runner' | 'operator' = 'runner'): RunResult {
   return {
     id,
     // The shell it would have run in, rather than the one this file used to name: a report line
@@ -732,7 +732,8 @@ function refused(id: number, reason: string, command = '(not run)', requested?: 
     requestedShell: requested ?? null,
     command,
     exitCode: -4,
-    outcome: 'aborted',
+    // Who declined it, as in `refusedResult` in the task runner: a rule, or a person.
+    outcome: by === 'operator' ? 'aborted' : 'refused',
     durationMs: 0,
     stdout: '',
     stderr: `[policy] step not executed: ${reason}\n`,

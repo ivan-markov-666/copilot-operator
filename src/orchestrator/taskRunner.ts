@@ -167,14 +167,18 @@ function blockedReason(tried: string[], needed?: string): string {
     .join(' — ');
 }
 
-/** A step that was refused never reaches the shell, but Copilot still has to hear about it. */
-function refusedResult(step: Step, reason: string): RunResult {
+/**
+ * A step that was not run never reaches the shell, but Copilot still has to hear about it — and
+ * hear who declined it: the runner (`refused`: a rule, so rewrite the step) or the operator
+ * (`aborted`: a person stopped or skipped it).
+ */
+function refusedResult(step: Step, reason: string, by: 'runner' | 'operator' = 'runner'): RunResult {
   return {
     id: step.id,
     shell: effectiveShell(step.shell),
     command: describeStep(step),
     exitCode: -4,
-    outcome: 'aborted',
+    outcome: by === 'operator' ? 'aborted' : 'refused',
     durationMs: 0,
     stdout: '',
     stderr: `[policy] step not executed: ${reason}\n`,
@@ -1400,7 +1404,7 @@ export async function runTask(
 
       for (const step of reply.steps) {
         if (signal?.aborted) {
-          results.push(refusedResult(step, 'stopped by the operator'));
+          results.push(refusedResult(step, 'stopped by the operator', 'operator'));
           aborted = true;
           break;
         }
@@ -1459,13 +1463,13 @@ export async function runTask(
         });
 
         if (decision.action === 'abort') {
-          results.push(refusedResult(step, decision.reason));
+          results.push(refusedResult(step, decision.reason, decision.by === 'operator' ? 'operator' : 'runner'));
           aborted = true;
           break;
         }
         if (decision.action === 'skip') {
-          sink.event('step-skipped', { id: step.id, reason: decision.reason }, `step ${step.id} skipped: ${decision.reason}`, 'warn');
-          results.push(refusedResult(step, decision.reason));
+          sink.event('step-skipped', { id: step.id, reason: decision.reason, by: decision.by ?? 'runner' }, `step ${step.id} skipped: ${decision.reason}`, 'warn');
+          results.push(refusedResult(step, decision.reason, decision.by === 'operator' ? 'operator' : 'runner'));
           continue;
         }
 
