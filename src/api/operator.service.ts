@@ -63,7 +63,7 @@ function sameFolder(a: string, b: string): boolean {
   return a.trim() !== '' && norm(a) === norm(b);
 }
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
-import { vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
+import { commitInterrupted, vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { gitAvailable, repoUnusableReason } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
@@ -318,12 +318,31 @@ export class OperatorService {
           level: 'warn',
           message: `"${r.title}" was left unfinished by an earlier run and has been marked aborted`,
         });
+        // What it had changed goes onto its branch, as a finished task's would. See `commitInterrupted`.
+        await this.commitRecovered(r.sessionId, r.taskId).catch((e: unknown) =>
+          console.warn(`[api] could not commit the work of "${r.title}": ${(e as Error).message}`),
+        );
       }
       if (recovered.length > 0) {
         console.log(`[api] closed ${recovered.length} task(s) left unfinished by an earlier run`);
       }
     })();
     return this.ready;
+  }
+
+  /** Commits the work of one task the previous process left unfinished, and says so on the task. */
+  private async commitRecovered(sessionId: string, taskId: string): Promise<void> {
+    const session = await this.store.getSession(sessionId);
+    const task = session?.tasks.find((t) => t.id === taskId);
+    if (!session || !task) return;
+    const vcs = await commitInterrupted(session, task, task.reason ?? 'interrupted', this.bus);
+    if (!vcs?.commit) return;
+    await this.store.updateSession(sessionId, (s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t) return;
+      t.vcs = vcs;
+      t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
+    });
   }
 
   /** Runs the startup work now, so it does not wait for the first request. */

@@ -312,6 +312,39 @@ export async function commitTaskResult(
 }
 
 /**
+ * Commits what a task left behind when the process running it ended before it could.
+ *
+ * `commitTaskResult` runs when a task finishes, whatever the outcome, which covers every failure
+ * the runner itself decides. It does not cover the process going away mid-task — `npm start`
+ * stopped with Ctrl+C, a restart, a crash, the laptop shutting down. Then nothing committed the
+ * work: at the next start the task was only marked aborted, its changes stayed loose in the tree,
+ * and the next attempt found a dirty repository and ran with version control switched off — so
+ * the first attempt's work was neither on a branch nor carried forward, and one `git checkout .`
+ * from gone. Called at startup for each task the recovery pass closes.
+ *
+ * Only on the task's own branch. The runner created that branch for this task and the process
+ * that owned it is gone, so what is uncommitted there is the task's work; a repository that has
+ * since been moved to another branch is someone's deliberate act, and is left alone with a
+ * warning, as a dirty tree is left alone before a task.
+ */
+export async function commitInterrupted(session: Session, task: Task, reason: string, bus: EventBus): Promise<TaskVcs | undefined> {
+  const settings = session.vcs;
+  const branch = task.vcs?.branch;
+  if (!settings?.enabled || !settings.commitOnFinish || !branch) return undefined;
+  const dir = repoDirOf(session);
+  const state = await repoState(dir);
+  if (!state.isRepo || !state.dirty) return undefined;
+  if (state.branch !== branch) {
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-problem', level: 'warn',
+      message:
+        `"${task.title}" was interrupted with uncommitted changes, but ${dir} is now on ${state.branch ?? 'no branch'}, ` +
+        `not on the task's branch ${branch}; nothing was committed, so the changes are where they are` });
+    return undefined;
+  }
+  return await commitTaskResult(session, task, { status: 'aborted', reason }, bus);
+}
+
+/**
  * A commit message that says what was asked and how it ended, in git's own shape.
  *
  * A task can carry its own message, which is what an imported plan sets: the model that wrote

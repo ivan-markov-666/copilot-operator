@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore } from '../src/session/store.js';
 import { EventBus } from '../src/session/events.js';
 import { git, repoState, commitAll, branchNameFrom, porcelainPaths } from '../src/vcs/git.js';
-import { prepareForTask, commitTaskResult, commitMessage, sessionBranches } from '../src/vcs/taskVcs.js';
+import { prepareForTask, commitTaskResult, commitInterrupted, commitMessage, sessionBranches } from '../src/vcs/taskVcs.js';
 import { looksGenerated, findSuspicious } from '../src/vcs/commitHygiene.js';
 import { runCheck, COMMIT_CLEAN_CHECK } from '../src/exec/checks.js';
 import type { Session, Task } from '../src/session/model.js';
@@ -245,6 +245,81 @@ console.log('committed                 :', markedTask?.vcs?.commit ? 'yes' : 'NO
 console.log('marked as suspicious      :', (markedTask?.vcs?.suspicious ?? []).map((s) => `${s.path} (${s.reason})`).join('; ') || '(nothing)');
 console.log('the honest file is not    :', !(markedTask?.vcs?.suspicious ?? []).some((s) => s.path.includes('honest')) ? 'yes' : 'NO');
 console.log('event                     :', events.find((e) => e.startsWith('vcs-suspicious'))?.slice(0, 90) ?? '(none)');
+
+/*
+ * A task the process never finished: `npm start` stopped, a restart, a crash. Its work was left
+ * loose in the tree, and the next attempt then found a dirty repository and ran with version
+ * control switched off. The startup recovery now commits it on the task's own branch — and only
+ * there — and the next attempt starts clean, from the same base, with the first one's work kept.
+ */
+console.log('\n--- a task interrupted mid-way keeps its work ---');
+{
+  let wrong = 0;
+  const expect = (what: string, got: unknown, want: unknown): void => {
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    if (!ok) wrong += 1;
+    console.log(`${what.padEnd(52)}: ${JSON.stringify(got)}${ok ? '' : `   WRONG, expected ${JSON.stringify(want)}`}`);
+  };
+  const r = await mkdtemp(join(tmpdir(), 'cop-vcs-interrupted-'));
+  const d = await mkdtemp(join(tmpdir(), 'cop-vcs-interrupted-data-'));
+  await git(r, ['init', '-b', 'main']);
+  await writeFile(join(r, 'app.ts'), 'export const a = 1;\n');
+  await commitAll(r, 'first commit');
+  const st = new SessionStore(d, join(process.cwd(), 'prompts', 'level1.md'));
+  await st.init();
+  const s0 = await st.createSession('interrupted probe');
+  await st.updateSession(s0.id, (s) => {
+    s.vcs = { enabled: true, repoDir: r, branchMode: 'per-task', commitOnFinish: true, branchPrefix: 'cop/' };
+  });
+  const task = await st.addTask(s0.id, { title: 'long job', level2: '', prompt: 'p' });
+  const saveIt = async (mutate: (s: Session) => void): Promise<void> => {
+    await st.updateSession(s0.id, mutate);
+  };
+
+  // The task starts, writes a file, and the process dies: status left running, nothing committed.
+  let sess = (await st.getSession(s0.id)) as Session;
+  const prep = await prepareForTask(sess, sess.tasks[0] as Task, bus, saveIt);
+  await st.updateTask(s0.id, task.id, (t) => {
+    t.vcs = prep.vcs;
+    t.status = 'running';
+  });
+  await writeFile(join(r, 'half-done.ts'), 'export const half = true;\n');
+
+  const recovered = await st.recoverInterrupted();
+  expect('the task is closed at startup', recovered.map((x) => x.taskId), [task.id]);
+  sess = (await st.getSession(s0.id)) as Session;
+  const closed = sess.tasks[0] as Task;
+  const vcsAfter = await commitInterrupted(sess, closed, closed.reason ?? '', bus);
+  expect('its work is committed', !!vcsAfter?.commit, true);
+  expect('on its own branch', vcsAfter?.branch, prep.vcs.branch);
+  expect('uncommitted changes left behind', (await repoState(r)).dirty, false);
+  const message = await git(r, ['log', '-1', '--format=%B']);
+  expect('the commit says how it ended', /Ended aborted/.test(message.stdout), true);
+  await st.updateTask(s0.id, task.id, (t) => {
+    t.vcs = vcsAfter;
+  });
+
+  // The second attempt: version control is on, it starts from the same base, the first is kept.
+  await st.rerunTask(s0.id, task.id);
+  sess = (await st.getSession(s0.id)) as Session;
+  const second = await prepareForTask(sess, sess.tasks[0] as Task, bus, saveIt);
+  expect('the second attempt has version control', second.vcs.problem ?? null, null);
+  expect('from the same commit as the first', second.vcs.baseCommit, prep.vcs.baseCommit);
+  expect('on a branch of its own', second.vcs.branch !== prep.vcs.branch, true);
+  const kept = await git(r, ['ls-tree', '--name-only', prep.vcs.branch as string]);
+  expect("the first attempt's file is on its branch", kept.stdout.split('\n').includes('half-done.ts'), true);
+
+  // Moved to another branch since: someone's deliberate act, left alone.
+  await writeFile(join(r, 'on-another-branch.ts'), 'x\n');
+  const elsewhere = await commitInterrupted(sess, { ...(sess.tasks[0] as Task), vcs: { branch: 'cop/not-checked-out' } }, 'r', bus);
+  expect('on another branch nothing is committed', elsewhere, undefined);
+  expect('and the change is still there', (await repoState(r)).dirty, true);
+
+  await rm(r, { recursive: true, force: true });
+  await rm(d, { recursive: true, force: true });
+  console.log(`wrong: ${wrong} (expect 0)`);
+  if (wrong > 0) process.exitCode = 1;
+}
 
 await rm(repo, { recursive: true, force: true });
 await rm(data, { recursive: true, force: true });
