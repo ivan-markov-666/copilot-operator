@@ -1,4 +1,4 @@
-import { buildChatName, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
+import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
 import { buildCoveringMessage, assertSendable } from '../src/protocol/reporter.js';
 import type { RunResult } from '../src/exec/runner.js';
@@ -50,3 +50,12 @@ console.log('unchanged since before  :', landed(sent, shownAfter, shownAfter), '
 console.log('changed but different   :', landed(sent, 'Terminal output for "web-smoke", iteration 7', 'x'), '(expect false)');
 console.log('nothing shown           :', landed(sent, '', 'x'), '(expect false)');
 console.log('same prefix, other round:', landed('An independent review of your work found 1 problem(s). The reviewer is a separate conversation that was given the task and the files you changed, ran the work itself, and did not see your summary. Round 2.', shownAfter, shownAfter), '(expect false — unchanged newest bubble)');
+
+// The session's short code, and how much of its name now fits (2026-09-28).
+{
+  const code = chatCode('20260928-073140-ujdt');
+  const name = buildChatName(code, 'casualty-gl-datacapture-regression-suite');
+  const ok = code === 'ujdt' && name === 'op/ujdt/casualty-gl-datacapture-regression-suite' && name.length <= MAX_CHAT_NAME;
+  console.log('short code keeps the name :', ok ? 'yes' : `NO (${name})`);
+  if (!ok) process.exitCode = 1;
+}

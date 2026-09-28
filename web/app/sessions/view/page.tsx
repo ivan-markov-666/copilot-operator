@@ -102,9 +102,7 @@ function SessionPage() {
 
       <RunClock tasks={session.tasks} />
 
-      {(session.pending ?? []).map((a) => (
-        <ApprovalBar key={a.id} approval={a} onDecided={reload} />
-      ))}
+      {/* A step waiting for a decision is shown by the layout, on every page (app/approvals.tsx). */}
 
       <ModelPanel session={session} onChange={reload} />
 
@@ -312,53 +310,6 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
   );
 }
 
-// ---------------------------------------------------------------------------------------
-// Approval bar: one per pending step
-// ---------------------------------------------------------------------------------------
-
-function ApprovalBar({ approval, onDecided }: { approval: Approval; onDecided: () => void }) {
-  const { t } = useT();
-  const fmtTime = useFmtTime();
-  const [busy, setBusy] = useState(false);
-  const decide = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
-    // Running the rest unattended is the same decision as starting unattended, so it is asked
-    // in the same words. The step on screen has been seen; the ones after it have not.
-    if (action === 'run-all' && !(await confirmDialog(t('approval.runAllConfirm')))) return;
-    setBusy(true);
-    try {
-      await api.decide(approval.id, action);
-    } finally {
-      setBusy(false);
-      onDecided();
-    }
-  };
-  return (
-    <div className="approval">
-      <div className="row">
-        <strong>{t('approval.title', { n: approval.stepId })}</strong>
-        <span className="muted small">{fmtTime(approval.createdAt)}</span>
-      </div>
-      <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
-      {approval.network && <p className="reason small">{t('approval.network')}</p>}
-      <div className="row">
-        <button className="primary" disabled={busy} onClick={() => void decide('run')}>
-          {t('approval.run')}
-        </button>
-        {!approval.network && (
-          <button disabled={busy} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
-            {t('approval.runAll')}
-          </button>
-        )}
-        <button disabled={busy} onClick={() => void decide('skip')}>
-          {t('approval.skip')}
-        </button>
-        <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
-          {t('approval.abort')}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------------------
 // Level 1, shown above the tasks

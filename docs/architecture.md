@@ -83,7 +83,7 @@ because names are not unique and the sidebar truncates them.
 Name shape, capped at the UI's 50-character limit:
 
 ```
-op/<runId>/<label>        e.g.  op/20260917-1912/windows-update
+op/<code>/<label>         e.g.  op/ujdt/windows-update   (code = the tail of the session id)
 ```
 
 The `op/` prefix makes every bot chat greppable and separates it from the user's own

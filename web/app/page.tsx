@@ -195,20 +195,7 @@ export default function SessionsPage() {
         </div>
       )}
 
-      {approvals.length > 0 && (
-        <div className="panel">
-          <h2>{t('approval.waitingHere')}</h2>
-          <p className="muted small">{t('approval.waitingHereWhy')}</p>
-          {approvals.map((a) => (
-            <HomeApproval
-              key={a.id}
-              approval={a}
-              sessionName={sessions?.find((x) => x.id === a.sessionId)?.name ?? a.sessionId}
-              onDecided={load}
-            />
-          ))}
-        </div>
-      )}
+      {/* A step waiting for a decision is shown by the layout, on every page (app/approvals.tsx). */}
 
       <div className="panel" id="new-session">
         <h2>{t('home.new')}</h2>
@@ -861,62 +848,3 @@ function badgeFor(state: BatchState['sessions'][number]['state']): string {
   return '';
 }
 
-/**
- * A step waiting for a decision, shown on the list rather than only on the session's page.
- *
- * Starting a run from here and then having to find the question somewhere else is the kind of
- * gap where a run looks stuck when it is simply waiting. The session's name is on every row
- * because, in a batch, which session is asking is half the question.
- */
-function HomeApproval({
-  approval,
-  sessionName,
-  onDecided,
-}: {
-  approval: Approval;
-  sessionName: string;
-  onDecided: () => void;
-}) {
-  const { t } = useT();
-  const fmtTime = useFmtTime();
-  const [busy, setBusy] = useState(false);
-
-  const decide = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
-    if (action === 'run-all' && !(await confirmDialog(t('approval.runAllConfirm')))) return;
-    setBusy(true);
-    try {
-      await api.decide(approval.id, action);
-    } finally {
-      setBusy(false);
-      onDecided();
-    }
-  };
-
-  return (
-    <div className="approval">
-      <div className="row">
-        <strong>{t('approval.title', { n: approval.stepId })}</strong>
-        <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
-        <span className="muted small">{fmtTime(approval.createdAt)}</span>
-      </div>
-      <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
-      {approval.network && <p className="reason small">{t('approval.network')}</p>}
-      <div className="row">
-        <button className="primary" disabled={busy} onClick={() => void decide('run')}>
-          {t('approval.run')}
-        </button>
-        {!approval.network && (
-          <button disabled={busy} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
-            {t('approval.runAll')}
-          </button>
-        )}
-        <button disabled={busy} onClick={() => void decide('skip')}>
-          {t('approval.skip')}
-        </button>
-        <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
-          {t('approval.abort')}
-        </button>
-      </div>
-    </div>
-  );
-}

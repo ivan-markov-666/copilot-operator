@@ -735,3 +735,25 @@ button .dot {
 /* A folded folder that holds something named in the two lists. */
 .chip.inside { font-size: calc(10.5px * var(--scale)); opacity: 0.85; }
 .chip.inside.out { color: var(--bad); border-color: var(--bad); }
+
+/*
+ * The steps waiting for a decision, on every page under the navigation (app/approvals.tsx). It
+ * sticks to the top of the window, so a long page scrolled down still shows it; the cards inside it
+ * do not stick on their own.
+ */
+.approval-banner {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--warn-soft);
+  border: 3px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 12px 14px 2px;
+  margin: 0 0 16px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  max-height: 70vh;
+  overflow: auto;
+}
+.approval-banner h2 { margin: 0 0 4px; color: var(--warn); }
+.approval-banner .approval { position: static; background: var(--bg); margin-bottom: 10px; }
+.approval-banner .approval button { font-size: calc(15px * var(--scale)); padding: 8px 14px; }

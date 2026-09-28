@@ -34,15 +34,28 @@ export type ChatPointer = {
 };
 
 /**
+ * The short code a session's chats are named with: the random tail of its id
+ * (`20260928-073140-ujdt` gives `ujdt`), which the session page's address shows too.
+ *
+ * It replaced the date and time (`20260928-073140`), which took 15 of the 50 characters Copilot
+ * allows and left the session's own name 31; with the code it keeps 42 (asked for 2026-09-28).
+ * An id without such a tail gives its last six letters and digits.
+ */
+export function chatCode(sessionId: string): string {
+  const tail = /-([a-z0-9]{3,8})$/i.exec(sessionId)?.[1];
+  return (tail ?? sessionId.replace(/[^a-z0-9]/gi, '').slice(-6)).toLowerCase();
+}
+
+/**
  * Builds the chat name. Shape:
  *
- *   op/<runId>/<label>
+ *   op/<code>/<label>
  *
  * The `op/` prefix makes every bot chat greppable in the sidebar and separates them from
- * the user's own chats. The run id ties the chat to the transcript on disk. The label is
- * whatever the run config calls the task.
+ * the user's own chats. The code ties the chat to its session (see `chatCode`). The label is
+ * the session's name.
  *
- * The whole thing is squeezed into 50 characters: the prefix and run id are kept intact
+ * The whole thing is squeezed into 50 characters: the prefix and the code are kept intact
  * because they are what makes the chat findable, and the label absorbs the truncation.
  */
 export function buildChatName(runId: string, label: string): string {

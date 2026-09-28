@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
 import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
-import { buildChatName, savePointer, type ChatPointer } from '../transport/chatSession.js';
+import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
@@ -761,7 +761,7 @@ export async function runTask(
       if (!session.chat) {
         const chatId = await transport.currentChatId();
         if (chatId) {
-          const name = buildChatName(session.id.slice(0, 15), session.name);
+          const name = buildChatName(chatCode(session.id), session.name);
           await transport.nameChat(chatId, name).catch(() => false);
           const chat: ChatPointer = {
             chatId,

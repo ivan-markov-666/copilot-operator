@@ -946,9 +946,10 @@ export const dict = {
     'batch.onFailure': 'If a session fails',
     'batch.model': 'Model for this run',
     'batch.waiting': '{n} step(s) waiting for you',
+    'approval.tabTitle': 'waiting for you',
     'approval.waitingHere': 'A step is waiting for your decision',
     'approval.waitingHereWhy':
-      'A run started from this page asks its questions here, so it does not look stuck while a session page nobody has open waits for an answer.',
+      'Shown on every page while a step waits, so a run never looks stuck because the page that asks is not the one open.',
     'batch.reviewModel': 'Model that reviews the work',
     'batch.reviewModelKeep': 'Each session keeps its own',
     'batch.reviewModelWhy':
@@ -1922,9 +1923,10 @@ export const dict = {
     'batch.onFailure': 'Ако сесия се провали',
     'batch.model': 'Модел за това изпълнение',
     'batch.waiting': '{n} стъпка(и) чакат вас',
+    'approval.tabTitle': 'чака вас',
     'approval.waitingHere': 'Стъпка чака вашето решение',
     'approval.waitingHereWhy':
-      'Изпълнение, стартирано от тази страница, задава въпросите си тук, за да не изглежда забило, докато страница на сесия, която никой не е отворил, чака отговор.',
+      'Показва се на всяка страница, докато стъпка чака, за да не изглежда пускането забило само защото отворената страница не е тази, която пита.',
     'batch.reviewModel': 'Модел, който проверява работата',
     'batch.reviewModelKeep': 'Всяка сесия си остава със своя',
     'batch.reviewModelWhy':

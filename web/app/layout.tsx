@@ -5,6 +5,7 @@ import { LanguageProvider } from '../lib/i18n';
 import { AppearanceProvider, themeScript } from '../lib/appearance';
 import { Nav, SkipLink } from './nav';
 import { DialogHost } from './dialog';
+import { GlobalApprovals } from './approvals';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -44,6 +45,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   </h1>
                   <Nav />
                 </header>
+                {/* Whatever page is open, a step waiting for a decision is asked about here. */}
+                <GlobalApprovals />
                 <main id="main">{children}</main>
               </div>
             </DialogHost>
