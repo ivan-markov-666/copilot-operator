@@ -85,6 +85,8 @@ export class SessionStore {
   readonly dir: string;
   private readonly sessionsDir: string;
   private readonly presetsDir: string;
+  /** Named personas the operator keeps for the import page, one file each. */
+  private readonly personasDir: string;
   private readonly level1Path: string;
   private readonly modelsPath: string;
 
@@ -92,6 +94,7 @@ export class SessionStore {
     this.dir = resolve(dataDir);
     this.sessionsDir = join(this.dir, 'sessions');
     this.presetsDir = join(this.dir, 'level2');
+    this.personasDir = join(this.dir, 'personas');
     this.level1Path = join(this.dir, 'level1.md');
     this.modelsPath = join(this.dir, 'models.json');
   }
@@ -184,6 +187,39 @@ export class SessionStore {
 
   async deletePreset(name: string): Promise<void> {
     await rm(join(this.presetsDir, `${safePresetName(name)}.md`), { force: true });
+  }
+
+  // --- named personas -------------------------------------------------------------------
+  //
+  // "How the tasks are carried out" is one box on the import page, and the persona in it depends
+  // on the kind of work: a Playwright suite wants a different agent from an API service. These
+  // are saved copies of that box under a name, so switching is one choice instead of pasting a
+  // JSON back in. The box itself (`context-persona.md`) stays the one that is in force.
+
+  async listPersonas(): Promise<Level2Preset[]> {
+    const names = (await readdir(this.personasDir).catch(() => [] as string[]))
+      .filter((n) => n.endsWith('.md'))
+      .sort((a, b) => a.localeCompare(b));
+    const out: Level2Preset[] = [];
+    for (const n of names) {
+      const path = join(this.personasDir, n);
+      const content = await readFile(path, 'utf8');
+      const { mtime } = await import('node:fs').then((fs) => fs.statSync(path));
+      out.push({ name: n.slice(0, -3), content, updatedAt: mtime.toISOString() });
+    }
+    return out;
+  }
+
+  async savePersona(name: string, content: string): Promise<Level2Preset> {
+    const safe = name.replace(/[^\p{L}\p{N}._ -]/gu, '').trim();
+    if (!safe) throw new Error('The persona name is empty after removing unsafe characters.');
+    await mkdir(this.personasDir, { recursive: true });
+    await this.atomicWrite(join(this.personasDir, `${safePresetName(safe)}.md`), content);
+    return { name: safe, content, updatedAt: new Date().toISOString() };
+  }
+
+  async deletePersona(name: string): Promise<void> {
+    await rm(join(this.personasDir, `${safePresetName(name)}.md`), { force: true });
   }
 
   // --- sessions -------------------------------------------------------------------------

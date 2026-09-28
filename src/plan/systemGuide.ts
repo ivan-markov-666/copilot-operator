@@ -279,6 +279,38 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         bg: 'Как се изпълняват задачите: персоната на агента',
         controls: [
           {
+            key: 'plan.personaSaved',
+            kind: 'select',
+            en: 'Saved personas',
+            bg: 'Запазени персони',
+            doesEn: 'Chooses a saved persona and puts it in the box below, which is saved at once; the choice shows which saved persona the box matches.',
+            doesBg: 'Избира запазена персона и я поставя в полето отдолу, което се запазва веднага; изборът показва на коя запазена персона отговаря полето.',
+          },
+          {
+            key: 'plan.personaNamePlaceholder',
+            kind: 'field',
+            en: 'a name for the persona in the box, e.g. playwright-tests',
+            bg: 'име за персоната в полето, напр. playwright-tests',
+            doesEn: 'The name to keep the persona in the box under.',
+            doesBg: 'Името, под което да се запази персоната от полето.',
+          },
+          {
+            key: 'plan.personaSaveAs',
+            kind: 'button',
+            en: 'Save under this name',
+            bg: 'Запази под това име',
+            doesEn: 'Keeps a copy of the persona in the box under that name, replacing one of the same name after asking.',
+            doesBg: 'Запазва копие на персоната от полето под това име, като пита, преди да замени персона със същото име.',
+          },
+          {
+            key: 'plan.personaDelete',
+            kind: 'button',
+            en: 'Delete the chosen one',
+            bg: 'Изтрий избраната',
+            doesEn: 'Deletes the saved persona the box matches; the box itself is not changed.',
+            doesBg: 'Изтрива запазената персона, на която отговаря полето; самото поле не се променя.',
+          },
+          {
             key: 'plan.ctxClear',
             kind: 'button',
             en: 'Empty this',

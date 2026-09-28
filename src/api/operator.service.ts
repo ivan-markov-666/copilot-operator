@@ -384,6 +384,23 @@ export class OperatorService {
     await this.store.deletePreset(name);
   }
 
+  // --- named personas for the import page -----------------------------------------------
+
+  async listPersonas(): Promise<Level2Preset[]> {
+    await this.init();
+    return await this.store.listPersonas();
+  }
+
+  async savePersona(name: string, content: string): Promise<Level2Preset> {
+    await this.init();
+    return await this.store.savePersona(name, content);
+  }
+
+  async deletePersona(name: string): Promise<void> {
+    await this.init();
+    await this.store.deletePersona(name);
+  }
+
   // --- sessions and tasks ---------------------------------------------------------------
 
   async listSessions(): Promise<Array<Session & { running: boolean }>> {
@@ -407,18 +424,17 @@ export class OperatorService {
     if (mirror) assertMirrorIsCoherent(mirror);
     const session = await this.store.createSession(name, mirror);
 
-    // A new session starts on the standing choice, if there is one. It is copied onto the
-    // session rather than read at run time, so changing the default later cannot silently
-    // change what an existing session does.
+    /*
+     * The models are not written onto a new session. A session with no model of its own uses the
+     * one chosen in Settings at the time it runs (see `effectiveModels` in taskRunner.ts), so
+     * choosing a model there reaches every such session, the ones created before it included.
+     * It used to be copied here, which meant a model chosen after an import reached nothing.
+     */
     const cfg = await this.settings.load();
-    const defaultModel = (cfg.copilot.defaultModel ?? '').trim();
-    const defaultReviewModel = (cfg.copilot.defaultReviewModel ?? '').trim();
     const projectDir = (cfg.project?.rootDir ?? '').trim();
-    if (!defaultModel && !defaultReviewModel && !projectDir) return session;
+    if (!projectDir) return session;
 
     return await this.store.updateSession(session.id, (s) => {
-      if (defaultModel) s.model = defaultModel;
-      if (defaultReviewModel) s.review = { enabled: s.review?.enabled !== false, model: defaultReviewModel };
       if (projectDir) {
         // Both fields, because they answer different questions about the same folder: where the
         // files are and where the branches go. Neither is switched on by being filled in.
@@ -1109,14 +1125,25 @@ export class OperatorService {
     const wantedModel = model?.trim();
     const wantedReviewModel = reviewModel?.trim();
     if (wantedModel || wantedReviewModel) {
+      /*
+       * The panel starts on the models chosen in Settings. A session that follows Settings and is
+       * run on exactly that model is left following it, so choosing another model in Settings
+       * later still reaches it; only a different choice, or a session with a model of its own,
+       * is written.
+       */
+      const settingsNow = await this.settings.load();
+      const followModel = (settingsNow.copilot.defaultModel ?? '').trim();
+      const followReview = (settingsNow.copilot.defaultReviewModel ?? '').trim();
       for (const entry of sessions) {
         if (entry.state !== 'waiting') continue;
         await this.store.updateSession(entry.sessionId, (s) => {
-          if (wantedModel) s.model = wantedModel;
+          if (wantedModel && (s.model?.trim() || wantedModel !== followModel)) s.model = wantedModel;
           // Only the model is set here, never whether the review happens: a run panel is about
           // this run, and silently switching a session's review on or off from it would be a
           // change to the session that outlives the run.
-          if (wantedReviewModel) s.review = { ...DEFAULT_REVIEW, ...s.review, model: wantedReviewModel };
+          if (wantedReviewModel && (s.review?.model?.trim() || wantedReviewModel !== followReview)) {
+            s.review = { ...DEFAULT_REVIEW, ...s.review, model: wantedReviewModel };
+          }
         });
       }
     }
@@ -1540,13 +1567,8 @@ export class OperatorService {
      * the language asked for; only the shipped example does.
      */
     const persona = (await this.getContext('persona', 'en')).content;
-    const result = await importPlan(
-      this.store,
-      check.plan,
-      (cfg.copilot.defaultModel ?? '').trim(),
-      (cfg.copilot.defaultReviewModel ?? '').trim(),
-      persona,
-    );
+    // No default models passed: a session the plan gives no model follows Settings at run time.
+    const result = await importPlan(this.store, check.plan, '', '', persona);
     return {
       ok: true,
       result: { ...result, warnings: [...check.warnings, ...result.warnings] },

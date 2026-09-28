@@ -177,8 +177,9 @@ function unavailableShellWarnings(plan: Plan): string[] {
 /**
  * Creates everything the plan describes.
  *
- * `defaultModel` is what a session starts on when the plan does not name one, which keeps an
- * imported session behaving like one made by hand in the UI.
+ * `defaultModel` is written onto a session the plan names no model for. The service passes
+ * nothing: such a session follows the model chosen in Settings at the time it runs, like one made
+ * by hand in the UI. Kept as a parameter for a caller that wants the old, copied behaviour.
  */
 export async function importPlan(
   store: SessionStore,

@@ -650,6 +650,12 @@ export const api = {
     call<Preset>(`/presets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
   deletePreset: (name: string) => call<{ ok: true }>(`/presets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
+  /** Named copies of the persona box on the import page. Same shape as a level 2 preset. */
+  personas: () => call<Preset[]>('/personas'),
+  savePersona: (name: string, content: string) =>
+    call<Preset>(`/personas/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+  deletePersona: (name: string) => call<{ ok: true }>(`/personas/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
   sessions: () => call<Session[]>('/sessions'),
   session: (id: string) => call<Session>(`/sessions/${id}`),
   createSession: (name: string, mirror?: Partial<Mirror>) =>

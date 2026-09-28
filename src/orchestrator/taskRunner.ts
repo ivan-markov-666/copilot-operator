@@ -343,10 +343,28 @@ export async function openSessionTransport(
  * set to, and the session records that, so the register shows which model did the work rather
  * than which one was asked for.
  */
-async function applySessionModel(transport: CopilotTransport, session: Session, bus: EventBus): Promise<string | undefined> {
-  if (!session.model?.trim()) return undefined;
+/**
+ * The models a session runs on: its own, or else the ones chosen in Settings at this moment.
+ * A session gets a model of its own from the plan or from its own picker; one that has none
+ * follows Settings, so a model chosen there after the session was made still reaches it.
+ */
+export function effectiveModels(session: Pick<Session, 'model' | 'review'>, cfg: Pick<ResolvedConfig, 'copilot'>): { model: string; reviewModel: string } {
+  return {
+    model: (session.model ?? '').trim() || (cfg.copilot.defaultModel ?? '').trim(),
+    reviewModel: (session.review?.model ?? '').trim() || (cfg.copilot.defaultReviewModel ?? '').trim(),
+  };
+}
 
-  const result = await transport.selectModel(session.model.trim()).catch((e: unknown) => ({
+async function applySessionModel(
+  transport: CopilotTransport,
+  session: Session,
+  bus: EventBus,
+  cfg: Pick<ResolvedConfig, 'copilot'>,
+): Promise<string | undefined> {
+  const wanted = effectiveModels(session, cfg).model;
+  if (!wanted) return undefined;
+
+  const result = await transport.selectModel(wanted).catch((e: unknown) => ({
     ok: false as const,
     current: null,
     reason: (e as Error).message,
@@ -357,9 +375,9 @@ async function applySessionModel(transport: CopilotTransport, session: Session, 
     type: result.ok ? 'model-selected' : 'model-not-selected',
     level: result.ok ? 'info' : 'warn',
     message: result.ok
-      ? `model: ${result.current ?? session.model}`
-      : `could not switch to "${session.model}": ${result.reason ?? 'unknown reason'}. Continuing on ${result.current ?? 'the chat default'}.`,
-    data: { asked: session.model, current: result.current, ok: result.ok },
+      ? `model: ${result.current ?? wanted}${session.model?.trim() ? '' : ' (from Settings)'}`
+      : `could not switch to "${wanted}": ${result.reason ?? 'unknown reason'}. Continuing on ${result.current ?? 'the chat default'}.`,
+    data: { asked: wanted, fromSettings: !session.model?.trim(), current: result.current, ok: result.ok },
   });
 
   return result.current ?? undefined;
@@ -958,7 +976,7 @@ export async function runTask(
 
       reviewRounds += 1;
 
-      const model = (session.review?.model ?? '').trim();
+      const model = effectiveModels(session, cfg).reviewModel;
       const repoDir = session.vcs?.enabled ? (session.vcs.repoDir ?? '').trim() : '';
       /*
        * What changed, read from git rather than from anybody's account of it.
@@ -1698,8 +1716,8 @@ export async function runSession(
 
     // The picker belongs to the conversation, so the session's choice is applied once, here,
     // before the first task goes out. What the chat ended up on is recorded either way.
-    const modelInUse = await applySessionModel(chat, session, bus);
-    if (session.model?.trim()) {
+    const modelInUse = await applySessionModel(chat, session, bus, cfg);
+    if (effectiveModels(session, cfg).model) {
       await store.updateSession(sessionId, (s) => {
         s.modelInUse = modelInUse;
       });
@@ -1763,8 +1781,8 @@ export async function runSession(
          * it was the model the session asked for. The review has always done this for its own
          * fresh conversations a few hundred lines up; this path simply never did.
          */
-        const freshModel = await applySessionModel(chat, session, bus);
-        if (session.model?.trim()) {
+        const freshModel = await applySessionModel(chat, session, bus, cfg);
+        if (effectiveModels(session, cfg).model) {
           session = await store.updateSession(sessionId, (s) => {
             s.modelInUse = freshModel;
           });

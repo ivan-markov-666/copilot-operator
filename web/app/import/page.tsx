@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, type ContextKind, type PlanCheck, type PlanImport, sessionHref } from '../../lib/api';
+import { api, type ContextKind, type PlanCheck, type PlanImport, sessionHref, type Preset } from '../../lib/api';
 import { confirmDialog } from '../dialog';
 import { useT, useFmtTime } from '../../lib/i18n';
 
@@ -380,6 +380,105 @@ export default function ImportPage() {
  * persona is shown sits in the placeholder, so an empty field says what belongs in it without
  * pretending to be an answer.
  */
+/**
+ * Named copies of the persona box, for switching between kinds of work with one choice.
+ *
+ * The box above stays the persona in force — the brief carries what is in it. This keeps copies of
+ * it under names the operator picks ("playwright-tests", "api-service"): choosing one puts it in
+ * the box and saves the box, exactly as typing it would; "Save under this name" keeps what is in
+ * the box now. The choice shows the saved persona the box currently matches, if any.
+ */
+function PersonaShelf({ current, onLoad }: { current: string; onLoad: (text: string) => void }) {
+  const { t } = useT();
+  const [shelf, setShelf] = useState<Preset[]>([]);
+  const [name, setName] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const reload = useCallback(async () => {
+    try {
+      setShelf(await api.personas());
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }, []);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const matching = shelf.find((p) => p.content === current)?.name ?? '';
+
+  const load = async (chosen: string) => {
+    const persona = shelf.find((p) => p.name === chosen);
+    if (!persona) return;
+    // What is in the box would be lost only if it is not kept anywhere else.
+    if (current.trim() && !matching && !(await confirmDialog(t('plan.personaReplaceConfirm', { name: chosen })))) return;
+    onLoad(persona.content);
+    setName(persona.name);
+    setMsg(t('plan.personaLoaded', { name: persona.name }));
+  };
+
+  const saveAs = async () => {
+    const wanted = name.trim();
+    if (!wanted || !current.trim()) return;
+    if (shelf.some((p) => p.name === wanted) && !(await confirmDialog(t('plan.personaOverwriteConfirm', { name: wanted })))) return;
+    try {
+      const saved = await api.savePersona(wanted, current);
+      setName(saved.name);
+      setMsg(t('plan.personaSavedAs', { name: saved.name }));
+      await reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+
+  const remove = async () => {
+    if (!matching || !(await confirmDialog(t('plan.personaDeleteConfirm', { name: matching })))) return;
+    try {
+      await api.deletePersona(matching);
+      setMsg(t('plan.personaDeleted', { name: matching }));
+      await reload();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="option" style={{ marginBottom: 8 }}>
+      <label htmlFor="persona-shelf">{t('plan.personaSaved')}</label>
+      <div className="row">
+        <select id="persona-shelf" value={matching} onChange={(e) => void load(e.target.value)} style={{ width: 'auto', minWidth: 260 }}>
+          <option value="">{shelf.length === 0 ? t('plan.personaNone') : t('plan.personaPick')}</option>
+          {shelf.map((p) => (
+            <option key={p.name} value={p.name}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <button className="quiet" onClick={() => void remove()} disabled={!matching}>
+          {t('plan.personaDelete')}
+        </button>
+      </div>
+      <div className="row" style={{ marginTop: 6 }}>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t('plan.personaNamePlaceholder')}
+          aria-label={t('plan.personaNamePlaceholder')}
+          style={{ maxWidth: 360 }}
+        />
+        <button onClick={() => void saveAs()} disabled={!name.trim() || !current.trim()}>
+          {t('plan.personaSaveAs')}
+        </button>
+        <span className="muted small" role="status">
+          {msg}
+        </span>
+      </div>
+      <p className="why">{t('plan.personaSavedWhy')}</p>
+    </div>
+  );
+}
+
 function ContextField({ kind, onSaved }: { kind: ContextKind; onSaved: () => void }) {
   const { t, locale } = useT();
   const [value, setValue] = useState('');
@@ -446,6 +545,15 @@ function ContextField({ kind, onSaved }: { kind: ContextKind; onSaved: () => voi
         {label} <span className="muted small">— {customised ? t('plan.ctxWritten') : t('plan.ctxEmpty')}</span>
       </summary>
       <p className="muted small" style={{ marginTop: 8 }}>{hint}</p>
+      {kind === 'persona' && (
+        <PersonaShelf
+          current={value}
+          onLoad={(text) => {
+            setValue(text);
+            void write(text);
+          }}
+        />
+      )}
       <textarea
         value={value}
         onChange={(e) => {

@@ -106,6 +106,24 @@ export class OperatorController {
     return { ok: true };
   }
 
+  // --- named personas (the import page's second box, saved under a name) -----------------
+
+  @Get('personas')
+  personas(): Promise<unknown> {
+    return this.ops.listPersonas();
+  }
+
+  @Put('personas/:name')
+  savePersona(@Param('name') name: string, @Body() body: { content: string }): Promise<unknown> {
+    return this.ops.savePersona(name, body?.content ?? '').catch(fail);
+  }
+
+  @Delete('personas/:name')
+  async deletePersona(@Param('name') name: string): Promise<{ ok: true }> {
+    await this.ops.deletePersona(name).catch(fail);
+    return { ok: true };
+  }
+
   // --- sessions ---------------------------------------------------------------------------
 
   @Get('sessions')

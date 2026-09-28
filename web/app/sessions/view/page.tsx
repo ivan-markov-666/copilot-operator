@@ -142,6 +142,11 @@ function SessionPage() {
 function Header({ session, queued, onChange }: { session: Session; queued: number; onChange: () => void }) {
   const { t } = useT();
   const [msg, setMsg] = useState('');
+  // The model chosen in Settings, which a session without one of its own follows.
+  const [settingsModel, setSettingsModel] = useState('');
+  useEffect(() => {
+    api.models().then((c) => setSettingsModel(c.defaultModel ?? '')).catch(() => undefined);
+  }, []);
   const [name, setName] = useState(session.name);
   const [group, setGroup] = useState(session.conversationGroup ?? '');
   useEffect(() => setName(session.name), [session.name]);
@@ -290,7 +295,9 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
       </p>
 
       <div className="muted small" style={{ marginTop: 10 }}>
-        {t('session.willUseModel', { name: session.model || t('model.default') })}
+        {t('session.willUseModel', {
+          name: session.model || (settingsModel ? t('model.followsDefault', { name: settingsModel }) : t('model.default')),
+        })}
         {' · '}
         {session.mirror.enabled && session.mirror.rootDir ? (
           t('session.willUseFiles', {
@@ -471,7 +478,8 @@ function ModelPanel({ session, onChange }: { session: Session; onChange: () => v
           onChange={(e) => void choose(e.target.value)}
           style={{ width: 'auto', minWidth: 260 }}
         >
-          <option value="">{t('model.default')}</option>
+          {/* The empty choice follows Settings, so it says which model that is today. */}
+          <option value="">{catalogue?.defaultModel ? t('model.followsDefault', { name: catalogue.defaultModel }) : t('model.default')}</option>
           {chosen && !known && <option value={chosen}>{t('model.notInList', { name: chosen })}</option>}
           {ungrouped.map((o) => (
             <option key={o.name} value={o.name} disabled={o.disabled}>
@@ -501,8 +509,8 @@ function ModelPanel({ session, onChange }: { session: Session; onChange: () => v
       <ModelHint current={chosen} onUse={(name) => void choose(name)} />
 
       {/*
-        The standing choice, kept on this machine. It is copied onto a session when the session
-        is created, so changing it later cannot quietly change what an existing session does.
+        The standing choice, kept on this machine. A session with no model of its own follows it
+        at the time it runs; one given its own model keeps that.
       */}
       <div className="row" style={{ marginTop: 8 }}>
         <span className="muted small">
@@ -569,6 +577,11 @@ function ReviewPanel({ session, onChange }: { session: Session; onChange: () => 
   const [model, setModel] = useState(current.model ?? '');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  // The review model chosen in Settings, which a session without one of its own follows.
+  const [settingsReview, setSettingsReview] = useState('');
+  useEffect(() => {
+    api.models().then((c) => setSettingsReview(c.defaultReviewModel ?? '')).catch(() => undefined);
+  }, []);
 
   const save = async () => {
     setBusy(true);
@@ -604,7 +617,13 @@ function ReviewPanel({ session, onChange }: { session: Session; onChange: () => 
 
       <label htmlFor="review-model">{t('review.modelField')}</label>
       <div className="row">
-        <ModelPicker id="review-model" chosen={model} onChange={setModel} none={t('review.modelSame')} disabled={session.running || !enabled} />
+        <ModelPicker
+          id="review-model"
+          chosen={model}
+          onChange={setModel}
+          none={settingsReview ? t('model.followsDefault', { name: settingsReview }) : t('review.modelSame')}
+          disabled={session.running || !enabled}
+        />
       </div>
       <p className="why">{t('review.modelWhy')}</p>
       <ReviewModelHint current={model} onUse={(name) => setModel(name)} />
