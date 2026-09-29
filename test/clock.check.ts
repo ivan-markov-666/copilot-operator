@@ -29,7 +29,8 @@ console.log('finished run             :', finished.ms, finished.live, finished.t
 const inFlight = [done[0], done[1], { startedAt: at(901), status: 'running', runGroup: run }];
 const going = runSpanMs(run, inFlight, t0 + 1000_000);
 console.log('run still going, now=+1000:', going.ms, going.live, '(expect 1000000 true)');
-const notYet = runSpanMs(run, [done[0], { status: 'queued', runGroup: run }], t0 + 400_000);
+const queuedTask = { status: 'queued' as const, runGroup: run };
+const notYet = runSpanMs(run, [done[0], queuedTask], t0 + 400_000);
 console.log('a task not yet started   :', notYet.live, '(expect false — queued is not live; the span ends at the last finish)', notYet.ms, '(expect 300000)');
 
 console.log('\n--- the latest run of a session ---');

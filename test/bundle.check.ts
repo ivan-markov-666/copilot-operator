@@ -136,7 +136,7 @@ console.log('\n--- a failed attempt keeps its plan, work and runner ---');
     t.startedAt = '2026-09-28T10:00:00.000Z';
     t.finishedAt = '2026-09-28T10:05:00.000Z';
     t.iterations = 4;
-    t.checks = [{ name: 'parses-empty', expect: 'exit-0', run: 'npm test' } as NonNullable<Task['checks']>[number]];
+    t.checks = [{ name: 'parses-empty', expect: 'exit-0', run: 'npm test' } as unknown as NonNullable<Task['checks']>[number]];
   });
   const { mkdir, writeFile, readFile } = await import('node:fs/promises');
   const runsDir = join(dir, 'runs');

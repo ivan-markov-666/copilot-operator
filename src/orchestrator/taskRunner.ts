@@ -15,7 +15,8 @@ import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
-import { CopilotTransport, type ReplyCapture } from '../transport/copilotTransport.js';
+import type { ReplyCapture } from '../transport/copilotTransport.js';
+import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
@@ -228,8 +229,8 @@ export async function openBrowser(
   bus: EventBus,
   transportDir: string,
   sessionId: string,
-): Promise<CopilotTransport> {
-  const transport = new CopilotTransport({
+): Promise<ChatTransport> {
+  const transport = createTransport({
     profileDir: cfg.resolved.profileDir,
     transportDir,
     chatUrl: cfg.copilot.url,
@@ -273,7 +274,7 @@ export async function openBrowser(
  * too, for a reason that has nothing to do with them.
  */
 export async function enterSessionConversation(
-  transport: CopilotTransport,
+  transport: ChatTransport,
   session: Session,
   opts: { closeOnFailure: boolean },
 ): Promise<void> {
@@ -339,7 +340,7 @@ export async function openSessionTransport(
   session: Session,
   bus: EventBus,
   runsDir: string,
-): Promise<CopilotTransport> {
+): Promise<ChatTransport> {
   const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id);
   await enterSessionConversation(transport, session, { closeOnFailure: true });
   return transport;
@@ -367,7 +368,7 @@ export function effectiveModels(session: Pick<Session, 'model' | 'review'>, cfg:
 }
 
 async function applySessionModel(
-  transport: CopilotTransport,
+  transport: ChatTransport,
   session: Session,
   bus: EventBus,
   cfg: Pick<ResolvedConfig, 'copilot'>,
@@ -396,7 +397,7 @@ async function applySessionModel(
 
 /** Runs one task to completion inside an already-open transport. */
 export async function runTask(
-  transport: CopilotTransport,
+  transport: ChatTransport,
   session: Session,
   task: Task,
   deps: RunDeps,
@@ -420,6 +421,13 @@ export async function runTask(
   const taskLogPath = log.path('task-log.txt');
   await mkdir(artifactsDir, { recursive: true });
   await mkdir(repliesDir, { recursive: true });
+  /*
+   * Made here, not left to the first step report. The report writer creates it as a side effect, so
+   * a chat that answered "done" before running a single step reached the failed-checks report with
+   * no folder to write it into, and the task ended "failed" on an ENOENT about checks-1.txt instead
+   * of telling the chat which check failed. Found by the end-to-end checks (test/e2e-run.check.ts).
+   */
+  await mkdir(reportsDir, { recursive: true });
 
   /** The consolidated, human-readable record of the whole task, appended as it happens. */
   const record = async (heading: string, body: string): Promise<void> => {
@@ -1727,7 +1735,7 @@ export async function runSession(
      * is absent this function opens its own and closes it at the end, which is what a single
      * session has always done.
      */
-    transport?: CopilotTransport;
+    transport?: ChatTransport;
   },
 ): Promise<{ ran: number; lastStatus?: TaskOutcome['status']; paused: boolean }> {
   const { cfg, store, bus } = deps;
@@ -1749,7 +1757,7 @@ export async function runSession(
   await mkdir(sessionRunsDir, { recursive: true });
 
   const borrowed = deps.transport ?? null;
-  let transport: CopilotTransport | null = borrowed;
+  let transport: ChatTransport | null = borrowed;
   let ran = 0;
   let lastStatus: TaskOutcome['status'] | undefined;
   /** Whether the queue stopped because the operator asked it to hold, rather than because it ended. */
@@ -1764,7 +1772,7 @@ export async function runSession(
     } else {
       transport = await openSessionTransport(cfg, session, bus, sessionRunsDir);
     }
-    const chat = transport as CopilotTransport;
+    const chat = transport as ChatTransport;
 
     // The picker belongs to the conversation, so the session's choice is applied once, here,
     // before the first task goes out. What the chat ended up on is recorded either way.

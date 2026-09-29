@@ -5,7 +5,7 @@ const opts = { stopMarker: 'Край', defaultShell: 'pwsh' as const };
 const show = (label: string, md: string): void => {
   const r = parseReply(md, opts);
   if (r.ok) {
-    const steps = r.reply.steps.map((s) => (s.type === 'command' ? `command:${s.cmd}` : `download:${s.file}`));
+    const steps = r.reply.steps.map((s) => `command:${s.cmd}`);
     console.log(`${label.padEnd(30)} ok   done=${String(r.done).padEnd(5)} steps=${r.reply.steps.length} ${JSON.stringify(steps)}`);
   } else {
     console.log(`${label.padEnd(30)} FAIL ${r.reason}: ${r.detail.slice(0, 60)}`);

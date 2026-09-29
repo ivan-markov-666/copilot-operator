@@ -73,7 +73,7 @@ import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
 import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } from '../exec/isolation.js';
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
-import { CopilotTransport } from '../transport/copilotTransport.js';
+import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { Settings } from './settings.js';
@@ -1045,7 +1045,7 @@ export class OperatorService {
     sessionId: string,
     mode: 'confirm' | 'unattended',
     /** A browser that is already open. A batch passes its own; a single run opens one. */
-    transport?: CopilotTransport,
+    transport?: ChatTransport,
     /** The press of a start button this belongs to, stamped onto every task it reaches. */
     runGroup?: TaskRunGroup,
     /** Only these queued tasks, when the operator chose some; the rest stay queued. */
@@ -1410,7 +1410,7 @@ export class OperatorService {
      * to each session in turn, and closed when the last one is done — so between sessions the
      * only thing that changes is which conversation is on screen.
      */
-    let browser: CopilotTransport | null = null;
+    let browser: ChatTransport | null = null;
     try {
       const cfg = await this.settings.load();
       browser = await openBrowser(cfg, this.bus, join(cfg.resolved.runsDir, '_browser'), batch.id);
@@ -2361,7 +2361,7 @@ export class OperatorService {
 
     this.readingModels = true;
     const cfg = await this.settings.load();
-    const transport = new CopilotTransport({
+    const transport = createTransport({
       profileDir: cfg.resolved.profileDir,
       transportDir: join(cfg.resolved.runsDir, '_models'),
       chatUrl: cfg.copilot.url,

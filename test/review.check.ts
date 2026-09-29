@@ -158,11 +158,11 @@ const again = {
   about: 'work' as const,
 };
 const elsewhere = { ...again, where: 'web/app/page.tsx' };
-const noPlace = { what: 'The README start command returns 500.', evidence: 'z', basis: 'run the commands it tells', where: '' };
+const noPlace = { what: 'The README start command returns 500.', evidence: 'z', basis: 'run the commands it tells', where: '', about: 'work' as const };
 console.log('same place, other words    :', isRepeat(round1, again), '(expect true)');
 console.log('different place            :', isRepeat(round1, elsewhere), '(expect false)');
 console.log('no place, same claim       :', isRepeat([noPlace], { ...noPlace, evidence: 'w' }), '(expect true)');
-console.log('no place, other claim      :', isRepeat([noPlace], { what: 'The README install command fails.', evidence: 'w', basis: 'run the commands it tells', where: '' }), '(expect false)');
+console.log('no place, other claim      :', isRepeat([noPlace], { what: 'The README install command fails.', evidence: 'w', basis: 'run the commands it tells', where: '', about: 'work' }), '(expect false)');
 console.log('first round, nothing before:', isRepeat([], again), '(expect false)');
 console.log('marked when written out    :', describeFindings([again], () => true).includes('earlier round') ? 'yes' : 'NO');
 

@@ -5,7 +5,7 @@
  * network: this API runs on the operator's own machine and drives that machine's browser.
  */
 import type { ProjectMirrorSelection } from '../config/schema.js';
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res, Sse, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Res, Sse, NotFoundException, BadRequestException } from '@nestjs/common';
 import type { Response } from 'express';
 import { Observable } from 'rxjs';
 import { OperatorService } from './operator.service.js';
@@ -41,7 +41,14 @@ function contentDisposition(fileName: string): string {
 
 @Controller()
 export class OperatorController {
-  constructor(private readonly ops: OperatorService) {}
+  /*
+   * Named explicitly rather than read from the parameter's type. Nest normally learns what to inject
+   * from the metadata `tsc` emits for a decorated class, and that metadata exists only when the code
+   * was compiled by `tsc`: run through tsx or any other esbuild-based loader — which is how every
+   * check in test/ runs, including the ones that start this API — the type is gone and `ops` arrived
+   * as undefined, so every route failed with a TypeError. With the token named, both ways work.
+   */
+  constructor(@Inject(OperatorService) private readonly ops: OperatorService) {}
 
   @Get('health')
   health(): { ok: true; time: string } {
