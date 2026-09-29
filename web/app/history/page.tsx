@@ -22,6 +22,7 @@ import { RunControls } from '../runControls';
 import { RichText } from '../richText';
 import { useTaskActions } from '../taskActions';
 import { confirmDialog } from '../dialog';
+import { ChangesButton } from '../diffView';
 import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { TaskStory } from '../taskStory';
 
@@ -528,6 +529,9 @@ function Flow({
                           <SaveLog label={t('save.attemptLog')} save={() => api.saveTaskLog(e.sessionId, e.taskId, a.runId)} />
                         )}
                         {a.runId && <AttemptRecord sessionId={e.sessionId} taskId={e.taskId} attempt={a.attempt} />}
+                        {a.runId && a.changedFiles !== undefined && (
+                          <ChangesButton sessionId={e.sessionId} taskId={e.taskId} runId={a.runId} title={`${e.title} — ${t('reg.attemptN', { n: a.attempt })}`} files={a.changedFiles} />
+                        )}
                       </div>
                       <div className="when">
                         {a.startedAt ? t('task.started', { t: fmtTime(a.startedAt) }) : ''}
@@ -560,6 +564,8 @@ function Flow({
                * has run — a passed task is exactly what somebody compares a failed one against.
                */}
               {e.startedAt && <ExportLinks where={{ session: e.sessionId, task: e.taskId }} />}
+              {/* What the task changed, before and after — where its attempt committed something. */}
+              {e.changedFiles !== undefined && <ChangesButton sessionId={e.sessionId} taskId={e.taskId} title={e.title} files={e.changedFiles} />}
               <RowInfo />
               {e.runId && (
                 <button

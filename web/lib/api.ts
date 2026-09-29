@@ -372,7 +372,11 @@ export type RegistryEntry = {
     reason?: string;
     runId?: string;
     branch?: string;
+    /** How many files that attempt's commit changed; absent when it committed nothing. */
+    changedFiles?: number;
   }>;
+  /** How many files this attempt's commit changed; absent when it committed nothing. */
+  changedFiles?: number;
 };
 
 /**
@@ -586,6 +590,20 @@ export type StoryEntry =
   | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean }
   | { kind: 'review'; round: number; entries: StoryEntry[] };
 
+/** A file a task changed. `added`/`removed` are -1 for a binary file. */
+export type ChangedFile = { path: string; oldPath?: string; status: string; added: number; removed: number };
+
+/** Its two versions as text; null where it did not exist, or was binary or too large to show. */
+export type ChangedFileContent = {
+  path: string;
+  oldPath?: string;
+  status: string;
+  before: string | null;
+  after: string | null;
+  binary: boolean;
+  tooLarge: boolean;
+};
+
 export type Story = {
   runId: string;
   title: string;
@@ -709,6 +727,16 @@ export const api = {
       body: JSON.stringify({ ...patch, ...(opts.buildOnFinished ? { buildOnFinished: true } : {}) }),
     }),
   /** `runId` asks for one earlier attempt instead of the current one. */
+  /** What an attempt changed in the repository: the files between its start and its commit. */
+  taskChanges: (id: string, taskId: string, runId?: string) =>
+    call<{ ok: boolean; problem?: string; repoDir?: string; branch?: string; base?: string; commit?: string; files: ChangedFile[] }>(
+      `/sessions/${id}/tasks/${taskId}/changes${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
+    ),
+  /** One of those files, before and after. */
+  taskChangeFile: (id: string, taskId: string, path: string, runId?: string) =>
+    call<ChangedFileContent>(
+      `/sessions/${id}/tasks/${taskId}/changes/file?path=${encodeURIComponent(path)}${runId ? `&run=${encodeURIComponent(runId)}` : ''}`,
+    ),
   /** The attempt as a story: sent, answered, run, ended. Polled while live. */
   taskStory: (id: string, taskId: string, runId?: string) =>
     call<Story>(`/sessions/${id}/tasks/${taskId}/story${runId ? `?run=${encodeURIComponent(runId)}` : ''}`),

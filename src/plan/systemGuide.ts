@@ -1773,6 +1773,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Файловете, които комитът на задачата е променил.',
           },
           {
+            key: 'diff.open',
+            kind: 'button',
+            en: 'See the changes ({n} file(s))',
+            bg: 'Виж промените ({n} файла)',
+            doesEn:
+              'Where the attempt committed: every file it changed, before on the left and after on the right, scrolling together. Also under each earlier attempt.',
+            doesBg:
+              'Където опитът е комитнал: всеки променен файл, преди вляво и след вдясно, превъртани заедно. И под всеки по-ранен опит.',
+          },
+          {
             key: 'task.deviations',
             kind: 'disclosure',
             en: 'Not as the task said ({n})',
@@ -2411,6 +2421,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Изтегля какво е направил runner-ът: средата, всяко събитие и стъпка с кода на изход, механиката на рецензията.',
           },
           {
+            key: 'diff.open',
+            kind: 'button',
+            en: 'See the changes ({n} file(s))',
+            bg: 'Виж промените ({n} файла)',
+            doesEn:
+              'Where the attempt committed: every file it changed, before on the left and after on the right, scrolling together.',
+            doesBg:
+              'Където опитът е комитнал: всеки променен файл, преди вляво и след вдясно, превъртани заедно.',
+          },
+          {
             key: 'story.show',
             kind: 'button',
             en: 'What happened',
@@ -2867,6 +2887,93 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Closes the box and changes nothing.',
             doesBg:
               'Затваря прозореца и не променя нищо.',
+          },
+        ],
+      },
+      {
+        headingKey: 'diff.title',
+        en: 'Changes in "{title}"',
+        bg: 'Промени в „{title}“',
+        controls: [
+          {
+            key: 'diff.nextChange',
+            kind: 'button',
+            en: 'Next change',
+            bg: 'Следваща промяна',
+            doesEn:
+              'Jumps to the next edit (key n).',
+            doesBg:
+              'Отива на следващата промяна (клавиш n).',
+          },
+          {
+            key: 'diff.prevChange',
+            kind: 'button',
+            en: 'Previous change',
+            bg: 'Предишна промяна',
+            doesEn:
+              'The one before (key p).',
+            doesBg:
+              'Предишната (клавиш p).',
+          },
+          {
+            key: 'diff.nextFile',
+            kind: 'button',
+            en: 'Next file',
+            bg: 'Следващ файл',
+            doesEn:
+              'The next file in the list on the left (key ]).',
+            doesBg:
+              'Следващият файл от списъка вляво (клавиш ]).',
+          },
+          {
+            key: 'diff.prevFile',
+            kind: 'button',
+            en: 'Previous file',
+            bg: 'Предишен файл',
+            doesEn:
+              'The file before (key [).',
+            doesBg:
+              'Предишният файл (клавиш [).',
+          },
+          {
+            key: 'diff.gap',
+            kind: 'button',
+            en: '⋯ {n} unchanged line(s) — show them',
+            bg: '⋯ {n} непроменени реда — покажи ги',
+            doesEn:
+              'Opens a folded stretch of unchanged lines.',
+            doesBg:
+              'Отваря сгънат участък непроменени редове.',
+          },
+          {
+            key: 'diff.whole',
+            kind: 'checkbox',
+            en: 'Show the whole file',
+            bg: 'Покажи целия файл',
+            doesEn:
+              'Every line, nothing folded.',
+            doesBg:
+              'Всички редове, нищо сгънато.',
+          },
+          {
+            key: 'diff.wrap',
+            kind: 'checkbox',
+            en: 'Wrap long lines',
+            bg: 'Пренасяй дългите редове',
+            doesEn:
+              'Off: long lines stay on one line and the table scrolls sideways.',
+            doesBg:
+              'Изключено: дългите редове остават на един ред и таблицата се превърта настрани.',
+          },
+          {
+            key: 'diff.close',
+            kind: 'button',
+            en: 'Close',
+            bg: 'Затвори',
+            doesEn:
+              'Closes the view (Esc).',
+            doesBg:
+              'Затваря изгледа (Esc).',
           },
         ],
       },
@@ -3602,14 +3709,14 @@ const KIND_WORDS: Record<ControlKind, { en: string; bg: string }> = {
   tab: { en: 'tab', bg: 'раздел' },
   badge: { en: 'badge', bg: 'етикет' },
   disclosure: { en: 'fold', bg: 'разгъване' },
-  note: { en: 'line on screen', bg: 'ред на екрана' },
+  note: { en: 'text', bg: 'текст' },
 };
 
 const INTRO_EN =
-  'Every label in quotes below is the exact text on the screen. Name the control by that text — press "Check it" — instead of describing it, and give the route so the operator knows which page they are on. A label with {braces} in it is filled in with numbers or names at the time.';
+  'Every label in quotes below is the exact text on the screen. Name the control by that text — press "Check it" — instead of describing it, and give the route so the operator knows which page they are on. A label with {braces} in it is filled in with numbers or names at the time. A label with no kind after it is a button.';
 
 const INTRO_BG =
-  'Всеки надпис в кавички по-долу е точният текст на екрана. Назовавай контрола с този текст — натисни „Провери“ — вместо да го описваш, и казвай маршрута, за да знае операторът на коя страница е. Надпис с {скоби} се попълва с числа или имена в момента.';
+  'Всеки надпис в кавички по-долу е точният текст на екрана. Назовавай контрола с този текст — натисни „Провери“ — вместо да го описваш, и казвай маршрута, за да знае операторът на коя страница е. Надпис с {скоби} се попълва с числа или имена в момента. Надпис без вид след него е бутон.';
 
 /**
  * The guide as the Markdown section the brief embeds. Dense on purpose: the brief is pasted
@@ -3632,8 +3739,10 @@ export function systemGuideSection(lang: 'en' | 'bg'): string {
       lines.push('');
       lines.push(`**${bg ? section.bg : section.en}**`);
       for (const control of section.controls) {
-        const word = KIND_WORDS[control.kind][lang];
-        lines.push(`- "${bg ? control.bg : control.en}" (${word}) — ${bg ? control.doesBg : control.doesEn}`);
+        // A button is the common case and is said once in the introduction instead of on 120 lines:
+        // the brief is pasted into a chat whose composer has a limit, and this is where it goes.
+        const kind = control.kind === 'button' ? '' : ` (${KIND_WORDS[control.kind][lang]})`;
+        lines.push(`- "${bg ? control.bg : control.en}"${kind} — ${bg ? control.doesBg : control.doesEn}`);
       }
     }
   }

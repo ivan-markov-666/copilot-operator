@@ -17,6 +17,7 @@ import { DirTree } from '../../dirTree';
 import { TaskStory } from '../../taskStory';
 import { RichText } from '../../richText';
 import { confirmDialog } from '../../dialog';
+import { ChangesButton } from '../../diffView';
 import { useUnattendedWithoutAsking } from '../../../lib/useUnattendedWithoutAsking';
 import { useTaskActions } from '../../taskActions';
 
@@ -1798,6 +1799,13 @@ function TaskCard({
                   </ul>
                 </details>
               )}
+              {/* The same files side by side, before and after. */}
+              {task.vcs.commit && task.vcs.baseCommit && (
+                <>
+                  {' · '}
+                  <ChangesButton sessionId={session.id} taskId={task.id} title={task.title} files={task.vcs.files?.length ?? 0} />
+                </>
+              )}
               {/* Pointed out to the model once and left in place, so a person should look. */}
               {(task.vcs.suspicious?.length ?? 0) > 0 && (
                 <div className="err small" style={{ marginTop: 4 }}>
@@ -2001,6 +2009,9 @@ function TaskCard({
                     {a.iterations > 0 && <span className="muted">{t('task.iterations', { n: a.iterations })}</span>}
                     {a.runId && <SaveLog label={t('save.attemptLog')} save={() => api.saveTaskLog(session.id, task.id, a.runId)} />}
                     {a.runId && <AttemptRecord sessionId={session.id} taskId={task.id} attempt={i + 1} />}
+                    {a.runId && a.vcs?.commit && a.vcs.baseCommit && (
+                      <ChangesButton sessionId={session.id} taskId={task.id} runId={a.runId} title={`${task.title} — ${t('task.attemptN', { n: i + 1 })}`} files={a.vcs.files?.length ?? 0} />
+                    )}
                   </div>
                   <div className="muted">
                     {a.startedAt ? t('task.started', { t: fmtTime(a.startedAt) }) : ''}

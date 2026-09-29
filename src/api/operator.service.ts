@@ -63,8 +63,8 @@ function sameFolder(a: string, b: string): boolean {
   return a.trim() !== '' && norm(a) === norm(b);
 }
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
-import { commitInterrupted, vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
-import { gitAvailable, repoUnusableReason } from '../vcs/git.js';
+import { commitInterrupted, repoDirOf, vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
+import { changedFilesBetween, fileAt, gitAvailable, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConflicts, DEFAULT_IGNORE_DIRS } from '../context/projectMirror.js';
@@ -277,7 +277,11 @@ export type RegistryEntry = {
     reason?: string;
     runId?: string;
     branch?: string;
+    /** How many files that attempt's commit changed; absent when it committed nothing. */
+    changedFiles?: number;
   }>;
+  /** How many files this attempt's commit changed; absent when it committed nothing. */
+  changedFiles?: number;
 };
 
 @Injectable()
@@ -661,6 +665,87 @@ export class OperatorService {
   }
 
   /** Files a task produced, so the UI can list reports and downloaded scripts. */
+  /**
+   * What a task changed in the repository: the files, between the commit it started from and the
+   * commit it produced. `runId` picks an earlier attempt. Read from git each time rather than kept
+   * on the record, so what is shown is the repository's own account; the record only says which
+   * two commits to compare.
+   *
+   * There is something to show only when version control was on and the task committed: a task
+   * that changed nothing, or ran with version control off, left no commit to compare, and the
+   * answer says which.
+   */
+  async taskChanges(
+    sessionId: string,
+    taskId: string,
+    runId?: string,
+  ): Promise<{ ok: boolean; problem?: string; repoDir?: string; branch?: string; base?: string; commit?: string; files: ChangedFile[] }> {
+    const found = await this.changesOf(sessionId, taskId, runId);
+    if ('problem' in found) return { ok: false, problem: found.problem, files: [] };
+    const listed = await changedFilesBetween(found.dir, found.base, found.commit);
+    if (listed.problem) return { ok: false, problem: `the repository no longer has these commits: ${listed.problem}`, files: [] };
+    return { ok: true, repoDir: found.dir, branch: found.branch, base: found.base, commit: found.commit, files: listed.files };
+  }
+
+  /**
+   * One changed file, before and after, as text. Only a file the task changed can be asked for:
+   * the path is checked against that list, so this cannot be used to read anything else in the
+   * repository's history. A binary file, or one over 2 MB on either side, is said to be so rather
+   * than returned.
+   */
+  async taskChangeFile(
+    sessionId: string,
+    taskId: string,
+    path: string,
+    runId?: string,
+  ): Promise<{ path: string; oldPath?: string; status: string; before: string | null; after: string | null; binary: boolean; tooLarge: boolean }> {
+    const found = await this.changesOf(sessionId, taskId, runId);
+    if ('problem' in found) throw new Error(found.problem);
+    const listed = await changedFilesBetween(found.dir, found.base, found.commit);
+    const file = listed.files.find((f) => f.path === path);
+    if (!file) throw new Error('That file is not one this task changed.');
+    const MAX = 2 * 1024 * 1024;
+    const before = file.status === 'A' ? { bytes: null, tooLarge: false } : await fileAt(found.dir, found.base, file.oldPath ?? file.path, MAX);
+    const after = file.status === 'D' ? { bytes: null, tooLarge: false } : await fileAt(found.dir, found.commit, file.path, MAX);
+    // Git's own test for binary: a NUL byte in the first 8000.
+    const binary = [before.bytes, after.bytes].some((b) => !!b && b.subarray(0, 8000).includes(0));
+    const text = (b: Buffer | null): string | null => (b === null || binary ? null : b.toString('utf8').replace(/^\uFEFF/, ''));
+    return {
+      path: file.path,
+      ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+      status: file.status,
+      before: text(before.bytes),
+      after: text(after.bytes),
+      binary,
+      tooLarge: before.tooLarge || after.tooLarge,
+    };
+  }
+
+  /** The repository and the two commits a task's changes lie between, or why there are none. */
+  private async changesOf(
+    sessionId: string,
+    taskId: string,
+    runId?: string,
+  ): Promise<{ dir: string; base: string; commit: string; branch?: string } | { problem: string }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    const task = session?.tasks.find((t) => t.id === taskId);
+    if (!session || !task) return { problem: 'No such task.' };
+    const chosen = runId ? resolveRunId(task, runId) : task.runId;
+    if (runId && !chosen) return { problem: 'That attempt is not one of this task\'s.' };
+    const vcs = !chosen || chosen === task.runId ? task.vcs : (task.attempts ?? []).find((a) => a.runId === chosen)?.vcs;
+    if (!vcs?.baseCommit || !vcs.commit) {
+      return {
+        problem: vcs?.branch
+          ? 'This attempt committed nothing, so there are no changes to show.'
+          : 'Version control was not on for this attempt, so its changes were not recorded.',
+      };
+    }
+    const dir = repoDirOf(session);
+    if (!dir) return { problem: 'The session has no repository folder set.' };
+    return { dir, base: vcs.baseCommit, commit: vcs.commit, branch: vcs.branch };
+  }
+
   async taskFiles(
     sessionId: string,
     taskId: string,
@@ -2344,6 +2429,7 @@ export class OperatorService {
           readOnly: t.readOnly || undefined,
           autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,
+          changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,
           attempts: (t.attempts ?? []).map((a, n) => {
             const from = a.startedAt ? Date.parse(a.startedAt) : undefined;
             const to = a.finishedAt ? Date.parse(a.finishedAt) : undefined;
@@ -2358,6 +2444,7 @@ export class OperatorService {
               reason: a.reason,
               runId: a.runId,
               branch: a.vcs?.branch,
+              changedFiles: a.vcs?.commit && a.vcs.baseCommit ? (a.vcs.files?.length ?? 0) : undefined,
             };
           }),
         });

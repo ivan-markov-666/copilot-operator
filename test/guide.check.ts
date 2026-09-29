@@ -279,6 +279,7 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^checks\.(n|passed)$/, why: 'the count on the checks fold, whose controls are guided' },
   { pattern: /^task\.editAll$/, why: 'the tooltip of "Edit"' },
   { pattern: /^reg\.newTaskIn$/, why: 'the second half of the "New task" label' },
+  { pattern: /^diff\.(before|after)$/, why: 'the two column headings of the changes view' },
   { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);

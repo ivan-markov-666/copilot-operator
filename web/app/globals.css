@@ -691,6 +691,44 @@ select optgroup { background: var(--panel); color: var(--ink); }
 /* The output of the command running now, read like a terminal. */
 .story-out.terminal { max-height: 45vh; overscroll-behavior: contain; }
 
+/* What a task changed, side by side (diffView.tsx). One table, so both sides scroll together. */
+.diff-overlay { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: flex; flex-direction: column; }
+.diff-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.diff-head h2 { margin: 0; font-size: calc(16px * var(--scale)); }
+.diff-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) 1fr; }
+.diff-files { overflow: auto; border-right: 1px solid var(--line); padding: 6px; background: var(--panel); }
+.diff-file { display: flex; gap: 6px; align-items: baseline; width: 100%; text-align: left; border: 0; border-radius: 6px; background: none; padding: 5px 6px; font-size: calc(12px * var(--scale)); cursor: pointer; }
+.diff-file:hover { background: var(--bg-tint); }
+.diff-file.on { background: var(--accent-soft); }
+.diff-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diff-counts { white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+.diff-counts .plus { color: var(--ok); }
+.diff-counts .minus { color: var(--bad); }
+.diff-status { font-family: var(--mono); font-weight: 700; width: 1.2em; text-align: center; border-radius: 4px; }
+.diff-status.s-A { color: var(--ok); }
+.diff-status.s-D { color: var(--bad); }
+.diff-status.s-M { color: var(--warn); }
+.diff-status.s-R, .diff-status.s-C { color: var(--accent); }
+.diff-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.diff-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.diff-name { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
+.diff-scroll { flex: 1; overflow: auto; overscroll-behavior: contain; }
+.diff-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--mono); font-size: calc(12px * var(--scale)); }
+.diff-table col.num { width: 52px; }
+.diff-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--line); text-align: left; padding: 4px 8px; font-family: inherit; }
+.diff-table td { padding: 0 8px; vertical-align: top; line-height: 1.5; }
+.diff-table td.num { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--line); }
+.diff-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-table.nowrap td.code { white-space: pre; overflow-wrap: normal; }
+.diff-table.nowrap { width: max-content; min-width: 100%; }
+.diff-row.del td.l, .diff-row.change td.l { background: var(--bad-soft); }
+.diff-row.add td.r, .diff-row.change td.r { background: var(--ok-soft); }
+.diff-row mark { background: color-mix(in srgb, currentColor 22%, transparent); color: inherit; border-radius: 2px; }
+.diff-row td.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--bg-tint) 6px 12px); }
+.diff-row.current td.num { box-shadow: inset 3px 0 0 var(--accent); }
+.diff-gap td { background: var(--bg-tint); text-align: center; padding: 2px; }
+@media (max-width: 760px) { .diff-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .diff-files { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+
 /* To the top / to the bottom, at the right edge of a long page (scrollJump.tsx). */
 .scroll-jump { position: fixed; right: 16px; bottom: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 40; }
 .scroll-jump button { width: 42px; height: 42px; border-radius: 50%; padding: 0; font-size: 20px; line-height: 1; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }

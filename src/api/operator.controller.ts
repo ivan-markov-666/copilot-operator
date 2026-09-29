@@ -269,6 +269,27 @@ export class OperatorController {
     return story;
   }
 
+  /**
+   * What a task changed: the files between the commit it started from and the one it produced.
+   * `run` picks an earlier attempt. See `taskChanges`.
+   */
+  @Get('sessions/:id/tasks/:taskId/changes')
+  taskChanges(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
+    return this.ops.taskChanges(id, taskId, run?.trim() || undefined).catch(fail);
+  }
+
+  /** One of those files, before and after. Only a file the task changed can be asked for. */
+  @Get('sessions/:id/tasks/:taskId/changes/file')
+  taskChangeFile(
+    @Param('id') id: string,
+    @Param('taskId') taskId: string,
+    @Query('path') path?: string,
+    @Query('run') run?: string,
+  ): Promise<unknown> {
+    if (!path) throw new BadRequestException('path is required');
+    return this.ops.taskChangeFile(id, taskId, path, run?.trim() || undefined).catch(fail);
+  }
+
   @Get('sessions/:id/tasks/:taskId/files')
   taskFiles(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
     return this.ops.taskFiles(id, taskId, run);

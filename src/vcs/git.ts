@@ -280,6 +280,86 @@ export async function commitFiles(dir: string, commit: string): Promise<Array<{ 
     }));
 }
 
+/**
+ * One git command, with its output as bytes and untouched.
+ *
+ * `git` trims what it returns, which is right for a branch name and wrong for a file: trimming
+ * takes the indentation off the first line and the newline off the last, and a diff built on that
+ * would show both as changes nobody made. Bytes also let a binary file be recognised rather than
+ * decoded into noise.
+ */
+export function gitBytes(cwd: string, args: string[], timeoutMs = 60_000, maxBytes = 16 * 1024 * 1024): Promise<{ ok: boolean; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: maxBytes, encoding: 'buffer' }, (error, stdout, stderr) => {
+      resolve({ ok: !error, stdout: (stdout as Buffer | undefined) ?? Buffer.alloc(0), stderr: String(stderr ?? '').trim() });
+    });
+  });
+}
+
+/** One file a task changed, between the commit it started from and the one it produced. */
+export type ChangedFile = {
+  path: string;
+  /** The path before a rename or a copy. */
+  oldPath?: string;
+  /** git's letter: A added, M modified, D deleted, R renamed, C copied, T type changed. */
+  status: string;
+  /** Lines added and removed; -1 for a binary file, which git counts in neither direction. */
+  added: number;
+  removed: number;
+};
+
+/**
+ * The files that differ between two commits, renames detected, in git's order.
+ *
+ * Read NUL-separated (`-z`) so a path with a space, a tab or a non-ASCII letter comes through as it
+ * is rather than quoted and escaped.
+ */
+export async function changedFilesBetween(dir: string, from: string, to: string): Promise<{ files: ChangedFile[]; problem?: string }> {
+  const names = await gitBytes(dir, ['diff', '--name-status', '-M', '-z', from, to]);
+  if (!names.ok) return { files: [], problem: names.stderr || 'git could not compare the two commits' };
+  const tokens = names.stdout.toString('utf8').split('\0');
+  const files: ChangedFile[] = [];
+  for (let i = 0; i < tokens.length; ) {
+    const status = tokens[i] ?? '';
+    if (!status) break;
+    const letter = status[0]!;
+    if (letter === 'R' || letter === 'C') {
+      files.push({ status: letter, oldPath: tokens[i + 1] ?? '', path: tokens[i + 2] ?? '', added: 0, removed: 0 });
+      i += 3;
+    } else {
+      files.push({ status: letter, path: tokens[i + 1] ?? '', added: 0, removed: 0 });
+      i += 2;
+    }
+  }
+  const counts = await gitBytes(dir, ['diff', '--numstat', '-M', '-z', from, to]);
+  if (counts.ok) {
+    const parts = counts.stdout.toString('utf8').split('\0');
+    for (let i = 0; i < parts.length; ) {
+      const head = parts[i] ?? '';
+      if (!head) break;
+      const [added = '0', removed = '0', path = ''] = head.split('\t');
+      // A rename is written "added<TAB>removed<TAB>" followed by the old and the new path.
+      const newPath = path === '' ? (parts[i + 2] ?? '') : path;
+      i += path === '' ? 3 : 1;
+      const file = files.find((f) => f.path === newPath);
+      if (file) {
+        file.added = added === '-' ? -1 : Number(added) || 0;
+        file.removed = removed === '-' ? -1 : Number(removed) || 0;
+      }
+    }
+  }
+  return { files };
+}
+
+/** A file's bytes as they were in one commit, or null when it does not exist there. */
+export async function fileAt(dir: string, commit: string, path: string, maxBytes: number): Promise<{ bytes: Buffer | null; tooLarge: boolean }> {
+  const size = await git(dir, ['cat-file', '-s', `${commit}:${path}`]);
+  if (!size.ok) return { bytes: null, tooLarge: false };
+  if (Number(size.stdout) > maxBytes) return { bytes: null, tooLarge: true };
+  const r = await gitBytes(dir, ['show', `${commit}:${path}`], 60_000, maxBytes + 1024);
+  return r.ok ? { bytes: r.stdout, tooLarge: false } : { bytes: null, tooLarge: false };
+}
+
 /** The subject line of one commit, or empty when it cannot be read. */
 export async function commitSubject(dir: string, commit: string): Promise<string> {
   const r = await git(dir, ['log', '-1', '--format=%s', commit]);
