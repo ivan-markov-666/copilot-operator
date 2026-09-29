@@ -413,6 +413,38 @@ await scenario('format retries used up: stopped at a limit, not failed, and cont
   t.check('the command of the first attempt did not run again', countLines(h), ['one', 'two']);
 });
 
+const blockedAfter = (tried: string[]): string =>
+  rawJson({ status: 'blocked', summary: 'I could not get the service to answer, so the rest of the task cannot be checked from here.', tried, needed: 'the service running' });
+
+await scenario('"blocked" with fewer approaches than Settings ask for is sent back for another', { limits: { minApproachesBeforeBlocked: 4, retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'approaches', [{ ...greeting, checks: [] }]));
+  h.chat.script(
+    (m) => {
+      t.truthy('the chat is told the number before it starts', /## Giving up/.test(m.text) && /at least 4 genuinely different approaches/.test(m.text), m.text.slice(0, 600));
+      return reply.steps("Add-Content -Path count.txt -Value 'one'");
+    },
+    blockedAfter(['started the service', 'used the mock']),
+    (m) => {
+      t.truthy('two of four: sent back, asking for a different approach', /^Not yet\. This task is given up only after at least 4/.test(m.text) && /\(1\) started the service/.test(m.text), m.text.slice(0, 400));
+      return reply.steps("Add-Content -Path count.txt -Value 'two'");
+    },
+    blockedAfter(['started the service', 'used the mock', 'ran it on another port', 'restarted the machine service']),
+  );
+  const task = (await h.run(s!.id)).tasks[0]!;
+  t.check('with four it is accepted as blocked', task.status, 'blocked');
+  t.check('sent back once', task.stats?.blockedTooEarly, 1);
+  t.check('and the approach it tried in between ran', countLines(h), ['one', 'two']);
+});
+
+await scenario('a chat that keeps giving up with nothing new is accepted after three requests, and says so', { limits: { minApproachesBeforeBlocked: 5, retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'stubborn', [{ ...greeting, checks: [] }]));
+  const two = blockedAfter(['started the service', 'used the mock']);
+  h.chat.script(two, two, two, two);
+  const task = (await h.run(s!.id)).tasks[0]!;
+  t.check('blocked after three requests for another approach', [task.status, task.stats?.blockedTooEarly], ['blocked', 3]);
+  t.truthy('the reason says it gave up early', /gave up after 2 of the 5 approaches Settings ask for, having been asked 3 time\(s\)/.test(task.reason ?? ''), task.reason);
+});
+
 await scenario('the API refuses callers without the token', {}, async (h) => {
   const res = await fetch(`http://127.0.0.1:${h.api.port}/api/sessions`);
   t.check('no token: 401', res.status, 401);

@@ -668,6 +668,7 @@ function ExecutionSection() {
   const rawRef = useRef<Record<string, unknown> | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const [retries, setRetries] = useState(2);
+  const [approaches, setApproaches] = useState(2);
   const [iterations, setIterations] = useState(60);
   const [minutes, setMinutes] = useState(240);
   const [replySec, setReplySec] = useState(900);
@@ -692,10 +693,12 @@ function ExecutionSection() {
          */
         const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as {
           retryBlockedInFreshChat?: number;
+          minApproachesBeforeBlocked?: number;
           maxIterations?: number;
           maxRunMinutes?: number;
         };
         setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
+        setApproaches(typeof limits.minApproachesBeforeBlocked === 'number' ? limits.minApproachesBeforeBlocked : 2);
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
@@ -753,6 +756,7 @@ function ExecutionSection() {
     return done;
   };
   const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
+  const saveApproachesLater = useDebouncedSave((n: number) => write('limits', 'minApproachesBeforeBlocked', n));
   const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
   const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
   const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
@@ -768,6 +772,23 @@ function ExecutionSection() {
       <h2>{t('exec.title')}</h2>
       <p className="muted small">{t('exec.intro')}</p>
       {err && <div className="err">{err}</div>}
+      <label htmlFor="min-approaches">{t('exec.minApproaches')}</label>
+      <div className="row">
+        <BoundedNumber
+          id="min-approaches"
+          value={approaches}
+          min={2}
+          max={20}
+          onChange={(n) => {
+            setApproaches(n);
+            saveApproachesLater(n);
+          }}
+          disabled={!raw}
+        />
+        <span className="muted small">{t('exec.minApproachesUnit')}</span>
+      </div>
+      <p className="why">{t('exec.minApproachesWhy')}</p>
+
       <label htmlFor="retry-blocked">{t('exec.retryBlocked')}</label>
       <div className="row">
         <BoundedNumber

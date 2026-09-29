@@ -82,6 +82,9 @@ export const dict = {
     'exec.replyTimeoutUnit': 'seconds (900 = 15 minutes)',
     'exec.replyTimeoutWhy':
       'From sending a message to the reply having finished. A reply not finished by then ends the task as failed — "Copilot did not finish a reply within …" — with a screenshot of the chat in the run folder. The slower models and long answers can take several minutes. Applies to runs started from now on.',
+    'exec.minApproaches': 'Approaches the chat must try before it may give up',
+    'exec.minApproachesUnit': 'different approaches, then "blocked" is accepted',
+    'exec.minApproachesWhy': 'A task ends "blocked" when the chat says it cannot finish and lists what it tried. With fewer approaches than this, the runner sends it back asking for another, different one. The format\'s own minimum is 2. Three "blocked" replies in a row with nothing new tried are accepted anyway.',
     'exec.retryBlocked': 'When a task ends blocked, run it again in a fresh conversation',
     'exec.retryBlockedTimes': 'times, then accept the verdict',
     'exec.retryBlockedWhy':
@@ -1225,6 +1228,9 @@ export const dict = {
     'exec.replyTimeoutUnit': 'секунди (900 = 15 минути)',
     'exec.replyTimeoutWhy':
       'От изпращането на съобщение до завършването на отговора. Отговор, незавършен дотогава, приключва задачата като провалена — „Copilot did not finish a reply within …“ — със снимка на чата в папката на пускането. По-бавните модели и дългите отговори може да отнемат няколко минути. Важи за пускания, започнати от сега нататък.',
+    'exec.minApproaches': 'Подходи, които чатът трябва да опита, преди да се откаже',
+    'exec.minApproachesUnit': 'различни подхода, после „blocked“ се приема',
+    'exec.minApproachesWhy': 'Задача завършва „blocked“, когато чатът каже, че не може да я довърши, и изброи какво е опитал. С по-малко подходи от този брой runner-ът я връща с молба за друг, различен подход. Минимумът на формата е 2. Три поредни отговора „blocked“ без нищо ново опитано се приемат все пак.',
     'exec.retryBlocked': 'Когато задача завърши блокирана, пусни я отново в нов разговор',
     'exec.retryBlockedTimes': 'пъти, после приеми присъдата',
     'exec.retryBlockedWhy':

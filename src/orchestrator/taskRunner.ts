@@ -42,6 +42,7 @@ import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
+import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
@@ -470,6 +471,15 @@ export async function runTask(
   let runnerNotes: string[] = [];
   /** Steps the chat sent that were not run, for the handoff at the end. */
   const notRun: NotRun[] = [];
+  /**
+   * How many different approaches "blocked" needs, from Settings, never below the format's own two.
+   * A "blocked" with fewer is sent back; after `MAX_EARLY_BLOCKS` of them in a row with nothing tried
+   * in between the verdict is accepted, so a chat that cannot think of anything else does not spend
+   * the rest of the iterations saying so.
+   */
+  const minApproaches = Math.max(MIN_TRIED_APPROACHES, cfg.limits.minApproachesBeforeBlocked ?? MIN_TRIED_APPROACHES);
+  const MAX_EARLY_BLOCKS = 3;
+  let earlyBlocks = 0;
   /** What went wrong on the way, counted for the register's figures. See `TaskStats`. */
   const stats: TaskStats = { formatErrors: 0, doneRejected: 0, repeatsRefused: 0, stepsRefused: 0, operatorStops: 0, reviewRejections: 0, scopeReverts: 0 };
   /** Loops the older guards do not see; see `progress.ts`. */
@@ -846,6 +856,11 @@ export async function runTask(
       vcsNote: prepared.note,
       readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
       scopeNote: scopeNote(scope, scopeEnforced),
+      approachesNote:
+        minApproaches > MIN_TRIED_APPROACHES
+          ? `## Giving up\n\nThis task may end with status "blocked" only after at least ${minApproaches} genuinely different approaches, ` +
+            `each listed in "tried". With fewer, the runner asks you for another approach instead of accepting it.`
+          : undefined,
       shellNote: shellNote(shells, defaultShell),
     });
     await setTask((t) => {
@@ -1494,10 +1509,38 @@ export async function runTask(
        * what the reply said, at greater length and one message later. The reason carries the
        * approaches that were tried, and that is what the register shows.
        */
+      if (!blocked && reply.steps.length > 0) earlyBlocks = 0;
+      if (blocked && reply.tried.length < minApproaches && earlyBlocks < MAX_EARLY_BLOCKS) {
+        /*
+         * Too early to give up, by the operator's own measure (Settings → Execution). Sent back as a
+         * request for another approach rather than accepted: the format only knows that two is the
+         * floor, the operator decided this work deserves more tries than that.
+         */
+        earlyBlocks += 1;
+        stats.blockedTooEarly = (stats.blockedTooEarly ?? 0) + 1;
+        sink.event('blocked-too-early', { tried: reply.tried.length, needed: minApproaches, time: earlyBlocks },
+          `"blocked" after ${reply.tried.length} approach(es); Settings ask for ${minApproaches}, so the chat is asked for another`, 'warn');
+        const message =
+          `Not yet. This task is given up only after at least ${minApproaches} genuinely different approaches, and your reply lists ` +
+          `${reply.tried.length}: ${reply.tried.map((x, i) => `(${i + 1}) ${x}`).join(' ')}. Try a different approach now — not one of ` +
+          'these again, and not the same command reworded — and send its steps with status "continue". If it fails too, add it to ' +
+          '"tried" and try another. Nothing you listed is lost: the runner keeps what has been tried.';
+        await record('BLOCKED TOO EARLY — MESSAGE SENT', message);
+        await pacer.throttleSend();
+        const before = await transport.sendAndConfirm(message);
+        const next = await transport.waitForReply(before);
+        await saveReply(`blocked-too-early-${earlyBlocks}`, next);
+        lastMarkdown = next.markdown;
+        await pacer.settle();
+        continue;
+      }
       if (blocked) {
         sink.event('task-blocked', { tried: reply.tried, needed: reply.needed },
           `the task was given up as blocked after ${reply.tried.length} approach(es)`, 'warn');
-        return await finish('blocked', blockedReason(reply.tried, reply.needed), reply.summary, lastMarkdown);
+        const early = reply.tried.length < minApproaches
+          ? ` It gave up after ${reply.tried.length} of the ${minApproaches} approaches Settings ask for, having been asked ${earlyBlocks} time(s) for another.`
+          : '';
+        return await finish('blocked', blockedReason(reply.tried, reply.needed) + early, reply.summary, lastMarkdown);
       }
 
       if (done && reply.steps.length === 0) {

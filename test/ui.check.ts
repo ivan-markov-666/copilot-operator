@@ -315,6 +315,17 @@ try {
       return s.raw.copilot?.replyTimeoutSec === 1200;
     });
     t.check('the reply wait is saved', (await h.call<{ raw: { copilot?: { replyTimeoutSec?: number } } }>('GET', '/settings')).raw.copilot?.replyTimeoutSec, 1200);
+    const approaches = page.getByLabel('Approaches the chat must try before it may give up');
+    await approaches.fill('6');
+    await approaches.blur();
+    await waitFor('the approaches to be saved', async () => {
+      const s = await h.call<{ raw: { limits?: { minApproachesBeforeBlocked?: number } } }>('GET', '/settings');
+      return s.raw.limits?.minApproachesBeforeBlocked === 6;
+    });
+    t.truthy('the number of approaches before "blocked" is saved', true);
+    await approaches.fill('1');
+    await approaches.blur();
+    t.check('and cannot go under the format\'s two', await approaches.inputValue(), '2');
     t.check('and the limit set before it was not reverted', (await h.call<{ raw: { limits?: { maxIterations?: number } } }>('GET', '/settings')).raw.limits?.maxIterations, 5);
   });
 } finally {

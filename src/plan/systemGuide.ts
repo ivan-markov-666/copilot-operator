@@ -3280,6 +3280,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Секунди чакане на отговор от чата (по подразбиране 900); незавършен дотогава отговор проваля задачата с „Copilot did not finish a reply within …“.',
           },
           {
+            key: 'exec.minApproaches',
+            kind: 'field',
+            en: 'Approaches the chat must try before it may give up',
+            bg: 'Подходи, които чатът трябва да опита, преди да се откаже',
+            doesEn: 'How many different approaches a "blocked" must list (2–20); with fewer the chat is asked for another.',
+            doesBg: 'Колко различни подхода трябва да изброи „blocked“ (2–20); с по-малко чатът е помолен за още един.',
+          },
+          {
             key: 'exec.retryBlocked',
             kind: 'field',
             en: 'When a task ends blocked, run it again in a fresh conversation',

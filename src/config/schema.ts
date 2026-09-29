@@ -420,6 +420,12 @@ export const RunConfigSchema = z.object({
        * its record. Zero turns it off.
        */
       retryBlockedInFreshChat: z.number().int().nonnegative().default(2),
+      /*
+       * How many genuinely different approaches the chat must have tried before it may end a task
+       * "blocked". The reply format's own floor is 2 (replySchema.ts); this raises it. A "blocked"
+       * with fewer is sent back asking for another approach (see taskRunner.ts). Settings → Execution.
+       */
+      minApproachesBeforeBlocked: z.number().int().min(2).max(50).default(2),
     })
     .prefault({}),
 

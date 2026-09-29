@@ -410,6 +410,8 @@ export type TaskStats = {
   reviewRejections: number;
   /** Files put back because they were outside the task's scope. */
   scopeReverts: number;
+  /** Times "blocked" was sent back because fewer approaches were tried than Settings ask for. */
+  blockedTooEarly?: number;
   /** Set when the task was stopped by a no-progress signal (`orchestrator/progress.ts`). */
   stoppedFor?: 'no-progress';
 };
