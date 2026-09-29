@@ -249,6 +249,25 @@ try {
     t.truthy('the register shows the figures: none done at the first attempt yet', /0 \/ 1 \(0%\)/.test(firstRow ?? ''), firstRow);
   });
 
+  await scenario('a new prompt for a done task: its old checks are offered, unticked, and it can be made read-only', {}, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'newprompt'));
+    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+    await h.run(s!.id);
+    await page.goto(url('/history'));
+    await page.getByRole('button', { name: 'Give it a new prompt and queue it again' }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByText('Checks that still apply to the new prompt').waitFor();
+    const oldCheck = dialog.getByRole('checkbox', { name: 'greeting written' });
+    t.check('the old check is listed, and unticked for a done task', await oldCheck.isChecked(), false);
+    await dialog.getByRole('textbox').first().fill('Audit hello.txt and say in your summary what it holds. Change nothing.');
+    t.truthy('a changed prompt says what happens to the old checks', await dialog.getByText(/A new prompt is a new question/).isVisible());
+    await dialog.getByRole('checkbox', { name: 'Read-only: this task must not change any file' }).check();
+    await dialog.getByRole('button', { name: 'Save and queue again' }).click();
+    await waitFor('the task to be queued again', async () => (await h.session(s!.id)).tasks[0]!.status === 'queued');
+    const queued = (await h.session(s!.id)).tasks[0]! as unknown as { checks?: unknown[]; readOnly?: boolean; prompt: string };
+    t.check('queued read-only, with no old checks and the new prompt', [queued.readOnly, queued.checks ?? [], queued.prompt.startsWith('Audit hello.txt')], [true, [], true]);
+  });
+
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {
     await page.goto(url('/defaults'));
     const iterations = page.getByLabel('Most messages to the chat in one task');

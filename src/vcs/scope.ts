@@ -63,11 +63,12 @@ export type ScopeCheck = { outside: string[]; reverted: string[]; failed: Array<
  * Puts back every change outside `scope`. Only for a repository whose tree was clean when the task
  * started, which is why the caller passes the repository only when version control is active.
  */
-export async function enforceScope(dir: string, scope: readonly string[]): Promise<ScopeCheck> {
+export async function enforceScope(dir: string, scope: readonly string[], nothing = false): Promise<ScopeCheck> {
   const out: ScopeCheck = { outside: [], reverted: [], failed: [] };
-  if (scope.length === 0) return out;
+  // An empty scope allows everything; `nothing` is the read-only task, which allows no change at all.
+  if (scope.length === 0 && !nothing) return out;
   const changed = await workingTreePaths(dir);
-  out.outside = changed.filter((p) => !inScope(p, scope));
+  out.outside = nothing ? changed : changed.filter((p) => !inScope(p, scope));
   const root = resolve(dir);
   for (const rel of out.outside) {
     const abs = resolve(join(dir, rel));
@@ -100,13 +101,15 @@ export async function enforceScope(dir: string, scope: readonly string[]): Promi
 }
 
 /** What the chat is told, in the message that carries the step results. */
-export function scopeMessage(check: ScopeCheck, scope: readonly string[]): string {
+export function scopeMessage(check: ScopeCheck, scope: readonly string[], readOnly = false): string {
   const list = (paths: string[]): string => paths.slice(0, 15).join(', ') + (paths.length > 15 ? `, and ${paths.length - 15} more` : '');
   const parts = [
-    `Outside this task's scope, so put back by the runner: ${list(check.reverted)}.`,
+    `${readOnly ? 'Changed by a read-only task' : "Outside this task's scope"}, so put back by the runner: ${list(check.reverted)}.`,
     check.failed.length > 0 ? `Could not be put back: ${check.failed.map((f) => `${f.path} (${f.why})`).join('; ')}.` : '',
-    `This task may change only: ${scope.join(', ')}. If the work truly needs a file outside that, do not work around it: ` +
-      'end with status "blocked", name the file in "needed" and say why.',
+    readOnly
+      ? 'This task is read-only: it may change no file at all. Read, run and report; put what you found in your summary.'
+      : `This task may change only: ${scope.join(', ')}. If the work truly needs a file outside that, do not work around it: ` +
+        'end with status "blocked", name the file in "needed" and say why.',
   ];
   return parts.filter(Boolean).join(' ');
 }

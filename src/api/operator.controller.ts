@@ -171,7 +171,7 @@ export class OperatorController {
   updateTask(
     @Param('id') id: string,
     @Param('taskId') taskId: string,
-    @Body() body: { title?: string; level2?: string; prompt?: string; vcsPlan?: { branch?: string; commitMessage?: string }; checks?: TaskCheck[] },
+    @Body() body: { title?: string; level2?: string; prompt?: string; vcsPlan?: { branch?: string; commitMessage?: string }; checks?: TaskCheck[]; readOnly?: boolean; scope?: string[] },
   ): Promise<unknown> {
     return this.ops.updateTask(id, taskId, body).catch(fail);
   }
@@ -205,6 +205,9 @@ export class OperatorController {
       prompt?: string;
       vcsPlan?: { branch?: string; commitMessage?: string };
       checks?: TaskCheck[];
+      /** Whether the task may change files, and which: an audit is `readOnly`, or scoped to its report. */
+      readOnly?: boolean;
+      scope?: string[];
       /** A new prompt for a done task that builds on its work; see `rerunTask` in the service. */
       buildOnFinished?: boolean;
     },

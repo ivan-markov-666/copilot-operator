@@ -45,6 +45,7 @@ import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
+import { contractConflicts } from './contract.js';
 import { treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
@@ -474,6 +475,12 @@ export async function runTask(
   /** Set when a check round shows no progress; the give-up then ends the task blocked with it. */
   let noProgressReason: string | null = null;
   /**
+   * Why the attempt stopped, when the status alone does not say: a format the chat could not keep,
+   * a task contract that contradicts itself, a loop, a check that could never run, a machine that
+   * lacks a shell. Written by `finish`. See `Task.stopCode`.
+   */
+  let stopCode: Task['stopCode'];
+  /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
    * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
    */
@@ -581,6 +588,7 @@ export async function runTask(
       if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
       t.logFile = 'task-log.txt';
       t.stats = stats;
+      if (stopCode) t.stopCode = stopCode;
     });
     // The end in one fixed shape, read off the record just written. See `session/handoff.ts`.
     await setTask((t) => {
@@ -751,10 +759,33 @@ export async function runTask(
      * is the task's, and the starting commit is what a change goes back to.
      */
     const scope = task.scope ?? [];
-    const scopeEnforced = scope.length > 0 && !!prepared.vcs.branch && !prepared.vcs.problem && !!prepared.vcs.baseCommit;
+    const onOwnBranch = !!prepared.vcs.branch && !prepared.vcs.problem && !!prepared.vcs.baseCommit;
+    /*
+     * A read-only task is a scope of nothing, and is enforced the same way: whatever a round changed
+     * is put back before the chat reads the results. It used to be judged only at the end, so an
+     * audit that edited a file "to check something" kept the edit through every later round and its
+     * findings described a tree that was not the one it had been asked to audit.
+     */
+    const scopeEnforced = (scope.length > 0 || !!task.readOnly) && onOwnBranch;
     /** The working tree's fingerprint, when the task is on a branch of its own; null otherwise. */
     const treeNow = async (): Promise<string | null> =>
       prepared.vcs.branch && !prepared.vcs.problem && prepared.vcs.baseCommit ? await treeFingerprint(repoDirOf(session)).catch(() => null) : null;
+
+    /*
+     * The task's contract, checked before a single message is sent.
+     *
+     * A task can be written so that no answer satisfies it: read-only and still given paths to
+     * change, or a check that needs a file to change while the task may not change it. Sent as it
+     * is, the chat works for rounds, the check fails at the end, and the task goes blocked on a
+     * finding the chat could never have fixed. The contradiction is named instead, now, and nothing
+     * is run. See `orchestrator/contract.ts`.
+     */
+    const conflicts = await contractConflicts(task, work.cwd, repoDirOf(session) || work.cwd);
+    if (conflicts.length > 0) {
+      stopCode = 'contract-conflict';
+      sink.event('contract-conflict', { conflicts }, `the task contradicts itself: ${conflicts.join(' | ')}`, 'error');
+      return await finish('blocked', `the task contradicts itself, so it was not started: ${conflicts.join(' ')} Change the prompt, the checks, the scope or read-only, and queue it again.`);
+    }
 
     // --- project mirror, attached to the first message of the task ---------------------
     let mirrorFiles: string[] = [];
@@ -980,6 +1011,7 @@ export async function runTask(
       if (stuck) {
         noProgressReason = stuck;
         stats.stoppedFor = 'no-progress';
+        stopCode = 'no-progress';
         sink.event('no-progress', { kind: 'checks' }, stuck, 'warn');
         return 'give-up';
       }
@@ -1365,9 +1397,7 @@ export async function runTask(
          */
         if (formatRetries > cfg.limits.maxFormatRetries) {
           await transport.dumpFailure(log.path('failures'), 'format-error');
-          await setTask((t) => {
-            t.stopCode = 'format-repair-exhausted';
-          });
+          stopCode = 'format-repair-exhausted';
           return await finish(
             'limit-reached',
             `format repair exhausted: ${formatRetries} replies in a row did not match the format (maxFormatRetries ${cfg.limits.maxFormatRetries}), ` +
@@ -1471,10 +1501,13 @@ export async function runTask(
       if (done && reply.steps.length === 0) {
         const verdict = await gateOnChecks();
         if (verdict === 'environment') {
+          stopCode = 'environment';
           return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
         }
         if (verdict === 'give-up') {
           if (noProgressReason) return await finish('blocked', noProgressReason, reply.summary, lastMarkdown);
+          // Every failing check was refused before it ran: a verdict on the checks, not on the work.
+          if (lastOutcomes.some((o) => !o.passed) && lastOutcomes.every((o) => o.passed || o.refusedBeforeRunning)) stopCode = 'invalid-check';
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
         if (verdict === 'accept') {
@@ -1633,6 +1666,7 @@ export async function runTask(
       // Ended before the report is written and sent: there is nobody to send it to who could
       // do anything with it, and the reason on the task says what to install or set instead.
       if (environmentProblem) {
+        stopCode = 'environment';
         return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
       }
 
@@ -1642,7 +1676,7 @@ export async function runTask(
        * and the chat is told in the same message.
        */
       if (scopeEnforced) {
-        const check = await enforceScope(repoDirOf(session), scope).catch((e: unknown) => ({
+        const check = await enforceScope(repoDirOf(session), scope, !!task.readOnly).catch((e: unknown) => ({
           outside: [] as string[],
           reverted: [] as string[],
           failed: [{ path: '(the working tree)', why: (e as Error).message }],
@@ -1652,7 +1686,7 @@ export async function runTask(
             `outside the task's scope, put back: ${check.reverted.join(', ') || '(none)'}` +
               (check.failed.length > 0 ? `; could not be put back: ${check.failed.map((f) => f.path).join(', ')}` : ''),
             'warn');
-          runnerNotes.push(scopeMessage(check, scope));
+          runnerNotes.push(scopeMessage(check, scope, !!task.readOnly));
           stats.scopeReverts += check.reverted.length;
           await setTask((t) => {
             t.scopeReverted = [...new Set([...(t.scopeReverted ?? []), ...check.reverted])];
@@ -1687,6 +1721,7 @@ export async function runTask(
       const stuck = progress.afterRound(await treeNow(), results);
       if (stuck) {
         stats.stoppedFor = 'no-progress';
+        stopCode = 'no-progress';
         sink.event('no-progress', { kind: 'rounds', iteration: iterations }, stuck, 'warn');
         return await finish('blocked', stuck, reply.summary, lastMarkdown);
       }
@@ -1794,10 +1829,13 @@ export async function runTask(
       if (done) {
         const verdict = await gateOnChecks();
         if (verdict === 'environment') {
+          stopCode = 'environment';
           return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
         }
         if (verdict === 'give-up') {
           if (noProgressReason) return await finish('blocked', noProgressReason, reply.summary, lastMarkdown);
+          // Every failing check was refused before it ran: a verdict on the checks, not on the work.
+          if (lastOutcomes.some((o) => !o.passed) && lastOutcomes.every((o) => o.passed || o.refusedBeforeRunning)) stopCode = 'invalid-check';
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
         if (verdict === 'accept') {

@@ -87,7 +87,12 @@ export type TaskReviewCheck = {
   /** Which attempt of the task the finding was made on. */
   attempt: number;
   state: 'active' | 'suspended' | 'dropped';
+  /** Why it was dropped, when that was not a review's verdict: the task was given a new prompt. */
+  droppedBecause?: string;
 };
+
+/** What editing a task, or queueing it again with changes, may change. See `applyTaskPatch` in store.ts. */
+export type TaskPatch = Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks' | 'readOnly' | 'scope'>>;
 
 export type Task = {
   id: string;
@@ -209,11 +214,15 @@ export type Task = {
   /** What went wrong on the way, counted by the runner; the register adds them up. Absent on older tasks. */
   stats?: TaskStats;
   /**
-   * Which limit stopped an attempt that ended `limit-reached`, when it was not the message or time
-   * limit: `format-repair-exhausted` is the chat's replies failing the format more times in a row
-   * than `limits.maxFormatRetries` allows. Continued like any limit, in the same chat.
+   * Why an attempt stopped, when its status does not say it: a success, a business blocker the chat
+   * reported and a plain failed check need none. `format-repair-exhausted` (limit-reached: the chat's
+   * replies failed the format more times in a row than `limits.maxFormatRetries` allows; continued
+   * in the same chat), `contract-conflict` (blocked before starting: the task contradicts itself),
+   * `no-progress` (blocked: a loop, see orchestrator/progress.ts), `invalid-check` (failed: every
+   * failing check was refused before it ran, so the checks are wrong, not the work), `environment`
+   * (failed: the machine lacks the shell a step or check needs).
    */
-  stopCode?: 'format-repair-exhausted';
+  stopCode?: 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
   /**
    * Set on an attempt the runner started by itself, in a fresh conversation, after the one before
    * it ended blocked (`limits.retryBlockedInFreshChat`). Absent on one a person started.

@@ -21,7 +21,7 @@ import type {
   ReviewSettings,
   VersionControl,
 } from './model.js';
-import { newId, tidyVcsPlan } from './model.js';
+import { newId, tidyVcsPlan, type TaskPatch } from './model.js';
 
 /** A task the runner is inside of. It cannot be edited, deleted, or left behind at startup. */
 const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
@@ -80,6 +80,41 @@ export const DEFAULT_MIRROR: MirrorSettings = {
   respectGitignore: true,
   includeEnvFiles: false,
 };
+
+/**
+ * Applies an edit to a task: the one place the rule about a new intent lives.
+ *
+ * A task given a new prompt is a new question. The checks the reviews of its earlier attempts
+ * added were findings about the old question, and inheriting them gated the new one on work it
+ * no longer asks for: a maintenance task rewritten as an audit still had to pass "the build uses
+ * the new config", and went blocked on an artificial finding. So a changed prompt drops them, with
+ * the reason kept beside each, and they stay on the record. The plan's own checks are not guessed
+ * at: whoever writes the new prompt says which still apply (the edit form and the new-prompt
+ * dialog both show them), and `checks` in the patch is that answer. A re-run with the same prompt
+ * keeps everything, because it is the same question asked again.
+ */
+export function applyTaskPatch(t: Task, patch: TaskPatch): void {
+  const newPrompt = patch.prompt !== undefined && patch.prompt.trim() !== '' && patch.prompt.trim() !== t.prompt.trim();
+  if (patch.title !== undefined) t.title = patch.title.trim() || t.title;
+  if (patch.prompt !== undefined && patch.prompt.trim()) t.prompt = patch.prompt;
+  if (patch.level2 !== undefined) t.level2 = patch.level2;
+  if (patch.vcsPlan !== undefined) t.vcsPlan = tidyVcsPlan(patch.vcsPlan);
+  if (patch.checks !== undefined) t.checks = patch.checks.filter((c) => c.name.trim() !== '');
+  if (patch.readOnly !== undefined) {
+    if (patch.readOnly) t.readOnly = true;
+    else delete t.readOnly;
+  }
+  if (patch.scope !== undefined) {
+    const scope = patch.scope.map((p) => p.trim()).filter(Boolean);
+    if (scope.length > 0) t.scope = scope;
+    else delete t.scope;
+  }
+  if (newPrompt && t.reviewChecks?.length) {
+    t.reviewChecks = t.reviewChecks.map((rc) =>
+      rc.state === 'dropped' ? rc : { ...rc, state: 'dropped' as const, droppedBecause: 'the task was given a new prompt; this was a finding about the old one' },
+    );
+  }
+}
 
 export class SessionStore {
   readonly dir: string;
@@ -395,7 +430,7 @@ export class SessionStore {
   async rerunTask(
     sessionId: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
+    patch: TaskPatch = {},
     /** Present when the new attempt carries on from the last one (see `continueTask`). */
     continuing?: Task['continuing'],
     /** Present when a finished task's new prompt builds on its work (see `Task.buildsOn`). */
@@ -441,11 +476,7 @@ export class SessionStore {
       ];
 
       // An edit is applied only after the old attempt has been put beyond its reach.
-      if (patch.title !== undefined) t.title = patch.title.trim() || t.title;
-      if (patch.prompt !== undefined && patch.prompt.trim()) t.prompt = patch.prompt;
-      if (patch.level2 !== undefined) t.level2 = patch.level2;
-      if (patch.vcsPlan !== undefined) t.vcsPlan = tidyVcsPlan(patch.vcsPlan);
-      if (patch.checks !== undefined) t.checks = patch.checks.filter((c) => c.name.trim() !== '');
+      applyTaskPatch(t, patch);
 
       t.attempt = (t.attempt ?? 1) + 1;
       t.status = 'queued';

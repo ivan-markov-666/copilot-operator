@@ -230,6 +230,8 @@ export type Task = {
   scopeReverted?: string[];
   /** How the attempt ended, in one fixed shape the runner put together from its own records. */
   handoff?: Handoff;
+  /** Why it stopped, when the status alone does not say. See `Task.stopCode` in src/session/model.ts. */
+  stopCode?: StopCode;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -365,6 +367,7 @@ export type RegistryEntry = {
   readOnly?: boolean;
   /** The paths the task may change. */
   scope?: string[];
+  stopCode?: StopCode;
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
@@ -645,6 +648,8 @@ export type SavedLog = {
 export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
 
+export type StopCode = 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
+
 /** See `src/session/handoff.ts`: every entry is something the runner recorded, not the model's words. */
 export type Handoff = {
   outcome: { status: TaskStatus; reason?: string };
@@ -778,7 +783,7 @@ export const api = {
 
   addTask: (id: string, task: { title: string; level2: string; prompt: string }) =>
     call<Task>(`/sessions/${id}/tasks`, { method: 'POST', body: JSON.stringify(task) }),
-  updateTask: (id: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>>) =>
+  updateTask: (id: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks' | 'readOnly' | 'scope'>>) =>
     call<Task>(`/sessions/${id}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteTask: (id: string, taskId: string) => call<{ ok: true }>(`/sessions/${id}/tasks/${taskId}`, { method: 'DELETE' }),
   /** Queues a finished task again, keeping the earlier attempt on the record. */
@@ -786,7 +791,7 @@ export const api = {
   rerunTask: (
     id: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
+    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks' | 'readOnly' | 'scope'>> = {},
     /** For a task that ended done: the new attempt builds on its work, on its branch. */
     opts: { buildOnFinished?: boolean } = {},
   ) =>

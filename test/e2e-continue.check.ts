@@ -11,10 +11,11 @@
  *
  *   npm run check:e2e-continue
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type SessionView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { SessionStore } from '../src/session/store.js';
 
 const t = new Tally();
 
@@ -200,6 +201,82 @@ await scenario('where a session starts: after the previous session, or from a na
   const cDone: SessionView = await h.run(c!.id);
   t.check('"branch" starts at main, whatever ran before', [cDone.vcsStart?.commit, cDone.vcsStart?.kind], [h.git('rev-parse', 'main'), 'branch']);
   t.truthy('so its branch does not have the earlier sessions\' files', !h.git('ls-tree', '--name-only', 'cop/fresh').split('\n').includes('hello.txt'), h.git('ls-tree', '--name-only', 'cop/fresh'));
+});
+
+await scenario('a maintenance task rewritten as an audit: old checks gone, repository untouched, done only on the audit deliverable', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'maint', [task('greeting', 'hello.txt', 'hi')])] });
+  h.chat.script(write('hello.txt', 'hi'), reply.done());
+  const done = (await h.run(s!.id)).tasks[0]!;
+  t.check('the maintenance attempt is done', done.status, 'done');
+
+  // An earlier review left a check behind: "hello.txt says HELLO" — true of the old intent at best.
+  const store = new SessionStore(h.dataDir, join(import.meta.dirname, '..', 'prompts', 'level1.md'));
+  await store.updateSession(s!.id, (x) => {
+    x.tasks[0]!.reviewChecks = [
+      { check: { name: 'greeting is loud', expect: 'file-contains', file: 'hello.txt', value: 'HELLO' }, findingId: 'r1f1', what: 'the greeting is too quiet', round: 1, attempt: 1, state: 'active' },
+    ];
+  });
+
+  const auditPrompt = 'Audit the greeting: write audit/report.md with a "## Findings" section describing hello.txt. Change nothing else.';
+  const auditCheck = { name: 'audit report written', expect: 'file-contains', file: 'audit/report.md', value: '## Findings' };
+  const queued = await h.call<{ status: string; checks?: Array<{ name: string }>; scope?: string[]; reviewChecks?: Array<{ state: string; droppedBecause?: string }> }>(
+    'POST',
+    `/sessions/${s!.id}/tasks/${done.id}/rerun`,
+    { prompt: auditPrompt, checks: [auditCheck], scope: ['audit/'], buildOnFinished: true },
+  );
+  t.check('queued with only the audit\'s check', queued.checks?.map((c) => c.name), ['audit report written']);
+  t.check('scoped to the audit folder', queued.scope, ['audit/']);
+  t.truthy('the inherited review check is dropped, with why', queued.reviewChecks?.every((r) => r.state === 'dropped' && /new prompt/.test(r.droppedBecause ?? '')), queued.reviewChecks);
+
+  h.chat.script(
+    (m) => {
+      t.truthy('the chat gets the audit prompt and its scope', m.text.includes(auditPrompt) && /## Scope/.test(m.text), m.text.slice(0, 400));
+      // It "fixes" the greeting as well, which the audit does not allow.
+      return reply.steps("Set-Content -Path hello.txt -Value 'HELLO' -Encoding utf8", "New-Item -ItemType Directory -Force -Path audit | Out-Null; Set-Content -Path audit/report.md -Value '# Audit' -Encoding utf8");
+    },
+    (m) => {
+      t.truthy('it is told the edit was put back', /put back by the runner: hello\.txt/.test(m.text), m.text.slice(0, 500));
+      return reply.done();
+    },
+    (m) => {
+      const said = m.text + Object.values(m.attached).join('\n');
+      t.truthy('"done" without the deliverable is turned down by the audit check', said.includes('audit report written'), said.slice(0, 400));
+      t.truthy('and not by the old review check', !said.includes('greeting is loud'), said.slice(0, 600));
+      return reply.steps("Add-Content -Path audit/report.md -Value '## Findings' -Encoding utf8", "Add-Content -Path audit/report.md -Value 'hello.txt holds the word hi.' -Encoding utf8");
+    },
+    reply.done(),
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('the audit is done', after.status, 'done');
+  t.check('the repository outside the audit is as it was', h.git('show', 'cop/maint:hello.txt'), 'hi');
+  t.truthy('the deliverable is committed', h.git('show', 'cop/maint:audit/report.md').includes('## Findings'));
+  t.check('what was put back is on the task', (after as unknown as { scopeReverted?: string[] }).scopeReverted, ['hello.txt']);
+});
+
+await scenario('a read-only task that changes a file: put back every round, and it still finishes', {}, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'readonly', [{ title: 'audit-readme', prompt: 'Read README.md and report in your summary how long it is. Change nothing.', readOnly: true }])] });
+  h.chat.script(
+    reply.steps("Set-Content -Path README.md -Value 'rewritten' -Encoding utf8", '(Get-Content README.md).Length'),
+    (m) => {
+      t.truthy('the chat is told the task is read-only and the change was put back', /Changed by a read-only task, so put back by the runner: README\.md/.test(m.text) && /read-only: it may change no file/.test(m.text), m.text.slice(0, 500));
+      return reply.done();
+    },
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('done, not failed: nothing it changed survived', after.status, 'done');
+  t.check('README.md is untouched', readFileSync(join(h.repo, 'README.md'), 'utf8'), '# fixture\n');
+  t.check('and nothing was committed', h.git('rev-list', '--count', 'main..cop/readonly'), '0');
+});
+
+await scenario('a task that contradicts itself is stopped before anything is sent', {}, async (h) => {
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [session(h, 'contradiction', [{ title: 'audit-only', prompt: 'Audit the project and report; change nothing at all in the repository.', readOnly: true, checks: [{ name: 'fix applied', expect: 'file-contains', file: 'README.md', value: 'fixed' }] }])],
+  });
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('blocked before starting', [after.status, (after as unknown as { stopCode?: string }).stopCode], ['blocked', 'contract-conflict']);
+  t.truthy('the reason names the contradiction', /"fix applied" fails now and can only pass if README\.md changes, but the task is read-only/.test(after.reason ?? ''), after.reason);
+  t.check('nothing was sent to the chat', h.chat.sent.length, 0);
 });
 
 t.finish();

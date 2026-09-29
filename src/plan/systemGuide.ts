@@ -1631,6 +1631,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'При вече изпълнена задача: записва промяната и я връща в опашката; предишният опит се пази. При готова задача новият опит стъпва върху свършеното. Не я пуска.',
           },
           {
+            key: 'task.readOnlyEdit',
+            kind: 'checkbox',
+            en: 'Read-only: this task must not change any file',
+            bg: 'Само за четене: задачата не бива да променя нито един файл',
+            doesEn: 'Also in the new-prompt dialog of the register. For an audit: every change a round makes is put back.',
+            doesBg: 'Има го и в диалога за нов prompt в регистъра. За одит: всяка промяна от кръг се връща.',
+          },
+          {
+            key: 'task.scopeEdit',
+            kind: 'field',
+            en: 'Files this task may change',
+            bg: 'Файлове, които задачата може да променя',
+            doesEn: 'One path or pattern per line; changes elsewhere are put back. Also in the new-prompt dialog, which lists the old checks to keep or drop.',
+            doesBg: 'По един път или шаблон на ред; промени другаде се връщат. Има го и в диалога за нов prompt, който изброява старите проверки за запазване или махане.',
+          },
+          {
             key: 'task.branch',
             kind: 'field',
             en: 'Branch for this task',

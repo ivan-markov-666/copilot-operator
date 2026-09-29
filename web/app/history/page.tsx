@@ -12,9 +12,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, fmtDuration, type Metrics, type MetricsRow, type Ratio, type RegistryEntry, type TaskStatus, sessionHref } from '../../lib/api';
+import { api, fmtDuration, type Metrics, type MetricsRow, type Ratio, type RegistryEntry, type TaskCheck, type TaskStatus, sessionHref } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { useModalFocus } from '../../lib/useModalFocus';
+import { ContractFields, scopeLines } from '../contractFields';
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
 import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
@@ -544,6 +545,11 @@ function Flow({
                   {t('task.readOnly')}
                 </span>
               )}
+              {e.stopCode && (
+                <span className="chip" title={t('stop.why')}>
+                  {t(`stop.${e.stopCode}` as Key)}
+                </span>
+              )}
               {(e.scope?.length ?? 0) > 0 && (
                 <span className="chip" title={t('task.scopeWhy')}>
                   {t('task.scope', { paths: (e.scope ?? []).join(', ') })}
@@ -892,6 +898,17 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
   const [prompt, setPrompt] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  /*
+   * What the new prompt keeps from the old contract. A failed task given a fixed prompt is the same
+   * question worded better, so its checks start ticked; a done task given a new prompt is a new
+   * question, so they start unticked and the operator ticks what still applies. Checks earlier
+   * reviews added are dropped by the API whenever the prompt changes.
+   */
+  const [checks, setChecks] = useState<TaskCheck[]>([]);
+  const [kept, setKept] = useState<Set<number>>(new Set());
+  const [readOnly, setReadOnly] = useState(false);
+  const [scope, setScope] = useState('');
+  const [original, setOriginal] = useState('');
   const boxRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(boxRef, true);
   // Escape leaves it, as it does the other two dialogs; it did nothing here.
@@ -909,7 +926,14 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
       .session(entry.sessionId)
       .then((s) => {
         const task = s.tasks.find((x) => x.id === entry.taskId);
-        if (live) setPrompt(task?.prompt ?? '');
+        if (!live) return;
+        setPrompt(task?.prompt ?? '');
+        setOriginal(task?.prompt ?? '');
+        const list = task?.checks ?? [];
+        setChecks(list);
+        setKept(new Set(entry.status === 'done' ? [] : list.map((_, i) => i)));
+        setReadOnly(!!task?.readOnly);
+        setScope((task?.scope ?? []).join('\n'));
       })
       .catch((e) => {
         if (live) setMsg((e as Error).message);
@@ -925,7 +949,12 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
     setMsg('');
     try {
       // A finished task's new prompt builds on its work; a failed one's starts again.
-      await api.rerunTask(entry.sessionId, entry.taskId, { prompt }, { buildOnFinished: entry.status === 'done' });
+      await api.rerunTask(
+        entry.sessionId,
+        entry.taskId,
+        { prompt, checks: checks.filter((_, i) => kept.has(i)), readOnly, scope: readOnly ? [] : scopeLines(scope) },
+        { buildOnFinished: entry.status === 'done' },
+      );
       setMsg(t('reg.fixPromptSaved', { title: entry.title }));
       setTimeout(() => onClose(true), 900);
     } catch (e) {
@@ -945,6 +974,33 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
         ) : (
           <textarea className="prose" aria-labelledby="fix-title" value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ minHeight: 260 }} disabled={busy} />
         )}
+        {prompt !== null && checks.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <strong className="small">{t('reg.keepChecks')}</strong>
+            <p className="why">{t('reg.keepChecksWhy')}</p>
+            {checks.map((c, i) => (
+              <div className="option" key={i} style={{ margin: '4px 0' }}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={kept.has(i)}
+                    onChange={(e) =>
+                      setKept((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(i);
+                        else next.delete(i);
+                        return next;
+                      })
+                    }
+                  />
+                  <span>{c.name}</span>
+                </label>
+              </div>
+            ))}
+          </div>
+        )}
+        {prompt !== null && prompt.trim() !== original.trim() && <p className="notice caution small">{t('task.newIntentNote')}</p>}
+        {prompt !== null && <ContractFields readOnly={readOnly} scope={scope} onReadOnly={setReadOnly} onScope={setScope} />}
         <div className="row modal-actions">
           {msg && prompt !== null && <span className="small grow">{msg}</span>}
           <button type="button" className="quiet" onClick={() => onClose(false)} disabled={busy}>

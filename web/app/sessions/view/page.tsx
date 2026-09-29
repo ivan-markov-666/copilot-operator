@@ -21,6 +21,7 @@ import { ChangesButton } from '../../diffView';
 import { useUnattendedWithoutAsking } from '../../../lib/useUnattendedWithoutAsking';
 import { useTaskActions } from '../../taskActions';
 import { usePoll } from '../../../lib/usePoll';
+import { ContractFields, scopeLines } from '../../contractFields';
 
 // ---------------------------------------------------------------------------------------
 // The page
@@ -1691,6 +1692,9 @@ function TaskCard({
   const [branch, setBranch] = useState(task.vcsPlan?.branch ?? '');
   const [commitMessage, setCommitMessage] = useState(task.vcsPlan?.commitMessage ?? '');
   const [checks, setChecks] = useState<TaskCheck[]>(task.checks ?? []);
+  const [readOnlyDraft, setReadOnlyDraft] = useState(!!task.readOnly);
+  const [scopeDraft, setScopeDraft] = useState((task.scope ?? []).join('\n'));
+  const contract = { readOnly: readOnlyDraft, scope: readOnlyDraft ? [] : scopeLines(scopeDraft) };
   // Ticks only while this task runs; a finished card never re-renders for the clock.
   const now = useNow(isLive(task));
   const [files, setFiles] = useState<{ reports: string[]; artifacts: string[]; replies: string[] } | null>(null);
@@ -1710,13 +1714,15 @@ function TaskCard({
       setBranch(task.vcsPlan?.branch ?? '');
       setCommitMessage(task.vcsPlan?.commitMessage ?? '');
       setChecks(task.checks ?? []);
+      setReadOnlyDraft(!!task.readOnly);
+      setScopeDraft((task.scope ?? []).join('\n'));
     }
     setEditing(!editing);
   };
 
   const save = async () => {
     try {
-      await api.updateTask(session.id, task.id, { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks });
+      await api.updateTask(session.id, task.id, { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks, ...contract });
       setEditing(false);
       onChange();
     } catch (e) {
@@ -1782,7 +1788,7 @@ function TaskCard({
       await api.rerunTask(
         session.id,
         task.id,
-        { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks },
+        { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks, ...contract },
         { buildOnFinished: task.status === 'done' },
       );
       setEditing(false);
@@ -2052,6 +2058,9 @@ function TaskCard({
           )}
 
           <ChecksEditor checks={checks} onChange={setChecks} />
+          {/* A new prompt is a new question: say what happens to the checks written for the old one. */}
+          {promptText.trim() !== task.prompt.trim() && <p className="notice caution small">{t('task.newIntentNote')}</p>}
+          <ContractFields readOnly={readOnlyDraft} scope={scopeDraft} onReadOnly={setReadOnlyDraft} onScope={setScopeDraft} />
 
           <div className="row" style={{ marginTop: 8 }}>
             <button className="primary" onClick={() => void (hasRun ? saveAndRerun() : save())}>
@@ -2128,6 +2137,13 @@ function TaskCard({
 
           <ReviewVerdict review={task.review} />
 
+          {task.stopCode && !isLive(task) && (
+            <p className="small">
+              <span className="chip" title={t('stop.why')}>
+                {t(`stop.${task.stopCode}` as Key)}
+              </span>
+            </p>
+          )}
           {task.handoff && !isLive(task) && <HandoffView handoff={task.handoff} />}
 
           {task.summary && (

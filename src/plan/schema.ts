@@ -489,7 +489,7 @@ export function checkPlan(text: string): PlanCheck {
     return { ok: false, warnings, issues: parsed.error.issues.map((i) => ({ path: pathOf(i.path), message: i.message })) };
   }
 
-  const weak = weakCheckIssues(parsed.data);
+  const weak = [...weakCheckIssues(parsed.data), ...contradictionIssues(parsed.data)];
   if (weak.length) return { ok: false, warnings, issues: weak };
 
   return {
@@ -558,6 +558,27 @@ function weakCheckIssues(plan: Plan): PlanIssue[] {
           'and a test run exits 0 with no tests at all. Add a check that reads output or contents only the finished work produces — ' +
           'name each test after its acceptance criterion and use "output-contains" on the test runner\'s output for that test passing ' +
           '(with node --test, the line starts with ✔), or "output-matches" on the count of passing tests.',
+      });
+    });
+  });
+  return out;
+}
+
+/**
+ * A task whose own flags contradict each other: read-only (change nothing) and scoped (change
+ * these). Refused at import, where the chat that wrote it can still be asked which it meant; the
+ * runner refuses it again before starting (orchestrator/contract.ts) for a task edited since.
+ */
+function contradictionIssues(plan: Plan): PlanIssue[] {
+  const out: PlanIssue[] = [];
+  plan.sessions.forEach((s, i) => {
+    s.tasks.forEach((t, j) => {
+      if (!t.readOnly || t.scope.length === 0) return;
+      out.push({
+        path: `sessions[${i}].tasks[${j}]`,
+        message:
+          `"${t.title}" is "readOnly": true, which allows no change, and has a "scope" (${t.scope.join(', ')}), which allows changes there. ` +
+          'An audit that writes a report is not read-only: drop "readOnly" and scope it to the report. One that writes nothing: drop "scope".',
       });
     });
   });

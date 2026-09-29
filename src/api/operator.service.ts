@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { installLayout } from '../config/layout.js';
 
-import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW } from '../session/store.js';
+import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, applyTaskPatch } from '../session/store.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -27,7 +27,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { newId, tidyVcsPlan } from '../session/model.js';
+import { newId, tidyVcsPlan, type TaskPatch } from '../session/model.js';
 import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
@@ -259,6 +259,7 @@ export type RegistryEntry = {
   readOnly?: boolean;
   /** The paths the task may change; absent means anywhere. */
   scope?: string[];
+  stopCode?: Task['stopCode'];
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
   autoRetries?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
@@ -578,16 +579,12 @@ export class OperatorService {
   async updateTask(
     sessionId: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>>,
+    patch: TaskPatch,
   ): Promise<Task> {
     await this.init();
     return await this.store.updateTask(sessionId, taskId, (t) => {
       if (t.status !== 'queued') throw new Error('Only a queued task can be edited.');
-      if (patch.title !== undefined) t.title = patch.title;
-      if (patch.level2 !== undefined) t.level2 = patch.level2;
-      if (patch.prompt !== undefined) t.prompt = patch.prompt;
-      if (patch.vcsPlan !== undefined) t.vcsPlan = tidyVcsPlan(patch.vcsPlan);
-      if (patch.checks !== undefined) t.checks = patch.checks.filter((c) => c.name.trim() !== '');
+      applyTaskPatch(t, patch);
     });
   }
 
@@ -621,7 +618,7 @@ export class OperatorService {
   async rerunTask(
     sessionId: string,
     taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
+    patch: TaskPatch = {},
     /**
      * A new prompt for a task that ended done builds on what it did: the next attempt works on
      * that attempt's branch. Only for a done task — a failed attempt's work is what is being
@@ -2452,6 +2449,7 @@ export class OperatorService {
           disputes: t.disputes?.length || undefined,
           readOnly: t.readOnly || undefined,
           scope: t.scope?.length ? t.scope : undefined,
+          stopCode: t.stopCode,
           autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,
           changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,
