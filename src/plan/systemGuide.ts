@@ -354,6 +354,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Слага цялото задание в клипборда; поставете го в нов разговор с чат модел.',
           },
           {
+            key: 'plan.saveBrief',
+            kind: 'button',
+            en: 'Save the brief as a file',
+            bg: 'Запази заданието като файл',
+            doesEn: 'Saves the brief as a .txt to attach to a fresh chat; the way when it is over about 116 000 characters.',
+            doesBg: 'Запазва заданието като .txt за прикачване в нов разговор; начинът, когато е над около 116 000 знака.',
+          },
+          {
+            key: 'plan.copyBriefNote',
+            kind: 'button',
+            en: 'Copy the message for the file',
+            bg: 'Копирай съобщението към файла',
+            doesEn: 'Only when the brief is too long to paste: the one line to send with the attached file.',
+            doesBg: 'Само когато заданието е твърде дълго за поставяне: едното изречение, което се праща с прикачения файл.',
+          },
+          {
             key: 'plan.softwarePart',
             kind: 'disclosure',
             en: 'Software level (fixed)',

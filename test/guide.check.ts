@@ -281,6 +281,7 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^reg\.newTaskIn$/, why: 'the second half of the "New task" label' },
   { pattern: /^diff\.(before|after)$/, why: 'the two column headings of the changes view' },
   { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
+  { pattern: /^plan\.briefFileMessage$/, why: 'the text "Copy the message for the file" copies, also shown beside it; the button is guided' },
   { pattern: /^batch\.move(Up|Down)$/, why: 'only the screen-reader name of the ↑ and ↓ that reorder the sessions of a run; the buttons show an arrow, not this text' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
@@ -309,23 +310,25 @@ if (uncovered.size > 0) {
 }
 
 /*
- * The brief's size, against where it is pasted.
+ * The brief's size, against how it reaches the chat.
  *
- * A complete guide made the brief about a fifth longer, and the operator pastes the brief into a
- * chat — often Copilot's, whose composer refuses a message beyond roughly 120 000 characters. The
- * longest form is the first run, which carries the example documents and the phase 0 interview.
- * This is a tripwire under that limit, not a target: when it trips, something has to get shorter
- * (or move out of the brief), and that is a decision to make on purpose rather than to discover
- * when an operator's paste is refused.
+ * Copilot's composer refuses a message beyond roughly 120 000 characters. That used to be a hard
+ * limit on the brief, and every new control in the guide had to be paid for with a cut. It is not
+ * one: over the line the import page hands the brief out as a file to attach, with a one-line
+ * message (see PASTE_LIMIT in web/app/import/page.tsx), and a file has room. So the paste limit is
+ * reported, not enforced; what still fails is a brief so long it is surely a mistake — a runaway
+ * loop in the guide, a document pasted into itself — which no chat would read to the end anyway.
  */
-console.log('\n--- the brief fits where it is pasted ---');
-const BRIEF_BUDGET = 116_000;
+console.log('\n--- the brief, and how it reaches the chat ---');
+const PASTE_LIMIT = 116_000;
+const SANITY_LIMIT = 400_000;
 let oversized = 0;
 for (const lang of ['en', 'bg'] as const) {
   const example = (name: string): string => readFileSync(join('prompts', `${name}.${lang}.md`), 'utf8');
   const longest = planBrief({ lang, organisationExample: example('organisation'), personaExample: example('persona'), workExample: example('work') });
-  if (longest.length > BRIEF_BUDGET) oversized += 1;
-  console.log(`${lang} first-run brief         :`, longest.length, `chars (budget ${BRIEF_BUDGET}; Copilot refuses beyond about 120 000)`);
+  if (longest.length > SANITY_LIMIT) oversized += 1;
+  const how = longest.length > PASTE_LIMIT ? `over ${PASTE_LIMIT}: the import page offers it as a file` : `pasted (the file is offered past ${PASTE_LIMIT})`;
+  console.log(`${lang} first-run brief         :`, longest.length, `chars — ${how}; fails only past ${SANITY_LIMIT}`);
 }
 
 const failures = gone + drifted + unrendered + orphaned + invented + uncovered.size + oversized;

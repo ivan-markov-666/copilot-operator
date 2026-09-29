@@ -17,6 +17,25 @@ import { useT, useFmtTime } from '../../lib/i18n';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
+/** Past this many characters the brief is attached as a file rather than pasted (Copilot takes about 120 000). */
+const PASTE_LIMIT = 116_000;
+
+/**
+ * The brief as a `.txt` file, saved by the browser. `.txt` because it is what Copilot takes as an
+ * attachment without asking: the project mirror appends `.txt` to every file it attaches for the
+ * same reason.
+ */
+function saveBrief(text: string, lang: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `copilot-operator-brief.${lang}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export default function ImportPage() {
   const { t, locale } = useT();
   const fmtTime = useFmtTime();
@@ -156,13 +175,35 @@ export default function ImportPage() {
         <h3>{t('plan.briefAsks')}</h3>
         <p className="why">{t('plan.briefAsksWhy')}</p>
 
+        {/*
+          Pasted when it fits, attached when it does not. Copilot's composer refuses a message beyond
+          about 120 000 characters, and a first-run brief with long organisation and work texts is
+          past that; a file attached to the chat has no such limit. So over the line the page leads
+          with the file and a one-line message that tells the chat to read it, and says why. The
+          file is always on offer: some operators prefer it anyway.
+        */}
+        {brief.length > PASTE_LIMIT && (
+          <div className="notice caution" role="status" style={{ marginTop: 12 }}>
+            {t('plan.briefTooLong', { n: brief.length.toLocaleString(), limit: PASTE_LIMIT.toLocaleString() })}
+          </div>
+        )}
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="primary" onClick={() => void copy('brief', brief)} disabled={!brief}>
+          <button className={brief.length > PASTE_LIMIT ? '' : 'primary'} onClick={() => void copy('brief', brief)} disabled={!brief}>
             {t('plan.copyBrief')}
+          </button>
+          <button className={brief.length > PASTE_LIMIT ? 'primary' : ''} onClick={() => saveBrief(brief, locale)} disabled={!brief}>
+            {t('plan.saveBrief')}
           </button>
           {copied === 'brief' && <span className="badge done">{t('plan.copied')}</span>}
           <span className="muted small">{t('plan.briefLang')}</span>
         </div>
+        {brief.length > PASTE_LIMIT && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <button onClick={() => void copy('briefNote', t('plan.briefFileMessage'))}>{t('plan.copyBriefNote')}</button>
+            {copied === 'briefNote' && <span className="badge done">{t('plan.copied')}</span>}
+            <span className="muted small">{t('plan.briefFileMessage')}</span>
+          </div>
+        )}
         {briefErr && <div className="err">{briefErr}</div>}
 
         <h3 style={{ marginTop: 16 }}>{t('plan.persona')}</h3>

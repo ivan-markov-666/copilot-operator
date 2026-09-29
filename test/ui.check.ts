@@ -18,7 +18,7 @@
  *
  * Set COP_UI_SHOTS to a folder to keep a screenshot of every scenario that fails.
  */
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
@@ -165,6 +165,20 @@ try {
     t.check('and the focus is back on the button that opened it', await page.evaluate(() => document.activeElement?.textContent?.trim()), 'Delete');
   });
 
+  await scenario('a brief too long to paste is offered as a file, with the message to send with it', {}, async (h, page, url) => {
+    // A long organisation text, as a big company's would be, pushes the brief past what Copilot takes in a message.
+    await h.call('PUT', '/context/organisation', { content: `# Our organisation\n\n${'We write every rule down. '.repeat(6000)}` });
+    await page.goto(url('/import'));
+    await page.getByText(/more than Copilot takes in one message/).waitFor();
+    t.truthy('the page says why', true);
+    const save = page.getByRole('button', { name: 'Save the brief as a file' });
+    t.check('saving the file is now the main button', await save.getAttribute('class'), 'primary');
+    const [download] = await Promise.all([page.waitForEvent('download'), save.click()]);
+    const saved = await download.path().then((p) => (p ? readFileSync(p, 'utf8') : ''));
+    t.truthy('the file holds the whole brief, organisation text included', saved.length > 120_000 && saved.includes('We write every rule down.'), saved.length);
+    t.truthy('and the one-line message for the chat can be copied', await page.getByRole('button', { name: 'Copy the message for the file' }).isVisible());
+  });
+
   await scenario('the import page turns pasted JSON into sessions', {}, async (h, page, url) => {
     await page.goto(url('/import'));
     await page.getByPlaceholder(/json/i).first().fill(JSON.stringify(planFor(h, 'imported')));
@@ -172,6 +186,8 @@ try {
     await page.getByRole('button', { name: 'Create the sessions and tasks' }).click();
     await page.getByText(/Created 1 session\(s\) with 1 task\(s\)/).waitFor();
     const sessions = await h.call<Array<{ name: string; tasks: Array<{ status: string }> }>>('GET', '/sessions');
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save the brief as a file' }).click()]);
+    t.check('the brief can be saved as a .txt file', download.suggestedFilename(), 'copilot-operator-brief.en.txt');
     t.check('one session, its task queued, nothing started', sessions.map((s) => [s.name, s.tasks.map((x) => x.status)]), [['imported', ['queued']]]);
     await page.goto(url('/'));
     await page.getByRole('link', { name: 'imported' }).first().waitFor();
