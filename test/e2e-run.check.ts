@@ -64,6 +64,10 @@ await scenario('an unattended task, from the plan to the commit', { copilot: { d
   t.check('the branch holds one commit on top of main', h.git('rev-list', '--count', 'main..cop/hello'), '1');
   t.truthy('the commit says it was not pushed', /Not pushed\./.test(h.git('log', '-1', '--format=%B', 'cop/hello')));
   t.check('the tree is clean afterwards', h.git('status', '--porcelain'), '');
+  const handoff = task.handoff;
+  t.check('the handoff: outcome, files, checks, branch', [handoff?.outcome.status, handoff?.changedFiles.map((f) => f.path), handoff?.validation.every((v) => v.passed), handoff?.vcs.branch, handoff?.vcs.pushed], ['done', ['hello.txt'], true, 'cop/hello', false]);
+  t.truthy('and says the push is left to the operator', handoff?.manual.some((m) => /push cop\/hello/.test(m)), handoff?.manual);
+  t.check('with nothing left unrun and nothing known wrong', [handoff?.notExecuted, handoff?.knownIssues], [[], []]);
 
   t.check('a session with no model of its own asked for the one in Settings', h.chat.modelRequests, ['GPT 5.6 Think deeper']);
   t.check('and recorded what the chat ended up on', after.modelInUse, 'GPT 5.6 Think deeper');
@@ -180,6 +184,8 @@ await scenario('a step the gate refuses is reported to the chat and never runs',
   const after = await h.run(s!.id);
   t.check('the folder is still there', readFileSync(join(h.repo, 'src', 'keep.txt'), 'utf8'), 'keep\n');
   t.check('the task went on and finished', after.tasks[0]!.status, 'done');
+  const notRun = after.tasks[0]!.handoff?.notExecuted ?? [];
+  t.truthy('the handoff lists the refused step as not run, with why', notRun.length === 1 && notRun[0]!.includes('Remove-Item'), notRun);
 });
 
 await scenario('an independent review opens its own conversation and passes the work', {}, async (h) => {

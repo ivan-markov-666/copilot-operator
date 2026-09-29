@@ -228,6 +228,8 @@ export type Task = {
   scope?: string[];
   /** What the runner put back because it was outside `scope`. */
   scopeReverted?: string[];
+  /** How the attempt ended, in one fixed shape the runner put together from its own records. */
+  handoff?: Handoff;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -642,6 +644,19 @@ export type SavedLog = {
 /** The three parts of Kerrigan that come from the operator. See `ContextKind` in the store. */
 export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
+
+/** See `src/session/handoff.ts`: every entry is something the runner recorded, not the model's words. */
+export type Handoff = {
+  outcome: { status: TaskStatus; reason?: string };
+  changedFiles: Array<{ path: string; added: number; removed: number }>;
+  validation: Array<{ name: string; passed: boolean }>;
+  review?: { verdict: string; open: number };
+  knownIssues: string[];
+  evidence: { runId?: string; checks: number; reviewRounds: number };
+  vcs: { branch?: string; commit?: string; pushed: false; problem?: string };
+  manual: string[];
+  notExecuted: string[];
+};
 
 export type SessionEvent = {
   at: string;

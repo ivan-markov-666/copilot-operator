@@ -43,6 +43,7 @@ import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
+import { composeHandoff, type NotRun } from '../session/handoff.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -461,6 +462,8 @@ export async function runTask(
   let disputes: Dispute[] = [];
   /** What the runner tells the model in its next message about the reply just processed. */
   let runnerNotes: string[] = [];
+  /** Steps the chat sent that were not run, for the handoff at the end. */
+  const notRun: NotRun[] = [];
   /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
    * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
@@ -568,6 +571,10 @@ export async function runTask(
       if (disputes.length > 0) t.disputes = disputes;
       if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
       t.logFile = 'task-log.txt';
+    });
+    // The end in one fixed shape, read off the record just written. See `session/handoff.ts`.
+    await setTask((t) => {
+      t.handoff = composeHandoff(t, notRun);
     });
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
     await log.close();
@@ -1565,6 +1572,12 @@ export async function runTask(
           break;
         }
         await pacer.settle();
+      }
+
+      for (const r of results) {
+        if (r.outcome !== 'refused' && r.outcome !== 'aborted') continue;
+        const why = (r.stderr.split('\n')[0] ?? '').replace(/^\[policy\] step not executed: /, '').trim();
+        notRun.push({ command: r.command.slice(0, 200), why: why.slice(0, 300) || r.outcome });
       }
 
       // Ended before the report is written and sent: there is nobody to send it to who could

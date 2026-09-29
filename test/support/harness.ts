@@ -61,6 +61,15 @@ export type TaskView = {
   interruption?: { steps?: Array<{ id: number; state: string }>; resultsSent?: boolean };
   attempts?: Array<{ status: string; runId?: string; vcs?: { branch?: string } }>;
   review?: { verdict?: string };
+  handoff?: {
+    outcome: { status: string; reason?: string };
+    changedFiles: Array<{ path: string }>;
+    validation: Array<{ name: string; passed: boolean }>;
+    knownIssues: string[];
+    vcs: { branch?: string; commit?: string; pushed: false };
+    manual: string[];
+    notExecuted: string[];
+  };
   vcs?: { branch?: string; baseCommit?: string; commit?: string; files?: Array<{ path: string }>; problem?: string; foreignCommits?: string[] };
 };
 export type SessionView = {

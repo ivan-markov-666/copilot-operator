@@ -1,9 +1,9 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
+import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { AttemptRecord, SaveLog } from '../../saveLog';
 import { fmtDuration } from '../../../lib/api';
@@ -1540,6 +1540,57 @@ function ExportPanel({ session }: { session: Session }) {
 }
 
 // ---------------------------------------------------------------------------------------
+// How a task ended, in the runner's fixed shape (src/session/handoff.ts)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The eight answers an operator wants from a finished attempt, always in the same order and always
+ * from the runner's records: the chat's own account is the summary below it. Empty sections are
+ * left out rather than shown as "none", except the two whose emptiness is itself the news.
+ */
+function HandoffView({ handoff }: { handoff: Handoff }) {
+  const { t } = useT();
+  const row = (label: Key, body: ReactNode) => (
+    <div className="handoff-row">
+      <strong>{t(label)}</strong> {body}
+    </div>
+  );
+  const list = (items: string[]) => (
+    <ul>
+      {items.map((x, i) => (
+        <li key={i}>{x}</li>
+      ))}
+    </ul>
+  );
+  const passed = handoff.validation.filter((v) => v.passed).length;
+  return (
+    <div className="summary handoff">
+      <strong>{t('handoff.title')}</strong>
+      {row('handoff.outcome', <>
+        <span className={`badge ${handoff.outcome.status}`}>{t(`status.${handoff.outcome.status}` as Key)}</span>
+        {handoff.outcome.reason ? ` ${handoff.outcome.reason}` : ''}
+      </>)}
+      {row('handoff.files', handoff.changedFiles.length === 0
+        ? <span className="muted">{t('handoff.noFiles')}</span>
+        : <code>{handoff.changedFiles.map((f) => `${f.path}${f.added >= 0 ? ` +${f.added}/-${f.removed}` : ''}`).join(', ')}</code>)}
+      {handoff.validation.length > 0 && row('handoff.validation', <>
+        {t('handoff.passed', { n: passed, of: handoff.validation.length })}
+        {handoff.review ? ` · ${t('handoff.review', { verdict: handoff.review.verdict, open: handoff.review.open })}` : ''}
+      </>)}
+      {row('handoff.issues', handoff.knownIssues.length === 0 ? <span className="muted">{t('handoff.noIssues')}</span> : list(handoff.knownIssues))}
+      {handoff.evidence.runId && row('handoff.evidence', <code>{handoff.evidence.runId}</code>)}
+      {(handoff.vcs.branch || handoff.vcs.problem) && row('handoff.vcs', <>
+        {handoff.vcs.branch && <code>{handoff.vcs.branch}</code>}
+        {handoff.vcs.commit ? ` @ ${handoff.vcs.commit.slice(0, 8)} · ${t('handoff.notPushed')}` : handoff.vcs.branch ? ` · ${t('handoff.noCommit')}` : ''}
+        {handoff.vcs.problem ? ` — ${handoff.vcs.problem}` : ''}
+      </>)}
+      {handoff.manual.length > 0 && row('handoff.manual', list(handoff.manual))}
+      {handoff.notExecuted.length > 0 && row('handoff.notRun', list(handoff.notExecuted))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
 // Add a task
 // ---------------------------------------------------------------------------------------
 
@@ -2076,6 +2127,8 @@ function TaskCard({
           )}
 
           <ReviewVerdict review={task.review} />
+
+          {task.handoff && !isLive(task) && <HandoffView handoff={task.handoff} />}
 
           {task.summary && (
             <div className="summary">

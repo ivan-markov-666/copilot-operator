@@ -681,6 +681,10 @@ th, td { position: relative; }
   pre, .log { font-size: calc(12px * var(--scale)); }
 }
 
+/* How a task ended (HandoffView): one line per answer, lists indented under their label. */
+.handoff .handoff-row { margin: 4px 0; overflow-wrap: anywhere; }
+.handoff .handoff-row ul { margin: 2px 0 0; padding-left: 20px; }
+
 /* The register: runs fold, each with its heading on the fold and its downloads. */
 .run-fold { border-top: 1px solid var(--line); padding: 8px 0 4px; }
 .run-fold:first-of-type { border-top: none; }

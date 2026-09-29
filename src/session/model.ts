@@ -9,6 +9,7 @@
  * data directory, and the heavy artefacts of a task (reports, replies, step logs) live in the
  * run folder the task points at.
  */
+import type { Handoff } from './handoff.js';
 import type { Interruption } from './interruption.js';
 import type { ChatPointer } from '../transport/chatSession.js';
 import type { ShellInventory } from '../exec/shells.js';
@@ -203,6 +204,8 @@ export type Task = {
   scope?: string[];
   /** Changes the runner put back because they were outside `scope`, over the whole attempt. */
   scopeReverted?: string[];
+  /** How the attempt ended, in one fixed shape the runner puts together. See `session/handoff.ts`. */
+  handoff?: Handoff;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };

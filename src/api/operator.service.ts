@@ -74,6 +74,7 @@ import { findEdgeUsingProfile } from '../transport/profileLock.js';
 import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } from '../exec/isolation.js';
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
+import { composeHandoff } from '../session/handoff.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { Settings } from './settings.js';
@@ -362,6 +363,14 @@ export class OperatorService {
         t.vcs = vcs;
         t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
       }
+      // The same fixed-shape ending a task the runner finished gets; the steps the bot never
+      // reached are the interruption's own record of them.
+      t.handoff = composeHandoff(
+        t,
+        (interruption?.steps ?? [])
+          .filter((x) => x.state !== 'finished')
+          .map((x) => ({ command: x.command ?? `step ${x.id}`, why: x.state === 'cut' ? 'cut off when the bot stopped' : 'not reached before the bot stopped' })),
+      );
     });
     const ended = settled.tasks.find((t) => t.id === taskId);
     if (!ended) return;

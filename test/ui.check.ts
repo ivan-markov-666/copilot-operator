@@ -198,6 +198,8 @@ try {
     t.check('the task finished', (await h.session(s!.id)).tasks[0]!.status, 'done');
 
     await page.goto(url(`/sessions/view?id=${s!.id}`));
+    await page.getByText("How it ended — from the runner's records").waitFor();
+    t.truthy('the card shows how it ended, from the runner records', (await page.locator('.handoff').textContent())?.includes('hello.txt'), await page.locator('.handoff').textContent());
     await page.getByRole('button', { name: /See the changes \(1 file\(s\)\)/ }).first().click();
     const diff = page.getByRole('dialog');
     await diff.getByText('hello.txt').first().waitFor();

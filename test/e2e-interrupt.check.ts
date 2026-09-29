@@ -99,6 +99,7 @@ try {
     t.check('with a record of each step: finished, cut off, never run', recovered.interruption?.steps?.map((x) => `${x.id}:${x.state}`), ['1:finished', '2:cut', '3:not-run']);
     t.check('the finished step\'s work is committed on the task\'s branch', h.git('show', 'cop/cut:first.txt'), 'one');
     t.check('the session is idle, not stuck "running"', (await h.session(s!.id)).status, 'idle');
+    t.check('its handoff names the two steps that did not run', recovered.handoff?.notExecuted.length, 2);
 
     const queued = await h.call<{ status: string; continuing?: { how?: string } }>('POST', `/sessions/${s!.id}/tasks/${recovered.id}/continue`);
     t.check('"Continue" queues it as a continuation after an interruption', [queued.status, queued.continuing?.how], ['queued', 'interrupted']);
