@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
@@ -1404,6 +1404,7 @@ function Level2Editor({
   onPresetsChanged?: () => void;
 }) {
   const { t } = useT();
+  const l2Id = useId();
   const [msg, setMsg] = useState('');
   const saveAs = async () => {
     const name = prompt(t('l2.saveAsPrompt'));
@@ -1419,11 +1420,12 @@ function Level2Editor({
   return (
     <>
       <div className="row">
-        <label className="grow" style={{ margin: 0 }}>
+        <label className="grow" style={{ margin: 0 }} htmlFor={`${l2Id}-text`}>
           {t('l2.label')}
         </label>
         <select
           value=""
+          aria-label={t('l2.loadPreset')}
           onChange={(e) => {
             const p = presets.find((x) => x.name === e.target.value);
             if (p) onChange(p.content);
@@ -1443,6 +1445,7 @@ function Level2Editor({
       {/* The controls above wrap onto their own line on a narrow window, and without this the
           Save-as-preset button ends up sitting on the edge of the text box. */}
       <textarea
+        id={`${l2Id}-text`}
         className="prose"
         value={value}
         onChange={(e) => onChange(e.target.value)}

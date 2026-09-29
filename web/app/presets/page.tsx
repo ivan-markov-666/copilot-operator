@@ -46,10 +46,11 @@ export default function PresetsPage() {
       <div className="panel">
         <h2>{t('presets.title')}</h2>
         <p className="muted small">{t('presets.hint')}</p>
-        <label>{t('presets.name')}</label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('presets.namePlaceholder')} />
-        <label>{t('presets.content')}</label>
+        <label htmlFor="preset-name">{t('presets.name')}</label>
+        <input id="preset-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('presets.namePlaceholder')} />
+        <label htmlFor="preset-content">{t('presets.content')}</label>
         <textarea
+          id="preset-content"
           className="prose"
           style={{ minHeight: 220 }}
           value={content}

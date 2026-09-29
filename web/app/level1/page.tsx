@@ -54,7 +54,7 @@ export default function Level1Page() {
         <span className="grow" />
         {content !== saved && <span>{t('l1page.unsaved')}</span>}
       </div>
-      <textarea className="prose" style={{ minHeight: 520 }} value={content} onChange={(e) => setContent(e.target.value)} />
+      <textarea className="prose" aria-label={t('l1page.title')} style={{ minHeight: 520 }} value={content} onChange={(e) => setContent(e.target.value)} />
       <div className="row" style={{ marginTop: 10 }}>
         <button className="primary" onClick={() => void save()} disabled={content === saved}>
           {t('l1page.save')}

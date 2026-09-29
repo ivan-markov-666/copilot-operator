@@ -544,6 +544,7 @@ function ProjectFolders({
   busy: boolean;
 }) {
   const { t } = useT();
+  const foldersId = useId();
   const [include, setInclude] = useState((value?.includeDirs ?? []).join('\n'));
   const [exclude, setExclude] = useState((value?.excludeDirs ?? []).join('\n'));
   const [respectGitignore, setRespectGitignore] = useState(value?.respectGitignore ?? true);
@@ -595,8 +596,9 @@ function ProjectFolders({
       <p className="muted small">{t('proj.foldersHint')}</p>
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="grow">
-          <label>{t('mirror.include')}</label>
+          <label htmlFor={`${foldersId}-include`}>{t('mirror.include')}</label>
           <textarea
+            id={`${foldersId}-include`}
             value={include}
             onChange={(e) => {
               setInclude(e.target.value);
@@ -606,8 +608,9 @@ function ProjectFolders({
           />
         </div>
         <div className="grow">
-          <label>{t('mirror.exclude')}</label>
+          <label htmlFor={`${foldersId}-exclude`}>{t('mirror.exclude')}</label>
           <textarea
+            id={`${foldersId}-exclude`}
             value={exclude}
             onChange={(e) => {
               setExclude(e.target.value);

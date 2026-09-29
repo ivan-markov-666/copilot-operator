@@ -210,6 +210,7 @@ export default function SessionsPage() {
           <input
             type="text"
             className="grow"
+            aria-label={t('home.col.name')}
             placeholder={t('home.namePlaceholder')}
             value={name}
             onChange={(e) => setName(e.target.value)}

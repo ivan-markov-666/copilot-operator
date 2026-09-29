@@ -60,7 +60,8 @@ async function scenario(title: string, settings: Record<string, unknown>, body: 
   const context = await browser!.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   const pageErrors: string[] = [];
-  page.on('pageerror', (e) => pageErrors.push(e.message));
+  // With the page it happened on: an error seen once is only worth something if it says where.
+  page.on('pageerror', (e) => pageErrors.push(`${page.url().replace(/^https?:\/\/[^/]+/, '')}: ${e.message}`));
   page.setDefaultTimeout(15_000);
   const url = (p: string): string => `http://127.0.0.1:${h.api.port}${p}`;
   try {
@@ -177,6 +178,34 @@ try {
     const saved = await download.path().then((p) => (p ? readFileSync(p, 'utf8') : ''));
     t.truthy('the file holds the whole brief, organisation text included', saved.length > 120_000 && saved.includes('We write every rule down.'), saved.length);
     t.truthy('and the one-line message for the chat can be copied', await page.getByRole('button', { name: 'Copy the message for the file' }).isVisible());
+  });
+
+  await scenario('every form field on every page has a name a screen reader can say', {}, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'labels'));
+    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+    await h.run(s!.id);
+    const pages = ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const unnamed: Record<string, string[]> = {};
+    for (const p of pages) {
+      await page.goto(url(p));
+      await page.waitForLoadState('networkidle');
+      // Open every fold, so the fields inside them are judged too.
+      await page.evaluate(() => document.querySelectorAll('details').forEach((d) => ((d as HTMLDetailsElement).open = true)));
+      await page.waitForTimeout(300);
+      const found = await page.evaluate(() => {
+        const out: string[] = [];
+        for (const el of Array.from(document.querySelectorAll('input, textarea, select'))) {
+          const f = el as HTMLInputElement;
+          if (f.type === 'hidden' || f.getClientRects().length === 0) continue;
+          const byLabel = f.labels && f.labels.length > 0 && Array.from(f.labels).some((l) => (l.textContent ?? '').trim());
+          const named = byLabel || (f.getAttribute('aria-label') ?? '').trim() || f.getAttribute('aria-labelledby') || (f.getAttribute('title') ?? '').trim();
+          if (!named) out.push(`${f.tagName.toLowerCase()}${f.type ? `[${f.type}]` : ''}${f.placeholder ? ` "${f.placeholder.slice(0, 40)}"` : ''}`);
+        }
+        return out;
+      });
+      if (found.length > 0) unnamed[p.split('?')[0]!] = found;
+    }
+    t.check('fields with no name, by page', unnamed, {});
   });
 
   await scenario('the import page turns pasted JSON into sessions', {}, async (h, page, url) => {

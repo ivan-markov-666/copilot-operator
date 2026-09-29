@@ -212,7 +212,7 @@ export default function ImportPage() {
         {/* The software's part: shown so nobody has to copy it to read it, and never editable here. */}
         <details style={{ marginTop: 8 }} open={briefOpen} onToggle={(e) => setBriefOpen((e.target as HTMLDetailsElement).open)}>
           <summary>{t('plan.softwarePart')}</summary>
-          <textarea readOnly value={software} style={{ minHeight: 380, marginTop: 10 }} />
+          <textarea readOnly aria-label={t('plan.softwarePart')} value={software} style={{ minHeight: 380, marginTop: 10 }} />
         </details>
 
         {/* The operator's three texts — the parts of Kerrigan that come from the person using her.
@@ -246,6 +246,7 @@ export default function ImportPage() {
         >
           <textarea
             className="grow"
+            aria-label={t('plan.placeholder')}
             placeholder={t('plan.placeholder')}
             value={text}
             onChange={(e) => {
@@ -599,6 +600,7 @@ function ContextField({ kind, onSaved }: { kind: ContextKind; onSaved: () => voi
         />
       )}
       <textarea
+        aria-label={label}
         value={value}
         onChange={(e) => {
           setValue(e.target.value);
