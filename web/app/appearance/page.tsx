@@ -20,9 +20,11 @@ export default function AppearancePage() {
     { value: 'dark', label: 'theme.dark' },
   ];
   const sizes: Array<{ value: TextSize; label: Key }> = [
+    { value: 'small', label: 'ap.sizeSmall' },
     { value: 'normal', label: 'ap.sizeNormal' },
     { value: 'large', label: 'ap.sizeLarge' },
     { value: 'huge', label: 'ap.sizeHuge' },
+    { value: 'giant', label: 'ap.sizeGiant' },
   ];
   return (
     <>

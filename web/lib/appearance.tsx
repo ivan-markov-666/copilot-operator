@@ -15,7 +15,17 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 export type Theme = 'light' | 'dark';
-export type TextSize = 'normal' | 'large' | 'huge';
+
+/**
+ * The text sizes, smallest first: one step below normal and three above it.
+ *
+ * The names are what is stored, so they never change meaning: `large` and `huge` were the only two
+ * steps above normal until 2026-09-29 and a browser that saved one of them must still land on the
+ * same size. New steps got new names (`small`, `giant`) rather than renumbering the old ones. The
+ * factor for each lives in globals.css, beside the rest of the scale.
+ */
+export const TEXT_SIZES = ['small', 'normal', 'large', 'huge', 'giant'] as const;
+export type TextSize = (typeof TEXT_SIZES)[number];
 
 export type Appearance = {
   theme: Theme;
@@ -42,6 +52,28 @@ export const DEFAULT_APPEARANCE: Appearance = {
 const STORAGE_KEY = 'cop.appearance';
 
 /**
+ * Whatever is in storage, turned into settings this page can show.
+ *
+ * Storage is the one input here nobody checks: an older version wrote it, a person edited it in the
+ * developer tools, another tab wrote half of it. A value this version does not know used to be put
+ * on `<html>` as it was, which matched no rule in the stylesheet and pressed no button on the
+ * Appearance page — the text looked normal and nothing said so. Each field is taken only when it is
+ * one of the values this version knows, and the default stands for the rest.
+ */
+export function sanitiseAppearance(raw: unknown): Appearance {
+  const a = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const flag = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback);
+  return {
+    theme: a.theme === 'dark' ? 'dark' : a.theme === 'light' ? 'light' : DEFAULT_APPEARANCE.theme,
+    textSize: (TEXT_SIZES as readonly unknown[]).includes(a.textSize) ? (a.textSize as TextSize) : DEFAULT_APPEARANCE.textSize,
+    highContrast: flag(a.highContrast, DEFAULT_APPEARANCE.highContrast),
+    reduceMotion: flag(a.reduceMotion, DEFAULT_APPEARANCE.reduceMotion),
+    underlineLinks: flag(a.underlineLinks, DEFAULT_APPEARANCE.underlineLinks),
+    strongFocus: flag(a.strongFocus, DEFAULT_APPEARANCE.strongFocus),
+  };
+}
+
+/**
  * Runs before React, inline in the document head. Anything it cannot do — bad json, no
  * storage — leaves the defaults in the markup, which are already correct.
  */
@@ -51,8 +83,9 @@ export const themeScript = `
     var d = document.documentElement;
     var raw = localStorage.getItem('${STORAGE_KEY}');
     var a = raw ? JSON.parse(raw) : {};
+    if (!a || typeof a !== 'object') a = {};
     d.dataset.theme = a.theme === 'dark' ? 'dark' : 'light';
-    d.dataset.textsize = a.textSize || 'normal';
+    d.dataset.textsize = ${JSON.stringify(TEXT_SIZES)}.indexOf(a.textSize) >= 0 ? a.textSize : 'normal';
     d.dataset.contrast = a.highContrast ? 'high' : 'normal';
     d.dataset.motion = a.reduceMotion ? 'reduced' : 'normal';
     d.dataset.links = a.underlineLinks ? 'underline' : 'plain';
@@ -94,7 +127,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     let next = DEFAULT_APPEARANCE;
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) next = { ...DEFAULT_APPEARANCE, ...(JSON.parse(raw) as Partial<Appearance>) };
+      if (raw) next = sanitiseAppearance(JSON.parse(raw));
       else if (window.matchMedia('(prefers-color-scheme: dark)').matches) next = { ...next, theme: 'dark' };
       // A person who asked their system for less motion has already answered this question.
       if (window.matchMedia('(prefers-reduced-motion: reduce)').matches && !raw) next = { ...next, reduceMotion: true };

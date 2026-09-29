@@ -89,8 +89,16 @@
   --shadow: none;
 }
 
+/*
+ * The text sizes (lib/appearance.tsx), one step below normal and three above. Each step is about an
+ * eighth larger than the one before it, so the steps feel even rather than the top one leaping.
+ * Anything drawn at a fixed size in this file — the page's width, icon buttons, tick boxes — is
+ * multiplied by the same factor, or the text outgrows the thing it sits in.
+ */
+:root[data-textsize='small'] { --scale: 0.9; }
 :root[data-textsize='large'] { --scale: 1.12; }
 :root[data-textsize='huge'] { --scale: 1.28; }
+:root[data-textsize='giant'] { --scale: 1.45; }
 :root[data-focus='strong'] { --focus-width: 4px; }
 
 * { box-sizing: border-box; }
@@ -138,7 +146,7 @@ a:hover { text-decoration: underline; }
 }
 .skip-link:focus { left: 0; }
 
-.wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
+.wrap { max-width: calc(1100px * var(--scale)); margin: 0 auto; padding: 24px 16px 80px; }
 
 .top {
   display: flex;
@@ -240,7 +248,7 @@ textarea.prose { font-family: inherit; font-size: calc(14px * var(--scale)); }
 label { display: block; font-size: calc(13px * var(--scale)); color: var(--muted); margin: 12px 0 4px; }
 
 input[type='checkbox'],
-input[type='radio'] { accent-color: var(--accent); width: 16px; height: 16px; }
+input[type='radio'] { accent-color: var(--accent); width: calc(16px * var(--scale)); height: calc(16px * var(--scale)); }
 
 /* A checkbox with its own explanation under it, for options that need one. */
 .option { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: var(--bg); }
@@ -444,7 +452,7 @@ th { color: var(--muted); font-weight: 700; font-size: calc(12px * var(--scale))
 .toolbar select,
 .toolbar input[type='text'] { width: auto; min-width: 150px; }
 
-.segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 9px; overflow: hidden; }
+.segmented { display: inline-flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--line-strong); border-radius: 9px; overflow: hidden; }
 .segmented button { border: none; border-radius: 0; border-right: 1px solid var(--line); }
 .segmented button:last-child { border-right: none; }
 .segmented button[aria-pressed='true'] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -642,7 +650,7 @@ select optgroup { background: var(--panel); color: var(--ink); }
   .segmented button { flex: 1 1 auto; }
   .flow > li { padding-left: 18px; }
   .modal { padding: 14px; }
-  pre, .log { font-size: 12px; }
+  pre, .log { font-size: calc(12px * var(--scale)); }
 }
 
 /* The register: runs fold, each with its heading on the fold and its downloads. */
@@ -662,7 +670,7 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .dir-tree { list-style: none; margin: 6px 0 0; padding-left: 0; }
 .dir-tree .dir-tree { padding-left: 18px; border-left: 1px dashed var(--line); margin-left: 8px; }
 .dir-row { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
-.dir-flip { width: 20px; padding: 0; border: none; background: transparent; color: var(--muted); font-size: 12px; }
+.dir-flip { width: calc(20px * var(--scale)); padding: 0; border: none; background: transparent; color: var(--muted); font-size: calc(12px * var(--scale)); }
 .dir-name { border: 1px solid transparent; background: transparent; padding: 2px 8px 2px 6px; border-radius: 6px; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); display: inline-flex; align-items: center; gap: 6px; }
 .dir-name:hover { border-color: var(--line-strong); }
 .dir-mark { display: inline-block; width: 12px; text-align: center; color: var(--muted); }
@@ -670,7 +678,7 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .dir.inherited > .dir-row .dir-name { color: var(--ok); }
 .dir.out > .dir-row .dir-name { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); text-decoration: line-through; }
 .dir.out-inherited > .dir-row .dir-name { color: var(--muted); text-decoration: line-through; }
-.dir-out { width: 22px; height: 22px; padding: 0; border-radius: 6px; font-size: 13px; line-height: 1; color: var(--muted); }
+.dir-out { width: calc(22px * var(--scale)); height: calc(22px * var(--scale)); padding: 0; border-radius: 6px; font-size: calc(13px * var(--scale)); line-height: 1; color: var(--muted); }
 .dir-out.on { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
 
 /* The story of a task (taskStory.tsx): what was sent, answered, run, and how it ended. */
@@ -701,7 +709,7 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .diff-file:hover { background: var(--bg-tint); }
 .diff-file.on { background: var(--accent-soft); }
 .diff-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.diff-counts { white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+.diff-counts { white-space: nowrap; font-family: var(--mono); font-size: calc(11px * var(--scale)); }
 .diff-counts .plus { color: var(--ok); }
 .diff-counts .minus { color: var(--bad); }
 .diff-status { font-family: var(--mono); font-weight: 700; width: 1.2em; text-align: center; border-radius: 4px; }
@@ -714,7 +722,7 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .diff-name { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
 .diff-scroll { flex: 1; overflow: auto; overscroll-behavior: contain; }
 .diff-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--mono); font-size: calc(12px * var(--scale)); }
-.diff-table col.num { width: 52px; }
+.diff-table col.num { width: calc(52px * var(--scale)); }
 .diff-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--line); text-align: left; padding: 4px 8px; font-family: inherit; }
 .diff-table td { padding: 0 8px; vertical-align: top; line-height: 1.5; }
 .diff-table td.num { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--line); }
@@ -731,13 +739,13 @@ select optgroup { background: var(--panel); color: var(--ink); }
 
 /* To the top / to the bottom, at the right edge of a long page (scrollJump.tsx). */
 .scroll-jump { position: fixed; right: 16px; bottom: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 40; }
-.scroll-jump button { width: 42px; height: 42px; border-radius: 50%; padding: 0; font-size: 20px; line-height: 1; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.scroll-jump button { width: calc(42px * var(--scale)); height: calc(42px * var(--scale)); border-radius: 50%; padding: 0; font-size: calc(20px * var(--scale)); line-height: 1; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
 .story-notes { margin: 4px 0; font-size: calc(13px * var(--scale)); }
 .story-fixed { padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); margin: 6px 0; }
 .story-fixed.close { border-color: var(--ok); }
 .story-fixed.close.failed { border-color: var(--bad); background: var(--bad-soft); }
 .option-inline { display: inline-flex; align-items: center; gap: 6px; }
-.story-box .live { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.story-box .live { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-size: calc(11px * var(--scale)); font-weight: 700; text-transform: uppercase; }
 .story-box .live .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: live-pulse 1.6s ease-in-out infinite; }
 
 /*
@@ -760,9 +768,9 @@ button .dot {
 
 /* A row of one-word links, explained. The button is small on purpose: it is an offer, not a step. */
 .info-dot {
-  width: 18px;
-  height: 18px;
-  min-width: 18px;
+  width: calc(18px * var(--scale));
+  height: calc(18px * var(--scale));
+  min-width: calc(18px * var(--scale));
   padding: 0;
   border-radius: 50%;
   font-size: calc(11px * var(--scale));

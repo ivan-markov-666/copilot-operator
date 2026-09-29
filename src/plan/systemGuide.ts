@@ -3549,34 +3549,44 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         bg: 'Размер на текста',
         controls: [
           {
+            key: 'ap.sizeSmall',
+            kind: 'button',
+            en: 'Small',
+            bg: 'Малък',
+            doesEn: 'One step below normal.',
+            doesBg: 'Една степен под нормалния.',
+          },
+          {
             key: 'ap.sizeNormal',
             kind: 'button',
             en: 'Normal',
             bg: 'Нормален',
-            doesEn:
-              'Normal text size.',
-            doesBg:
-              'Нормален размер на текста.',
+            doesEn: 'Normal size.',
+            doesBg: 'Нормален размер.',
           },
           {
             key: 'ap.sizeLarge',
             kind: 'button',
             en: 'Large',
             bg: 'Голям',
-            doesEn:
-              'Larger text.',
-            doesBg:
-              'По-голям текст.',
+            doesEn: 'One step above normal.',
+            doesBg: 'Една степен над нормалния.',
           },
           {
             key: 'ap.sizeHuge',
             kind: 'button',
+            en: 'Larger',
+            bg: 'По-голям',
+            doesEn: 'Two steps above normal.',
+            doesBg: 'Две степени над нормалния.',
+          },
+          {
+            key: 'ap.sizeGiant',
+            kind: 'button',
             en: 'Largest',
             bg: 'Най-голям',
-            doesEn:
-              'The largest text.',
-            doesBg:
-              'Най-големият текст.',
+            doesEn: 'Three steps above normal.',
+            doesBg: 'Три степени над нормалния.',
           },
         ],
       },
