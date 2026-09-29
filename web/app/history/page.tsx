@@ -1020,7 +1020,15 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
                         }
                       />
                       <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
-                    </label>
+                    </label>{' '}
+                    {/*
+                      The same repair a chained failure is offered above. An independent failure
+                      can be left out of the run, but one worth running again is usually worth
+                      running with a better prompt, and this is where it is being decided.
+                    */}
+                    <button className="quiet small" onClick={() => setFixingHint(e)} title={t('reg.fixPromptHint')}>
+                      {t('reg.fixPrompt')}
+                    </button>
                   </li>
                 ))}
               </ul>
