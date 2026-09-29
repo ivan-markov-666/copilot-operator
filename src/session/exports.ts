@@ -259,6 +259,7 @@ export function taskAtAttempt(task: Task, attempt: number): Task | null {
     vcs: a.vcs,
     attempts: task.attempts?.slice(0, attempt - 1),
     continuing: undefined,
+    buildsOn: undefined,
     finalReply: undefined,
     firstMessage: undefined,
     logFile: a.runId ? 'task-log.txt' : undefined,

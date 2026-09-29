@@ -1610,9 +1610,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Save and queue it again',
             bg: 'Запази и върни в опашката',
             doesEn:
-              'On a task that has already run: stores the edit (text, checks, branch, commit message) and puts the task back in the queue with it; the earlier attempt is kept. It does not start it.',
+              'On a task that has already run: stores the edit and queues it again; the earlier attempt is kept. On a done task the new attempt builds on its work. It does not start it.',
             doesBg:
-              'При вече изпълнена задача: записва промяната (текст, проверки, клон, текст на комита) и връща задачата в опашката с нея; предишният опит се пази. Не я пуска.',
+              'При вече изпълнена задача: записва промяната и я връща в опашката; предишният опит се пази. При готова задача новият опит стъпва върху свършеното. Не я пуска.',
           },
           {
             key: 'task.branch',
@@ -2449,6 +2449,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'On a row that did not end done, its session idle: rewrite the task\'s text and queue it again. It does not start it.',
             doesBg:
               'На ред, който не е завършил готов, при спряна сесия: пренапишете текста на задачата и я върнете в опашката. Не я пуска.',
+          },
+          {
+            key: 'reg.newPrompt',
+            kind: 'button',
+            en: 'Give it a new prompt and queue it again',
+            bg: 'Нов prompt и върни в опашката',
+            doesEn:
+              'On a row that ended done, its session idle: a new instruction for the task, built on its finished work (same branch). It does not start it.',
+            doesBg:
+              'На ред, завършил готов, при спряна сесия: нова инструкция за задачата, върху свършената работа (същия клон). Не я пуска.',
           },
           {
             key: 'restore.button',

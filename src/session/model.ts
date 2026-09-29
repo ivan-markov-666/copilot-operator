@@ -148,6 +148,13 @@ export type Task = {
    * the same branch, and opens with "carry on from where you stopped" instead of the task again.
    */
   continuing?: { fromAttempt: number; stoppedBecause?: string };
+  /**
+   * Set when a task that ended done is given a new prompt: the next attempt works on that
+   * attempt's branch, with its finished work in the tree, and is told the instruction is new and
+   * builds on it. Apart from `continuing`, which carries on the same assignment where it stopped:
+   * here the assignment has changed, and saying "carry on" would have the chat ignore the change.
+   */
+  buildsOn?: { fromAttempt: number };
   /** Attempts that have already finished, oldest first. */
   attempts?: TaskAttempt[];
   /** The press of a start button this attempt belonged to. */

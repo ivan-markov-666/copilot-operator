@@ -116,7 +116,8 @@ export async function prepareForTask(
     : branchNameFrom([session.name, task.title, attempt > 1 ? `a${attempt}` : undefined], prefix);
   // A continuation carries on where the previous attempt stopped, on that attempt's own branch:
   // its work is what is being continued. See `continueTask` in the store.
-  const previousBranch = task.continuing ? task.attempts?.at(-1)?.vcs?.branch : undefined;
+  // The same for a new prompt given to a finished task: it builds on that attempt's work.
+  const previousBranch = task.continuing || task.buildsOn ? task.attempts?.at(-1)?.vcs?.branch : undefined;
   if (previousBranch) return await switchTo(session, task, dir, previousBranch, base, bus, { reuseExisting: true, start });
   // A re-run starts from where that task started the first time, not from where the previous
   // attempt ended. That is the whole point of recording the base commit.

@@ -22,6 +22,8 @@ export type ComposeInput = {
   taskNumber: number;
   /** Carrying on from an attempt that stopped at the runner's limit. See `Task.continuing`. */
   continuing?: { fromAttempt: number; stoppedBecause?: string };
+  /** A new prompt for a task that ended done, building on that attempt's work. See `Task.buildsOn`. */
+  buildsOn?: { fromAttempt: number };
   contractAlreadySent: boolean;
   /**
    * Where the runner will execute the steps, as a fact for Copilot.
@@ -118,7 +120,11 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
   const continuationLine = input.continuing
     ? `\n\nThis continues an earlier attempt at this task that stopped at the runner's limit. The files are as ` +
       `that attempt left them: look at what is already done before changing anything, and carry on from there.`
-    : '';
+    : input.buildsOn
+      ? `\n\nThis task was done once already (attempt ${input.buildsOn.fromAttempt}), and that work is in your ` +
+        `working tree. The text above is a new instruction for it: look at what is there first, build on it, and ` +
+        `change or undo it only where the new instruction asks. Verify the result as for any task.`
+      : '';
 
   if (!input.contractAlreadySent) {
     const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}${continuationLine}`;

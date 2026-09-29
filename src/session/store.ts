@@ -383,6 +383,8 @@ export class SessionStore {
     patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
     /** Present when the new attempt carries on from the last one (see `continueTask`). */
     continuing?: Task['continuing'],
+    /** Present when a finished task's new prompt builds on its work (see `Task.buildsOn`). */
+    buildsOn?: Task['buildsOn'],
   ): Promise<Task> {
     let result: Task | undefined;
     await this.updateSession(sessionId, (s) => {
@@ -427,6 +429,7 @@ export class SessionStore {
       t.status = 'queued';
       t.iterations = 0;
       t.continuing = continuing;
+      t.buildsOn = buildsOn;
       // Cleared so the next run starts from nothing and gets its own run folder.
       t.runId = undefined;
       t.runGroup = undefined;

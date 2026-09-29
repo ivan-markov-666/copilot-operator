@@ -57,6 +57,9 @@ export const dict = {
     'reg.fixPromptTitle': 'The prompt of "{title}"',
     'reg.fixPromptHint': 'Only the task text, as it will be sent. Level 2, the checks and the git names stay as they are; edit those on the task card. Saving queues the task again with this text; the attempt that ran keeps the text it ran with.',
     'reg.fixPromptSave': 'Save and queue again',
+    'reg.newPrompt': 'Give it a new prompt and queue it again',
+    'reg.newPromptHint':
+      'The task ended done. Write what it should do now: the new attempt works on top of what it did — on its branch, with its files in place — and is told this is a new instruction. Level 2, the checks and the git names stay as they are. Saving starts nothing: then "Continue" and "only this one".',
     'reg.fixPromptSaved': '"{title}" is queued again with the new prompt. Start the session, or run it again from here.',
     'reg.fixPromptLoading': 'reading the task…',
     'reg.newTask': 'New task',
@@ -1101,6 +1104,9 @@ export const dict = {
     'reg.fixPromptTitle': 'Prompt-ът на „{title}"',
     'reg.fixPromptHint': 'Само текстът на задачата, както ще бъде изпратен. Ниво 2, проверките и имената за git остават каквито са; тях ги редактирате от картата на задачата. Запазването връща задачата в опашката с този текст; опитът, който е минал, пази текста, с който е минал.',
     'reg.fixPromptSave': 'Запази и върни в опашката',
+    'reg.newPrompt': 'Нов prompt и върни в опашката',
+    'reg.newPromptHint':
+      'Задачата е завършила готова. Напишете какво да направи сега: новият опит работи върху това, което е направила — на нейния клон, с файловете ѝ на място — и научава, че това е нова инструкция. Ниво 2, проверките и имената за git остават каквито са. Запазването не пуска нищо: после „Продължи“ и „само тази“.',
     'reg.fixPromptSaved': '„{title}" е върната в опашката с новия prompt. Пуснете сесията или „Пусни отново оттук".',
     'reg.fixPromptLoading': 'чета задачата…',
     'reg.newTask': 'Нова задача',

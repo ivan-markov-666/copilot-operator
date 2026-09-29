@@ -697,8 +697,17 @@ export const api = {
   deleteTask: (id: string, taskId: string) => call<{ ok: true }>(`/sessions/${id}/tasks/${taskId}`, { method: 'DELETE' }),
   /** Queues a finished task again, keeping the earlier attempt on the record. */
   continueTask: (id: string, taskId: string) => call<Task>(`/sessions/${id}/tasks/${taskId}/continue`, { method: 'POST', body: '{}' }),
-  rerunTask: (id: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {}) =>
-    call<Task>(`/sessions/${id}/tasks/${taskId}/rerun`, { method: 'POST', body: JSON.stringify(patch) }),
+  rerunTask: (
+    id: string,
+    taskId: string,
+    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
+    /** For a task that ended done: the new attempt builds on its work, on its branch. */
+    opts: { buildOnFinished?: boolean } = {},
+  ) =>
+    call<Task>(`/sessions/${id}/tasks/${taskId}/rerun`, {
+      method: 'POST',
+      body: JSON.stringify({ ...patch, ...(opts.buildOnFinished ? { buildOnFinished: true } : {}) }),
+    }),
   /** `runId` asks for one earlier attempt instead of the current one. */
   /** The attempt as a story: sent, answered, run, ended. Polled while live. */
   taskStory: (id: string, taskId: string, runId?: string) =>

@@ -1632,7 +1632,13 @@ function TaskCard({
   const saveAndRerun = async () => {
     if (!(await confirmDialog(t('task.editRanConfirm', { title: task.title })))) return;
     try {
-      await api.rerunTask(session.id, task.id, { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks });
+      // As in the register: a task that ended done is edited to build on its work, not to redo it.
+      await api.rerunTask(
+        session.id,
+        task.id,
+        { title, level2, prompt: promptText, vcsPlan: { branch, commitMessage }, checks },
+        { buildOnFinished: task.status === 'done' },
+      );
       setEditing(false);
       onChange();
     } catch (e) {

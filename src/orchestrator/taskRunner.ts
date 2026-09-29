@@ -772,6 +772,7 @@ export async function runTask(
       taskNumber,
       contractAlreadySent: session.contractSent,
       continuing: task.continuing,
+      buildsOn: task.buildsOn,
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
       readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,

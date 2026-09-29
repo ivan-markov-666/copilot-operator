@@ -579,6 +579,16 @@ function Flow({
                 </button>
               )}
               {/*
+               * A finished task can be given a new instruction too — "now also do this", "change
+               * that" — and it builds on what the task did rather than starting it over. See
+               * `Task.buildsOn`.
+               */}
+              {e.status === 'done' && !e.sessionRunning && (
+                <button className="quiet" onClick={() => setFixing(e)} title={t('reg.newPromptHint')}>
+                  {t('reg.newPrompt')}
+                </button>
+              )}
+              {/*
                * Only on a task that has actually run. A queued one has no point to go back to
                * and is already where a restart would put it.
                */}
@@ -811,7 +821,8 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
     setBusy(true);
     setMsg('');
     try {
-      await api.rerunTask(entry.sessionId, entry.taskId, { prompt });
+      // A finished task's new prompt builds on its work; a failed one's starts again.
+      await api.rerunTask(entry.sessionId, entry.taskId, { prompt }, { buildOnFinished: entry.status === 'done' });
       setMsg(t('reg.fixPromptSaved', { title: entry.title }));
       setTimeout(() => onClose(true), 900);
     } catch (e) {
@@ -824,7 +835,7 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
     <div className="modal-backdrop" role="presentation" onClick={() => onClose(false)}>
       <div className="modal wide" role="dialog" aria-modal="true" aria-labelledby="fix-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="fix-title">{t('reg.fixPromptTitle', { title: entry.title })}</h2>
-        <p className="muted small">{t('reg.fixPromptHint')}</p>
+        <p className="muted small">{t(entry.status === 'done' ? 'reg.newPromptHint' : 'reg.fixPromptHint')}</p>
         {entry.reason && <p className="what err small">{t('reg.stopped', { reason: entry.reason })}</p>}
         {prompt === null ? (
           <p className="muted small">{msg || t('reg.fixPromptLoading')}</p>

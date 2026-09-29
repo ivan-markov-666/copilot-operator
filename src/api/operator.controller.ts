@@ -191,9 +191,19 @@ export class OperatorController {
   rerunTask(
     @Param('id') id: string,
     @Param('taskId') taskId: string,
-    @Body() body?: { title?: string; level2?: string; prompt?: string; vcsPlan?: { branch?: string; commitMessage?: string }; checks?: TaskCheck[] },
+    @Body()
+    body?: {
+      title?: string;
+      level2?: string;
+      prompt?: string;
+      vcsPlan?: { branch?: string; commitMessage?: string };
+      checks?: TaskCheck[];
+      /** A new prompt for a done task that builds on its work; see `rerunTask` in the service. */
+      buildOnFinished?: boolean;
+    },
   ): Promise<unknown> {
-    return this.ops.rerunTask(id, taskId, body ?? {}).catch(fail);
+    const { buildOnFinished, ...patch } = body ?? {};
+    return this.ops.rerunTask(id, taskId, patch, { buildOnFinished: buildOnFinished === true }).catch(fail);
   }
 
   /** What going back to before this task would do. Changes nothing. */

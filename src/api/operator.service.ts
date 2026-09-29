@@ -600,16 +600,26 @@ export class OperatorService {
     sessionId: string,
     taskId: string,
     patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks'>> = {},
+    /**
+     * A new prompt for a task that ended done builds on what it did: the next attempt works on
+     * that attempt's branch. Only for a done task — a failed attempt's work is what is being
+     * replaced, so a re-run of one starts again from where the task first started.
+     */
+    opts: { buildOnFinished?: boolean } = {},
   ): Promise<Task> {
     await this.init();
-    const task = await this.store.rerunTask(sessionId, taskId, patch);
+    const before = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
+    const buildsOn = opts.buildOnFinished && before?.status === 'done' ? { fromAttempt: before.attempt ?? 1 } : undefined;
+    const task = await this.store.rerunTask(sessionId, taskId, patch, undefined, buildsOn);
     this.bus.publish({
       sessionId,
       taskId,
       type: 'task-requeued',
       level: 'info',
-      message: `"${task.title}" is queued again (attempt ${task.attempt ?? 1})`,
-      data: { attempt: task.attempt },
+      message: buildsOn
+        ? `"${task.title}" is queued again with a new prompt that builds on attempt ${buildsOn.fromAttempt} (attempt ${task.attempt ?? 1})`
+        : `"${task.title}" is queued again (attempt ${task.attempt ?? 1})`,
+      data: { attempt: task.attempt, ...(buildsOn ? { buildsOn } : {}) },
     });
     return task;
   }
