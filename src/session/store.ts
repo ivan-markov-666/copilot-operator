@@ -429,6 +429,12 @@ export class SessionStore {
           checks: t.checks,
           vcsPlan: t.vcsPlan,
           review: t.review,
+          stats: t.stats,
+          continuing: t.continuing,
+          buildsOn: t.buildsOn,
+          freshRetry: t.freshRetry,
+          scope: t.scope,
+          scopeReverted: t.scopeReverted,
           vcs: t.vcs,
         },
       ];
@@ -464,6 +470,12 @@ export class SessionStore {
       // the one thing a new attempt should inherit.
       t.deviations = undefined;
       t.disputes = undefined;
+      // Counts, the ending and what was put back belong to the attempt above too. A fresh-chat retry
+      // marks itself again after this, in the runner.
+      t.stats = undefined;
+      t.handoff = undefined;
+      t.scopeReverted = undefined;
+      t.freshRetry = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.
       t.vcs = undefined;

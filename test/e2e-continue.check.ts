@@ -79,6 +79,12 @@ await scenario('a task stopped at the message limit is continued in the same cha
   t.check('as attempt 2, with attempt 1 kept on the record', [after.attempt, after.attempts?.[0]?.status], [2, 'limit-reached']);
   t.check('on the branch the first attempt used', after.vcs?.branch, 'cop/limited');
   t.check('the contract was sent only once', h.chat.sent.filter((m) => m.contract === 'task').length, 1);
+
+  type Ratio = { n: number; of: number };
+  const figures = (await h.call<{ rows: Array<{ group: string; firstPass: Ratio; doneInTheEnd: Ratio; resumed: Ratio; manualInterventions: number; attempts: number }> }>('GET', '/metrics')).rows[0]!;
+  t.check('the register\'s figures: not done first time, done in the end, resumed and finished, one person stepping in',
+    [figures.attempts, figures.firstPass, figures.doneInTheEnd, figures.resumed, figures.manualInterventions],
+    [2, { n: 0, of: 1 }, { n: 1, of: 1 }, { n: 1, of: 1 }, 1]);
 });
 
 await scenario('"only this one": a run of one picked task leaves the rest queued', {}, async (h) => {

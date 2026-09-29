@@ -225,6 +225,12 @@ try {
     await confirm.getByRole('button', { name: 'OK' }).click();
     await waitFor('the task to be queued again', async () => (await h.session(s!.id)).tasks[0]!.status === 'queued');
     t.check('it is queued as a continuation', (await h.session(s!.id)).tasks[0]!.continuing?.how, 'limit');
+
+    await page.goto(url('/history'));
+    const figures = page.locator('.metrics');
+    await figures.getByText('How the bot is doing').waitFor();
+    const firstRow = await figures.locator('tr', { hasText: 'Done at the first attempt' }).textContent();
+    t.truthy('the register shows the figures: none done at the first attempt yet', /0 \/ 1 \(0%\)/.test(firstRow ?? ''), firstRow);
   });
 
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {

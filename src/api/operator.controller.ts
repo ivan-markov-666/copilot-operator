@@ -720,6 +720,11 @@ export class OperatorController {
     return this.ops.taskRegistry();
   }
 
+  @Get('metrics')
+  metrics(): Promise<unknown> {
+    return this.ops.metrics();
+  }
+
   // --- helpers for the UI -----------------------------------------------------------------
 
   @Get('dirs')

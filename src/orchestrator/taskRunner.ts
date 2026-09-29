@@ -1920,7 +1920,10 @@ export async function runSession(
           s.chat = undefined;
           s.contractSent = false;
           const again = s.tasks.find((x) => x.id === task.id);
-          if (again) again.autoRetries = (again.autoRetries ?? 0) + 1;
+          if (again) {
+            again.autoRetries = (again.autoRetries ?? 0) + 1;
+            again.freshRetry = true;
+          }
         });
         await chat.newChat();
         /*

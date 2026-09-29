@@ -75,6 +75,7 @@ import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } fro
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { composeHandoff } from '../session/handoff.js';
+import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { Settings } from './settings.js';
@@ -2405,6 +2406,12 @@ export class OperatorService {
    * what is still ahead; doing the flattening here keeps that split honest, because the
    * queue position is only knowable from the session's own list.
    */
+  /** How well the bot is doing, added up from every task on record. See `session/metrics.ts`. */
+  async metrics(): Promise<Metrics> {
+    await this.init();
+    return computeMetrics(await this.store.listSessions());
+  }
+
   async taskRegistry(): Promise<RegistryEntry[]> {
     await this.init();
     const sessions = await this.store.listSessions();

@@ -2987,6 +2987,13 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           },
         ],
       },
+      {
+        headingKey: 'metrics.title',
+        en: 'How the bot is doing',
+        bg: 'Как се справя ботът',
+        // A table of figures at the foot of the register, read-only; the heading says what it is.
+        controls: [],
+      },
     ],
   },
 

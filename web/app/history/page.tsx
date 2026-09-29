@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, fmtDuration, type RegistryEntry, type TaskStatus, sessionHref } from '../../lib/api';
+import { api, fmtDuration, type Metrics, type MetricsRow, type Ratio, type RegistryEntry, type TaskStatus, sessionHref } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { useModalFocus } from '../../lib/useModalFocus';
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
@@ -348,9 +348,79 @@ export default function HistoryPage() {
               {past.length === 0 ? <div className="empty">{t('reg.noPast')}</div> : <PastByRun entries={past} sizes={runSizes} onChange={() => void load()} />}
             </section>
           )}
+          {all && all.length > 0 && <MetricsPanel refreshKey={updatedAt} />}
         </>
       )}
     </>
+  );
+}
+
+/**
+ * How well the bot is doing, added up from every task on record (src/session/metrics.ts).
+ *
+ * Read when the register reloads, which is every few seconds; the figures are cheap to add up and
+ * a person watching a run sees them move. One column for all tasks and one per model, because
+ * "which model gets it right first time" is the question most of these figures are for.
+ */
+function MetricsPanel({ refreshKey }: { refreshKey: string }) {
+  const { t } = useT();
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api
+      .metrics()
+      .then((m) => {
+        setMetrics(m);
+        setErr('');
+      })
+      .catch((e: unknown) => setErr((e as Error).message));
+  }, [refreshKey]);
+  if (!metrics) return err ? <div className="panel err">{err}</div> : null;
+  const ratio = (r: Ratio): string => (r.of === 0 ? '—' : `${r.n} / ${r.of} (${Math.round((100 * r.n) / r.of)}%)`);
+  const rows: Array<[Key, (m: MetricsRow) => string]> = [
+    ['metrics.tasks', (m) => `${m.tasks} · ${t('metrics.attemptsN', { n: m.attempts })}`],
+    ['metrics.firstPass', (m) => ratio(m.firstPass)],
+    ['metrics.doneInTheEnd', (m) => ratio(m.doneInTheEnd)],
+    ['metrics.falseCompletion', (m) => ratio(m.falseCompletion)],
+    ['metrics.reviewRejection', (m) => ratio(m.reviewRejection)],
+    ['metrics.repeatedCommands', (m) => ratio(m.repeatedCommands)],
+    ['metrics.noProgress', (m) => ratio(m.noProgress)],
+    ['metrics.scopeViolation', (m) => ratio(m.scopeViolation)],
+    ['metrics.unrelatedDiff', (m) => ratio(m.unrelatedDiff)],
+    ['metrics.resumed', (m) => ratio(m.resumed)],
+    ['metrics.freshRetries', (m) => String(m.freshRetries)],
+    ['metrics.manual', (m) => String(m.manualInterventions)],
+    ['metrics.ended', (m) => Object.entries(m.ended).map(([s, n]) => `${t(`status.${s}` as Key)} ${n}`).join(', ') || '—'],
+  ];
+  const all = metrics.rows[0];
+  return (
+    <section className="panel metrics">
+      <h2>{t('metrics.title')}</h2>
+      <p className="muted small">{t('metrics.hint')}</p>
+      {all && all.withStats < all.attempts && <p className="muted small">{t('metrics.olderAttempts', { n: all.attempts - all.withStats })}</p>}
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>{t('metrics.col.measure')}</th>
+              {metrics.rows.map((m) => (
+                <th key={m.group}>{m.group === 'all' ? t('metrics.col.all') : m.group}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, value]) => (
+              <tr key={label}>
+                <td>{t(label)}</td>
+                {metrics.rows.map((m) => (
+                  <td key={m.group}>{value(m)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

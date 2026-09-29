@@ -658,6 +658,28 @@ export type Handoff = {
   notExecuted: string[];
 };
 
+/** See `src/session/metrics.ts`: counts the runner recorded, as "so many of so many". */
+export type Ratio = { n: number; of: number };
+export type MetricsRow = {
+  group: string;
+  tasks: number;
+  attempts: number;
+  firstPass: Ratio;
+  doneInTheEnd: Ratio;
+  ended: Partial<Record<TaskStatus, number>>;
+  freshRetries: number;
+  manualInterventions: number;
+  falseCompletion: Ratio;
+  reviewRejection: Ratio;
+  repeatedCommands: Ratio;
+  scopeViolation: Ratio;
+  noProgress: Ratio;
+  unrelatedDiff: Ratio;
+  resumed: Ratio;
+  withStats: number;
+};
+export type Metrics = { rows: MetricsRow[]; computedAt: string };
+
 export type SessionEvent = {
   at: string;
   sessionId: string;
@@ -735,6 +757,7 @@ export const api = {
   deletePersona: (name: string) => call<{ ok: true }>(`/personas/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   sessions: () => call<Session[]>('/sessions'),
+  metrics: () => call<Metrics>('/metrics'),
   session: (id: string) => call<Session>(`/sessions/${id}`),
   createSession: (name: string, mirror?: Partial<Mirror>) =>
     call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, mirror }) }),

@@ -208,6 +208,11 @@ export type Task = {
   handoff?: Handoff;
   /** What went wrong on the way, counted by the runner; the register adds them up. Absent on older tasks. */
   stats?: TaskStats;
+  /**
+   * Set on an attempt the runner started by itself, in a fresh conversation, after the one before
+   * it ended blocked (`limits.retryBlockedInFreshChat`). Absent on one a person started.
+   */
+  freshRetry?: boolean;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -457,6 +462,13 @@ export type TaskAttempt = {
   vcsPlan?: TaskVcsPlan;
   /** What the independent review concluded about this attempt. */
   review?: TaskReview;
+  /** The attempt's own counts, how it began and what the runner put back; for the register's figures. */
+  stats?: TaskStats;
+  continuing?: TaskContinuation;
+  buildsOn?: Task['buildsOn'];
+  freshRetry?: boolean;
+  scope?: string[];
+  scopeReverted?: string[];
   /**
    * What version control did for this attempt, including the commit it started from.
    *

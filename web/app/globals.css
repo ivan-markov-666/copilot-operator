@@ -681,6 +681,10 @@ th, td { position: relative; }
   pre, .log { font-size: calc(12px * var(--scale)); }
 }
 
+/* The register's figures: a table that scrolls on its own when it has many model columns. */
+.table-scroll { overflow-x: auto; }
+.metrics td:not(:first-child), .metrics th:not(:first-child) { white-space: nowrap; }
+
 /* How a task ended (HandoffView): one line per answer, lists indented under their label. */
 .handoff .handoff-row { margin: 4px 0; overflow-wrap: anywhere; }
 .handoff .handoff-row ul { margin: 2px 0 0; padding-left: 20px; }
