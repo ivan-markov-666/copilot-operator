@@ -301,6 +301,7 @@ export class SessionStore {
       checks?: TaskCheck[];
       reviewEnabled?: boolean;
       readOnly?: boolean;
+      scope?: string[];
     },
   ): Promise<Task> {
     const vcsPlan = tidyVcsPlan(input.vcsPlan);
@@ -321,6 +322,8 @@ export class SessionStore {
       ...(input.reviewEnabled === false ? { reviewEnabled: false } : {}),
       // Only `true` is worth storing: a task may change files unless a plan said otherwise.
       ...(input.readOnly === true ? { readOnly: true } : {}),
+      // Stored only when it limits something: absent means anywhere, as before scopes existed.
+      ...((input.scope ?? []).filter((p) => p.trim()).length > 0 ? { scope: (input.scope ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
     };
     await this.updateSession(sessionId, (s) => {
       s.tasks.push(task);

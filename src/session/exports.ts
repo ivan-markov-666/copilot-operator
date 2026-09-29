@@ -181,6 +181,7 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           if (t.checks && t.checks.length > 0) task.checks = t.checks.map(planCheck);
           if (t.reviewEnabled === false) task.review = false;
           if (t.readOnly) task.readOnly = true;
+          if (t.scope && t.scope.length > 0) task.scope = [...t.scope];
           const earlier = earlierPlans(t, level2);
           if (earlier.length > 0) task.earlierAttempts = earlier;
           return task;
@@ -423,6 +424,8 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
       title: task.title,
       attempt: task.attempt ?? 1,
       readOnly: task.readOnly ?? false,
+      scope: task.scope ?? [],
+      scopeReverted: task.scopeReverted ?? [],
       prompt: p.prompt,
       expected: p.expected,
       level2: task.level2,

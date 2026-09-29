@@ -226,6 +226,13 @@ const TaskInput = z.object({
    */
   readOnly: z.boolean().default(false),
   /**
+   * The paths this task may change, repository-relative: a file, a folder (`tests/e2e/`), or a
+   * pattern with `*` and `**`. Absent or empty means anywhere in the project. Enforced by the runner
+   * after every round of steps when version control is on — a change outside is put back and the
+   * chat told — which a sentence in the prompt cannot be. See `vcs/scope.ts`.
+   */
+  scope: z.array(z.string().trim().min(1, 'A scope entry needs a path or a pattern.')).default([]),
+  /**
    * What earlier attempts of this task were asked, written by the plan export for a task that has
    * been run more than once (`earlierPlans` in `session/exports.ts`). History, not instruction:
    * accepted so that an exported plan imports again without a warning about it, and then ignored —

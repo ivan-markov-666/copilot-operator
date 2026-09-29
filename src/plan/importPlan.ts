@@ -245,6 +245,7 @@ export async function importPlan(
         checks: task.checks,
         reviewEnabled: task.review,
         readOnly: task.readOnly || undefined,
+        scope: task.scope.length > 0 ? task.scope : undefined,
       });
       titles.push(added.title);
     }

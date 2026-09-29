@@ -196,6 +196,13 @@ export type Task = {
    * page's labels when a reviewer asked.
    */
   readOnly?: boolean;
+  /**
+   * The paths the task may change (repository-relative files, folders or patterns). Absent means
+   * anywhere. The runner puts back changes outside it after every round of steps. See `vcs/scope.ts`.
+   */
+  scope?: string[];
+  /** Changes the runner put back because they were outside `scope`, over the whole attempt. */
+  scopeReverted?: string[];
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };

@@ -42,6 +42,7 @@ import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
+import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -727,6 +728,13 @@ export async function runTask(
           : `branch ${prepared.vcs.branch}, from ${prepared.vcs.baseCommit ?? '(no commits yet)'}`,
       );
     }
+    /*
+     * The paths this task may change. Enforced only on a branch of the task's own, which is what
+     * makes "put back" safe: the tree was clean when the branch was made, so every change in it
+     * is the task's, and the starting commit is what a change goes back to.
+     */
+    const scope = task.scope ?? [];
+    const scopeEnforced = scope.length > 0 && !!prepared.vcs.branch && !prepared.vcs.problem && !!prepared.vcs.baseCommit;
 
     // --- project mirror, attached to the first message of the task ---------------------
     let mirrorFiles: string[] = [];
@@ -784,6 +792,7 @@ export async function runTask(
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
       readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
+      scopeNote: scopeNote(scope, scopeEnforced),
       shellNote: shellNote(shells, defaultShell),
     });
     await setTask((t) => {
@@ -1562,6 +1571,29 @@ export async function runTask(
       // do anything with it, and the reason on the task says what to install or set instead.
       if (environmentProblem) {
         return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
+      }
+
+      /*
+       * The task's scope, as a rule rather than a sentence (see `vcs/scope.ts`): whatever this round
+       * changed outside it is put back now, before the chat reads the results and builds on them,
+       * and the chat is told in the same message.
+       */
+      if (scopeEnforced) {
+        const check = await enforceScope(repoDirOf(session), scope).catch((e: unknown) => ({
+          outside: [] as string[],
+          reverted: [] as string[],
+          failed: [{ path: '(the working tree)', why: (e as Error).message }],
+        }));
+        if (check.outside.length > 0 || check.failed.length > 0) {
+          sink.event('scope-reverted', { iteration: iterations, reverted: check.reverted, failed: check.failed },
+            `outside the task's scope, put back: ${check.reverted.join(', ') || '(none)'}` +
+              (check.failed.length > 0 ? `; could not be put back: ${check.failed.map((f) => f.path).join(', ')}` : ''),
+            'warn');
+          runnerNotes.push(scopeMessage(check, scope));
+          await setTask((t) => {
+            t.scopeReverted = [...new Set([...(t.scopeReverted ?? []), ...check.reverted])];
+          });
+        }
       }
 
       // --- report back ---------------------------------------------------------------

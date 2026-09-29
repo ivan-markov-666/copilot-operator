@@ -224,6 +224,10 @@ export type Task = {
   reviewEnabled?: boolean;
   /** The task must not change files; the runner fails it if the tree changed. */
   readOnly?: boolean;
+  /** The paths the task may change; the runner puts back changes outside them. Absent means anywhere. */
+  scope?: string[];
+  /** What the runner put back because it was outside `scope`. */
+  scopeReverted?: string[];
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -357,6 +361,8 @@ export type RegistryEntry = {
   disputes?: number;
   /** The task must not change files. */
   readOnly?: boolean;
+  /** The paths the task may change. */
+  scope?: string[];
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */

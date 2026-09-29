@@ -38,6 +38,8 @@ export type ComposeInput = {
   workDirNote?: string;
   /** Set for a task that must not change files. See `READ_ONLY_NOTE`. */
   readOnlyNote?: string;
+  /** Set for a task with a scope: which paths it may change. See `vcs/scope.ts`. */
+  scopeNote?: string;
   /**
    * What version control has already done for this task, as an instruction to Copilot.
    *
@@ -70,7 +72,7 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.readOnlyNote, input.vcsNote, input.shellNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.scopeNote, input.vcsNote, input.shellNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
 

@@ -474,6 +474,11 @@ function Flow({
                   {t('task.readOnly')}
                 </span>
               )}
+              {(e.scope?.length ?? 0) > 0 && (
+                <span className="chip" title={t('task.scopeWhy')}>
+                  {t('task.scope', { paths: (e.scope ?? []).join(', ') })}
+                </span>
+              )}
               {(e.autoRetries ?? 0) > 0 && (
                 <span className={`badge ${e.status === 'done' ? 'done' : 'blocked'}`} title={t('reg.retriedFreshWhy')}>
                   {e.status === 'done' ? t('reg.retriedFreshDone', { n: e.autoRetries ?? 0 }) : t('reg.retriedFreshStill', { n: e.autoRetries ?? 0 })}

@@ -255,6 +255,8 @@ export type RegistryEntry = {
   disputes?: number;
   /** The task must not change files. */
   readOnly?: boolean;
+  /** The paths the task may change; absent means anywhere. */
+  scope?: string[];
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
   autoRetries?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
@@ -2433,6 +2435,7 @@ export class OperatorService {
           deviations: t.deviations?.length || undefined,
           disputes: t.disputes?.length || undefined,
           readOnly: t.readOnly || undefined,
+          scope: t.scope?.length ? t.scope : undefined,
           autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,
           changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,

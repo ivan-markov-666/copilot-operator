@@ -284,6 +284,26 @@ await scenario('a commit on the branch that the runner did not make is named on 
   t.check('and the task\'s own commit went on top of it', h.git('rev-list', '--count', 'main..cop/foreign'), '2');
 });
 
+await scenario('a change outside the task\'s scope is put back and the chat is told', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'scoped', [{ ...greeting, scope: ['hello.txt'] }]));
+  h.chat.script(
+    (m) => {
+      t.truthy('the opening message states the scope', /## Scope/.test(m.text) && m.text.includes('hello.txt'), m.text.slice(0, 300));
+      return reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8", "Set-Content -Path README.md -Value 'rewritten' -Encoding utf8");
+    },
+    (m) => {
+      t.truthy('the next message says README.md was put back', /put back by the runner: README\.md/.test(m.text), m.text.slice(0, 600));
+      return reply.done();
+    },
+  );
+  const after = await h.run(s!.id);
+  const task = after.tasks[0]!;
+  t.check('the task is done', task.status, 'done');
+  t.check('its work inside the scope is committed', h.git('show', 'cop/scoped:hello.txt'), 'hi');
+  t.check('the file outside it is as it was', h.git('show', 'cop/scoped:README.md'), '# fixture');
+  t.check('and the task records what was put back', (task as unknown as { scopeReverted?: string[] }).scopeReverted, ['README.md']);
+});
+
 await scenario('the API refuses callers without the token', {}, async (h) => {
   const res = await fetch(`http://127.0.0.1:${h.api.port}/api/sessions`);
   t.check('no token: 401', res.status, 401);

@@ -1515,6 +1515,7 @@ function ExportPanel({ session }: { session: Session }) {
                 <span>
                   {task.title} <span className={`badge ${task.status}`}>{t(`status.${task.status}` as Key)}</span>{' '}
                   {task.readOnly && <span className="chip">{t('task.readOnly')}</span>}{' '}
+                  {(task.scope?.length ?? 0) > 0 && <span className="chip">{t('task.scope', { paths: (task.scope ?? []).join(', ') })}</span>}{' '}
                   <span className="muted small">{fmtTime(task.finishedAt ?? task.startedAt ?? task.createdAt)}</span>
                 </span>
               </label>
@@ -1916,6 +1917,12 @@ function TaskCard({
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+              {/* The runner put these back: they were outside the paths the task may change. */}
+              {(task.scopeReverted?.length ?? 0) > 0 && (
+                <div className="small" style={{ marginTop: 4 }}>
+                  {t('task.scopeReverted', { n: task.scopeReverted?.length ?? 0, paths: (task.scopeReverted ?? []).join(', ') })}
                 </div>
               )}
               {/* Commits on the branch that the runner did not make, found before its own commit. */}
