@@ -9,8 +9,22 @@
 import { ReplySchema, type Reply, type Step } from './replySchema.js';
 import { ReviewSchema, type Review } from './reviewSchema.js';
 
-export type ParseOk = { ok: true; reply: Reply; done: boolean; blocked: boolean; json: string };
-export type ParseFail = { ok: false; reason: string; detail: string };
+export type ParseOk = {
+  ok: true;
+  reply: Reply;
+  done: boolean;
+  blocked: boolean;
+  json: string;
+  /** Prose fields that arrived in another shape and were read as text; see `normaliseProse`. */
+  coerced?: string[];
+};
+export type ParseFail = {
+  ok: false;
+  reason: string;
+  detail: string;
+  /** The fields the schema rejected, as dotted paths (`tried.0`, `steps.1.cmd`), for the message back. */
+  paths?: string[];
+};
 
 /** The same, for a reviewing conversation, which answers in its own contract. */
 export type ReviewParseOk = { ok: true; review: Review; verdict: 'continue' | 'pass' | 'fail'; json: string };
@@ -69,6 +83,77 @@ export function stripCitations(text: string | undefined): string | undefined {
   return text.replace(/\s*【[^】]*】/g, '').replace(/[ 	]+$/gm, '').trim();
 }
 
+/*
+ * Prose that arrived in another shape.
+ *
+ * `tried`, `needed`, `notes` and `summary` are sentences for a person to read; nothing in them is
+ * run. A chat that writes `tried` as a list of objects — `{"approach": "…", "result": "…"}` — has
+ * said exactly what was asked, in a shape the schema did not expect, and refusing the whole reply
+ * for it cost a format round each time and, three in a row, the task: it ended "failed" with the
+ * work done and its results already recorded. So these fields are read as text whatever shape they
+ * come in, and the reading is reported. The fields that are acted on — `status`, `steps` and
+ * everything in them — are never coerced: a step the runner would have to guess at is not run.
+ */
+const PROSE_KEYS = ['approach', 'what', 'tried', 'attempt', 'action', 'description', 'text', 'summary', 'detail', 'result', 'outcome', 'why', 'reason', 'needed'];
+
+function proseOf(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(proseOf).filter((x) => x.trim()).join('\n');
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const named = PROSE_KEYS.filter((k) => typeof record[k] === 'string' && (record[k] as string).trim()).map((k) => record[k] as string);
+    if (named.length > 0) return named.join(' — ');
+    const strings = Object.values(record).filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+    return strings.length > 0 ? strings.join(' — ') : JSON.stringify(value);
+  }
+  return String(value);
+}
+
+export function normaliseProse(value: unknown): { value: unknown; coerced: string[] } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { value, coerced: [] };
+  const out: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  const coerced: string[] = [];
+  for (const key of ['notes', 'summary', 'needed']) {
+    if (key in out && out[key] !== undefined && typeof out[key] !== 'string') {
+      out[key] = proseOf(out[key]);
+      coerced.push(key);
+    }
+  }
+  if ('tried' in out && out.tried !== undefined) {
+    const tried = out.tried;
+    if (typeof tried === 'string') {
+      out.tried = tried.trim() ? [tried] : [];
+      coerced.push('tried');
+    } else if (Array.isArray(tried) && tried.some((t) => typeof t !== 'string')) {
+      out.tried = tried.map(proseOf).filter((t) => t.trim() !== '');
+      tried.forEach((t, i) => {
+        if (typeof t !== 'string') coerced.push(`tried.${i}`);
+      });
+    }
+  }
+  return { value: out, coerced };
+}
+
+/** What each field must look like, said in the message that asks for a reformatted reply. */
+const FIELD_SHAPES: Array<[RegExp, string]> = [
+  [/^status$/, '"status" is one of "continue", "done", "blocked"'],
+  [/^steps(\.|$)/, '"steps" is a list of {"id": 1, "type": "command", "cmd": "the command"} ("shell", "expect", "timeoutSec" optional)'],
+  [/^tried(\.|$)/, '"tried" is a list of plain strings, one sentence per approach'],
+  [/^deviations(\.|$)/, '"deviations" is a list of {"instruction": "…", "did": "…", "why": "…"} with plain strings'],
+  [/^disputed(\.|$)/, '"disputed" is a list of {"finding": "…", "why": "…", "evidence": "…"} with plain strings'],
+  [/^(summary|notes|needed)$/, '"summary", "notes" and "needed" are plain strings'],
+];
+
+const FORMAT_EXAMPLE = [
+  '```json',
+  '{"status": "continue", "notes": "what this round does", "steps": [{"id": 1, "type": "command", "cmd": "npm test"}]}',
+  '```',
+  'or, to end: {"status": "done", "summary": "several sentences on what was done and what it shows"}',
+  'or {"status": "blocked", "summary": "…", "tried": ["first approach", "second approach"], "needed": "what would unblock it"}',
+].join('\n');
+
 export type ParseOptions = {
   /** The word that ends the run when Copilot writes it. */
   stopMarker: string;
@@ -78,6 +163,7 @@ export type ParseOptions = {
 
 export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
   const candidates = findJsonCandidates(markdown);
+  const paths = new Set<string>();
 
   if (candidates.length === 0) {
     return {
@@ -97,11 +183,13 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
         errors.push(`JSON.parse failed: ${(e as Error).message}`);
         continue;
       }
-      const result = ReplySchema.safeParse(value);
+      const prose = normaliseProse(value);
+      const result = ReplySchema.safeParse(prose.value);
       if (!result.success) {
         errors.push(
           result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; '),
         );
+        for (const i of result.error.issues) paths.add(i.path.join('.') || '(root)');
         continue;
       }
 
@@ -128,6 +216,7 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
         done: reply.status === 'done' || (markerHit && hasSummary && !blocked),
         blocked,
         json: text.trim(),
+        ...(prose.coerced.length > 0 ? { coerced: prose.coerced } : {}),
       };
     }
   }
@@ -136,6 +225,7 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
     ok: false,
     reason: 'invalid-json',
     detail: errors.slice(0, 4).join(' | '),
+    ...(paths.size > 0 ? { paths: [...paths] } : {}),
   };
 }
 
@@ -191,15 +281,28 @@ export function parseReview(markdown: string, opts: { defaultShell: ParseOptions
 }
 
 /** The message sent back when a reply did not validate. Names the problem, nothing else. */
+/**
+ * The message that asks for the same answer again, in the format.
+ *
+ * It names each rejected field with the shape it must have, gives a valid example, and says what
+ * did not happen: nothing from the rejected reply was run, so the results of the steps before it
+ * stand and the answer only needs reformatting. Without that last part a chat told "invalid" tends
+ * to start the round again, or to keep the same shape and change the wording, and the rounds run out.
+ */
 export function formatErrorMessage(fail: ParseFail, attempt: number, maxAttempts: number): string {
+  const shapes = [...new Set((fail.paths ?? []).flatMap((p) => FIELD_SHAPES.filter(([re]) => re.test(p)).map(([, s]) => s)))];
   return [
-    `Your last reply did not match the required format (attempt ${attempt} of ${maxAttempts}).`,
+    `Your last reply did not match the required format (format retry ${attempt} of ${maxAttempts}).`,
     fail.reason === 'no-json-block'
       ? 'There was no fenced json code block in it.'
       : `The json block did not validate: ${fail.detail}`,
-    'Resend the same answer as exactly one fenced code block tagged json, with the fields',
-    'status, steps and notes, and nothing else tagged json in the reply.',
-  ].join(' ');
+    shapes.length > 0 ? `What those fields must be: ${shapes.join('; ')}.` : '',
+    'Only the format is wrong. Nothing from that reply was run, and the results of the steps before it stand.',
+    'Send the same answer again, reformatted, as exactly one fenced code block tagged json — do not start over and do not change what it asks for. For example:',
+    FORMAT_EXAMPLE,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**

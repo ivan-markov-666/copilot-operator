@@ -209,6 +209,12 @@ export type Task = {
   /** What went wrong on the way, counted by the runner; the register adds them up. Absent on older tasks. */
   stats?: TaskStats;
   /**
+   * Which limit stopped an attempt that ended `limit-reached`, when it was not the message or time
+   * limit: `format-repair-exhausted` is the chat's replies failing the format more times in a row
+   * than `limits.maxFormatRetries` allows. Continued like any limit, in the same chat.
+   */
+  stopCode?: 'format-repair-exhausted';
+  /**
    * Set on an attempt the runner started by itself, in a fresh conversation, after the one before
    * it ended blocked (`limits.retryBlockedInFreshChat`). Absent on one a person started.
    */
@@ -467,6 +473,7 @@ export type TaskAttempt = {
   continuing?: TaskContinuation;
   buildsOn?: Task['buildsOn'];
   freshRetry?: boolean;
+  stopCode?: Task['stopCode'];
   scope?: string[];
   scopeReverted?: string[];
   /**

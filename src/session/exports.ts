@@ -427,6 +427,7 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
       scope: task.scope ?? [],
       scopeReverted: task.scopeReverted ?? [],
       handoff: task.handoff ?? null,
+      stopCode: task.stopCode ?? null,
       prompt: p.prompt,
       expected: p.expected,
       level2: task.level2,

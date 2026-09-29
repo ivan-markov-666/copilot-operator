@@ -63,7 +63,7 @@ export type TaskView = {
   review?: { verdict?: string };
   stats?: { formatErrors: number; doneRejected: number; repeatsRefused: number; stepsRefused: number; operatorStops: number; reviewRejections: number; scopeReverts: number; stoppedFor?: string };
   handoff?: {
-    outcome: { status: string; reason?: string };
+    outcome: { status: string; reason?: string; stopCode?: string };
     changedFiles: Array<{ path: string }>;
     validation: Array<{ name: string; passed: boolean }>;
     knownIssues: string[];

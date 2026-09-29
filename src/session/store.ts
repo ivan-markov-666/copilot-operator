@@ -433,6 +433,7 @@ export class SessionStore {
           continuing: t.continuing,
           buildsOn: t.buildsOn,
           freshRetry: t.freshRetry,
+          stopCode: t.stopCode,
           scope: t.scope,
           scopeReverted: t.scopeReverted,
           vcs: t.vcs,
@@ -476,6 +477,7 @@ export class SessionStore {
       t.handoff = undefined;
       t.scopeReverted = undefined;
       t.freshRetry = undefined;
+      t.stopCode = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.
       t.vcs = undefined;

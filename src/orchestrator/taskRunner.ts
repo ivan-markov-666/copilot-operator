@@ -1354,9 +1354,27 @@ export async function runTask(
         stats.formatErrors += 1;
         sink.event('format-error', { reason: parsed.reason, detail: parsed.detail },
           `reply did not match the contract (${parsed.reason}), retry ${formatRetries}/${cfg.limits.maxFormatRetries}`, 'warn');
+        /*
+         * Out of format retries: stopped at a limit, not failed.
+         *
+         * Nothing about the work went wrong here — the steps that ran are recorded, their output is
+         * in the run folder, and the rejected replies ran nothing. So the task ends `limit-reached`,
+         * marked `format-repair-exhausted`, which is what lets "Continue in the same chat" carry it
+         * on from exactly here instead of the operator having to run it again from the start. It
+         * used to end `failed`, which read as a verdict on the work and offered only a fresh start.
+         */
         if (formatRetries > cfg.limits.maxFormatRetries) {
           await transport.dumpFailure(log.path('failures'), 'format-error');
-          return await finish('failed', `Copilot did not keep the output contract: ${parsed.detail}`, undefined, lastMarkdown);
+          await setTask((t) => {
+            t.stopCode = 'format-repair-exhausted';
+          });
+          return await finish(
+            'limit-reached',
+            `format repair exhausted: ${formatRetries} replies in a row did not match the format (maxFormatRetries ${cfg.limits.maxFormatRetries}), ` +
+              `the last because ${parsed.detail}. Nothing from those replies was run; the work so far is kept.`,
+            undefined,
+            lastMarkdown,
+          );
         }
         await pacer.throttleSend();
         const before = await transport.sendAndConfirm(formatErrorMessage(parsed, formatRetries, cfg.limits.maxFormatRetries));
@@ -1367,6 +1385,10 @@ export async function runTask(
       }
 
       formatRetries = 0;
+      if (parsed.coerced) {
+        sink.event('format-coerced', { fields: parsed.coerced },
+          `read as text: ${parsed.coerced.join(', ')} arrived in another shape; nothing in them is run, so the reply was taken as it was`);
+      }
       iterations += 1;
       await setTask((t) => {
         t.iterations = iterations;

@@ -349,6 +349,70 @@ await scenario('a change outside the task\'s scope is put back and the chat is t
   t.check('and the task records what was put back', (task as unknown as { scopeReverted?: string[] }).scopeReverted, ['README.md']);
 });
 
+/** A reply exactly as given, for shapes the `reply` helpers are built never to produce. */
+const rawJson = (v: unknown): string => 'Here is my answer.\n\n```json\n' + JSON.stringify(v, null, 2) + '\n```\n';
+const countLines = (h: Harness): string[] => readFileSync(join(h.repo, 'count.txt'), 'utf8').split(/\r?\n/).filter(Boolean);
+
+await scenario('the case that failed a task: "tried" as objects after the commands ran — taken as blocked, nothing run twice', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'triedobjects', [{ ...greeting, checks: [] }]));
+  h.chat.script(
+    reply.steps("Add-Content -Path count.txt -Value 'one'"),
+    rawJson({
+      status: 'blocked',
+      summary: 'The work that could be done is done; the last part needs a service that is not running here.',
+      tried: [{ approach: 'started the service', result: 'access denied' }, { approach: 'used the mock instead', result: 'the task forbids it' }],
+      needed: 'the service running',
+    }),
+  );
+  const task = (await h.run(s!.id)).tasks[0]!;
+  t.check('blocked, as the chat said — not failed', task.status, 'blocked');
+  t.truthy('with its approaches read as text', /started the service — access denied/.test(task.reason ?? ''), task.reason);
+  t.check('no format round was spent on it', task.stats?.formatErrors, 0);
+  t.check('and the command ran once', countLines(h), ['one']);
+});
+
+await scenario('a reply that needs fixing: the chat is asked, answers in the format, and the run goes on without repeating a command', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'repair', [{ ...greeting, checks: [] }]));
+  h.chat.script(
+    reply.steps("Add-Content -Path count.txt -Value 'one'"),
+    // A command in the wrong shape: this one is not guessed at.
+    rawJson({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: ['Add-Content', '-Path', 'count.txt', '-Value', 'two'] }] }),
+    (m) => {
+      t.truthy('the chat is told which field and what shape it must have', m.text.includes('steps.0.cmd') && m.text.includes('"steps" is a list of'), m.text.slice(0, 400));
+      t.truthy('and that nothing from that reply ran', /Nothing from that reply was run/.test(m.text), m.text.slice(0, 600));
+      return reply.steps("Add-Content -Path count.txt -Value 'two'");
+    },
+    reply.done(),
+  );
+  const task = (await h.run(s!.id)).tasks[0]!;
+  t.check('the task is done', task.status, 'done');
+  t.check('each command ran once, in order', countLines(h), ['one', 'two']);
+  t.check('the format round is counted apart from the iterations', [task.iterations, task.stats?.formatErrors], [3, 1]);
+});
+
+await scenario('format retries used up: stopped at a limit, not failed, and continued in the same chat', { limits: { maxFormatRetries: 1 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'exhausted', [{ ...greeting, checks: [] }]));
+  const bad = rawJson({ status: 'continue', steps: [{ id: 1, type: 'command' }] });
+  h.chat.script(reply.steps("Add-Content -Path count.txt -Value 'one'"), bad, bad);
+  const stopped = (await h.run(s!.id)).tasks[0]!;
+  t.check('limit-reached, marked format-repair-exhausted', [stopped.status, (stopped as unknown as { stopCode?: string }).stopCode], ['limit-reached', 'format-repair-exhausted']);
+  t.truthy('the reason says so and that the work is kept', /^format repair exhausted: 2 replies in a row/.test(stopped.reason ?? '') && /work so far is kept/.test(stopped.reason ?? ''), stopped.reason);
+  t.check('the handoff carries the code', (stopped.handoff?.outcome as { stopCode?: string } | undefined)?.stopCode, 'format-repair-exhausted');
+
+  const queued = await h.call<{ status: string; continuing?: { how?: string } }>('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`);
+  t.check('"Continue in the same chat" takes it', [queued.status, queued.continuing?.how], ['queued', 'limit']);
+  h.chat.script(
+    (m) => {
+      t.truthy('the chat is told to carry on, and why it stopped', /Continue task 1/.test(m.text) && /format repair exhausted/.test(m.text), m.text.slice(0, 500));
+      return reply.steps("Add-Content -Path count.txt -Value 'two'");
+    },
+    reply.done(),
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('done on the continued attempt', after.status, 'done');
+  t.check('the command of the first attempt did not run again', countLines(h), ['one', 'two']);
+});
+
 await scenario('the API refuses callers without the token', {}, async (h) => {
   const res = await fetch(`http://127.0.0.1:${h.api.port}/api/sessions`);
   t.check('no token: 401', res.status, 401);

@@ -12,7 +12,7 @@
 import type { Task, TaskStatus } from './model.js';
 
 export type Handoff = {
-  outcome: { status: TaskStatus; reason?: string };
+  outcome: { status: TaskStatus; reason?: string; stopCode?: string };
   changedFiles: Array<{ path: string; added: number; removed: number }>;
   validation: Array<{ name: string; passed: boolean }>;
   review?: { verdict: string; open: number };
@@ -55,7 +55,7 @@ export function composeHandoff(task: Task, notRun: NotRun[] = []): Handoff {
   if ((vcs.suspicious?.length ?? 0) > 0 || (vcs.foreignCommits?.length ?? 0) > 0) manual.push('look at the committed files and commits listed above');
 
   return {
-    outcome: { status: task.status, ...(task.reason ? { reason: task.reason } : {}) },
+    outcome: { status: task.status, ...(task.reason ? { reason: task.reason } : {}), ...(task.stopCode ? { stopCode: task.stopCode } : {}) },
     changedFiles: (vcs.files ?? []).map((f) => ({ path: f.path, added: f.added, removed: f.removed })),
     validation: (task.checkResults ?? []).map((c) => ({ name: c.name, passed: c.passed })),
     ...(task.review ? { review: { verdict: task.review.verdict, open: openFindings.length } } : {}),
