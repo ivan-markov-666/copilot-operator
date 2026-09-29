@@ -110,7 +110,9 @@ export default function ImportPage() {
   const runImport = async () => {
     // The same plan pasted twice is the mistake this page invites, so it is named before it
     // happens rather than found afterwards in a list of look-alike sessions.
-    const known = check && !check.ok ? [] : (check?.duplicates ?? []);
+    // Asked here when "Check it" was never pressed: the button is optional, the warning is not.
+    const checked = check ?? (await api.checkPlan(text).catch(() => null));
+    const known = checked && !checked.ok ? [] : (checked?.duplicates ?? []);
     if (known.length > 0) {
       const names = known.map((d) => `• ${d.name} (${d.tasks})`).join('\n');
       if (!(await confirmDialog(t('plan.duplicateConfirm', { names })))) return;
@@ -359,11 +361,12 @@ export default function ImportPage() {
               href={`/?run=${encodeURIComponent(imported.result.sessions.map((x) => x.id).join(','))}&fail=${
                 imported.summary.onFailure
               }`}
+              className="button-link"
             >
-              <button className="primary">{t('plan.runThese')}</button>
+              {t('plan.runThese')}
             </Link>
-            <Link href="/">
-              <button>{t('plan.toSessions')}</button>
+            <Link href="/" className="button-link plain">
+              {t('plan.toSessions')}
             </Link>
           </div>
         </div>

@@ -18,6 +18,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, type ChangedFile, type ChangedFileContent } from '../lib/api';
+import { useModalFocus } from '../lib/useModalFocus';
 import { useT } from '../lib/i18n';
 import { changedSpan, foldRows, linesOf, sideBySide, type DiffRow } from '../lib/lineDiff';
 
@@ -48,6 +49,10 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
   const [openGaps, setOpenGaps] = useState<Map<string, Set<number>>>(new Map());
   const [block, setBlock] = useState(-1);
   const scroller = useRef<HTMLDivElement | null>(null);
+  const overlay = useRef<HTMLDivElement | null>(null);
+  const closeButton = useRef<HTMLButtonElement | null>(null);
+  // Focus on Close when it opens, kept inside, back on "See the changes" when it closes.
+  useModalFocus(overlay, true, closeButton);
 
   useEffect(() => {
     api
@@ -124,7 +129,7 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
   };
 
   return (
-    <div className="diff-overlay" role="dialog" aria-modal="true" aria-labelledby="diff-title">
+    <div ref={overlay} className="diff-overlay" role="dialog" aria-modal="true" aria-labelledby="diff-title">
       <div className="diff-head">
         <h2 id="diff-title">{t('diff.title', { title })}</h2>
         {changes?.ok && (
@@ -135,7 +140,7 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
         )}
         <span className="grow" />
         <span className="muted small">{t('diff.keys')}</span>
-        <button type="button" onClick={onClose}>
+        <button ref={closeButton} type="button" onClick={onClose}>
           {t('diff.close')}
         </button>
       </div>

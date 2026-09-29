@@ -10,9 +10,11 @@
  * or the reason it stopped, because "what was done and what was not" is the whole question.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtDuration, type RegistryEntry, type TaskStatus, sessionHref } from '../../lib/api';
+import { usePoll } from '../../lib/usePoll';
+import { useModalFocus } from '../../lib/useModalFocus';
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
 import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
@@ -95,11 +97,7 @@ export default function HistoryPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 6000);
-    return () => clearInterval(timer);
-  }, [load]);
+  usePoll(load, 6000);
 
   const sessions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -561,7 +559,7 @@ function Flow({
             {e.summary && <RichText text={e.summary} className="what" />}
             {e.reason && <p className="what err">{t('reg.stopped', { reason: e.reason })}</p>}
 
-            {actions.message && <p className="what small">{actions.message}</p>}
+            {actions.message && actions.messageTask === e.taskId && <p className="what small">{actions.message}</p>}
 
             <div className="row small" style={{ marginTop: 6 }}>
               <Link href={sessionHref(e.sessionId, e.taskId)}>{t('reg.openTask')}</Link>
@@ -583,6 +581,7 @@ function Flow({
               {e.runId && (
                 <button
                   className={storyOpen.has(e.taskId) ? '' : 'quiet'}
+                  aria-expanded={storyOpen.has(e.taskId)}
                   onClick={() => flipStory(e.taskId)}
                   title={isLive(e) ? t('story.showLiveWhy') : t('story.why')}
                 >
@@ -818,6 +817,16 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
   const [prompt, setPrompt] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(boxRef, true);
+  // Escape leaves it, as it does the other two dialogs; it did nothing here.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !busy) onClose(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [busy, onClose]);
 
   useEffect(() => {
     let live = true;
@@ -852,14 +861,14 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={() => onClose(false)}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-labelledby="fix-title" onClick={(e) => e.stopPropagation()}>
+      <div ref={boxRef} className="modal wide" role="dialog" aria-modal="true" aria-labelledby="fix-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="fix-title">{t('reg.fixPromptTitle', { title: entry.title })}</h2>
         <p className="muted small">{t(entry.status === 'done' ? 'reg.newPromptHint' : 'reg.fixPromptHint')}</p>
         {entry.reason && <p className="what err small">{t('reg.stopped', { reason: entry.reason })}</p>}
         {prompt === null ? (
           <p className="muted small">{msg || t('reg.fixPromptLoading')}</p>
         ) : (
-          <textarea className="prose" value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ minHeight: 260 }} disabled={busy} />
+          <textarea className="prose" aria-labelledby="fix-title" value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ minHeight: 260 }} disabled={busy} />
         )}
         <div className="row modal-actions">
           {msg && prompt !== null && <span className="small grow">{msg}</span>}
@@ -886,8 +895,8 @@ function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
   const { t } = useT();
   return (
     <div className="row" style={{ margin: '14px 0 18px' }}>
-      <Link href="/#new-session">
-        <button className="primary">{t('reg.newSession')}</button>
+      <Link href="/#new-session" className="button-link">
+        {t('reg.newSession')}
       </Link>
       {sessions.length > 0 && (
         <>
@@ -995,9 +1004,16 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     setOpen(true);
     setMsg('');
     // Asked for when the panel opens rather than kept in step with every tick: what is chosen
-    // below changes which tasks run, not what the run is about.
+    // below changes which tasks run, not what the run is about. The sessions are the ones just
+    // ticked — every candidate's — not `sessionIds`, which still reflects the selection before
+    // this click (empty the first time, so the name was suggested from no sessions at all).
+    const opening = [...new Set(
+      [...candidates]
+        .sort((a, b) => (a.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) - (b.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) || a.position - b.position)
+        .map((e) => e.sessionId),
+    )];
     void api
-      .suggestedRunName(sessionIds)
+      .suggestedRunName(opening)
       .then((r) => setName(r.name))
       .catch(() => undefined);
   };

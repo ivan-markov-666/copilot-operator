@@ -126,6 +126,45 @@ try {
     t.check('pages wider than the screen (pixels too wide)', wide, {});
   });
 
+  await scenario('on a tablet and a laptop at the largest size, no page scrolls sideways either', {}, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'wide'));
+    await page.goto(url('/appearance'));
+    await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ textSize: 'giant' })));
+    const wide: Record<string, number> = {};
+    for (const [w, hgt] of [[768, 1024], [1280, 800]] as const) {
+      await page.setViewportSize({ width: w, height: hgt });
+      for (const p of ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults']) {
+        await page.goto(url(p));
+        await page.waitForLoadState('networkidle');
+        const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        if (over > 1) wide[`${w} ${p}`] = over;
+      }
+    }
+    t.check('pages wider than the window (pixels too wide)', wide, {});
+  });
+
+  await scenario('a double click adds one task, and a dialog keeps and returns the focus', {}, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'clicks'));
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    await page.getByLabel('Task', { exact: true }).fill('Create extra.txt in the repository root holding exactly the word extra, and nothing else.');
+    await page.getByRole('button', { name: 'Add to queue', exact: true }).dblclick();
+    await waitFor('the task list to settle', async () => (await h.session(s!.id)).tasks.length >= 2);
+    await new Promise((r) => setTimeout(r, 800));
+    t.check('one task was added, not two', (await h.session(s!.id)).tasks.length, 2);
+
+    const del = page.getByRole('button', { name: 'Delete', exact: true }).first();
+    await del.click();
+    const dialog = page.getByRole('alertdialog');
+    await dialog.waitFor();
+    t.truthy('the dialog reads out its question, not only its title', ((await dialog.getAttribute('aria-describedby')) ?? '') !== '', await dialog.getAttribute('aria-describedby'));
+    for (let i = 0; i < 5; i++) await page.keyboard.press('Tab');
+    t.check('Tab stays inside the dialog', await page.evaluate(() => Boolean(document.activeElement?.closest('[role="alertdialog"]'))), true);
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached' });
+    t.check('Escape closes it and nothing was deleted', (await h.call<unknown[]>('GET', '/sessions')).length, 1);
+    t.check('and the focus is back on the button that opened it', await page.evaluate(() => document.activeElement?.textContent?.trim()), 'Delete');
+  });
+
   await scenario('the import page turns pasted JSON into sessions', {}, async (h, page, url) => {
     await page.goto(url('/import'));
     await page.getByPlaceholder(/json/i).first().fill(JSON.stringify(planFor(h, 'imported')));

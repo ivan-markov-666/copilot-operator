@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus, sessionHref } from '../lib/api';
+import { usePoll } from '../lib/usePoll';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { useUnattendedWithoutAsking } from '../lib/useUnattendedWithoutAsking';
@@ -47,11 +48,7 @@ export default function SessionsPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(), 3000);
-    return () => clearInterval(timer);
-  }, [load]);
+  usePoll(load, 3000);
 
   /*
    * An import hands this page its sessions and the plan's own answer to "if a session fails".
@@ -71,13 +68,21 @@ export default function SessionsPage() {
     window.history.replaceState(null, '', window.location.pathname);
   }, []);
 
+  // Enter and a click together used to make two sessions; one request at a time.
+  const [creating, setCreating] = useState(false);
+  const creatingNow = useRef(false);
   const create = async () => {
+    if (creatingNow.current) return;
+    creatingNow.current = true;
+    setCreating(true);
     try {
       const s = await api.createSession(name || 'session');
       setName('');
       window.location.href = sessionHref(s.id);
     } catch (e) {
       setError((e as Error).message);
+      creatingNow.current = false;
+      setCreating(false);
     }
   };
 
@@ -212,7 +217,7 @@ export default function SessionsPage() {
               if (e.key === 'Enter') void create();
             }}
           />
-          <button className="primary" onClick={() => void create()} disabled={apiUp === false}>
+          <button className="primary" onClick={() => void create()} disabled={creating || apiUp === false}>
             {t('home.create')}
           </button>
         </div>
@@ -483,9 +488,30 @@ function BatchPanel({
 
   // Settings → Execution can say an unattended start needs no "are you sure"; see the hook.
   const quietStart = useUnattendedWithoutAsking();
+  /*
+   * One request at a time. The buttons stayed live until the next poll noticed the batch, so a
+   * second click in those three seconds sent a second start; stop, pause and resume said nothing
+   * at all when the API refused them.
+   */
+  const [acting, setActing] = useState(false);
+  const actingNow = useRef(false);
+  const act = async (fn: () => Promise<void>): Promise<void> => {
+    if (actingNow.current) return;
+    actingNow.current = true;
+    setActing(true);
+    try {
+      await fn();
+    } catch (e) {
+      setRefusal((e as Error).message);
+    } finally {
+      actingNow.current = false;
+      setActing(false);
+      onChange();
+    }
+  };
   const start = async (mode: 'confirm' | 'unattended') => {
     if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('batch.unattendedConfirm', { n: runnable.length })))) return;
-    try {
+    await act(async () => {
       const r = await api.startBatch(
         runnable.map((s) => s.id),
         mode,
@@ -496,29 +522,26 @@ function BatchPanel({
       );
       setMsg('');
       setRefusal(r.started ? '' : r.reason ?? '');
-      onChange();
-    } catch (e) {
-      setRefusal((e as Error).message);
-    }
+    });
   };
 
-  const stop = async () => {
-    await api.stopBatch();
-    setMsg(t('batch.stopping'));
-    onChange();
-  };
+  const stop = () =>
+    act(async () => {
+      await api.stopBatch();
+      setMsg(t('batch.stopping'));
+    });
 
-  const pause = async () => {
-    await api.pauseBatch();
-    setMsg(t('batch.pausing'));
-    onChange();
-  };
+  const pause = () =>
+    act(async () => {
+      await api.pauseBatch();
+      setMsg(t('batch.pausing'));
+    });
 
-  const resume = async () => {
-    await api.resumeBatch();
-    setMsg('');
-    onChange();
-  };
+  const resume = () =>
+    act(async () => {
+      await api.resumeBatch();
+      setMsg('');
+    });
 
   // Sessions the chosen model would change, named before the run rather than discovered after.
   const overridden = chosen.filter((s) => (s.model ?? '') !== model).length;
@@ -576,10 +599,10 @@ function BatchPanel({
                     {s.name} <span className="muted small">({queuedIn(s)})</span>
                   </span>
                   <span>
-                    <button className="quiet" onClick={() => move(s.id, -1)} disabled={i === 0} aria-label="up">
+                    <button className="quiet" onClick={() => move(s.id, -1)} disabled={i === 0} aria-label={t('batch.moveUp', { name: s.name })}>
                       ↑
                     </button>
-                    <button className="quiet" onClick={() => move(s.id, 1)} disabled={i === runnable.length - 1} aria-label="down">
+                    <button className="quiet" onClick={() => move(s.id, 1)} disabled={i === runnable.length - 1} aria-label={t('batch.moveDown', { name: s.name })}>
                       ↓
                     </button>
                   </span>
@@ -720,13 +743,13 @@ function BatchPanel({
 
           <div className="run-choice">
             <div>
-              <button className="primary" onClick={() => void start('unattended')} disabled={blocked}>
+              <button className="primary" onClick={() => void start('unattended')} disabled={acting || blocked}>
                 {t('batch.run', { n: runnable.length })}
               </button>
               <p className="why">{t('batch.runWhy')}</p>
             </div>
             <div>
-              <button onClick={() => void start('confirm')} disabled={blocked}>
+              <button onClick={() => void start('confirm')} disabled={acting || blocked}>
                 {t('batch.runStep')}
               </button>
               <p className="why">{t('batch.runStepWhy')}</p>
@@ -740,15 +763,15 @@ function BatchPanel({
           {/* The gentler of the two comes first: it is the one somebody wants after a failure,
               and the one that costs nothing to press. */}
           {batch?.pausing ? (
-            <button className="primary" onClick={() => void resume()} disabled={batch?.stopping} title={t('batch.resumeWhy')}>
+            <button className="primary" onClick={() => void resume()} disabled={acting || batch?.stopping} title={t('batch.resumeWhy')}>
               {t('batch.resume')}
             </button>
           ) : (
-            <button onClick={() => void pause()} disabled={batch?.stopping} title={t('batch.pauseWhy')}>
+            <button onClick={() => void pause()} disabled={acting || batch?.stopping} title={t('batch.pauseWhy')}>
               {t('batch.pause')}
             </button>
           )}
-          <button onClick={() => void stop()} disabled={batch?.stopping} title={t('batch.stopWhy')}>
+          <button onClick={() => void stop()} disabled={acting || batch?.stopping} title={t('batch.stopWhy')}>
             {t('batch.stop')}
           </button>
           {batch?.pausing && !batch?.stopping && <span className="muted small">{t('batch.pausing')}</span>}

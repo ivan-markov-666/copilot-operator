@@ -281,6 +281,7 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^reg\.newTaskIn$/, why: 'the second half of the "New task" label' },
   { pattern: /^diff\.(before|after)$/, why: 'the two column headings of the changes view' },
   { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
+  { pattern: /^batch\.move(Up|Down)$/, why: 'only the screen-reader name of the ↑ and ↓ that reorder the sessions of a run; the buttons show an arrow, not this text' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
 const guided = new Set(claims.map((c) => c.key));

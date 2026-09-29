@@ -646,15 +646,36 @@ export type SessionEvent = {
   data?: Record<string, unknown>;
 };
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...(apiToken() ? { 'x-cop-token': apiToken() } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
+/**
+ * How long a request may take before the page gives up on it and says so.
+ *
+ * Without a limit a hung API hung the page: the request never ended, its button stayed disabled
+ * and, with every poller on the page waiting the same way, the browser's handful of connections to
+ * the API were all taken. Thirty seconds is far longer than anything this API does for an ordinary
+ * request. The few that wait on something outside it — a folder picker the operator is looking at,
+ * the chat's model list read through a browser window — pass `timeoutMs: null`.
+ */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+async function call<T>(path: string, init?: RequestInit, opts: { timeoutMs?: number | null } = {}): Promise<T> {
+  const timeoutMs = opts.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : opts.timeoutMs;
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      ...init,
+      ...(timeoutMs !== null && !init?.signal ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+      headers: {
+        'content-type': 'application/json',
+        ...(apiToken() ? { 'x-cop-token': apiToken() } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    if ((e as Error).name === 'TimeoutError') {
+      throw new Error(`The API did not answer within ${Math.round((timeoutMs ?? 0) / 1000)} s (${path.split('?')[0]}). It may be busy; try again.`);
+    }
+    throw e;
+  }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
@@ -842,10 +863,12 @@ export const api = {
     call<string[]>(`/dirs?root=${encodeURIComponent(root)}&gitignore=${respectGitignore ? '1' : '0'}`),
 
   /** Opens the machine's own folder dialog. Resolves when the operator picks or cancels. */
-  browseFolder: (start?: string) => call<FolderPick>('/browse-folder', { method: 'POST', body: JSON.stringify({ start }) }),
+  // Open until the operator closes the folder picker.
+  browseFolder: (start?: string) => call<FolderPick>('/browse-folder', { method: 'POST', body: JSON.stringify({ start }) }, { timeoutMs: null }),
 
   previewMirror: (m: Pick<Mirror, 'rootDir' | 'includeDirs' | 'excludeDirs' | 'respectGitignore' | 'includeEnvFiles'>) =>
-    call<MirrorPreview>('/mirror/preview', { method: 'POST', body: JSON.stringify(m) }),
+    // Walks the whole folder tree, which on a large project takes longer than an ordinary request.
+    call<MirrorPreview>('/mirror/preview', { method: 'POST', body: JSON.stringify(m) }, { timeoutMs: 180_000 }),
 
   tasks: () => call<RegistryEntry[]>('/tasks'),
 
@@ -949,7 +972,8 @@ export const api = {
   setDefaultReviewModel: (model: string) =>
     call<{ defaultReviewModel: string }>('/models/review-default', { method: 'PUT', body: JSON.stringify({ model }) }),
   /** Opens the browser and re-reads the picker. Slow, and refused while a session runs. */
-  refreshModels: () => call<ModelCatalogue>('/models/refresh', { method: 'POST', body: '{}' }),
+  // Opens the chat in a browser window and signs in first: minutes, not seconds.
+  refreshModels: () => call<ModelCatalogue>('/models/refresh', { method: 'POST', body: '{}' }, { timeoutMs: null }),
 };
 
 /** Bytes as something a person reads, not a number to decode. */

@@ -14,7 +14,7 @@
  * test suite — which every folder field then offers by name and the plan brief lists by path.
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, type ModelCatalogue, type ProjectDefault, type ProjectMirrorSelection } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
@@ -166,7 +166,8 @@ function BoundedNumber({
         setText(String(settled));
         if (settled !== value) onChange(settled);
       }}
-      style={{ width: 90 }}
+      // Wide enough for "10800" at every text size; the width is in characters, so it scales with them.
+      style={{ width: '9ch' }}
       disabled={disabled}
     />
   );
@@ -258,6 +259,8 @@ function ProjectSection() {
       const picked = await api.browseFolder(start.trim() || undefined);
       if (picked.ok) into(picked.path);
       else if (!picked.cancelled) setErr(picked.reason ?? '');
+    } catch (e) {
+      setErr((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -317,16 +320,16 @@ function ProjectSection() {
         mirror={project?.mirror}
         isDefault
         busy={busy}
-        onName={(v) => {
+        onNameInput={(v) => {
           setName(v);
           nameLater(v);
         }}
-        onNameBlur={() => void saveName(name)}
-        onDir={(v) => {
+        onName={(v) => void saveName(v)}
+        onDirInput={(v) => {
           setDir(v);
           dirLater(v);
         }}
-        onDirBlur={() => void saveDefault(dir)}
+        onDir={(v) => void saveDefault(v)}
         onBrowse={() => void browse((path) => void saveDefault(path), dir)}
         onRemove={project?.rootDir ? () => void saveDefault('') : undefined}
         removeLabel={t('proj.clear')}
@@ -335,9 +338,10 @@ function ProjectSection() {
       <SavedNote msg={msg} />
       {project && !project.rootDir && <p className="muted small" style={{ marginTop: 8 }}>{t('proj.none')}</p>}
 
-      {others.map((o) => (
+      {others.map((o, i) => (
         <ProjectEntry
-          key={o.name}
+          // By place, not by name: renaming a project must not remount the row under the cursor.
+          key={`other-${i}`}
           name={o.name}
           dir={o.rootDir}
           repoOk={o.repoOk}
@@ -419,10 +423,10 @@ function ProjectEntry({
   mirror,
   isDefault = false,
   busy,
+  onNameInput,
   onName,
-  onNameBlur,
+  onDirInput,
   onDir,
-  onDirBlur,
   onBrowse,
   onRemove,
   removeLabel,
@@ -435,33 +439,63 @@ function ProjectEntry({
   mirror?: ProjectMirrorSelection;
   isDefault?: boolean;
   busy: boolean;
+  /** Every keystroke, for an entry that saves as it is typed (the default one, debounced). */
+  onNameInput?: (value: string) => void;
+  /** The finished value, when the field is left and it differs from what is saved. */
   onName: (value: string) => void;
-  onNameBlur?: () => void;
+  onDirInput?: (value: string) => void;
   onDir: (value: string) => void;
-  onDirBlur?: () => void;
   onBrowse: () => void;
   onRemove?: () => void;
   removeLabel: string;
   onFolders: (sel: ProjectMirrorSelection) => Promise<boolean>;
 }) {
   const { t } = useT();
+  const id = useId();
+  /*
+   * What is typed lives here until the field is left. The other projects saved on every keystroke
+   * and showed only what the save returned, so typed characters snapped back while a save was out,
+   * the field went grey during each save, and a rename remounted the row and lost the cursor. The
+   * text fields are never disabled: a save in progress is no reason to stop someone typing.
+   */
+  const [nameDraft, setNameDraft] = useState(name);
+  const [dirDraft, setDirDraft] = useState(dir);
+  useEffect(() => setNameDraft(name), [name]);
+  useEffect(() => setDirDraft(dir), [dir]);
   return (
     <div className="panel inner" style={{ marginTop: 10 }}>
       <div className="row">
-        <div style={{ width: 200 }}>
-          <label>{t('proj.entryName')}</label>
+        <div style={{ width: 'min(200px, 100%)' }}>
+          <label htmlFor={`${id}-name`}>{t('proj.entryName')}</label>
           <input
+            id={`${id}-name`}
             type="text"
-            value={name}
-            onChange={(e) => onName(e.target.value)}
-            onBlur={onNameBlur}
+            value={nameDraft}
+            onChange={(e) => {
+              setNameDraft(e.target.value);
+              onNameInput?.(e.target.value);
+            }}
+            onBlur={() => {
+              if (nameDraft !== name || onNameInput) onName(nameDraft);
+            }}
             placeholder={dir ? (dir.replace(/[\/]+$/, '').split(/[\/]/).pop() ?? '') : t('proj.namePlaceholder')}
-            disabled={busy}
           />
         </div>
         <div className="grow">
-          <label>{t('proj.entryDir')}</label>
-          <input type="text" value={dir} onChange={(e) => onDir(e.target.value)} onBlur={onDirBlur} placeholder="C:\Projects\my-app" disabled={busy} />
+          <label htmlFor={`${id}-dir`}>{t('proj.entryDir')}</label>
+          <input
+            id={`${id}-dir`}
+            type="text"
+            value={dirDraft}
+            onChange={(e) => {
+              setDirDraft(e.target.value);
+              onDirInput?.(e.target.value);
+            }}
+            onBlur={() => {
+              if (dirDraft !== dir || onDirInput) onDir(dirDraft);
+            }}
+            placeholder="C:\Projects\my-app"
+          />
         </div>
         <button onClick={onBrowse} disabled={busy}>
           {t('mirror.browse')}
@@ -526,8 +560,8 @@ function ProjectFolders({
       includeEnvFiles,
       ...next,
     };
-    await onSave(sel);
-    setMsg(t('proj.foldersSaved'));
+    // `onSave` says whether it worked and shows its own error; "saved" only when it was.
+    if (await onSave(sel)) setMsg(t('proj.foldersSaved'));
   };
   const writeLater = useDebouncedSave(write);
 
@@ -996,11 +1030,11 @@ function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing
       </ul>
 
       <div className="row" style={{ marginTop: 12 }}>
-        <Link href="/">
-          <button>{t('proj.toSessions')}</button>
+        <Link href="/" className="button-link plain">
+          {t('proj.toSessions')}
         </Link>
-        <Link href="/import">
-          <button className="quiet">{t('proj.toImport')}</button>
+        <Link href="/import" className="button-link quiet">
+          {t('proj.toImport')}
         </Link>
       </div>
     </div>

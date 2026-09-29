@@ -18,9 +18,10 @@
  * Neither loses anything: what is queued stays queued, and "Continue" on this same page is what
  * starts it again.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { api, type BatchState } from '../lib/api';
+import { usePoll } from '../lib/usePoll';
 import { useT } from '../lib/i18n';
 
 export function RunControls({ onChange }: { onChange?: () => void }) {
@@ -37,12 +38,8 @@ export function RunControls({ onChange }: { onChange?: () => void }) {
     }
   }, []);
 
-  useEffect(() => {
-    void read();
-    // Faster than the register's own six seconds: this is the part somebody is waiting on.
-    const timer = setInterval(() => void read(), 3000);
-    return () => clearInterval(timer);
-  }, [read]);
+  // Faster than the register's own six seconds: this is the part somebody is waiting on.
+  usePoll(read, 3000);
 
   const act = async (what: 'pause' | 'resume' | 'stop') => {
     setBusy(true);

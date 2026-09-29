@@ -177,7 +177,14 @@ export function DirTree({
                 </span>
                 {n.name}
               </button>
-              <button type="button" className={`dir-out${state === 'out' ? ' on' : ''}`} onClick={() => toggleExclude(n.path)} title={state === 'out' ? t('tree.unexclude') : t('tree.exclude')}>
+              <button
+                type="button"
+                className={`dir-out${state === 'out' ? ' on' : ''}`}
+                onClick={() => toggleExclude(n.path)}
+                title={state === 'out' ? t('tree.unexclude') : t('tree.exclude')}
+                // The button's text is a minus sign, which a screen reader reads as "minus".
+                aria-label={`${state === 'out' ? t('tree.unexclude') : t('tree.exclude')}: ${n.path}`}
+              >
                 −
               </button>
               {hidden && (

@@ -230,6 +230,7 @@ a:hover { text-decoration: underline; }
 .small { font-size: calc(13px * var(--scale)); }
 
 input[type='text'],
+input[type='number'],
 textarea,
 select {
   width: 100%;
@@ -241,6 +242,7 @@ select {
   font: inherit;
 }
 input[type='text']:focus,
+input[type='number']:focus,
 textarea:focus,
 select:focus { border-color: var(--accent); }
 textarea { min-height: 110px; resize: vertical; font-family: var(--mono); font-size: calc(13px * var(--scale)); line-height: 1.5; }
@@ -284,7 +286,11 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border: 1px solid var(--line-strong);
   color: var(--muted);
   white-space: nowrap;
+  /* A badge that carries a sentence (the model a run is on) wraps rather than leaving its panel. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
+@media (max-width: 600px) { .badge { white-space: normal; } }
 .badge.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .badge.waiting-approval { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
 .badge.done { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
@@ -473,6 +479,13 @@ th { color: var(--muted); font-weight: 700; font-size: calc(12px * var(--scale))
 .button-link:hover { filter: brightness(1.08); text-decoration: none; }
 .button-link + .button-link { background: var(--panel); color: var(--ink); border-color: var(--line-strong); font-weight: 400; }
 .button-link + .button-link:hover { background: var(--accent-soft); border-color: var(--accent); filter: none; }
+/*
+ * A link to another page that looks like an ordinary button. These were a <button> inside a <Link>:
+ * invalid markup, and two stops for the Tab key on one control.
+ */
+.button-link.plain { background: var(--panel); color: var(--ink); border-color: var(--line-strong); font-weight: 400; }
+.button-link.quiet { background: transparent; color: var(--muted); border-color: transparent; font-weight: 400; }
+.button-link.plain:hover, .button-link.quiet:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); filter: none; }
 
 .empty { color: var(--muted); padding: 14px 0; }
 /*
@@ -822,7 +835,8 @@ button .dot {
   padding: 12px 14px 2px;
   margin: 0 0 16px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
-  max-height: 70vh;
+  /* Sticky, so capped: at the largest text size 70% of a laptop screen left little page to use. */
+  max-height: min(70vh, calc(30rem * var(--scale)));
   overflow: auto;
 }
 .approval-banner h2 { margin: 0 0 4px; color: var(--warn); }

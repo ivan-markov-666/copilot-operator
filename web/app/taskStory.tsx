@@ -90,7 +90,10 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
         if (!alive) return;
         setStory(s);
         setErr('');
-        if (s.live) timer = setTimeout(read, POLL_MS);
+        // Either side saying "live" keeps it going. The story can say "not live" for a moment while a
+        // task that is running has no run folder yet; stopping on that stopped the story for good,
+        // because the page's own `live` had not changed and nothing restarted it.
+        if (s.live || live) timer = setTimeout(read, POLL_MS);
       } catch (e) {
         if (!alive) return;
         setErr((e as Error).message);

@@ -24,6 +24,11 @@ export type TaskRef = { sessionId: string; taskId: string; title: string };
 export type TaskActions = {
   busy: '' | 'restore' | 'restart';
   message: string;
+  /**
+   * The task `message` is about. One hook serves a whole list in the register, and its message was
+   * shown under every row there; a row shows it only when this is its own task.
+   */
+  messageTask: string;
   clearMessage: () => void;
   restore: (task: TaskRef) => Promise<void>;
   restartFrom: (task: TaskRef) => Promise<void>;
@@ -32,7 +37,8 @@ export type TaskActions = {
 export function useTaskActions(onChange: () => void): TaskActions {
   const { t } = useT();
   const [busy, setBusy] = useState<'' | 'restore' | 'restart'>('');
-  const [message, setMessage] = useState('');
+  const [said, setSaid] = useState<{ taskId: string; text: string }>({ taskId: '', text: '' });
+  const say = (taskId: string, text: string): void => setSaid({ taskId, text });
 
   /**
    * Back to the code as it was before this task, without destroying what came after.
@@ -45,11 +51,11 @@ export function useTaskActions(onChange: () => void): TaskActions {
   const restore = useCallback(
     async (task: TaskRef) => {
       setBusy('restore');
-      setMessage('');
+      say(task.taskId, '');
       try {
         const preview = await api.restorePreview(task.sessionId, task.taskId);
         if (!preview.ok) {
-          setMessage(t('restore.cannot', { problem: preview.problem ?? '' }));
+          say(task.taskId, t('restore.cannot', { problem: preview.problem ?? '' }));
           return;
         }
 
@@ -72,10 +78,10 @@ export function useTaskActions(onChange: () => void): TaskActions {
 
         const done = await api.restore(task.sessionId, task.taskId);
         if (!done.ok) {
-          setMessage(t('restore.failed', { problem: done.problem ?? '' }));
+          say(task.taskId, t('restore.failed', { problem: done.problem ?? '' }));
           return;
         }
-        setMessage(
+        say(task.taskId, 
           (done.leftBehind?.length ?? 0) > 0
             ? t('restore.done', {
                 branch: done.branch ?? '',
@@ -87,7 +93,7 @@ export function useTaskActions(onChange: () => void): TaskActions {
         );
         onChange();
       } catch (e) {
-        setMessage((e as Error).message);
+        say(task.taskId, (e as Error).message);
       } finally {
         setBusy('');
       }
@@ -107,17 +113,17 @@ export function useTaskActions(onChange: () => void): TaskActions {
   const restartFrom = useCallback(
     async (task: TaskRef) => {
       setBusy('restart');
-      setMessage('');
+      say(task.taskId, '');
       try {
         const plan = await api.restartPlan(task.sessionId, task.taskId);
         if (!plan.ok) {
-          setMessage(t('restart.cannot', { problem: plan.problem ?? '' }));
+          say(task.taskId, t('restart.cannot', { problem: plan.problem ?? '' }));
           return;
         }
 
         const blocked = plan.restores.filter((r) => !r.ok);
         if (blocked.length > 0) {
-          setMessage(t('restart.cannot', { problem: blocked.map((r) => `${r.repoDir}: ${r.problem ?? ''}`).join(' | ') }));
+          say(task.taskId, t('restart.cannot', { problem: blocked.map((r) => `${r.repoDir}: ${r.problem ?? ''}`).join(' | ') }));
           return;
         }
 
@@ -149,14 +155,14 @@ export function useTaskActions(onChange: () => void): TaskActions {
 
         const done = await api.restartFrom(task.sessionId, task.taskId);
         if (!done.started) {
-          setMessage(t('restart.failed', { problem: done.reason ?? '' }));
+          say(task.taskId, t('restart.failed', { problem: done.reason ?? '' }));
           onChange();
           return;
         }
-        setMessage(t('restart.started', { requeued: done.requeued, repos: done.restored.length }));
+        say(task.taskId, t('restart.started', { requeued: done.requeued, repos: done.restored.length }));
         onChange();
       } catch (e) {
-        setMessage((e as Error).message);
+        say(task.taskId, (e as Error).message);
       } finally {
         setBusy('');
       }
@@ -164,5 +170,5 @@ export function useTaskActions(onChange: () => void): TaskActions {
     [t, onChange],
   );
 
-  return { busy, message, clearMessage: () => setMessage(''), restore, restartFrom };
+  return { busy, message: said.text, messageTask: said.taskId, clearMessage: () => say('', ''), restore, restartFrom };
 }

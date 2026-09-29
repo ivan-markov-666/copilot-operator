@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api } from '../lib/api';
+import { usePoll } from '../lib/usePoll';
 import { LanguageSwitcher, useT, type Key } from '../lib/i18n';
 
 /**
@@ -86,22 +87,14 @@ export function Nav() {
 function useRunning(): number {
   const [running, setRunning] = useState(0);
 
-  useEffect(() => {
-    let live = true;
-    const read = () =>
+  usePoll(
+    () =>
       api
         .activity()
-        .then((a) => {
-          if (live) setRunning(a.sessions);
-        })
-        .catch(() => undefined);
-    void read();
-    const timer = setInterval(read, 4000);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, []);
+        .then((a) => setRunning(a.sessions))
+        .catch(() => undefined),
+    4000,
+  );
 
   return running;
 }

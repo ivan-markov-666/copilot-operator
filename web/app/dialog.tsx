@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useT } from '../lib/i18n';
+import { useModalFocus } from '../lib/useModalFocus';
 
 type Request = {
   kind: 'confirm' | 'alert';
@@ -50,6 +51,7 @@ export function DialogHost({ children }: { children?: ReactNode }) {
   const { t } = useT();
   const [queue, setQueue] = useState<Request[]>([]);
   const okRef = useRef<HTMLButtonElement | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     host = (r) => setQueue((q) => [...q, r]);
@@ -73,9 +75,11 @@ export function DialogHost({ children }: { children?: ReactNode }) {
     [current],
   );
 
+  // In on the main button, kept inside, and back on whatever opened it: see the hook.
+  useModalFocus(boxRef, Boolean(current), okRef);
+
   useEffect(() => {
     if (!current) return;
-    okRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -92,14 +96,19 @@ export function DialogHost({ children }: { children?: ReactNode }) {
       {current && (
         <div className="modal-backdrop" onClick={() => answer(false)} role="presentation">
           <div
+            ref={boxRef}
             className={`modal${current.danger ? ' danger' : ''}`}
             role={current.kind === 'confirm' ? 'alertdialog' : 'dialog'}
             aria-modal="true"
             aria-labelledby="modal-title"
+            // The question itself, read out with the title; without it a screen reader said only "Are you sure?".
+            aria-describedby="modal-body"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 id="modal-title">{current.title ?? (current.kind === 'confirm' ? t('dialog.confirmTitle') : t('dialog.noticeTitle'))}</h2>
-            <div className="modal-body">{current.message}</div>
+            <div id="modal-body" className="modal-body">
+              {current.message}
+            </div>
             <div className="row modal-actions">
               {current.kind === 'confirm' && (
                 <button type="button" className="quiet" onClick={() => answer(false)}>

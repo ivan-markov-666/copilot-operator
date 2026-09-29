@@ -34,11 +34,15 @@ export default function Level1Page() {
   };
   const reset = async () => {
     if (!(await confirmDialog(t('l1page.resetConfirm')))) return;
-    const l = await api.resetLevel1();
-    setContent(l.content);
-    setSaved(l.content);
-    setCustomised(false);
-    setMsg(t('l1page.resetDone'));
+    try {
+      const l = await api.resetLevel1();
+      setContent(l.content);
+      setSaved(l.content);
+      setCustomised(false);
+      setMsg(t('l1page.resetDone'));
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
   };
 
   return (

@@ -20,6 +20,7 @@ import { confirmDialog } from '../../dialog';
 import { ChangesButton } from '../../diffView';
 import { useUnattendedWithoutAsking } from '../../../lib/useUnattendedWithoutAsking';
 import { useTaskActions } from '../../taskActions';
+import { usePoll } from '../../../lib/usePoll';
 
 // ---------------------------------------------------------------------------------------
 // The page
@@ -47,13 +48,26 @@ function SessionPage() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [level1, setLevel1] = useState<{ content: string; customised: boolean } | null>(null);
   const [err, setErr] = useState('');
+  const [streamClosed, setStreamClosed] = useState(false);
   const refreshTimer = useRef<number | null>(null);
+  /*
+   * Which reload is the newest. Reloads come from the poll, from the live events and from every
+   * button on the page, and a slow one could land after a quicker one sent later — the page then
+   * showed a session as idle again a moment after Start, with its run buttons live. Only the answer
+   * to the latest request is shown.
+   */
+  const latest = useRef(0);
 
   const reload = useCallback(async () => {
+    if (!id) return;
+    const mine = ++latest.current;
     try {
-      setSession(await api.session(id));
+      const fresh = await api.session(id);
+      if (mine !== latest.current) return;
+      setSession(fresh);
       setErr('');
     } catch (e) {
+      if (mine !== latest.current) return;
       setErr((e as Error).message);
     }
   }, [id]);
@@ -68,27 +82,37 @@ function SessionPage() {
   }, [reload]);
 
   useEffect(() => {
-    void reload();
+    if (!id) return;
     api.presets().then(setPresets).catch(() => undefined);
     api.level1().then(setLevel1).catch(() => undefined);
 
     const es = new EventSource(api.streamUrl(id));
+    es.onopen = () => setStreamClosed(false);
     es.onmessage = (m) => {
-      const e = JSON.parse(m.data) as SessionEvent;
+      let e: SessionEvent;
+      try {
+        e = JSON.parse(m.data) as SessionEvent;
+      } catch {
+        return;
+      }
       if (e.type === 'ping') return;
       setEvents((prev) => [...prev.slice(-400), e]);
       scheduleReload();
     };
     es.onerror = () => {
-      /* EventSource reconnects by itself */
+      // A dropped connection is retried by the browser on its own; a refused one (the API said no,
+      // or is gone) is closed for good, and the live log would otherwise just go quiet.
+      if (es.readyState === EventSource.CLOSED) setStreamClosed(true);
     };
-    const poll = setInterval(() => void reload(), 8000);
     return () => {
       es.close();
-      clearInterval(poll);
     };
-  }, [id, reload, scheduleReload]);
+  }, [id, scheduleReload]);
 
+  // The session itself, read now and every eight seconds besides whatever the live events trigger.
+  usePoll(reload, 8000, Boolean(id));
+
+  if (!id) return <div className="panel err">{t('session.noId')}</div>;
   if (err && !session) return <div className="panel err">{err}</div>;
   if (!session) return <div className="panel muted">{t('home.loading')}</div>;
 
@@ -99,6 +123,17 @@ function SessionPage() {
       <div className="crumbs">
         <Link href="/">{t('session.crumb')}</Link> / {session.name}
       </div>
+
+      {err && (
+        <div className="panel err" role="alert">
+          {t('session.stale', { err })}
+        </div>
+      )}
+      {streamClosed && !err && (
+        <div className="panel muted small" role="status">
+          {t('session.streamClosed')}
+        </div>
+      )}
 
       <Header session={session} queued={queued} onChange={reload} />
 
@@ -154,30 +189,54 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
 
   // Settings → Execution can say an unattended start needs no "are you sure"; see the hook.
   const quietStart = useUnattendedWithoutAsking();
+  /*
+   * One request at a time from this header, and every failure said beside the buttons. The buttons
+   * used to stay live until the next reload, so a double click sent two starts, and a start the API
+   * refused with an error (not with `started: false`) vanished without a word.
+   */
+  const [busy, setBusy] = useState(false);
+  // The guard is a ref: the second click of a double click arrives before React has re-rendered
+  // with `busy` true, so a check of the state alone let it through.
+  const inFlight = useRef(false);
+  const act = async (fn: () => Promise<void>): Promise<void> => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      onChange();
+    }
+  };
   const start = async (mode: 'confirm' | 'unattended') => {
     if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('session.unattendedConfirm')))) return;
-    const r = await api.start(session.id, mode, session.planName);
-    setMsg(
-      r.started
-        ? t(mode === 'unattended' ? 'session.startedAuto' : 'session.startedStep')
-        : t('session.notStarted', { reason: r.reason ?? '' }),
-    );
-    onChange();
+    await act(async () => {
+      const r = await api.start(session.id, mode, session.planName);
+      setMsg(
+        r.started
+          ? t(mode === 'unattended' ? 'session.startedAuto' : 'session.startedStep')
+          : t('session.notStarted', { reason: r.reason ?? '' }),
+      );
+    });
   };
-  const stop = async () => {
-    await api.stop(session.id);
-    setMsg(t('session.stopping'));
-    onChange();
-  };
-  const askAgain = async () => {
-    await api.setRunMode(session.id, 'confirm');
-    setMsg(t('session.askingAgain'));
-    onChange();
-  };
-  const rename = async () => {
-    if (name.trim() && name !== session.name) await api.updateSession(session.id, { name });
-    onChange();
-  };
+  const stop = () =>
+    act(async () => {
+      await api.stop(session.id);
+      setMsg(t('session.stopping'));
+    });
+  const askAgain = () =>
+    act(async () => {
+      await api.setRunMode(session.id, 'confirm');
+      setMsg(t('session.askingAgain'));
+    });
+  const rename = () =>
+    act(async () => {
+      if (name.trim() && name !== session.name) await api.updateSession(session.id, { name });
+    });
   const remove = async () => {
     if (session.running) {
       setMsg(t('home.deleteRunning'));
@@ -208,7 +267,7 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
   return (
     <div className="panel">
       <div className="row">
-        <input type="text" className="grow" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => void rename()} />
+        <input type="text" className="grow" aria-label={t('home.col.name')} value={name} onChange={(e) => setName(e.target.value)} onBlur={() => void rename()} />
         <span className={`badge ${session.running ? 'running' : ''}`}>{stateLabel}</span>
       </div>
       {/*
@@ -219,13 +278,13 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
       {!session.running && (
         <div className="run-choice">
           <div>
-            <button className="primary" onClick={() => void start('unattended')} disabled={queued === 0}>
+            <button className="primary" onClick={() => void start('unattended')} disabled={busy || queued === 0}>
               {t('session.run', { n: queued })}
             </button>
             <p className="why">{t('session.runWhy')}</p>
           </div>
           <div>
-            <button onClick={() => void start('confirm')} disabled={queued === 0}>
+            <button onClick={() => void start('confirm')} disabled={busy || queued === 0}>
               {t('session.runStep')}
             </button>
             <p className="why">{t('session.runStepWhy')}</p>
@@ -236,14 +295,16 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
       <div className="row" style={{ marginTop: 10 }}>
         {session.running && (
           <>
-            <button className="danger" onClick={() => void stop()}>
+            <button className="danger" onClick={() => void stop()} disabled={busy}>
               {t('session.stop')}
             </button>
             {/* A run switched to unattended says so, and can be put back to asking. */}
             {session.runMode === 'unattended' && (
               <>
                 <span className="badge waiting-approval">{t('session.modeUnattended')}</span>
-                <button onClick={() => void askAgain()}>{t('session.askAgain')}</button>
+                <button onClick={() => void askAgain()} disabled={busy}>
+                  {t('session.askAgain')}
+                </button>
               </>
             )}
           </>
@@ -668,6 +729,9 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
       } else {
         setMsg(picked.cancelled ? t('mirror.browseCancelled') : (picked.reason ?? ''));
       }
+    } catch (e) {
+      // Without this the message stayed at "browsing…" for good when the request failed.
+      setMsg((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -1495,8 +1559,14 @@ function TaskForm({
   const [level2, setLevel2] = useState(last?.level2 ?? '');
   const [promptText, setPromptText] = useState('');
   const [msg, setMsg] = useState('');
+  // A second click while the first is on its way queued the same task twice, and the bot runs both.
+  const [adding, setAdding] = useState(false);
+  const inFlight = useRef(false);
 
   const add = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setAdding(true);
     try {
       await api.addTask(session.id, { title, level2, prompt: promptText });
       setTitle('');
@@ -1505,6 +1575,9 @@ function TaskForm({
       onAdded();
     } catch (e) {
       setMsg((e as Error).message);
+    } finally {
+      inFlight.current = false;
+      setAdding(false);
     }
   };
 
@@ -1512,13 +1585,14 @@ function TaskForm({
     <div className="panel" id="new-task">
       <h2>{t('form.title')}</h2>
       <p className="muted small">{t('form.hint')}</p>
-      <label>{t('form.titleLabel')}</label>
-      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('form.titlePlaceholder')} />
+      <label htmlFor="new-task-title">{t('form.titleLabel')}</label>
+      <input id="new-task-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('form.titlePlaceholder')} />
       <div style={{ marginTop: 10 }}>
         <Level2Editor value={level2} onChange={setLevel2} presets={presets} onPresetsChanged={onPresetsChanged} />
       </div>
-      <label>{t('form.taskLabel')}</label>
+      <label htmlFor="new-task-prompt">{t('form.taskLabel')}</label>
       <textarea
+        id="new-task-prompt"
         className="prose"
         value={promptText}
         onChange={(e) => setPromptText(e.target.value)}
@@ -1526,7 +1600,7 @@ function TaskForm({
         style={{ minHeight: 140 }}
       />
       <div className="row" style={{ marginTop: 10 }}>
-        <button className="primary" onClick={() => void add()} disabled={!promptText.trim()}>
+        <button className="primary" onClick={() => void add()} disabled={adding || !promptText.trim()}>
           {t('form.add')}
         </button>
         <span className="muted small">{msg}</span>
@@ -1569,6 +1643,24 @@ function TaskCard({
   const now = useNow(isLive(task));
   const [files, setFiles] = useState<{ reports: string[]; artifacts: string[]; replies: string[] } | null>(null);
   const [msg, setMsg] = useState('');
+
+  /*
+   * The form starts from the task as it is now, every time it opens. The fields were copied from
+   * the task once, when the card first rendered, so a prompt changed since — "Fix the prompt" in
+   * the register, an edit in another tab — showed the old text here, and "Save and queue it again"
+   * wrote the old text back over the new one.
+   */
+  const toggleEditor = (): void => {
+    if (!editing) {
+      setTitle(task.title);
+      setLevel2(task.level2);
+      setPromptText(task.prompt);
+      setBranch(task.vcsPlan?.branch ?? '');
+      setCommitMessage(task.vcsPlan?.commitMessage ?? '');
+      setChecks(task.checks ?? []);
+    }
+    setEditing(!editing);
+  };
 
   const save = async () => {
     try {
@@ -1667,8 +1759,13 @@ function TaskCard({
       setMsg((e as Error).message);
     }
   };
+  // Read each time the list is opened, not once: a running task keeps adding reports and replies.
   const loadFiles = async () => {
-    if (!files) setFiles(await api.taskFiles(session.id, task.id));
+    try {
+      setFiles(await api.taskFiles(session.id, task.id));
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
   };
 
   const fileLinks = (label: Key, kind: 'reports' | 'artifacts' | 'replies', names: string[]) =>
@@ -1697,6 +1794,7 @@ function TaskCard({
         {task.runId && (
           <button
             className={showStory ? '' : 'quiet'}
+            aria-expanded={showStory}
             onClick={() => setShowStory((v) => !v)}
             title={isLive(task) ? t('story.showLiveWhy') : t('story.why')}
           >
@@ -1707,7 +1805,7 @@ function TaskCard({
           </button>
         )}
         {editable && (
-          <button onClick={() => setEditing((v) => !v)} title={t('task.editAll')}>
+          <button onClick={toggleEditor} title={t('task.editAll')}>
             {editing ? t('task.cancel') : t('task.edit')}
           </button>
         )}

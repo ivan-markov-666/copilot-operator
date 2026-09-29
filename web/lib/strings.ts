@@ -282,6 +282,11 @@ export const dict = {
 
     // session header
     'session.crumb': 'Sessions',
+    'batch.moveUp': 'Move {name} up',
+    'batch.moveDown': 'Move {name} down',
+    'session.noId': 'No session is named in the address. Open one from the Sessions page.',
+    'session.stale': 'The page could not refresh this session, so what it shows may be out of date: {err}',
+    'session.streamClosed': 'The live log has disconnected; the page still refreshes every few seconds. Reload it to reconnect.',
     'session.run': 'Run {n} task(s)',
     'session.runWhy':
       'Works through the queue on its own, without stopping to ask. This is the ordinary way to run: start it and come back when it has finished.',
@@ -1362,6 +1367,11 @@ export const dict = {
     'status.limit-reached': 'достигнат лимит',
 
     'session.crumb': 'Сесии',
+    'batch.moveUp': 'Премести {name} нагоре',
+    'batch.moveDown': 'Премести {name} надолу',
+    'session.noId': 'В адреса не е посочена сесия. Отворете една от страницата „Сесии“.',
+    'session.stale': 'Страницата не успя да опресни тази сесия, така че показаното може да е остаряло: {err}',
+    'session.streamClosed': 'Живият дневник се разкачи; страницата пак се опреснява на няколко секунди. Презаредете я, за да се свърже отново.',
     'session.run': 'Пусни {n} задача(и)',
     'session.runWhy':
       'Минава през опашката сама, без да спира да пита. Това е обичайният начин: пускате и се връщате, когато приключи.',

@@ -33,8 +33,12 @@ export default function PresetsPage() {
   };
   const remove = async (p: Preset) => {
     if (!(await confirmDialog(t('presets.deleteConfirm', { name: p.name })))) return;
-    await api.deletePreset(p.name);
-    await load();
+    try {
+      await api.deletePreset(p.name);
+      await load();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
   };
 
   return (
