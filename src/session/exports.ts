@@ -158,6 +158,9 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           commitOnFinish: s.vcs?.commitOnFinish ?? true,
           branchPrefix: s.vcs?.branchPrefix ?? 'cop/',
           branchName: (s.vcs as { branchName?: string } | undefined)?.branchName ?? '',
+          // Only when chosen: absent is the old behaviour, and writing it out would suggest a choice.
+          ...(s.vcs?.startFrom ? { startFrom: s.vcs.startFrom } : {}),
+          ...(s.vcs?.baseBranch ? { baseBranch: s.vcs.baseBranch } : {}),
         },
         review: { enabled: s.review?.enabled !== false, model: s.review?.model ?? '' },
         mirror: {

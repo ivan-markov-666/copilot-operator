@@ -462,6 +462,39 @@ export type VersionControl = {
    * It has no effect in `per-task` mode, where the name comes from each task.
    */
   branchName?: string;
+  /**
+   * Where this session's first branch is cut from.
+   *
+   *   branch            the local branch named by `baseBranch` (`main` unless said otherwise):
+   *                     every session starts from the same clean code, and no session sees
+   *                     another's work.
+   *   previous-session  the end of the branch of the session that last committed work in this
+   *                     same repository — in a run of several sessions, the one before it — so
+   *                     the sessions form a chain and each carries on from the last.
+   *   head              wherever the repository happens to be when the session first runs. What
+   *                     it always was, and what absent still means, so no existing session or
+   *                     plan changes; it is the one to avoid, because "wherever it happens to be"
+   *                     is usually the branch the previous session left checked out, and whether
+   *                     sessions chain or not then depended on something nobody chose.
+   *
+   * Decided once, at the session's first run, and kept in `vcsStart`; changing it clears that, so
+   * the next task that runs is cut from the new choice.
+   */
+  startFrom?: 'branch' | 'previous-session' | 'head';
+  /** The local branch `startFrom: branch` starts from, and the fallback of `previous-session`. */
+  baseBranch?: string;
+};
+
+/** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */
+export type SessionStart = {
+  kind: 'branch' | 'previous-session' | 'head';
+  commit: string;
+  /** The branch the commit was the tip of, when there was one. */
+  branch?: string;
+  /** For `previous-session`: the session whose work this one continues. */
+  fromSession?: { id: string; name: string };
+  /** Said when the start is not what was asked for: no earlier session in this repository. */
+  note?: string;
 };
 
 /** What version control did for one task, recorded so a re-run can go back to where it began. */
@@ -546,6 +579,8 @@ export type Session = {
   vcs?: VersionControl;
   /** The commit every per-task branch of this session is cut from. Set by the first run. */
   vcsBaseCommit?: string;
+  /** Where that commit came from, and why. See `VersionControl.startFrom`. */
+  vcsStart?: SessionStart;
   /** The last run this session was part of, and what that run asked of it. */
   runGroup?: SessionRunGroup;
   mirror: MirrorSettings;

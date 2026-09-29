@@ -513,6 +513,20 @@ export class OperatorService {
           const reason = repoUnusableReason(merged.repoDir || s.mirror.rootDir || '');
           if (reason) throw new Error(reason);
         }
+        if (merged.baseBranch !== undefined) merged.baseBranch = merged.baseBranch.trim();
+        /*
+         * Where the session starts is fixed at its first run. A new choice clears that record, so
+         * the next task to run is cut from what was chosen now; the tasks that already ran keep
+         * their own base commits, which is what a re-run of them goes back to.
+         */
+        const startChanged =
+          (merged.startFrom ?? 'head') !== (s.vcs?.startFrom ?? 'head') ||
+          (merged.baseBranch || 'main') !== (s.vcs?.baseBranch || 'main') ||
+          merged.repoDir.toLowerCase() !== (s.vcs?.repoDir ?? '').trim().toLowerCase();
+        if (startChanged) {
+          s.vcsBaseCommit = undefined;
+          s.vcsStart = undefined;
+        }
         s.vcs = merged;
       }
     });

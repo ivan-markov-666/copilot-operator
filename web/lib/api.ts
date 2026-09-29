@@ -247,6 +247,19 @@ export type VersionControl = {
   branchPrefix: string;
   /** The one branch a per-session run works on. Empty means it is derived from the name. */
   branchName?: string;
+  /** Where the session's first branch is cut from. Absent means wherever the repository is. */
+  startFrom?: 'branch' | 'previous-session' | 'head';
+  /** The local branch `startFrom: branch` starts from; `main` when empty. */
+  baseBranch?: string;
+};
+
+/** Where a session's first branch was actually cut from, recorded at its first run. */
+export type SessionStart = {
+  kind: 'branch' | 'previous-session' | 'head';
+  commit: string;
+  branch?: string;
+  fromSession?: { id: string; name: string };
+  note?: string;
 };
 
 /** What version control did for one attempt of a task. */
@@ -464,6 +477,7 @@ export type Session = {
   planName?: string;
   vcs?: VersionControl;
   vcsBaseCommit?: string;
+  vcsStart?: SessionStart;
   /** Whether a second, independent conversation checks the work. On unless said otherwise. */
   review?: ReviewSettings;
   mirror: Mirror;

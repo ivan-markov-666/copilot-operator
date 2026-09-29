@@ -605,6 +605,9 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
   const [repoProblem, setRepoProblem] = useState<string | null>(null);
   const [branchName, setBranchName] = useState(vcs.branchName ?? '');
   useEffect(() => setBranchName((JSON.parse(saved) as VersionControl).branchName ?? ''), [saved]);
+  const [baseBranch, setBaseBranch] = useState(vcs.baseBranch ?? '');
+  useEffect(() => setBaseBranch((JSON.parse(saved) as VersionControl).baseBranch ?? ''), [saved]);
+  const startFrom = vcs.startFrom ?? 'head';
   useEffect(() => {
     setRepoDir((JSON.parse(saved) as VersionControl).repoDir);
   }, [saved]);
@@ -785,6 +788,78 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
               />
               <p className="why">{t('vcs.branchNameWhy')}</p>
             </>
+          )}
+
+          {/*
+            Where the session begins, asked before it runs. Until this existed the answer was
+            "wherever HEAD is", which after a run of sessions is the branch the last one left
+            checked out, so whether sessions chained or started clean depended on nothing anyone
+            chose. The old behaviour stays available, and last, for sessions that relied on it.
+          */}
+          <h3>{t('vcs.startFrom')}</h3>
+          <div className="option">
+            <label>
+              <input
+                type="radio"
+                name="startFrom"
+                checked={startFrom === 'branch'}
+                onChange={() => void save({ startFrom: 'branch' })}
+                disabled={session.running}
+              />
+              <span>{t('vcs.startBranch')}</span>
+            </label>
+            <p className="why">{t('vcs.startBranchWhy')}</p>
+          </div>
+          <div className="option">
+            <label>
+              <input
+                type="radio"
+                name="startFrom"
+                checked={startFrom === 'previous-session'}
+                onChange={() => void save({ startFrom: 'previous-session' })}
+                disabled={session.running}
+              />
+              <span>{t('vcs.startPrevious')}</span>
+            </label>
+            <p className="why">{t('vcs.startPreviousWhy')}</p>
+          </div>
+          <div className="option">
+            <label>
+              <input
+                type="radio"
+                name="startFrom"
+                checked={startFrom === 'head'}
+                onChange={() => void save({ startFrom: 'head' })}
+                disabled={session.running}
+              />
+              <span>{t('vcs.startHead')}</span>
+            </label>
+            <p className="why">{t('vcs.startHeadWhy')}</p>
+          </div>
+          {startFrom !== 'head' && (
+            <>
+              <label htmlFor="vcs-base-branch">{t('vcs.baseBranch')}</label>
+              <input
+                id="vcs-base-branch"
+                type="text"
+                value={baseBranch}
+                onChange={(e) => setBaseBranch(e.target.value)}
+                onBlur={() => baseBranch.trim() !== (vcs.baseBranch ?? '') && void save({ baseBranch: baseBranch.trim() })}
+                placeholder="main"
+                disabled={session.running}
+              />
+              <p className="why">{t('vcs.baseBranchWhy')}</p>
+            </>
+          )}
+          {session.vcsStart && (
+            <p className="muted small">
+              {session.vcsStart.kind === 'previous-session'
+                ? t('vcs.startedPrevious', { name: session.vcsStart.fromSession?.name ?? '', branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
+                : session.vcsStart.kind === 'branch'
+                  ? t('vcs.startedBranch', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
+                  : t('vcs.startedHead', { commit: session.vcsStart.commit.slice(0, 8) })}
+              {session.vcsStart.note ? ` — ${session.vcsStart.note}` : ''}
+            </p>
           )}
 
           <div className="option">

@@ -337,6 +337,19 @@ export const dict = {
     'vcs.branchName': 'Name of that one branch',
     'vcs.branchNameWhy':
       'Without the prefix. Empty means it is built from the session name, the way it always was. It has no effect in the other mode, where each task names its own.',
+    'vcs.startFrom': 'Where this session starts',
+    'vcs.startBranch': 'From a local branch (main)',
+    'vcs.startBranchWhy': 'The session starts from the branch named below, as it is on this machine. Every session set this way starts from the same clean code and sees no other session’s work.',
+    'vcs.startPrevious': 'From the previous session’s branch',
+    'vcs.startPreviousWhy':
+      'The session carries on from the end of the branch of the session that last committed work in this same repository — in a run of several sessions, the one before it — so the sessions form a chain. Sessions in other repositories do not count. With no earlier session here, it starts from the branch named below.',
+    'vcs.startHead': 'From wherever the repository is (as until now)',
+    'vcs.startHeadWhy': 'Whatever branch is checked out when the session first runs — often the one the previous session left. Kept for sessions that relied on it.',
+    'vcs.baseBranch': 'Local branch to start from',
+    'vcs.baseBranchWhy': 'Empty means main. Decided at the session’s first run; changing any of this applies from the next task that runs.',
+    'vcs.startedPrevious': 'Started from the end of {branch} ({commit}), the branch of the session “{name}”.',
+    'vcs.startedBranch': 'Started from the local branch {branch} ({commit}).',
+    'vcs.startedHead': 'Started from where the repository was ({commit}).',
     'vcs.commit': 'Commit when a task finishes',
     'vcs.commitWhy':
       'One local commit per task, whatever the outcome, with the summary in the message. Off leaves the changes in the working tree.',
@@ -1353,6 +1366,19 @@ export const dict = {
     'vcs.branchName': 'Име на този един клон',
     'vcs.branchNameWhy':
       'Без представката. Празно значи, че се сглобява от името на сесията, както винаги е било. В другия режим няма ефект — там всяка задача си именува своя.',
+    'vcs.startFrom': 'Откъде тръгва тази сесия',
+    'vcs.startBranch': 'От локален клон (main)',
+    'vcs.startBranchWhy': 'Сесията тръгва от клона, посочен отдолу, какъвто е на тази машина. Всяка сесия с този избор тръгва от един и същ чист код и не вижда работата на другите.',
+    'vcs.startPrevious': 'От клона на предната сесия',
+    'vcs.startPreviousWhy':
+      'Сесията продължава от края на клона на сесията, която последна е комитнала работа в същото хранилище — при пускане на няколко сесии това е предната — така че сесиите образуват верига. Сесии в други хранилища не се броят. Ако тук няма по-ранна сесия, тръгва от клона, посочен отдолу.',
+    'vcs.startHead': 'Откъдето е хранилището (както досега)',
+    'vcs.startHeadWhy': 'Какъвто клон е избран при първото пускане на сесията — често този, който е оставила предната. Запазено за сесии, които разчитат на него.',
+    'vcs.baseBranch': 'Локален клон, от който да тръгне',
+    'vcs.baseBranchWhy': 'Празно значи main. Решава се при първото пускане на сесията; промяна тук важи от следващата задача, която тръгне.',
+    'vcs.startedPrevious': 'Тръгна от края на {branch} ({commit}) — клона на сесията „{name}“.',
+    'vcs.startedBranch': 'Тръгна от локалния клон {branch} ({commit}).',
+    'vcs.startedHead': 'Тръгна оттам, където беше хранилището ({commit}).',
     'vcs.commit': 'Комит при приключване на задача',
     'vcs.commitWhy':
       'По един локален комит на задача, независимо от изхода, с обяснението в съобщението. Изключено оставя промените в работното дърво.',

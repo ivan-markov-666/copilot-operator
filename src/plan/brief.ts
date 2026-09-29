@@ -310,6 +310,8 @@ export function planExample(): Record<string, unknown> {
           branchMode: 'per-task',
           commitOnFinish: true,
           branchPrefix: 'cop/',
+          startFrom: 'branch',
+          baseBranch: 'main',
         },
         review: { enabled: true, model: '' },
         mirror: {
@@ -484,8 +486,21 @@ function table(header: string[], rows: string[][]): string {
 const VCS_DETAIL_EN = `
 **vcs on a session**: \`enabled\` (true here), \`repoDir\` (absolute path to the git repository),
 \`branchMode\`, \`commitOnFinish\` (true unless the user says otherwise), \`branchPrefix\` (leave it
-"cop/"), and \`branchName\` — used **only** in per-session mode, for the one branch the whole
-session works on, without the prefix.
+"cop/"), \`branchName\` — used **only** in per-session mode, for the one branch the whole
+session works on, without the prefix — and \`startFrom\` with \`baseBranch\`.
+
+**startFrom** decides where each session's work begins, and it is the user's choice — ask:
+
+- \`"branch"\` — the session starts from the local branch named in \`baseBranch\` (\`"main"\` unless
+  the user names another). Every session starts from the same clean code and sees no other
+  session's work.
+- \`"previous-session"\` — the session carries on from the end of the branch of the session that
+  ran before it **in the same repository**, so the sessions form a chain. The first session of
+  such a chain starts from \`baseBranch\`. Sessions in other repositories do not count.
+
+Put the same \`startFrom\` on every session that works in one repository unless the user wants it
+mixed. Leaving it out keeps the old behaviour — whatever branch the repository is on — which is
+the one to avoid.
 
 **branchMode** is a real choice and you should make it deliberately:
 
@@ -515,8 +530,20 @@ time. Ask it before you write any JSON.
 const VCS_DETAIL_BG = `
 **vcs на сесия**: \`enabled\` (тук true), \`repoDir\` (абсолютен път до git хранилището),
 \`branchMode\`, \`commitOnFinish\` (true, освен ако потребителят не каже друго), \`branchPrefix\`
-(остави "cop/") и \`branchName\` — използва се **само** в режим per-session, за единствения клон,
-по който работи цялата сесия, без представката.
+(остави "cop/"), \`branchName\` — използва се **само** в режим per-session, за единствения клон,
+по който работи цялата сесия, без представката — и \`startFrom\` с \`baseBranch\`.
+
+**startFrom** решава откъде започва работата на всяка сесия, и изборът е на потребителя — питай:
+
+- \`"branch"\` — сесията тръгва от локалния клон в \`baseBranch\` (\`"main"\`, освен ако потребителят
+  не посочи друг). Всяка сесия тръгва от един и същ чист код и не вижда работата на другите.
+- \`"previous-session"\` — сесията продължава от края на клона на сесията, пусната преди нея **в
+  същото хранилище**, така че сесиите образуват верига. Първата сесия от веригата тръгва от
+  \`baseBranch\`. Сесии в други хранилища не се броят.
+
+Сложи един и същ \`startFrom\` на всички сесии в едно хранилище, освен ако потребителят не иска
+различни. Ако го пропуснеш, остава старото поведение — от който клон е хранилището в момента —
+което е за избягване.
 
 **branchMode** е истински избор и трябва да го направиш съзнателно:
 

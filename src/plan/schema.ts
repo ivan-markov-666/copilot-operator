@@ -42,6 +42,19 @@ const VcsInput = z
       branchPrefix: z.string().optional(),
       /** The name of the one branch a per-session run works on. Ignored in per-task mode. */
       branchName: z.string().optional(),
+      /**
+       * Where the session's first branch is cut from: a local branch (`baseBranch`, `main` unless
+       * said otherwise), or the end of the branch of the session before it in the same repository.
+       * Absent keeps the old behaviour, wherever the repository is. See `VersionControl.startFrom`.
+       */
+      startFrom: z
+        .enum(['branch', 'previous-session', 'head'], {
+          error:
+            'startFrom must be "branch" (every session starts from the local branch in baseBranch, "main" unless said otherwise) or "previous-session" (each session carries on from the branch of the session before it in the same repository).',
+        })
+        .optional(),
+      /** The local branch `startFrom: "branch"` starts from, and `previous-session`'s fallback. */
+      baseBranch: z.string().trim().optional(),
     },
     {
       error:

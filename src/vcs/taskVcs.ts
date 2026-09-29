@@ -16,10 +16,10 @@
  *   per-session  one branch for the whole queue, so each task builds on the last. A chain.
  */
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskVcs, VersionControl } from '../session/model.js';
+import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
-import { branchNameFrom, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, checkoutExisting, freeBranchName, isValidBranchName, plannedBranchName, repoState } from './git.js';
+import { branchNameFrom, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Session): string {
@@ -44,6 +44,8 @@ export async function prepareForTask(
   task: Task,
   bus: EventBus,
   saveSession: (mutate: (s: Session) => void) => Promise<void>,
+  /** Every session on record, for `startFrom: previous-session` to find the one before this. */
+  allSessions: () => Promise<Session[]> = async () => [],
 ): Promise<PrepareResult> {
   const settings = session.vcs;
   if (!settings?.enabled) return { vcs: {}, note: '' };
@@ -71,13 +73,28 @@ export async function prepareForTask(
   }
 
   // The session's base is fixed the first time it runs: every per-task branch is cut from it,
-  // which is what makes the tasks independent of each other rather than of the calendar.
+  // which is what makes the tasks independent of each other rather than of the calendar. Where
+  // it is taken from is the session's `startFrom`; see `sessionStart`.
   let base = session.vcsBaseCommit;
-  if (!base && state.head) {
-    base = state.head;
-    await saveSession((s) => {
-      s.vcsBaseCommit = base;
-    });
+  let start = session.vcsStart;
+  if (!base) {
+    const resolved = await sessionStart(session, dir, state.head, allSessions);
+    if ('problem' in resolved) {
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-problem', level: 'warn',
+        message: `version control is on but inactive: ${resolved.problem}` });
+      return { vcs: { problem: resolved.problem }, note: '' };
+    }
+    start = resolved.start;
+    base = start?.commit;
+    if (start) {
+      const chosen = start;
+      await saveSession((s) => {
+        s.vcsBaseCommit = chosen.commit;
+        s.vcsStart = chosen;
+      });
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: chosen.note ? 'warn' : 'info',
+        message: describeStart(chosen), data: { ...chosen } });
+    }
   }
 
   const attempt = task.attempt ?? 1;
@@ -88,7 +105,7 @@ export async function prepareForTask(
     const wanted = planned
       ? plannedBranchName(planned, prefix)
       : branchNameFrom([session.name, session.id.slice(0, 13)], prefix);
-    return await switchTo(session, task, dir, wanted, base, bus, { reuseExisting: true });
+    return await switchTo(session, task, dir, wanted, base, bus, { reuseExisting: true, start });
   }
 
   // A name the task carries wins over one derived from its title: whoever wrote the plan knew
@@ -100,11 +117,99 @@ export async function prepareForTask(
   // A continuation carries on where the previous attempt stopped, on that attempt's own branch:
   // its work is what is being continued. See `continueTask` in the store.
   const previousBranch = task.continuing ? task.attempts?.at(-1)?.vcs?.branch : undefined;
-  if (previousBranch) return await switchTo(session, task, dir, previousBranch, base, bus, { reuseExisting: true });
+  if (previousBranch) return await switchTo(session, task, dir, previousBranch, base, bus, { reuseExisting: true, start });
   // A re-run starts from where that task started the first time, not from where the previous
   // attempt ended. That is the whole point of recording the base commit.
   const from = firstAttemptBase(task) ?? base;
-  return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false });
+  return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false, start });
+}
+
+/**
+ * The commit a session's first branch is cut from, by its `startFrom`, or why there is none.
+ *
+ * `previous-session` looks for the session whose work was committed last in this same repository —
+ * not the one listed before it, because a plan may put sessions in several repositories, and
+ * continuing a front end from a back end's branch would be nonsense. In a run of several sessions
+ * that is the one that ran just before; started on its own, it is the last one that worked here.
+ * When there is none, it starts from `baseBranch` and says so, rather than from wherever the
+ * repository happens to be.
+ */
+export async function sessionStart(
+  session: Session,
+  dir: string,
+  head: string | null,
+  allSessions: () => Promise<Session[]>,
+): Promise<{ start?: SessionStart } | { problem: string }> {
+  const how = session.vcs?.startFrom ?? 'head';
+  const baseBranch = session.vcs?.baseBranch?.trim() || 'main';
+  if (how === 'head') return head ? { start: { kind: 'head', commit: head } } : {};
+
+  const fromBranch = async (note?: string): Promise<{ start?: SessionStart } | { problem: string }> => {
+    const tip = await branchTip(dir, baseBranch);
+    if (!tip) {
+      return {
+        problem:
+          `this session is set to start from the local branch "${baseBranch}", and ${dir} has no such branch. ` +
+          'Name the branch the work should start from (Version control → "Start from"), or create it.',
+      };
+    }
+    return { start: { kind: 'branch', commit: tip, branch: baseBranch, ...(note ? { note } : {}) } };
+  };
+  if (how === 'branch') return await fromBranch();
+
+  const here = normalise(dir);
+  let best: { session: Session; branch: string; at: string } | null = null;
+  for (const other of await allSessions()) {
+    if (other.id === session.id || !other.vcs?.enabled || normalise(repoDirOf(other)) !== here) continue;
+    const last = lastWorkOf(other);
+    if (last && (!best || last.at > best.at)) best = { session: other, ...last };
+  }
+  if (!best) return await fromBranch(`no earlier session has committed work in this repository, so it starts from "${baseBranch}"`);
+  const tip = await branchTip(dir, best.branch);
+  if (!tip) {
+    return await fromBranch(
+      `the branch of the previous session "${best.session.name}" (${best.branch}) is no longer in the repository, so it starts from "${baseBranch}"`,
+    );
+  }
+  return { start: { kind: 'previous-session', commit: tip, branch: best.branch, fromSession: { id: best.session.id, name: best.session.name } } };
+}
+
+/**
+ * The branch holding a session's latest work, and when that work ended: in `per-session` mode its
+ * one branch, in `per-task` mode the branch of the task that finished last — only tasks that
+ * committed something, since a branch with nothing on it is the session's start, not its work.
+ */
+function lastWorkOf(session: Session): { branch: string; at: string } | null {
+  let best: { branch: string; at: string } | null = null;
+  for (const t of session.tasks) {
+    for (const v of [...(t.attempts ?? []).map((a) => ({ vcs: a.vcs, at: a.finishedAt })), { vcs: t.vcs, at: t.finishedAt }]) {
+      if (!v.vcs?.branch || !v.vcs.commit || !v.at) continue;
+      if (!best || v.at > best.at) best = { branch: v.vcs.branch, at: v.at };
+    }
+  }
+  return best;
+}
+
+async function branchTip(dir: string, branch: string): Promise<string | null> {
+  if (!(await isValidBranchName(dir, branch))) return null;
+  const r = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
+  return r.ok && r.stdout.trim() ? r.stdout.trim() : null;
+}
+
+function normalise(dir: string): string {
+  return dir.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+}
+
+/** One line for the log and the event stream: where this session starts, and why. */
+export function describeStart(start: SessionStart): string {
+  const at = start.commit.slice(0, 8);
+  const said =
+    start.kind === 'previous-session'
+      ? `this session continues "${start.fromSession?.name ?? '?'}": it starts from the end of its branch ${start.branch} (${at})`
+      : start.kind === 'branch'
+        ? `this session starts from the local branch ${start.branch} (${at})`
+        : `this session starts from where the repository was (${at})`;
+  return start.note ? `${said} — ${start.note}` : said;
 }
 
 /** Where a session's work is, for the operator: one branch, or one per task. */
@@ -148,7 +253,7 @@ async function switchTo(
   wantedName: string,
   from: string | undefined,
   bus: EventBus,
-  opts: { reuseExisting: boolean },
+  opts: { reuseExisting: boolean; start?: SessionStart },
 ): Promise<PrepareResult> {
   if (!(await isValidBranchName(dir, wantedName))) {
     const problem = `"${wantedName}" is not a name git accepts.`;
@@ -197,6 +302,7 @@ async function switchTo(
     mode,
     base: vcs.baseCommit ? { commit: vcs.baseCommit, subject } : undefined,
     earlier,
+    start: opts.start,
   });
   return { vcs, note };
 }
@@ -208,6 +314,8 @@ export type NoteContext = {
   base?: { commit: string; subject: string };
   /** The other tasks of this session that already ran, with the branch each worked on. */
   earlier: Array<{ title: string; branch: string }>;
+  /** Where the session itself started, when it was chosen rather than taken from HEAD. */
+  start?: SessionStart;
 };
 
 /**
@@ -239,12 +347,24 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
         ? `Every task of this session gets its own branch from that same commit, so the work of the earlier tasks is NOT in your working tree: ` +
           `${ctx.earlier.map((e) => `"${e.title}" is on \`${e.branch}\``).join(', ')}. If this task depends on what one of them produced, say so in the summary rather than looking for files that are not here.`
         : 'Every task of this session gets its own branch from that same commit.';
+  /*
+   * Where the session began, said when it was chosen. A session that continues another has that
+   * session's files in its tree, and a model not told so reads them as something to redo or
+   * doubt; one that starts from `main` has none of them, and a model not told so goes looking.
+   */
+  const began =
+    ctx.start?.kind === 'previous-session'
+      ? `This session continues the work of the earlier session "${ctx.start.fromSession?.name ?? ''}": it was started from the end of its branch \`${ctx.start.branch}\`, so that session's work is already in your working tree. Build on it; do not redo it.`
+      : ctx.start?.kind === 'branch'
+        ? `This session started from the local branch \`${ctx.start.branch}\`, not from any earlier session's work${ctx.start.note ? ` (${ctx.start.note})` : ''}.`
+        : '';
   return [
     '## Version control',
     '',
     `The runner has already put ${repoDir} on the branch \`${vcs.branch}\`, created for this task from ${base},`,
     'and it will commit whatever you change when the task finishes.',
     '',
+    ...(began ? [began, ''] : []),
     standing,
     '',
     '- Do not create branches, switch branches, commit, stash, reset or revert. That is the',

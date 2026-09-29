@@ -693,9 +693,15 @@ export async function runTask(
 
   try {
     // --- version control: a branch of this task's own, before anything is touched -------
-    const prepared = await prepareForTask(session, task, bus, async (mutate) => {
-      await store.updateSession(session.id, mutate);
-    });
+    const prepared = await prepareForTask(
+      session,
+      task,
+      bus,
+      async (mutate) => {
+        await store.updateSession(session.id, mutate);
+      },
+      () => store.listSessions(),
+    );
     if (prepared.vcs.branch || prepared.vcs.problem) {
       await setTask((t) => {
         t.vcs = prepared.vcs;
