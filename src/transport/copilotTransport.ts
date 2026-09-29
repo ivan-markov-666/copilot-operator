@@ -882,6 +882,20 @@ Current URL: ${url}`);
       await this.closeMenu();
       return { ok: false, current: before, reason: `The picker does not offer "${name}" any more.` };
     }
+    /*
+     * Already the one in force: close the menu and say so, without clicking.
+     *
+     * The button cannot answer this on its own, because it shortens names — "GPT 5.6 Think deeper"
+     * reads "GPT 5.6 Think" — so the exact comparison above lets a chat that is already on the
+     * model through to here. The row's own mark (`aria-checked` and its kin) is the answer. The
+     * click it used to get did nothing in Copilot: the row already in force ignores it, the menu
+     * stayed open over the composer, and the run went on with the model list hanging on screen.
+     */
+    if (target.selected) {
+      await this.closeMenu();
+      this.emit('model-already-selected', { model: target.name, buttonShows: before });
+      return { ok: true, current: target.name };
+    }
     if (target.disabled) {
       await this.closeMenu();
       return { ok: false, current: before, reason: `"${name}" is shown but not available right now.` };
@@ -889,6 +903,9 @@ Current URL: ${url}`);
 
     await this.clickMenuRow(target.name, inSubmenu);
     await this.p.waitForTimeout(1_000);
+    // Whatever the click did, the menu is not left open over the chat: a build that keeps it open
+    // after a choice, or a click that did not land, would otherwise leave it for the next message.
+    if ((await this.readMenuRows()).length > 0) await this.closeMenu();
     const after = await this.currentModel();
 
     // The button shows the choice, so it is the check. It also **shortens** it: picking
