@@ -278,9 +278,9 @@ export const dict = {
     'approval.run': 'Run',
     'approval.runAll': 'Run this and the rest without asking',
     'approval.runAllWhy':
-      'Answers this step with Run and stops asking for every step after it, for the rest of this run. Commands on the deny list are still refused, and a command that downloads from the internet still asks.',
+      'Answers this step with Run and stops asking for every step after it, for the rest of this run. Commands on the deny list are still refused, and a command that downloads from the internet does what Settings → Execution says (by default it still asks).',
     'approval.runAllConfirm':
-      'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused, and a command that downloads from the internet still asks. Continue?',
+      'From here on, commands written by Copilot will run without asking, until this run ends. Commands on the deny list are still refused, and a command that downloads from the internet does what Settings → Execution says (by default it still asks). Continue?',
     'approval.network':
       'This command downloads from the internet. A run that does not ask still stops for this one (unless Settings → Execution says otherwise), because a later step could run what arrived. Run it only if you know what it fetches and why.',
     'approval.skip': 'Skip',
@@ -1318,9 +1318,9 @@ export const dict = {
     'approval.run': 'Изпълни',
     'approval.runAll': 'Изпълни без да питаш повече',
     'approval.runAllWhy':
-      'Отговаря на тази стъпка с Изпълни и престава да пита за следващите до края на това изпълнение. Забранените команди пак се отказват, а команда, която тегли от интернет, пак пита.',
+      'Отговаря на тази стъпка с Изпълни и престава да пита за следващите до края на това изпълнение. Забранените команди пак се отказват, а команда, която тегли от интернет, прави каквото казват Настройки → Изпълнение (по подразбиране пак пита).',
     'approval.runAllConfirm':
-      'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват, а команда, която тегли от интернет, пак пита. Продължавате ли?',
+      'Оттук нататък командите, написани от Copilot, ще се изпълняват без да питат, докато това изпълнение приключи. Забранените команди пак се отказват, а команда, която тегли от интернет, прави каквото казват Настройки → Изпълнение (по подразбиране пак пита). Продължавате ли?',
     'approval.network':
       'Тази команда тегли от интернет. Пускане без питане също спира за нея (освен ако Настройки → Изпълнение не казва друго), защото следваща стъпка може да пусне изтегленото. Изпълнете я само ако знаете какво тегли и защо.',
     'approval.skip': 'Пропусни',

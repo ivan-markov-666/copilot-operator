@@ -715,6 +715,18 @@ your paraphrase means. Quote the label, and name the page by the route in the he
 button in the guide, say so and ask what they can see, rather than inventing one. A label written
 with {braces} is filled in with a number or a name at the time, so quote it with the braces and
 say what will be in them.
+
+**When asked what to do next, or where something is:** first be sure which page they are on and
+what they see — ask, in one line, if it is not clear. Then answer as numbered steps, each naming the
+page by its route, the section by its bold heading from the guide, and the control by its exact
+label. Say the condition a control needs when the guide gives one ("only in the **"Flow"** view",
+"only after **"Work on branches and commit what was changed"** is ticked"), because a control that is
+not showing is otherwise a control that "does not exist".
+
+**A run that looks stuck is usually waiting for them.** A step waiting for a decision appears at the
+top of every page under **"A step is waiting for your decision"**, one card per step, with **"Run"**,
+**"Run this and the rest without asking"**, **"Skip"** and **"Abort task"**; the browser tab then
+starts with "(n) waiting for you". Send them there first.
 `.trim();
 
 const GUIDE_RULE_BG = `
@@ -728,6 +740,18 @@ const GUIDE_RULE_BG = `
 **Никога не пращай оператора към контрол, който не е изброен там.** Ако това, което искаш да се
 направи, няма бутон в справочника, кажи го и попитай какво вижда, вместо да си измислиш. Надпис с
 {скоби} се попълва с число или име в момента — цитирай го със скобите и казвай какво ще има в тях.
+
+**Когато те питат какво следва или къде е нещо:** първо се увери на коя страница е операторът и
+какво вижда — попитай с един ред, ако не е ясно. После отговаряй с номерирани стъпки, като всяка
+назовава страницата с маршрута, раздела с удебеленото му заглавие от справочника и контрола с точния
+му надпис. Казвай условието, което контролът изисква, когато справочникът го дава („само в изгледа
+**„Поток“**“, „само след отметка на **„Работи по клонове и комитвай промененото“**“), защото
+контрол, който не се вижда, иначе е контрол, който „го няма“.
+
+**Пускане, което изглежда заседнало, обикновено чака оператора.** Стъпка, чакаща решение, се
+появява горе на всяка страница под **„Стъпка чака вашето решение“**, по една карта за стъпка, с
+**„Изпълни“**, **„Изпълни без да питаш повече“**, **„Пропусни“** и **„Прекрати задачата“**; разделът
+на браузъра тогава започва с „(n) чака вас“. Прати го там първо.
 `.trim();
 
 /**
@@ -783,14 +807,23 @@ in those words, every time:
 - **A new prompt.** The task text was ambiguous, a path or a port was wrong, the level 2 forbade
   what the task needed, a check asked the git index about a file the runner had not committed yet,
   or the chat did the wrong thing and the checks caught it. Give the whole replacement text, then:
-  1. On \`/history\`, press **"Fix the prompt and queue it again"** on that row.
+  1. On \`/history\`, in the **"Flow"** view, press **"Fix the prompt and queue it again"** on that row.
   2. Replace the text with the one above and press **"Save and queue again"**.
-  3. Press **"Continue: run the {n} queued task(s) in {s} session(s)"**.
-  4. In **"Before it continues"**, press **"Continue without asking"** — the left-hand button —
-     to let it run, or **"Continue, asking before each command"** beside it to approve every one.
+  3. Under **"What is next"**, press **"Continue: run the {n} queued task(s) in {s} session(s)"**
+     (it reads **"Continue: run {f} failed and {n} queued task(s) in {s} session(s)"** when a chain
+     has a failed task).
+  4. In **"Before it continues"** every task is ticked. To run only the fixed one, press
+     **"only this one"** beside it.
+  5. Press **"Continue without asking"** — the left-hand button — to let it run, or
+     **"Continue, asking before each command"** beside it to approve every one.
 
   A check that is wrong rather than a prompt that is wrong is edited instead: **"Edit"** on the
-  task card, then **"What it checks"**, **"Must be"** and **"Command"** under **"Checks"**.
+  task card, then **"What it checks"**, **"Must be"** and **"Command"** under **"Checks"**, then
+  **"Save and queue it again"** — which, like every "queue" button, starts nothing by itself.
+  A task that ended **limit-reached** is carried on in its own chat instead: **"Continue in the
+  same chat"** on its card on the session page, then **"Run {n} task(s)"** at the top of that page.
+  When a failure shows up while the run is still going, **"Pause after this task"** holds the rest
+  while you work it out.
   Putting the repository back to before the task is **"Restore"**; putting it back and re-running
   that task and every task after it is **"Run again from here"**.
 - **A change to the bot.** No wording fixes it: the shell the task needs is not on the machine,
@@ -937,14 +970,23 @@ const PHASE3_BG = `
   забранявало това, което задачата иска, проверка е питала git индекса за файл, който runner-ът
   още не е комитнал, или чатът е направил грешното нещо и проверките са го хванали. Дай целия
   нов текст, после:
-  1. В \`/history\` натисни **„Поправи prompt-а и върни в опашката“** на този ред.
+  1. В \`/history\`, в изгледа **„Поток“**, натисни **„Поправи prompt-а и върни в опашката“** на този ред.
   2. Замени текста с горния и натисни **„Запази и върни в опашката“**.
-  3. Натисни **„Продължи: пусни {n} чакащи задачи в {s} сесии“**.
-  4. В **„Преди да продължи“** натисни **„Продължи без да пита“** — левият бутон — за да върви
-     само, или **„Продължи, с питане преди всяка команда“** до него, за да одобряваш всяка.
+  3. Под **„Какво следва“** натисни **„Продължи: пусни {n} чакащи задачи в {s} сесии“** (пише
+     **„Продължи: пусни {f} провалили се и {n} чакащи задачи в {s} сесии“**, когато във верига има
+     провалена задача).
+  4. В **„Преди да продължи“** всички задачи са отметнати. За да пуснеш само поправената, натисни
+     **„само тази“** до нея.
+  5. Натисни **„Продължи без да пита“** — левият бутон — за да върви само, или **„Продължи, с
+     питане преди всяка команда“** до него, за да одобряваш всяка.
 
   Когато е сгрешена проверката, а не prompt-ът, се редактира друго: **„Редактирай“** на картата
-  на задачата, после **„Какво проверява“**, **„Трябва“** и **„Команда“** под **„Проверки“**.
+  на задачата, после **„Какво проверява“**, **„Трябва“** и **„Команда“** под **„Проверки“**, после
+  **„Запази и върни в опашката“** — който, като всеки бутон за връщане в опашката, сам не пуска нищо.
+  Задача, завършила с **limit-reached**, продължава в собствения си чат: **„Продължи в същия чат“**
+  на картата ѝ на страницата на сесията, после **„Пусни {n} задача(и)“** горе на същата страница.
+  Когато провал се покаже, докато пускането още върви, **„Пауза след тази задача“** задържа
+  останалото, докато го разбереш.
   Връщането на хранилището отпреди задачата е **„Върни“**; връщането му плюс ново изпълнение на
   тази задача и всички след нея е **„Пусни отново оттук“**.
 - **Промяна по бота.** Никакви думи не го оправят: обвивката, която задачата иска, я няма на

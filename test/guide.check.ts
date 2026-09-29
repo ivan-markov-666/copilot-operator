@@ -254,7 +254,79 @@ ${unattendedRefused}`;
   console.log(`${lang} labels quoted in prose  :`, quoted.length, '| not on any screen:', unknown.length, '(expect 0)');
 }
 
-const failures = gone + drifted + unrendered + orphaned + invented;
+/*
+ * Coverage: every control on a page is in the guide, or is named below as not needing to be.
+ *
+ * The checks above hold what the guide says to the screens; none of them noticed what it did not
+ * say. The guide called itself "a selection and not an inventory", and on 2026-09-29 an audit
+ * found 144 of 283 labelled controls missing from it — the Continue panel's tick boxes and "only
+ * this one", "Where this session starts", the story's live controls, the options of every Settings
+ * menu — while Kerrigan is told never to name a control the guide does not list. So a control she
+ * cannot see is a control she will say does not exist. This reads every page for the labels of
+ * things an operator presses, picks, opens or reads as a heading — the `t('key')` inside a button,
+ * link, option, label, disclosure, legend, table heading or section heading — and fails on any
+ * that is neither guided nor exempted here with the reason it needs no directions.
+ */
+console.log('\n--- every control on a page is in the guide ---');
+
+const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
+  { pattern: /\.col\./, why: 'a table column heading; the persona names what is in the column, not its header' },
+  { pattern: /(Why|Hint)$|\.why$/, why: 'a tooltip (title attribute) explaining a control that is itself guided' },
+  { pattern: /^tree\.state/, why: 'the tooltip of a folder-tree row, whose buttons are guided' },
+  { pattern: /^sys\.(cwd|data|desktop|edge|mode|node|profile|profileInUse|runs|asSaved|resolved)$/, why: 'a row or heading of the read-only System report' },
+  { pattern: /^ap\.example(Link)?$/, why: 'sample text on the Appearance page, there to show the chosen style' },
+  { pattern: /^model\.(notInList|unavailable)$/, why: 'a marker added to a model option, not an option of its own' },
+  { pattern: /^checks\.(n|passed)$/, why: 'the count on the checks fold, whose controls are guided' },
+  { pattern: /^task\.editAll$/, why: 'the tooltip of "Edit"' },
+  { pattern: /^reg\.newTaskIn$/, why: 'the second half of the "New task" label' },
+  { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
+];
+const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
+const guided = new Set(claims.map((c) => c.key));
+const pageFiles = sourceFiles('web/app').filter((f) => f.endsWith('.tsx'));
+const uncovered = new Map<string, string>();
+for (const file of pageFiles) {
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/\bt\('([\w.-]+)'/g)) {
+    const key = m[1]!;
+    if (guided.has(key) || uncovered.has(key) || EXEMPT.some((e) => e.pattern.test(key))) continue;
+    // The element the call sits in: the last tag opened before it and not closed since.
+    const before = text.slice(0, m.index);
+    const open = [...before.matchAll(/<([A-Za-z][\w.]*)[\s>]/g)].pop();
+    const closedSince = Math.max(before.lastIndexOf('</'), before.lastIndexOf('/>'));
+    if (!open || open.index! < closedSince || !CONTROL_TAGS.has(open[1]!)) continue;
+    uncovered.set(key, `${file.replace(/\\/g, '/')} <${open[1]}>`);
+  }
+}
+for (const [key, where] of uncovered) {
+  console.log(`!! ${key} ("${en[key] ?? ''}") — a control in ${where} that the guide does not list`);
+}
+console.log('controls the guide misses :', uncovered.size, '(expect 0)');
+if (uncovered.size > 0) {
+  console.log('Add each to src/plan/systemGuide.ts where it sits on its page, or to EXEMPT above with the reason it needs no directions.');
+}
+
+/*
+ * The brief's size, against where it is pasted.
+ *
+ * A complete guide made the brief about a fifth longer, and the operator pastes the brief into a
+ * chat — often Copilot's, whose composer refuses a message beyond roughly 120 000 characters. The
+ * longest form is the first run, which carries the example documents and the phase 0 interview.
+ * This is a tripwire under that limit, not a target: when it trips, something has to get shorter
+ * (or move out of the brief), and that is a decision to make on purpose rather than to discover
+ * when an operator's paste is refused.
+ */
+console.log('\n--- the brief fits where it is pasted ---');
+const BRIEF_BUDGET = 116_000;
+let oversized = 0;
+for (const lang of ['en', 'bg'] as const) {
+  const example = (name: string): string => readFileSync(join('prompts', `${name}.${lang}.md`), 'utf8');
+  const longest = planBrief({ lang, organisationExample: example('organisation'), personaExample: example('persona'), workExample: example('work') });
+  if (longest.length > BRIEF_BUDGET) oversized += 1;
+  console.log(`${lang} first-run brief         :`, longest.length, `chars (budget ${BRIEF_BUDGET}; Copilot refuses beyond about 120 000)`);
+}
+
+const failures = gone + drifted + unrendered + orphaned + invented + uncovered.size + oversized;
 console.log('\nfailures:', failures, '(expect 0)');
 if (failures > 0) {
   console.log('The interface, the guide and the brief disagree.');

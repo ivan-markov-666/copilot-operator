@@ -751,6 +751,19 @@ export const SCRIPT: ScriptMessage[] = [
         ],
       },
       {
+        choose: { en: 'Where each session starts, if 1.1 (`startFrom`):', bg: 'Откъде тръгва всяка сесия, ако е 1.1 (`startFrom`):' },
+        options: [
+          {
+            en: 'From the local branch main — every session starts from the same clean code (branch; name another in baseBranch)',
+            bg: 'От локалния клон main — всяка сесия тръгва от един и същ чист код (branch; друг клон в baseBranch)',
+          },
+          {
+            en: "From the previous session's branch — the sessions form a chain (previous-session)",
+            bg: 'От клона на предната сесия — сесиите образуват верига (previous-session)',
+          },
+        ],
+      },
+      {
         choose: { en: 'If a task fails (`onFailure` of the session, required):', bg: 'Ако задача се провали (`onFailure` на сесията, задължително):' },
         options: [
           { en: 'Stop — the tasks are a chain', bg: 'Спри — задачите са верига' },
