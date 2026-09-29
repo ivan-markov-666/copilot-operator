@@ -158,12 +158,51 @@ await scenario('"done" is not taken on trust: the checks run, and a failure goes
   t.check('the file is there', h.git('show', 'cop/checked:hello.txt'), 'hi');
 });
 
-await scenario('a check that never passes ends the task as failed', { limits: { maxCheckRounds: 2 } }, async (h) => {
+await scenario('a check that never passes, though the chat keeps changing things, ends the task as failed', { limits: { maxCheckRounds: 2 } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'never', [greeting]));
-  h.chat.script(reply.done(), reply.done(), reply.done(), reply.done());
+  // Something different each time, and never what the check wants.
+  for (const text of ['one', 'two', 'three']) h.chat.script(reply.steps(`Set-Content -Path hello.txt -Value '${text}' -Encoding utf8`), reply.done());
   const after = await h.run(s!.id);
   t.check('the task failed', after.tasks[0]!.status, 'failed');
   t.truthy('and the reason names the check', (after.tasks[0]!.reason ?? '').includes('greeting written'), after.tasks[0]!.reason);
+  h.chat.discard();
+});
+
+await scenario('"done" again with the same failing check and nothing changed: stopped as no progress', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'again', [greeting]));
+  h.chat.script(reply.done(), reply.done());
+  const after = await h.run(s!.id);
+  const task = after.tasks[0]!;
+  t.check('blocked, not left to use its remaining rounds', task.status, 'blocked');
+  t.truthy('with the diagnosis', /no progress: "done" was said again with the same 1 check\(s\) failing \(greeting written\)/.test(task.reason ?? ''), task.reason);
+  t.check('counted: done rejected twice, stopped for no progress', [task.stats?.doneRejected, task.stats?.stoppedFor], [2, 'no-progress']);
+});
+
+await scenario('the same error from different commands with nothing changed: stopped as no progress', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'sameerror', [greeting]));
+  h.chat.script(
+    reply.steps({ cmd: 'echo database unreachable 1>&2 & exit /b 3', shell: 'cmd' }),
+    reply.steps({ cmd: '(echo database unreachable) 1>&2 & exit /b 3', shell: 'cmd' }),
+    reply.steps({ cmd: 'echo database unreachable>&2 & exit /b 3', shell: 'cmd' }),
+  );
+  const after = await h.run(s!.id);
+  const task = after.tasks[0]!;
+  t.check('blocked after three such rounds', task.status, 'blocked');
+  t.truthy('with the error quoted', /3 rounds in a row ended with the same error/.test(task.reason ?? '') && /database unreachable/.test(task.reason ?? ''), task.reason);
+});
+
+await scenario('changes made and undone round after round: stopped as no progress', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'flipflop', [greeting]));
+  h.chat.script(
+    reply.steps("Set-Content -Path hello.txt -Value 'one' -Encoding utf8"),
+    reply.steps("Set-Content -Path hello.txt -Value 'two' -Encoding utf8"),
+    reply.steps("'one' | Set-Content -Path hello.txt -Encoding utf8"),
+    reply.steps("'two' | Set-Content -Path hello.txt -Encoding utf8"),
+  );
+  const after = await h.run(s!.id);
+  const task = after.tasks[0]!;
+  t.check('blocked on the second return', task.status, 'blocked');
+  t.truthy('with the diagnosis', /went back to how they were two rounds earlier 2 times/.test(task.reason ?? ''), task.reason);
 });
 
 await scenario('a step the gate refuses is reported to the chat and never runs', {}, async (h) => {

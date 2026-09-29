@@ -391,6 +391,11 @@ export const RunConfigSchema = z.object({
        * of turns" is not.
        */
       maxStalledIterations: z.number().int().positive().default(2),
+      /*
+       * Rounds in a row that end with the same error while no file changes, before the task is
+       * stopped as blocked with that diagnosis (orchestrator/progress.ts). Only with a repository.
+       */
+      maxNoProgressRounds: z.number().int().min(2).default(3),
       /**
        * How many times a task may be sent back because an independent review found problems.
        *

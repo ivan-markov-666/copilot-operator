@@ -61,6 +61,7 @@ export type TaskView = {
   interruption?: { steps?: Array<{ id: number; state: string }>; resultsSent?: boolean };
   attempts?: Array<{ status: string; runId?: string; vcs?: { branch?: string } }>;
   review?: { verdict?: string };
+  stats?: { formatErrors: number; doneRejected: number; repeatsRefused: number; stepsRefused: number; operatorStops: number; reviewRejections: number; scopeReverts: number; stoppedFor?: string };
   handoff?: {
     outcome: { status: string; reason?: string };
     changedFiles: Array<{ path: string }>;

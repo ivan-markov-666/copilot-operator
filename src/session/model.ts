@@ -206,6 +206,8 @@ export type Task = {
   scopeReverted?: string[];
   /** How the attempt ended, in one fixed shape the runner puts together. See `session/handoff.ts`. */
   handoff?: Handoff;
+  /** What went wrong on the way, counted by the runner; the register adds them up. Absent on older tasks. */
+  stats?: TaskStats;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -369,6 +371,29 @@ export type TaskReview = {
 };
 
 /** How one check turned out, kept on the task so the record says why it ended as it did. */
+/**
+ * The attempt's own counts of what went wrong on the way. Each is something the runner did, not
+ * something the chat said: the register's figures (`session/metrics.ts`) are sums of these.
+ */
+export type TaskStats = {
+  /** Replies sent back because they were not in the format. */
+  formatErrors: number;
+  /** Times "done" was answered with failing checks. */
+  doneRejected: number;
+  /** Steps refused for repeating a command that had already given the same result. */
+  repeatsRefused: number;
+  /** Steps the runner's gate refused (policy, repeat, missing shell, damage). */
+  stepsRefused: number;
+  /** Steps a person skipped or aborted from the approval screen. */
+  operatorStops: number;
+  /** Review rounds that failed the work. */
+  reviewRejections: number;
+  /** Files put back because they were outside the task's scope. */
+  scopeReverts: number;
+  /** Set when the task was stopped by a no-progress signal (`orchestrator/progress.ts`). */
+  stoppedFor?: 'no-progress';
+};
+
 export type TaskCheckResult = {
   name: string;
   passed: boolean;

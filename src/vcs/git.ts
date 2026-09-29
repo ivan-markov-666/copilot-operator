@@ -17,6 +17,8 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 export type GitResult = { ok: boolean; stdout: string; stderr: string; code: number };
@@ -367,6 +369,29 @@ export async function commitSubject(dir: string, commit: string): Promise<string
 }
 
 /** One line per commit, newest first, for showing what a task produced. */
+/**
+ * One hash for the whole working tree as it differs from HEAD: tracked changes, staged or not, and
+ * every untracked file that is not ignored, with its contents. Two equal fingerprints mean no file
+ * changed in between, which is what `orchestrator/progress.ts` needs to tell a loop from work.
+ * Null when there is no HEAD to compare with.
+ */
+export async function treeFingerprint(dir: string): Promise<string | null> {
+  const diff = await gitBytes(dir, ['diff', 'HEAD', '--binary', '--no-ext-diff', '--no-textconv'], 60_000, 64 * 1024 * 1024);
+  if (!diff.ok) return null;
+  const hash = createHash('sha256').update(diff.stdout);
+  const others = await gitBytes(dir, ['ls-files', '--others', '--exclude-standard', '-z']);
+  const names = others.ok ? others.stdout.toString('utf8').split('\0').filter(Boolean).sort().slice(0, 5000) : [];
+  for (const name of names) {
+    hash.update(`\0${name}\0`);
+    const info = await stat(join(dir, name)).catch(() => null);
+    if (!info?.isFile()) continue;
+    // A very large file is known by its size and time rather than read.
+    if (info.size > 8 * 1024 * 1024) hash.update(`${info.size}:${info.mtimeMs}`);
+    else hash.update(await readFile(join(dir, name)).catch(() => Buffer.alloc(0)));
+  }
+  return hash.digest('hex');
+}
+
 /** The identity the runner commits under (see `commitAll`). */
 export const RUNNER_EMAIL = 'copilot-operator@localhost';
 

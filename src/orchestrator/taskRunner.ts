@@ -44,6 +44,9 @@ import { RunLog } from '../log/runLog.js';
 import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
+import { ProgressWatch } from './progress.js';
+import { treeFingerprint } from '../vcs/git.js';
+import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -464,6 +467,12 @@ export async function runTask(
   let runnerNotes: string[] = [];
   /** Steps the chat sent that were not run, for the handoff at the end. */
   const notRun: NotRun[] = [];
+  /** What went wrong on the way, counted for the register's figures. See `TaskStats`. */
+  const stats: TaskStats = { formatErrors: 0, doneRejected: 0, repeatsRefused: 0, stepsRefused: 0, operatorStops: 0, reviewRejections: 0, scopeReverts: 0 };
+  /** Loops the older guards do not see; see `progress.ts`. */
+  const progress = new ProgressWatch({ noProgress: Math.max(2, cfg.limits.maxNoProgressRounds ?? 3), oscillations: 2 });
+  /** Set when a check round shows no progress; the give-up then ends the task blocked with it. */
+  let noProgressReason: string | null = null;
   /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
    * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
@@ -571,6 +580,7 @@ export async function runTask(
       if (disputes.length > 0) t.disputes = disputes;
       if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
       t.logFile = 'task-log.txt';
+      t.stats = stats;
     });
     // The end in one fixed shape, read off the record just written. See `session/handoff.ts`.
     await setTask((t) => {
@@ -742,6 +752,9 @@ export async function runTask(
      */
     const scope = task.scope ?? [];
     const scopeEnforced = scope.length > 0 && !!prepared.vcs.branch && !prepared.vcs.problem && !!prepared.vcs.baseCommit;
+    /** The working tree's fingerprint, when the task is on a branch of its own; null otherwise. */
+    const treeNow = async (): Promise<string | null> =>
+      prepared.vcs.branch && !prepared.vcs.problem && prepared.vcs.baseCommit ? await treeFingerprint(repoDirOf(session)).catch(() => null) : null;
 
     // --- project mirror, attached to the first message of the task ---------------------
     let mirrorFiles: string[] = [];
@@ -960,7 +973,16 @@ export async function runTask(
         sink.event('checks-passed', { count: outcomes.length }, `all ${outcomes.length} check(s) passed`);
         return 'accept';
       }
+      stats.doneRejected += 1;
       if (deps.signal?.aborted) return 'give-up';
+      // The same failures as last time, and not a file changed since they were reported.
+      const stuck = progress.afterFailedChecks(await treeNow(), failed.map((o) => ({ name: o.check.name, detail: o.detail })));
+      if (stuck) {
+        noProgressReason = stuck;
+        stats.stoppedFor = 'no-progress';
+        sink.event('no-progress', { kind: 'checks' }, stuck, 'warn');
+        return 'give-up';
+      }
       if (checkRounds > maxCheckRounds) {
         /*
          * Only checks from earlier reviews are failing. A reviewer's check is outranked by the
@@ -1150,6 +1172,7 @@ export async function runTask(
        * task; the ones suspended by a dispute or by spent rounds come back if the finding was
        * raised again, and go if it was not.
        */
+      if (outcome.verdict === 'fail') stats.reviewRejections += 1;
       if (outcome.verdict === 'pass' || outcome.verdict === 'fail') {
         for (const d of outcome.derivedChecks ?? []) {
           reviewChecks = [...reviewChecks, { check: d.check, findingId: d.findingId, what: d.what, where: d.where, round: reviewRounds, attempt, state: 'active' }];
@@ -1328,6 +1351,7 @@ export async function runTask(
 
       if (!parsed.ok) {
         formatRetries += 1;
+        stats.formatErrors += 1;
         sink.event('format-error', { reason: parsed.reason, detail: parsed.detail },
           `reply did not match the contract (${parsed.reason}), retry ${formatRetries}/${cfg.limits.maxFormatRetries}`, 'warn');
         if (formatRetries > cfg.limits.maxFormatRetries) {
@@ -1428,6 +1452,7 @@ export async function runTask(
           return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
         }
         if (verdict === 'give-up') {
+          if (noProgressReason) return await finish('blocked', noProgressReason, reply.summary, lastMarkdown);
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
         if (verdict === 'accept') {
@@ -1492,6 +1517,7 @@ export async function runTask(
         const ran = seen.get(key)?.sameInARow ?? 0;
         if (ran >= maxCommandRepeats) {
           repeatsRefused += 1;
+          stats.repeatsRefused += 1;
           sink.event('step-repeated', { id: step.id, count: ran, limit: maxCommandRepeats },
             `step ${step.id} refused: already run ${ran} time(s) in this task with the same result`, 'warn');
           results.push(refusedResult(step, repeatRefusal(ran, maxCommandRepeats)));
@@ -1576,6 +1602,8 @@ export async function runTask(
 
       for (const r of results) {
         if (r.outcome !== 'refused' && r.outcome !== 'aborted') continue;
+        if (r.outcome === 'refused') stats.stepsRefused += 1;
+        else stats.operatorStops += 1;
         const why = (r.stderr.split('\n')[0] ?? '').replace(/^\[policy\] step not executed: /, '').trim();
         notRun.push({ command: r.command.slice(0, 200), why: why.slice(0, 300) || r.outcome });
       }
@@ -1603,6 +1631,7 @@ export async function runTask(
               (check.failed.length > 0 ? `; could not be put back: ${check.failed.map((f) => f.path).join(', ')}` : ''),
             'warn');
           runnerNotes.push(scopeMessage(check, scope));
+          stats.scopeReverts += check.reverted.length;
           await setTask((t) => {
             t.scopeReverted = [...new Set([...(t.scopeReverted ?? []), ...check.reverted])];
           });
@@ -1630,6 +1659,15 @@ export async function runTask(
       }
 
       if (aborted) return await finish('aborted', 'the operator aborted the task', undefined, lastMarkdown);
+
+      // A loop in which every round looks new: see `progress.ts`. After the report is written, so
+      // the evidence the diagnosis points at is on disk.
+      const stuck = progress.afterRound(await treeNow(), results);
+      if (stuck) {
+        stats.stoppedFor = 'no-progress';
+        sink.event('no-progress', { kind: 'rounds', iteration: iterations }, stuck, 'warn');
+        return await finish('blocked', stuck, reply.summary, lastMarkdown);
+      }
 
       /*
        * Nothing this iteration did anything.
@@ -1737,6 +1775,7 @@ export async function runTask(
           return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
         }
         if (verdict === 'give-up') {
+          if (noProgressReason) return await finish('blocked', noProgressReason, reply.summary, lastMarkdown);
           return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
         }
         if (verdict === 'accept') {
