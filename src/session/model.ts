@@ -296,7 +296,9 @@ export type TaskCheck = {
      * itself whenever it is going to commit; not offered to plans, because it is not a claim
      * about the work but a fact about what a commit should not carry. See `commitHygiene.ts`.
      */
-    | 'commit-clean';
+    | 'commit-clean'
+    /** The text of the changed files: encoding, line endings, credentials. Also added by the runner. See `contentIntegrity.ts`. */
+    | 'content-clean';
   /** The command, for the exit-code and output kinds. */
   run?: string;
   shell?: 'pwsh' | 'powershell' | 'cmd';

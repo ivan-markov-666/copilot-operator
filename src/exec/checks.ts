@@ -23,6 +23,7 @@ import type { ProcessTracker } from './processes.js';
 import { resolveShell, type Shell, type ShellProblem } from './shells.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { findSuspicious, suspiciousDetail } from '../vcs/commitHygiene.js';
+import { integrityDetail, scanChanges } from '../vcs/contentIntegrity.js';
 import type { TaskCheck } from '../session/model.js';
 
 /**
@@ -32,6 +33,12 @@ import type { TaskCheck } from '../session/model.js';
  * work: it is what a commit should never carry, whatever the task was.
  */
 export const COMMIT_CLEAN_CHECK: TaskCheck = { name: 'nothing installed, built, logged or secret is committed', expect: 'commit-clean' };
+
+/** Its sibling for what is inside the files: encoding damage, stray bytes, credentials. See `contentIntegrity.ts`. */
+export const CONTENT_CLEAN_CHECK: TaskCheck = { name: 'the text written is clean: encoding, line endings, no credentials', expect: 'content-clean' };
+
+/** The checks the runner adds by itself before a commit, rather than ones a plan wrote. */
+export const RUNNER_CHECK_KINDS: ReadonlySet<TaskCheck['expect']> = new Set(['commit-clean', 'content-clean']);
 
 /** What a check turned out to be, with enough detail to act on when it failed. */
 export type CheckOutcome = {
@@ -87,6 +94,8 @@ export type CheckRunOptions = {
   roots?: string[];
   /** The repository whose working tree `commit-clean` looks at. Absent means the check passes. */
   repoDir?: string;
+  /** The commit the task started from, which `content-clean` compares each changed file with. */
+  baseCommit?: string;
   /**
    * The shell a check that names none of its own is given.
    *
@@ -136,6 +145,17 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     return found.length === 0
       ? pass('nothing in the working tree looks like tool output or secrets')
       : fail(suspiciousDetail(found), { output: found.map((s) => `${s.path}\t${s.reason}`).join('\n') });
+  }
+
+  if (check.expect === 'content-clean') {
+    const dir = (opts.repoDir ?? '').trim();
+    if (!dir) return pass('no repository is set for this session, so nothing is committed');
+    const state = await repoState(dir).catch(() => null);
+    if (!state?.isRepo) return pass(`${dir} is not a git repository, so nothing is committed`);
+    const found = await scanChanges(dir, await workingTreePaths(dir), opts.baseCommit);
+    return found.length === 0
+      ? pass('the changed files are clean UTF-8 text with one kind of line ending and no credentials')
+      : fail(integrityDetail(found), { output: found.map((f) => `${f.path}\t${f.kind}\t${f.detail}`).join('\n') });
   }
 
   /*

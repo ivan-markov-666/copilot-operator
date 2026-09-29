@@ -23,7 +23,7 @@ import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes,
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type ShellProblem } from '../exec/shells.js';
-import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, type CheckOutcome } from '../exec/checks.js';
+import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
@@ -853,7 +853,8 @@ export async function runTask(
      * task refusing to start over it.
      */
     const willCommit = !!(session.vcs?.enabled && session.vcs.commitOnFinish && repoDirOf(session));
-    let generatedPointedOut = false;
+    /** The runner's own checks that have been pointed out to the chat once already. */
+    const pointedOut = new Set<string>();
 
     /**
      * Whether "done" is accepted, decided by the operator's checks rather than by the reply.
@@ -865,7 +866,7 @@ export async function runTask(
      * happened, and a task cannot be trusted to answer that about itself.
      */
     const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up' | 'environment'> => {
-      const checks = [...(task.checks ?? []), ...activeChecks(reviewChecks), ...(willCommit ? [COMMIT_CLEAN_CHECK] : [])];
+      const checks = [...(task.checks ?? []), ...activeChecks(reviewChecks), ...(willCommit ? [COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK] : [])];
       if (checks.length === 0) return 'accept';
 
       // Counted only once the round turns out to have been a real attempt. A round that died of
@@ -888,18 +889,25 @@ export async function runTask(
         deny: (command, shell, cwd) => checkCommandRefusal(command, shell, cfg.execution, { roots: confinement.roots, cwd }),
         roots: confinement.roots,
         repoDir: willCommit ? repoDirOf(session) : undefined,
+        baseCommit: prepared.vcs.baseCommit,
         // The same shell a step that named none is given, so the gate and the work it judges
         // cannot have been read by different interpreters.
         defaultShell,
       }));
 
+      /*
+       * The runner's own checks are advice given once, not a gate: a second "done" with the finding
+       * still there is committed and the finding stays on the task. Refusing instead would leave the
+       * tree dirty and the next task unable to start. Each check is pointed out once on its own, so a
+       * content problem found after the paths were settled still gets its one mention.
+       */
       for (const o of outcomes) {
-        if (o.check.expect !== 'commit-clean' || o.passed) continue;
-        if (generatedPointedOut) {
+        if (!RUNNER_CHECK_KINDS.has(o.check.expect) || o.passed) continue;
+        if (pointedOut.has(o.check.expect)) {
           o.passed = true;
-          o.detail = `still there after being pointed out once; committed and marked as suspicious on the task — ${o.detail}`;
+          o.detail = `still there after being pointed out once; committed and kept on the task — ${o.detail}`;
         } else {
-          generatedPointedOut = true;
+          pointedOut.add(o.check.expect);
         }
       }
 

@@ -225,6 +225,34 @@ await scenario('a task the chat calls blocked is tried once more in a fresh conv
   t.check('and the contract was sent again there', h.chat.sent.filter((m) => m.contract === 'task').length, 2);
 });
 
+await scenario('broken text is pointed out once before the commit, and the fix is committed', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'encoding', [{ ...greeting, checks: [] }]));
+  h.chat.script(
+    reply.steps(`Set-Content -Path config.json -Value '{"a":1}' -Encoding utf8BOM`),
+    reply.done(),
+    (m) => {
+      const said = m.text + Object.values(m.attached).join('\n');
+      t.truthy('the chat is told about the byte-order mark in config.json', /config\.json/.test(said) && /byte-order mark/.test(said), said.slice(0, 600));
+      return reply.steps(`Set-Content -Path config.json -Value '{"a":1}' -Encoding utf8NoBOM`);
+    },
+    reply.done(),
+  );
+  const after = await h.run(s!.id);
+  t.check('the task is done', after.tasks[0]!.status, 'done');
+  const committed = h.git('show', 'cop/encoding:config.json');
+  t.check('what was committed has no byte-order mark', committed.charCodeAt(0) === 0xfeff, false);
+});
+
+await scenario('a problem still there after one mention is committed and kept on the task', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'kept', [{ ...greeting, checks: [] }]));
+  h.chat.script(reply.steps(`Set-Content -Path config.json -Value '{"a":1}' -Encoding utf8BOM`), reply.done(), reply.done());
+  const after = await h.run(s!.id);
+  t.check('the task is done', after.tasks[0]!.status, 'done');
+  const results = (after.tasks[0] as unknown as { checkResults?: Array<{ name: string; passed: boolean; detail: string }> }).checkResults ?? [];
+  const content = results.find((r) => /text written is clean/.test(r.name));
+  t.truthy('and the finding stays on it', content && /still there after being pointed out once/.test(content.detail), results);
+});
+
 await scenario('the API refuses callers without the token', {}, async (h) => {
   const res = await fetch(`http://127.0.0.1:${h.api.port}/api/sessions`);
   t.check('no token: 401', res.status, 401);
