@@ -68,7 +68,9 @@
     "check:diff": "tsx test/diff.check.ts",
     "check:e2e-run": "tsx test/e2e-run.check.ts",
     "check:e2e-continue": "tsx test/e2e-continue.check.ts",
-    "check:e2e-interrupt": "tsx test/e2e-interrupt.check.ts"
+    "check:e2e-interrupt": "tsx test/e2e-interrupt.check.ts",
+    "check:ui": "node scripts/build-package.mjs && tsx test/ui.check.ts",
+    "check:all": "npm run check && npm run check:ui"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.3",

@@ -125,7 +125,7 @@ export async function makeDirs(settings: Record<string, unknown> = {}): Promise<
  * which is how a check restarts the program after killing it — and those are left in place on
  * `stop` unless `own` makes this harness the one that cleans them up.
  */
-export async function startHarness(opts: { settings?: Record<string, unknown>; dirs?: HarnessDirs; own?: boolean } = {}): Promise<Harness> {
+export async function startHarness(opts: { settings?: Record<string, unknown>; dirs?: HarnessDirs; own?: boolean; webDir?: string } = {}): Promise<Harness> {
   const dirs = opts.dirs ?? (await makeDirs(opts.settings));
   const own = opts.own ?? !opts.dirs;
   const { base, dataDir, runsDir, repo } = dirs;
@@ -136,7 +136,7 @@ export async function startHarness(opts: { settings?: Record<string, unknown>; d
 
   const { startApi } = await import('../../src/api/server.js');
   const port = await freePort();
-  const api = await startApi({ port, quiet: true });
+  const api = await startApi({ port, quiet: true, webDir: opts.webDir });
   const origin = `http://127.0.0.1:${port}`;
 
   const raw = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: unknown }> => {

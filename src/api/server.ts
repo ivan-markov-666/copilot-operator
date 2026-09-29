@@ -22,6 +22,11 @@ export type StartOptions = {
   webOrigin?: string;
   /** Leaves out the "listening on" lines, for checks that start and stop a server many times. */
   quiet?: boolean;
+  /**
+   * The prebuilt interface to serve, when this is not a package install (which finds its own).
+   * The browser checks use it to put the page and the API on one origin, the way a package runs.
+   */
+  webDir?: string;
 };
 
 export type StartedApi = {
@@ -71,6 +76,7 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
    */
   const layout = installLayout();
   const dataDir = layout.dataDir;
+  const webDir = opts.webDir ?? layout.webDir;
   await mkdir(dataDir, { recursive: true });
   if (layout.mode === 'package') {
     /*
@@ -88,10 +94,10 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   const token = await ensureApiToken(dataDir);
   // The dev UI's origin, and this process's own for the interface it serves itself.
   const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1'), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
-  app.use(localApiGuard({ token, port: PORT, allowedOrigins, servesInterface: layout.webDir !== null }));
-  if (layout.webDir) {
+  app.use(localApiGuard({ token, port: PORT, allowedOrigins, servesInterface: webDir !== null }));
+  if (webDir) {
     // The prebuilt interface, from the package: one process, one port, no dev server.
-    app.useStaticAssets(layout.webDir, { extensions: ['html'], index: 'index.html' });
+    app.useStaticAssets(webDir, { extensions: ['html'], index: 'index.html' });
   }
 
   await app.listen(PORT, '127.0.0.1');

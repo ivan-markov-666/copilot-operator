@@ -475,8 +475,15 @@ th { color: var(--muted); font-weight: 700; font-size: calc(12px * var(--scale))
 .button-link + .button-link:hover { background: var(--accent-soft); border-color: var(--accent); filter: none; }
 
 .empty { color: var(--muted); padding: 14px 0; }
+/*
+ * Read by a screen reader, drawn nowhere. `clip-path` as well as `clip`, and a table cell holding one
+ * is made its containing block (below): an absolutely placed box whose containing block is the page
+ * sits at its static position, which inside a table scrolled sideways on a phone was 200 px past the
+ * right edge, and the whole Sessions page scrolled sideways to reach one invisible pixel.
+ */
 .visually-hidden {
   position: absolute;
+  clip-path: inset(50%);
   width: 1px;
   height: 1px;
   margin: -1px;
@@ -619,6 +626,14 @@ select optgroup { background: var(--panel); color: var(--ink); }
  * content, the nav becomes a scrollable strip, tables scroll inside their panel, and every
  * field takes the full width instead of a share of a row that no longer exists.
  */
+/*
+ * Long unbroken text — a Windows path, a branch name, a commit message — wraps inside its panel
+ * instead of pushing the page wider than the screen. `break-word` rather than `anywhere` so a
+ * table's columns are still sized by their words, not squeezed to one letter.
+ */
+.panel { overflow-wrap: break-word; }
+th, td { position: relative; }
+
 @media (max-width: 600px) {
   .wrap { padding: 12px 10px 60px; }
   .top { gap: 8px; margin-bottom: 12px; padding-bottom: 10px; }
@@ -663,6 +678,8 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .run-fold > summary .run-heading { display: inline-block; width: calc(100% - 16px); vertical-align: top; }
 .run-heading h2 { font-size: calc(15px * var(--scale)); }
 .exports { white-space: nowrap; }
+/* On a phone the four download links are wider than the screen at the larger text sizes. */
+@media (max-width: 600px) { .exports { white-space: normal; } }
 .modal.wide { width: min(820px, 100%); }
 
 /* The directory tree of the mirror (dirTree.tsx). */
