@@ -810,13 +810,71 @@ Current URL: ${url}`);
     await row.click({ timeout: 8_000 }).catch(() => undefined);
   }
 
-  /** Closes the picker, submenu included. */
+  /**
+   * Whether the model picker is open: its button says so (`aria-expanded`), or its rows are on screen.
+   * Both, because either alone has been wrong: rows can be mid-animation after the menu closed, and a
+   * button re-rendered by the page can lose the attribute while the menu is still up.
+   */
+  private async modelMenuOpen(): Promise<boolean> {
+    const button = await this.resolveModelButton(1_000);
+    const expanded = button ? await button.getAttribute('aria-expanded').catch(() => null) : null;
+    if (expanded === 'true') return true;
+    return (await this.readMenuRows()).length > 0;
+  }
+
+  /**
+   * Closes the picker, submenu included, and makes sure it is closed.
+   *
+   * Escape pressed on the page was all this did, three times, and then it gave up without a word.
+   * Live, that left the model list open over the chat after a check of the model: Escape goes to
+   * whatever has focus, and after a click dispatched on a row, or no click at all because the model
+   * was already chosen, focus was not in the menu, so nothing heard it. Each way a person would close
+   * it is tried in turn, and the menu is looked at after each: Escape; Escape sent to the menu itself;
+   * the picker button again (it toggles); a click outside the menu, in the composer, which a Fluent
+   * popup takes as "close". A menu still open after all of them is reported, not passed over.
+   */
   private async closeMenu(): Promise<void> {
-    for (let i = 0; i < 3; i += 1) {
-      await this.p.keyboard.press('Escape').catch(() => undefined);
-      await this.p.waitForTimeout(200);
-      if ((await this.readMenuRows()).length === 0) return;
+    const ways: Array<[string, () => Promise<void>]> = [
+      ['escape', async () => await this.p.keyboard.press('Escape')],
+      [
+        'escape in the menu',
+        async () => {
+          for (const selector of Model.popupSelectors.slice(0, 2)) {
+            const menu = this.p.locator(`${selector}:visible`).last();
+            if ((await menu.count()) > 0) {
+              await menu.press('Escape', { timeout: 2_000 });
+              return;
+            }
+          }
+        },
+      ],
+      [
+        'the picker button',
+        async () => {
+          const button = await this.resolveModelButton(1_000);
+          // Only while the button itself says the menu is open: clicking it otherwise would open it.
+          if (button && (await button.getAttribute('aria-expanded').catch(() => null)) === 'true') await button.click({ timeout: 3_000 });
+        },
+      ],
+      [
+        'a click outside',
+        async () => {
+          const composer = this.composer();
+          if ((await composer.count().catch(() => 0)) > 0 && (await composer.isVisible().catch(() => false))) await composer.click({ timeout: 3_000 });
+          else await this.p.mouse.click(4, 4);
+        },
+      ],
+    ];
+    for (const [how, act] of ways) {
+      if (!(await this.modelMenuOpen())) return;
+      await act().catch(() => undefined);
+      await this.p.waitForTimeout(250);
+      if (!(await this.modelMenuOpen())) {
+        if (how !== 'escape') this.emit('model-menu-closed', { how });
+        return;
+      }
     }
+    if (await this.modelMenuOpen()) this.emit('model-menu-stuck', { tried: ways.map(([how]) => how) });
   }
 
   /** The first popup container that becomes visible after the picker is clicked. */
@@ -905,7 +963,7 @@ Current URL: ${url}`);
     await this.p.waitForTimeout(1_000);
     // Whatever the click did, the menu is not left open over the chat: a build that keeps it open
     // after a choice, or a click that did not land, would otherwise leave it for the next message.
-    if ((await this.readMenuRows()).length > 0) await this.closeMenu();
+    await this.closeMenu();
     const after = await this.currentModel();
 
     // The button shows the choice, so it is the check. It also **shortens** it: picking

@@ -256,11 +256,13 @@ export async function openBrowser(
         'error-banner': 'The chat reported a transient error; reloading the page.',
         'reply-files-ignored':
           'The reply came with a file attached. It was not downloaded and will not be run: the runner takes only the text of a reply.',
+        'model-menu-stuck':
+          'The model menu would not close — Escape, the menu button and a click outside all left it open. Close it in the Edge window; the run goes on.',
       };
       bus.publish({
         sessionId,
         type: `browser:${event}`,
-        level: event === 'verification-required' || event === 'reply-files-ignored' ? 'warn' : 'info',
+        level: event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' ? 'warn' : 'info',
         message: spoken[event],
         data: detail,
       });

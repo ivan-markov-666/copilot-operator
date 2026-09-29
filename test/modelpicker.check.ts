@@ -18,7 +18,8 @@ import { Tally } from './support/harness.js';
 const t = new Tally();
 
 const PAGE = String.raw`<!doctype html><html><body>
-<button id="gptModeSwitcher" aria-label="Model Selector"><span id="shown"></span></button>
+<button id="gptModeSwitcher" aria-label="Model Selector" aria-expanded="false"><span id="shown"></span></button>
+<div id="m365-chat-editor-target-element" contenteditable="true" style="margin-top:200px;min-height:40px">composer</div>
 <div id="menu" role="menu" style="display:none">
   <div role="menuitemradio" data-name="Auto">Auto<br>Decides how long to think</div>
   <div role="menuitemradio" data-name="Think deeper">Think deeper<br>Takes longer</div>
@@ -29,68 +30,84 @@ const PAGE = String.raw`<!doctype html><html><body>
   <div role="menuitemradio" data-name="GPT 5.6 Quick response" data-short="GPT 5.6 Quick">GPT 5.6 Quick response</div>
 </div>
 <script>
+  // How this copy of the menu closes: 'any' (Escape anywhere, as the first version of this check
+  // assumed), 'focused' (Escape only when focus is inside the menu), 'toggle' (Escape never; the
+  // picker button toggles), 'outside' (only a press outside the menu and its button closes it).
+  const MODE = '__MODE__';
   let current = 'Auto';
   window.clicksOnChosen = 0;
   const shortOf = (el) => el.dataset.short || el.dataset.name;
+  const button = document.getElementById('gptModeSwitcher');
   function render() {
     for (const el of document.querySelectorAll('[role=menuitemradio]')) el.setAttribute('aria-checked', String(el.dataset.name === current));
     const row = [...document.querySelectorAll('[role=menuitemradio]')].find((el) => el.dataset.name === current);
     document.getElementById('shown').textContent = row ? shortOf(row) : current;
   }
   const menu = document.getElementById('menu'), sub = document.getElementById('sub');
-  const close = () => { menu.style.display = 'none'; sub.style.display = 'none'; };
-  document.getElementById('gptModeSwitcher').onclick = () => { menu.style.display = 'block'; };
+  const isOpen = () => menu.style.display !== 'none';
+  const open = () => { menu.style.display = 'block'; button.setAttribute('aria-expanded', 'true'); };
+  const close = () => { menu.style.display = 'none'; sub.style.display = 'none'; button.setAttribute('aria-expanded', 'false'); };
+  button.onclick = () => { if (isOpen() && MODE === 'toggle') close(); else open(); };
   document.getElementById('gpt').onmouseenter = () => { sub.style.display = 'block'; };
   document.getElementById('gpt').onclick = () => { sub.style.display = 'block'; };
   for (const el of document.querySelectorAll('[role=menuitemradio]')) {
+    el.tabIndex = -1;
     el.onclick = () => {
       // Copilot's behaviour: the row already in force ignores the click and the menu stays open.
       if (el.dataset.name === current) { window.clicksOnChosen += 1; return; }
       current = el.dataset.name; render(); close();
     };
   }
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  menu.tabIndex = -1; sub.tabIndex = -1;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const inMenu = menu.contains(document.activeElement) || sub.contains(document.activeElement);
+    if (MODE === 'any' || (MODE === 'focused' && inMenu)) close();
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (MODE !== 'outside' || !isOpen()) return;
+    if (!menu.contains(e.target) && !sub.contains(e.target) && !button.contains(e.target)) close();
+  });
   window.setModel = (name) => { current = name; render(); };
   render();
 </script></body></html>`;
 
 const browser = await chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage();
-  const transport = new CopilotTransport({ profileDir: '', transportDir: '', chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000 });
-  // The transport is given this page instead of opening Edge; `open()` is never called.
-  (transport as unknown as { page: Page }).page = page;
-  await page.setContent(PAGE);
+  for (const mode of ['any', 'focused', 'toggle', 'outside']) {
+    console.log(`\n=== a menu that closes on: ${mode} ===`);
+    const page = await browser.newPage();
+    const transport = new CopilotTransport({ profileDir: '', transportDir: '', chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000 });
+    // The transport is given this page instead of opening Edge; `open()` is never called.
+    (transport as unknown as { page: Page }).page = page;
+    await page.setContent(PAGE.replace('__MODE__', mode));
 
-  const menuOpen = async (): Promise<boolean> => await page.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
-  const clicksOnChosen = async (): Promise<number> => await page.evaluate(() => (window as unknown as { clicksOnChosen: number }).clicksOnChosen);
-  const setModel = async (name: string): Promise<void> => await page.evaluate((n) => (window as unknown as { setModel: (x: string) => void }).setModel(n), name);
+    const menuOpen = async (): Promise<boolean> => await page.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
+    const clicksOnChosen = async (): Promise<number> => await page.evaluate(() => (window as unknown as { clicksOnChosen: number }).clicksOnChosen);
+    const setModel = async (name: string): Promise<void> => await page.evaluate((n) => (window as unknown as { setModel: (x: string) => void }).setModel(n), name);
 
-  console.log('--- a model that is not chosen yet ---');
-  let r = await transport.selectModel('Think deeper');
-  t.check('chosen', [r.ok, r.current], [true, 'Think deeper']);
-  t.check('and the menu is closed', await menuOpen(), false);
+    let r = await transport.selectModel('Think deeper');
+    t.check(`${mode}: a model not chosen yet is chosen, menu closed`, [r.ok, r.current, await menuOpen()], [true, 'Think deeper', false]);
 
-  r = await transport.selectModel('GPT 5.6 Quick response');
-  t.check('one inside the GPT group is chosen too, by its full name', [r.ok, r.current], [true, 'GPT 5.6 Quick response']);
-  t.check('and the menu is closed', await menuOpen(), false);
+    r = await transport.selectModel('GPT 5.6 Quick response');
+    t.check(`${mode}: one inside the GPT group too, menu closed`, [r.ok, r.current, await menuOpen()], [true, 'GPT 5.6 Quick response', false]);
 
-  console.log('\n--- a model that is already chosen ---');
-  await setModel('GPT 5.6 Think deeper');
-  const before = await clicksOnChosen();
-  r = await transport.selectModel('GPT 5.6 Think deeper');
-  t.check('reported as in force (the button says only "GPT 5.6 Think")', [r.ok, r.current], [true, 'GPT 5.6 Think deeper']);
-  t.check('the row already chosen is not clicked', (await clicksOnChosen()) - before, 0);
-  t.check('and the menu is not left open over the chat', await menuOpen(), false);
+    await setModel('GPT 5.6 Think deeper');
+    const before = await clicksOnChosen();
+    r = await transport.selectModel('GPT 5.6 Think deeper');
+    t.check(`${mode}: already chosen (the button says only "GPT 5.6 Think"): in force, not clicked, menu closed`, [r.ok, r.current, (await clicksOnChosen()) - before, await menuOpen()], [true, 'GPT 5.6 Think deeper', 0, false]);
 
-  await setModel('Think deeper');
-  r = await transport.selectModel('Think deeper');
-  t.check('a top-level one already chosen: in force, menu closed', [r.ok, r.current, await menuOpen()], [true, 'Think deeper', false]);
+    await setModel('Think deeper');
+    r = await transport.selectModel('Think deeper');
+    t.check(`${mode}: a top-level one already chosen: in force, menu closed`, [r.ok, r.current, await menuOpen()], [true, 'Think deeper', false]);
 
-  console.log('\n--- a model the picker does not offer ---');
-  r = await transport.selectModel('Claude Opus');
-  t.check('refused, with the menu closed', [r.ok, await menuOpen()], [false, false]);
-  t.check('and the chat stays on what it was', r.current, 'Think deeper');
+    r = await transport.selectModel('Claude Opus');
+    t.check(`${mode}: one the picker does not offer: refused, menu closed, model unchanged`, [r.ok, await menuOpen(), r.current], [false, false, 'Think deeper']);
+
+    const listed = await transport.listModels();
+    t.check(`${mode}: reading the whole list leaves the menu closed`, [listed.options.map((o) => o.name), await menuOpen()], [['Auto', 'Think deeper', 'GPT 5.6 Think deeper', 'GPT 5.6 Quick response'], false]);
+    await page.close();
+  }
 } finally {
   await browser.close();
 }
