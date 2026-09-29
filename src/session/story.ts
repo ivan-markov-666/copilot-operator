@@ -42,6 +42,16 @@ function clip(text: string): string {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n… (${text.length - MAX_TEXT} more characters in the run folder)` : text;
 }
 
+/**
+ * A command's output keeps its end instead, the way a terminal does. What is at the end of a long
+ * output — the test summary, the error that stopped it — is what anyone reads it for, and while a
+ * step is still running the end is where the new lines arrive: a head-kept clip froze a live view
+ * of a long test run at its first 60 000 characters, and nothing after that ever appeared.
+ */
+function clipTail(text: string): string {
+  return text.length > MAX_TEXT ? `… (${text.length - MAX_TEXT} earlier characters in the run folder)\n${text.slice(-MAX_TEXT)}` : text;
+}
+
 /** The task log's sections: a name between two rules, then the text until the next rule. */
 function sectionsOf(log: string): Array<{ name: string; text: string }> {
   const rule = /^=+\s*$/;
@@ -92,7 +102,7 @@ async function stepsIn(dir: string): Promise<Map<number, StoryEntry[]>> {
       iteration,
       id: Number(m[2]),
       command: parsed.command,
-      output: clip(parsed.output),
+      output: clipTail(parsed.output),
       outcome: parsed.outcome,
       exitCode: parsed.exitCode,
       durationMs: parsed.durationMs,

@@ -11,14 +11,31 @@
  * reply and the command running now appear as they happen; when it ends, the ending is added
  * and the reading stops. A failed step, a failing check and a non-done ending are marked, so
  * the eye goes to where it broke.
+ *
+ * Watched live, it behaves like a terminal: the exchange sits in its own scrolling box that stays
+ * at the newest entry, and the command running now is shown open with its output following its
+ * last line — so the operator watches, and does not scroll. Scrolling up to read stops the
+ * following until they come back to the end (see `useFollowBottom`).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, fmtDuration, type Story, type StoryEntry } from '../lib/api';
 import { useT } from '../lib/i18n';
+import { useFollowBottom } from '../lib/useFollowBottom';
 import { RichText } from './richText';
 
-const POLL_MS = 4000;
+/** Re-read every two seconds while live: often enough for output to read as a stream. */
+const POLL_MS = 2000;
+
+/** A step's output that stays at its last line while it grows — only while `follow`. */
+function FollowPre({ text, follow }: { text: string; follow: boolean }) {
+  const { ref } = useFollowBottom<HTMLPreElement>(follow, text);
+  return (
+    <pre ref={ref} className={`story-out${follow ? ' terminal' : ''}`}>
+      {text}
+    </pre>
+  );
+}
 
 export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: string; taskId: string; runId?: string; live: boolean }) {
   const { t } = useT();
@@ -27,6 +44,42 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
   const [showChat, setShowChat] = useState(true);
   const [showCommands, setShowCommands] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  /*
+   * Steps seen running, which open on their own, and the ones the operator closed anyway. A step
+   * that was open while it ran stays open when it finishes, so its output does not vanish from
+   * under the eye that was following it.
+   */
+  const [seenRunning, setSeenRunning] = useState<Set<string>>(new Set());
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+  const isLive = !!story?.live;
+  /*
+   * Pinned after every render, not only when a new story arrives: the output of a step that has
+   * just started opens in the render after the one that brought it, and grows the list again —
+   * pinning on the story alone left the list one opened output short of its end.
+   */
+  const renders = useRef(0);
+  renders.current += 1;
+  const scroll = useFollowBottom<HTMLDivElement>(isLive, renders.current);
+  const box = useRef<HTMLDivElement | null>(null);
+  const scrolledIntoView = useRef(false);
+
+  useEffect(() => {
+    if (!story) return;
+    const running: string[] = [];
+    const walk = (entries: StoryEntry[], prefix: string): void =>
+      entries.forEach((e, i) => {
+        const key = `${prefix}${i}`;
+        if (e.kind === 'review') walk(e.entries, `${key}-`);
+        else if (e.kind === 'step' && !e.outcome) running.push(key);
+      });
+    walk(story.entries, 'e');
+    if (running.some((k) => !seenRunning.has(k))) setSeenRunning((prev) => new Set([...prev, ...running]));
+    // Opened live, the box is brought on screen once, so there is nothing to scroll to find it.
+    if (story.live && !scrolledIntoView.current && box.current) {
+      scrolledIntoView.current = true;
+      box.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [story, seenRunning]);
 
   useEffect(() => {
     let alive = true;
@@ -54,13 +107,22 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
   if (err && !story) return <div className="err small">{err}</div>;
   if (!story) return <div className="muted small">{t('story.loading')}</div>;
 
-  const flip = (key: string) =>
+  const isOpen = (key: string): boolean => open.has(key) || (seenRunning.has(key) && !closed.has(key));
+  const flip = (key: string) => {
+    const wasOpen = isOpen(key);
     setOpen((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
+      if (wasOpen) next.delete(key);
       else next.add(key);
       return next;
     });
+    setClosed((prev) => {
+      const next = new Set(prev);
+      if (wasOpen) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
 
   const shown = (e: StoryEntry): boolean =>
     e.kind === 'review' ? showChat || showCommands : e.kind === 'step' ? showCommands : showChat;
@@ -78,7 +140,8 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
       );
     }
     if (e.kind === 'step') {
-      const isOpen = open.has(key);
+      const stepOpen = isOpen(key);
+      const running = !e.outcome && story.live;
       return (
         <li key={key} className={`story-step${e.failed ? ' failed' : ''}`}>
           <div className="story-head">
@@ -97,15 +160,15 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
           {e.output && (
             <>
               <button type="button" className="linkish small" onClick={() => flip(key)}>
-                {isOpen ? t('story.hideOutput') : t('story.showOutput', { n: e.output.length })}
+                {stepOpen ? t('story.hideOutput') : t('story.showOutput', { n: e.output.length })}
               </button>
-              {isOpen && <pre className="story-out">{e.output}</pre>}
+              {stepOpen && <FollowPre text={e.output} follow={running} />}
             </>
           )}
         </li>
       );
     }
-    const isOpen = open.has(key);
+    const textOpen = open.has(key);
     const who = e.kind === 'sent' ? t('story.bot') : t('story.chat');
     const failedReply = e.kind === 'reply' && (e.status === 'blocked' || e.status === 'failed');
     return (
@@ -117,9 +180,9 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
         </div>
         {e.kind === 'reply' && e.notes && <p className="story-notes">{e.notes}</p>}
         <button type="button" className="linkish small" onClick={() => flip(key)}>
-          {isOpen ? t('story.hideText') : t('story.showText', { n: e.text.length })}
+          {textOpen ? t('story.hideText') : t('story.showText', { n: e.text.length })}
         </button>
-        {isOpen && <pre className="story-out">{e.text}</pre>}
+        {textOpen && <pre className="story-out">{e.text}</pre>}
       </li>
     );
   };
@@ -128,7 +191,7 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
   const failed = c && c.status !== 'done';
 
   return (
-    <div className="story-box">
+    <div className="story-box" ref={box}>
       <div className="row small" style={{ marginBottom: 6 }}>
         <label className="option-inline">
           <input type="checkbox" checked={showChat} onChange={(e) => setShowChat(e.target.checked)} /> {t('story.showChat')}
@@ -141,6 +204,12 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
             <span className="dot" aria-hidden="true" /> {t('story.live')}
           </span>
         )}
+        {/* Scrolled up to read, the following stops; this takes it back to the newest line. */}
+        {story.live && !scroll.following && (
+          <button type="button" className="quiet small" onClick={scroll.follow} title={t('story.followWhy')}>
+            {t('story.follow')}
+          </button>
+        )}
         {err && <span className="err">{err}</span>}
       </div>
 
@@ -149,7 +218,9 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
         <pre className="story-out always">{story.prompt}</pre>
       </div>
 
-      <ol className="story">{story.entries.map((e, i) => renderEntry(e, `e${i}`))}</ol>
+      <div ref={scroll.ref} className={`story-scroll${story.live ? ' live' : ''}`}>
+        <ol className="story">{story.entries.map((e, i) => renderEntry(e, `e${i}`))}</ol>
+      </div>
 
       {c ? (
         <div className={`story-fixed close${failed ? ' failed' : ''}`}>

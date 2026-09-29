@@ -686,6 +686,14 @@ select optgroup { background: var(--panel); color: var(--ink); }
 .story-cmd { margin: 4px 0; white-space: pre-wrap; word-break: break-word; font-size: calc(12px * var(--scale)); color: var(--ink); }
 .story-out { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; font-size: calc(12px * var(--scale)); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
 .story-out.always { max-height: 260px; }
+/* Live, the exchange scrolls in its own box that stays at the newest entry (useFollowBottom). */
+.story-scroll.live { max-height: 65vh; overflow: auto; overscroll-behavior: contain; }
+/* The output of the command running now, read like a terminal. */
+.story-out.terminal { max-height: 45vh; overscroll-behavior: contain; }
+
+/* To the top / to the bottom, at the right edge of a long page (scrollJump.tsx). */
+.scroll-jump { position: fixed; right: 16px; bottom: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 40; }
+.scroll-jump button { width: 42px; height: 42px; border-radius: 50%; padding: 0; font-size: 20px; line-height: 1; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
 .story-notes { margin: 4px 0; font-size: calc(13px * var(--scale)); }
 .story-fixed { padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); margin: 6px 0; }
 .story-fixed.close { border-color: var(--ok); }

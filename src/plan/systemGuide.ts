@@ -166,6 +166,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesEn: 'Switches the whole interface, and the brief it hands out, between English and Bulgarian.',
             doesBg: 'Превключва целия интерфейс и заданието, което дава, между английски и български.',
           },
+          {
+            key: 'scroll.top',
+            kind: 'button',
+            en: 'To the top of the page',
+            bg: 'Най-горе на страницата',
+            doesEn: 'The round ↑ button at the right edge of a page more than two screens long, such as the register: back to the top.',
+            doesBg: 'Кръглият бутон ↑ в десния край на страница, по-дълга от два екрана, например регистъра: обратно най-горе.',
+          },
+          {
+            key: 'scroll.bottom',
+            kind: 'button',
+            en: 'To the bottom of the page',
+            bg: 'Най-долу на страницата',
+            doesEn: 'The round ↓ button under it: to the bottom of the page.',
+            doesBg: 'Кръглият бутон ↓ под него: най-долу на страницата.',
+          },
         ],
       },
       {

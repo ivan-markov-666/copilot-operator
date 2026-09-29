@@ -6,6 +6,7 @@ import { AppearanceProvider, themeScript } from '../lib/appearance';
 import { Nav, SkipLink } from './nav';
 import { DialogHost } from './dialog';
 import { GlobalApprovals } from './approvals';
+import { ScrollJump } from './scrollJump';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -49,6 +50,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <GlobalApprovals />
                 <main id="main">{children}</main>
               </div>
+              <ScrollJump />
             </DialogHost>
           </LanguageProvider>
         </AppearanceProvider>
