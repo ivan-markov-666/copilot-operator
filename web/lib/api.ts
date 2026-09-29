@@ -377,6 +377,8 @@ export type RegistryEntry = {
   }>;
   /** How many files this attempt's commit changed; absent when it committed nothing. */
   changedFiles?: number;
+  /** Aborted because the bot itself stopped under it (power, Ctrl+C, a crash), not continued yet. */
+  interrupted?: boolean;
 };
 
 /**

@@ -1640,9 +1640,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Continue in the same chat',
             bg: 'Продължи в същия чат',
             doesEn:
-              'Only on a task stopped at its limit: queues it to carry on in the same chat and branch with a fresh count. Then press "Run {n} task(s)".',
+              'On a task that stopped before it finished (its limit, the bot stopping, the operator): queues it to carry on in the same chat and branch. Then "Run {n} task(s)".',
             doesBg:
-              'Само на задача, спряла на лимита: нарежда я да продължи в същия чат и клон с нов брояч. После натиснете „Пусни {n} задача(и)“.',
+              'На задача, спряла преди да приключи (лимит, спрял бот, оператор): нарежда я да продължи в същия чат и клон. После „Пусни {n} задача(и)“.',
           },
           {
             key: 'task.rerun',
@@ -2675,6 +2675,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         bg: 'Какво следва',
         controls: [
           {
+            key: 'reg.interruptedTitle',
+            kind: 'note',
+            en: 'The bot stopped in the middle of the work.',
+            bg: 'Ботът спря посред работата.',
+            doesEn:
+              'After the bot stopped under a run (power, Ctrl+C, a crash): the stopped tasks\' work is kept, and "Continue" carries them on where they stopped.',
+            doesBg:
+              'След като ботът е спрял посред пускане (ток, Ctrl+C, срив): свършеното е запазено, а „Продължи“ продължава спрелите задачи оттам, където са спрели.',
+          },
+          {
             key: 'batch.pause',
             kind: 'button',
             en: 'Pause after this task',
@@ -2717,8 +2727,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           {
             key: 'reg.continueWithFailed',
             kind: 'button',
-            en: 'Continue: run {f} failed and {n} queued task(s) in {s} session(s)',
-            bg: 'Продължи: пусни {f} провалили се и {n} чакащи задачи в {s} сесии',
+            en: 'Continue: run {f} unfinished and {n} queued task(s) in {s} session(s)',
+            bg: 'Продължи: пусни {f} недовършени и {n} чакащи задачи в {s} сесии',
             doesEn:
               'The same button when a failed task of a chained session would go back into the queue with the queued ones.',
             doesBg:
@@ -2800,9 +2810,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Continue without asking',
             bg: 'Продължи без да пита',
             doesEn:
-              'Starts exactly the ticked tasks and runs every command without asking (asks "are you sure" first unless Settings say otherwise). Ticked failed tasks start afresh.',
+              'Starts exactly the ticked tasks without asking (after "are you sure" unless Settings say otherwise). Stopped ones (aborted, limit reached) continue where they stopped; failed or blocked ones start afresh.',
             doesBg:
-              'Пуска точно отметнатите задачи и изпълнява всяка команда без питане (първо пита „сигурен ли си“, освен ако Настройките казват друго). Отметнатите провалени задачи тръгват отначало.',
+              'Пуска точно отметнатите задачи без питане (след „сигурен ли си“, освен ако Настройките казват друго). Спрелите (прекратени, с лимит) продължават откъдето спряха; провалените и блокираните тръгват отначало.',
           },
           {
             key: 'reg.continueGo',

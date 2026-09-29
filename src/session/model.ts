@@ -9,6 +9,7 @@
  * data directory, and the heavy artefacts of a task (reports, replies, step logs) live in the
  * run folder the task points at.
  */
+import type { Interruption } from './interruption.js';
 import type { ChatPointer } from '../transport/chatSession.js';
 import type { ShellInventory } from '../exec/shells.js';
 
@@ -147,7 +148,14 @@ export type Task = {
    * task that stopped at the runner's limit. The next run stays in the same conversation and on
    * the same branch, and opens with "carry on from where you stopped" instead of the task again.
    */
-  continuing?: { fromAttempt: number; stoppedBecause?: string };
+  continuing?: TaskContinuation;
+  /**
+   * Where an attempt was when the bot stopped under it — power, a shutdown, Ctrl+C, a crash —
+   * read from its run folder at the next start (see `session/interruption.ts`). Present on a task
+   * the recovery closed as aborted; it is what lets "Continue" carry the task on in its chat and
+   * tell the chat exactly which of its steps ran.
+   */
+  interruption?: Interruption;
   /**
    * Set when a task that ended done is given a new prompt: the next attempt works on that
    * attempt's branch, with its finished work in the tree, and is told the instruction is new and
@@ -490,6 +498,18 @@ export type VersionControl = {
   startFrom?: 'branch' | 'previous-session' | 'head';
   /** The local branch `startFrom: branch` starts from, and the fallback of `previous-session`. */
   baseBranch?: string;
+};
+
+/**
+ * Carrying on from an attempt that stopped before it finished, in the same conversation and on the
+ * same branch. `how` says why it stopped, which is what the chat is told: the runner's limit, the
+ * bot itself stopping under it (with where it was), or the operator.
+ */
+export type TaskContinuation = {
+  fromAttempt: number;
+  stoppedBecause?: string;
+  how?: 'limit' | 'interrupted' | 'stopped';
+  interruption?: Interruption;
 };
 
 /** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */

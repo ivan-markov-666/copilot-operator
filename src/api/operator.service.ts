@@ -63,6 +63,7 @@ function sameFolder(a: string, b: string): boolean {
   return a.trim() !== '' && norm(a) === norm(b);
 }
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
+import { readInterruption } from '../session/interruption.js';
 import { commitInterrupted, repoDirOf, vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { changedFilesBetween, fileAt, gitAvailable, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
@@ -282,6 +283,8 @@ export type RegistryEntry = {
   }>;
   /** How many files this attempt's commit changed; absent when it committed nothing. */
   changedFiles?: number;
+  /** Aborted because the bot itself stopped under it, and not continued yet. */
+  interrupted?: boolean;
 };
 
 @Injectable()
@@ -346,17 +349,20 @@ export class OperatorService {
     const task = session?.tasks.find((t) => t.id === taskId);
     if (!session || !task) return;
     const vcs = await commitInterrupted(session, task, task.reason ?? 'interrupted', this.bus);
-    const settled = vcs?.commit
-      ? await this.store.updateSession(sessionId, (s) => {
-          const t = s.tasks.find((x) => x.id === taskId);
-          if (!t) return;
-          t.vcs = vcs;
-          t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
-        })
-      : session;
+    const cfg = await this.settings.load();
+    // Where it had got to, from its run folder, so "Continue" can tell the chat exactly that.
+    const interruption = task.runId ? await readInterruption(join(cfg.resolved.runsDir, task.runId)) : null;
+    const settled = await this.store.updateSession(sessionId, (s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t) return;
+      if (interruption) t.interruption = interruption;
+      if (vcs?.commit) {
+        t.vcs = vcs;
+        t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
+      }
+    });
     const ended = settled.tasks.find((t) => t.id === taskId);
     if (!ended) return;
-    const cfg = await this.settings.load();
     await writeAttemptRecord(settled, ended, cfg.resolved.runsDir, exportMachine(cfg));
   }
 
@@ -585,7 +591,7 @@ export class OperatorService {
    * the text it ran with, and only then is the new text applied. Editing in place would leave
    * the old attempt's summary sitting under a question that was never asked.
    */
-  /** "Continue" on a task that stopped at the runner's limit: same chat, same branch, fresh count. */
+  /** "Continue" on a task that stopped before it finished — its limit, the bot stopping, the operator: same chat, same branch, fresh count. */
   async continueTask(sessionId: string, taskId: string): Promise<Task> {
     await this.init();
     const task = await this.store.continueTask(sessionId, taskId);
@@ -2430,6 +2436,7 @@ export class OperatorService {
           autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,
           changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,
+          interrupted: t.status === 'aborted' && !!t.interruption ? true : undefined,
           attempts: (t.attempts ?? []).map((a, n) => {
             const from = a.startedAt ? Date.parse(a.startedAt) : undefined;
             const to = a.finishedAt ? Date.parse(a.finishedAt) : undefined;

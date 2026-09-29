@@ -29,6 +29,8 @@ import { TaskStory } from '../taskStory';
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
 /** Everything that ended without the work being done, which is what the counter asks about. */
 const FAILED_STATUSES: TaskStatus[] = ['blocked', 'failed', 'aborted', 'limit-reached'];
+/** Stopped before it finished, rather than judged: "Continue" carries these on where they stopped. */
+const CONTINUABLE: TaskStatus[] = ['aborted', 'limit-reached'];
 
 type View = 'flow' | 'list' | 'runs';
 
@@ -321,6 +323,17 @@ export default function HistoryPage() {
               {/* Holding or stopping the run belongs next to continuing it: they are the three
                   things an operator does to a run in flight, and this is the page they watch it on. */}
               <RunControls onChange={() => void load()} />
+              {/*
+               * After the bot stopped under a run — power, a shutdown, Ctrl+C, a crash — the first
+               * thing the operator sees here says so, and what to press. Their work is kept and
+               * "Continue" carries them on where they stopped.
+               */}
+              {shown.some((e) => e.interrupted && !e.sessionRunning) && (
+                <div className="notice caution" role="status">
+                  <strong>{t('reg.interruptedTitle')}</strong>{' '}
+                  {t('reg.interrupted', { n: shown.filter((e) => e.interrupted && !e.sessionRunning).length })}
+                </div>
+              )}
               <ContinueRun entries={shown} onChange={() => void load()} />
               {upcoming.length === 0 ? (
                 <div className="empty">{t('reg.noUpcoming')}</div>
@@ -996,7 +1009,12 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     setBusy(true);
     setMsg('');
     try {
-      for (const e of requeue) await api.rerunTask(e.sessionId, e.taskId);
+      // A task that stopped before it finished carries on where it stopped, in its chat and on its
+      // branch; one with a verdict on its work starts again.
+      for (const e of requeue) {
+        if (CONTINUABLE.includes(e.status)) await api.continueTask(e.sessionId, e.taskId);
+        else await api.rerunTask(e.sessionId, e.taskId);
+      }
       // Exactly what is ticked: the queued tasks nobody chose stay queued for another run.
       const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name.trim() || undefined, chosen.map((e) => e.taskId));
       setMsg(r.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
@@ -1045,6 +1063,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
                       <label className="option-inline">
                         <input type="checkbox" checked={picked.has(e.taskId)} onChange={(ev) => tick(e.taskId, ev.target.checked)} />
                         <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
+                        {CONTINUABLE.includes(e.status) && <span className="muted small"> · {t('reg.willContinue')}</span>}
                       </label>{' '}
                       {/* The use case this panel grew for: one fixed task, run on its own. */}
                       <button className="quiet small" onClick={() => setPicked(new Set([e.taskId]))} title={t('reg.pickOnlyWhy')}>

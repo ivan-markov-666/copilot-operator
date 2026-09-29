@@ -364,17 +364,29 @@ export class SessionStore {
    * the old attempt is untouched too, because the next attempt gets a folder of its own.
    */
   /**
-   * Queues a task that stopped at the runner's limit to carry on where it stopped: the same
+   * Queues a task that stopped before it finished to carry on where it stopped: the same
    * conversation, the same branch, a fresh count of messages. The attempt that stopped is kept on
    * the record like any other.
+   *
+   * Two kinds of stop qualify. The runner's limit (`limit-reached`), and a stop that was not the
+   * task's doing (`aborted`): the bot itself stopping under it — power, a shutdown, Ctrl+C, a crash,
+   * recorded in `interruption` at the next start — or the operator stopping it. A task that failed,
+   * blocked or was not done has a verdict on its work, and carrying that work on would carry the
+   * verdict's cause on with it; those are run again.
    */
   async continueTask(sessionId: string, taskId: string): Promise<Task> {
     const current = (await this.getSession(sessionId))?.tasks.find((x) => x.id === taskId);
     if (!current) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
-    if (current.status !== 'limit-reached') {
-      throw new Error('Only a task that stopped at the runner\'s limit can be continued; run this one again instead.');
+    if (current.status !== 'limit-reached' && current.status !== 'aborted') {
+      throw new Error('Only a task that stopped before it finished can be continued; run this one again instead.');
     }
-    return await this.rerunTask(sessionId, taskId, {}, { fromAttempt: current.attempt ?? 1, stoppedBecause: current.reason });
+    const how = current.status === 'limit-reached' ? 'limit' : current.interruption ? 'interrupted' : 'stopped';
+    return await this.rerunTask(sessionId, taskId, {}, {
+      fromAttempt: current.attempt ?? 1,
+      stoppedBecause: current.reason,
+      how,
+      ...(current.interruption ? { interruption: current.interruption } : {}),
+    });
   }
 
   async rerunTask(
@@ -430,6 +442,8 @@ export class SessionStore {
       t.iterations = 0;
       t.continuing = continuing;
       t.buildsOn = buildsOn;
+      // Where the attempt that stopped had got to belongs to that attempt; the next one starts clean.
+      t.interruption = undefined;
       // Cleared so the next run starts from nothing and gets its own run folder.
       t.runId = undefined;
       t.runGroup = undefined;
@@ -480,7 +494,9 @@ export class SessionStore {
       for (const t of stuck) {
         t.status = 'aborted';
         t.finishedAt = t.finishedAt ?? new Date().toISOString();
-        t.reason = 'The operator stopped while this task was in progress, so it never finished. Nothing was resumed.';
+        t.reason =
+          'The bot stopped while this task was in progress (the program was closed, the machine went off, or it crashed), so it never finished. ' +
+          'Its work so far is kept; "Continue in the same chat" carries it on where it stopped.';
         recovered.push({ sessionId: session.id, taskId: t.id, title: t.title });
       }
       session.status = 'idle';

@@ -1602,8 +1602,9 @@ function TaskCard({
     (session.vcs?.enabled ?? false) &&
     (!!task.vcs?.baseCommit || (task.attempts ?? []).some((a) => a.vcs?.baseCommit));
 
-  // Only a task that stopped at the runner's limit can be carried on; anything else is run again.
-  const continuable = !active && task.status === 'limit-reached';
+  // A task that stopped before it finished — its limit, the bot stopping under it, the operator —
+  // is carried on where it stopped; one with a verdict on its work (failed, blocked) is run again.
+  const continuable = !active && (task.status === 'limit-reached' || task.status === 'aborted');
   const carryOn = async () => {
     if (!(await confirmDialog(t('task.continueConfirm', { title: task.title })))) return;
     try {

@@ -810,7 +810,7 @@ in those words, every time:
   1. On \`/history\`, in the **"Flow"** view, press **"Fix the prompt and queue it again"** on that row.
   2. Replace the text with the one above and press **"Save and queue again"**.
   3. Under **"What is next"**, press **"Continue: run the {n} queued task(s) in {s} session(s)"**
-     (it reads **"Continue: run {f} failed and {n} queued task(s) in {s} session(s)"** when a chain
+     (it reads **"Continue: run {f} unfinished and {n} queued task(s) in {s} session(s)"** when a chain
      has a failed task).
   4. In **"Before it continues"** every task is ticked. To run only the fixed one, press
      **"only this one"** beside it.
@@ -820,7 +820,7 @@ in those words, every time:
   A check that is wrong rather than a prompt that is wrong is edited instead: **"Edit"** on the
   task card, then **"What it checks"**, **"Must be"** and **"Command"** under **"Checks"**, then
   **"Save and queue it again"** — which, like every "queue" button, starts nothing by itself.
-  A task that ended **limit-reached** is carried on in its own chat instead: **"Continue in the
+  A task that ended **limit-reached**, or **aborted** because the bot stopped under it, is carried on in its own chat instead: **"Continue in the
   same chat"** on its card on the session page, then **"Run {n} task(s)"** at the top of that page.
   When a failure shows up while the run is still going, **"Pause after this task"** holds the rest
   while you work it out.
@@ -973,7 +973,7 @@ const PHASE3_BG = `
   1. В \`/history\`, в изгледа **„Поток“**, натисни **„Поправи prompt-а и върни в опашката“** на този ред.
   2. Замени текста с горния и натисни **„Запази и върни в опашката“**.
   3. Под **„Какво следва“** натисни **„Продължи: пусни {n} чакащи задачи в {s} сесии“** (пише
-     **„Продължи: пусни {f} провалили се и {n} чакащи задачи в {s} сесии“**, когато във верига има
+     **„Продължи: пусни {f} недовършени и {n} чакащи задачи в {s} сесии“**, когато във верига има
      провалена задача).
   4. В **„Преди да продължи“** всички задачи са отметнати. За да пуснеш само поправената, натисни
      **„само тази“** до нея.
@@ -983,7 +983,7 @@ const PHASE3_BG = `
   Когато е сгрешена проверката, а не prompt-ът, се редактира друго: **„Редактирай“** на картата
   на задачата, после **„Какво проверява“**, **„Трябва“** и **„Команда“** под **„Проверки“**, после
   **„Запази и върни в опашката“** — който, като всеки бутон за връщане в опашката, сам не пуска нищо.
-  Задача, завършила с **limit-reached**, продължава в собствения си чат: **„Продължи в същия чат“**
+  Задача, завършила с **limit-reached** или **aborted**, защото ботът е спрял под нея, продължава в собствения си чат: **„Продължи в същия чат“**
   на картата ѝ на страницата на сесията, после **„Пусни {n} задача(и)“** горе на същата страница.
   Когато провал се покаже, докато пускането още върви, **„Пауза след тази задача“** задържа
   останалото, докато го разбереш.

@@ -76,7 +76,7 @@ function sectionsOf(log: string): Array<{ name: string; text: string }> {
 }
 
 /** A step log: two header lines, the output, one footer line. */
-function parseStepLog(text: string): { command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number } {
+export function parseStepLog(text: string): { command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number } {
   const lines = text.split('\n');
   const command = lines[1]?.replace(/^# /, '') ?? '';
   const footer = lines.map((l) => l.match(/^# outcome=(\S+) exit=(-?\d+) durationMs=(\d+)/)).filter(Boolean).pop() as RegExpMatchArray | undefined;

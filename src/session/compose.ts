@@ -12,6 +12,8 @@
  * and it keeps each task self-contained in the transcript. The priority of level 1 over
  * level 2 is stated inside level 1 itself; the composition only makes the boundary visible.
  */
+import type { TaskContinuation } from './model.js';
+import { describeInterruption } from './interruption.js';
 
 export type ComposeInput = {
   level1: string;
@@ -20,8 +22,8 @@ export type ComposeInput = {
   taskTitle: string;
   /** Position of the task in the session, from 1. */
   taskNumber: number;
-  /** Carrying on from an attempt that stopped at the runner's limit. See `Task.continuing`. */
-  continuing?: { fromAttempt: number; stoppedBecause?: string };
+  /** Carrying on from an attempt that stopped before it finished. See `Task.continuing`. */
+  continuing?: TaskContinuation;
   /** A new prompt for a task that ended done, building on that attempt's work. See `Task.buildsOn`. */
   buildsOn?: { fromAttempt: number };
   contractAlreadySent: boolean;
@@ -97,6 +99,28 @@ function level2Block(level2: string): string {
  * The messages to send, in order. The last one is the one whose reply starts the loop.
  * `firstMessage` is what the UI shows as "the prompt that opened this task".
  */
+/**
+ * Why the attempt being continued stopped, and where it was, in the words the chat is sent. The
+ * chat was mid-conversation when it stopped, so what it most needs is to know that nothing it did
+ * failed, that the files are as its work left them, and — after the bot stopped under it — which of
+ * the steps it had just asked for actually ran.
+ */
+function whyItStopped(c: TaskContinuation): string {
+  if (c.how === 'interrupted') {
+    const where = c.interruption ? `\n\n${describeInterruption(c.interruption)}\n\n` : ' ';
+    return (
+      'The runner stopped unexpectedly while this task was in progress — the program was closed, the machine went off or it ' +
+      'crashed; nothing you did failed — and it has now started again. The files are as your work left them, and what had ' +
+      `changed is committed on this branch.${where}`.trimEnd()
+    );
+  }
+  if (c.how === 'stopped') {
+    return 'It was stopped by the operator before it finished — not because anything failed. The files are as you left them.';
+  }
+  const why = c.stoppedBecause ? ` (${c.stoppedBecause})` : '';
+  return `It stopped because the runner's limit was reached${why} — not because anything failed. The files are as you left them.`;
+}
+
 export function composeOpening(input: ComposeInput): { messages: string[]; firstMessage: string } {
   const taskBlock =
     `${TASK_HEADER} ${input.taskNumber}: ${input.taskTitle.trim() || 'untitled'}\n\n${input.prompt.trim()}`;
@@ -107,19 +131,18 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
    * conversation was lost does the task go out in full, with a line saying it is a continuation.
    */
   if (input.continuing && input.contractAlreadySent) {
-    const why = input.continuing.stoppedBecause ? ` (${input.continuing.stoppedBecause})` : '';
     const message =
       `Continue task ${input.taskNumber}: ${input.taskTitle.trim() || 'untitled'}, in this same conversation. ` +
-      `It stopped because the runner's limit was reached${why} — not because anything failed. ` +
-      `The files are as you left them. Do not start over and do not repeat work that is done: start from ` +
+      `${whyItStopped(input.continuing)} ` +
+      `Do not start over and do not repeat work that is done: start from ` +
       `your plan, say in \`notes\` which stages are done and which one you are on, and carry on. ` +
       `The assignment is the one you were given above; it has not changed. Step numbering restarts at 1.\n\n` +
       `${runnerBlock(input)}`.trimEnd();
     return { messages: [message], firstMessage: message };
   }
   const continuationLine = input.continuing
-    ? `\n\nThis continues an earlier attempt at this task that stopped at the runner's limit. The files are as ` +
-      `that attempt left them: look at what is already done before changing anything, and carry on from there.`
+    ? `\n\nThis continues an earlier attempt at this task. ${whyItStopped(input.continuing)} ` +
+      `Look at what is already done before changing anything, and carry on from there.`
     : input.buildsOn
       ? `\n\nThis task was done once already (attempt ${input.buildsOn.fromAttempt}), and that work is in your ` +
         `working tree. The text above is a new instruction for it: look at what is there first, build on it, and ` +
