@@ -253,6 +253,37 @@ await scenario('a problem still there after one mention is committed and kept on
   t.truthy('and the finding stays on it', content && /still there after being pointed out once/.test(content.detail), results);
 });
 
+/** Starts a supervised run and waits for its first step to ask; the check acts on the repository meanwhile. */
+async function whileWaiting(h: Harness, sessionId: string, meanwhile: () => void): Promise<void> {
+  await h.call('POST', `/sessions/${sessionId}/start`, { mode: 'confirm' });
+  type Approval = { id: string };
+  const first = await waitFor('the step to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
+  meanwhile();
+  await h.call('POST', `/approvals/${first.id}`, { action: 'run' });
+  await h.idle();
+}
+
+await scenario('nothing is committed onto a branch the repository was moved to during the task', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'moved', [{ ...greeting, checks: [] }]));
+  h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+  // The operator switches branch in another window while the step waits.
+  await whileWaiting(h, s!.id, () => h.git('checkout', '-q', '-b', 'someone-else'));
+  const task = (await h.session(s!.id)).tasks[0]!;
+  t.truthy('the task says why nothing was committed', /not on the task's branch cop\/moved/.test(task.vcs?.problem ?? ''), task.vcs);
+  t.check('neither branch got a commit', [h.git('rev-list', '--count', 'main..cop/moved'), h.git('rev-list', '--count', 'main..someone-else')], ['0', '0']);
+  t.check('the work is still in the working tree', h.git('status', '--porcelain'), '?? hello.txt');
+});
+
+await scenario('a commit on the branch that the runner did not make is named on the task', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'foreign', [{ ...greeting, checks: [] }]));
+  h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+  await whileWaiting(h, s!.id, () => h.git('-c', 'user.email=someone@example.invalid', '-c', 'user.name=someone', 'commit', '-q', '--allow-empty', '-m', 'sneaked in'));
+  const task = (await h.session(s!.id)).tasks[0]!;
+  const foreign = task.vcs?.foreignCommits ?? [];
+  t.truthy('the foreign commit is recorded', foreign.length === 1 && foreign[0]!.includes('someone@example.invalid sneaked in'), foreign);
+  t.check('and the task\'s own commit went on top of it', h.git('rev-list', '--count', 'main..cop/foreign'), '2');
+});
+
 await scenario('the API refuses callers without the token', {}, async (h) => {
   const res = await fetch(`http://127.0.0.1:${h.api.port}/api/sessions`);
   t.check('no token: 401', res.status, 401);

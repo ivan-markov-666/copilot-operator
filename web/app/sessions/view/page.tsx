@@ -1918,6 +1918,19 @@ function TaskCard({
                   </ul>
                 </div>
               )}
+              {/* Commits on the branch that the runner did not make, found before its own commit. */}
+              {(task.vcs.foreignCommits?.length ?? 0) > 0 && (
+                <div className="err small" style={{ marginTop: 4 }}>
+                  {t('vcs.foreignCommits', { n: task.vcs.foreignCommits?.length ?? 0 })}
+                  <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+                    {(task.vcs.foreignCommits ?? []).map((c) => (
+                      <li key={c}>
+                        <code>{c}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           )}
         </div>

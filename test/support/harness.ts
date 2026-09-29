@@ -61,7 +61,7 @@ export type TaskView = {
   interruption?: { steps?: Array<{ id: number; state: string }>; resultsSent?: boolean };
   attempts?: Array<{ status: string; runId?: string; vcs?: { branch?: string } }>;
   review?: { verdict?: string };
-  vcs?: { branch?: string; baseCommit?: string; commit?: string; files?: Array<{ path: string }> };
+  vcs?: { branch?: string; baseCommit?: string; commit?: string; files?: Array<{ path: string }>; problem?: string; foreignCommits?: string[] };
 };
 export type SessionView = {
   id: string;

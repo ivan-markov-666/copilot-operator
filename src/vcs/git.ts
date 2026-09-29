@@ -367,6 +367,22 @@ export async function commitSubject(dir: string, commit: string): Promise<string
 }
 
 /** One line per commit, newest first, for showing what a task produced. */
+/** The identity the runner commits under (see `commitAll`). */
+export const RUNNER_EMAIL = 'copilot-operator@localhost';
+
+/** Whether `ancestor` is reachable from `ref`: false when the branch was reset or rewritten past it. */
+export async function isAncestor(dir: string, ancestor: string, ref = 'HEAD'): Promise<boolean> {
+  const r = await git(dir, ['merge-base', '--is-ancestor', ancestor, ref]);
+  return r.ok;
+}
+
+/** Commits between the two that the runner did not make, as `<short sha> <author email> <subject>`. */
+export async function foreignCommits(dir: string, fromCommit: string, toRef = 'HEAD'): Promise<string[]> {
+  const r = await git(dir, ['log', '--format=%h %ae %s', `${fromCommit}..${toRef}`]);
+  if (!r.ok || !r.stdout) return [];
+  return r.stdout.split('\n').filter((line) => line.split(' ')[1] !== RUNNER_EMAIL);
+}
+
 export async function commitsBetween(dir: string, fromCommit: string, toRef = 'HEAD'): Promise<string[]> {
   const r = await git(dir, ['log', '--oneline', `${fromCommit}..${toRef}`]);
   return r.ok && r.stdout ? r.stdout.split('\n') : [];

@@ -19,7 +19,7 @@ import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
-import { branchNameFrom, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
+import { branchNameFrom, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Session): string {
@@ -395,6 +395,44 @@ export async function commitTaskResult(
   if (!settings?.enabled || !settings.commitOnFinish || !current.branch) return current;
 
   const dir = repoDirOf(session);
+
+  /*
+   * Where the commit would land, checked before anything is staged.
+   *
+   * `commitAll` commits on whatever HEAD is. The task's branch was checked out at its start, and
+   * nothing the chat runs may move it (git writes are refused), but the operator can, in another
+   * window, and so can a tool a step started. Committing then puts the task's work on somebody
+   * else's branch under the task's name. So: the repository must still be on the task's branch,
+   * and the commit the task started from must still be in that branch's history — a branch reset
+   * or rewritten under the task is not one to add to. Either failing leaves the changes in the
+   * working tree, uncommitted, and says so; the next task will not start over a dirty tree, which
+   * is the stop that is wanted. Commits on the branch that the runner did not make are allowed
+   * (they are already there; refusing would not remove them) and named on the task.
+   */
+  const state = await repoState(dir);
+  if (state.branch !== current.branch) {
+    const problem =
+      `the repository is on ${state.branch ?? 'a detached HEAD'}, not on the task's branch ${current.branch}: it was moved while the task ran. ` +
+      'Nothing was committed; the changes are left in the working tree for you to look at.';
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-provenance', level: 'error', message: problem,
+      data: { expected: current.branch, actual: state.branch } });
+    return { ...current, problem };
+  }
+  if (current.baseCommit && state.head && !(await isAncestor(dir, current.baseCommit))) {
+    const problem =
+      `the task's branch ${current.branch} no longer contains the commit it started from (${current.baseCommit.slice(0, 8)}): ` +
+      'it was reset or rewritten while the task ran. Nothing was committed; the changes are left in the working tree.';
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-provenance', level: 'error', message: problem,
+      data: { base: current.baseCommit, head: state.head } });
+    return { ...current, problem };
+  }
+  const foreign = current.baseCommit ? await foreignCommits(dir, current.baseCommit) : [];
+  if (foreign.length > 0) {
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-foreign-commits', level: 'warn',
+      message: `${foreign.length} commit(s) on ${current.branch} since the task started were not made by the runner: ${foreign.slice(0, 5).join(' | ')}`,
+      data: { commits: foreign } });
+  }
+
   const message = commitMessage(task, outcome);
   const result = await commitAll(dir, message);
 
@@ -429,7 +467,14 @@ export async function commitTaskResult(
       data: { commit: result.commit, suspicious } });
   }
 
-  return { ...current, commit: result.commit, commits, files, ...(suspicious.length > 0 ? { suspicious } : {}) };
+  return {
+    ...current,
+    commit: result.commit,
+    commits,
+    files,
+    ...(suspicious.length > 0 ? { suspicious } : {}),
+    ...(foreign.length > 0 ? { foreignCommits: foreign } : {}),
+  };
 }
 
 /**

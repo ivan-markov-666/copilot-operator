@@ -548,6 +548,8 @@ export type TaskVcs = {
    * They were pointed out to the model once and left in place, so a person should look.
    */
   suspicious?: Array<{ path: string; reason: string }>;
+  /** Commits on the branch since the task started that the runner did not make: `sha email subject`. */
+  foreignCommits?: string[];
   /** Set when version control was on but could not do its part, with the reason. */
   problem?: string;
 };
