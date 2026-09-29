@@ -453,9 +453,12 @@ export class OperatorController {
       reviewModel?: string;
       /** What to call the run; the register groups by it and the exports are named after it. */
       name?: string;
+      /** Only these queued tasks; absent means every queued task of the sessions. */
+      taskIds?: string[];
     },
   ): Promise<unknown> {
     if (!Array.isArray(body?.sessionIds)) throw new BadRequestException('sessionIds must be a list of session ids');
+    if (body?.taskIds !== undefined && !Array.isArray(body.taskIds)) throw new BadRequestException('taskIds must be a list of task ids');
     return this.ops
       .startBatch(
         body.sessionIds,
@@ -467,6 +470,7 @@ export class OperatorController {
         // The same for the review: absent means each session keeps whatever it is set to.
         body?.reviewModel,
         body?.name,
+        body?.taskIds,
       )
       .catch(fail);
   }

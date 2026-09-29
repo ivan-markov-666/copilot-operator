@@ -899,33 +899,52 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [open, setOpen] = useState(false);
-  /** Failed tasks of independent sessions the operator chose to queue again. */
+  /**
+   * The tasks this run takes, by id: queued ones and failed ones alike. Everything is ticked when
+   * the panel opens, which is what "continue" always did; unticking narrows it, down to the one
+   * task whose prompt was just fixed. What is not ticked stays exactly where it is.
+   */
   const [picked, setPicked] = useState<Set<string>>(new Set());
   /** A failed task whose prompt is being rewritten from inside this panel. */
   const [fixingHint, setFixingHint] = useState<RegistryEntry | null>(null);
 
   /*
-   * What "continue" means depends on the session.
+   * What "continue" means depends on the session, and the choice is the operator's.
    *
    * A session whose tasks are one chain stops at a failure, and the queued tasks behind it were
-   * written assuming it worked: continuing without it would run them against a state that does
-   * not exist. So its failed task goes back in the queue, in its place, as a condition — how it
-   * is made to pass is the operator's job (the register offers "Fix the prompt", and the runner
-   * already tried a fresh conversation). A session of independent tasks has no such condition;
-   * its failed tasks are offered, ticked by default, and can be left out.
+   * written assuming it worked: running them without it runs them against a state that does not
+   * exist. So its failed task is offered first and ticked. A session of independent tasks has no
+   * such condition. Every task can be unticked — the case this was made for is "I fixed one
+   * prompt; run that one, not everything else that is waiting" — and a chain task run without
+   * an earlier one of its session is said, not refused, because the operator may know it does
+   * not matter.
    */
   const upcoming = entries.filter((e) => e.status === 'queued');
   const failed = entries.filter((e) => FAILED_STATUSES.includes(e.status) && !e.sessionRunning);
   const anyRunning = entries.some((e) => e.sessionRunning);
   const chainFailed = failed.filter((e) => e.sessionOnFailure === 'stop');
   const looseFailed = failed.filter((e) => e.sessionOnFailure !== 'stop');
-  const chosenLoose = looseFailed.filter((e) => picked.has(e.taskId));
-  const requeue = [...chainFailed, ...chosenLoose];
+  const candidates = [...upcoming, ...failed];
+  const chosen = candidates.filter((e) => picked.has(e.taskId));
+  const requeue = failed.filter((e) => picked.has(e.taskId));
+  const chosenQueued = upcoming.filter((e) => picked.has(e.taskId));
   // Sessions in the order the last run had them, then by first appearance: the order they run in.
-  const ordered = [...upcoming, ...requeue].sort(
+  const ordered = [...chosen].sort(
     (a, b) => (a.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) - (b.sessionRunOrder ?? Number.MAX_SAFE_INTEGER) || a.position - b.position,
   );
   const sessionIds = [...new Set(ordered.map((e) => e.sessionId))];
+  // A chosen task of a chain whose session has an earlier task left out: said beside the buttons.
+  const gaps = chosen
+    .filter((e) => e.sessionOnFailure === 'stop')
+    .map((e) => ({ e, before: candidates.find((o) => o.sessionId === e.sessionId && o.position < e.position && !picked.has(o.taskId)) }))
+    .filter((g): g is { e: RegistryEntry; before: RegistryEntry } => !!g.before);
+  const tick = (id: string, on: boolean): void =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   /*
    * What this run will be called, suggested by the API and editable here.
    *
@@ -942,7 +961,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
       : t('reg.continue', { n: upcoming.length, s: sessionIds.length });
 
   const openPanel = () => {
-    setPicked(new Set(looseFailed.map((e) => e.taskId)));
+    setPicked(new Set(candidates.map((e) => e.taskId)));
     setOpen(true);
     setMsg('');
     // Asked for when the panel opens rather than kept in step with every tick: what is chosen
@@ -961,7 +980,8 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     setMsg('');
     try {
       for (const e of requeue) await api.rerunTask(e.sessionId, e.taskId);
-      const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name.trim() || undefined);
+      // Exactly what is ticked: the queued tasks nobody chose stay queued for another run.
+      const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name.trim() || undefined, chosen.map((e) => e.taskId));
       setMsg(r.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
       setOpen(false);
       onChange();
@@ -985,53 +1005,52 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
       {open && !anyRunning && (
         <div className="notice" style={{ marginTop: 8 }}>
           <strong>{t('reg.continuePanelTitle')}</strong>
-          {chainFailed.length > 0 && (
-            <div style={{ marginTop: 6 }}>
-              <div className="small">{t('reg.continueChain')}</div>
-              <ul className="small" style={{ margin: '4px 0', paddingLeft: 18 }}>
-                {chainFailed.map((e) => (
-                  <li key={e.taskId}>
-                    <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>{' '}
-                    <button className="quiet small" onClick={() => setFixingHint(e)}>
-                      {t('reg.fixPrompt')}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {looseFailed.length > 0 && (
-            <div style={{ marginTop: 6 }}>
-              <div className="small">{t('reg.continueIndependent')}</div>
-              <ul className="small" style={{ margin: '4px 0', paddingLeft: 18, listStyle: 'none' }}>
-                {looseFailed.map((e) => (
-                  <li key={e.taskId}>
-                    <label className="option-inline">
-                      <input
-                        type="checkbox"
-                        checked={picked.has(e.taskId)}
-                        onChange={(ev) =>
-                          setPicked((prev) => {
-                            const next = new Set(prev);
-                            if (ev.target.checked) next.add(e.taskId);
-                            else next.delete(e.taskId);
-                            return next;
-                          })
-                        }
-                      />
-                      <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
-                    </label>{' '}
-                    {/*
-                      The same repair a chained failure is offered above. An independent failure
-                      can be left out of the run, but one worth running again is usually worth
-                      running with a better prompt, and this is where it is being decided.
-                    */}
-                    <button className="quiet small" onClick={() => setFixingHint(e)} title={t('reg.fixPromptHint')}>
-                      {t('reg.fixPrompt')}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+          <div className="row small" style={{ marginTop: 6 }}>
+            <button className="quiet small" onClick={() => setPicked(new Set(candidates.map((e) => e.taskId)))}>
+              {t('reg.pickAll')}
+            </button>
+            <button className="quiet small" onClick={() => setPicked(new Set())}>
+              {t('reg.pickNone')}
+            </button>
+          </div>
+          {[
+            { key: 'chain', entries: chainFailed, intro: t('reg.continueChain'), fix: true },
+            { key: 'loose', entries: looseFailed, intro: t('reg.continueIndependent'), fix: true },
+            { key: 'queued', entries: upcoming, intro: t('reg.continueQueued'), fix: false },
+          ]
+            .filter((group) => group.entries.length > 0)
+            .map((group) => (
+              <div key={group.key} style={{ marginTop: 6 }}>
+                <div className="small">{group.intro}</div>
+                <ul className="small" style={{ margin: '4px 0', paddingLeft: 18, listStyle: 'none' }}>
+                  {group.entries.map((e) => (
+                    <li key={e.taskId}>
+                      <label className="option-inline">
+                        <input type="checkbox" checked={picked.has(e.taskId)} onChange={(ev) => tick(e.taskId, ev.target.checked)} />
+                        <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
+                      </label>{' '}
+                      {/* The use case this panel grew for: one fixed task, run on its own. */}
+                      <button className="quiet small" onClick={() => setPicked(new Set([e.taskId]))} title={t('reg.pickOnlyWhy')}>
+                        {t('reg.pickOnly')}
+                      </button>
+                      {group.fix && (
+                        <>
+                          {' '}
+                          <button className="quiet small" onClick={() => setFixingHint(e)} title={t('reg.fixPromptHint')}>
+                            {t('reg.fixPrompt')}
+                          </button>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          {gaps.length > 0 && (
+            <div className="notice caution small" style={{ marginTop: 6 }}>
+              {gaps.map((g) => (
+                <div key={g.e.taskId}>{t('reg.continueGap', { task: g.e.title, before: g.before.title, session: g.e.sessionName })}</div>
+              ))}
             </div>
           )}
           <div style={{ marginTop: 8 }}>
@@ -1047,7 +1066,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
             <p className="why">{t('reg.continueNameWhy')}</p>
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            {t('reg.continueSummary', { q: upcoming.length, r: requeue.length, s: sessionIds.length })}
+            {t('reg.continueSummary', { q: chosenQueued.length, r: requeue.length, s: sessionIds.length })}
           </div>
           {/*
             The unattended button is the left one, and the left one is the loud one.

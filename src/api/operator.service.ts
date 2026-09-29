@@ -28,7 +28,7 @@ import type {
   VersionControl,
 } from '../session/model.js';
 import { newId, tidyVcsPlan } from '../session/model.js';
-import { runSession, openBrowser } from '../orchestrator/taskRunner.js';
+import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
 import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, taskAtAttempt, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
@@ -135,6 +135,8 @@ export type BatchState = {
   startedAt: string;
   /** What the operator called the run. See `TaskRunGroup.name`. */
   name?: string;
+  /** The tasks this run was limited to, when the operator chose some. See `startBatch`. */
+  onlyTasks?: string[];
   finishedAt?: string;
   mode: 'confirm' | 'unattended';
   /** `stop` gives up on the rest when a session fails; `continue` works through them all. */
@@ -945,6 +947,8 @@ export class OperatorService {
     transport?: CopilotTransport,
     /** The press of a start button this belongs to, stamped onto every task it reaches. */
     runGroup?: TaskRunGroup,
+    /** Only these queued tasks, when the operator chose some; the rest stay queued. */
+    onlyTasks?: ReadonlySet<string>,
   ): Promise<{ started: boolean; reason?: string; done: Promise<RunTally> }> {
     await this.init();
     // Every project's Desktop copy brought up to date before the chat opens, when the operator
@@ -955,7 +959,7 @@ export class OperatorService {
     if (this.running.has(sessionId)) return { started: false, reason: 'already running', done: Promise.resolve(idle) };
     const session = await this.store.getSession(sessionId);
     if (!session) return { started: false, reason: 'no such session', done: Promise.resolve(idle) };
-    const queuedIds = session.tasks.filter((t) => t.status === 'queued').map((t) => t.id);
+    const queuedIds = queuedToRun(session, onlyTasks).map((t) => t.id);
     if (queuedIds.length === 0) return { started: false, reason: 'no queued tasks', done: Promise.resolve(idle) };
 
     const cfg = await this.settings.load();
@@ -1016,6 +1020,7 @@ export class OperatorService {
       continueOnFailure: session.onFailure === 'continue',
       transport,
       runGroup,
+      onlyTasks,
     })
       .then(async (outcome) => ({ ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused }))
       .catch(async (e: unknown) => {
@@ -1129,8 +1134,15 @@ export class OperatorService {
     reviewModel?: string,
     /** What to call the run. Offered from the plan's name; empty means it goes by its id. */
     name?: string,
+    /**
+     * The queued tasks to run, when not every queued task of those sessions: what the operator
+     * ticked in the register. A session none of whose chosen tasks is queued is skipped; the
+     * tasks nobody chose stay queued exactly as they were. Absent means every queued task.
+     */
+    taskIds?: string[],
   ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
     await this.init();
+    const onlyTasks = taskIds && taskIds.length > 0 ? new Set(taskIds.map((t) => t.trim()).filter(Boolean)) : undefined;
     if (this.batch?.running) return { started: false, reason: 'a batch is already running' };
     const wanted = [...new Set(sessionIds.map((s) => s.trim()).filter(Boolean))];
     if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
@@ -1149,10 +1161,10 @@ export class OperatorService {
         sessions.push({ sessionId: id, name: id, state: 'skipped', ran: 0, failed: 0, reason: 'no such session' });
         continue;
       }
-      const queued = s.tasks.filter((t) => t.status === 'queued').length;
+      const queued = queuedToRun(s, onlyTasks).length;
       sessions.push(
         queued === 0
-          ? { sessionId: id, name: s.name, state: 'skipped', ran: 0, failed: 0, reason: 'nothing queued' }
+          ? { sessionId: id, name: s.name, state: 'skipped', ran: 0, failed: 0, reason: onlyTasks ? 'none of its chosen tasks is queued' : 'nothing queued' }
           : { sessionId: id, name: s.name, state: 'waiting', ran: 0, failed: 0 },
       );
     }
@@ -1214,6 +1226,7 @@ export class OperatorService {
       id: newId('b-'),
       startedAt: new Date().toISOString(),
       name: chosenName,
+      ...(onlyTasks ? { onlyTasks: [...onlyTasks] } : {}),
       mode,
       onFailure,
       stopping: false,
@@ -1360,7 +1373,8 @@ export class OperatorService {
           s.runGroup = {
             ...runGroup,
             order: at,
-            taskIds: s.tasks.filter((t) => t.status === 'queued').map((t) => t.id),
+            // What this run was asked to do: the chosen tasks, when some were chosen.
+            taskIds: queuedToRun(s, batch.onlyTasks).map((t) => t.id),
             mode: batch.mode,
             onFailure: batch.onFailure,
           };
@@ -1392,7 +1406,7 @@ export class OperatorService {
           data: { batchId: batch.id },
         });
 
-        const begun = await this.beginRun(entry.sessionId, batch.mode, browser, runGroup);
+        const begun = await this.beginRun(entry.sessionId, batch.mode, browser, runGroup, batch.onlyTasks ? new Set(batch.onlyTasks) : undefined);
         if (!begun.started) {
           entry.state = 'skipped';
           entry.reason = begun.reason;

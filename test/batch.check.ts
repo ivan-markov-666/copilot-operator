@@ -64,6 +64,30 @@ try {
   const plain = await authorizer.authorize({ id: 2, type: 'command', cmd: 'node --test' }, { sessionId: 'switched', iteration: 1 });
   check('an ordinary command still runs without asking', plain.action, 'run');
   internals.running.delete('switched');
+
+  /*
+   * Running only the chosen tasks. The register lets the operator untick everything but the one
+   * task whose prompt was just fixed; the run must take that task and leave the rest of the queue
+   * as it is. Tested at the rule every place shares, and at the entrance, which answers before a
+   * browser is opened.
+   */
+  console.log('\n--- only the chosen tasks are run ---');
+  const { queuedToRun } = await import('../src/orchestrator/taskRunner.js');
+  const multi = await ops.store.createSession('several', { enabled: false, rootDir: '' });
+  const first = await ops.store.addTask(multi.id, { title: 'first', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });
+  const fixed = await ops.store.addTask(multi.id, { title: 'fixed', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });
+  const done = await ops.store.addTask(multi.id, { title: 'done', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });
+  await ops.store.updateTask(multi.id, done.id, (t) => {
+    t.status = 'done';
+  });
+  const several = (await ops.store.getSession(multi.id))!;
+  check('no choice: the whole queue', queuedToRun(several).map((t) => t.title).join(','), 'first,fixed');
+  check('one chosen: only that one', queuedToRun(several, new Set([fixed.id])).map((t) => t.title).join(','), 'fixed');
+  check('a chosen task that is not queued is not run', queuedToRun(several, [done.id]).length, 0);
+  const none = await ops.startBatch([multi.id], 'confirm', 'stop', undefined, undefined, 'x', [done.id]);
+  check('a run whose chosen tasks are none of them queued does not start', none.started, false);
+  check('and says so', /queued/.test(none.reason ?? ''), true);
+  check('the task nobody chose is still queued', (await ops.store.getSession(multi.id))?.tasks.find((t) => t.id === first.id)?.status, 'queued');
 } finally {
   await rm(data, { recursive: true, force: true });
 }

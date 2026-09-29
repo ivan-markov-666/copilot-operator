@@ -85,6 +85,12 @@ export type RunDeps = {
    */
   runGroup?: TaskRunGroup;
   /**
+   * The queued tasks this run is to take, when not all of them. The operator picks them in the
+   * register — typically the one task whose prompt was just fixed — and every other queued task
+   * of the session stays queued, untouched, for another run. Absent means the whole queue.
+   */
+  onlyTasks?: ReadonlySet<string>;
+  /**
    * The mode the run is in as this task begins. "Run the rest without asking" switches a run to
    * unattended half-way, and until 2026-09-27 the policy.json of every later task still said a
    * person had approved each step. The service that holds the switch answers this.
@@ -1695,6 +1701,16 @@ export async function runTask(
 }
 
 /**
+ * The queued tasks of a session a run takes: all of them, or only the ones the operator chose.
+ * One rule for the run itself and for every place that counts or records what a run will do, so
+ * the batch entrance, the run's record and the run cannot disagree about it.
+ */
+export function queuedToRun(session: Session, onlyTasks?: ReadonlySet<string> | readonly string[]): Task[] {
+  const only = onlyTasks ? new Set(onlyTasks) : undefined;
+  return session.tasks.filter((t) => t.status === 'queued' && (!only || only.has(t.id)));
+}
+
+/**
  * Runs every queued task of a session, in order, in one conversation. Stops at the first
  * task that does not end with `done` unless `continueOnFailure` is set, because a failed
  * task usually leaves the machine in a state the next task did not expect.
@@ -1717,7 +1733,7 @@ export async function runSession(
   let session = await store.getSession(sessionId);
   if (!session) throw new Error(`Session ${sessionId} does not exist.`);
 
-  const queued = session.tasks.filter((t) => t.status === 'queued');
+  const queued = queuedToRun(session, deps.onlyTasks);
   if (queued.length === 0) {
     bus.publish({ sessionId, type: 'session-idle', level: 'info', message: 'no queued tasks' });
     return { ran: 0, paused: false };

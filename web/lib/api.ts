@@ -751,12 +751,14 @@ export const api = {
     reviewModel?: string,
     /** What to call the run; the register groups by it and the exports are named after it. */
     name?: string,
+    /** Only these queued tasks; the rest of the sessions' queues stay as they are. */
+    taskIds?: string[],
   ) =>
     call<{ started: boolean; reason?: string; batch?: BatchState }>('/batch/start', {
       method: 'POST',
       // An absent model leaves every session on the one it already has; a name is written
       // onto all of them before the run starts.
-      body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name }),
+      body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name, taskIds }),
     }),
   /** What the run would be called if nothing is typed, so the field can start there. */
   suggestedRunName: (sessionIds: string[]) =>
