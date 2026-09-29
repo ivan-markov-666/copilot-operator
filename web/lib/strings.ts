@@ -78,6 +78,10 @@ export const dict = {
     'exec.maxRunMinutes': 'Longest a task may run',
     'exec.maxRunMinutesUnit': 'minutes',
     'exec.maxRunMinutesWhy': 'Counted from the task\'s first message, waits for the hourly cap included. A task that stops here can be continued in the same chat.',
+    'exec.replyTimeout': 'How long to wait for a reply from the chat',
+    'exec.replyTimeoutUnit': 'seconds (900 = 15 minutes)',
+    'exec.replyTimeoutWhy':
+      'From sending a message to the reply having finished. A reply not finished by then ends the task as failed — "Copilot did not finish a reply within …" — with a screenshot of the chat in the run folder. The slower models and long answers can take several minutes. Applies to runs started from now on.',
     'exec.retryBlocked': 'When a task ends blocked, run it again in a fresh conversation',
     'exec.retryBlockedTimes': 'times, then accept the verdict',
     'exec.retryBlockedWhy':
@@ -1155,6 +1159,10 @@ export const dict = {
     'exec.maxRunMinutes': 'Най-дълго време за една задача',
     'exec.maxRunMinutesUnit': 'минути',
     'exec.maxRunMinutesWhy': 'Броено от първото съобщение на задачата, включително изчакванията заради часовия таван. Задача, спряла тук, може да продължи в същия чат.',
+    'exec.replyTimeout': 'Колко да се чака отговор от чата',
+    'exec.replyTimeoutUnit': 'секунди (900 = 15 минути)',
+    'exec.replyTimeoutWhy':
+      'От изпращането на съобщение до завършването на отговора. Отговор, незавършен дотогава, приключва задачата като провалена — „Copilot did not finish a reply within …“ — със снимка на чата в папката на пускането. По-бавните модели и дългите отговори може да отнемат няколко минути. Важи за пускания, започнати от сега нататък.',
     'exec.retryBlocked': 'Когато задача завърши блокирана, пусни я отново в нов разговор',
     'exec.retryBlockedTimes': 'пъти, после приеми присъдата',
     'exec.retryBlockedWhy':

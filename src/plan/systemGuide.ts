@@ -3231,6 +3231,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Колко минути може да върви една задача (по подразбиране 240), преди да спре като достигнат лимит; запазва се, докато пишете.',
           },
           {
+            key: 'exec.replyTimeout',
+            kind: 'field',
+            en: 'How long to wait for a reply from the chat',
+            bg: 'Колко да се чака отговор от чата',
+            doesEn:
+              'Seconds to wait for a chat reply (default 900); a reply not finished by then fails the task with "Copilot did not finish a reply within …".',
+            doesBg:
+              'Секунди чакане на отговор от чата (по подразбиране 900); незавършен дотогава отговор проваля задачата с „Copilot did not finish a reply within …“.',
+          },
+          {
             key: 'exec.retryBlocked',
             kind: 'field',
             en: 'When a task ends blocked, run it again in a fresh conversation',

@@ -633,6 +633,7 @@ function ExecutionSection() {
   const [retries, setRetries] = useState(2);
   const [iterations, setIterations] = useState(60);
   const [minutes, setMinutes] = useState(240);
+  const [replySec, setReplySec] = useState(900);
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [startMode, setStartMode] = useState<StartMode>('confirm');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
@@ -660,6 +661,8 @@ function ExecutionSection() {
         setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
+        const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
+        setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
         const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as {
           isolation?: Isolation;
           mode?: StartMode;
@@ -683,10 +686,19 @@ function ExecutionSection() {
    * digits went nowhere. Now each write waits for the one before and is built on the object that
    * one produced, so nothing has to be disabled.
    */
-  const write = (branch: 'limits' | 'execution', key: string, value: unknown): Promise<void> => {
+  const write = (branch: 'limits' | 'execution' | 'copilot', key: string, value: unknown): Promise<void> => {
     const run = async () => {
-      const base = rawRef.current;
-      if (!base) return;
+      if (!rawRef.current) return;
+      /*
+       * The file as it is now, not as this section first read it. The other sections of this page
+       * save through their own calls — the models, the projects — and a write built on the copy read
+       * when the page opened put back whatever they had changed since: choose a model, then change a
+       * limit, and the old model was back.
+       */
+      const base = await api
+        .settings()
+        .then((s) => s.raw)
+        .catch(() => rawRef.current as Record<string, unknown>);
       const next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } };
       setMsg('');
       try {
@@ -706,6 +718,7 @@ function ExecutionSection() {
   const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
   const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
   const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
+  const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
 
   /*
    * The fields that change what a run is allowed to do rather than how hard it tries. Saved
@@ -768,6 +781,23 @@ function ExecutionSection() {
         <span className="muted small">{t('exec.maxRunMinutesUnit')}</span>
       </div>
       <p className="why">{t('exec.maxRunMinutesWhy')}</p>
+
+      <label htmlFor="reply-timeout">{t('exec.replyTimeout')}</label>
+      <div className="row">
+        <BoundedNumber
+          id="reply-timeout"
+          value={replySec}
+          min={60}
+          max={10800}
+          onChange={(n) => {
+            setReplySec(n);
+            saveReplyLater(n);
+          }}
+          disabled={!raw}
+        />
+        <span className="muted small">{t('exec.replyTimeoutUnit')}</span>
+      </div>
+      <p className="why">{t('exec.replyTimeoutWhy')}</p>
 
       <label htmlFor="isolation">{t('exec.isolation')}</label>
       <select
