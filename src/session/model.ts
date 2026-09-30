@@ -506,24 +506,6 @@ export type TaskAttempt = {
   vcs?: TaskVcs;
 };
 
-export type MirrorSettings = {
-  enabled: boolean;
-  rootDir: string;
-  includeDirs: string[];
-  excludeDirs: string[];
-  /**
-   * Skip whatever the project's `.gitignore` lists. On by default: build output and local
-   * scratch files are noise in a chat. It has no say over `.env` files.
-   */
-  respectGitignore: boolean;
-  /**
-   * Copy `.env` files. Off by default, and the only thing that decides them: neither the
-   * gitignore option nor the contents of `.gitignore` can turn it on or off, because every
-   * project ignores `.env` and that would make this switch meaningless.
-   */
-  includeEnvFiles: boolean;
-};
-
 /**
  * How a session treats the repository it works in.
  *
@@ -533,7 +515,7 @@ export type MirrorSettings = {
  */
 export type VersionControl = {
   enabled: boolean;
-  /** The repository to work in. Empty means the project the files are mirrored from. */
+  /** The repository to work in. Empty means the session's project folder (`Session.projectDir`). */
   repoDir: string;
   /**
    * `per-task` gives every task its own branch, all cut from the same starting point, so a
@@ -751,7 +733,15 @@ export type Session = {
   vcsStart?: SessionStart;
   /** The last run this session was part of, and what that run asked of it. */
   runGroup?: SessionRunGroup;
-  mirror: MirrorSettings;
+  /**
+   * The folder the session's work is about: where its commands run and, when `vcs.repoDir` is empty,
+   * the repository. Set from the Project page when the session is created.
+   *
+   * It used to be `mirror.rootDir`, the root of the project files copied to the Desktop and attached
+   * to the chat. That feature was removed on 2026-09-30 at the operator's request; a session saved
+   * before then is read with its old root as this folder. See `SessionStore.readSession`.
+   */
+  projectDir: string;
   tasks: Task[];
 };
 

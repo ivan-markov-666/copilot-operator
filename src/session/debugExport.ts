@@ -90,7 +90,7 @@ export type DebugSession = {
   chat?: { name: string; url: string };
   vcs?: Session['vcs'];
   vcsBaseCommit?: string;
-  mirror: Session['mirror'];
+  projectDir: Session['projectDir'];
   tasks: DebugTask[];
 };
 
@@ -243,7 +243,7 @@ export async function buildDebugExport(input: {
       chat: session.chat ? { name: session.chat.name, url: session.chat.url } : undefined,
       vcs: session.vcs,
       vcsBaseCommit: session.vcsBaseCommit,
-      mirror: session.mirror,
+      projectDir: session.projectDir,
       tasks,
     });
   }

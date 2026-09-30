@@ -80,15 +80,6 @@ const GIT_SOMETIMES_WRITES =
   'reflog\\s+(?:delete|expire)|' +
   'notes\\s+(?:add|append|edit|remove|copy|prune)';
 
-/** Which directories of one project are copied to the Desktop, and how. */
-const ProjectMirrorSelection = z.object({
-  includeDirs: z.array(z.string()).default([]),
-  excludeDirs: z.array(z.string()).default([]),
-  respectGitignore: z.boolean().default(true),
-  includeEnvFiles: z.boolean().default(false),
-});
-export type ProjectMirrorSelection = z.infer<typeof ProjectMirrorSelection>;
-
 export const RunConfigSchema = z.object({
   copilot: z
     .object({
@@ -288,9 +279,8 @@ export const RunConfigSchema = z.object({
       rootDir: z.string().default(''),
       /**
        * What to call it. Empty means the folder's own name, which is what this used to be
-       * always — fine until the Desktop mirror started naming a folder per project and the
-       * plan brief started listing them, where "rules-tests" is a path and "the test suite"
-       * is what the operator calls it. The other projects have had a name from the start; the
+       * always — fine until the plan brief started listing the projects, where "rules-tests"
+       * is a path and "the test suite" is what the operator calls it. The other projects have had a name from the start; the
        * default one had nowhere to put it.
        */
       name: z.string().trim().default(''),
@@ -307,49 +297,9 @@ export const RunConfigSchema = z.object({
           z.object({
             name: z.string().trim().min(1),
             rootDir: z.string().trim().min(1),
-            /** Which of this project's directories go to the Desktop. See `mirror` below. */
-            mirror: ProjectMirrorSelection.optional(),
-            /** `false` keeps this project off the Desktop while the switch below is on. Absent means on. */
-            desktop: z.boolean().optional(),
           }),
         )
         .default([]),
-      /**
-       * Keep a copy of every project's selected directories on the Desktop, one folder per
-       * project under `copilot-operator-context`, refreshed before every run.
-       *
-       * The Desktop is the way into OneDrive, and OneDrive is the way into the chat's file
-       * picker. This is the switch for it: on, every project listed here is mirrored, with its
-       * own selection; off, the project folders are removed from the Desktop, because a stale
-       * copy of a code base sitting in the cloud is worse than none.
-       */
-      mirrorToDesktop: z.boolean().default(false),
-      /** The default project's own selection. */
-      mirror: ProjectMirrorSelection.optional(),
-      /** `false` keeps the default project off the Desktop while the switch is on. Absent means on. */
-      desktop: z.boolean().optional(),
-    })
-    .prefault({}),
-
-  /**
-   * Defaults for the project mirror. Which project and which directories is a property of a
-   * session; these are the mechanics shared by all of them.
-   */
-  projectMirror: z
-    .object({
-      enabled: z.boolean().default(false),
-      rootDir: z.string().optional(),
-      includeDirs: z.array(z.string()).default([]),
-      excludeDirs: z.array(z.string()).default([]),
-      targetDir: z.string().optional(),
-      separator: z.string().default('--'),
-      txtMode: z.enum(['append', 'replace', 'none']).default('append'),
-      respectGitignore: z.boolean().default(true),
-      ignoreDirs: z.array(z.string()).default([]),
-      includeEnvFiles: z.boolean().default(false),
-      maxFileBytes: z.number().int().positive().default(2 * 1024 * 1024),
-      attachToFirstMessage: z.boolean().default(true),
-      maxAttachedFiles: z.number().int().positive().default(20),
     })
     .prefault({}),
 
@@ -467,8 +417,6 @@ export type ResolvedConfig = RunConfig & {
     level1Path: string;
     level2Text: string;
     taskText: string;
-    mirrorRootDir?: string;
-    mirrorTargetDir?: string;
   };
 };
 
@@ -480,15 +428,6 @@ async function textOf(value: z.infer<typeof TextOrFile> | undefined, baseDir: st
 
 /** Turns parsed config plus a base directory into absolute paths and loaded texts. */
 export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir: string): Promise<ResolvedConfig> {
-  if (cfg.projectMirror.enabled) {
-    if (!cfg.projectMirror.rootDir) throw new Error('projectMirror.enabled is true but projectMirror.rootDir is missing.');
-    if (cfg.projectMirror.includeDirs.length === 0) {
-      throw new Error(
-        'projectMirror.enabled is true but includeDirs is empty, so nothing would be copied. ' +
-          'List the directories to include, or use ["."] for the whole project.',
-      );
-    }
-  }
   /*
    * The administrator's floor, applied here because this is the one function both the terminal's
    * `run.yaml` and the API's `data/settings.json` pass through. Applying it anywhere further in
@@ -505,10 +444,6 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
     denyPatterns: cfg.execution.denyPatterns,
     isolation: cfg.execution.isolation,
     passEnv: cfg.execution.passEnv,
-    mirrorToDesktop: cfg.project.mirrorToDesktop,
-    projectMirrorEnabled: cfg.projectMirror.enabled,
-    includeEnvFiles: cfg.project.mirror?.includeEnvFiles ?? cfg.project.others.some((o) => o.mirror?.includeEnvFiles === true),
-    mirrorIncludeEnvFiles: cfg.projectMirror.includeEnvFiles,
   };
   const outcome: LockOutcome = { applied: false, changes: [] };
   for (const lock of locks) {
@@ -529,12 +464,6 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
       isolation: policy.isolation ?? cfg.execution.isolation,
       passEnv: policy.passEnv ?? cfg.execution.passEnv,
     },
-    project: lockedProject(cfg.project, policy),
-    projectMirror: {
-      ...cfg.projectMirror,
-      enabled: policy.projectMirrorEnabled ?? cfg.projectMirror.enabled,
-      includeEnvFiles: policy.mirrorIncludeEnvFiles ?? cfg.projectMirror.includeEnvFiles,
-    },
     configPath,
     baseDir,
     policyLock: outcome,
@@ -546,21 +475,7 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
       level1Path: expandPath(cfg.level1File, baseDir),
       level2Text: await textOf(cfg.level2, baseDir),
       taskText: await textOf(cfg.task, baseDir),
-      mirrorRootDir: cfg.projectMirror.rootDir ? expandPath(cfg.projectMirror.rootDir, baseDir) : undefined,
-      mirrorTargetDir: cfg.projectMirror.targetDir ? expandPath(cfg.projectMirror.targetDir, baseDir) : undefined,
     },
-  };
-}
-
-/** The project section with what the lock decided: the Desktop mirror switch and the .env selections. */
-function lockedProject(project: RunConfig['project'], policy: LockablePolicy): RunConfig['project'] {
-  const envOff = policy.includeEnvFiles === false;
-  const fix = <M extends { includeEnvFiles: boolean } | undefined>(m: M): M => (m && envOff ? { ...m, includeEnvFiles: false } : m);
-  return {
-    ...project,
-    mirrorToDesktop: policy.mirrorToDesktop ?? project.mirrorToDesktop,
-    mirror: fix(project.mirror),
-    others: project.others.map((o) => ({ ...o, mirror: fix(o.mirror) })),
   };
 }
 

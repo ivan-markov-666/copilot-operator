@@ -281,7 +281,7 @@ export async function buildExport(input: ExportInput): Promise<{ fileName: strin
     `model      : ${session.model || 'whatever the chat was set to'}${session.modelInUse ? ` (ran on ${session.modelInUse})` : ''}`,
     `repository : ${
       session.vcs?.enabled
-        ? `${session.vcs.repoDir || session.mirror.rootDir || '(none set)'} — ${
+        ? `${session.vcs.repoDir || session.projectDir || '(none set)'} — ${
             session.vcs.branchMode === 'per-session' ? 'one branch for the whole session' : 'a branch of its own for every task'
           }, prefix ${session.vcs.branchPrefix}${session.vcs.commitOnFinish ? '' : ', commits off'}`
         : 'version control is off for this session'

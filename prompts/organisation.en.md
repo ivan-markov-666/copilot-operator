@@ -37,7 +37,6 @@
       "prerequisites": "what must be installed, running or set before it builds: runtimes, services, environment variables",
       "runsWith": "the commands that build, start and test it",
       "knownPitfalls": "what goes wrong here that is not obvious from the code, and what to do about it",
-      "howToReachItFromTheChat": "attached files, or the Desktop mirror at Desktop/copilot-operator-context/<project>/ where a file is named after its path with -- for each folder and .txt on the end, with the prefix the app gives this project in front: example--src--main.ts.txt is src/main.ts",
       "versionControl": "whether the runner may branch and commit here"
     }
   ]

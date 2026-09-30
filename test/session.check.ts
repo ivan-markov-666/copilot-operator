@@ -39,7 +39,8 @@ console.log('level1 customised :', (await store.getLevel1()).customised);
 await store.resetLevel1();
 console.log('level1 reset      :', !(await store.getLevel1()).customised);
 
-const s = await store.createSession('payments', { enabled: true, rootDir: 'C:/x', includeDirs: ['src'] });
+const s = await store.createSession('payments', 'C:/x');
+console.log('project folder    :', s.projectDir, '(expect C:/x)');
 const t1 = await store.addTask(s.id, { title: 'first', level2: 'L2', prompt: 'do a' });
 await store.addTask(s.id, { title: '', level2: '', prompt: 'do b with a very long prompt that becomes the title when none is given' });
 const loaded = await store.getSession(s.id);

@@ -3,17 +3,15 @@
 import { Suspense, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
+import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { AttemptRecord, SaveLog } from '../../saveLog';
 import { fmtDuration, isContinuable } from '../../../lib/api';
 import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
 import { useNow } from '../../../lib/useNow';
-import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
 import { useAppearance } from '../../../lib/appearance';
 import { ModelHint, ProjectHint, ReviewModelHint } from '../../defaultHints';
 import { ModelPicker } from '../../modelPicker';
-import { DirTree } from '../../dirTree';
 import { TaskStory } from '../../taskStory';
 import { RichText } from '../../richText';
 import { confirmDialog } from '../../dialog';
@@ -151,7 +149,6 @@ function SessionPage() {
 
       <ReviewPanel session={session} onChange={reload} />
 
-      <MirrorPanel session={session} onChange={reload} />
 
       <div className="panel">
         <h2>{t('tasks.title')}</h2>
@@ -363,15 +360,6 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
         {t('session.willUseModel', {
           name: session.model || (settingsModel ? t('model.followsDefault', { name: settingsModel }) : t('model.default')),
         })}
-        {' · '}
-        {session.mirror.enabled && session.mirror.rootDir ? (
-          t('session.willUseFiles', {
-            root: session.mirror.rootDir,
-            dirs: session.mirror.includeDirs.length ? session.mirror.includeDirs.join(', ') : '.',
-          })
-        ) : (
-          <span className="err">{t('session.noFiles')}</span>
-        )}
       </div>
     </div>
   );
@@ -683,7 +671,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
    * from the path. It runs whether version control is on or off, because the answer is what
    * decides if it may be turned on; the session's own preflight only speaks once it already is.
    */
-  const folder = (JSON.parse(saved) as VersionControl).repoDir || session.mirror.rootDir || '';
+  const folder = (JSON.parse(saved) as VersionControl).repoDir || session.projectDir || '';
   useEffect(() => {
     let cancelled = false;
     if (!folder.trim()) {
@@ -726,7 +714,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
     setBusy(true);
     setMsg(t('mirror.browsing'));
     try {
-      const picked = await api.browseFolder(repoDir.trim() || session.mirror.rootDir || undefined);
+      const picked = await api.browseFolder(repoDir.trim() || session.projectDir || undefined);
       if (picked.ok) {
         setRepoDir(picked.path);
         await save({ repoDir: picked.path });
@@ -742,7 +730,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
   };
 
   // Empty means the project the files are mirrored from, which is the usual case.
-  const effectiveRepo = vcs.repoDir || session.mirror.rootDir || '';
+  const effectiveRepo = vcs.repoDir || session.projectDir || '';
   const canEnable = effectiveRepo.trim() !== '' && repoProblem === null;
 
   return (
@@ -769,7 +757,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
           value={repoDir}
           onChange={(e) => setRepoDir(e.target.value)}
           onBlur={() => repoDir.trim() !== vcs.repoDir && void save({ repoDir: repoDir.trim() })}
-          placeholder={session.mirror.rootDir || 'C:\\Projects\\my-app'}
+          placeholder={session.projectDir || 'C:\\Projects\\my-app'}
           disabled={session.running}
         />
         <button onClick={() => void browse()} disabled={busy || session.running}>
@@ -1059,347 +1047,6 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------------------
-// Project mirror
-// ---------------------------------------------------------------------------------------
-
-function MirrorPanel({ session, onChange }: { session: Session; onChange: () => void }) {
-  const { t } = useT();
-  const [enabled, setEnabled] = useState(session.mirror.enabled);
-  const [rootDir, setRootDir] = useState(session.mirror.rootDir);
-  const [include, setInclude] = useState(session.mirror.includeDirs.join('\n'));
-  const [exclude, setExclude] = useState(session.mirror.excludeDirs.join('\n'));
-  const [respectGitignore, setRespectGitignore] = useState(session.mirror.respectGitignore ?? true);
-  const [includeEnvFiles, setIncludeEnvFiles] = useState(session.mirror.includeEnvFiles ?? false);
-  const [dirs, setDirs] = useState<string[] | null>(null);
-  const [preview, setPreview] = useState<MirrorPreview | null>(null);
-  const [busy, setBusy] = useState<'' | 'browse' | 'check'>('');
-  const [msg, setMsg] = useState('');
-  const [alwaysOut, setAlwaysOut] = useState<string[]>([]);
-
-  // The page refetches the session every few seconds, which hands this component a brand new
-  // `mirror` object every time even when nothing in it changed. Keying the reset on the
-  // contents rather than on the object identity is what stops a poll from wiping a path
-  // halfway through being typed.
-  const savedMirror = JSON.stringify(session.mirror);
-  useEffect(() => {
-    const m = JSON.parse(savedMirror) as Session['mirror'];
-    setEnabled(m.enabled);
-    setRootDir(m.rootDir);
-    setInclude(m.includeDirs.join('\n'));
-    setExclude(m.excludeDirs.join('\n'));
-    setRespectGitignore(m.respectGitignore ?? true);
-    setIncludeEnvFiles(m.includeEnvFiles ?? false);
-  }, [savedMirror]);
-
-  useEffect(() => {
-    api
-      .doctor()
-      .then((d) => setAlwaysOut((d.alwaysIgnoredDirs as string[]) ?? []))
-      .catch(() => undefined);
-  }, []);
-
-  const includeDirs = linesOf(include);
-  const excludeDirs = linesOf(exclude);
-  const conflicts = findSelectionConflicts(includeDirs, excludeDirs);
-  const settings = { rootDir: rootDir.trim(), includeDirs, excludeDirs, respectGitignore, includeEnvFiles };
-  // The API refuses these too; the form knows them first so the button can say so.
-  const missingRoot = enabled && !settings.rootDir;
-  const blocked = conflicts.length > 0 || missingRoot;
-
-  /**
-   * Whether the form differs from what is stored.
-   *
-   * This panel needs an explicit Save while the model picker above it saves on change, and
-   * that difference is a trap: a ticked checkbox looks the same whether it was saved or not.
-   * A task written to read attached files was queued three times against a session that
-   * attaches none, and the ticked box on screen was the reason it looked configured.
-   */
-  const storedShape = JSON.stringify({
-    enabled: session.mirror.enabled,
-    rootDir: session.mirror.rootDir,
-    includeDirs: session.mirror.includeDirs,
-    excludeDirs: session.mirror.excludeDirs,
-    respectGitignore: session.mirror.respectGitignore ?? true,
-    includeEnvFiles: session.mirror.includeEnvFiles ?? false,
-  });
-  const formShape = JSON.stringify({ enabled, ...settings });
-  const unsaved = formShape !== storedShape;
-
-  const save = async () => {
-    if (blocked) return;
-    try {
-      await api.updateSession(session.id, { mirror: { enabled, ...settings } });
-      setMsg(t('mirror.saved'));
-      onChange();
-    } catch (e) {
-      setMsg((e as Error).message);
-    }
-  };
-
-  const listDirs = async () => {
-    try {
-      setDirs(await api.dirs(rootDir, respectGitignore));
-      setMsg('');
-    } catch (e) {
-      setMsg((e as Error).message);
-    }
-  };
-
-  /** Opens the machine's own folder dialog through the API and takes whatever comes back. */
-  const browse = async () => {
-    setBusy('browse');
-    setMsg(t('mirror.browsing'));
-    try {
-      const picked = await api.browseFolder(rootDir.trim() || undefined);
-      if (picked.ok) {
-        setRootDir(picked.path);
-        setDirs(null);
-        setPreview(null);
-        setMsg('');
-      } else {
-        setMsg(picked.cancelled ? t('mirror.browseCancelled') : (picked.reason ?? ''));
-      }
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const check = async () => {
-    if (!settings.rootDir) {
-      setMsg(t('mirror.needRoot'));
-      return;
-    }
-    setBusy('check');
-    setMsg(t('mirror.checking'));
-    try {
-      setPreview(await api.previewMirror(settings));
-      setMsg('');
-    } catch (e) {
-      setPreview(null);
-      setMsg((e as Error).message);
-    } finally {
-      setBusy('');
-    }
-  };
-
-  /** Turning the env switch on is a decision about secrets, so it is asked out loud once. */
-  const toggleEnv = async (on: boolean) => {
-    if (on && !(await confirmDialog(t('mirror.envWarn')))) return;
-    setIncludeEnvFiles(on);
-    setPreview(null);
-  };
-
-  return (
-    <div className="panel">
-      <div className="row">
-        <h2 className="grow" style={{ margin: 0 }}>
-          {t('mirror.title')}
-        </h2>
-        {/* The badge reports what is stored, never what the form shows. */}
-        <span className={`badge ${session.mirror.enabled ? 'done' : ''}`}>
-          {session.mirror.enabled ? t('mirror.stateOn') : t('mirror.stateOff')}
-        </span>
-      </div>
-      <p className="muted small">{t('mirror.hint', { example: 'src--test--a.spec.ts.txt' })}</p>
-
-      <div className="option">
-        <label>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          <span>{t('mirror.enable')}</span>
-        </label>
-      </div>
-
-      <label htmlFor="mirror-root">{t('mirror.root')}</label>
-      <div className="row">
-        <input
-          id="mirror-root"
-          type="text"
-          className="grow"
-          value={rootDir}
-          onChange={(e) => {
-            setRootDir(e.target.value);
-            setPreview(null);
-          }}
-          placeholder="C:\Projects\my-app"
-        />
-        <button onClick={() => void browse()} disabled={busy === 'browse'}>
-          {t('mirror.browse')}
-        </button>
-        <button onClick={() => void listDirs()} disabled={!rootDir.trim()}>
-          {t('mirror.listDirs')}
-        </button>
-      </div>
-      <div className="muted small" style={{ marginTop: 4 }}>
-        {t('mirror.rootHint')}
-      </div>
-      <ProjectHint
-        current={rootDir}
-        onUse={(d) => {
-          setRootDir(d);
-          setPreview(null);
-        }}
-      />
-      {dirs && (
-        <div className="small muted" style={{ margin: '6px 0' }}>
-          {dirs.length === 0 ? t('mirror.noDirs') : dirs.join(' · ')}
-        </div>
-      )}
-
-      <h3>{t('mirror.rules')}</h3>
-      <div className="option">
-        <label>
-          <input
-            type="checkbox"
-            checked={respectGitignore}
-            onChange={(e) => {
-              setRespectGitignore(e.target.checked);
-              setPreview(null);
-            }}
-          />
-          <span>{t('mirror.gitignore')}</span>
-        </label>
-        <p className="why">{t('mirror.gitignoreWhy')}</p>
-      </div>
-      <div className={`option${includeEnvFiles ? ' warned' : ''}`}>
-        <label>
-          <input type="checkbox" checked={includeEnvFiles} onChange={(e) => toggleEnv(e.target.checked)} />
-          <span>{t('mirror.env')}</span>
-        </label>
-        <p className="why">{t('mirror.envWhy')}</p>
-        {includeEnvFiles && (
-          <p className="why">
-            <strong>{t('mirror.envOn')}</strong>
-          </p>
-        )}
-      </div>
-      {alwaysOut.length > 0 && <p className="muted small">{t('mirror.alwaysOut', { dirs: alwaysOut.join(', ') })}</p>}
-
-      <div className="row" style={{ alignItems: 'flex-start' }}>
-        <div className="grow">
-          <label htmlFor="mirror-include">{t('mirror.include')}</label>
-          <textarea
-            id="mirror-include"
-            value={include}
-            onChange={(e) => {
-              setInclude(e.target.value);
-              setPreview(null);
-            }}
-            placeholder={'src\ntests'}
-            style={{ minHeight: 80 }}
-            aria-invalid={conflicts.length > 0}
-          />
-        </div>
-        <div className="grow">
-          <label htmlFor="mirror-exclude">{t('mirror.exclude')}</label>
-          <textarea
-            id="mirror-exclude"
-            value={exclude}
-            onChange={(e) => {
-              setExclude(e.target.value);
-              setPreview(null);
-            }}
-            placeholder={'src/generated'}
-            style={{ minHeight: 80 }}
-            aria-invalid={conflicts.length > 0}
-          />
-        </div>
-      </div>
-
-      {/* The same two lists, filled by clicking directories instead of typing paths. */}
-      <DirTree
-        rootDir={rootDir}
-        respectGitignore={respectGitignore}
-        includeEnvFiles={includeEnvFiles}
-        include={include.split('\n')}
-        exclude={exclude.split('\n')}
-        onChange={(inc, exc) => {
-          setInclude(inc.join('\n'));
-          setExclude(exc.join('\n'));
-          setPreview(null);
-        }}
-      />
-
-      {conflicts.length > 0 && (
-        <div className="notice" role="alert">
-          <strong>{t('mirror.conflict')}</strong>
-          <ul>
-            {conflicts.map((c, i) => (
-              <li key={i}>
-                {c.kind === 'same'
-                  ? t('mirror.conflictSame', { dir: c.include })
-                  : t('mirror.conflictParent', { include: c.include, exclude: c.exclude })}
-              </li>
-            ))}
-          </ul>
-          <div style={{ marginTop: 6 }}>{t('mirror.conflictFix')}</div>
-        </div>
-      )}
-
-      {missingRoot && (
-        <div className="notice caution" role="alert">
-          <strong>{t('mirror.needRoot')}</strong>
-        </div>
-      )}
-
-      {unsaved && (
-        <div className="notice caution" role="status">
-          <strong>{t('mirror.unsaved')}</strong> {t('mirror.unsavedWhy')}
-        </div>
-      )}
-
-      <div className="row" style={{ marginTop: 10 }}>
-        <button className="primary" onClick={() => void save()} disabled={blocked}>
-          {t('mirror.save')}
-        </button>
-        <button onClick={() => void check()} disabled={conflicts.length > 0 || busy === 'check'}>
-          {t('mirror.check')}
-        </button>
-        <span className="muted small" role="status">
-          {msg}
-        </span>
-      </div>
-
-      {preview && <MirrorPreviewBox preview={preview} />}
-    </div>
-  );
-}
-
-/** What the current selection would actually copy. The only honest way to check the switches. */
-function MirrorPreviewBox({ preview }: { preview: MirrorPreview }) {
-  const { t } = useT();
-  if (preview.files.length === 0) {
-    return (
-      <div className="notice caution" style={{ marginTop: 10 }}>
-        <strong>{t('mirror.checkedNone')}</strong>
-      </div>
-    );
-  }
-  return (
-    <div className="notice calm" style={{ marginTop: 10 }}>
-      <strong>{t('mirror.checked', { files: preview.files.length, size: fmtBytes(preview.totalBytes) })}</strong>{' '}
-      {preview.envFiles.length > 0 && <span className="err">{t('mirror.checkedEnv', { n: preview.envFiles.length })}</span>}{' '}
-      {preview.skipped.length > 0 && <span className="muted">{t('mirror.checkedSkipped', { n: preview.skipped.length })}</span>}
-      <details style={{ marginTop: 6 }}>
-        <summary>{t('mirror.showFiles')}</summary>
-        <pre className="tall">{preview.files.join('\n')}</pre>
-      </details>
-      {preview.skipped.length > 0 && (
-        <details>
-          <summary>{t('mirror.showSkipped')}</summary>
-          <pre className="tall">{preview.skipped.map((s) => `${s.relPath}  —  ${s.reason}`).join('\n')}</pre>
-        </details>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------------------
-// Is this queue one chain, or a set of independent tasks?
-// ---------------------------------------------------------------------------------------
 
 /**
  * What the queue does when a task does not end with a summary.

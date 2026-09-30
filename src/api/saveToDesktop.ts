@@ -30,7 +30,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 
-import { resolveDesktopDir } from '../context/contextFiles.js';
+import { resolveDesktopDir } from '../context/desktopDir.js';
 
 /** The one folder under the Desktop that every saved log lands in. */
 export const LOGS_FOLDER = 'copilot-operator-logs';

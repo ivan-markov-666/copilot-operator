@@ -30,7 +30,7 @@ process.env.COP_DATA_DIR = data;
 try {
   const ops = new OperatorService();
   await ops.store.init();
-  const s = await ops.store.createSession('one', { enabled: false, rootDir: '' });
+  const s = await ops.store.createSession('one');
   await ops.store.addTask(s.id, { title: 'a-task', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });
 
   console.log('--- an unattended run with no isolation is refused before anything opens ---');
@@ -73,7 +73,7 @@ try {
    */
   console.log('\n--- only the chosen tasks are run ---');
   const { queuedToRun } = await import('../src/orchestrator/taskRunner.js');
-  const multi = await ops.store.createSession('several', { enabled: false, rootDir: '' });
+  const multi = await ops.store.createSession('several');
   const first = await ops.store.addTask(multi.id, { title: 'first', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });
   const fixed = await ops.store.addTask(multi.id, { title: 'fixed', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });
   const done = await ops.store.addTask(multi.id, { title: 'done', level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' });

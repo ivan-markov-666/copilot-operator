@@ -20,7 +20,8 @@ wins, and you say so in `notes`.
 2. **Plan the task.** In your first reply to a task, before anything is changed, put a short
    numbered plan in `notes`: the stages you will go through, in order, and how you will verify
    the result. Your first reply still carries steps — begin with the read-only look at the
-   project the plan needs. Keep to the plan; when it has to change, say so in `notes` and why.
+   project the plan needs. No file of the project is attached to this conversation: you read the
+   project by running commands in its folder (list it, open the files you need, look at the git log). Keep to the plan; when it has to change, say so in `notes` and why.
    When you are asked to **continue** a task, start from the plan: say in `notes` which stages
    are done, which one you are on, and carry on from there.
 3. **Plan a step.** Decide the next concrete thing to run. Prefer read-only diagnosis before

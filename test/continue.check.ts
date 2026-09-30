@@ -75,7 +75,7 @@ const dir = await mkdtemp(join(tmpdir(), 'cop-continue-'));
 try {
   const store = new SessionStore(dir, join(dir, 'level1.md'));
   await store.init();
-  const s = await store.createSession('calc', { enabled: false, rootDir: '' });
+  const s = await store.createSession('calc');
   const t = await store.addTask(s.id, { title: 'basic-operations', level2: '', prompt: base.prompt });
 
   let refused = false;
@@ -159,7 +159,7 @@ console.log('\n--- a new prompt for a finished task builds on it ---');
     const { OperatorService } = await import('../src/api/operator.service.js');
     const ops = new OperatorService();
     await ops.store.init();
-    const s = await ops.store.createSession('calc', { enabled: false, rootDir: '' });
+    const s = await ops.store.createSession('calc');
     await ops.store.updateSession(s.id, (x) => {
       x.vcs = { enabled: true, repoDir: repo, branchMode: 'per-task', commitOnFinish: true, branchPrefix: 'cop/' };
     });
@@ -256,7 +256,7 @@ console.log('\n--- after the bot stopped under a task ---');
     // The task as the stopped process left it: running, with its run folder.
     const seed = new SessionStore(data, join(data, 'level1.md'));
     await seed.init();
-    const s = await seed.createSession('power cut', { enabled: false, rootDir: '' });
+    const s = await seed.createSession('power cut');
     await seed.updateSession(s.id, (x) => {
       x.vcs = { enabled: false, repoDir: '', branchMode: 'per-task', commitOnFinish: false, branchPrefix: 'cop/' };
       x.status = 'running';

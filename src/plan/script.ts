@@ -266,14 +266,6 @@ export const SCRIPT: ScriptMessage[] = [
         ],
       },
       {
-        choose: { en: 'How do I read its code from this chat?', bg: 'Как да чета кода му от този чат?' },
-        options: [
-          { en: 'As files attached to the first message of a task', bg: 'Като прикачени файлове към първото съобщение на задачата' },
-          { en: 'Through the Desktop mirror (Desktop/copilot-operator-context/)', bg: 'През огледалото на Desktop-а (Desktop/copilot-operator-context/)' },
-          { en: 'Both', bg: 'И двете' },
-        ],
-      },
-      {
         choose: {
           en: 'May the bot make git branches and commits in this project?',
           bg: 'Може ли ботът да прави git клонове и комити в този проект?',
@@ -794,13 +786,6 @@ export const SCRIPT: ScriptMessage[] = [
           { en: "On, with the session's own model", bg: 'Включена, на модела на сесията' },
           { en: 'On, with another model — say which', bg: 'Включена, на друг модел — напиши кой' },
           { en: 'Off', bg: 'Изключена' },
-        ],
-      },
-      {
-        choose: { en: 'Project files for the chat (`mirror`):', bg: 'Файлове на проекта към чата (`mirror`):' },
-        options: [
-          { en: 'No', bg: 'Не' },
-          { en: 'Yes — give the root and the folders', bg: 'Да — напиши корена и папките' },
         ],
       },
       {

@@ -39,9 +39,12 @@ export const PolicyLockSchema = z
     denyPatterns: z.array(z.string()).optional(),
     /** `true` treats the claim `none-accepted` as `none`: unattended runs need real isolation here. */
     requireIsolation: z.boolean().optional(),
-    /** `false` switches the Desktop mirror off, whatever the settings say. */
+    /**
+     * Still read, so a lock written for an earlier version is not refused; they lock nothing now.
+     * The project was once copied to the Desktop and attached to the chat, and these switched that,
+     * and its `.env` files, off. That feature was removed on 2026-09-30.
+     */
     allowDesktopMirror: z.boolean().optional(),
-    /** `false` keeps `.env` files out of every mirror and every attachment. */
     allowEnvFiles: z.boolean().optional(),
     /** A ceiling on `execution.passEnv`: the only variables a step may be given beyond the fixed set. */
     passEnv: z.array(z.string()).optional(),
@@ -65,10 +68,6 @@ export type LockablePolicy = {
   denyPatterns: string[];
   isolation?: IsolationClaim;
   passEnv?: string[];
-  mirrorToDesktop?: boolean;
-  projectMirrorEnabled?: boolean;
-  includeEnvFiles?: boolean;
-  mirrorIncludeEnvFiles?: boolean;
 };
 
 /** What the lock changed, so the run log and the manifest can say it rather than imply it. */
@@ -131,16 +130,6 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
   if (lock.requireIsolation && next.isolation === 'none-accepted') {
     next.isolation = 'none';
     changes.push('isolation "none-accepted" treated as "none" (the lock requires real isolation for unattended runs)');
-  }
-  if (lock.allowDesktopMirror === false && (next.mirrorToDesktop || next.projectMirrorEnabled)) {
-    next.mirrorToDesktop = false;
-    next.projectMirrorEnabled = false;
-    changes.push('the Desktop mirror switched off by the lock');
-  }
-  if (lock.allowEnvFiles === false && (next.includeEnvFiles || next.mirrorIncludeEnvFiles)) {
-    next.includeEnvFiles = false;
-    next.mirrorIncludeEnvFiles = false;
-    changes.push('.env files kept out of every mirror by the lock');
   }
   if (lock.passEnv && next.passEnv) {
     // Not `intersect`: an empty operator list here means "nothing extra", the tightest setting.

@@ -224,17 +224,16 @@ console.log('\n--- the second compliance round ---');
   check('an *_OPTOUT variable passes', env.SOMETOOL_OPTOUT, '1');
   check('an unrelated one still does not', 'HOMEBREW_NO_ANALYTICS' in env, false);
   check('the common opt-outs are set', [env.DOTNET_CLI_TELEMETRY_OPTOUT, env.POWERSHELL_TELEMETRY_OPTOUT, env.DO_NOT_TRACK], ['1', '1', '1']);
-  // The lock reaches the settings that move data, and the updater.
+  // The lock reaches the settings that move data, and the updater. A lock written for an earlier
+  // version still parses: its Desktop and .env switches lock nothing now that there is no Desktop copy.
   const lock = PolicyLockSchema.parse({ requireIsolation: true, allowDesktopMirror: false, allowEnvFiles: false, passEnv: ['DATABASE_URL'], update: { requireSigned: true, remote: 'https://git.example.com/x.git' } });
   const { policy, outcome } = applyPolicyLock(
-    { mode: 'confirm', allowedPrograms: ['node'], denyPatterns: [], isolation: 'none-accepted', passEnv: ['DATABASE_URL', 'AWS_SECRET'], mirrorToDesktop: true, projectMirrorEnabled: true, includeEnvFiles: true, mirrorIncludeEnvFiles: true },
+    { mode: 'confirm', allowedPrograms: ['node'], denyPatterns: [], isolation: 'none-accepted', passEnv: ['DATABASE_URL', 'AWS_SECRET'] },
     lock,
   );
   check('none-accepted becomes none', policy.isolation, 'none');
-  check('the Desktop mirror is off', [policy.mirrorToDesktop, policy.projectMirrorEnabled], [false, false]);
-  check('.env files are out', [policy.includeEnvFiles, policy.mirrorIncludeEnvFiles], [false, false]);
   check('passEnv is narrowed to the ceiling', policy.passEnv, ['DATABASE_URL']);
-  check('and every change is on the record', outcome.changes.length, 4);
+  check('and every change is on the record', outcome.changes.length, 2);
   check('the update fields parse', lock.update?.requireSigned, true);
   let strict = false;
   try {

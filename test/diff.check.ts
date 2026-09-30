@@ -124,7 +124,7 @@ console.log('\n--- the service: only a changed file can be read ---');
     const { OperatorService } = await import('../src/api/operator.service.js');
     const ops = new OperatorService();
     await ops.store.init();
-    const s = await ops.store.createSession('diffs', { enabled: false, rootDir: '' });
+    const s = await ops.store.createSession('diffs');
     await ops.store.updateSession(s.id, (x) => {
       x.vcs = { enabled: true, repoDir: repo, branchMode: 'per-task', commitOnFinish: true, branchPrefix: 'cop/' };
     });

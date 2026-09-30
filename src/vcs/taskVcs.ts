@@ -23,7 +23,7 @@ import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type Br
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Session): string {
-  return (session.vcs?.repoDir?.trim() || session.mirror.rootDir?.trim() || '').trim();
+  return (session.vcs?.repoDir?.trim() || session.projectDir?.trim() || '').trim();
 }
 
 export type PrepareResult = {

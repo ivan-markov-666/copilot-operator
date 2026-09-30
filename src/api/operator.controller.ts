@@ -4,7 +4,6 @@
  * Bound to localhost only (see main.ts). There is no authentication because there is no
  * network: this API runs on the operator's own machine and drives that machine's browser.
  */
-import type { ProjectMirrorSelection } from '../config/schema.js';
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Res, Sse, NotFoundException, BadRequestException } from '@nestjs/common';
 import type { Response } from 'express';
 import { Observable } from 'rxjs';
@@ -139,8 +138,8 @@ export class OperatorController {
   }
 
   @Post('sessions')
-  createSession(@Body() body: { name: string; mirror?: Record<string, unknown> }): Promise<unknown> {
-    return this.ops.createSession(body?.name ?? '', body?.mirror as never).catch(fail);
+  createSession(@Body() body: { name: string; projectDir?: string }): Promise<unknown> {
+    return this.ops.createSession(body?.name ?? '', body?.projectDir).catch(fail);
   }
 
   @Get('sessions/:id')
@@ -659,16 +658,10 @@ export class OperatorController {
     body: {
       rootDir?: string;
       name?: string;
-      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
-      mirrorToDesktop?: boolean;
-      mirror?: ProjectMirrorSelection;
-      /** The default project's own tick for the Desktop copy. */
-      desktop?: boolean;
+      others?: Array<{ name: string; rootDir: string }>;
     },
   ): Promise<unknown> {
-    return this.ops
-      .setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others, mirrorToDesktop: body?.mirrorToDesktop, mirror: body?.mirror, desktop: body?.desktop })
-      .catch(fail);
+    return this.ops.setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others }).catch(fail);
   }
 
   /**
@@ -738,12 +731,6 @@ export class OperatorController {
 
   // --- helpers for the UI -----------------------------------------------------------------
 
-  @Get('dirs')
-  dirs(@Query('root') root: string, @Query('gitignore') gitignore?: string): Promise<string[]> {
-    if (!root) throw new BadRequestException('root is required');
-    return this.ops.dirs(root, gitignore !== '0' && gitignore !== 'false');
-  }
-
   /**
    * Opens the machine's own folder dialog. A POST because it has a visible effect: a window
    * appears on the operator's desktop and waits for them.
@@ -751,19 +738,5 @@ export class OperatorController {
   @Post('browse-folder')
   browseFolder(@Body() body: { start?: string }): Promise<unknown> {
     return this.ops.browseFolder(body?.start);
-  }
-
-  @Post('mirror/preview')
-  preview(@Body() body: { rootDir?: string; includeDirs?: string[]; excludeDirs?: string[]; respectGitignore?: boolean; includeEnvFiles?: boolean }): Promise<unknown> {
-    if (!body?.rootDir?.trim()) throw new BadRequestException('rootDir is required');
-    return this.ops
-      .previewMirror({
-        rootDir: body.rootDir.trim(),
-        includeDirs: body.includeDirs ?? [],
-        excludeDirs: body.excludeDirs ?? [],
-        respectGitignore: body.respectGitignore ?? true,
-        includeEnvFiles: body.includeEnvFiles ?? false,
-      })
-      .catch(fail);
   }
 }

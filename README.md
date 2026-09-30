@@ -8,9 +8,8 @@ browser, so it needs no API licence and no admin consent.
 
 > **Status: working, every part verified against a live Microsoft 365 Copilot tenant.**
 > The loop, chat naming, reply parsing, command execution and the results file are confirmed.
-> A step printing for 92 s survived while a silent one was stopped at its idle limit. Project files
-> mirrored to the Desktop were attached and answered questions from. Unattended mode is the
-> one thing still untried, deliberately.
+> A step printing for 92 s survived while a silent one was stopped at its idle limit. Unattended
+> mode is the one thing still untried, deliberately.
 
 ## What it does
 
@@ -26,8 +25,8 @@ browser, so it needs no API licence and no admin consent.
 6. Repeats until Copilot finishes with a **summary** of what it did and what the result is.
 7. Runs the next queued task in the same conversation.
 
-A **session** is one conversation with a queue of tasks. Selected parts of a project can be
-mirrored to a Desktop folder and attached, so the chat can see the code it is asked about.
+A **session** is one conversation with a queue of tasks. No file of the project is attached to
+the chat: it reads the project by running commands in the project folder, like any other step.
 
 There is a web UI for all of this, and a terminal command for a single task.
 
@@ -42,7 +41,7 @@ are redacted from every report before it is uploaded, always, with `report.redac
 applied on top. Running it in a dedicated Windows account or Windows Sandbox is recommended.
 
 **Where the reports go.** Every report — the terminal output of every step, the check results,
-the reviewer's transcripts — and any files the project mirror attaches are uploaded into the
+the reviewer's transcripts — are uploaded into the
 Copilot chat, which stores them in the signed-in account's OneDrive for Business and in the
 Copilot conversation history. They stay inside the company's own Microsoft 365 tenant, under its
 Purview DLP policies, sensitivity labels, retention and eDiscovery; nothing goes to any other
@@ -257,7 +256,7 @@ runs this on managed laptops, because no code change can decide it for them.
 - *Data protection.* See "Where the reports go" above. Where the law requires it, record the
   processing (a DPIA where automated tooling that stores every command's output and sends it to
   an AI service triggers one; works-council consultation where tooling that records employees'
-  actions requires it). Mirrored source may carry personal data in fixtures and exports.
+  actions requires it). Command output can carry personal data from fixtures and exports.
 - *AI-use policy.* Commands written by a language model execute on the endpoint. Confirm mode
   keeps a person on every line; unattended mode removes that person and is the decision most
   AI-governance policies want recorded. `policy.lock.json` can forbid it machine-wide.
@@ -273,8 +272,6 @@ which the operator cannot edit (the same file beside the install is honoured too
 {
   "maxMode": "confirm",
   "requireIsolation": true,
-  "allowDesktopMirror": false,
-  "allowEnvFiles": false,
   "passEnv": [],
   "allowedPrograms": ["pwsh", "powershell", "cmd", "node", "npm", "npx", "git", "dotnet"],
   "update": { "requireSigned": true, "remote": "https://git.example.com/tools/copilot-operator.git" }
@@ -426,7 +423,8 @@ exist. What the software leaves, and where:
 | backups taken by `npm run update` | `data-backups/` in the checkout | delete the folder |
 | the bot's own Edge profile, with its Microsoft 365 session | `%LOCALAPPDATA%\copilot-operator\edge-profile` | sign out in that window (`cop login --fresh` deletes it) and delete the folder |
 | the API key the browser was handed | the browser's storage for `localhost:3210` | clear site data for that origin |
-| logs saved on request, and the optional project mirror | `Desktop\copilot-operator-logs`, the mirror folder in Settings | delete them; they may already be in OneDrive |
+| logs saved on request | `Desktop\copilot-operator-logs` | delete them; they may already be in OneDrive |
+| the project copies of versions before 0.1.14 | `Desktop\copilot-operator-context` | delete the folder; nothing writes to it any more |
 | the reports uploaded to Copilot | the account's OneDrive and Copilot chat history | delete the conversations, or let the tenant's retention run |
 | a machine-wide policy lock, if an administrator placed one | `%ProgramData%\copilot-operator\policy.lock.json` | the administrator removes it |
 
@@ -480,8 +478,6 @@ npx tsx src/cli.ts run run.yaml
 |---|---|
 | `cop login` | opens Edge with the bot profile and waits for you to sign in |
 | `cop doctor [run.yaml]` | checks Node, Edge, PowerShell, the Desktop, the config |
-| `cop dirs <projectRoot>` | lists the directories you can select for the mirror |
-| `cop mirror <run.yaml>` | refreshes the Desktop folder without touching the chat |
 | `cop run <run.yaml>` | one task as a new session; `--unattended` skips the per-step prompt |
 | `cop chat [run.yaml]` | prints the last run's conversation name and link |
 
@@ -499,8 +495,7 @@ ordered so the risk climbs slowly, starting with checks that need no account at 
 | Command runner, dual timeouts, process-tree kill | `src/exec/runner.ts` | implemented, checked |
 | Chat naming and reattach after re-login | `src/transport/chatSession.ts` | implemented, checked |
 | Covering message for the results file | `src/protocol/reporter.ts` | implemented, checked |
-| Desktop folder resolution and guard rails | `src/context/contextFiles.ts` | implemented, checked |
-| Project mirror, flattened names, incremental | `src/context/projectMirror.ts` | implemented, checked |
+| Desktop folder resolution (for saved logs) | `src/context/desktopDir.ts` | implemented |
 | Pacing, send cap, backoff | `src/util/pacing.ts` | implemented, checked |
 | Playwright transport | `src/transport/copilotTransport.ts` | implemented; selectors verified live |
 | Reply parser and the JSON contract | `src/protocol/parser.ts`, `replySchema.ts` | implemented, checked |

@@ -320,178 +320,14 @@ Fallback: if the upload fails twice, the Reporter sends the head and tail of the
 message text, capped at 100 000 characters, and says in the message that the output was
 truncated.
 
-### 2.7 The Desktop folder
+### 2.7 The Desktop folder and 2.8 the project mirror — removed
 
-Implemented in `src/context/contextFiles.ts`.
-
-The bot has to show Copilot the project it is working on, and the human has to stay in
-charge of exactly which files that is.
-
-**Everything in this path is the file system, not the browser.** The user names the project
-root and the directories to include; the program copies them into **a folder on the Desktop**
-that it alone owns, by default `<Desktop>/copilot-operator-context`, **one subfolder per
-project** named after the project, with the project's name in front of every file name
-(`rules-api--src--main.ts.txt`). OneDrive picks that folder up on its own. No Playwright, no
-upload form, no web picker anywhere here. How the copying and the naming work is section 2.8.
-
-One folder for whatever session was running was right for one project and wrong for three:
-each session's sync deleted the previous project's copies as "no longer selected", and once
-attached to the chat, `src--main.ts.txt` from the API and from the web app were one name.
-`src/context/desktopMirror.ts` owns the per-project layout. The Settings page's switch
-(`project.mirrorToDesktop`) keeps **every** listed project on the Desktop with its own
-selection of directories (`project.mirror`, `others[].mirror`), refreshed before each run and
-at the flip of the switch; off, the project folders are removed, because a stale copy of a
-code base in the cloud is worse than none. A session's own mirror (the files attached to its
-first message) uses the same per-project folder whether or not the switch is on. Files the
-old flat layout left in the root are swept once.
-
-#### Desktop, and OneDrive
-
-`resolveDesktopDir()` tries `<OneDriveCommercial>\Desktop`, then `<OneDrive>\Desktop`, then
-`%USERPROFILE%\Desktop`, and takes the first that exists. That ordering is what makes it
-correct under OneDrive's Known Folder Move: when Desktop backup is on, the real Desktop lives
-inside OneDrive and `%USERPROFILE%\Desktop` may not exist at all. No registry read is needed,
-and the result is whatever is true on the machine the bot runs on.
-
-When Desktop backup is on, which is the intended deployment, the mirror folder reaches
-OneDrive with no user action at all. `desktopIsSynced()` reports whether that is the case, and
-`checkSelection()` surfaces it as a note when it is not, so a machine without Desktop backup
-says so instead of silently keeping everything local.
-
-### 2.8 The project mirror
-
-Implemented in `src/context/projectMirror.ts`. This is the piece that gets project code in
-front of the chat.
-
-#### The problem it solves
-
-The target folder has to be **flat**: it sits on the Desktop, owned by this program alone, and
-the point is that OneDrive picks it up without anyone dragging folders around. But a project
-is a tree, and two files called `index.ts` in different folders would collide the moment the
-tree is flattened. On top of that the chat's upload input rejects `.ts`, `.java`, `.php` and
-most other source extensions outright.
-
-Both are solved by encoding the relative path into the file name and giving everything a
-`.txt` tail:
-
-```
-src/test/example-test.spec.ts   ->   src--test--example-test.spec.ts.txt
-```
-
-`unflattenName()` reverses it, so the original path is recoverable from the name alone.
-
-#### The convention comes from Context Picker
-
-The rules are taken from `copySelectionToDir` in the user's own
-[context-picker](https://github.com/ivan-markov-666/context-picker) (MIT), so a folder
-produced here and a folder produced by the extension are interchangeable:
-
-- relative path, forward slashes, joined with the separator (`--`)
-- collisions get `<sep><n>` appended, starting at 2, compared case-insensitively
-- `.txt` appended **after** the collision suffix
-- sync writes only files whose bytes differ, and deletes what is no longer selected
-
-`txtMode` allows `append` (the default, `app.ts.txt`, keeps the real extension visible),
-`replace` (`app.txt`) and `none`.
-
-#### The input is directories, not files
-
-This is the one deliberate difference from the extension. There the user ticks individual
-files in an editor. Here the user names the project root and the directories to include, and
-**selecting a directory takes everything beneath it, at any depth**. Directories that are not
-selected contribute nothing.
-
-| Setting | Meaning |
-|---|---|
-| `rootDir` | the project path the user gives |
-| `includeDirs` | relative directories to take, recursively; `['.']` is the whole project |
-| `excludeDirs` | carved back out after `includeDirs` |
-| `respectGitignore` | on by default; the project's root `.gitignore` is honoured |
-| `ignoreDirs` | extra names pruned at any depth, on top of the built-in list |
-| `includeEnvFiles` | off by default; `.env` and `.env.*` are skipped and reported |
-| `maxFileBytes` | 2 MB by default; larger files are skipped and reported |
-
-`node_modules`, `.git`, `bin`, `obj`, `.vs`, `dist`, `build`, `out`, `coverage`,
-`__pycache__`, `.venv`, `venv` and `target` are pruned at any depth even with no
-`.gitignore`. `listSelectableDirs()` returns the directories worth offering, pruned by the
-same rules, so a picker only ever shows what can actually be copied.
-
-#### Incremental by construction
-
-`mirrorProject()` writes a file only when its bytes differ from what is already in the target,
-deletes target files that are no longer selected, and leaves everything else untouched. That
-is what stops OneDrive from re-uploading a whole project because one file changed. Comparison
-is by content, not mtime, because a rebuild can rewrite a byte-identical file.
-
-Verified behaviour (`npm run check:mirror`), on a sample project:
-
-| Case | Result |
-|---|---|
-| naming | `src/test/example-test.spec.ts` -> `src--test--example-test.spec.ts.txt`, round-trips back |
-| collision | a real `a--b.ts` next to `a/b.ts` becomes `a--b.ts--2.txt` |
-| first run, `src` + `docs` | 4 added |
-| second run, no edits | 0 added, 0 updated, 0 deleted, 4 unchanged |
-| edit one, add one, delete one | 1 added, 1 updated, 1 deleted, 2 unchanged |
-| select another directory | 1 added, the rest untouched |
-| `node_modules`, `.git`, `dist`, `build` | never copied, whatever is ticked |
-| `.gitignore` respected (the default) | ignored files stay out |
-| `.env`, `.env.production`, env off | skipped, and named in `skipped` with the reason |
-| `.env` listed in `.gitignore`, env on | copied anyway; `.gitignore` has no say over env files |
-| `.env` inside a gitignored folder, env on | the env file is taken, the rest of the folder is not |
-| the same directory included and excluded | refused before anything is copied |
-
-#### The two switches over what is copied
-
-Both are per session, set in the UI, and they are deliberately not the same kind of thing.
-
-`respectGitignore` is a convenience: the project already says what is noise, so by default the
-mirror believes it. `includeEnvFiles` is a decision about secrets, and it is **the only** thing
-that decides an env file. If `.gitignore` could hide them, the switch would mean nothing,
-because every project ignores `.env`. So the walk hands every env file it meets to the
-selection step regardless of the gitignore option, and that step keeps or drops them by this
-switch alone. With the switch on, a directory that only `.gitignore` hides is still descended
-into, but nothing except env files is taken from it.
-
-Turning it on is confirmed once in the UI, and each run that attaches env files says so in the
-event stream, because the copies end up in OneDrive and in the chat.
-
-#### Two ways to produce the folder
-
-**Built in, the default.** `mirrorProject()` does the whole thing from the project path and a
-list of directories. Nothing else has to be installed.
-
-**Context Picker, for per-file control.** When the user wants to tick individual files rather
-than whole directories, the extension writes the same folder, with the same naming, through
-its own `copyfiles` bridge. `exportSelection()` drives that. Either tool can maintain the
-folder; the bot only reads it.
-
-#### Guard rails before anything is used
-
-`checkSelection()` refuses early rather than half-way, because a partial context makes
-Copilot answer confidently about files it never saw. It reports:
-
-- an empty export folder,
-- more than `maxFiles` (default 20) or more than `maxTotalBytes` (default 25 MB),
-- any file whose extension the chat would reject, naming them and pointing at the
-  "append .txt" option,
-- anything that looks like an env file, which is refused outright,
-Separately from those, it returns non-blocking `notes`, currently one: that the export folder
-is not inside OneDrive, so the copies stay on this machine only. That is a fact about backup,
-not a fault, so it never stops a run.
-
-#### Licence
-
-`context-picker` is MIT licensed (`LICENSE.txt` at its repository root, and `"license":
-"MIT"` in its `package.json`, both confirmed on 2026-09-17). Same licence as this project, so
-`copilot-operator` can depend on it and recommend it without any friction.
-
-#### Open question
-
-How the chat consumes those files is not settled. The composer's "+" menu offers
-"Attach cloud files", but it opens a cross-origin iframe picker, which is expensive to
-automate and brittle. Two cheaper options to test first: whether Copilot's enterprise
-grounding finds the folder by name once OneDrive has indexed it, and whether pointing the
-chat at the folder in the prompt is enough. This needs one experiment before any code.
+Removed on 2026-09-30, at the operator's request: it misbehaved (a first message timing out while
+the copies churned in a OneDrive Desktop) and nothing needed it. The chat reads the project the way
+it does everything else — by running commands in the session's project folder (`Session.projectDir`,
+or `vcs.repoDir`) — and nothing of the project is copied or attached. A session saved before then is
+read with its old `mirror.rootDir` as its project folder; a plan that still has `mirror` imports with
+a warning. `src/context/desktopDir.ts` keeps only where the Desktop is, for saved logs.
 
 ### 2.9 Pacer
 
@@ -573,7 +409,7 @@ execution:
   mode: confirm             # confirm | unattended
   defaultShell: pwsh
   # Fallback only: a session's commands run in its project folder (vcs.repoDir, else
-  # mirror.rootDir). This checkout is refused as a fallback; see workDir.ts.
+  # projectDir). This checkout is refused as a fallback; see workDir.ts.
   cwd: ~/copilot-operator-work
   # "fast" steps, the default
   commandTimeoutSec: 300
@@ -590,30 +426,6 @@ execution:
     - 'Remove-Item.*-Recurse'
     - '\bformat\b'
     - 'Stop-Computer|Restart-Computer'
-
-projectMirror:
-  # The project the user points at.
-  rootDir: C:/Projects/my-app
-  # Directories to include, relative to rootDir. Selecting one takes everything beneath it.
-  includeDirs:
-    - src
-    - tests
-  excludeDirs:
-    - src/generated
-  # One folder on the Desktop that only this program owns, updated incrementally.
-  # OneDrive picks it up by itself when Desktop backup is on.
-  targetDir: ~/Desktop/copilot-operator-context
-  separator: '--'            # src/test/a.spec.ts -> src--test--a.spec.ts.txt
-  txtMode: append            # append | replace | none
-  respectGitignore: true
-  ignoreDirs: []             # on top of node_modules, .git, bin, obj, dist, ...
-  includeEnvFiles: false     # .env and .env.* are skipped and reported
-  maxFileBytes: 2097152
-
-contextPicker:               # optional: per-file selection instead of whole directories
-  bridgePath: null           # .../context-picker/dist-cli/scan-selection.js
-  maxFiles: 20
-  maxTotalBytes: 26214400
 
 report:
   transport: file          # file | text  (file is the default and the supported path)
@@ -667,7 +479,6 @@ copilot-operator/
       states.ts
     context/
       contextFiles.ts     Desktop folder resolution, hash manifest, guard rails
-      projectMirror.ts    directory selection, flattened names, incremental sync
     util/pacing.ts        settle pause, hourly send cap, backoff
     log/runLog.ts
   prompts/02-format.md

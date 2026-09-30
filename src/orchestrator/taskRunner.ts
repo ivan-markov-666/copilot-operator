@@ -52,8 +52,6 @@ import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { mirrorProject, describeMirror, MirrorSelectionError } from '../context/projectMirror.js';
-import { keptOnDesktop, mirrorSourceRoot, projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
@@ -104,12 +102,6 @@ export type RunDeps = {
    * person had approved each step. The service that holds the switch answers this.
    */
   currentMode?: () => 'confirm' | 'unattended';
-  /**
-   * Told whenever the task may have changed files: after every round of steps, and when a task
-   * ends. The API uses it to keep the Desktop copies of the projects current while a run works,
-   * instead of only before it starts. It must not wait on anything and must not throw.
-   */
-  onWorkChanged?: () => void;
 };
 
 /** Why a task that was reported as done is being closed as failed. */
@@ -667,8 +659,6 @@ export async function runTask(
     await setTask((t) => {
       t.handoff = composeHandoff(t, notRun);
     });
-    // Its last changes, checks and commit included, go to the Desktop copies too.
-    deps.onWorkChanged?.();
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
     await log.close();
     /*
@@ -870,71 +860,6 @@ export async function runTask(
       return await finish('blocked', `the task contradicts itself, so it was not started: ${conflicts.join(' ')} Change the prompt, the checks, the scope or read-only, and queue it again.`);
     }
 
-    // --- project mirror, attached to the first message of the task ---------------------
-    let mirrorFiles: string[] = [];
-    if (session.mirror.enabled && session.mirror.rootDir) {
-      // One folder per project, and the project's name in front of every file name, so three
-      // repositories mirrored in turn do not delete each other's copies or collide in the chat.
-      // The bot's own Desktop copy named as the root means the project it is a copy of. See `mirrorSourceRoot`.
-      const source = mirrorSourceRoot(cfg, session.mirror.rootDir);
-      if ('problem' in source) {
-        sink.event('mirror-refused', { error: source.problem }, source.problem, 'error');
-        return await finish('failed', `${source.problem} Nothing was sent to the chat.`);
-      }
-      if (source.fromCopy) {
-        sink.event('mirror-source', { asked: source.fromCopy, used: source.rootDir },
-          `the root of the files to attach is the bot's Desktop copy ${source.fromCopy}; they are copied from the project itself, ${source.rootDir}`, 'warn');
-      }
-      const sourceRoot = source.rootDir;
-      const projectName = projectNameFor(sourceRoot, cfg);
-      // A project kept on the Desktop has its folder there looked after by the Desktop mirror; the
-      // attachments are copied into this attempt's own folder instead. See `keptOnDesktop`.
-      const onDesktop = keptOnDesktop(cfg, sourceRoot);
-      const targetDir = onDesktop ? log.path('attachments') : projectTargetDir(cfg, projectName);
-      await removeLegacyFlatMirror(cfg).catch(() => undefined);
-      /*
-       * A selection that cannot be copied stops the task before anything is sent: the chat would
-       * otherwise work without the files it was promised. The copies already there are kept.
-       */
-      const result = await mirrorProject({
-        rootDir: sourceRoot,
-        // `rules-engine` in a plan usually means the repository's folder, wherever the root is.
-        alsoUnder: [repoDirOf(session)],
-        includeDirs: session.mirror.includeDirs.length ? session.mirror.includeDirs : ['.'],
-        excludeDirs: session.mirror.excludeDirs,
-        targetDir,
-        namePrefix: projectName,
-        separator: cfg.projectMirror.separator,
-        txtMode: cfg.projectMirror.txtMode,
-        // The session's own switches win: they are what the operator ticked for this project.
-        // Settings only supply the fallback for a session saved before they existed.
-        respectGitignore: session.mirror.respectGitignore ?? cfg.projectMirror.respectGitignore,
-        ignoreDirs: cfg.projectMirror.ignoreDirs,
-        includeEnvFiles: session.mirror.includeEnvFiles ?? cfg.projectMirror.includeEnvFiles,
-        maxFileBytes: cfg.projectMirror.maxFileBytes,
-      }).catch((e: unknown) => (e instanceof MirrorSelectionError ? e : Promise.reject(e)));
-      if (result instanceof MirrorSelectionError) {
-        sink.event('mirror-refused', { error: result.message }, result.message, 'error');
-        return await finish('failed', `${result.message} Nothing was sent to the chat. Fix the files to attach and queue the task again.`);
-      }
-      sink.event('mirror', { targetDir, onDesktop, ...result }, `project mirror${onDesktop ? ' (attachments, in the run folder: the Desktop copy is kept by the Desktop mirror)' : ''}: ${describeMirror(result)}`);
-      if (session.mirror.includeEnvFiles) {
-        const envCount = Object.keys(result.mapping).filter((p) => /(^|\/)\.env(\.|$)/i.test(p)).length;
-        if (envCount > 0) {
-          sink.event('mirror-env', { envCount }, `${envCount} .env file(s) are being attached, as configured`, 'warn');
-        }
-      }
-      for (const s of result.skipped.slice(0, 20)) {
-        sink.event('mirror-skipped', { ...s }, `not copied: ${s.relPath} (${s.reason})`);
-      }
-      const all = Object.values(result.mapping).sort();
-      mirrorFiles = all.slice(0, cfg.projectMirror.maxAttachedFiles).map((n) => join(targetDir, n));
-      if (all.length > mirrorFiles.length) {
-        sink.event('mirror-truncated', { total: all.length, attached: mirrorFiles.length },
-          `only the first ${mirrorFiles.length} of ${all.length} mirrored files will be attached`, 'warn');
-      }
-    }
-
     // --- opening messages -------------------------------------------------------------
     const { content: level1 } = await store.getLevel1();
     const taskNumber = session.tasks.findIndex((t) => t.id === task.id) + 1;
@@ -966,12 +891,9 @@ export async function runTask(
     let lastMarkdown = '';
     for (const [index, message] of opening.messages.entries()) {
       if (signal?.aborted) return await finish('aborted', 'stopped before the task was sent');
-      const isFirstOfTask = index === 0;
-      const attach = isFirstOfTask && mirrorFiles.length ? mirrorFiles : [];
-
       await pacer.throttleSend();
-      const before = await transport.sendAndConfirm(message, attach);
-      sink.event('message-sent', { index, chars: message.length, attached: attach.length },
+      const before = await transport.sendAndConfirm(message);
+      sink.event('message-sent', { index, chars: message.length },
         `message ${index + 1}/${opening.messages.length} sent`);
 
       const reply = await transport.waitForReply(before);
@@ -1874,9 +1796,6 @@ export async function runTask(
       }
 
       if (aborted) return await finish('aborted', 'the operator aborted the task', undefined, lastMarkdown);
-
-      // The files may have changed: the Desktop copies catch up, in the background (see RunDeps).
-      if (results.some((r) => r.outcome !== 'refused' && r.outcome !== 'aborted')) deps.onWorkChanged?.();
 
       // A loop in which every round looks new: see `progress.ts`. After the report is written, so
       // the evidence the diagnosis points at is on disk.

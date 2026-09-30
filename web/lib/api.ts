@@ -240,17 +240,6 @@ export type Task = {
   review?: TaskReview;
 };
 
-export type Mirror = {
-  enabled: boolean;
-  rootDir: string;
-  includeDirs: string[];
-  excludeDirs: string[];
-  /** Skip what .gitignore lists. Has no say over .env files. */
-  respectGitignore: boolean;
-  /** Copy .env files. The only thing that decides them. */
-  includeEnvFiles: boolean;
-};
-
 export type VersionControl = {
   enabled: boolean;
   repoDir: string;
@@ -333,13 +322,6 @@ export type VcsStatus = {
     complete?: string;
     branches: Array<{ title: string; branch: string; commit?: string; status: string }>;
   };
-};
-
-export type MirrorPreview = {
-  files: string[];
-  skipped: Array<{ relPath: string; reason: string }>;
-  envFiles: string[];
-  totalBytes: number;
 };
 
 export type FolderPick = { ok: true; path: string } | { ok: false; cancelled: boolean; reason?: string };
@@ -522,7 +504,8 @@ export type Session = {
   vcsStart?: SessionStart;
   /** Whether a second, independent conversation checks the work. On unless said otherwise. */
   review?: ReviewSettings;
-  mirror: Mirror;
+  /** The folder the session's work is about: where its commands run, and its repository when none is set. */
+  projectDir: string;
   tasks: Task[];
   running: boolean;
   /** How the run in progress is answering approvals right now. Absent when nothing runs. */
@@ -597,11 +580,8 @@ export type BatchState = {
   sessions: BatchSession[];
 };
 
-/** Which directories of one project go to the Desktop, and how. */
-export type ProjectMirrorSelection = { includeDirs: string[]; excludeDirs: string[]; respectGitignore: boolean; includeEnvFiles: boolean };
-
 /** One of the other folders the operator works in, by name, with whether it can carry version control. */
-export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection; desktop: boolean };
+export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string };
 
 /** The project folder new sessions start pointed at, whether it can carry version control, and the other folders by name. */
 export type ProjectDefault = {
@@ -611,14 +591,6 @@ export type ProjectDefault = {
   repoOk: boolean;
   repoProblem?: string;
   others: OtherProject[];
-  /** The master switch: whether the projects are kept on the Desktop, refreshed before and during runs. */
-  mirrorToDesktop: boolean;
-  /** Whether the default project is among them, under the switch. */
-  desktop: boolean;
-  /** The default project's selection. */
-  mirror?: ProjectMirrorSelection;
-  /** The Desktop folder that holds one subfolder per project. */
-  contextRoot: string;
 };
 
 export type Preset = { name: string; content: string; updatedAt: string };
@@ -823,8 +795,8 @@ export const api = {
   metrics: () => call<Metrics>('/metrics'),
   syncPlan: (dir: string) => call<SyncPlan>(`/repo/sync?dir=${encodeURIComponent(dir)}`),
   session: (id: string) => call<Session>(`/sessions/${id}`),
-  createSession: (name: string, mirror?: Partial<Mirror>) =>
-    call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, mirror }) }),
+  createSession: (name: string, projectDir?: string) =>
+    call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, projectDir }) }),
   updateSession: (
     id: string,
     patch: {
@@ -834,7 +806,7 @@ export const api = {
       onFailure?: 'stop' | 'continue';
       conversationGroup?: string;
       review?: Partial<ReviewSettings>;
-      mirror?: Partial<Mirror>;
+      projectDir?: string;
       vcs?: Partial<VersionControl>;
     },
   ) =>
@@ -969,16 +941,9 @@ export const api = {
   /** Creates everything the plan describes, and starts none of it. */
   importPlan: (text: string) => call<PlanImport>('/plan/import', { method: 'POST', body: JSON.stringify({ text }) }),
 
-  dirs: (root: string, respectGitignore = true) =>
-    call<string[]>(`/dirs?root=${encodeURIComponent(root)}&gitignore=${respectGitignore ? '1' : '0'}`),
-
   /** Opens the machine's own folder dialog. Resolves when the operator picks or cancels. */
   // Open until the operator closes the folder picker.
   browseFolder: (start?: string) => call<FolderPick>('/browse-folder', { method: 'POST', body: JSON.stringify({ start }) }, { timeoutMs: null }),
-
-  previewMirror: (m: Pick<Mirror, 'rootDir' | 'includeDirs' | 'excludeDirs' | 'respectGitignore' | 'includeEnvFiles'>) =>
-    // Walks the whole folder tree, which on a large project takes longer than an ordinary request.
-    call<MirrorPreview>('/mirror/preview', { method: 'POST', body: JSON.stringify(m) }, { timeoutMs: 180_000 }),
 
   tasks: () => call<RegistryEntry[]>('/tasks'),
 
@@ -1071,10 +1036,7 @@ export const api = {
   setProject: (patch: {
     rootDir?: string;
     name?: string;
-    desktop?: boolean;
-    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
-    mirrorToDesktop?: boolean;
-    mirror?: ProjectMirrorSelection;
+    others?: Array<{ name: string; rootDir: string }>;
   }) => call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
 
   models: () => call<ModelCatalogue>('/models'),

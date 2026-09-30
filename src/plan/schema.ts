@@ -184,15 +184,12 @@ const TaskVcsInput = z.object({
   commitMessage: z.string().trim().optional(),
 });
 
-/** The project files copied into the chat. Absent means none, which is the default. */
-const MirrorInput = z.object({
-  enabled: z.boolean().optional(),
-  rootDir: z.string().optional(),
-  includeDirs: z.array(z.string()).optional(),
-  excludeDirs: z.array(z.string()).optional(),
-  respectGitignore: z.boolean().optional(),
-  includeEnvFiles: z.boolean().optional(),
-});
+/**
+ * What was once the project files copied into the chat, removed on 2026-09-30. Still read, so a plan
+ * written before then imports: its `rootDir` becomes the session's project folder, and the rest is
+ * ignored with a warning. See `importPlan`.
+ */
+const LegacyMirrorInput = z.object({ enabled: z.boolean().optional(), rootDir: z.string().optional() }).passthrough();
 
 const TaskInput = z.object({
   title: z
@@ -290,7 +287,13 @@ const SessionInput = z.object({
   conversationGroup: z.string().trim().default(''),
   vcs: VcsInput,
   review: ReviewInput.optional(),
-  mirror: MirrorInput.optional(),
+  /**
+   * The session's project folder: where its commands run, and its repository when `vcs.repoDir` is
+   * empty. Absent means the default project on the Project page.
+   */
+  projectDir: z.string().trim().optional(),
+  /** Read only for old plans; see `LegacyMirrorInput`. */
+  mirror: LegacyMirrorInput.optional(),
   tasks: z.array(TaskInput).min(1, 'A session with no tasks would import as an empty queue.'),
 });
 
@@ -403,7 +406,6 @@ const KNOWN_KEYS = {
   vcs: keysOf(VcsInput),
   taskVcs: keysOf(TaskVcsInput),
   review: keysOf(ReviewInput),
-  mirror: keysOf(MirrorInput),
 };
 
 function unknownKeys(value: unknown, kind: keyof typeof KNOWN_KEYS, where: string, out: string[]): void {
@@ -424,10 +426,9 @@ function collectWarnings(raw: unknown): string[] {
   if (!Array.isArray(sessions)) return out;
   sessions.forEach((s, i) => {
     unknownKeys(s, 'session', `sessions[${i}]`, out);
-    const session = s as { tasks?: unknown; vcs?: unknown; review?: unknown; mirror?: unknown };
+    const session = s as { tasks?: unknown; vcs?: unknown; review?: unknown };
     unknownKeys(session.vcs, 'vcs', `sessions[${i}].vcs`, out);
     unknownKeys(session.review, 'review', `sessions[${i}].review`, out);
-    unknownKeys(session.mirror, 'mirror', `sessions[${i}].mirror`, out);
     if (Array.isArray(session.tasks)) {
       session.tasks.forEach((t, j) => {
         unknownKeys(t, 'task', `sessions[${i}].tasks[${j}]`, out);

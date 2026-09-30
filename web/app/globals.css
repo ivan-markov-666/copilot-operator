@@ -714,22 +714,6 @@ tr.inactive td:first-child { opacity: 1; }
 @media (max-width: 600px) { .exports { white-space: normal; } }
 .modal.wide { width: min(820px, 100%); }
 
-/* The directory tree of the mirror (dirTree.tsx). */
-.dir-tree-box { margin-top: 8px; }
-.dir-tree { list-style: none; margin: 6px 0 0; padding-left: 0; }
-.dir-tree .dir-tree { padding-left: 18px; border-left: 1px dashed var(--line); margin-left: 8px; }
-.dir-row { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
-.dir-flip { width: calc(20px * var(--scale)); padding: 0; border: none; background: transparent; color: var(--muted); font-size: calc(12px * var(--scale)); }
-.dir-name { border: 1px solid transparent; background: transparent; padding: 2px 8px 2px 6px; border-radius: 6px; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); display: inline-flex; align-items: center; gap: 6px; }
-.dir-name:hover { border-color: var(--line-strong); }
-.dir-mark { display: inline-block; width: 12px; text-align: center; color: var(--muted); }
-.dir.in > .dir-row .dir-name { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
-.dir.inherited > .dir-row .dir-name { color: var(--ok); }
-.dir.out > .dir-row .dir-name { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); text-decoration: line-through; }
-.dir.out-inherited > .dir-row .dir-name { color: var(--muted); text-decoration: line-through; }
-.dir-out { width: calc(22px * var(--scale)); height: calc(22px * var(--scale)); padding: 0; border-radius: 6px; font-size: calc(13px * var(--scale)); line-height: 1; color: var(--muted); }
-.dir-out.on { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
-
 /* The story of a task (taskStory.tsx): what was sent, answered, run, and how it ended. */
 .story-box { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: var(--code); }
 .story { list-style: none; margin: 6px 0; padding: 0; }

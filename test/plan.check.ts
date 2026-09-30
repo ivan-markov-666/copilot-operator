@@ -320,7 +320,7 @@ console.log('order kept        :', first?.tasks.map((t) => t.title).join(' -> ')
 console.log('onFailure         :', first?.onFailure, '(expect stop)');
 console.log('model             :', first?.model, '(expect Default Model — the plan named none)');
 console.log('vcs repo          :', first?.vcs?.repoDir, '| mode:', first?.vcs?.branchMode, '| commits:', first?.vcs?.commitOnFinish);
-console.log('mirror root       :', first?.mirror.rootDir, '| dirs:', first?.mirror.includeDirs.join(','), '| env files:', first?.mirror.includeEnvFiles);
+console.log('project folder    :', first?.projectDir, '(the plan\'s old mirror root, or empty)');
 
 const task1 = first?.tasks[0];
 console.log('\n--- one task, as Copilot will receive it ---');
@@ -366,7 +366,6 @@ console.log('no plan, no change:', derived.split('\n')[0], '(expect the title)')
 console.log('\n--- the second session is the independent one ---');
 console.log('onFailure         :', second?.onFailure, '(expect continue)');
 console.log('vcs               :', second?.vcs?.enabled ? 'on' : 'off', '(expect off)');
-console.log('mirror            :', second?.mirror.enabled ? 'on' : 'off', '(expect off — the plan named none)');
 console.log('no git names kept :', second?.tasks.every((t) => t.vcsPlan === undefined), '(expect true)');
 
 console.log('\n--- the plan says what a failed session means for the rest ---');
@@ -457,7 +456,7 @@ if (noRoot.ok) {
   console.log('imported anyway   :', result.sessions.length === 1);
   console.log('warnings          :\n  ' + result.warnings.join('\n  '));
   const session = await store.getSession(result.sessions[0].id);
-  console.log('files left off    :', session?.mirror.enabled === false, '(expect true)');
+  console.log('no project files  :', !('mirror' in (session ?? {})), '(expect true — attaching them was removed)');
 }
 
 /*

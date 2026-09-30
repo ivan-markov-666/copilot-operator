@@ -31,7 +31,7 @@ const REPO = 'C:\\Projects\\shared-repo';
 /** Three sessions of three tasks, all pointed at one repository, as an import would make them. */
 const made: Session[] = [];
 for (const name of ['first', 'second', 'third']) {
-  const s = await store.createSession(name, { enabled: false, rootDir: '' });
+  const s = await store.createSession(name);
   for (const n of [1, 2, 3]) {
     await store.addTask(s.id, {
       title: `${name}-task-${n}`,
@@ -117,7 +117,7 @@ console.log('scope             :', late.tasks.map((t) => `${t.sessionName}/${t.t
 console.log('its session kept  :', late.sessions.some((s) => s.name === 'second'), '(expect true)');
 
 console.log('\n--- a session that was never part of a run falls back to itself ---');
-const lonely = await store.createSession('lonely', { enabled: false, rootDir: '' });
+const lonely = await store.createSession('lonely');
 for (const n of [1, 2, 3]) {
   await store.addTask(lonely.id, { title: `lonely-${n}`, level2: '', prompt: `Prompt ${n} long enough to be a real instruction.` });
 }

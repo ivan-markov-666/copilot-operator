@@ -12,7 +12,7 @@
  * nothing at all.
  *
  * A session already knows its project — `vcs.repoDir` says where the branches go and
- * `mirror.rootDir` where the files are — so that is where its commands run. The configured
+ * `projectDir` where the work is — so that is where its commands run. The configured
  * `execution.cwd` is the fallback for a session with no project, and this project's own
  * checkout is never a fallback: a session that would land here by default does not run, and
  * says why. Landing here on purpose — the operator pointed the session at the bot itself — is
@@ -26,7 +26,7 @@ import type { Session } from '../session/model.js';
 export type WorkingDir = {
   cwd: string;
   /** Where the answer came from. */
-  source: 'repository' | 'mirror' | 'config';
+  source: 'repository' | 'project' | 'config';
   /** The session's project is this runner's own checkout. Allowed, because it was chosen. */
   ownCheckout: boolean;
 };
@@ -74,14 +74,14 @@ export function isOwnCheckout(dir: string, own = botRootDir()): boolean {
  * the rule can be exercised against a made-up one.
  */
 export function workingDirFor(
-  session: Pick<Session, 'vcs' | 'mirror'>,
+  session: Pick<Session, 'vcs' | 'projectDir'>,
   configCwd: string,
   own = botRootDir(),
 ): WorkingDir | WorkingDirProblem {
   const repo = (session.vcs?.repoDir ?? '').trim();
-  const mirror = (session.mirror?.rootDir ?? '').trim();
+  const project = (session.projectDir ?? '').trim();
   if (repo) return { cwd: resolve(repo), source: 'repository', ownCheckout: isInside(repo, own) };
-  if (mirror) return { cwd: resolve(mirror), source: 'mirror', ownCheckout: isInside(mirror, own) };
+  if (project) return { cwd: resolve(project), source: 'project', ownCheckout: isInside(project, own) };
   if (isInside(configCwd, own)) {
     return {
       cwd: resolve(configCwd),

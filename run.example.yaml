@@ -45,25 +45,6 @@ report:
   # Uploads land in the user's OneDrive, so this is worth using.
   redactPatterns: []
 
-# Optional: mirror parts of a project into a flat Desktop folder so the chat can see it.
-# Selecting a directory takes everything beneath it. Only changed files are rewritten.
-projectMirror:
-  enabled: false
-  rootDir: C:/Projects/my-app
-  includeDirs:
-    - src
-    - tests
-  excludeDirs:
-    - src/generated
-  # Defaults to <Desktop>/copilot-operator-context
-  # targetDir: ~/Desktop/copilot-operator-context
-  separator: '--' # src/test/a.spec.ts -> src--test--a.spec.ts.txt
-  txtMode: append # append | replace | none
-  respectGitignore: true
-  includeEnvFiles: false
-  attachToFirstMessage: true
-  maxAttachedFiles: 20
-
 pacing:
   enabled: true
   settleMs: 1000

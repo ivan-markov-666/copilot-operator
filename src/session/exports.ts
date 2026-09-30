@@ -166,14 +166,7 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           ...(s.vcs?.updateFromRemote === false ? { updateFromRemote: false } : {}),
         },
         review: { enabled: s.review?.enabled !== false, model: s.review?.model ?? '' },
-        mirror: {
-          enabled: s.mirror.enabled,
-          rootDir: s.mirror.rootDir,
-          includeDirs: s.mirror.includeDirs,
-          excludeDirs: s.mirror.excludeDirs,
-          respectGitignore: s.mirror.respectGitignore ?? true,
-          includeEnvFiles: s.mirror.includeEnvFiles ?? false,
-        },
+        ...(s.projectDir ? { projectDir: s.projectDir } : {}),
         tasks: tasks.map((t) => {
           const p = splitPrompt(t.prompt);
           const task: Record<string, unknown> = { title: t.title, prompt: p.prompt, expected: p.expected };
@@ -570,7 +563,6 @@ async function botTask(session: Session, task: Task, runsDir: string): Promise<R
       fromReviews: task.reviewChecks,
     },
     processes: { leftovers: task.leftovers, reaped: events.filter((e) => e.type === 'processes-reaped').map(trimmed), notOurs: events.filter((e) => e.type === 'processes-not-ours').map(trimmed) },
-    mirror: events.filter((e) => String(e.type).startsWith('mirror')).map(trimmed),
     review: {
       verdict: task.review?.verdict,
       rounds: task.review?.rounds,

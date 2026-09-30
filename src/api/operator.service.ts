@@ -20,7 +20,6 @@ import type {
   Level2Preset,
   PendingApproval,
   SessionEvent,
-  MirrorSettings,
   ModelCatalogue,
   ReviewSettings,
   TaskReview,
@@ -33,11 +32,8 @@ import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
 import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, taskAtAttempt, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
-import { mirrorAllProjects, removeProjectMirrors, contextRoot } from '../context/desktopMirror.js';
-import { describeMirror } from '../context/projectMirror.js';
 import { buildStory, type Story } from '../session/story.js';
 import type { ContextKind } from '../session/store.js';
-import type { ProjectMirrorSelection } from '../config/schema.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions, type UnattendedBlock } from '../plan/brief.js';
 
@@ -48,15 +44,7 @@ export type ProjectDefault = {
   name: string;
   repoOk: boolean;
   repoProblem?: string;
-  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection; desktop: boolean }>;
-  /** The master switch: whether the projects are kept on the Desktop, refreshed before and during runs. */
-  mirrorToDesktop: boolean;
-  /** Whether the default project is among them, under the switch. */
-  desktop: boolean;
-  /** The default project's selection. */
-  mirror?: ProjectMirrorSelection;
-  /** The Desktop folder that holds one subfolder per project. */
-  contextRoot: string;
+  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string }>;
 };
 
 /** Windows paths: case and the slash direction do not make two folders. */
@@ -70,7 +58,6 @@ import { commitInterrupted, repoDirOf, vcsPreflight, restorePreview, restoreToBa
 import { branchExists, changedFilesBetween, fileAt, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
-import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConflicts, DEFAULT_IGNORE_DIRS } from '../context/projectMirror.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
 import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } from '../exec/isolation.js';
@@ -79,7 +66,7 @@ import { createTransport, type ChatTransport } from '../transport/chatTransport.
 import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
-import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
+import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { Settings } from './settings.js';
 import type { ResolvedConfig } from '../config/schema.js';
@@ -491,10 +478,9 @@ export class OperatorService {
     return { ...s, running: this.running.has(id), pending, runMode: this.running.get(id)?.mode };
   }
 
-  async createSession(name: string, mirror?: Partial<MirrorSettings>): Promise<Session> {
+  async createSession(name: string, folder?: string): Promise<Session> {
     await this.init();
-    if (mirror) assertMirrorIsCoherent(mirror);
-    const session = await this.store.createSession(name, mirror);
+    const session = await this.store.createSession(name, folder ?? '');
 
     /*
      * The models are not written onto a new session. A session with no model of its own uses the
@@ -509,8 +495,8 @@ export class OperatorService {
     return await this.store.updateSession(session.id, (s) => {
       if (projectDir) {
         // Both fields, because they answer different questions about the same folder: where the
-        // files are and where the branches go. Neither is switched on by being filled in.
-        if (!s.mirror.rootDir.trim()) s.mirror.rootDir = projectDir;
+        // work is and where the branches go. Version control is not switched on by being filled in.
+        if (!s.projectDir.trim()) s.projectDir = projectDir;
         if (s.vcs && !s.vcs.repoDir.trim()) s.vcs.repoDir = projectDir;
       }
     });
@@ -523,7 +509,7 @@ export class OperatorService {
       model?: string;
       onFailure?: 'stop' | 'continue';
       conversationGroup?: string;
-      mirror?: Partial<MirrorSettings>;
+      projectDir?: string;
       vcs?: Partial<VersionControl>;
       review?: Partial<ReviewSettings>;
       active?: boolean;
@@ -548,11 +534,7 @@ export class OperatorService {
         const merged = { ...DEFAULT_REVIEW, ...s.review, ...patch.review };
         s.review = { enabled: merged.enabled !== false, model: (merged.model ?? '').trim() };
       }
-      if (patch.mirror) {
-        const merged = { ...s.mirror, ...patch.mirror };
-        assertMirrorIsCoherent(merged);
-        s.mirror = merged;
-      }
+      if (patch.projectDir !== undefined) s.projectDir = patch.projectDir.trim();
       if (patch.vcs) {
         const merged = { ...DEFAULT_VCS, ...s.vcs, ...patch.vcs };
         // A prefix is what makes the bot's branches recognisable in `git branch`, so an empty
@@ -560,7 +542,7 @@ export class OperatorService {
         merged.branchPrefix = merged.branchPrefix.trim() || DEFAULT_VCS.branchPrefix;
         merged.repoDir = merged.repoDir.trim();
         if (merged.enabled) {
-          const reason = repoUnusableReason(merged.repoDir || s.mirror.rootDir || '');
+          const reason = repoUnusableReason(merged.repoDir || s.projectDir || '');
           if (reason) throw new Error(reason);
         }
         if (merged.baseBranch !== undefined) merged.baseBranch = merged.baseBranch.trim();
@@ -1089,10 +1071,6 @@ export class OperatorService {
     onlyTasks?: ReadonlySet<string>,
   ): Promise<{ started: boolean; reason?: string; done: Promise<RunTally> }> {
     await this.init();
-    // Every project's Desktop copy brought up to date before the chat opens, when the operator
-    // asked for that. Before the run rather than before each task: a task's own mirror already
-    // refreshes its project, and the other projects do not change while the bot works.
-    await this.refreshDesktopMirrors();
     const idle: RunTally = { ran: 0, failed: 0, leftQueued: 0, failedTitles: [] };
     if (this.running.has(sessionId)) return { started: false, reason: 'already running', done: Promise.resolve(idle) };
     const session = await this.store.getSession(sessionId);
@@ -1159,7 +1137,6 @@ export class OperatorService {
       // and the policy.json of a later task must say so.
       currentMode: () => this.running.get(sessionId)?.mode ?? mode,
       // The Desktop copies follow the work while it happens, not only before the run.
-      onWorkChanged: () => this.requestDesktopRefresh(),
       // The session decides whether its tasks are one chain or a set of independent checks.
       continueOnFailure: session.onFailure === 'continue',
       transport,
@@ -1719,7 +1696,7 @@ export class OperatorService {
     const repoIssues: PlanIssue[] = [];
     check.plan.sessions.forEach((session, i) => {
       if (session.vcs?.enabled === false) return;
-      const dir = session.vcs?.repoDir?.trim() || session.mirror?.rootDir?.trim() || '';
+      const dir = session.vcs?.repoDir?.trim() || session.projectDir?.trim() || session.mirror?.rootDir?.trim() || '';
       const reason = repoUnusableReason(dir);
       if (reason) repoIssues.push({ path: `sessions[${i}].vcs.repoDir`, message: reason });
       else if (!dir) {
@@ -1741,7 +1718,7 @@ export class OperatorService {
     for (const [i, session] of check.plan.sessions.entries()) {
       const wanted = session.vcs?.enabled === false ? '' : (session.vcs?.existingBranch ?? '').trim();
       if (!wanted) continue;
-      const dir = session.vcs?.repoDir?.trim() || session.mirror?.rootDir?.trim() || '';
+      const dir = session.vcs?.repoDir?.trim() || session.projectDir?.trim() || session.mirror?.rootDir?.trim() || '';
       const madeEarlier = check.plan.sessions
         .slice(0, i)
         .some((e) => !!e.vcs?.branchName?.trim() && plannedBranchName(e.vcs.branchName, e.vcs.branchPrefix?.trim() || 'cop/') === wanted);
@@ -2253,7 +2230,7 @@ export class OperatorService {
     const wanted = normaliseDir(dir);
     const cfg = await this.settings.load();
     const known = new Set(
-      [cfg.project?.rootDir ?? '', ...(cfg.project?.others ?? []).map((o) => o.rootDir), ...(await this.store.listSessions()).flatMap((s) => [s.vcs?.repoDir ?? '', s.mirror?.rootDir ?? ''])]
+      [cfg.project?.rootDir ?? '', ...(cfg.project?.others ?? []).map((o) => o.rootDir), ...(await this.store.listSessions()).flatMap((s) => [s.vcs?.repoDir ?? '', s.projectDir ?? ''])]
         .filter((d) => d.trim())
         .map(normaliseDir),
     );
@@ -2277,7 +2254,7 @@ export class OperatorService {
     const problem = repoUnusableReason(rootDir);
     const others = (cfg.project?.others ?? []).map((o) => {
       const p = repoUnusableReason(o.rootDir);
-      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}), mirror: o.mirror, desktop: o.desktop !== false };
+      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}) };
     });
     return {
       rootDir,
@@ -2285,65 +2262,7 @@ export class OperatorService {
       repoOk: rootDir !== '' && problem === null,
       ...(problem ? { repoProblem: problem } : {}),
       others,
-      mirrorToDesktop: cfg.project?.mirrorToDesktop ?? false,
-      desktop: cfg.project?.desktop !== false,
-      mirror: cfg.project?.mirror,
-      contextRoot: contextRoot(cfg),
     };
-  }
-
-  private desktopRefresh: Promise<void> | null = null;
-  private desktopRefreshAgain = false;
-
-  /**
-   * Asks for the Desktop copies to be brought up to date, while a run works.
-   *
-   * They used to be refreshed once, before a run, so a task that changed files left the Desktop —
-   * and OneDrive, and the chat that reads from it — on the code as it was before the task. The
-   * runner now calls this after every round of steps and after every task. One refresh runs at a
-   * time: a request that arrives while one is running is remembered and served by one more pass
-   * after it, so a burst of rounds costs two passes, not one per round, and the last pass always
-   * sees the latest files. A failure is reported and never stops the run.
-   */
-  requestDesktopRefresh(): void {
-    if (this.desktopRefresh) {
-      this.desktopRefreshAgain = true;
-      return;
-    }
-    this.desktopRefresh = (async () => {
-      do {
-        this.desktopRefreshAgain = false;
-        await this.refreshDesktopMirrors();
-      } while (this.desktopRefreshAgain);
-    })().finally(() => {
-      this.desktopRefresh = null;
-    });
-  }
-
-  /** Resolves once no Desktop refresh is running or waiting. For the checks, and for a clean stop. */
-  async desktopRefreshSettled(): Promise<void> {
-    while (this.desktopRefresh) await this.desktopRefresh;
-  }
-
-  /**
-   * Refreshes every project's Desktop folder, when the switch is on. Called before a run
-   * starts, so what OneDrive holds when the chat opens is the code as it is now, for every
-   * project on the Settings page and not only the one the session is about.
-   */
-  async refreshDesktopMirrors(): Promise<void> {
-    const cfg = await this.settings.load();
-    if (!cfg.project?.mirrorToDesktop) return;
-    try {
-      const outcomes = await mirrorAllProjects(cfg);
-      this.bus.publish({
-        sessionId: '*',
-        type: 'desktop-mirror',
-        level: outcomes.some((o) => o.problem) ? 'warn' : 'info',
-        message: outcomes.map((o) => `${o.name}: ${o.result ? describeMirror(o.result) : `not refreshed — ${o.problem}`}`).join('; ') || 'no projects to mirror',
-      });
-    } catch (e) {
-      this.bus.publish({ sessionId: '*', type: 'desktop-mirror-failed', level: 'warn', message: (e as Error).message });
-    }
   }
 
   /**
@@ -2360,19 +2279,13 @@ export class OperatorService {
   async setProject(patch: {
     rootDir?: string;
     name?: string;
-    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
-    mirrorToDesktop?: boolean;
-    mirror?: ProjectMirrorSelection;
-    desktop?: boolean;
+    others?: Array<{ name: string; rootDir: string }>;
   }): Promise<ProjectDefault> {
     const raw = await this.settings.raw();
     const current = ((raw.project as Record<string, unknown>) ?? {}) as {
       rootDir?: string;
       name?: string;
-      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
-      mirrorToDesktop?: boolean;
-      mirror?: ProjectMirrorSelection;
-      desktop?: boolean;
+      others?: Array<{ name: string; rootDir: string }>;
     };
     const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
     const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
@@ -2381,9 +2294,6 @@ export class OperatorService {
     const others = (patch.others ?? current.others ?? []).map((o) => ({
       name: (o.name ?? '').trim(),
       rootDir: (o.rootDir ?? '').trim(),
-      ...(o.mirror ? { mirror: o.mirror } : {}),
-      // Stored only when it is off: absent means the project goes to the Desktop with the rest.
-      ...(o.desktop === false ? { desktop: false } : {}),
     }));
     const seen = new Set<string>();
     for (const o of others) {
@@ -2396,25 +2306,9 @@ export class OperatorService {
       seen.add(key);
     }
 
-    const mirrorToDesktop = patch.mirrorToDesktop ?? current.mirrorToDesktop ?? false;
-    const mirror = patch.mirror ?? current.mirror;
-    const desktop = patch.desktop ?? current.desktop ?? true;
-    const { desktop: _old, ...rest } = current;
-    const cfg = await this.settings.save({
-      ...raw,
-      project: { ...rest, rootDir, name, others, mirrorToDesktop, ...(mirror ? { mirror } : {}), ...(desktop === false ? { desktop: false } : {}) },
-    });
-
-    /*
-     * The switch acts at once, both ways. On: every project's folder appears on the Desktop
-     * now, not at the next run, because "I turned it on and nothing happened" is a support
-     * question. Off: the folders go, because a copy of a code base left in OneDrive after the
-     * operator said no is the one outcome the switch must not produce. A changed selection
-     * with the switch on is applied the same way.
-     */
-    const wasOn = current.mirrorToDesktop ?? false;
-    if (mirrorToDesktop) await mirrorAllProjects(cfg);
-    else if (wasOn) await removeProjectMirrors(cfg);
+    // What the removed Desktop copies left in the stored project is dropped with the next save.
+    const { mirror: _m, desktop: _d, mirrorToDesktop: _t, ...rest } = current as typeof current & { mirror?: unknown; desktop?: unknown; mirrorToDesktop?: unknown };
+    await this.settings.save({ ...raw, project: { ...rest, rootDir, name, others } });
     return await this.project();
   }
 
@@ -2612,48 +2506,9 @@ export class OperatorService {
 
   // --- environment ----------------------------------------------------------------------
 
-  async dirs(root: string, respectGitignore = true): Promise<string[]> {
-    return await listSelectableDirs(root, { respectGitignore });
-  }
-
   /** Opens the machine's own folder dialog and reports what was picked. */
   async browseFolder(start?: string): Promise<FolderPick> {
     return await pickFolder(start);
-  }
-
-  /**
-   * What the current selection would copy, without writing anything. This is how the two
-   * switches become checkable: turn the env one on and the `.env` files move from the skipped
-   * list into the copied one, whatever `.gitignore` says about them.
-   */
-  async previewMirror(input: Partial<MirrorSettings> & { rootDir: string }): Promise<{
-    files: string[];
-    skipped: Array<{ relPath: string; reason: string }>;
-    envFiles: string[];
-    totalBytes: number;
-    conflicts: ReturnType<typeof findSelectionConflicts>;
-  }> {
-    const conflicts = findSelectionConflicts(input.includeDirs ?? [], input.excludeDirs ?? []);
-    if (conflicts.length > 0) throw new Error(describeConflicts(conflicts));
-
-    const cfg = await this.settings.load();
-    const { files, skipped } = await collectFiles({
-      rootDir: input.rootDir,
-      includeDirs: input.includeDirs?.length ? input.includeDirs : ['.'],
-      excludeDirs: input.excludeDirs ?? [],
-      targetDir: '',
-      respectGitignore: input.respectGitignore ?? true,
-      includeEnvFiles: input.includeEnvFiles ?? false,
-      ignoreDirs: cfg.projectMirror.ignoreDirs,
-      maxFileBytes: cfg.projectMirror.maxFileBytes,
-    });
-
-    let totalBytes = 0;
-    for (const rel of files) {
-      const s = await import('node:fs/promises').then((fs) => fs.stat(join(input.rootDir, rel)).catch(() => null));
-      if (s) totalBytes += s.size;
-    }
-    return { files, skipped, envFiles: files.filter(isEnvPath), totalBytes, conflicts };
   }
 
   async doctor(): Promise<Record<string, unknown>> {
@@ -2686,7 +2541,6 @@ export class OperatorService {
        */
       isolation: assessIsolation(cfg.execution.isolation, readIsolationSignals()),
       folderDialog: process.platform === 'win32',
-      alwaysIgnoredDirs: DEFAULT_IGNORE_DIRS,
     };
   }
 }
@@ -2705,22 +2559,3 @@ function resolveRunId(task: Task | undefined, requested?: string): string | null
   return owned.includes(requested) ? requested : null;
 }
 
-function isEnvPath(relPath: string): boolean {
-  const name = relPath.split('/').pop()?.toLowerCase() ?? '';
-  return name === '.env' || name.startsWith('.env.');
-}
-
-/**
- * Refuses a selection that contradicts itself, at the point it is saved rather than at the
- * point it runs. A contradiction is cheap to fix while the form is open and expensive to
- * discover an hour later, when the first task of a run fails on it.
- */
-function assertMirrorIsCoherent(mirror: Partial<MirrorSettings>): void {
-  const conflicts = findSelectionConflicts(mirror.includeDirs ?? [], mirror.excludeDirs ?? []);
-  if (conflicts.length > 0) {
-    throw new Error(`The include and exclude lists contradict each other. ${describeConflicts(conflicts)}`);
-  }
-  if (mirror.enabled && mirror.rootDir !== undefined && !mirror.rootDir.trim()) {
-    throw new Error('Attaching project files needs a project root.');
-  }
-}

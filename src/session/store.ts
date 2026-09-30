@@ -16,7 +16,6 @@ import type {
   TaskStatus,
   TaskVcsPlan,
   Level2Preset,
-  MirrorSettings,
   ModelCatalogue,
   ReviewSettings,
   VersionControl,
@@ -70,15 +69,6 @@ export const DEFAULT_VCS: VersionControl = {
   branchMode: 'per-task',
   commitOnFinish: true,
   branchPrefix: 'cop/',
-};
-
-export const DEFAULT_MIRROR: MirrorSettings = {
-  enabled: false,
-  rootDir: '',
-  includeDirs: [],
-  excludeDirs: [],
-  respectGitignore: true,
-  includeEnvFiles: false,
 };
 
 /**
@@ -291,7 +281,7 @@ export class SessionStore {
     return await this.readSession(join(this.sessionsDir, `${safeName(id)}.json`));
   }
 
-  async createSession(name: string, mirror: Partial<MirrorSettings> = {}): Promise<Session> {
+  async createSession(name: string, projectDir = ''): Promise<Session> {
     const session: Session = {
       id: newId(),
       name: name.trim() || 'untitled',
@@ -302,7 +292,7 @@ export class SessionStore {
       // behaved and the safer of the two.
       onFailure: 'stop',
       vcs: { ...DEFAULT_VCS },
-      mirror: { ...DEFAULT_MIRROR, ...mirror },
+      projectDir: projectDir.trim(),
       tasks: [],
     };
     await this.saveSession(session);
@@ -560,13 +550,15 @@ export class SessionStore {
   // --- helpers --------------------------------------------------------------------------
 
   /**
-   * Reads one session file, filling in mirror fields added after it was written. Sessions are
+   * Reads one session file, filling in fields added after it was written. Sessions are
    * long-lived JSON on disk, so a new option must never come back as `undefined`.
    */
   private async readSession(path: string): Promise<Session | null> {
     try {
-      const s = JSON.parse(await readFile(path, 'utf8')) as Session;
-      s.mirror = { ...DEFAULT_MIRROR, ...(s.mirror ?? {}) };
+      const s = JSON.parse(await readFile(path, 'utf8')) as Session & { mirror?: { rootDir?: string } };
+      // Written before the project-files feature was removed: its root is the project folder.
+      s.projectDir = (s.projectDir ?? s.mirror?.rootDir ?? '').trim();
+      delete s.mirror;
       s.vcs = { ...DEFAULT_VCS, ...(s.vcs ?? {}) };
       // Sessions written before the queue could be told what to do on a failure behave the
       // way they always did: the chain stops.

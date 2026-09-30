@@ -10,7 +10,7 @@
  * is the one moment the operator gets to read what a chat model decided on their behalf.
  */
 import type { SessionStore } from '../session/store.js';
-import { DEFAULT_MIRROR, DEFAULT_VCS } from '../session/store.js';
+import { DEFAULT_VCS } from '../session/store.js';
 import type { Session } from '../session/model.js';
 import { availableShells, detectShells, type Shell } from '../exec/shells.js';
 import type { Plan, PlanSession, PlanTask } from './schema.js';
@@ -206,15 +206,14 @@ export async function importPlan(
       : '';
 
   for (const planned of plan.sessions) {
-    const mirror = { ...DEFAULT_MIRROR, ...(planned.mirror ?? {}) };
-    if (mirror.enabled && !mirror.rootDir.trim()) {
-      mirror.enabled = false;
+    // Attaching project files to the chat was removed; an old plan's root is still its project folder.
+    if (planned.mirror?.enabled) {
       warnings.push(
-        `Session "${planned.name}" asked for project files without a root folder, so file attachment was left off.`,
+        `Session "${planned.name}" asks for project files to be attached to the chat. That no longer exists: ` +
+          'the chat reads the project by running commands. "mirror" was ignored.',
       );
     }
-
-    const created = await store.createSession(planned.name, mirror);
+    const created = await store.createSession(planned.name, planned.projectDir || planned.mirror?.rootDir || '');
     const vcs = { ...DEFAULT_VCS, ...(planned.vcs ?? {}) };
     vcs.branchPrefix = vcs.branchPrefix.trim() || DEFAULT_VCS.branchPrefix;
     vcs.repoDir = vcs.repoDir.trim();

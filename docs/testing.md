@@ -29,7 +29,7 @@ npm run check
 
 **Expect:** seven blocks of output, each printing what it exercised: the parser against
 eleven reply shapes, the report writer and redaction, the deny list against eight commands,
-the runner's two timeouts, the project mirror, chat naming, pacing.
+the runner's two timeouts, chat naming, pacing.
 
 **If it fails:** the failure is in this repository, not in your setup. Nothing has touched a
 browser or an account yet.
@@ -46,7 +46,7 @@ npx tsx src/cli.ts doctor
 `Ready.`
 
 The Desktop line may say it is not backed up by OneDrive. That is a note, not a failure. It
-only matters if you want the project mirror to reach the cloud.
+only matters for where the logs you save end up.
 
 ---
 
@@ -209,44 +209,14 @@ rather than the command failing.
 
 ---
 
-## 8. Test the project mirror
+## 8. The project mirror — removed
 
-`run.mirror.yaml` is ready and deliberately small: it mirrors only the two prompt files, so
-nothing private is involved while the mechanism is being proved.
-
-```bash
-npx tsx src/cli.ts mirror run.mirror.yaml
-npx tsx src/cli.ts mirror run.mirror.yaml
-```
-
-**Expect:** the first says `2 added`, the second says `0 added, 0 updated, 0 deleted,
-2 unchanged`. That is the incremental behaviour. The folder on the Desktop holds
-`prompts--01-persona.md.txt` and `prompts--02-format.md.txt`: the path is in the name and
-`.txt` is appended, because the chat rejects most source extensions.
-
-Then hand them to the chat:
-
-```bash
-npx tsx src/cli.ts run run.mirror.yaml
-```
-
-The task asks Copilot to read the attached files and answer a question only their contents
-can answer, so a plausible-sounding guess is not enough to pass.
-
-Verified live: Copilot answered that the end-of-run word is `Край` and named
-`prompts--02-format.md.txt` as the file defining it, which is correct and could only come
-from reading the attachment. The mirror reported `2 unchanged`, so nothing was re-uploaded.
-
-**Attaching uploads a copy to the user's OneDrive.** That is worth knowing before pointing
-this at real code. Use `report.redactPatterns`, or mirror a narrower set of directories.
-
-To see what a project offers before choosing:
-
-```bash
-npx tsx src/cli.ts dirs C:\Projects\your-app
-```
-
----
+Removed on 2026-09-30, at the operator's request: it misbehaved (a first message timing out while
+the copies churned in a OneDrive Desktop) and nothing needed it. The chat reads the project the way
+it does everything else — by running commands in the session's project folder (`Session.projectDir`,
+or `vcs.repoDir`) — and nothing of the project is copied or attached. A session saved before then is
+read with its old `mirror.rootDir` as its project folder; a plan that still has `mirror` imports with
+a warning. `src/context/desktopDir.ts` keeps only where the Desktop is, for saved logs.
 
 ## 9. Only now, consider unattended
 

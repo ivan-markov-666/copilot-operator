@@ -15,8 +15,9 @@ takes an authorizer (who approves steps), a store (where sessions persist) and a
 ## Concepts the UI is built around
 
 **Session.** One Copilot conversation. Created with a name; the conversation itself is opened
-by the first run and then reused. A session has an optional project mirror (which project,
-which directories) and an ordered list of tasks.
+by the first run and then reused. A session has a project folder, where its commands run, and
+an ordered list of tasks. No file of the project is attached to the chat; it reads the project
+with commands.
 
 **Task.** One unit of work inside a session, with its own level 2 instructions and its own
 prompt. Tasks run in order in the same chat, so a later task can build on what an earlier one
@@ -320,9 +321,7 @@ GET    /api/sessions/:id/vcs          can version control work here, and on whic
 POST   /api/sessions/:id/tasks/:taskId/rerun    queues a finished task again
 POST   /api/sessions/:id/mode        { mode } asks or stops asking, mid-run
 GET    /api/sessions/:id/export      ?variant=full|outcome&tasks=id,id  downloads the record
-GET    /api/dirs?root=&gitignore=    selectable directories of a project
 POST   /api/browse-folder            { start? } -> opens the machine's folder dialog
-POST   /api/mirror/preview           what the selection would copy, without writing anything
 ```
 
 ## Settings

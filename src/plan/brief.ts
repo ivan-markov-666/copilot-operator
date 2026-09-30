@@ -314,14 +314,6 @@ export function planExample(): Record<string, unknown> {
           baseBranch: 'main',
         },
         review: { enabled: true, model: '' },
-        mirror: {
-          enabled: true,
-          rootDir: root,
-          includeDirs: ['src/invoices'],
-          excludeDirs: [],
-          respectGitignore: true,
-          includeEnvFiles: false,
-        },
         tasks: firstTasks,
       },
       {
@@ -384,7 +376,6 @@ const FIELD_ROWS_EN = [
   ['review', 'task', 'no', 'Set to `false` to skip the review for one task. Absent means the session decides.'],
   ['readOnly', 'task', 'no', '`true` for a task that must not change files — an audit, a smoke test, a report. The runner fails it if the tree changed, and still commits the change on its branch so nothing is lost.'],
   ['scope', 'task', 'no', 'The paths the task may change: files, folders (`tests/e2e/`) or `*`/`**` patterns. With version control on, the runner puts back any change outside them. Give it when the task is about one suite or module.'],
-  ['mirror', 'session', 'no, but ask', 'Whether project files are copied and attached to the first message as context, and which: root, directories in and out, gitignore, env files. Off when left out.'],
   ['tasks', 'session', 'yes', 'At least one, in the order they must run.'],
   ['title', 'task', 'yes', '3 to 120 characters. Short, latin, hyphenated.'],
   ['prompt', 'task', 'yes', 'The task itself, at least 30 characters. This is what Copilot reads.'],
@@ -450,7 +441,6 @@ const FIELD_ROWS_BG = [
   ['review', 'задача', 'не', 'Сложи `false`, за да се пропусне рецензията само за тази задача. Липсата значи каквото казва сесията.'],
   ['readOnly', 'задача', 'не', '`true` за задача, която не бива да променя файлове — одит, smoke тест, доклад. Runner-ът я проваля, ако дървото е променено, и пак комитва промяната на клона ѝ, за да не се губи нищо.'],
   ['scope', 'задача', 'не', 'Пътищата, които задачата може да променя: файлове, папки (`tests/e2e/`) или шаблони с `*`/`**`. При включен контрол на версиите runner-ът връща всяка промяна извън тях. Давай го, когато задачата е за един suite или модул.'],
-  ['mirror', 'сесия', 'не, но питай', 'Дали файлове от проекта се копират и прикачат към първото съобщение като контекст, и кои: корен, директории вътре и вън, gitignore, env файлове. Изключено, когато липсва.'],
   ['tasks', 'сесия', 'да', 'Поне една, в реда, в който трябва да се изпълнят.'],
   ['title', 'задача', 'да', 'От 3 до 120 знака. Кратко, латиница, с тирета.'],
   ['prompt', 'задача', 'да', 'Самата задача, поне 30 знака. Това чете Copilot.'],
@@ -699,18 +689,6 @@ const CHECKS_BG = `
 задача са \`file-exists\`, \`file-missing\` или \`exit-zero\`, се отказва при проверката**, защото и
 трите минават без свършена работа.
 Всеки критерий от заданието е покрит поне от една проверка, която пада, докато работата не е свършена.
-`.trim();
-
-const MIRROR_EN = `
-**mirror**: \`enabled\`, \`rootDir\` (absolute), \`includeDirs\` and \`excludeDirs\` (paths relative to
-the root, forward slashes), \`respectGitignore\` (leave it true), \`includeEnvFiles\` (leave it false
-unless the user insists — it copies secrets into a chat).
-`.trim();
-
-const MIRROR_BG = `
-**mirror**: \`enabled\`, \`rootDir\` (абсолютен), \`includeDirs\` и \`excludeDirs\` (пътища спрямо корена,
-с наклонени черти напред), \`respectGitignore\` (остави го true), \`includeEnvFiles\` (остави го false,
-освен ако потребителят не настоява — копира тайни в чат).
 `.trim();
 
 const VCS_RULE_EN =
@@ -1639,10 +1617,6 @@ asking for both — the first is what makes the next plan quicker to write than 
      judges it. Ask whether it stays on and on which model; a model different from the working
      one catches more. \`model\` for the work itself only if the user names one from the chat's
      own picker.
-   - \`mirror\` (optional, off by default): whether project files are copied and attached to the
-     first message as context — from which root, which directories in and out, whether
-     \`.gitignore\` is respected (yes), whether \`.env\` files go in (no: they are secrets). Ask;
-     never assume.
 3. **The tasks.** For each: \`title\` (required), \`prompt\` (required — what Copilot reads:
    precise, with paths, ports and commands), \`expected\` (the bar, one sentence), \`checks\`
    (the same bar written so the runner can decide it; write one wherever a command or a file can
@@ -1726,8 +1700,6 @@ something other than **"done"**.
 ${table(['Field', 'Where', 'Required', 'What it is'], rows)}
 
 ${VCS_DETAIL_EN}
-
-${MIRROR_EN}
 
 ${CHECKS_EN}
 
@@ -1864,10 +1836,6 @@ ${systemGuideSection('bg')}
      работата и я оценява. Питай дали остава включен и на кой модел; модел, различен от
      работния, хваща повече. \`model\` за самата работа — само ако потребителят назове такъв
      от менюто на чата.
-   - \`mirror\` (незадължително, изключено по подразбиране): дали файлове от проекта се копират
-     и прикачат към първото съобщение като контекст — от кой корен, кои директории вътре и вън,
-     дали се спазва \`.gitignore\` (да), дали влизат \`.env\` файлове (не: те са тайни). Питай;
-     никога не предполагай.
 3. **Задачите.** За всяка: \`title\` (задължително), \`prompt\` (задължително — това чете
    Copilot: точно, с пътища, портове и команди), \`expected\` (летвата, едно изречение),
    \`checks\` (същата летва, написана така, че runner-ът да я решава сам; пиши по една навсякъде,
@@ -1952,8 +1920,6 @@ ${runStepBg(unattendedBlocked)}
 ${table(['Поле', 'Къде', 'Задължително', 'Какво е'], rows)}
 
 ${VCS_DETAIL_BG}
-
-${MIRROR_BG}
 
 ${CHECKS_BG}
 

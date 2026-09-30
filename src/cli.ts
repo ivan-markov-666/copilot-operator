@@ -4,7 +4,6 @@
  *
  *   cop login                 sign in once; the Edge profile is reused afterwards
  *   cop doctor [run.yaml]     check the machine before trusting a run to it
- *   cop mirror <run.yaml>     refresh the Desktop folder without touching the chat
  *   cop run <run.yaml>        the loop
  *   cop chat                  print the last run's conversation link
  */
@@ -24,9 +23,8 @@ import { SessionStore } from './session/store.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
-import { mirrorProject, describeMirror, listSelectableDirs } from './context/projectMirror.js';
 import { isOwnCheckout } from './exec/workDir.js';
-import { defaultExportDir, desktopIsSynced, resolveDesktopDir } from './context/contextFiles.js';
+import { desktopIsSynced, resolveDesktopDir } from './context/desktopDir.js';
 import { Url } from './transport/locators.js';
 import { findEdgeUsingProfile } from './transport/profileLock.js';
 import { assessIsolation, readIsolationSignals, type IsolationClaim } from './exec/isolation.js';
@@ -334,7 +332,7 @@ program
     say(existsSync(desktop), `Desktop at ${desktop}`);
     console.log(
       `  ${desktopIsSynced() ? 'ok  ' : 'note'}  Desktop ${desktopIsSynced() ? 'is' : 'is NOT'} backed up by OneDrive` +
-        `${desktopIsSynced() ? '' : ' — the mirror folder will stay on this machine only'}`,
+        `${desktopIsSynced() ? '' : ' — logs saved there stay on this machine only'}`,
     );
 
     if (configPath) {
@@ -354,9 +352,6 @@ program
           `  ${profileExists ? 'ok  ' : 'note'}  browser profile ${cfg.resolved.profileDir}` +
             `${profileExists ? '' : ' — run "cop login" first'}`,
         );
-        if (cfg.projectMirror.enabled) {
-          say(existsSync(cfg.resolved.mirrorRootDir as string), `project root ${cfg.resolved.mirrorRootDir}`);
-        }
       } catch (e) {
         say(false, (e as Error).message);
       }
@@ -365,16 +360,6 @@ program
     console.log('');
     console.log(problems.length === 0 ? 'Ready.' : `${problems.length} problem(s) to fix first.`);
     process.exitCode = problems.length === 0 ? 0 : 1;
-  });
-
-program
-  .command('dirs')
-  .description('list the directories of a project that can be selected for the mirror')
-  .argument('<projectRoot>')
-  .action(async (root: string) => {
-    const dirs = await listSelectableDirs(root);
-    if (dirs.length === 0) console.log('(no selectable directories found)');
-    for (const d of dirs) console.log(d);
   });
 
 program
@@ -426,38 +411,6 @@ program
   });
 
 program
-  .command('mirror')
-  .description('refresh the Desktop folder from the project, without touching the chat')
-  .argument('<config>', 'path to run.yaml')
-  .action(async (configPath: string) => {
-    const cfg = await loadConfig(configPath);
-    if (!cfg.projectMirror.enabled) {
-      console.log('projectMirror.enabled is false in this config; nothing to do.');
-      return;
-    }
-    const targetDir = cfg.resolved.mirrorTargetDir ?? defaultExportDir();
-    await mkdir(targetDir, { recursive: true });
-    const result = await mirrorProject({
-      rootDir: cfg.resolved.mirrorRootDir as string,
-      includeDirs: cfg.projectMirror.includeDirs,
-      excludeDirs: cfg.projectMirror.excludeDirs,
-      targetDir,
-      separator: cfg.projectMirror.separator,
-      txtMode: cfg.projectMirror.txtMode,
-      respectGitignore: cfg.projectMirror.respectGitignore,
-      ignoreDirs: cfg.projectMirror.ignoreDirs,
-      includeEnvFiles: cfg.projectMirror.includeEnvFiles,
-      maxFileBytes: cfg.projectMirror.maxFileBytes,
-    });
-    console.log(`${targetDir}`);
-    console.log(describeMirror(result));
-    for (const s of result.skipped) console.log(`  skipped ${s.relPath}: ${s.reason}`);
-    if (!desktopIsSynced()) {
-      console.log('note: the Desktop is not backed up by OneDrive, so these copies stay local.');
-    }
-  });
-
-program
   .command('run')
   .description('run one task from a run.yaml: creates a session, runs it, prints the summary')
   .argument('<config>', 'path to run.yaml')
@@ -486,14 +439,8 @@ program
 
     const store = new SessionStore(cfg.resolved.dataDir, cfg.resolved.level1Path);
     await store.init();
-    const session = await store.createSession(cfg.copilot.label, {
-      enabled: cfg.projectMirror.enabled,
-      rootDir: cfg.resolved.mirrorRootDir ?? '',
-      includeDirs: cfg.projectMirror.includeDirs,
-      excludeDirs: cfg.projectMirror.excludeDirs,
-      respectGitignore: cfg.projectMirror.respectGitignore,
-      includeEnvFiles: cfg.projectMirror.includeEnvFiles,
-    });
+    // No project folder of its own: its commands run in `execution.cwd`. See `workingDirFor`.
+    const session = await store.createSession(cfg.copilot.label);
     await store.updateSession(session.id, (s) => {
       s.onFailure = cfg.execution.continueOnFailure ? 'continue' : 'stop';
     });
