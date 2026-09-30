@@ -27,7 +27,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { newId, tidyVcsPlan, type TaskPatch } from '../session/model.js';
+import { isContinuable, newId, tidyVcsPlan, type TaskPatch } from '../session/model.js';
 import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
@@ -263,6 +263,14 @@ export type RegistryEntry = {
   /** The paths the task may change; absent means anywhere. */
   scope?: string[];
   stopCode?: Task['stopCode'];
+  /** The setting whose limit ended the attempt, when one did. See `TaskLimit`. */
+  limit?: Task['limit'];
+  /** "Continue" can carry it on where it stopped, in its chat and on its branch. See `isContinuable`. */
+  continuable?: boolean;
+  /** This attempt's branch, the commit its work was put in, and why nothing was, for "Continue" to say. */
+  branch?: string;
+  commit?: string;
+  vcsProblem?: string;
   /** The session is set aside (`Session.active` false): its tasks are not offered to run. */
   sessionInactive?: boolean;
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
@@ -617,7 +625,7 @@ export class OperatorService {
    * the text it ran with, and only then is the new text applied. Editing in place would leave
    * the old attempt's summary sitting under a question that was never asked.
    */
-  /** "Continue" on a task that stopped before it finished — its limit, the bot stopping, the operator: same chat, same branch, fresh count. */
+  /** "Continue" on a task that stopped before it finished — a limit from the settings, the bot stopping, the operator: same chat, same branch, fresh count. */
   async continueTask(sessionId: string, taskId: string): Promise<Task> {
     await this.init();
     const task = await this.store.continueTask(sessionId, taskId);
@@ -2539,6 +2547,11 @@ export class OperatorService {
           readOnly: t.readOnly || undefined,
           scope: t.scope?.length ? t.scope : undefined,
           stopCode: t.stopCode,
+          limit: t.limit,
+          continuable: isContinuable(t) || undefined,
+          branch: t.vcs?.branch,
+          commit: t.vcs?.commit,
+          vcsProblem: t.vcs?.problem,
           sessionInactive: s.active === false || undefined,
           autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type MirrorPreview, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { AttemptRecord, SaveLog } from '../../saveLog';
-import { fmtDuration } from '../../../lib/api';
+import { fmtDuration, isContinuable } from '../../../lib/api';
 import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
 import { useNow } from '../../../lib/useNow';
 import { findSelectionConflicts, linesOf } from '../../../lib/mirrorRules';
@@ -1757,9 +1757,9 @@ function TaskCard({
     (session.vcs?.enabled ?? false) &&
     (!!task.vcs?.baseCommit || (task.attempts ?? []).some((a) => a.vcs?.baseCommit));
 
-  // A task that stopped before it finished — its limit, the bot stopping under it, the operator —
-  // is carried on where it stopped; one with a verdict on its work (failed, blocked) is run again.
-  const continuable = !active && (task.status === 'limit-reached' || task.status === 'aborted');
+  // A task that stopped before it finished — a limit from the settings, the bot stopping under it,
+  // the operator — is carried on where it stopped; one with a verdict on its work is run again.
+  const continuable = !active && isContinuable(task);
   const carryOn = async () => {
     if (!(await confirmDialog(t('task.continueConfirm', { title: task.title })))) return;
     try {
@@ -1852,6 +1852,11 @@ function TaskCard({
           {index}. {task.title}
         </h4>
         <span className={`badge ${task.status}`}>{t(`status.${task.status}` as Key)}</span>
+        {task.limit && (
+          <span className="chip" title={t('reg.limitChipWhy')}>
+            {t('reg.limitChip', { limit: t(`limit.${task.limit.setting}` as Key, { n: task.limit.value }) })}
+          </span>
+        )}
         {(task.attempt ?? 1) > 1 && <span className="chip">{t('task.attemptN', { n: task.attempt ?? 1 })}</span>}
         {task.iterations > 0 && <span className="muted small">{t('task.iterations', { n: task.iterations })}</span>}
         {task.runId && (

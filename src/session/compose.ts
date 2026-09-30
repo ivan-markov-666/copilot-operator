@@ -12,7 +12,7 @@
  * and it keeps each task self-contained in the transcript. The priority of level 1 over
  * level 2 is stated inside level 1 itself; the composition only makes the boundary visible.
  */
-import type { TaskContinuation } from './model.js';
+import type { TaskContinuation, TaskLimit } from './model.js';
 import { describeInterruption } from './interruption.js';
 
 export type ComposeInput = {
@@ -122,8 +122,26 @@ function whyItStopped(c: TaskContinuation): string {
     return 'It was stopped by the operator before it finished — not because anything failed. The files are as you left them.';
   }
   const why = c.stoppedBecause ? ` (${c.stoppedBecause})` : '';
-  return `It stopped because the runner's limit was reached${why} — not because anything failed. The files are as you left them.`;
+  // Out of rounds of fixing: something did say no, and the chat needs to hear it was not waved through.
+  if (c.limit?.setting === 'maxCheckRounds' || c.limit?.setting === 'maxReviewRounds') {
+    return (
+      `It stopped because the runner's limit of ${LIMIT_WORDS[c.limit.setting](c.limit.value)} was reached${why}. ` +
+      'What was still failing then is still open: deal with it first. The count starts again now. The files are as you left them.'
+    );
+  }
+  const which = c.limit ? ` of ${LIMIT_WORDS[c.limit.setting](c.limit.value)}` : '';
+  return `It stopped because the runner's limit${which} was reached${why} — not because anything failed. The files are as you left them.`;
 }
+
+/** Each limit from the settings, as the chat is told about it. See `TaskLimit`. */
+const LIMIT_WORDS: Record<TaskLimit['setting'], (n: number) => string> = {
+  maxRunMinutes: (n) => `${n} minutes per task`,
+  maxIterations: (n) => `${n} messages per task`,
+  replyTimeoutSec: (n) => `${n} seconds to wait for one reply`,
+  maxFormatRetries: (n) => `${n} replies in the wrong format in a row`,
+  maxCheckRounds: (n) => `${n} rounds of fixing failed checks`,
+  maxReviewRounds: (n) => `${n} rounds of fixing review findings`,
+};
 
 export function composeOpening(input: ComposeInput): { messages: string[]; firstMessage: string } {
   const taskBlock =

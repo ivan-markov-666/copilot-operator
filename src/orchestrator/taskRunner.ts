@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ReplyCapture } from '../transport/copilotTransport.js';
-import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
+import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
@@ -51,7 +51,7 @@ import { treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import type { Session, Task, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { mirrorProject, describeMirror } from '../context/projectMirror.js';
 import { projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
@@ -498,6 +498,8 @@ export async function runTask(
    * lacks a shell. Written by `finish`. See `Task.stopCode`.
    */
   let stopCode: Task['stopCode'];
+  /** The setting whose limit ended the attempt, when one did. Written by `finish`. See `TaskLimit`. */
+  let limitHit: TaskLimit | undefined;
   /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
    * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
@@ -607,6 +609,7 @@ export async function runTask(
       t.logFile = 'task-log.txt';
       t.stats = stats;
       if (stopCode) t.stopCode = stopCode;
+      if (limitHit) t.limit = limitHit;
     });
     // The end in one fixed shape, read off the record just written. See `session/handoff.ts`.
     await setTask((t) => {
@@ -1057,6 +1060,7 @@ export async function runTask(
             `${failed.length} check(s) from earlier reviews still fail after ${maxCheckRounds} attempt(s); the work goes to the reviewer with them named`, 'warn');
           return 'accept';
         }
+        limitHit = { setting: 'maxCheckRounds', value: maxCheckRounds };
         sink.event('checks-exhausted', { rounds: checkRounds - 1 },
           `${failed.length} check(s) still failing after ${maxCheckRounds} attempt(s); the task is closed as failed`, 'warn');
         return 'give-up';
@@ -1329,6 +1333,7 @@ export async function runTask(
        * at the fix. It had been fixed.
        */
       if (reviewRounds > maxReviewRounds) {
+        limitHit = { setting: 'maxReviewRounds', value: maxReviewRounds };
         sink.event('review-exhausted', { rounds: maxReviewRounds, findings: outcome.findings.length },
           `the review still has findings after ${maxReviewRounds} round(s) of fixing; the task is closed as blocked`, 'warn');
         return 'give-up';
@@ -1398,8 +1403,14 @@ export async function runTask(
 
     for (;;) {
       if (signal?.aborted) return await finish('aborted', 'stopped by the operator');
-      if (Date.now() > deadline) return await finish('limit-reached', `maxRunMinutes (${cfg.limits.maxRunMinutes}) reached`);
-      if (iterations >= cfg.limits.maxIterations) return await finish('limit-reached', `maxIterations (${cfg.limits.maxIterations}) reached`);
+      if (Date.now() > deadline) {
+        limitHit = { setting: 'maxRunMinutes', value: cfg.limits.maxRunMinutes };
+        return await finish('limit-reached', `maxRunMinutes (${cfg.limits.maxRunMinutes}) reached`);
+      }
+      if (iterations >= cfg.limits.maxIterations) {
+        limitHit = { setting: 'maxIterations', value: cfg.limits.maxIterations };
+        return await finish('limit-reached', `maxIterations (${cfg.limits.maxIterations}) reached`);
+      }
 
       const parsed = parseReply(lastMarkdown, {
         stopMarker: cfg.copilot.stopMarker,
@@ -1423,6 +1434,7 @@ export async function runTask(
         if (formatRetries > cfg.limits.maxFormatRetries) {
           await transport.dumpFailure(log.path('failures'), 'format-error');
           stopCode = 'format-repair-exhausted';
+          limitHit = { setting: 'maxFormatRetries', value: cfg.limits.maxFormatRetries };
           return await finish(
             'limit-reached',
             `format repair exhausted: ${formatRetries} replies in a row did not match the format (maxFormatRetries ${cfg.limits.maxFormatRetries}), ` +
@@ -1866,6 +1878,12 @@ export async function runTask(
           lastMarkdown = next.markdown;
           sent = true;
         } catch (e) {
+          /*
+           * The report went out and the chat is still answering it. Sending it again would stack a
+           * second copy under a reply in progress; this is the reply wait from the settings running
+           * out, which ends the task at that limit (see the catch at the end), not an upload to retry.
+           */
+          if (isReplyTimeout(e)) throw e;
           sink.event('report-send-failed', { attempt, error: String(e) }, `sending the report failed (attempt ${attempt + 1}): ${(e as Error).message}`, 'warn');
           if (attempt === cfg.report.uploadRetries) {
             const body = await readFile(report.paths[0], 'utf8');
@@ -1905,6 +1923,15 @@ export async function runTask(
     }
   } catch (e) {
     const message = (e as Error).message;
+    /*
+     * The chat took longer than Settings allow for a reply. A limit, not a fault: the conversation
+     * and the work are where they were, and "Continue" carries the task on in that chat.
+     */
+    if (isReplyTimeout(e)) {
+      sink.event('reply-timeout', { seconds: e.seconds }, message, 'warn');
+      limitHit = { setting: 'replyTimeoutSec', value: e.seconds };
+      return await finish('limit-reached', `replyTimeoutSec (${e.seconds}) reached: ${message}`);
+    }
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     await transport.dumpFailure(log.path('failures'), 'crash').catch(() => undefined);
     /*

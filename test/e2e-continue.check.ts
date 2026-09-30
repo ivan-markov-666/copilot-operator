@@ -3,6 +3,8 @@
  * scripted chat of test/support/fakeChat.ts in place of Copilot. No browser, no Microsoft 365.
  *
  * - a task that stops at the message limit, continued in the same chat and on the same branch;
+ * - every other limit from the settings — the reply wait, rounds of fixing checks — continued the same way,
+ *   with its work committed and "Continue" offered on its register row;
  * - "only this one": a run of one picked task while the rest of the queue waits;
  * - a done task given a new prompt that builds on what it did;
  * - the operator stopping a run in the middle of a step;
@@ -16,6 +18,7 @@ import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type SessionView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 import { SessionStore } from '../src/session/store.js';
+import { ReplyTimeoutError } from '../src/transport/chatTransport.js';
 
 const t = new Tally();
 
@@ -61,6 +64,7 @@ await scenario('a task stopped at the message limit is continued in the same cha
   const stopped = (await h.run(s!.id)).tasks[0]!;
   t.check('the task stopped at the limit', stopped.status, 'limit-reached');
   t.truthy('and says which limit', /maxIterations \(5\)/.test(stopped.reason ?? ''), stopped.reason);
+  t.check('and records it', (stopped as unknown as { limit?: unknown }).limit, { setting: 'maxIterations', value: 5 });
   const firstChat = (await h.session(s!.id)).chat?.chatId;
 
   const queued = await h.call<{ status: string; continuing?: { how?: string } }>('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`);
@@ -87,6 +91,60 @@ await scenario('a task stopped at the message limit is continued in the same cha
     [figures.attempts, figures.firstPass, figures.doneInTheEnd, figures.resumed, figures.manualInterventions],
     [2, { n: 0, of: 1 }, { n: 1, of: 1 }, { n: 1, of: 1 }, 1]);
 });
+
+type Row = { taskId: string; status: string; continuable?: boolean; limit?: { setting: string; value: number }; branch?: string; commit?: string };
+const row = async (h: Harness, taskId: string): Promise<Row> => (await h.call<Row[]>('GET', '/tasks')).find((r) => r.taskId === taskId)!;
+
+/*
+ * Asked for on 2026-09-30: a task stopped by any limit from the settings must offer "Continue", with its
+ * work safe on its branch. Seen live: a task stopped at its minutes, and the register showed no way on.
+ */
+await scenario('a reply that takes longer than Settings allow: stopped at a limit, work committed, continued', {}, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'slow', [task('slow-job', 'result.txt', 'finished')])] });
+  h.chat.script(write('partial.txt', 'half'), () => {
+    throw new ReplyTimeoutError(900, 'Copilot did not finish a reply within 900s (new turn seen: true, still streaming: true).');
+  });
+  const stopped = (await h.run(s!.id)).tasks[0]!;
+  t.check('it stopped at a limit, not failed', stopped.status, 'limit-reached');
+  t.check('the reply wait is the limit recorded', (stopped as unknown as { limit?: unknown }).limit, { setting: 'replyTimeoutSec', value: 900 });
+  t.truthy('the work so far is committed on the task\'s branch', !!stopped.vcs?.commit && h.git('show', `${stopped.vcs?.branch}:partial.txt`) === 'half', stopped.vcs);
+  const r = await row(h, stopped.id);
+  t.check('the register offers "Continue" on the row, naming the branch and commit', [r.continuable, r.branch, r.commit], [true, 'cop/slow', stopped.vcs?.commit]);
+  const firstChat = (await h.session(s!.id)).chat?.chatId;
+
+  await h.call('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`);
+  h.chat.script(
+    (m) => {
+      t.check('the continuation goes into the same conversation', m.chatId, firstChat);
+      t.truthy('and names the limit', /900 seconds to wait for one reply/.test(m.text) && /Do not start over/.test(m.text), m.text.slice(0, 400));
+      return write('result.txt', 'finished');
+    },
+    reply.done(),
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('the continued attempt finishes, on the same branch, with the earlier work', [after.status, after.vcs?.branch, h.git('show', 'cop/slow:partial.txt')], ['done', 'cop/slow', 'half']);
+});
+
+await scenario('out of rounds of fixing failed checks: failed, but continued in the same chat', { limits: { maxCheckRounds: 1 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'rounds', [task('checked-job', 'result.txt', 'finished')])] });
+  h.chat.script(write('result.txt', 'nearly'), reply.done(), write('result.txt', 'almost'), reply.done());
+  const stopped = (await h.run(s!.id)).tasks[0]!;
+  t.check('it failed: the checks said no', stopped.status, 'failed');
+  t.check('and the limit that ended it is recorded', (stopped as unknown as { limit?: unknown }).limit, { setting: 'maxCheckRounds', value: 1 });
+  t.check('the register offers "Continue"', (await row(h, stopped.id)).continuable, true);
+
+  const queued = await h.call<{ status: string; continuing?: { how?: string } }>('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`);
+  t.check('"Continue" is accepted, as a limit', [queued.status, queued.continuing?.how], ['queued', 'limit']);
+  h.chat.script(
+    (m) => {
+      t.truthy('the chat is told the rounds ran out and what failed is still open', /1 rounds of fixing failed checks/.test(m.text) && /still open/.test(m.text), m.text.slice(0, 400));
+      return write('result.txt', 'finished');
+    },
+    reply.done(),
+  );
+  t.check('the continued attempt finishes', (await h.run(s!.id)).tasks[0]!.status, 'done');
+});
+
 
 await scenario('"only this one": a run of one picked task leaves the rest queued', {}, async (h) => {
   const [s] = await h.importPlan({

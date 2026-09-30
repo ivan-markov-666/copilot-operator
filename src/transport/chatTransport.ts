@@ -21,6 +21,8 @@
  */
 import { CopilotTransport, type TransportOptions } from './copilotTransport.js';
 
+export { ReplyTimeoutError, isReplyTimeout } from './copilotTransport.js';
+
 export type ChatTransport = Pick<
   CopilotTransport,
   | 'open'

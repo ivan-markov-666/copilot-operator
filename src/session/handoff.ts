@@ -9,7 +9,7 @@
  * reads them off the task record instead, so every entry is a fact the runner saw rather than a
  * claim, and nothing here is written by the model.
  */
-import type { Task, TaskStatus } from './model.js';
+import { isContinuable, type Task, type TaskStatus } from './model.js';
 
 export type Handoff = {
   outcome: { status: TaskStatus; reason?: string; stopCode?: string };
@@ -48,8 +48,8 @@ export function composeHandoff(task: Task, notRun: NotRun[] = []): Handoff {
   const manual: string[] = [];
   if (vcs.problem) manual.push(`version control: ${vcs.problem}`);
   if (vcs.commit && vcs.branch) manual.push(`push ${vcs.branch} when you are ready — the runner never pushes`);
+  if (isContinuable(task)) manual.push('continue it in the same chat from the register, or run it again');
   if (task.status === 'blocked') manual.push(`unblock it: ${task.reason ?? 'see the reason'}`);
-  if (task.status === 'limit-reached' || task.status === 'aborted') manual.push('continue it in the same chat from the register, or run it again');
   if (task.status === 'failed') manual.push('read why it failed, fix the prompt or the checks, and queue it again');
   if (openFindings.length > 0) manual.push(`${openFindings.length} review finding(s) are open`);
   if ((vcs.suspicious?.length ?? 0) > 0 || (vcs.foreignCommits?.length ?? 0) > 0) manual.push('look at the committed files and commits listed above');

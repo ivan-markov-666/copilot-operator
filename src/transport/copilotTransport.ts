@@ -19,6 +19,28 @@ import { Blocker, Css, Label, Model, Rename, Sidebar, Signal, Surface, TestId, U
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
 
+/**
+ * The chat did not finish a reply within `copilot.replyTimeoutSec`.
+ *
+ * Its own class because it is a limit from the settings, not a fault: the runner ends the task
+ * `limit-reached` on it, so "Continue" carries the task on in the same chat, where the reply may
+ * well have finished by then. Any other error from the transport still fails the task.
+ */
+export class ReplyTimeoutError extends Error {
+  constructor(
+    readonly seconds: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ReplyTimeoutError';
+  }
+}
+
+/** Recognised by name as well: a copy of this module loaded twice makes `instanceof` miss its own class. */
+export function isReplyTimeout(e: unknown): e is ReplyTimeoutError {
+  return e instanceof ReplyTimeoutError || (e instanceof Error && e.name === 'ReplyTimeoutError' && typeof (e as ReplyTimeoutError).seconds === 'number');
+}
+
 export type TransportOptions = {
   profileDir: string;
   transportDir: string;
@@ -1283,7 +1305,8 @@ Current URL: ${url}`);
       await this.dumpFailure(join(this.opts.transportDir, '..', 'failures'), 'reply-timeout').catch(
         () => undefined,
       );
-      throw new Error(
+      throw new ReplyTimeoutError(
+        Math.round(this.opts.replyTimeoutMs / 1000),
         `Copilot did not finish a reply within ${Math.round(this.opts.replyTimeoutMs / 1000)}s ` +
           `(new turn seen: ${sawNewTurn}, still streaming: ${last.streaming}). ` +
           'A screenshot and an HTML dump are in the run folder.',

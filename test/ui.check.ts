@@ -285,6 +285,46 @@ try {
     t.truthy('the register shows the figures: none done at the first attempt yet', /0 \/ 1 \(0%\)/.test(firstRow ?? ''), firstRow);
   });
 
+  /*
+   * Asked for on 2026-09-30: a task stopped by a limit in the settings was shown in the register with no
+   * way on. Its row now carries "Continue where it stopped", says what happens to the branch and files,
+   * and starts that task alone in its chat.
+   */
+  await scenario('a task stopped at a limit is continued from its own row in the register', { limits: { maxIterations: 5 } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'rowcontinue'));
+    for (let i = 1; i <= 6; i++) h.chat.script(reply.steps(`Set-Content -Path partial.txt -Value 'round ${i}' -Encoding utf8`));
+    const stopped = (await h.run(s!.id)).tasks[0]!;
+    t.check('the task stopped at the limit, its work committed', [stopped.status, !!stopped.vcs?.commit], ['limit-reached', true]);
+    const firstChat = (await h.session(s!.id)).chat?.chatId;
+
+    await page.goto(url('/history'));
+    const row = page.locator('ol.flow > li', { hasText: 'write-greeting' }).first();
+    await row.getByText('stopped at a limit: 5 messages per task').waitFor();
+    t.truthy('the row says which limit stopped it', true);
+    await row.getByRole('button', { name: 'Continue where it stopped' }).click();
+    const panel = row.getByRole('group', { name: 'Continue “write-greeting” where it stopped' });
+    await panel.waitFor();
+    const text = (await panel.textContent()) ?? '';
+    t.truthy('the panel says the chat is the same one', /Chat: the same conversation/.test(text), text);
+    t.truthy('and names the branch and the commit the work is on', text.includes('Branch: cop/rowcontinue') && text.includes(stopped.vcs!.commit!.slice(0, 8)), text);
+
+    h.chat.script(
+      (m) => {
+        t.check('the continuation goes into the same conversation', m.chatId, firstChat);
+        return reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8");
+      },
+      reply.done(),
+    );
+    await panel.getByRole('button', { name: 'Continue without asking' }).click();
+    const confirm = page.getByRole('alertdialog');
+    // "Are you sure" before an unattended start, unless Settings say not to ask.
+    await confirm.waitFor({ timeout: 3_000 }).then(() => confirm.getByRole('button', { name: 'OK' }).click()).catch(() => undefined);
+    await waitFor('the continued task to finish', async () => (await h.session(s!.id)).tasks[0]!.status === 'done');
+    await h.idle();
+    const after = (await h.session(s!.id)).tasks[0]!;
+    t.check('it finished as attempt 2, on the same branch', [after.status, after.attempt, after.vcs?.branch], ['done', 2, 'cop/rowcontinue']);
+  });
+
   await scenario('a new prompt for a done task: its old checks are offered, unticked, and it can be made read-only', {}, async (h, page, url) => {
     const [s] = await h.importPlan(planFor(h, 'newprompt'));
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());

@@ -21,7 +21,7 @@ import type {
   ReviewSettings,
   VersionControl,
 } from './model.js';
-import { newId, tidyVcsPlan, type TaskPatch } from './model.js';
+import { isContinuable, newId, tidyVcsPlan, type TaskPatch } from './model.js';
 
 /** A task the runner is inside of. It cannot be edited, deleted, or left behind at startup. */
 const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
@@ -408,21 +408,23 @@ export class SessionStore {
    *
    * Two kinds of stop qualify. The runner's limit (`limit-reached`), and a stop that was not the
    * task's doing (`aborted`): the bot itself stopping under it — power, a shutdown, Ctrl+C, a crash,
-   * recorded in `interruption` at the next start — or the operator stopping it. A task that failed,
-   * blocked or was not done has a verdict on its work, and carrying that work on would carry the
-   * verdict's cause on with it; those are run again.
+   * recorded in `interruption` at the next start — or the operator stopping it. A task that failed
+   * or blocked has a verdict on its work, and carrying that work on would carry the verdict's cause
+   * on with it; those are run again — unless what ended them was a limit from the settings (out of
+   * rounds of fixing checks or review findings), which is a counter, not the verdict. See `TaskLimit`.
    */
   async continueTask(sessionId: string, taskId: string): Promise<Task> {
     const current = (await this.getSession(sessionId))?.tasks.find((x) => x.id === taskId);
     if (!current) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
-    if (current.status !== 'limit-reached' && current.status !== 'aborted') {
-      throw new Error('Only a task that stopped before it finished can be continued; run this one again instead.');
+    if (!isContinuable(current)) {
+      throw new Error('Only a task that stopped before it finished, or at a limit from the settings, can be continued; run this one again instead.');
     }
-    const how = current.status === 'limit-reached' ? 'limit' : current.interruption ? 'interrupted' : 'stopped';
+    const how = current.status === 'limit-reached' || current.limit ? 'limit' : current.interruption ? 'interrupted' : 'stopped';
     return await this.rerunTask(sessionId, taskId, {}, {
       fromAttempt: current.attempt ?? 1,
       stoppedBecause: current.reason,
       how,
+      ...(current.limit ? { limit: current.limit } : {}),
       ...(current.interruption ? { interruption: current.interruption } : {}),
     });
   }
@@ -469,6 +471,7 @@ export class SessionStore {
           buildsOn: t.buildsOn,
           freshRetry: t.freshRetry,
           stopCode: t.stopCode,
+          limit: t.limit,
           scope: t.scope,
           scopeReverted: t.scopeReverted,
           vcs: t.vcs,
@@ -509,6 +512,7 @@ export class SessionStore {
       t.scopeReverted = undefined;
       t.freshRetry = undefined;
       t.stopCode = undefined;
+      t.limit = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.
       t.vcs = undefined;

@@ -1688,9 +1688,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Continue in the same chat',
             bg: 'Продължи в същия чат',
             doesEn:
-              'On a task that stopped before it finished (its limit, the bot stopping, the operator): queues it to carry on in the same chat and branch. Then "Run {n} task(s)".',
+              'On a task that stopped before it finished (a limit from the settings, the bot stopping, the operator): queues it to carry on in the same chat and branch. Then "Run {n} task(s)".',
             doesBg:
-              'На задача, спряла преди да приключи (лимит, спрял бот, оператор): нарежда я да продължи в същия чат и клон. После „Пусни {n} задача(и)“.',
+              'На задача, спряла преди да приключи (лимит от настройките, спрял бот, оператор): нарежда я да продължи в същия чат и клон. После „Пусни {n} задача(и)“.',
           },
           {
             key: 'task.rerun',
@@ -2507,6 +2507,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'The same button once the story is open: folds it away again.',
             doesBg:
               'Същият бутон, когато историята е отворена: сгъва я обратно.',
+          },
+          {
+            key: 'reg.continueHere',
+            kind: 'button',
+            en: 'Continue where it stopped',
+            bg: 'Продължи откъдето спря',
+            doesEn:
+              'On a row stopped by a limit from the settings (minutes, messages, reply wait, rounds of fixing), by the bot stopping or by the operator: says what happens to the chat, branch and files, then starts that task alone in its chat.',
+            doesBg:
+              'На ред, спрян от лимит в настройките (минути, съобщения, чакане на отговор, кръгове поправки), от спрял бот или от оператора: казва какво става с чата, клона и файловете, после пуска само тази задача в чата ѝ.',
           },
           {
             key: 'reg.fixPrompt',

@@ -224,6 +224,12 @@ export type Task = {
    */
   stopCode?: 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
   /**
+   * The setting whose limit ended this attempt, when one did. See `TaskLimit` and `isContinuable`.
+   * Kept apart from the status: a task out of rounds of fixing still reads `failed` or `blocked`,
+   * because its checks or its review did say no, but it is also one "Continue" can carry on.
+   */
+  limit?: TaskLimit;
+  /**
    * Set on an attempt the runner started by itself, in a fresh conversation, after the one before
    * it ended blocked (`limits.retryBlockedInFreshChat`). Absent on one a person started.
    */
@@ -485,6 +491,7 @@ export type TaskAttempt = {
   buildsOn?: Task['buildsOn'];
   freshRetry?: boolean;
   stopCode?: Task['stopCode'];
+  limit?: TaskLimit;
   scope?: string[];
   scopeReverted?: string[];
   /**
@@ -577,7 +584,34 @@ export type TaskContinuation = {
   stoppedBecause?: string;
   how?: 'limit' | 'interrupted' | 'stopped';
   interruption?: Interruption;
+  /** For `how: 'limit'`: which setting, when the attempt recorded it. */
+  limit?: TaskLimit;
 };
+
+/**
+ * A limit from the settings that ended an attempt, and its value at the time.
+ *
+ * Every one of them is a counter or a clock the operator chose, not a judgement of the work, so a
+ * task stopped by one can always be carried on in its chat with the counter started again:
+ * minutes per task, messages per task, the wait for a reply, replies in the wrong shape, rounds of
+ * fixing failed checks, rounds of fixing review findings. The loop guards (`no-progress`, a round
+ * of refused steps) are not here: they stop a task because it was going round in circles, and
+ * carrying it on would carry the circle on.
+ */
+export type TaskLimit = {
+  setting: 'maxRunMinutes' | 'maxIterations' | 'replyTimeoutSec' | 'maxFormatRetries' | 'maxCheckRounds' | 'maxReviewRounds';
+  value: number;
+};
+
+/**
+ * Whether "Continue" may carry a task on where it stopped, in its chat and on its branch.
+ *
+ * A task that stopped before it finished qualifies (`limit-reached`, `aborted`), and so does one
+ * whose ending came from a limit in the settings whatever its status says. See `TaskLimit`.
+ */
+export function isContinuable(t: Pick<Task, 'status' | 'limit'>): boolean {
+  return t.status === 'limit-reached' || t.status === 'aborted' || (!!t.limit && (t.status === 'failed' || t.status === 'blocked'));
+}
 
 /** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */
 export type SessionStart = {

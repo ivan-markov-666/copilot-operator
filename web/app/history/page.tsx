@@ -32,8 +32,16 @@ import { TaskStory } from '../taskStory';
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
 /** Everything that ended without the work being done, which is what the counter asks about. */
 const FAILED_STATUSES: TaskStatus[] = ['blocked', 'failed', 'aborted', 'limit-reached'];
-/** Stopped before it finished, rather than judged: "Continue" carries these on where they stopped. */
-const CONTINUABLE: TaskStatus[] = ['aborted', 'limit-reached'];
+/**
+ * Stopped before it finished, or at a limit from the settings, rather than judged: "Continue"
+ * carries these on where they stopped. Decided by the API (`isContinuable`), not by the status.
+ */
+const continuable = (e: RegistryEntry): boolean => !!e.continuable;
+
+/** A limit from the settings, in words: "240 minutes per task". */
+function limitWords(t: (key: Key, vars?: Record<string, string | number>) => string, limit: NonNullable<RegistryEntry['limit']>): string {
+  return t(`limit.${limit.setting}` as Key, { n: limit.value });
+}
 
 type View = 'flow' | 'list' | 'runs';
 
@@ -462,6 +470,8 @@ function Flow({
   const [fixing, setFixing] = useState<RegistryEntry | null>(null);
   /** The rows whose story is unfolded. */
   const [storyOpen, setStoryOpen] = useState<Set<string>>(new Set());
+  /** The row whose "Continue where it stopped" panel is open, if one is. */
+  const [continuing, setContinuing] = useState<string | null>(null);
   const flipStory = (taskId: string) =>
     setStoryOpen((prev) => {
       const next = new Set(prev);
@@ -500,6 +510,11 @@ function Flow({
               <strong>{e.title}</strong>
               <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
               {isNext && <span className="chip">{t('reg.next')}</span>}
+              {e.limit && (
+                <span className="chip" title={t('reg.limitChipWhy')}>
+                  {t('reg.limitChip', { limit: limitWords(t, e.limit) })}
+                </span>
+              )}
               {upcoming && FAILED_STATUSES.includes(e.status) && (
                 <span className="chip" title={t('reg.willRequeueFirstWhy')}>
                   {t('reg.willRequeueFirst')}
@@ -672,6 +687,20 @@ function Flow({
                   {storyOpen.has(e.taskId) ? t('story.hide') : isLive(e) ? t('story.showLive') : t('story.show')}
                 </button>
               )}
+              {/*
+               * On the row itself: a task stopped by a limit is noticed here, and carrying it on
+               * used to mean finding its card on the session page or the grouped panel above.
+               */}
+              {continuable(e) && !e.sessionRunning && !e.sessionInactive && (
+                <button
+                  className={continuing === e.taskId ? '' : 'primary'}
+                  aria-expanded={continuing === e.taskId}
+                  onClick={() => setContinuing(continuing === e.taskId ? null : e.taskId)}
+                  title={t('reg.continueHereWhy')}
+                >
+                  {t('reg.continueHere')}
+                </button>
+              )}
               {FAILED_STATUSES.includes(e.status) && !e.sessionRunning && (
                 <button className="quiet" onClick={() => setFixing(e)} title={t('reg.fixPromptHint')}>
                   {t('reg.fixPrompt')}
@@ -712,6 +741,15 @@ function Flow({
                 </>
               )}
             </div>
+            {continuing === e.taskId && continuable(e) && !e.sessionRunning && (
+              <ContinueHere
+                entry={e}
+                onClose={(started) => {
+                  setContinuing(null);
+                  if (started) onChange?.();
+                }}
+              />
+            )}
             {storyOpen.has(e.taskId) && e.runId && (
               <TaskStory sessionId={e.sessionId} taskId={e.taskId} live={e.status === 'running' || e.status === 'waiting-approval'} />
             )}
@@ -1064,6 +1102,75 @@ function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
  * This is the run panel's start, for exactly the sessions that still have something queued,
  * in the order the queue shows them.
  */
+/**
+ * "Continue where it stopped" on one row: what will happen to the chat, the branch and the files,
+ * then the same two ways to start that the rest of the page has.
+ *
+ * It queues the task to carry on (`continueTask`) and starts that one task alone; the rest of its
+ * session's queue stays where it is. What it says about the branch is read from the attempt's own
+ * record — committed, nothing new, not committed and why, or no version control at all — because
+ * "is my work safe" is the question this button is pressed with.
+ */
+function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (started: boolean) => void }) {
+  const { t } = useT();
+  const quietStart = useUnattendedWithoutAsking();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const branchLine = e.branch
+    ? e.commit
+      ? t('reg.continueHereCommitted', { branch: e.branch, commit: e.commit.slice(0, 8) })
+      : e.vcsProblem
+        ? t('reg.continueHereNotCommitted', { branch: e.branch, problem: e.vcsProblem })
+        : t('reg.continueHereNothingNew', { branch: e.branch })
+    : e.vcsProblem
+      ? t('reg.continueHereVcsInactive', { problem: e.vcsProblem })
+      : t('reg.continueHereNoVcs');
+  const start = async (mode: 'confirm' | 'unattended') => {
+    if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('batch.unattendedConfirm', { n: 1 })))) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      await api.continueTask(e.sessionId, e.taskId);
+      const name = await api.suggestedRunName([e.sessionId]).then((r) => r.name).catch(() => undefined);
+      const r = await api.startBatch([e.sessionId], mode, 'stop', undefined, undefined, name, [e.taskId]);
+      if (!r.started) {
+        // Queued to continue all the same: the grouped "Continue" above, or the session page, starts it.
+        setMsg(t('batch.notStarted', { reason: r.reason ?? '' }));
+        return;
+      }
+      setMsg(t('reg.continueHereStarted', { title: e.title }));
+      onClose(true);
+    } catch (err) {
+      setMsg((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="notice" role="group" aria-label={t('reg.continueHereTitle', { title: e.title })} style={{ marginTop: 8 }}>
+      <strong>{t('reg.continueHereTitle', { title: e.title })}</strong>
+      {e.reason && <p className="small">{e.reason}</p>}
+      <ul className="small">
+        <li>{t('reg.continueHereChat')}</li>
+        <li>{branchLine}</li>
+        <li>{t('reg.continueHereCount')}</li>
+      </ul>
+      <div className="row">
+        <button className="primary" disabled={busy} onClick={() => void start('confirm')} title={t('reg.continueWhy')}>
+          {t('reg.continueGo')}
+        </button>
+        <button disabled={busy} onClick={() => void start('unattended')} title={t('reg.continueUnattendedWhy')}>
+          {t('reg.continueUnattended')}
+        </button>
+        <button className="quiet" disabled={busy} onClick={() => onClose(false)}>
+          {t('dialog.cancel')}
+        </button>
+        {msg && <span className="small">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange: () => void }) {
   const { t } = useT();
   const [busy, setBusy] = useState(false);
@@ -1160,7 +1267,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
       // A task that stopped before it finished carries on where it stopped, in its chat and on its
       // branch; one with a verdict on its work starts again.
       for (const e of requeue) {
-        if (CONTINUABLE.includes(e.status)) await api.continueTask(e.sessionId, e.taskId);
+        if (continuable(e)) await api.continueTask(e.sessionId, e.taskId);
         else await api.rerunTask(e.sessionId, e.taskId);
       }
       // Exactly what is ticked: the queued tasks nobody chose stay queued for another run.
@@ -1211,7 +1318,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
                       <label className="option-inline">
                         <input type="checkbox" checked={picked.has(e.taskId)} onChange={(ev) => tick(e.taskId, ev.target.checked)} />
                         <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
-                        {CONTINUABLE.includes(e.status) && <span className="muted small"> · {t('reg.willContinue')}</span>}
+                        {continuable(e) && <span className="muted small"> · {t('reg.willContinue')}</span>}
                       </label>{' '}
                       {/* The use case this panel grew for: one fixed task, run on its own. */}
                       <button className="quiet small" onClick={() => setPicked(new Set([e.taskId]))} title={t('reg.pickOnlyWhy')}>

@@ -232,6 +232,8 @@ export type Task = {
   handoff?: Handoff;
   /** Why it stopped, when the status alone does not say. See `Task.stopCode` in src/session/model.ts. */
   stopCode?: StopCode;
+  /** The setting whose limit ended the attempt, when one did. */
+  limit?: TaskLimit;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
 };
@@ -393,6 +395,14 @@ export type RegistryEntry = {
   changedFiles?: number;
   /** Aborted because the bot itself stopped under it (power, Ctrl+C, a crash), not continued yet. */
   interrupted?: boolean;
+  /** The setting whose limit ended the attempt, when one did. */
+  limit?: TaskLimit;
+  /** "Continue" can carry it on where it stopped, in its chat and on its branch. */
+  continuable?: boolean;
+  /** This attempt's branch, the commit its work was put in, and why nothing was. */
+  branch?: string;
+  commit?: string;
+  vcsProblem?: string;
 };
 
 /**
@@ -669,6 +679,17 @@ export type SyncPlan = {
 };
 
 export type StopCode = 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
+
+/** A limit from the settings that ended an attempt. See `TaskLimit` in src/session/model.ts. */
+export type TaskLimit = {
+  setting: 'maxRunMinutes' | 'maxIterations' | 'replyTimeoutSec' | 'maxFormatRetries' | 'maxCheckRounds' | 'maxReviewRounds';
+  value: number;
+};
+
+/** Whether "Continue" may carry a task on where it stopped. The same rule as `isContinuable` in src/session/model.ts. */
+export function isContinuable(t: { status: TaskStatus; limit?: TaskLimit }): boolean {
+  return t.status === 'limit-reached' || t.status === 'aborted' || (!!t.limit && (t.status === 'failed' || t.status === 'blocked'));
+}
 
 /** See `src/session/handoff.ts`: every entry is something the runner recorded, not the model's words. */
 export type Handoff = {

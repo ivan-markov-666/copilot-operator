@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionStore } from '../src/session/store.js';
 import { composeOpening } from '../src/session/compose.js';
+import { isContinuable } from '../src/session/model.js';
+import { isContinuable as webIsContinuable } from '../web/lib/api.js';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -45,6 +47,27 @@ console.log('--- what the chat is sent ---');
 
   const plain = composeOpening({ ...base, contractAlreadySent: true });
   check('an ordinary later task is unchanged', /^New task in this same conversation/.test(plain.messages[0]!) && plain.messages[0]!.includes('Build the calculator'), true);
+}
+
+console.log('\n--- a limit from the settings: which one, and who may continue ---');
+{
+  // Asked for on 2026-09-30: a task stopped by a limit in the settings must always offer "Continue".
+  const minutes = composeOpening({ ...base, contractAlreadySent: true, continuing: { fromAttempt: 1, how: 'limit', stoppedBecause: 'maxRunMinutes (120) reached', limit: { setting: 'maxRunMinutes', value: 120 } } }).messages.join('\n');
+  check('the chat is told which limit, in words', /limit of 120 minutes per task was reached/.test(minutes) && /not because anything failed/.test(minutes), true);
+  const wait = composeOpening({ ...base, contractAlreadySent: true, continuing: { fromAttempt: 1, how: 'limit', limit: { setting: 'replyTimeoutSec', value: 900 } } }).messages.join('\n');
+  check('the reply wait too', /900 seconds to wait for one reply/.test(wait), true);
+  const rounds = composeOpening({ ...base, contractAlreadySent: true, continuing: { fromAttempt: 1, how: 'limit', limit: { setting: 'maxCheckRounds', value: 3 } } }).messages.join('\n');
+  check('out of rounds of fixing: what failed is still open, and it is not called a success', /3 rounds of fixing failed checks/.test(rounds) && /still open/.test(rounds) && !/not because anything failed/.test(rounds), true);
+
+  const limit = { setting: 'maxCheckRounds' as const, value: 3 };
+  check('stopped at the limit, aborted: continuable', [isContinuable({ status: 'limit-reached' }), isContinuable({ status: 'aborted' })], [true, true]);
+  check('failed or blocked by a limit from the settings: continuable', [isContinuable({ status: 'failed', limit }), isContinuable({ status: 'blocked', limit })], [true, true]);
+  check('failed or blocked on the work itself: not', [isContinuable({ status: 'failed' }), isContinuable({ status: 'blocked' })], [false, false]);
+  check('done or queued, whatever is recorded: not', [isContinuable({ status: 'done', limit }), isContinuable({ status: 'queued', limit })], [false, false]);
+  check('the page and the API decide the same way', (['done', 'failed', 'blocked', 'aborted', 'limit-reached', 'queued'] as const).flatMap((status) => [
+    isContinuable({ status }) === webIsContinuable({ status }),
+    isContinuable({ status, limit }) === webIsContinuable({ status, limit }),
+  ]).every(Boolean), true);
 }
 
 console.log('\n--- what is allowed, and what is kept ---');
@@ -81,6 +104,22 @@ try {
     60,
     'cop/calc/basic-operations',
   ]);
+
+  await store.updateSession(s.id, (x) => {
+    const task = x.tasks.find((y) => y.id === t.id)!;
+    task.status = 'failed';
+    task.reason = '1 check(s) still failing after 3 attempt(s)';
+  });
+  let refusedVerdict = false;
+  await store.continueTask(s.id, t.id).catch(() => (refusedVerdict = true));
+  check('failed on the work itself: not continued', refusedVerdict, true);
+  await store.updateSession(s.id, (x) => {
+    x.tasks.find((y) => y.id === t.id)!.limit = { setting: 'maxCheckRounds', value: 3 };
+  });
+  const byLimit = await store.continueTask(s.id, t.id);
+  check('failed because the rounds ran out: continued, as a limit, naming it', [byLimit.status, byLimit.continuing?.how, byLimit.continuing?.limit],
+    ['queued', 'limit', { setting: 'maxCheckRounds', value: 3 }]);
+  check('the stopped attempt keeps its limit; the new one starts without', [byLimit.attempts?.at(-1)?.limit, byLimit.limit ?? null], [{ setting: 'maxCheckRounds', value: 3 }, null]);
 
   await store.updateSession(s.id, (x) => {
     x.tasks.find((y) => y.id === t.id)!.status = 'done';

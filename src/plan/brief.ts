@@ -822,8 +822,9 @@ in those words, every time:
   A check that is wrong rather than a prompt that is wrong is edited instead: **"Edit"** on the
   task card, then **"What it checks"**, **"Must be"** and **"Command"** under **"Checks"**, then
   **"Save and queue it again"** — which, like every "queue" button, starts nothing by itself.
-  A task that ended **limit-reached**, or **aborted** because the bot stopped under it, is carried on in its own chat instead: **"Continue in the
-  same chat"** on its card on the session page, then **"Run {n} task(s)"** at the top of that page.
+  A task stopped by a limit from the settings, or **aborted** because the bot stopped under it, is carried on in its own chat instead:
+  **"Continue where it stopped"** on its row in the register, which starts it, or **"Continue in the same chat"** on its card on the session page,
+  then **"Run {n} task(s)"** at the top of that page.
   When a failure shows up while the run is still going, **"Pause after this task"** holds the rest
   while you work it out.
   Putting the repository back to before the task is **"Restore"**; putting it back and re-running
@@ -985,8 +986,9 @@ const PHASE3_BG = `
   Когато е сгрешена проверката, а не prompt-ът, се редактира друго: **„Редактирай“** на картата
   на задачата, после **„Какво проверява“**, **„Трябва“** и **„Команда“** под **„Проверки“**, после
   **„Запази и върни в опашката“** — който, като всеки бутон за връщане в опашката, сам не пуска нищо.
-  Задача, завършила с **limit-reached** или **aborted**, защото ботът е спрял под нея, продължава в собствения си чат: **„Продължи в същия чат“**
-  на картата ѝ на страницата на сесията, после **„Пусни {n} задача(и)“** горе на същата страница.
+  Задача, спряна от лимит в настройките, или **aborted**, защото ботът е спрял под нея, продължава в собствения си чат:
+  **„Продължи откъдето спря“** на реда ѝ в регистъра, който я пуска, или **„Продължи в същия чат“** на картата ѝ на страницата на сесията,
+  после **„Пусни {n} задача(и)“** горе на същата страница.
   Когато провал се покаже, докато пускането още върви, **„Пауза след тази задача“** задържа
   останалото, докато го разбереш.
   Връщането на хранилището отпреди задачата е **„Върни“**; връщането му плюс ново изпълнение на
