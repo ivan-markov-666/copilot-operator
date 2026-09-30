@@ -263,14 +263,20 @@ try {
     const stopped = await h.run(s!.id);
     t.check('the task stopped at the limit', stopped.tasks[0]!.status, 'limit-reached');
 
-    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
     await page.goto(url(`/sessions/view?id=${s!.id}`));
+    // "What happened" on the attempt that stopped: each entry says when it happened.
+    await page.getByRole('button', { name: /What happened/ }).first().click();
+    await page.locator('time.story-when').first().waitFor();
+    const times = await page.locator('time.story-when').evaluateAll((els) => els.map((e) => ({ text: e.textContent ?? '', iso: e.getAttribute('datetime') ?? '', title: e.getAttribute('title') ?? '' })));
+    t.truthy('every entry of the story shows when it happened', times.length >= 6 && times.every((x) => /\d{1,2}:\d{2}:\d{2}/.test(x.text) && !Number.isNaN(Date.parse(x.iso)) && x.title !== ''), times.slice(0, 4));
+    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
     await page.getByRole('button', { name: 'Continue in the same chat' }).first().click();
     const confirm = page.getByRole('alertdialog');
     await confirm.waitFor();
     await confirm.getByRole('button', { name: 'OK' }).click();
     await waitFor('the task to be queued again', async () => (await h.session(s!.id)).tasks[0]!.status === 'queued');
     t.check('it is queued as a continuation', (await h.session(s!.id)).tasks[0]!.continuing?.how, 'limit');
+
 
     await page.goto(url('/history'));
     const figures = page.locator('.metrics');

@@ -12,15 +12,15 @@
  * Nothing here is inferred. An entry is a file, or a section of the task log, or a field of
  * the task record; the reader decides what it means.
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Task } from './model.js';
 
 export type StoryEntry =
-  | { kind: 'sent'; iteration: number; label: string; text: string }
-  | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string }
-  | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean }
-  | { kind: 'review'; round: number; entries: StoryEntry[] };
+  | { kind: 'sent'; iteration: number; label: string; text: string; at?: string }
+  | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string; at?: string }
+  | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean; at?: string }
+  | { kind: 'review'; round: number; entries: StoryEntry[]; at?: string };
 
 export type Story = {
   runId: string;
@@ -37,6 +37,37 @@ export type Story = {
 };
 
 const MAX_TEXT = 60_000;
+
+/*
+ * When each thing happened.
+ *
+ * Every entry of the story is a file the runner wrote at the moment it happened: a reply is saved
+ * as it arrives, a step's log is opened as the step starts, a results file is written just before
+ * it is sent. So a file's creation time is the entry's time, for runs recorded long before anyone
+ * asked for times as much as for new ones — nothing had to be recorded differently. The modification
+ * time is the fallback on a file system that keeps no creation time. The opening message has no file
+ * of its own and takes its time from the transcript's first "message-sent".
+ */
+async function createdAt(path: string): Promise<string | undefined> {
+  const info = await stat(path).catch(() => null);
+  if (!info) return undefined;
+  const ms = info.birthtimeMs > 0 ? info.birthtimeMs : info.mtimeMs;
+  return new Date(ms).toISOString();
+}
+
+async function firstSentAt(dir: string): Promise<string | undefined> {
+  const text = await readFile(join(dir, 'transcript.jsonl'), 'utf8').catch(() => '');
+  for (const line of text.split('\n')) {
+    if (!line.includes('"message-sent"')) continue;
+    try {
+      const e = JSON.parse(line) as { at?: string; type?: string };
+      if (e.type === 'message-sent' && e.at) return e.at;
+    } catch {
+      /* a line cut off by a crash */
+    }
+  }
+  return undefined;
+}
 
 function clip(text: string): string {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n… (${text.length - MAX_TEXT} more characters in the run folder)` : text;
@@ -98,6 +129,7 @@ async function stepsIn(dir: string): Promise<Map<number, StoryEntry[]>> {
     const iteration = Number(m[1]);
     const parsed = parseStepLog(await readFile(join(dir, name), 'utf8').catch(() => ''));
     const entry: StoryEntry = {
+      at: await createdAt(join(dir, name)),
       kind: 'step',
       iteration,
       id: Number(m[2]),
@@ -128,18 +160,38 @@ async function reviewRound(dir: string, round: number): Promise<StoryEntry> {
   const entries: StoryEntry[] = [];
   const read = async (name: string): Promise<string> => clip(await readFile(join(dir, name), 'utf8').catch(() => ''));
   const names = (await readdir(dir).catch(() => [] as string[])).sort();
-  if (names.includes('00-brief.md')) entries.push({ kind: 'sent', iteration: 0, label: 'brief', text: await read('00-brief.md') });
+  if (names.includes('00-brief.md')) entries.push({ kind: 'sent', iteration: 0, label: 'brief', text: await read('00-brief.md'), at: await createdAt(join(dir, '00-brief.md')) });
   const steps = await stepsIn(join(dir, 'steps'));
-  const replies = names.filter((n) => /^\d+-review\.md$/.test(n)).sort();
-  for (const [i, name] of replies.entries()) {
-    const text = await read(name);
-    const parsed = parseReply(text);
-    entries.push({ kind: 'reply', iteration: i + 1, label: `review ${round}, reply ${i + 1}`, text, ...parsed });
-    for (const step of steps.get(i + 1) ?? []) entries.push(step);
-    if (names.includes(`iteration-${i + 1}.txt`)) entries.push({ kind: 'sent', iteration: i + 1, label: `results ${i + 1}`, text: await read(`iteration-${i + 1}.txt`) });
+  /*
+   * The replies, by what they answer. `00-opening.md` is the answer to the brief — the one that
+   * proposes the first steps — and `NN-review.md` the answer to the results of iteration NN (the
+   * review saves it after sending them). So after reply k come the steps of iteration k + 1 and
+   * their results, then reply k + 1. The story used to read only the `NN-review` files and put each
+   * before the steps it came after; the times on the entries are what showed it.
+   */
+  const replyFor = new Map<number, string>();
+  if (names.includes('00-opening.md')) replyFor.set(0, '00-opening.md');
+  for (const n of names) {
+    const m = n.match(/^(\d+)-review\.md$/);
+    if (m) replyFor.set(Number(m[1]), n);
   }
-  if (names.includes('findings-sent.md')) entries.push({ kind: 'sent', iteration: replies.length, label: 'findings sent to the implementer', text: await read('findings-sent.md') });
-  return { kind: 'review', round, entries };
+  const last = Math.max(0, ...replyFor.keys(), ...steps.keys());
+  for (let k = 0; k <= last; k += 1) {
+    const name = replyFor.get(k);
+    if (name) {
+      const text = await read(name);
+      entries.push({ kind: 'reply', iteration: k, label: `review ${round}, reply ${k + 1}`, text, ...parseReply(text), at: await createdAt(join(dir, name)) });
+    }
+    for (const step of steps.get(k + 1) ?? []) entries.push(step);
+    if (names.includes(`iteration-${k + 1}.txt`)) {
+      entries.push({ kind: 'sent', iteration: k + 1, label: `results ${k + 1}`, text: await read(`iteration-${k + 1}.txt`), at: await createdAt(join(dir, `iteration-${k + 1}.txt`)) });
+    }
+  }
+  const replies = [...replyFor.values()];
+  if (names.includes('findings-sent.md')) {
+    entries.push({ kind: 'sent', iteration: replies.length, label: 'findings sent to the implementer', text: await read('findings-sent.md'), at: await createdAt(join(dir, 'findings-sent.md')) });
+  }
+  return { kind: 'review', round, entries, at: entries.find((e) => e.at)?.at };
 }
 
 export async function buildStory(runsDir: string, runId: string, task: Task, live: boolean): Promise<Story> {
@@ -149,7 +201,9 @@ export async function buildStory(runsDir: string, runId: string, task: Task, liv
   const entries: StoryEntry[] = [];
 
   const opening = sections.find((s) => s.name === 'OPENING MESSAGE');
-  if (opening) entries.push({ kind: 'sent', iteration: 0, label: 'opening message', text: clip(opening.text) });
+  if (opening) entries.push({ kind: 'sent', iteration: 0, label: 'opening message', text: clip(opening.text), at: (await firstSentAt(dir)) ?? task.startedAt });
+  /** The results file of iteration k, as the report writer names it by default; its creation is when it was sent. */
+  const resultsAt = async (k: number): Promise<string | undefined> => await createdAt(join(dir, 'reports', `iteration-${k}.txt`));
 
   const steps = await stepsIn(join(dir, 'steps'));
   const reports = new Map<number, string>();
@@ -182,27 +236,27 @@ export async function buildStory(runsDir: string, runId: string, task: Task, liv
     if (it) {
       const k = Number(it[1]);
       for (const step of steps.get(k) ?? []) entries.push(step);
-      if (reports.has(k)) entries.push({ kind: 'sent', iteration: k, label: `results ${k}`, text: clip(reports.get(k)!) });
+      if (reports.has(k)) entries.push({ kind: 'sent', iteration: k, label: `results ${k}`, text: clip(reports.get(k)!), at: await resultsAt(k) });
       lastIteration = k;
     } else if (rv) {
       const round = Number(rv[1]);
       // The steps the last reply proposed ran before the review judged the work.
       for (const step of steps.get(lastIteration + 1) ?? []) entries.push(step);
-      if (reports.has(lastIteration + 1)) entries.push({ kind: 'sent', iteration: lastIteration + 1, label: `results ${lastIteration + 1}`, text: clip(reports.get(lastIteration + 1)!) });
+      if (reports.has(lastIteration + 1)) entries.push({ kind: 'sent', iteration: lastIteration + 1, label: `results ${lastIteration + 1}`, text: clip(reports.get(lastIteration + 1)!), at: await resultsAt(lastIteration + 1) });
       lastIteration += reports.has(lastIteration + 1) ? 1 : 0;
       if (!placedReviews.has(round)) {
         entries.push(await reviewRound(join(dir, 'review', String(round)), round));
         placedReviews.add(round);
       }
     }
-    entries.push({ kind: 'reply', iteration: it ? Number(it[1]) : 0, label, text, ...parsed });
+    entries.push({ kind: 'reply', iteration: it ? Number(it[1]) : 0, label, text, ...parsed, at: await createdAt(join(dir, 'replies', name)) });
   }
   // Steps and results after the last reply (a task that ended without another reply), and
   // review rounds nobody replied to yet (one still going, or the last one that passed).
   for (const [k, list] of [...steps.entries()].sort((a, b) => a[0] - b[0])) {
     if (k > lastIteration) {
       for (const step of list) entries.push(step);
-      if (reports.has(k)) entries.push({ kind: 'sent', iteration: k, label: `results ${k}`, text: clip(reports.get(k)!) });
+      if (reports.has(k)) entries.push({ kind: 'sent', iteration: k, label: `results ${k}`, text: clip(reports.get(k)!), at: await resultsAt(k) });
     }
   }
   for (const round of reviewDirs) {

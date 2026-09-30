@@ -599,10 +599,10 @@ export type Preset = { name: string; content: string; updatedAt: string };
 
 /** One thing that happened in a task attempt, as the run folder recorded it. */
 export type StoryEntry =
-  | { kind: 'sent'; iteration: number; label: string; text: string }
-  | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string }
-  | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean }
-  | { kind: 'review'; round: number; entries: StoryEntry[] };
+  | { kind: 'sent'; iteration: number; label: string; text: string; at?: string }
+  | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string; at?: string }
+  | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean; at?: string }
+  | { kind: 'review'; round: number; entries: StoryEntry[]; at?: string };
 
 /** A file a task changed. `added`/`removed` are -1 for a binary file. */
 export type ChangedFile = { path: string; oldPath?: string; status: string; added: number; removed: number };

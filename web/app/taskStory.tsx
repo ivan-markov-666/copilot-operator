@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api, fmtDuration, type Story, type StoryEntry } from '../lib/api';
-import { useT } from '../lib/i18n';
+import { useT, useFmtTime } from '../lib/i18n';
 import { useFollowBottom } from '../lib/useFollowBottom';
 import { RichText } from './richText';
 
@@ -136,6 +136,7 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
       return (
         <li key={key} className="story-review">
           <div className="story-head">
+            <When at={e.at} />
             <span className="chip">{t('story.review', { n: e.round })}</span>
           </div>
           <ol className="story">{e.entries.map((x, i) => renderEntry(x, `${key}-${i}`))}</ol>
@@ -148,6 +149,7 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
       return (
         <li key={key} className={`story-step${e.failed ? ' failed' : ''}`}>
           <div className="story-head">
+            <When at={e.at} />
             <span className="chip">{t('story.step', { it: e.iteration, id: e.id })}</span>
             {e.outcome && (
               <span className={`badge ${e.failed ? 'failed' : 'done'}`}>
@@ -177,6 +179,7 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
     return (
       <li key={key} className={`story-msg ${e.kind}${failedReply ? ' failed' : ''}`}>
         <div className="story-head">
+          <When at={e.at} />
           <strong>{who}</strong>
           <span className="muted small">{e.label}</span>
           {e.kind === 'reply' && e.status && <span className={`badge ${failedReply ? 'failed' : e.status === 'done' ? 'done' : ''}`}>{e.status}</span>}
@@ -245,5 +248,24 @@ export function TaskStory({ sessionId, taskId, runId, live }: { sessionId: strin
         <div className="story-fixed muted small">{t('story.notEnded')}</div>
       )}
     </div>
+  );
+}
+
+/**
+ * When an entry happened: the time of day, with the date in front when it was not today, and the
+ * full date and time on hover. `<time>` so it is a time to a screen reader and to a copy-paste.
+ */
+function When({ at }: { at?: string }) {
+  const fmtTime = useFmtTime();
+  const { locale } = useT();
+  if (!at) return null;
+  const d = new Date(at);
+  const tag = locale === 'bg' ? 'bg-BG' : undefined;
+  const time = d.toLocaleTimeString(tag, { hour12: false });
+  const today = new Date().toDateString() === d.toDateString();
+  return (
+    <time className="story-when" dateTime={at} title={fmtTime(at)}>
+      {today ? time : `${d.toLocaleDateString(tag)} ${time}`}
+    </time>
   );
 }

@@ -681,6 +681,9 @@ th, td { position: relative; }
   pre, .log { font-size: calc(12px * var(--scale)); }
 }
 
+/* When each entry of a task's story happened: first in its line, quiet, digits of equal width. */
+.story-when { color: var(--muted); font-size: calc(12px * var(--scale)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 /* The command that brings a project back to its remote's main (syncCommand.tsx): long, so it wraps. */
 .sync-cmd { white-space: pre-wrap; overflow-wrap: anywhere; }
 

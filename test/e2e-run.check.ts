@@ -52,6 +52,22 @@ async function scenario(title: string, settings: Record<string, unknown>, body: 
   }
 }
 
+type StoryItem = { kind: string; at?: string; entries?: StoryItem[] };
+/** Every entry of a story, the review rounds opened up, in the order the story shows them. */
+const flatten = (entries: StoryItem[]): StoryItem[] => entries.flatMap((e) => (e.kind === 'review' ? [e, ...flatten(e.entries ?? [])] : [e]));
+/** Checks that each entry has a time, inside the task's own run, and that the times follow the story's order. */
+async function storyTimes(h: Harness, sessionId: string, taskId: string, what: string): Promise<void> {
+  const story = await h.call<{ entries: StoryItem[] }>('GET', `/sessions/${sessionId}/tasks/${taskId}/story`);
+  const task = (await h.session(sessionId)).tasks.find((x) => x.id === taskId)! as unknown as { startedAt: string; finishedAt: string };
+  const all = flatten(story.entries);
+  t.truthy(`${what}: every entry of the story has a time`, all.length > 3 && all.every((e) => typeof e.at === 'string'), all.map((e) => [e.kind, e.at]));
+  const start = Date.parse(task.startedAt) - 1000;
+  const end = Date.parse(task.finishedAt) + 1000;
+  t.truthy(`${what}: all of them inside the task's run`, all.every((e) => Date.parse(e.at!) >= start && Date.parse(e.at!) <= end), { start: task.startedAt, end: task.finishedAt, at: all.map((e) => e.at) });
+  const times = all.map((e) => Date.parse(e.at!));
+  t.truthy(`${what}: in the order the story tells it`, times.every((x, i) => i === 0 || x >= times[i - 1]! - 50), all.map((e) => `${e.kind} ${e.at}`));
+}
+
 await scenario('an unattended task, from the plan to the commit', { copilot: { defaultModel: 'GPT 5.6 Think deeper' } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'hello', [greeting]));
   h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
@@ -94,6 +110,7 @@ await scenario('an unattended task, from the plan to the commit', { copilot: { d
   t.check('the second task is done', again.tasks.find((x) => x.id === added.id)?.status, 'done');
   t.check('the contract was not sent a second time', h.chat.sent.filter((m) => m.contract === 'task').length, 1);
   t.check('both files are on the branch, one commit each', [h.git('show', 'cop/hello:hello.txt'), h.git('show', 'cop/hello:bye.txt'), h.git('rev-list', '--count', 'main..cop/hello')], ['hi', 'bye', '2']);
+  await storyTimes(h, s!.id, added.id, 'a task in the same chat');
 });
 
 await scenario('a supervised run asks before every step, on the approvals route', {}, async (h) => {
@@ -248,6 +265,7 @@ await scenario('an independent review opens its own conversation and passes the 
   t.check('the task is done', after.tasks[0]!.status, 'done');
   t.check('with the review\'s verdict on it', after.tasks[0]!.review?.verdict, 'pass');
   t.check('two conversations: the task\'s and the review\'s', h.chat.conversations.size, 2);
+  await storyTimes(h, s!.id, after.tasks[0]!.id, 'with a review');
 });
 
 await scenario('a task the chat calls blocked is tried once more in a fresh conversation', { limits: { retryBlockedInFreshChat: 1 } }, async (h) => {
