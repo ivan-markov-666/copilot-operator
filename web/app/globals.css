@@ -681,6 +681,9 @@ th, td { position: relative; }
   pre, .log { font-size: calc(12px * var(--scale)); }
 }
 
+/* The command that brings a project back to its remote's main (syncCommand.tsx): long, so it wraps. */
+.sync-cmd { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* The register's figures: a table that scrolls on its own when it has many model columns. */
 .table-scroll { overflow-x: auto; }
 .metrics td:not(:first-child), .metrics th:not(:first-child) { white-space: nowrap; }

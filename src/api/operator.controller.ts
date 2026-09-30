@@ -675,6 +675,12 @@ export class OperatorController {
    * Separate from the session's own preflight because that one only speaks when version
    * control is already on, and the question here is whether it may be turned on.
    */
+  /** The command that brings a project's branch back to its remote's main — shown, never run. */
+  @Get('repo/sync')
+  repoSync(@Query('dir') dir?: string): Promise<unknown> {
+    return this.ops.syncPlan(dir ?? '').catch(fail);
+  }
+
   @Get('repo')
   repo(@Query('dir') dir?: string): { ok: boolean; problem?: string } {
     const problem = this.ops.repoProblem(dir ?? '');

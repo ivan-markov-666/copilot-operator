@@ -15,6 +15,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { SyncCommand } from '../syncCommand';
 import Link from 'next/link';
 import { api, type ModelCatalogue, type ProjectDefault, type ProjectMirrorSelection } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
@@ -527,6 +528,7 @@ function ProjectEntry({
           <ProjectFolders rootDir={dir} value={mirror} onSave={onFolders} busy={busy} />
         </details>
       )}
+      {dir && repoOk && <SyncCommand dir={dir} />}
     </div>
   );
 }

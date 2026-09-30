@@ -648,6 +648,20 @@ export type SavedLog = {
 export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
 
+/** See `src/vcs/syncCommand.ts`: what bringing a branch back to the remote's main would lose, and the command. */
+export type SyncPlan = {
+  ok: boolean;
+  problem?: string;
+  repoDir: string;
+  branch?: string;
+  remote?: string;
+  target?: string;
+  lastFetched?: string;
+  willLose: { commits: string[]; changed: string[]; untracked: string[] };
+  preview: string;
+  command: string;
+};
+
 export type StopCode = 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
 
 /** See `src/session/handoff.ts`: every entry is something the runner recorded, not the model's words. */
@@ -763,6 +777,7 @@ export const api = {
 
   sessions: () => call<Session[]>('/sessions'),
   metrics: () => call<Metrics>('/metrics'),
+  syncPlan: (dir: string) => call<SyncPlan>(`/repo/sync?dir=${encodeURIComponent(dir)}`),
   session: (id: string) => call<Session>(`/sessions/${id}`),
   createSession: (name: string, mirror?: Partial<Mirror>) =>
     call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, mirror }) }),

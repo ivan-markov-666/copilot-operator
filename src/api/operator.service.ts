@@ -75,6 +75,7 @@ import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } fro
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { composeHandoff } from '../session/handoff.js';
+import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/contextFiles.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
@@ -291,6 +292,12 @@ export type RegistryEntry = {
   /** Aborted because the bot itself stopped under it, and not continued yet. */
   interrupted?: boolean;
 };
+
+/** A folder as compared: absolute, forward slashes, no trailing slash, and case folded as Windows does. */
+function normaliseDir(dir: string): string {
+  if (!dir.trim()) return '';
+  return resolve(dir.trim()).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
 
 @Injectable()
 export class OperatorService {
@@ -2177,6 +2184,29 @@ export class OperatorService {
   /** Why a folder cannot be used for version control, or null when it can. */
   repoProblem(dir: string): string | null {
     return repoUnusableReason(dir);
+  }
+
+  /**
+   * What bringing a project back to its remote's main branch would lose, and the command that does
+   * it — for the operator to run. See `vcs/syncCommand.ts`; nothing here writes.
+   *
+   * Only for a folder this bot already works in: a project in Settings or the repository of a
+   * session. The answer lists file names and commit subjects, and a local page asking about any
+   * folder on the disk is not a question this API should answer.
+   */
+  async syncPlan(dir: string): Promise<SyncPlan> {
+    await this.init();
+    const wanted = normaliseDir(dir);
+    const cfg = await this.settings.load();
+    const known = new Set(
+      [cfg.project?.rootDir ?? '', ...(cfg.project?.others ?? []).map((o) => o.rootDir), ...(await this.store.listSessions()).flatMap((s) => [s.vcs?.repoDir ?? '', s.mirror?.rootDir ?? ''])]
+        .filter((d) => d.trim())
+        .map(normaliseDir),
+    );
+    if (!wanted || !known.has(wanted)) {
+      throw new Error('That folder is not one of the projects in Settings or the repository of a session, so no command is offered for it.');
+    }
+    return await planSync(resolve(dir.trim()));
   }
 
   // --- the project being worked on ---------------------------------------------------------

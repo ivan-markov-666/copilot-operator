@@ -18,7 +18,8 @@
  *
  * Set COP_UI_SHOTS to a folder to keep a screenshot of every scenario that fails.
  */
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
@@ -295,6 +296,25 @@ try {
     await waitFor('the task to be queued again', async () => (await h.session(s!.id)).tasks[0]!.status === 'queued');
     const queued = (await h.session(s!.id)).tasks[0]! as unknown as { checks?: unknown[]; readOnly?: boolean; prompt: string };
     t.check('queued read-only, with no old checks and the new prompt', [queued.readOnly, queued.checks ?? [], queued.prompt.startsWith('Audit hello.txt')], [true, [], true]);
+  });
+
+  await scenario('a project in Settings offers the command that brings it back to the remote main, and runs nothing', {}, async (h, page, url) => {
+    const git = (...args: string[]): string => execFileSync('git', ['-C', h.repo, ...args], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', join(h.base, 'remote.git')]);
+    git('remote', 'add', 'origin', join(h.base, 'remote.git'));
+    git('push', '-q', 'origin', 'main');
+    git('fetch', '-q', 'origin');
+    git('checkout', '-q', '-b', 'cop/work');
+    writeFileSync(join(h.repo, 'stray.txt'), 'stray\n');
+
+    await page.goto(url('/defaults'));
+    await page.getByRole('button', { name: 'Command to bring this project back to the remote main branch' }).first().click();
+    await page.getByText('This would be lost:').waitFor();
+    const box = page.locator('.sync-command').first();
+    t.truthy('it names the new file that would go', (await box.textContent())?.includes('stray.txt'), (await box.textContent())?.slice(0, 400));
+    const commands = await box.locator('pre.sync-cmd').allTextContents();
+    t.truthy('a preview that only reads, and the command', commands.length === 2 && commands[0]!.includes('clean -nd') && commands[1]!.includes("reset --hard 'origin/main'") && commands[1]!.includes('clean -fd'), commands);
+    t.check('and nothing was run', [existsSync(join(h.repo, 'stray.txt')), git('rev-parse', '--abbrev-ref', 'HEAD')], [true, 'cop/work']);
   });
 
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {
