@@ -16,6 +16,13 @@ export default function SessionsPage() {
   const [batch, setBatch] = useState<BatchState | null>(null);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  /*
+   * A second set of ticks, for managing the list rather than running it: status and delete. It is
+   * never locked by a run, only row by row for a session that is running right now, so the list can
+   * be tidied while the bot works. The run ticks stay locked during a run, because changing what the
+   * run is doing half-way is a different act (pause, stop) with buttons of its own.
+   */
+  const [managed, setManaged] = useState<string[]>([]);
   const [onFailure, setOnFailure] = useState<'stop' | 'continue'>('stop');
   const [fromPlan, setFromPlan] = useState(false);
   const [name, setName] = useState('');
@@ -109,9 +116,9 @@ export default function SessionsPage() {
     }
   };
 
-  /** The same, for everything that is ticked. One question, then one pass. */
+  /** The same, for everything ticked in the manage column. One question, then one pass. */
   const removeSelected = async () => {
-    const chosen = (sessions ?? []).filter((x) => selected.includes(x.id));
+    const chosen = (sessions ?? []).filter((x) => managed.includes(x.id) && !x.running);
     if (chosen.length === 0) return;
     const names = chosen.map((x) => `• ${x.name} (${x.tasks.length})`).join('\n');
     if (!(await confirmDialog(t('home.deleteSelectedConfirm', { n: chosen.length, names })))) return;
@@ -131,7 +138,36 @@ export default function SessionsPage() {
         ? t('home.deletedMany', { n: done })
         : t('home.deleteSomeFailed', { n: done, m: failed.length, why: failed.join('; ') }),
     );
-    setSelected([]);
+    setSelected((prev) => prev.filter((id) => !chosen.some((c) => c.id === id)));
+    setManaged([]);
+    await load();
+  };
+
+  /**
+   * Active or inactive, for every session ticked in the manage column. An inactive session is not
+   * started by anything — alone, in a run of several, by "Continue" — until it is made active again;
+   * nothing about it is lost. One request per session, and what failed is said.
+   */
+  const setActiveMany = async (active: boolean) => {
+    const chosen = (sessions ?? []).filter((x) => managed.includes(x.id) && !x.running);
+    if (chosen.length === 0) return;
+    const failed: string[] = [];
+    for (const session of chosen) {
+      try {
+        await api.updateSession(session.id, { active });
+      } catch (e) {
+        failed.push(`${session.name}: ${(e as Error).message}`);
+      }
+    }
+    setMsg(
+      failed.length === 0
+        ? t(active ? 'home.madeActive' : 'home.madeInactive', { n: chosen.length })
+        : t('home.statusSomeFailed', { n: chosen.length - failed.length, m: failed.length, why: failed.join('; ') }),
+    );
+    // An inactive session cannot be run, so it leaves the run selection too.
+    if (!active) setSelected((prev) => prev.filter((id) => !chosen.some((c) => c.id === id)));
+    // Done with: the ticks are cleared, so the next action starts from a choice made for it.
+    setManaged([]);
     await load();
   };
 
@@ -182,6 +218,10 @@ export default function SessionsPage() {
       return next;
     });
   };
+
+  // Everything that can be managed now: all but the sessions that are running.
+  const manageable = (sessions ?? []).filter((x) => !x.running);
+  const managedNow = manageable.filter((x) => managed.includes(x.id));
 
   return (
     <>
@@ -245,13 +285,15 @@ export default function SessionsPage() {
         {sessions && sessions.length === 0 && <div className="muted">{t('home.none')}</div>}
         {sessions && sessions.length > 0 && (
           <div className="row" style={{ marginBottom: 10 }}>
-            <strong className="small">{t('home.selected', { n: selected.length })}</strong>
-            <button
-              className="danger"
-              onClick={() => void removeSelected()}
-              disabled={selected.length === 0 || batch?.running === true || sessions.some((x) => selected.includes(x.id) && x.running)}
-            >
-              {t('home.deleteSelected', { n: selected.length })}
+            <strong className="small">{t('home.managed', { n: managedNow.length })}</strong>
+            <button onClick={() => void setActiveMany(true)} disabled={managedNow.length === 0}>
+              {t('home.makeActive')}
+            </button>
+            <button onClick={() => void setActiveMany(false)} disabled={managedNow.length === 0}>
+              {t('home.makeInactive')}
+            </button>
+            <button className="danger" onClick={() => void removeSelected()} disabled={managedNow.length === 0}>
+              {t('home.deleteSelected', { n: managedNow.length })}
             </button>
             <span className="muted small">{t('home.tickForBoth')}</span>
           </div>
@@ -269,9 +311,19 @@ export default function SessionsPage() {
                 <th>
                   <input
                     type="checkbox"
+                    aria-label={t('home.manageAll')}
+                    title={t('home.manageAll')}
+                    checked={manageable.length > 0 && manageable.every((x) => managed.includes(x.id))}
+                    onChange={(e) => setManaged(e.target.checked ? manageable.map((x) => x.id) : [])}
+                    disabled={manageable.length === 0}
+                  />
+                </th>
+                <th>
+                  <input
+                    type="checkbox"
                     aria-label={t('home.selectAll')}
-                    checked={sessions.length > 0 && selected.length === sessions.length}
-                    onChange={(e) => setSelected(e.target.checked ? sessions.map((x) => x.id).reverse() : [])}
+                    checked={sessions.length > 0 && selected.length === sessions.filter((x) => x.active !== false).length}
+                    onChange={(e) => setSelected(e.target.checked ? sessions.filter((x) => x.active !== false).map((x) => x.id).reverse() : [])}
                     disabled={batch?.running === true}
                   />
                 </th>
@@ -290,14 +342,25 @@ export default function SessionsPage() {
                 const done = s.tasks.filter((x) => x.status === 'done').length;
                 const queued = queuedIn(s);
                 return (
-                  <tr key={s.id}>
+                  <tr key={s.id} className={s.active === false ? 'inactive' : undefined}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={managed.includes(s.id)}
+                        onChange={() => setManaged((prev) => (prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id]))}
+                        disabled={!!s.running}
+                        aria-label={t('home.manageRow', { name: s.name })}
+                        title={s.running ? t('home.manageRunning') : t('home.manageRow', { name: s.name })}
+                      />
+                    </td>
                     <td>
                       <input
                         type="checkbox"
                         checked={selected.includes(s.id)}
                         onChange={() => toggle(s.id)}
-                        disabled={batch?.running === true}
+                        disabled={batch?.running === true || s.active === false}
                         aria-label={s.name}
+                        title={s.active === false ? t('home.inactiveWhy') : undefined}
                       />
                     </td>
                     <td>
@@ -307,7 +370,10 @@ export default function SessionsPage() {
                       {s.tasks.length} <span className="muted small">{t('home.tasksDetail', { done, queued })}</span>
                     </td>
                     <td>
-                      <span className={`badge ${settled(s).badge}`} title={settled(s).title}>{stateLabel(s)}</span>
+                      <span className={`badge ${settled(s).badge}`} title={settled(s).title}>{stateLabel(s)}</span>{' '}
+                      <span className={`chip${s.active === false ? ' inactive' : ''}`} title={t(s.active === false ? 'home.inactiveWhy' : 'home.activeWhy')}>
+                        {t(s.active === false ? 'home.statusInactive' : 'home.statusActive')}
+                      </span>
                     </td>
                     <td>
                       {s.chat ? (
@@ -323,7 +389,7 @@ export default function SessionsPage() {
                       <button
                         className="quiet"
                         onClick={() => void remove(s)}
-                        disabled={s.running || batch?.running === true}
+                        disabled={!!s.running}
                         title={t('home.delete')}
                       >
                         {t('home.delete')}
@@ -472,7 +538,8 @@ function BatchPanel({
   // The ticks also select what to delete, so a session with an empty queue can be ticked. It
   // is left out of the run rather than sent and skipped, which would fill the report with rows
   // about sessions nobody meant to run.
-  const runnable = chosen.filter((s) => queuedIn(s) > 0);
+  // An inactive session is set aside: ticked for a run or not, it is not started.
+  const runnable = chosen.filter((s) => queuedIn(s) > 0 && s.active !== false);
   const queuedTotal = runnable.reduce((n, s) => n + queuedIn(s), 0);
   const running = batch?.running === true;
   const oneAlreadyRunning = sessions.some((s) => s.running);

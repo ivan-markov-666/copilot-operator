@@ -323,6 +323,41 @@ try {
     t.check('and nothing was run', [existsSync(join(h.repo, 'stray.txt')), git('rev-parse', '--abbrev-ref', 'HEAD')], [true, 'cop/work']);
   });
 
+  await scenario('the Sessions page manages the list while a session runs', {}, async (h, page, url) => {
+    const plan = planFor(h, 'busy') as { sessions: Array<Record<string, unknown>> };
+    plan.sessions.push({ ...plan.sessions[0]!, name: 'later', vcs: { enabled: false } }, { ...plan.sessions[0]!, name: 'scrap', vcs: { enabled: false } });
+    const [busy] = await h.importPlan(plan);
+    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+    await h.call('POST', `/sessions/${busy!.id}/start`, { mode: 'confirm' });
+    await waitFor('the step to wait', async () => (await h.call<unknown[]>('GET', '/approvals')).length > 0);
+
+    await page.goto(url('/'));
+    const manage = (name: string) => page.getByRole('checkbox', { name: `Manage ${name}` });
+    await manage('busy').waitFor();
+    t.check('the running session cannot be ticked to manage', await manage('busy').isDisabled(), true);
+    t.check('the others can, during the run', [await manage('later').isDisabled(), await manage('scrap').isDisabled()], [false, false]);
+
+    await manage('later').check();
+    await page.getByRole('button', { name: 'Make inactive' }).click();
+    await page.getByText(/1 session\(s\) are inactive/).waitFor();
+    const laterRow = page.locator('tr', { has: page.getByRole('link', { name: 'later' }) });
+    t.truthy('its row says inactive', (await laterRow.textContent())?.includes('inactive'), await laterRow.textContent());
+    t.check('and it cannot be ticked to run', await page.getByRole('checkbox', { name: 'later', exact: true }).isDisabled(), true);
+
+    await manage('scrap').check();
+    await page.getByRole('button', { name: /^Delete the 1 selected$/ }).click();
+    const confirm = page.getByRole('alertdialog');
+    await confirm.waitFor();
+    await confirm.getByRole('button', { name: 'OK' }).click();
+    await waitFor('the session to be gone', async () => !(await h.call<Array<{ name: string }>>('GET', '/sessions')).some((s) => s.name === 'scrap'));
+    t.truthy('a session was deleted while another ran', true);
+
+    const approval = (await h.call<Array<{ id: string }>>('GET', '/approvals'))[0]!;
+    await h.call('POST', `/approvals/${approval.id}`, { action: 'run' });
+    await h.idle();
+    t.check('the running one finished undisturbed', (await h.session(busy!.id)).tasks[0]!.status, 'done');
+  });
+
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {
     await page.goto(url('/defaults'));
     const iterations = page.getByLabel('Most messages to the chat in one task');

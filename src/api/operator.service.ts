@@ -261,6 +261,8 @@ export type RegistryEntry = {
   /** The paths the task may change; absent means anywhere. */
   scope?: string[];
   stopCode?: Task['stopCode'];
+  /** The session is set aside (`Session.active` false): its tasks are not offered to run. */
+  sessionInactive?: boolean;
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
   autoRetries?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
@@ -514,11 +516,17 @@ export class OperatorService {
       mirror?: Partial<MirrorSettings>;
       vcs?: Partial<VersionControl>;
       review?: Partial<ReviewSettings>;
+      active?: boolean;
     },
   ): Promise<Session> {
     await this.init();
+    if (patch.active !== undefined && this.running.has(id)) {
+      throw new Error('This session is running; its status can be changed once it has stopped.');
+    }
     return await this.store.updateSession(id, (s) => {
       if (patch.name !== undefined) s.name = patch.name.trim() || s.name;
+      if (patch.active === true) delete s.active;
+      else if (patch.active === false) s.active = false;
       if (patch.onFailure === 'stop' || patch.onFailure === 'continue') s.onFailure = patch.onFailure;
       // An empty string is a real choice here: it means "leave the chat on whatever it is".
       if (patch.model !== undefined) s.model = patch.model.trim() || undefined;
@@ -1076,6 +1084,10 @@ export class OperatorService {
     if (this.running.has(sessionId)) return { started: false, reason: 'already running', done: Promise.resolve(idle) };
     const session = await this.store.getSession(sessionId);
     if (!session) return { started: false, reason: 'no such session', done: Promise.resolve(idle) };
+    // Set aside by the operator on the Sessions page: not started by anything until made active.
+    if (session.active === false) {
+      return { started: false, reason: 'the session is inactive; make it active on the Sessions page to run it', done: Promise.resolve(idle) };
+    }
     const queuedIds = queuedToRun(session, onlyTasks).map((t) => t.id);
     if (queuedIds.length === 0) return { started: false, reason: 'no queued tasks', done: Promise.resolve(idle) };
 
@@ -2480,6 +2492,7 @@ export class OperatorService {
           readOnly: t.readOnly || undefined,
           scope: t.scope?.length ? t.scope : undefined,
           stopCode: t.stopCode,
+          sessionInactive: s.active === false || undefined,
           autoRetries: t.autoRetries || undefined,
           attempt: t.attempt,
           changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,

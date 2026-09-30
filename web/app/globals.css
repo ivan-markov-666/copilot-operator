@@ -681,6 +681,11 @@ th, td { position: relative; }
   pre, .log { font-size: calc(12px * var(--scale)); }
 }
 
+/* A session set aside on the Sessions page (Session.active false): still listed, visibly not in play. */
+tr.inactive td { opacity: 0.6; }
+tr.inactive td:first-child { opacity: 1; }
+.chip.inactive { color: var(--warn); border-color: var(--warn); }
+
 /* When each entry of a task's story happened: first in its line, quiet, digits of equal width. */
 .story-when { color: var(--muted); font-size: calc(12px * var(--scale)); font-variant-numeric: tabular-nums; white-space: nowrap; }
 

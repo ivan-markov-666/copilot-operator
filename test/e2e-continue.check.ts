@@ -279,4 +279,54 @@ await scenario('a task that contradicts itself is stopped before anything is sen
   t.check('nothing was sent to the chat', h.chat.sent.length, 0);
 });
 
+await scenario('sessions set aside while another runs: inactive ones are not started, a waiting one can be deleted, the running one cannot be touched', {}, async (h) => {
+  const [a, b, c] = await h.importPlan({
+    version: 1,
+    sessions: [
+      session(h, 'runner', [task('first', 'one.txt', 'one')], { branchMode: 'per-task' }, { onFailure: 'continue' }),
+      session(h, 'aside', [task('second', 'two.txt', 'two')], { branchMode: 'per-task' }, { onFailure: 'continue' }),
+      session(h, 'dropped', [task('third', 'three.txt', 'three')], { branchMode: 'per-task' }, { onFailure: 'continue' }),
+    ],
+  });
+  t.check('imported sessions are active (no flag stored)', [a!, b!, c!].map((x) => (x as unknown as { active?: boolean }).active), [undefined, undefined, undefined]);
+
+  // A run of all three, asking before each step, so the first one is held mid-run.
+  h.chat.script(write('one.txt', 'one'), reply.done());
+  await h.call('POST', '/batch/start', { sessionIds: [a!.id, b!.id, c!.id], mode: 'confirm', onFailure: 'continue' });
+  type Approval = { id: string; sessionId: string };
+  const waiting = await waitFor('the first session to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
+  t.check('the first session is the one running', waiting.sessionId, a!.id);
+
+  const runningStatus = await h.raw('PUT', `/sessions/${a!.id}`, { active: false });
+  t.truthy('the running session\'s status cannot be changed', runningStatus.status >= 400, runningStatus);
+  const runningDelete = await h.raw('DELETE', `/sessions/${a!.id}`);
+  t.truthy('nor can it be deleted', runningDelete.status >= 400, runningDelete);
+
+  await h.call('PUT', `/sessions/${b!.id}`, { active: false });
+  t.check('a waiting session is set aside while the run goes on', (await h.session(b!.id) as unknown as { active?: boolean }).active, false);
+  const register = await h.call<Array<{ sessionId: string; sessionInactive?: boolean }>>('GET', '/tasks');
+  t.check('the register marks its tasks as not on offer', register.filter((e) => e.sessionId === b!.id).map((e) => e.sessionInactive), [true]);
+  await h.call('DELETE', `/sessions/${c!.id}`);
+  t.check('and another waiting one is deleted', (await h.call<Array<{ id: string }>>('GET', '/sessions')).some((x) => x.id === c!.id), false);
+
+  await h.call('POST', `/approvals/${waiting.id}`, { action: 'run' });
+  await h.idle();
+  type Batch = { sessions: Array<{ sessionId: string; state: string; reason?: string }> };
+  const batch = await h.call<Batch>('GET', '/batch');
+  t.check('the running session finished', (await h.session(a!.id)).tasks[0]!.status, 'done');
+  const aside = batch.sessions.find((x) => x.sessionId === b!.id)!;
+  t.truthy('the inactive one was skipped, saying why', aside.state === 'skipped' && /inactive/.test(aside.reason ?? ''), aside);
+  t.check('its task is still queued, nothing lost', (await h.session(b!.id)).tasks[0]!.status, 'queued');
+  const gone = batch.sessions.find((x) => x.sessionId === c!.id)!;
+  t.truthy('the deleted one was skipped too', gone.state === 'skipped', gone);
+
+  const alone = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${b!.id}/start`, { mode: 'unattended' });
+  t.truthy('started on its own, an inactive session refuses and says why', !alone.started && /inactive/.test(alone.reason ?? ''), alone);
+  await h.call('PUT', `/sessions/${b!.id}`, { active: true });
+  t.check('made active again: the flag is gone', (await h.session(b!.id) as unknown as { active?: boolean }).active, undefined);
+  h.chat.script(write('two.txt', 'two'), reply.done());
+  const again = await h.run(b!.id);
+  t.check('and it runs', again.tasks[0]!.status, 'done');
+});
+
 t.finish();

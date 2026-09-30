@@ -368,6 +368,8 @@ export type RegistryEntry = {
   /** The paths the task may change. */
   scope?: string[];
   stopCode?: StopCode;
+  /** The session is set aside: its tasks are not offered to run. */
+  sessionInactive?: boolean;
   /** Which attempt this row describes. 1 unless the task has been run again. */
   attempt?: number;
   /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
@@ -477,6 +479,8 @@ export type ModelCatalogue = {
 };
 
 export type Session = {
+  /** `false` when set aside on the Sessions page: not started by anything until made active. */
+  active?: boolean;
   id: string;
   name: string;
   createdAt: string;
@@ -784,6 +788,7 @@ export const api = {
   updateSession: (
     id: string,
     patch: {
+      active?: boolean;
       name?: string;
       model?: string;
       onFailure?: 'stop' | 'continue';

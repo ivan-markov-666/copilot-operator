@@ -1089,8 +1089,9 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
    * an earlier one of its session is said, not refused, because the operator may know it does
    * not matter.
    */
-  const upcoming = entries.filter((e) => e.status === 'queued');
-  const failed = entries.filter((e) => FAILED_STATUSES.includes(e.status) && !e.sessionRunning);
+  // A session set aside on the Sessions page is not offered: its tasks wait until it is active again.
+  const upcoming = entries.filter((e) => e.status === 'queued' && !e.sessionInactive);
+  const failed = entries.filter((e) => FAILED_STATUSES.includes(e.status) && !e.sessionRunning && !e.sessionInactive);
   const anyRunning = entries.some((e) => e.sessionRunning);
   const chainFailed = failed.filter((e) => e.sessionOnFailure === 'stop');
   const looseFailed = failed.filter((e) => e.sessionOnFailure !== 'stop');

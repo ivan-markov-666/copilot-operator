@@ -624,6 +624,12 @@ export type Session = {
   name: string;
   createdAt: string;
   status: SessionStatus;
+  /**
+   * `false` when the operator has set the session aside: it is not started — not on its own, not
+   * in a run of several, not by "Continue" in the register — until it is made active again. Absent
+   * means active, which is what every session is when it is created or imported.
+   */
+  active?: boolean;
   /** Set once the conversation exists in Copilot. */
   chat?: ChatPointer;
   /** Whether the level-1 contract has already been sent in this conversation. */
