@@ -323,10 +323,12 @@ export default function HistoryPage() {
             </section>
           )}
 
+          {/*
+            The run's controls sit above both lists rather than inside "What is next": that list folds
+            away, and "What has been done" comes first, and neither should take the controls with it.
+          */}
           {shown.length > 0 && (
-            <section className="panel">
-              <h2>{t('reg.upcoming')}</h2>
-              <p className="muted small">{t('reg.upcomingHint')}</p>
+            <div style={{ marginBottom: 12 }}>
               {/* Holding or stopping the run belongs next to continuing it: they are the three
                   things an operator does to a run in flight, and this is the page they watch it on. */}
               <RunControls onChange={() => void load()} />
@@ -342,12 +344,7 @@ export default function HistoryPage() {
                 </div>
               )}
               <ContinueRun entries={shown} onChange={() => void load()} />
-              {upcoming.length === 0 ? (
-                <div className="empty">{t('reg.noUpcoming')}</div>
-              ) : (
-                <Flow entries={upcoming} upcoming sizes={runSizes} onChange={() => void load()} />
-              )}
-            </section>
+            </div>
           )}
 
           {shown.length > 0 && (
@@ -357,10 +354,65 @@ export default function HistoryPage() {
               {past.length === 0 ? <div className="empty">{t('reg.noPast')}</div> : <PastByRun entries={past} sizes={runSizes} onChange={() => void load()} />}
             </section>
           )}
+
+          {shown.length > 0 && (
+            <section className="panel">
+              <FoldingUpcoming count={upcoming.length}>
+                <p className="muted small">{t('reg.upcomingHint')}</p>
+                {upcoming.length === 0 ? (
+                  <div className="empty">{t('reg.noUpcoming')}</div>
+                ) : (
+                  <Flow entries={upcoming} upcoming sizes={runSizes} onChange={() => void load()} />
+                )}
+              </FoldingUpcoming>
+            </section>
+          )}
           {all && all.length > 0 && <MetricsPanel refreshKey={updatedAt} />}
         </>
       )}
     </>
+  );
+}
+
+/** Where the fold of "What is next" is remembered, per viewer. */
+const UPCOMING_OPEN_KEY = 'cop.register.upcomingOpen';
+
+/**
+ * "What is next", folding. A long queue made the page a long scroll to get past; it opens by itself
+ * while the queue is short, and whatever the operator chose last is remembered in this browser.
+ */
+function FoldingUpcoming({ count, children }: { count: number; children: React.ReactNode }) {
+  const { t } = useT();
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      const kept = window.localStorage.getItem(UPCOMING_OPEN_KEY);
+      if (kept === 'true' || kept === 'false') return kept === 'true';
+    } catch {
+      /* no storage: fall through to the default */
+    }
+    return count <= 8;
+  });
+  // Toggled by the click alone: the browser also fires "toggle" when an open element first appears,
+  // and remembering that would overwrite the choice the operator made.
+  const flip = (e: React.MouseEvent): void => {
+    e.preventDefault();
+    const now = !open;
+    setOpen(now);
+    try {
+      window.localStorage.setItem(UPCOMING_OPEN_KEY, String(now));
+    } catch {
+      /* remembered only for this visit */
+    }
+  };
+  return (
+    <details open={open}>
+      <summary onClick={flip}>
+        <h2 style={{ display: 'inline' }}>
+          {t('reg.upcoming')} ({count})
+        </h2>
+      </summary>
+      {open && children}
+    </details>
   );
 }
 
@@ -701,6 +753,20 @@ function Flow({
                   {t('reg.continueHere')}
                 </button>
               )}
+              {/*
+               * A task that failed or blocked on its work starts again rather than carrying on — but
+               * on its own, from its row, without the rest of the queue going with it.
+               */}
+              {!continuable(e) && (e.status === 'failed' || e.status === 'blocked') && !e.sessionRunning && !e.sessionInactive && (
+                <button
+                  className={continuing === e.taskId ? '' : 'primary'}
+                  aria-expanded={continuing === e.taskId}
+                  onClick={() => setContinuing(continuing === e.taskId ? null : e.taskId)}
+                  title={t('reg.rerunHereWhy')}
+                >
+                  {t('reg.rerunHere')}
+                </button>
+              )}
               {FAILED_STATUSES.includes(e.status) && !e.sessionRunning && (
                 <button className="quiet" onClick={() => setFixing(e)} title={t('reg.fixPromptHint')}>
                   {t('reg.fixPrompt')}
@@ -741,7 +807,7 @@ function Flow({
                 </>
               )}
             </div>
-            {continuing === e.taskId && continuable(e) && !e.sessionRunning && (
+            {continuing === e.taskId && (continuable(e) || e.status === 'failed' || e.status === 'blocked') && !e.sessionRunning && (
               <ContinueHere
                 entry={e}
                 onClose={(started) => {
@@ -1116,7 +1182,11 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
   const quietStart = useUnattendedWithoutAsking();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const branchLine = e.branch
+  // Stopped: carried on where it stopped. Failed or blocked on its work: a new attempt, the same way alone.
+  const carryOn = continuable(e);
+  const branchLine = !carryOn
+    ? t('reg.rerunHereBranch')
+    : e.branch
     ? e.commit
       ? t('reg.continueHereCommitted', { branch: e.branch, commit: e.commit.slice(0, 8) })
       : e.vcsProblem
@@ -1130,7 +1200,8 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
     setBusy(true);
     setMsg('');
     try {
-      await api.continueTask(e.sessionId, e.taskId);
+      if (carryOn) await api.continueTask(e.sessionId, e.taskId);
+      else await api.rerunTask(e.sessionId, e.taskId);
       const name = await api.suggestedRunName([e.sessionId]).then((r) => r.name).catch(() => undefined);
       const r = await api.startBatch([e.sessionId], mode, 'stop', undefined, undefined, name, [e.taskId]);
       if (!r.started) {
@@ -1147,13 +1218,14 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
     }
   };
   return (
-    <div className="notice" role="group" aria-label={t('reg.continueHereTitle', { title: e.title })} style={{ marginTop: 8 }}>
-      <strong>{t('reg.continueHereTitle', { title: e.title })}</strong>
+    <div className="notice" role="group" aria-label={t(carryOn ? 'reg.continueHereTitle' : 'reg.rerunHereTitle', { title: e.title })} style={{ marginTop: 8 }}>
+      <strong>{t(carryOn ? 'reg.continueHereTitle' : 'reg.rerunHereTitle', { title: e.title })}</strong>
       {e.reason && <p className="small">{e.reason}</p>}
       <ul className="small">
-        <li>{t('reg.continueHereChat')}</li>
+        <li>{t(carryOn ? 'reg.continueHereChat' : 'reg.rerunHereChat')}</li>
         <li>{branchLine}</li>
-        <li>{t('reg.continueHereCount')}</li>
+        <li>{t(carryOn ? 'reg.continueHereCount' : 'reg.rerunHereKept')}</li>
+        <li>{t('reg.continueHereAlone')}</li>
       </ul>
       <div className="row">
         <button className="primary" disabled={busy} onClick={() => void start('confirm')} title={t('reg.continueWhy')}>
@@ -1295,12 +1367,14 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
       {open && !anyRunning && (
         <div className="notice" style={{ marginTop: 8 }}>
           <strong>{t('reg.continuePanelTitle')}</strong>
-          <div className="row small" style={{ marginTop: 6 }}>
-            <button className="quiet small" onClick={() => setPicked(new Set(candidates.map((e) => e.taskId)))}>
-              {t('reg.pickAll')}
-            </button>
-            <button className="quiet small" onClick={() => setPicked(new Set())}>
+          {/* Said and done in one place: how many are ticked, and the two buttons that change all of them. */}
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="small">{t('reg.pickedCount', { n: chosen.length, of: candidates.length })}</span>
+            <button className="small" onClick={() => setPicked(new Set())} disabled={chosen.length === 0}>
               {t('reg.pickNone')}
+            </button>
+            <button className="small" onClick={() => setPicked(new Set(candidates.map((e) => e.taskId)))} disabled={chosen.length === candidates.length}>
+              {t('reg.pickAll')}
             </button>
           </div>
           {[

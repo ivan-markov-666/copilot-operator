@@ -53,7 +53,7 @@ import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { mirrorProject, describeMirror, MirrorSelectionError } from '../context/projectMirror.js';
-import { projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
+import { keptOnDesktop, mirrorSourceRoot, projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
@@ -875,15 +875,29 @@ export async function runTask(
     if (session.mirror.enabled && session.mirror.rootDir) {
       // One folder per project, and the project's name in front of every file name, so three
       // repositories mirrored in turn do not delete each other's copies or collide in the chat.
-      const projectName = projectNameFor(session.mirror.rootDir, cfg);
-      const targetDir = projectTargetDir(cfg, projectName);
+      // The bot's own Desktop copy named as the root means the project it is a copy of. See `mirrorSourceRoot`.
+      const source = mirrorSourceRoot(cfg, session.mirror.rootDir);
+      if ('problem' in source) {
+        sink.event('mirror-refused', { error: source.problem }, source.problem, 'error');
+        return await finish('failed', `${source.problem} Nothing was sent to the chat.`);
+      }
+      if (source.fromCopy) {
+        sink.event('mirror-source', { asked: source.fromCopy, used: source.rootDir },
+          `the root of the files to attach is the bot's Desktop copy ${source.fromCopy}; they are copied from the project itself, ${source.rootDir}`, 'warn');
+      }
+      const sourceRoot = source.rootDir;
+      const projectName = projectNameFor(sourceRoot, cfg);
+      // A project kept on the Desktop has its folder there looked after by the Desktop mirror; the
+      // attachments are copied into this attempt's own folder instead. See `keptOnDesktop`.
+      const onDesktop = keptOnDesktop(cfg, sourceRoot);
+      const targetDir = onDesktop ? log.path('attachments') : projectTargetDir(cfg, projectName);
       await removeLegacyFlatMirror(cfg).catch(() => undefined);
       /*
        * A selection that cannot be copied stops the task before anything is sent: the chat would
        * otherwise work without the files it was promised. The copies already there are kept.
        */
       const result = await mirrorProject({
-        rootDir: session.mirror.rootDir,
+        rootDir: sourceRoot,
         // `rules-engine` in a plan usually means the repository's folder, wherever the root is.
         alsoUnder: [repoDirOf(session)],
         includeDirs: session.mirror.includeDirs.length ? session.mirror.includeDirs : ['.'],
@@ -903,7 +917,7 @@ export async function runTask(
         sink.event('mirror-refused', { error: result.message }, result.message, 'error');
         return await finish('failed', `${result.message} Nothing was sent to the chat. Fix the files to attach and queue the task again.`);
       }
-      sink.event('mirror', { targetDir, ...result }, `project mirror: ${describeMirror(result)}`);
+      sink.event('mirror', { targetDir, onDesktop, ...result }, `project mirror${onDesktop ? ' (attachments, in the run folder: the Desktop copy is kept by the Desktop mirror)' : ''}: ${describeMirror(result)}`);
       if (session.mirror.includeEnvFiles) {
         const envCount = Object.keys(result.mapping).filter((p) => /(^|\/)\.env(\.|$)/i.test(p)).length;
         if (envCount > 0) {

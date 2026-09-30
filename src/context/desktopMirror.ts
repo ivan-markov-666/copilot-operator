@@ -14,7 +14,7 @@
  * `project.mirrorToDesktop`; a session's own mirror (the files attached to its first message)
  * uses the same folder for its project whether or not the switch is on.
  */
-import { basename, join, resolve } from 'node:path';
+import { basename, join, resolve, relative, isAbsolute } from 'node:path';
 import { readdir, rm, stat } from 'node:fs/promises';
 import type { ResolvedConfig, ProjectMirrorSelection } from '../config/schema.js';
 import { mirrorProject, type MirrorResult } from './projectMirror.js';
@@ -50,6 +50,45 @@ export function knownProjects(cfg: ResolvedConfig): KnownProject[] {
   }
   for (const o of cfg.project?.others ?? []) out.push({ name: o.name, rootDir: o.rootDir, isDefault: false, mirror: o.mirror ?? EMPTY_SELECTION, desktop: o.desktop !== false });
   return out;
+}
+
+/**
+ * Whether the Desktop copy of the project at `rootDir` is kept by "Keep the projects on the Desktop".
+ *
+ * Then its Desktop folder has one owner, the Desktop mirror, and a task's attachments are copied
+ * elsewhere. The two used to share it with different selections — the whole project there, the
+ * task's folders here — so every run deleted most of the folder and every round of steps put it
+ * back: thousands of deletions and uploads in a OneDrive-synced Desktop, while the chat was
+ * uploading the task's own attachments to the same OneDrive (2026-09-30, a first message timing out).
+ */
+export function keptOnDesktop(cfg: ResolvedConfig, rootDir: string): boolean {
+  return !!cfg.project?.mirrorToDesktop && knownProjects(cfg).some((p) => p.desktop && sameFolder(p.rootDir, rootDir));
+}
+
+/**
+ * The project folder to copy from, for a folder a session names as its project files' root.
+ *
+ * A folder in the bot's own Desktop area (`contextRoot`) is not a project: it is the bot's copy of
+ * one, flattened, and the place the copies are written to. Named as a root — seen live on 2026-09-30,
+ * `...\Desktop\copilot-operator-context\Automation` — the mirror read the folder it was writing: with
+ * "Keep the projects on the Desktop" on it copied its own copies over the originals while the Desktop
+ * mirror put them back, and the first message timed out; with it off the folder was not there and
+ * the task was refused. Such a folder is taken to mean the project it is the copy of; one that is the
+ * copy of no known project is refused, with what to choose instead.
+ */
+export function mirrorSourceRoot(cfg: ResolvedConfig, rootDir: string): { rootDir: string; fromCopy?: string } | { problem: string } {
+  const area = resolve(contextRoot(cfg));
+  const dir = resolve(rootDir);
+  const rel = relative(area, dir);
+  if (rel === '') {
+    return { problem: `${dir} is the folder where the bot keeps its Desktop copies, not a project. Choose the project's own folder as the root of the files to attach.` };
+  }
+  if (rel.startsWith('..') || isAbsolute(rel)) return { rootDir };
+  const copyOf = knownProjects(cfg).find((p) => sameFolder(projectTargetDir(cfg, p.name), join(area, rel.split(/[\\/]/)[0]!)));
+  if (!copyOf) {
+    return { problem: `${dir} is inside the folder where the bot keeps its Desktop copies (${area}), not a project, and it is not the copy of any project on the Project page. Choose the project's own folder as the root of the files to attach.` };
+  }
+  return { rootDir: copyOf.rootDir, fromCopy: dir };
 }
 
 /** What to call the folder for a session's project: its Settings name, else the folder's own. */

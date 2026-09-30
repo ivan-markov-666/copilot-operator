@@ -2533,6 +2533,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Същият бутон, когато историята е отворена: сгъва я обратно.',
           },
           {
+            key: 'reg.rerunHere',
+            kind: 'button',
+            en: 'Run only this one again',
+            bg: 'Пусни само тази отново',
+            doesEn:
+              'On a row that failed or blocked on its work: says what happens to the chat, branch and record, then starts a new attempt of that task alone; the rest of the queue stays.',
+            doesBg:
+              'На ред, провален или блокиран по работата: казва какво става с чата, клона и записа, после пуска нов опит само за тази задача; останалите в опашката остават.',
+          },
+          {
             key: 'reg.continueHere',
             kind: 'button',
             en: 'Continue where it stopped',
@@ -2839,8 +2849,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           {
             key: 'reg.pickAll',
             kind: 'button',
-            en: 'All of them',
-            bg: 'Всички',
+            en: 'Tick all',
+            bg: 'Маркирай всички',
             doesEn:
               'In that panel: ticks every task.',
             doesBg:
@@ -2849,10 +2859,10 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           {
             key: 'reg.pickNone',
             kind: 'button',
-            en: 'None',
-            bg: 'Нито една',
+            en: 'Untick all',
+            bg: 'Размаркирай всички',
             doesEn:
-              'In that panel: unticks every task (the start buttons then do nothing until one is ticked).',
+              'In that panel: unticks every task, beside the count of ticked ones (the start buttons then do nothing until one is ticked).',
             doesBg:
               'В панела: маха всички отметки (бутоните за пускане тогава не действат, докато не се отметне поне една).',
           },

@@ -348,6 +348,56 @@ try {
     t.truthy('a branch that is not there is said before any run', true);
   });
 
+  /*
+   * Asked for on 2026-09-30: a task that failed goes back on its own, from its row, without the rest of
+   * the queue; the continue panel unticks everything in one click; "What has been done" comes before
+   * "What is next", and "What is next" folds.
+   */
+  await scenario('the register: one failed task run again alone, the lists in order, the queue folding', { limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'alone', [greeting, { ...greeting, title: 'second-greeting' }]));
+    h.chat.script(reply.blocked());
+    const ran = await h.run(s!.id);
+    t.check('the first task blocked, the second is still queued', ran.tasks.map((x) => x.status), ['blocked', 'queued']);
+
+    await page.goto(url('/history'));
+    await page.locator('h2', { hasText: 'What is next' }).waitFor();
+    const headings = await page.locator('h2').allTextContents();
+    const done = headings.findIndex((x) => x.startsWith('What has been done'));
+    const next = headings.findIndex((x) => x.startsWith('What is next'));
+    t.truthy('"What has been done" comes before "What is next"', done >= 0 && next > done, headings);
+    // The blocked task is there too, marked to go back first: its session is a chain.
+    t.truthy('"What is next" says how many', headings.some((x) => x === 'What is next (2)'), headings);
+
+    // The queue folds, and stays as it was left.
+    const fold = page.locator('details', { has: page.locator('h2', { hasText: 'What is next' }) });
+    t.check('open while the queue is short', await fold.evaluate((d) => (d as HTMLDetailsElement).open), true);
+    await fold.locator('summary').click();
+    t.check('folded with one click', await fold.evaluate((d) => (d as HTMLDetailsElement).open), false);
+    await page.reload();
+    t.check('and still folded after a reload', await page.locator('details', { has: page.locator('h2', { hasText: 'What is next' }) }).evaluate((d) => (d as HTMLDetailsElement).open), false);
+
+    // The continue panel: everything ticked, untick all in one click.
+    await page.getByRole('button', { name: /^Continue: run/ }).click();
+    await page.getByText(/2 of 2 ticked/).waitFor();
+    await page.getByRole('button', { name: 'Untick all' }).click();
+    await page.getByText(/0 of 2 ticked/).waitFor();
+    t.truthy('"Untick all" leaves nothing ticked', true);
+
+    // The failed row: run only it again.
+    const row = page.locator('ol.flow > li', { hasText: 'write-greeting' }).filter({ has: page.locator('.badge.blocked') }).first();
+    await row.getByRole('button', { name: 'Run only this one again' }).click();
+    const panel = row.getByRole('group', { name: 'Run “write-greeting” again, on its own' });
+    await panel.waitFor();
+    t.truthy('it says only this task runs', /Only this task runs/.test((await panel.textContent()) ?? ''), await panel.textContent());
+    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+    await panel.getByRole('button', { name: 'Continue without asking' }).click();
+    const confirm = page.getByRole('alertdialog');
+    await confirm.waitFor({ timeout: 3_000 }).then(() => confirm.getByRole('button', { name: 'OK' }).click()).catch(() => undefined);
+    await waitFor('the task to run again', async () => (await h.session(s!.id)).tasks[0]!.status === 'done');
+    await h.idle();
+    t.check('it ran again and is done; the other stayed queued', (await h.session(s!.id)).tasks.map((x) => x.status), ['done', 'queued']);
+  });
+
   await scenario('a new prompt for a done task: its old checks are offered, unticked, and it can be made read-only', {}, async (h, page, url) => {
     const [s] = await h.importPlan(planFor(h, 'newprompt'));
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());

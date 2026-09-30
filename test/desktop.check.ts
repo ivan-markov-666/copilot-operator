@@ -94,4 +94,145 @@ await withHarness('each project has its own tick under the master switch', async
   t.check('and on again brings back only the ticked ones', [existsSync(join(desktop, 'app')), existsSync(join(desktop, 'other'))], [false, true]);
 });
 
+/*
+ * The Desktop copy and a task's attachments no longer share a folder (2026-09-30). The Desktop copy
+ * holds the whole project; a task attaching only src used to delete everything else from it before its
+ * first message, and every round put it back — a storm of deletions and uploads in a OneDrive Desktop
+ * while the chat uploaded the attachments. Now the attachments come from the run folder, and the
+ * Desktop copy is not touched by the task.
+ */
+await withHarness('a task attaching some folders leaves the whole-project Desktop copy alone', async (h, desktop) => {
+  mkdirSync(join(h.repo, 'src'), { recursive: true });
+  mkdirSync(join(h.repo, 'docs'), { recursive: true });
+  writeFileSync(join(h.repo, 'src', 'app.ts'), 'export const app = 1;\n');
+  writeFileSync(join(h.repo, 'docs', 'guide.md'), '# the guide\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'src and docs');
+  // The Desktop copy is refreshed at the start of the run; this one only makes sure it is there now.
+  await h.call('PUT', '/project', { mirrorToDesktop: true });
+  const before = Object.keys(filesUnder(join(desktop, 'app'))).sort();
+  t.truthy('the Desktop copy holds the whole project, docs included', before.some((f) => f.includes('docs--guide.md')), before);
+
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [{
+      name: 'attach',
+      onFailure: 'stop',
+      vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'attach' },
+      review: { enabled: false },
+      mirror: { enabled: true, rootDir: h.repo, includeDirs: ['src'], excludeDirs: [] },
+      tasks: [{ title: 'read-src', prompt: 'Read the attached source and write seen.txt in the repository root holding exactly seen.' }],
+    }],
+  });
+  h.chat.script(
+    () => {
+      // The attachments go with the first message of the task, which the scripted chat answers itself.
+      const m = h.chat.sent.find((x) => x.attachments.length > 0);
+      t.truthy('the first message carried attachments', !!m, h.chat.sent.map((x) => x.attachments.length));
+      if (!m) return reply.steps("Set-Content -Path seen.txt -Value 'seen' -Encoding utf8");
+      t.truthy('the first message attaches the task\'s folder only, from the run folder', m.attachments.every((a) => a.includes('attachments') && a.includes('src--app.ts')), m.attachments);
+      t.truthy('every attachment is there when it is sent', Object.values(m.attached).every((text) => text !== '(missing)'), m.attached);
+      const now = Object.keys(filesUnder(join(desktop, 'app'))).sort();
+      t.check('the Desktop copy still holds everything it held', before.every((f) => now.includes(f)), true);
+      return reply.steps("Set-Content -Path seen.txt -Value 'seen' -Encoding utf8");
+    },
+    reply.done(),
+  );
+  const task = (await h.run(s!.id)).tasks[0]!;
+  t.check('the task ran', task.status, 'done');
+});
+
+/*
+ * The case in the screenshot of 2026-09-30: the session's files to attach had as their root the bot's
+ * own Desktop copy of the project (copilot-operator-context\<project>), not the project. With the
+ * Desktop on, the mirror read the folder it was writing; with it off, the folder was not there and the
+ * task was refused ("." is not inside the project root). The copy now stands for the project it is a
+ * copy of; a folder there that is the copy of nothing is refused, saying what to choose.
+ */
+async function copyAsRoot(h: Harness, desktop: string, name: string, root: string): Promise<{ status: string; reason?: string }> {
+  mkdirSync(join(h.repo, 'src'), { recursive: true });
+  writeFileSync(join(h.repo, 'src', 'app.ts'), 'export const app = 1;\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'src');
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [{
+      name,
+      onFailure: 'stop',
+      vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: name },
+      review: { enabled: false },
+      mirror: { enabled: true, rootDir: root, includeDirs: ['.'], excludeDirs: [] },
+      tasks: [{ title: `${name}-task`, prompt: 'Read the attached source and write seen.txt in the repository root holding exactly seen.' }],
+    }],
+  });
+  const before = Object.keys(filesUnder(join(desktop, 'app'))).sort();
+  h.chat.script(
+    () => {
+      const m = h.chat.sent.find((x) => x.attachments.length > 0);
+      t.truthy(`${name}: the project's own files are attached, from the run folder`, !!m && m.attachments.some((a) => a.includes('attachments') && a.includes('src--app.ts')), m?.attachments);
+      t.truthy(`${name}: not a copy of a copy`, !!m && m.attachments.every((a) => !/app--app--/.test(a)), m?.attachments);
+      // Refreshed at the start of the run (src/app.ts is new), and nothing taken out of it.
+      const now = Object.keys(filesUnder(join(desktop, 'app')));
+      t.truthy(`${name}: nothing was deleted from the Desktop copy`, before.every((f) => now.includes(f)) && now.includes('app--src--app.ts.txt'), now);
+      return reply.steps("Set-Content -Path seen.txt -Value 'seen' -Encoding utf8");
+    },
+    reply.done(),
+  );
+  return (await h.run(s!.id)).tasks[0]! as unknown as { status: string; reason?: string };
+}
+
+await withHarness('the bot\'s Desktop copy named as the root means the project, with the Desktop on', async (h, desktop) => {
+  const task = await copyAsRoot(h, desktop, 'copy-on', join(desktop, 'app'));
+  t.check('the task ran', [task.status, task.reason ?? null], ['done', null]);
+});
+
+await withHarness('the same with the Desktop off, when the copy folder is not there at all', async (h, desktop) => {
+  await h.call('PUT', '/project', { mirrorToDesktop: false });
+  t.check('no Desktop copy', existsSync(join(desktop, 'app')), false);
+  h.chat.script(
+    () => {
+      const m = h.chat.sent.find((x) => x.attachments.length > 0);
+      t.truthy('the project\'s files are attached all the same', !!m && m.attachments.some((a) => a.includes('src--app.ts')), m?.attachments);
+      return reply.steps("Set-Content -Path seen.txt -Value 'seen' -Encoding utf8");
+    },
+    reply.done(),
+  );
+  mkdirSync(join(h.repo, 'src'), { recursive: true });
+  writeFileSync(join(h.repo, 'src', 'app.ts'), 'export const app = 1;\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'src');
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [{
+      name: 'copy-off',
+      onFailure: 'stop',
+      vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'copy-off' },
+      review: { enabled: false },
+      mirror: { enabled: true, rootDir: join(desktop, 'app'), includeDirs: ['.'], excludeDirs: [] },
+      tasks: [{ title: 'copy-off-task', prompt: 'Read the attached source and write seen.txt in the repository root holding exactly seen.' }],
+    }],
+  });
+  const task = (await h.run(s!.id)).tasks[0]! as unknown as { status: string; reason?: string };
+  t.check('the task ran instead of being refused', [task.status, task.reason ?? null], ['done', null]);
+});
+
+await withHarness('a folder in the Desktop area that is the copy of no project is refused, saying what to choose', async (h, desktop) => {
+  const stray = join(desktop, 'someone-elses');
+  mkdirSync(stray, { recursive: true });
+  writeFileSync(join(stray, 'x.txt'), 'x\n');
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [{
+      name: 'stray',
+      onFailure: 'stop',
+      vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'stray' },
+      review: { enabled: false },
+      mirror: { enabled: true, rootDir: stray, includeDirs: ['.'], excludeDirs: [] },
+      tasks: [{ title: 'stray-task', prompt: 'Read the attached source and write seen.txt in the repository root holding exactly seen.' }],
+    }],
+  });
+  const task = (await h.run(s!.id)).tasks[0]! as unknown as { status: string; reason?: string };
+  t.truthy('failed before anything was sent, saying to choose the project\'s own folder', task.status === 'failed' && /not the copy of any project/.test(task.reason ?? '') && h.chat.sent.length === 0, task);
+});
+
 t.finish();
