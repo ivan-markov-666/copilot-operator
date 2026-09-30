@@ -89,7 +89,67 @@ export type MirrorConfig = {
   includeEnvFiles?: boolean;
   /** Files above this size are skipped and reported. */
   maxFileBytes?: number;
+  /**
+   * Folders an include directory is also looked for in, when it is not under `rootDir` — the
+   * session's repository. A plan writes `rules-engine` meaning the repository's folder, while the
+   * root is the project folder above it; that directory is then taken from the repository, as a
+   * path under `rootDir`. See `resolveIncludeDirs`.
+   */
+  alsoUnder?: string[];
 };
+
+/** A selection that cannot be copied as asked. Thrown before the target folder is touched. */
+export class MirrorSelectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MirrorSelectionError';
+  }
+}
+
+/**
+ * Each include directory as a path under `rootDir`, looked for in `alsoUnder` when it is not there.
+ *
+ * `found` are the paths to copy; `missing` are the ones that are nowhere, with why. A directory found
+ * in a folder outside `rootDir` is missing too: its files could not be named as the project's.
+ */
+export async function resolveIncludeDirs(
+  rootDir: string,
+  includeDirs: string[],
+  alsoUnder: string[] = [],
+): Promise<{ found: string[]; moved: Array<{ asked: string; used: string }>; missing: Array<{ dir: string; reason: string }> }> {
+  const root = resolve(rootDir);
+  const found: string[] = [];
+  const moved: Array<{ asked: string; used: string }> = [];
+  const missing: Array<{ dir: string; reason: string }> = [];
+  const isDir = async (p: string): Promise<boolean> => !!(await stat(p).catch(() => null))?.isDirectory();
+  for (const dir of includeDirs) {
+    const rel = normalizeDirPath(dir);
+    if (await isDir(join(root, rel))) {
+      found.push(rel);
+      continue;
+    }
+    let reason = `not a folder under the project root ${root}`;
+    let used: string | null = null;
+    for (const other of alsoUnder.filter((o) => o.trim() !== '')) {
+      const abs = resolve(other, rel);
+      if (!(await isDir(abs))) continue;
+      const underRoot = relative(root, abs);
+      if (underRoot.startsWith('..') || resolve(root, underRoot) !== abs) {
+        reason = `found under ${resolve(other)}, which is not inside the project root ${root}: make the root that folder`;
+        continue;
+      }
+      used = underRoot.split(osSep).join('/') || '.';
+      break;
+    }
+    if (used) {
+      found.push(used);
+      moved.push({ asked: rel, used });
+    } else {
+      missing.push({ dir: rel, reason });
+    }
+  }
+  return { found, moved, missing };
+}
 
 export type SkippedFile = { relPath: string; reason: string };
 
@@ -385,7 +445,30 @@ export async function mirrorProject(cfg: MirrorConfig): Promise<MirrorResult> {
   const separator = cfg.separator ?? DEFAULT_SEPARATOR;
   const txtMode = cfg.txtMode ?? 'append';
 
-  const { files, skipped } = await collectFiles(cfg);
+  /*
+   * Checked before the target folder is touched.
+   *
+   * The folder is brought in line with the selection, which deletes whatever the selection does
+   * not hold. A directory that could not be found made the selection empty, and every copy the
+   * chat had been working from was deleted (seen live on 2026-09-30: `rules-engine` not found,
+   * the whole context folder gone, totalBytes 0). A selection that is wrong is now an error that
+   * leaves the copies as they were; so is one that finds no file at all.
+   */
+  const dirs = await resolveIncludeDirs(rootDir, cfg.includeDirs, cfg.alsoUnder);
+  if (dirs.missing.length > 0) {
+    throw new MirrorSelectionError(
+      `The project files could not be copied: ${dirs.missing.map((m) => `"${m.dir}" is ${m.reason}`).join('; ')}. ` +
+        `Nothing was copied, and the copies already in ${targetDir} were left as they are.`,
+    );
+  }
+  const { files, skipped } = await collectFiles({ ...cfg, includeDirs: dirs.found });
+  if (files.length === 0) {
+    throw new MirrorSelectionError(
+      `The selection (${cfg.includeDirs.join(', ')}) holds no file that can be copied` +
+        `${skipped.length > 0 ? ` (${skipped.length} skipped, for example ${skipped[0]!.relPath}: ${skipped[0]!.reason})` : ''}. ` +
+        `Nothing was copied, and the copies already in ${targetDir} were left as they are.`,
+    );
+  }
   await mkdir(targetDir, { recursive: true });
 
   const used = new Set<string>();

@@ -86,7 +86,7 @@ export async function removeLegacyFlatMirror(cfg: ResolvedConfig): Promise<strin
   return removed;
 }
 
-export type ProjectMirrorOutcome = { name: string; rootDir: string; targetDir: string; result: MirrorResult };
+export type ProjectMirrorOutcome = { name: string; rootDir: string; targetDir: string; result?: MirrorResult; problem?: string };
 
 /** Brings one project's Desktop folder in line with its selection. */
 export async function mirrorKnownProject(cfg: ResolvedConfig, project: KnownProject): Promise<ProjectMirrorOutcome> {
@@ -120,7 +120,17 @@ export async function mirrorAllProjects(cfg: ResolvedConfig): Promise<ProjectMir
   await removeLegacyFlatMirror(cfg);
   const out: ProjectMirrorOutcome[] = [];
   for (const p of knownProjects(cfg)) {
-    if (p.desktop) out.push(await mirrorKnownProject(cfg, p));
+    // One project whose selection is wrong keeps its old copies and says so; the others are still refreshed.
+    if (p.desktop) {
+      out.push(
+        await mirrorKnownProject(cfg, p).catch((e: unknown) => ({
+          name: safeProjectName(p.name),
+          rootDir: p.rootDir,
+          targetDir: projectTargetDir(cfg, p.name),
+          problem: (e as Error).message,
+        })),
+      );
+    }
     else await removeProjectFolder(cfg, p);
   }
   return out;

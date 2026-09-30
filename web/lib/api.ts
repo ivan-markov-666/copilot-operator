@@ -138,6 +138,8 @@ export type TaskReviewCheck = {
 /** What an independent review concluded about a task. */
 export type TaskReview = {
   verdict: 'pass' | 'fail' | 'error' | 'skipped';
+  /** For `skipped`: why no review ran. */
+  skippedBecause?: string;
   rounds: number;
   /** How many commands the reviewer ran. A pass with none is refused before it reaches here. */
   stepsRun: number;
@@ -696,7 +698,14 @@ export type Handoff = {
   outcome: { status: TaskStatus; reason?: string };
   changedFiles: Array<{ path: string; added: number; removed: number }>;
   validation: Array<{ name: string; passed: boolean }>;
-  review?: { verdict: string; open: number };
+  review?: { verdict: string; open: number; skippedBecause?: string };
+  /** The repository in the order things happened. See `Handoff.lifecycle` in src/session/handoff.ts. */
+  lifecycle?: {
+    preCommitState?: { changed: string[] };
+    checksResult: Array<{ name: string; passed: boolean }>;
+    commitResult: { branch?: string; commit?: string; files: number; problem?: string };
+    postCommitState?: { branch?: string; head?: string; clean: boolean; uncommitted: string[] };
+  };
   knownIssues: string[];
   evidence: { runId?: string; checks: number; reviewRounds: number };
   vcs: { branch?: string; commit?: string; pushed: false; problem?: string };

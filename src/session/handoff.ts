@@ -15,7 +15,18 @@ export type Handoff = {
   outcome: { status: TaskStatus; reason?: string; stopCode?: string };
   changedFiles: Array<{ path: string; added: number; removed: number }>;
   validation: Array<{ name: string; passed: boolean }>;
-  review?: { verdict: string; open: number };
+  review?: { verdict: string; open: number; skippedBecause?: string };
+  /**
+   * The repository in the order things happened, each state on its own: the tree before the runner's
+   * commit, the checks, the commit, the repository after it. Mixed into one, "the tree is dirty" (true
+   * before) and a commit (made after) read as a contradiction. Absent without version control.
+   */
+  lifecycle?: {
+    preCommitState?: { changed: string[] };
+    checksResult: Array<{ name: string; passed: boolean }>;
+    commitResult: { branch?: string; commit?: string; files: number; problem?: string };
+    postCommitState?: { branch?: string; head?: string; clean: boolean; uncommitted: string[] };
+  };
   /** What is known to be wrong or doubtful at the end, one line each. */
   knownIssues: string[];
   evidence: { runId?: string; checks: number; reviewRounds: number };
@@ -58,7 +69,33 @@ export function composeHandoff(task: Task, notRun: NotRun[] = []): Handoff {
     outcome: { status: task.status, ...(task.reason ? { reason: task.reason } : {}), ...(task.stopCode ? { stopCode: task.stopCode } : {}) },
     changedFiles: (vcs.files ?? []).map((f) => ({ path: f.path, added: f.added, removed: f.removed })),
     validation: (task.checkResults ?? []).map((c) => ({ name: c.name, passed: c.passed })),
-    ...(task.review ? { review: { verdict: task.review.verdict, open: openFindings.length } } : {}),
+    ...(task.review
+      ? { review: { verdict: task.review.verdict, open: openFindings.length, ...(task.review.skippedBecause ? { skippedBecause: task.review.skippedBecause } : {}) } }
+      : {}),
+    ...(vcs.branch || vcs.problem
+      ? {
+          lifecycle: {
+            ...(vcs.beforeCommit ? { preCommitState: { changed: vcs.beforeCommit.changed } } : {}),
+            checksResult: (task.checkResults ?? []).map((c) => ({ name: c.name, passed: c.passed })),
+            commitResult: {
+              ...(vcs.branch ? { branch: vcs.branch } : {}),
+              ...(vcs.commit ? { commit: vcs.commit } : {}),
+              files: vcs.files?.length ?? 0,
+              ...(vcs.problem ? { problem: vcs.problem } : {}),
+            },
+            ...(vcs.afterCommit
+              ? {
+                  postCommitState: {
+                    ...(vcs.afterCommit.branch ? { branch: vcs.afterCommit.branch } : {}),
+                    ...(vcs.afterCommit.head ? { head: vcs.afterCommit.head } : {}),
+                    clean: vcs.afterCommit.clean,
+                    uncommitted: vcs.afterCommit.changed,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
     knownIssues,
     evidence: { ...(task.runId ? { runId: task.runId } : {}), checks: task.checkResults?.length ?? 0, reviewRounds: task.review?.rounds ?? 0 },
     vcs: { ...(vcs.branch ? { branch: vcs.branch } : {}), ...(vcs.commit ? { commit: vcs.commit } : {}), pushed: false, ...(vcs.problem ? { problem: vcs.problem } : {}) },

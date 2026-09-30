@@ -182,6 +182,20 @@ export function branchNameFrom(parts: Array<string | number | undefined>, prefix
  */
 export function plannedBranchName(raw: string, prefix = 'cop/', attempt = 1): string {
   const trimmed = raw.trim();
+  /*
+   * A name with its own namespace — `recovery/apz-migration`, `feature/JIRA-123-schemas` — is the
+   * team's convention, and it is used as written: the prefix is only for names that have none.
+   * Flattening it to `cop/recovery-apz-migration` made a different branch from the one asked for,
+   * so a plan continuing a recovery branch worked beside it instead of on it (2026-09-30). Each
+   * segment is still made safe, keeping its case; git itself has the last word in `switchTo`.
+   */
+  if (trimmed.includes('/')) {
+    const segments = trimmed
+      .split('/')
+      .map((seg) => seg.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^[-.]+|[-.]+$/g, ''))
+      .filter(Boolean);
+    if (segments.length > 1) return `${segments.join('/')}${attempt > 1 ? `-a${attempt}` : ''}`.replace(/\.\.+/g, '.').slice(0, 200);
+  }
   const p = prefix.trim();
   const body = p && trimmed.toLowerCase().startsWith(p.toLowerCase()) ? trimmed.slice(p.length) : trimmed;
   return branchNameFrom([body, attempt > 1 ? `a${attempt}` : undefined], prefix);

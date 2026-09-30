@@ -365,6 +365,15 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
     `The runner has already put ${repoDir} on the branch \`${vcs.branch}\`, created for this task from ${base},`,
     'and it will commit whatever you change when the task finishes.',
     '',
+    /*
+     * Said outright because a plan's text may still name the branch the work came from: a task that
+     * was told to continue a recovery branch went on asking for it, on a branch the runner had made
+     * (2026-09-30). The branch above is where the work goes; what it must contain is a commit.
+     */
+    `\`${vcs.branch}\` is where this work goes, whatever branch the task or the project instructions name: do not ask for`,
+    'another branch, switch to it or check that you are on it. When earlier work must be included, check its',
+    'commit instead: `git merge-base --is-ancestor <commit> HEAD` exits 0 when it is.',
+    '',
     ...(began ? [began, ''] : []),
     standing,
     '',
@@ -410,13 +419,27 @@ export async function commitTaskResult(
    * (they are already there; refusing would not remove them) and named on the task.
    */
   const state = await repoState(dir);
+  /*
+   * The repository before the commit and after it, kept apart on the record. A task's own claims
+   * ("nothing committed, the tree is dirty") were written before this runs; without both states
+   * the export read as contradicting itself. See `TaskVcs.beforeCommit`.
+   */
+  const beforeCommit = { changed: state.changed.slice(0, 200) };
+  const withStates = async (v: TaskVcs): Promise<TaskVcs> => {
+    const after = await repoState(dir).catch(() => null);
+    return {
+      ...v,
+      beforeCommit,
+      ...(after ? { afterCommit: { branch: after.branch ?? undefined, head: after.head ?? undefined, clean: !after.dirty, changed: after.changed.slice(0, 200) } } : {}),
+    };
+  };
   if (state.branch !== current.branch) {
     const problem =
       `the repository is on ${state.branch ?? 'a detached HEAD'}, not on the task's branch ${current.branch}: it was moved while the task ran. ` +
       'Nothing was committed; the changes are left in the working tree for you to look at.';
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-provenance', level: 'error', message: problem,
       data: { expected: current.branch, actual: state.branch } });
-    return { ...current, problem };
+    return await withStates({ ...current, problem });
   }
   if (current.baseCommit && state.head && !(await isAncestor(dir, current.baseCommit))) {
     const problem =
@@ -424,7 +447,7 @@ export async function commitTaskResult(
       'it was reset or rewritten while the task ran. Nothing was committed; the changes are left in the working tree.';
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-provenance', level: 'error', message: problem,
       data: { base: current.baseCommit, head: state.head } });
-    return { ...current, problem };
+    return await withStates({ ...current, problem });
   }
   const foreign = current.baseCommit ? await foreignCommits(dir, current.baseCommit) : [];
   if (foreign.length > 0) {
@@ -439,13 +462,13 @@ export async function commitTaskResult(
   if (result.problem) {
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-problem', level: 'warn',
       message: `nothing was committed: ${result.problem}` });
-    return { ...current, problem: result.problem };
+    return await withStates({ ...current, problem: result.problem });
   }
 
   if (!result.committed) {
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-nothing', level: 'info',
       message: `nothing to commit on ${current.branch}: the task changed no files` });
-    return current;
+    return await withStates(current);
   }
 
   const commits = current.baseCommit ? await commitsBetween(dir, current.baseCommit) : [];
@@ -467,14 +490,14 @@ export async function commitTaskResult(
       data: { commit: result.commit, suspicious } });
   }
 
-  return {
+  return await withStates({
     ...current,
     commit: result.commit,
     commits,
     files,
     ...(suspicious.length > 0 ? { suspicious } : {}),
     ...(foreign.length > 0 ? { foreignCommits: foreign } : {}),
-  };
+  });
 }
 
 /**

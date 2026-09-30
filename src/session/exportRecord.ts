@@ -107,10 +107,17 @@ function versionControlLines(task: Task, session: Session): string[] {
   if (!vcs.branch) return [`version control : did not run — ${vcs.problem}`];
 
   const commits = vcs.commits ?? [];
+  // In the order it happened: the tree before the runner's commit, the commit, the tree after it.
+  const before = vcs.beforeCommit;
+  const after = vcs.afterCommit;
   const lines = [
     `branch     : ${vcs.branch}`,
     `started at : ${vcs.baseCommit ? vcs.baseCommit.slice(0, 8) : '—'} (the commit this task branched from)`,
-    `commit     : ${vcs.commit ? vcs.commit.slice(0, 8) : 'none — the task changed no files'}`,
+    ...(before ? [`before commit: ${before.changed.length} path(s) changed or new in the working tree${before.changed.length ? ` — ${before.changed.slice(0, 10).join(', ')}` : ''}`] : []),
+    `commit     : ${vcs.commit ? vcs.commit.slice(0, 8) : vcs.problem ? 'none — see the note below' : 'none — the task changed no files'}`,
+    ...(after
+      ? [`after commit: on ${after.branch ?? '?'} at ${after.head ? after.head.slice(0, 8) : '?'}, ${after.clean ? 'working tree clean' : `still uncommitted: ${after.changed.slice(0, 10).join(', ')}`}`]
+      : []),
     `commits    : ${commits.length} on this branch since it was cut`,
   ];
   for (const line of commits) lines.push(`             ${line}`);

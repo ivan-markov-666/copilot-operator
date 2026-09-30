@@ -392,6 +392,8 @@ export type TaskReview = {
   }>;
   /** Set when the review itself could not be carried out, which is not the work's fault. */
   problem?: string;
+  /** For `skipped`: why no review ran — switched off, or the task ended before its work reached one. */
+  skippedBecause?: string;
   /** What the review actually ran on, when it differed from the session's model. */
   model?: string;
 };
@@ -651,6 +653,14 @@ export type TaskVcs = {
   foreignCommits?: string[];
   /** Set when version control was on but could not do its part, with the reason. */
   problem?: string;
+  /**
+   * The working tree just before the runner's commit: what was changed or new. Together with
+   * `afterCommit`, the two ends of the commit kept apart, so what the task said before it and what
+   * the repository was after it are not read as one contradictory state.
+   */
+  beforeCommit?: { changed: string[] };
+  /** The repository just after the runner's commit (or its attempt): branch, HEAD, and what is still uncommitted. */
+  afterCommit?: { branch?: string; head?: string; clean: boolean; changed: string[] };
 };
 
 export type Session = {

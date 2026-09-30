@@ -29,14 +29,70 @@ async function fileCheckPassesNow(check: TaskCheck, cwd: string): Promise<{ pass
   return { passes: exists && text.includes(check.value ?? ''), path };
 }
 
+/** `git` with the global options that may come before its subcommand. */
+const GIT = String.raw`\bgit(?:\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|--no-pager|-c\s+\S+))*\s+`;
+
+/** A check whose command asks which branch is checked out. */
+export function readsCurrentBranch(check: TaskCheck): boolean {
+  return !!check.run && new RegExp(`${GIT}(?:branch\\s+--show-current|rev-parse\\s+--abbrev-ref\\s+HEAD|symbolic-ref\\s+(?:-q\\s+)?(?:--short\\s+)?HEAD|name-rev\\s+--name-only\\s+HEAD)`, 'i').test(check.run);
+}
+
+/**
+ * A check whose command asks whether the working tree is clean: `git status --porcelain`/`--short`,
+ * `git diff --quiet`/`--exit-code`. With version control on, the runner commits the task's changes
+ * after its checks — and the chat may not commit — so such a check is decided after that commit.
+ */
+export function readsTreeClean(check: TaskCheck): boolean {
+  return !!check.run && new RegExp(`${GIT}(?:status\\b[^|;&\\n]*(?:--porcelain|--short|\\s-s\\b)|diff\\b[^|;&\\n]*(?:--quiet|--exit-code))`, 'i').test(check.run);
+}
+
+/**
+ * Whether a check about the checked-out branch can pass on `branch`, the one the runner chose.
+ * `null` when it cannot be told without running it.
+ */
+function branchCheckPasses(check: TaskCheck, branch: string): boolean | null {
+  const value = check.value ?? '';
+  if (check.expect === 'output-contains') return value === '' || branch.includes(value);
+  if (check.expect === 'output-omits') return value === '' || !branch.includes(value);
+  if (check.expect === 'output-matches') {
+    try {
+      return new RegExp(value).test(branch);
+    } catch {
+      return null;
+    }
+  }
+  // A comparison written into the command: `(git branch --show-current) -eq 'recovery/x'`.
+  const named = [...(check.run ?? '').matchAll(/['"]([\w.-]+(?:\/[\w.-]+)+)['"]/g)].map((m) => m[1]!);
+  if (named.length > 0) return named.includes(branch);
+  return null;
+}
+
 /** Each contradiction in the task, as a sentence; empty when it can be satisfied. */
 export async function contractConflicts(
   task: Pick<Task, 'readOnly' | 'scope' | 'checks' | 'reviewChecks'>,
   cwd: string,
   repoDir: string,
+  /** The branch version control put the task on, when it is on. */
+  vcs: { branch?: string } = {},
 ): Promise<string[]> {
   const out: string[] = [];
   const scope = task.scope ?? [];
+  /*
+   * A check that the task is on a branch the runner did not choose can never pass: the chat may not
+   * switch branches. Seen on 2026-09-30, a check still expecting the recovery branch the session had
+   * been started from, while the runner worked on its own. Named before the start, with the check
+   * that does what was meant: that the earlier work is in this branch.
+   */
+  if (vcs.branch) {
+    const all = [...(task.checks ?? []), ...(task.reviewChecks ?? []).filter((rc) => rc.state === 'active').map((rc) => rc.check)];
+    for (const check of all.filter(readsCurrentBranch)) {
+      if (branchCheckPasses(check, vcs.branch) !== false) continue;
+      out.push(
+        `The check "${check.name}" expects another branch, but version control put this task on ${vcs.branch}, and the chat may not switch branches. ` +
+          'To check that earlier work is included, check its commit instead: git merge-base --is-ancestor <commit> HEAD.',
+      );
+    }
+  }
   if (task.readOnly && scope.length > 0) {
     out.push(`It is read-only, which allows no change, and also scoped to ${scope.join(', ')}, which allows changes there.`);
   }

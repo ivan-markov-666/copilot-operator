@@ -16,7 +16,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stepEnvironment } from '../src/exec/stepEnv.js';
-import { checkCommandRefusal, commandRefusal, repositoryInternalsRefusal, unattendedPrecondition } from '../src/exec/policy.js';
+import { checkCommandRefusal, commandRefusal, matchDenyPattern, repositoryInternalsRefusal, unattendedPrecondition } from '../src/exec/policy.js';
+import { RunConfigSchema } from '../src/config/schema.js';
 import { botSelfRefusal, networkFetchReason } from '../src/exec/network.js';
 import { inlineCodeRefusal, startProcessTargets } from '../src/exec/programs.js';
 import { redactSecrets } from '../src/exec/redaction.js';
@@ -192,6 +193,18 @@ console.log('\n--- run folders follow the retention rule ---');
   check('older folders go, recent ones and the bot\'s own stay', await pruneRuns(runs, 30, now), ['old-session']);
   check('and they are really gone', [existsSync(join(runs, 'old-session')), existsSync(join(runs, 'recent-session')), existsSync(join(runs, '_browser'))], [false, true, true]);
   rmSync(runs, { recursive: true, force: true });
+}
+
+console.log('\n--- git that only reads is not taken for git that writes ---');
+{
+  // Refused live on 2026-09-30: `merge` caught `merge-base`, because a hyphen ends a word.
+  const deny = RunConfigSchema.parse({}).execution.denyPatterns;
+  const denied = (c: string): boolean => matchDenyPattern(c, deny) !== null;
+  check('git merge-base --is-ancestor is allowed', denied('git merge-base --is-ancestor abc1234 HEAD'), false);
+  check('with -C in front too', denied('git -C C:/repo merge-base main HEAD'), false);
+  check('git merge is still refused', [denied('git merge main'), denied('git merge')], [true, true]);
+  check('and the hyphenated ones that write', ['git read-tree HEAD', 'git checkout-index -a', 'git commit-tree abc', 'git merge-file a b c'].map(denied), [true, true, true, true]);
+  check('git rm and git add still refused', [denied('git rm x'), denied('git add .')], [true, true]);
 }
 
 console.log('\n--- the second compliance round ---');

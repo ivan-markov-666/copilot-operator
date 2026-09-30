@@ -334,7 +334,7 @@ console.log('branch asked for  :', task1?.vcsPlan?.branch, '| commit asked for:'
 console.log('branch git gets   :', plannedBranchName(task1?.vcsPlan?.branch ?? '', 'cop/'));
 console.log('prefix not doubled:', plannedBranchName('cop/invoice-csv-writer', 'cop/'), '(expect cop/invoice-csv-writer)');
 console.log('a re-run differs  :', plannedBranchName('invoice-csv-writer', 'cop/', 2));
-console.log('slashes flattened :', plannedBranchName('feature/CSV Writer!', 'cop/'));
+console.log('own namespace kept:', plannedBranchName('feature/CSV Writer!', 'cop/'), '(expect feature/CSV-Writer)');
 const message = commitMessage(first?.tasks[1] as Task, { status: 'done', summary: 'Added the endpoint and the flag.' });
 console.log('commit subject    :', message.split('\n')[0]);
 console.log('planned body kept :', message.includes('stays off by default'));

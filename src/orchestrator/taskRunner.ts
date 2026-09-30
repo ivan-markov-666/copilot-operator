@@ -46,13 +46,13 @@ import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
-import { contractConflicts } from './contract.js';
+import { contractConflicts, readsTreeClean } from './contract.js';
 import { treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { mirrorProject, describeMirror } from '../context/projectMirror.js';
+import type { Session, Task, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import { mirrorProject, describeMirror, MirrorSelectionError } from '../context/projectMirror.js';
 import { projectNameFor, projectTargetDir, removeLegacyFlatMirror } from '../context/desktopMirror.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
@@ -501,6 +501,13 @@ export async function runTask(
   /** The setting whose limit ended the attempt, when one did. Written by `finish`. See `TaskLimit`. */
   let limitHit: TaskLimit | undefined;
   /**
+   * Checks that the working tree is clean, decided after the runner's commit rather than at the gate.
+   * The chat may not commit, so before that commit such a check could only fail (2026-09-30: failed,
+   * and then the commit left the tree clean). Set by the gate, run by `finish`. See `readsTreeClean`.
+   */
+  let afterCommitChecks: TaskCheck[] = [];
+  let runAfterCommit: ((checks: TaskCheck[]) => Promise<CheckOutcome[]>) | null = null;
+  /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
    * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
    */
@@ -579,6 +586,41 @@ export async function runTask(
         return undefined;
       },
     );
+    /*
+     * The checks about a clean tree, now that the runner has committed. A done task whose tree is
+     * still not clean after the commit has failed; any other ending keeps its own reason, and the
+     * results are recorded all the same.
+     */
+    let afterCommitResults: Array<{ name: string; passed: boolean; detail: string }> = [];
+    if (afterCommitChecks.length > 0 && runAfterCommit) {
+      const outcomes = await runAfterCommit(afterCommitChecks).catch((e: unknown) => {
+        sink.event('checks-after-commit-error', { error: String(e) }, `the checks after the commit could not run: ${(e as Error).message}`, 'warn');
+        return [] as CheckOutcome[];
+      });
+      afterCommitResults = outcomes.map((o) => ({ name: `${o.check.name} (after the commit)`, passed: o.passed, detail: o.detail }));
+      for (const o of outcomes) {
+        sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail, afterCommit: true },
+          `${o.passed ? 'passed' : 'FAILED'} after the commit: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
+      }
+      const failedAfter = outcomes.filter((o) => !o.passed);
+      if (status === 'done' && failedAfter.length > 0) {
+        status = 'failed';
+        reason =
+          `after the runner's commit${vcsAfter?.commit ? ` (${vcsAfter.commit.slice(0, 8)})` : ''}${vcsAfter?.problem ? `, which did not happen: ${vcsAfter.problem}` : ''}, ` +
+          `${failedAfter.length} check(s) about the working tree still failed: ${failedAfter.map((o) => `${o.check.name} (${o.detail})`).join('; ')}`;
+      }
+    }
+    /*
+     * What the task said about the repository was written before the commit. When it did not end
+     * done and the runner then committed its changes, the reason says so, so "not committed, the
+     * tree is dirty" is not left standing beside a commit on the record.
+     */
+    if (status !== 'done' && vcsAfter?.commit && vcsAfter.commit !== task.vcs?.commit) {
+      reason =
+        `${reason ?? ''} After that, the runner committed the task's changes as ${vcsAfter.commit.slice(0, 8)} on ${vcsAfter.branch}` +
+        `${vcsAfter.afterCommit ? (vcsAfter.afterCommit.clean ? '; the working tree is clean' : `; still uncommitted: ${vcsAfter.afterCommit.changed.slice(0, 8).join(', ')}`) : ''}.`;
+      reason = reason.trim();
+    }
     if (vcsAfter?.branch) {
       await record(
         'VERSION CONTROL',
@@ -610,6 +652,16 @@ export async function runTask(
       t.stats = stats;
       if (stopCode) t.stopCode = stopCode;
       if (limitHit) t.limit = limitHit;
+      if (afterCommitResults.length > 0) t.checkResults = [...(t.checkResults ?? []), ...afterCommitResults];
+      // A review that was asked for and never ran says why, instead of reading as zero rounds.
+      if (!t.review && (task.reviewEnabled ?? session.review?.enabled ?? true) && status !== 'done') {
+        t.review = {
+          verdict: 'skipped',
+          rounds: 0,
+          stepsRun: 0,
+          skippedBecause: `the task ended ${status} before its work reached the review; the review runs only on work reported done whose checks pass`,
+        };
+      }
     });
     // The end in one fixed shape, read off the record just written. See `session/handoff.ts`.
     await setTask((t) => {
@@ -803,7 +855,9 @@ export async function runTask(
      * finding the chat could never have fixed. The contradiction is named instead, now, and nothing
      * is run. See `orchestrator/contract.ts`.
      */
-    const conflicts = await contractConflicts(task, work.cwd, repoDirOf(session) || work.cwd);
+    const conflicts = await contractConflicts(task, work.cwd, repoDirOf(session) || work.cwd, {
+      branch: prepared.vcs.problem ? undefined : prepared.vcs.branch,
+    });
     if (conflicts.length > 0) {
       stopCode = 'contract-conflict';
       sink.event('contract-conflict', { conflicts }, `the task contradicts itself: ${conflicts.join(' | ')}`, 'error');
@@ -818,8 +872,14 @@ export async function runTask(
       const projectName = projectNameFor(session.mirror.rootDir, cfg);
       const targetDir = projectTargetDir(cfg, projectName);
       await removeLegacyFlatMirror(cfg).catch(() => undefined);
+      /*
+       * A selection that cannot be copied stops the task before anything is sent: the chat would
+       * otherwise work without the files it was promised. The copies already there are kept.
+       */
       const result = await mirrorProject({
         rootDir: session.mirror.rootDir,
+        // `rules-engine` in a plan usually means the repository's folder, wherever the root is.
+        alsoUnder: [repoDirOf(session)],
         includeDirs: session.mirror.includeDirs.length ? session.mirror.includeDirs : ['.'],
         excludeDirs: session.mirror.excludeDirs,
         targetDir,
@@ -832,7 +892,11 @@ export async function runTask(
         ignoreDirs: cfg.projectMirror.ignoreDirs,
         includeEnvFiles: session.mirror.includeEnvFiles ?? cfg.projectMirror.includeEnvFiles,
         maxFileBytes: cfg.projectMirror.maxFileBytes,
-      });
+      }).catch((e: unknown) => (e instanceof MirrorSelectionError ? e : Promise.reject(e)));
+      if (result instanceof MirrorSelectionError) {
+        sink.event('mirror-refused', { error: result.message }, result.message, 'error');
+        return await finish('failed', `${result.message} Nothing was sent to the chat. Fix the files to attach and queue the task again.`);
+      }
       sink.event('mirror', { targetDir, ...result }, `project mirror: ${describeMirror(result)}`);
       if (session.mirror.includeEnvFiles) {
         const envCount = Object.keys(result.mapping).filter((p) => /(^|\/)\.env(\.|$)/i.test(p)).length;
@@ -954,7 +1018,15 @@ export async function runTask(
      * happened, and a task cannot be trusted to answer that about itself.
      */
     const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up' | 'environment'> => {
-      const checks = [...(task.checks ?? []), ...activeChecks(reviewChecks), ...(willCommit ? [COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK] : [])];
+      const every = [...(task.checks ?? []), ...activeChecks(reviewChecks)];
+      // Whether the tree is clean is decided after the runner's commit; see `afterCommitChecks`.
+      const deferred = willCommit ? every.filter(readsTreeClean) : [];
+      if (deferred.length > 0 && afterCommitChecks.length === 0) {
+        sink.event('checks-after-commit', { checks: deferred.map((c) => c.name) },
+          `${deferred.length} check(s) about a clean working tree are decided after the runner commits the work: ${deferred.map((c) => c.name).join(', ')}`);
+      }
+      afterCommitChecks = deferred;
+      const checks = [...every.filter((c) => !deferred.includes(c)), ...(willCommit ? [COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK] : [])];
       if (checks.length === 0) return 'accept';
 
       // Counted only once the round turns out to have been a real attempt. A round that died of
@@ -963,7 +1035,7 @@ export async function runTask(
       sink.event('checks-started', { round, count: checks.length },
         `checking the task against ${checks.length} condition(s)`);
 
-      const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, {
+      const checkOptions: Parameters<typeof runChecks>[1] = {
         cwd: work.cwd,
         tracker,
         passEnv: cfg.execution.passEnv,
@@ -981,7 +1053,9 @@ export async function runTask(
         // The same shell a step that named none is given, so the gate and the work it judges
         // cannot have been read by different interpreters.
         defaultShell,
-      }));
+      };
+      runAfterCommit = (cs) => runChecks(cs, checkOptions);
+      const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, checkOptions));
 
       /*
        * The runner's own checks are advice given once, not a gate: a second "done" with the finding
@@ -1127,7 +1201,7 @@ export async function runTask(
      */
     const gateOnReview = async (closing: string | undefined): Promise<'accept' | 'retry' | 'give-up'> => {
       if (!reviewWanted) {
-        await saveReview({ verdict: 'skipped', rounds: 0, stepsRun: 0 });
+        await saveReview({ verdict: 'skipped', rounds: 0, stepsRun: 0, skippedBecause: `the review is switched off for this ${task.reviewEnabled === false ? 'task' : 'session'}` });
         return 'accept';
       }
 

@@ -2514,7 +2514,11 @@ function Disputes({ items }: { items: TaskDispute[] }) {
  */
 function ReviewVerdict({ review }: { review?: TaskReview }) {
   const { t } = useT();
-  if (!review || review.verdict === 'skipped') return null;
+  if (!review) return null;
+  // A review that was asked for and did not run says why; one switched off says so in a word.
+  if (review.verdict === 'skipped') {
+    return review.skippedBecause ? <p className="muted small">{t('review.skippedWhy', { why: review.skippedBecause })}</p> : null;
+  }
 
   const tone = review.verdict === 'pass' ? 'done' : review.verdict === 'fail' ? 'blocked' : 'waiting-approval';
 

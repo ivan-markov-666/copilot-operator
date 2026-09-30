@@ -471,13 +471,13 @@ const FIELD_ROWS_BG = [
 
 const VCS_ROWS_EN = [
   ['vcs', 'session', 'yes, always', 'Whether the runner does version control for this session, and where. See below. A session without it is refused.'],
-  ['vcs.branch', 'task', 'yes in per-task mode', 'The branch this task works on, without the prefix.'],
+  ['vcs.branch', 'task', 'yes in per-task mode', 'The branch this task works on. A name with a "/" (feature/x, recovery/y) is used as written; one without gets the prefix.'],
   ['vcs.commitMessage', 'task', 'yes', 'The commit this task ends with. Imperative, first line under 72 characters.'],
 ];
 
 const VCS_ROWS_BG = [
   ['vcs', 'сесия', 'да, винаги', 'Дали runner-ът прави контрол на версиите за тази сесия и къде. Виж по-долу. Сесия без него се отказва.'],
-  ['vcs.branch', 'задача', 'да, в режим per-task', 'Клонът, по който работи задачата, без представката.'],
+  ['vcs.branch', 'задача', 'да, в режим per-task', 'Клонът, по който работи задачата. Име с „/“ (feature/x, recovery/y) се ползва както е; без „/“ получава представката.'],
   ['vcs.commitMessage', 'задача', 'да', 'Комитът, с който задачата завършва. В повелително наклонение, първият ред под 72 знака.'],
 ];
 
@@ -489,7 +489,12 @@ const VCS_DETAIL_EN = `
 **vcs on a session**: \`enabled\` (true here), \`repoDir\` (absolute path to the git repository),
 \`branchMode\`, \`commitOnFinish\` (true unless the user says otherwise), \`branchPrefix\` (leave it
 "cop/"), \`branchName\` — used **only** in per-session mode, for the one branch the whole
-session works on, without the prefix — and \`startFrom\` with \`baseBranch\`.
+session works on — and \`startFrom\` with \`baseBranch\`. A branch name with a "/" follows the
+team's own convention and is used exactly as written (in per-session mode an existing branch of that
+name is carried on, not copied); a name without one gets the prefix. With version control on, a check never tests which
+branch is checked out — the runner chooses it; to check that earlier work is included, check the
+commit: \`git merge-base --is-ancestor <commit> HEAD\`. Nor does a check test that the working tree
+is clean: the runner commits after the checks, and its own commit is what leaves it clean.
 
 **startFrom** decides where each session's work begins, and it is the user's choice — ask:
 
@@ -533,7 +538,12 @@ const VCS_DETAIL_BG = `
 **vcs на сесия**: \`enabled\` (тук true), \`repoDir\` (абсолютен път до git хранилището),
 \`branchMode\`, \`commitOnFinish\` (true, освен ако потребителят не каже друго), \`branchPrefix\`
 (остави "cop/"), \`branchName\` — използва се **само** в режим per-session, за единствения клон,
-по който работи цялата сесия, без представката — и \`startFrom\` с \`baseBranch\`.
+по който работи цялата сесия — и \`startFrom\` с \`baseBranch\`. Име на клон с „/“ следва
+конвенцията на екипа и се ползва точно както е написано (в режим per-session съществуващ клон с това
+име се продължава, не се копира); име без „/“ получава представката. При включен контрол на версиите проверка никога не
+проверява кой клон е активен — него го избира runner-ът; за да провериш, че по-ранна работа е
+включена, провери commit-а: \`git merge-base --is-ancestor <commit> HEAD\`. Проверка не проверява и
+че работното дърво е чисто: runner-ът комитва след проверките и неговият commit го оставя чисто.
 
 **startFrom** решава откъде започва работата на всяка сесия, и изборът е на потребителя — питай:
 

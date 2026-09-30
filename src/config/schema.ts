@@ -53,11 +53,18 @@ const GIT_GLOBAL_OPTION =
   '(?:--no-pager|--paginate|--bare|--literal-pathspecs|--exec-path=\\S*|-c\\s+\\S+|' +
   '-C\\s+(?:"[^"]*"|\'[^\']*\'|\\S+)|--git-dir[= ]\\S+|--work-tree[= ]\\S+)';
 
-/** Subcommands that have no read-only form at all. */
+/**
+ * Subcommands that have no read-only form at all.
+ *
+ * Matched as a whole subcommand, followed by neither a letter nor a hyphen: `merge` must not catch
+ * `merge-base`, which only reads (refused live on 2026-09-30, while a task checked that its branch
+ * held a checkpoint). The hyphenated ones that do write are therefore listed by their full name.
+ */
 const GIT_ALWAYS_WRITES =
   'commit|push|reset|rebase|merge|cherry-pick|revert|clean|checkout|switch|restore|stash|' +
   'am|apply|init|clone|filter-branch|filter-repo|update-ref|update-index|gc|prune|repack|' +
-  'submodule|worktree|mv|rm|add|pull';
+  'submodule|worktree|mv|rm|add|pull|' +
+  'checkout-index|commit-tree|merge-file|merge-index|merge-one-file|read-tree|prune-packed|update-server-info';
 
 /** Subcommands that read by default and write with these arguments. */
 const GIT_SOMETIMES_WRITES =
@@ -252,7 +259,7 @@ export const RunConfigSchema = z.object({
           'Disable-WindowsOptionalFeature',
           'net\\s+user\\s+\\w+\\s+/add',
           // git that changes something. See GIT_WRITE_NOTE below.
-          `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})\\b`,
+          `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})(?![\\w-])`,
           `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_SOMETIMES_WRITES})`,
         ]),
     })

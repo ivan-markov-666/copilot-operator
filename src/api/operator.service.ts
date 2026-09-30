@@ -2308,8 +2308,8 @@ export class OperatorService {
       this.bus.publish({
         sessionId: '*',
         type: 'desktop-mirror',
-        level: 'info',
-        message: outcomes.map((o) => `${o.name}: ${describeMirror(o.result)}`).join('; ') || 'no projects to mirror',
+        level: outcomes.some((o) => o.problem) ? 'warn' : 'info',
+        message: outcomes.map((o) => `${o.name}: ${o.result ? describeMirror(o.result) : `not refreshed — ${o.problem}`}`).join('; ') || 'no projects to mirror',
       });
     } catch (e) {
       this.bus.publish({ sessionId: '*', type: 'desktop-mirror-failed', level: 'warn', message: (e as Error).message });
