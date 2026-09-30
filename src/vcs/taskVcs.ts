@@ -19,7 +19,7 @@ import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
-import { branchExists, branchNameFrom, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
+import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type BranchUpdate, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Session): string {
@@ -100,7 +100,7 @@ export async function prepareForTask(
         s.vcsBaseCommit = chosen.commit;
         s.vcsStart = chosen;
       });
-      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: chosen.note ? 'warn' : 'info',
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: chosen.note || updateWarns(chosen) ? 'warn' : 'info',
         message: describeStart(chosen), data: { ...chosen } });
     }
   }
@@ -170,15 +170,16 @@ async function onExistingBranch(
   }
   let start = session.vcsStart;
   if (!session.vcsBaseCommit || start?.kind !== 'existing-branch' || start.branch !== wanted) {
+    const update = session.vcs?.updateFromRemote !== false ? await updateFromRemote(dir, wanted) : undefined;
     const tip = await branchTip(dir, wanted);
     if (tip) {
-      const chosen: SessionStart = { kind: 'existing-branch', commit: tip, branch: wanted };
+      const chosen: SessionStart = { kind: 'existing-branch', commit: tip, branch: wanted, ...(update ? { update } : {}) };
       start = chosen;
       await saveSession((s) => {
         s.vcsBaseCommit = chosen.commit;
         s.vcsStart = chosen;
       });
-      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: 'info', message: describeStart(chosen), data: { ...chosen } });
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: updateWarns(chosen) ? 'warn' : 'info', message: describeStart(chosen), data: { ...chosen } });
     }
   }
   const prepared = await switchTo(session, task, dir, wanted, undefined, bus, { reuseExisting: true, mustExist: true, start });
@@ -206,6 +207,8 @@ export async function sessionStart(
   if (how === 'head') return head ? { start: { kind: 'head', commit: head } } : {};
 
   const fromBranch = async (note?: string): Promise<{ start?: SessionStart } | { problem: string }> => {
+    // The code as it is on the server, not as this checkout last pulled it: see `updateFromRemote`.
+    const update = session.vcs?.updateFromRemote !== false && (await branchTip(dir, baseBranch)) ? await updateFromRemote(dir, baseBranch) : undefined;
     const tip = await branchTip(dir, baseBranch);
     if (!tip) {
       return {
@@ -214,7 +217,7 @@ export async function sessionStart(
           'Name the branch the work should start from (Version control → "Start from"), or create it.',
       };
     }
-    return { start: { kind: 'branch', commit: tip, branch: baseBranch, ...(note ? { note } : {}) } };
+    return { start: { kind: 'branch', commit: tip, branch: baseBranch, ...(note ? { note } : {}), ...(update ? { update } : {}) } };
   };
   if (how === 'branch') return await fromBranch();
 
@@ -272,7 +275,13 @@ export function describeStart(start: SessionStart): string {
         : start.kind === 'branch'
         ? `this session starts from the local branch ${start.branch} (${at})`
         : `this session starts from where the repository was (${at})`;
-  return start.note ? `${said} — ${start.note}` : said;
+  const updated = start.update ? ` (${describeUpdate(start.update as BranchUpdate)})` : '';
+  return start.note ? `${said}${updated} — ${start.note}` : `${said}${updated}`;
+}
+
+/** Whether the update before a session's start is worth a warning: it did not bring the branch up to date. */
+export function updateWarns(start: SessionStart): boolean {
+  return !!start.update && !['updated', 'up-to-date', 'no-remote'].includes(start.update.outcome);
 }
 
 /** Where a session's work is, for the operator: one branch, or one per task. */

@@ -11,9 +11,12 @@
  * - a plan can put a new task on an existing branch (`existingBranch`): no new branch, exactly that
  *   name, task after task; a branch that is not there is refused at import, and at the run a missing
  *   branch or a dirty tree refuses the task before anything is sent.
+ * - before a session's first branch the starting branch is fetched and fast-forwarded from its remote,
+ *   only ever forward: a branch with its own commits is left and said, and the option can be switched off.
  *
  *   npm run check:e2e-vcs
  */
+import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startHarness, Tally, type Harness } from './support/harness.js';
@@ -212,6 +215,99 @@ await scenario('at the run: a branch gone, or uncommitted changes, refuse the ta
   const dirty = (await h.run(d!.id)).tasks[0]! as unknown as { status: string; reason?: string };
   t.truthy('failed, saying the tree has uncommitted changes, nothing sent', dirty.status === 'failed' && /uncommitted changes/.test(dirty.reason ?? '') && h.chat.sent.length === 0, dirty);
   t.check('and the repository was left on main, the change untouched', [h.git('branch', '--show-current'), h.git('status', '--porcelain')], ['main', '?? operator-work.txt']);
+});
+
+/**
+ * A bare repository as `origin`, with main pushed, and a second clone that pushes one more commit to it —
+ * the server moving on while this checkout did not. Returns that commit.
+ */
+function serverMovesOn(h: Harness, branch = 'main'): string {
+  const bare = join(h.base, 'server.git');
+  const other = join(h.base, 'colleague');
+  const run = (cwd: string, ...args: string[]): string => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+  h.git('remote', 'add', 'origin', bare);
+  h.git('push', '-q', '-u', 'origin', 'main');
+  if (branch !== 'main') h.git('push', '-q', '-u', 'origin', branch);
+  execFileSync('git', ['clone', '-q', '-b', branch, bare, other]);
+  run(other, 'config', 'user.email', 'colleague@example.invalid');
+  run(other, 'config', 'user.name', 'colleague');
+  writeFileSync(join(other, 'server.txt'), 'pushed by a colleague\n');
+  run(other, 'add', '-A');
+  run(other, 'commit', '-q', '-m', 'on the server');
+  run(other, 'push', '-q', 'origin', branch);
+  return run(other, 'rev-parse', 'HEAD');
+}
+
+const fromMain = (h: Harness, name: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  version: 1,
+  sessions: [{
+    name,
+    onFailure: 'stop',
+    vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: name, startFrom: 'branch', baseBranch: 'main', ...extra },
+    review: { enabled: false },
+    tasks: [fileTask(`${name}-task`, 'a.txt', 'a')],
+  }],
+});
+
+type Started = { vcsStart?: { commit?: string; update?: { outcome: string; from?: string; to?: string; remote?: string } } };
+
+await scenario('before the session branch: main is fetched and moved forward to the server\'s', {}, async (h) => {
+  const server = serverMovesOn(h);
+  const [s] = await h.importPlan(fromMain(h, 'fresh'));
+  h.chat.script(write('a.txt', 'a'), reply.done());
+  const task = (await h.run(s!.id)).tasks[0]!;
+  const started = (await h.session(s!.id)) as unknown as Started;
+  t.check('the session starts from the server\'s commit', [started.vcsStart?.commit, task.vcs?.baseCommit], [server, server]);
+  t.check('main was moved forward to it', h.git('rev-parse', 'main'), server);
+  t.check('and it says so', [started.vcsStart?.update?.outcome, started.vcsStart?.update?.remote, started.vcsStart?.update?.to], ['updated', 'origin/main', server]);
+  t.check('the colleague\'s file is in the task\'s work', h.git('show', `${task.vcs?.commit}:server.txt`), 'pushed by a colleague');
+});
+
+await scenario('main with commits of its own is left as it is, and that is said', {}, async (h) => {
+  serverMovesOn(h);
+  writeFileSync(join(h.repo, 'mine.txt'), 'a local commit nobody pushed\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'local only');
+  const local = h.git('rev-parse', 'main');
+  const [s] = await h.importPlan(fromMain(h, 'diverged'));
+  h.chat.script(write('a.txt', 'a'), reply.done());
+  const task = (await h.run(s!.id)).tasks[0]!;
+  const started = (await h.session(s!.id)) as unknown as Started;
+  t.check('main is untouched and the session starts from it', [h.git('rev-parse', 'main'), task.vcs?.baseCommit], [local, local]);
+  t.check('the update says the branches went their own ways', started.vcsStart?.update?.outcome, 'diverged');
+  t.check('the task still ran', task.status, 'done');
+});
+
+await scenario('switched off in the plan: no fetch, the local branch as it is', {}, async (h) => {
+  serverMovesOn(h);
+  const local = h.git('rev-parse', 'main');
+  const [s] = await h.importPlan(fromMain(h, 'offline', { updateFromRemote: false }));
+  h.chat.script(write('a.txt', 'a'), reply.done());
+  const task = (await h.run(s!.id)).tasks[0]!;
+  const started = (await h.session(s!.id)) as unknown as Started;
+  t.check('started from the local main, no update recorded', [task.vcs?.baseCommit, h.git('rev-parse', 'main'), started.vcsStart?.update ?? null], [local, local, null]);
+});
+
+await scenario('an existing branch carried on is brought up to date from its upstream first', {}, async (h) => {
+  h.git('checkout', '-q', '-b', 'feature/shared');
+  h.git('checkout', '-q', 'main');
+  const server = serverMovesOn(h, 'feature/shared');
+  const [s] = await h.importPlan(onExisting(h, 'shared', 'feature/shared', [fileTask('on-shared', 'b.txt', 'b')]));
+  h.chat.script(write('b.txt', 'b'), reply.done());
+  const task = (await h.run(s!.id)).tasks[0]!;
+  const started = (await h.session(s!.id)) as unknown as Started;
+  t.check('the branch was moved forward to the server\'s, and the task built on it', [started.vcsStart?.update?.outcome, task.vcs?.baseCommit, h.git('rev-parse', `${task.vcs?.commit}^`)], ['updated', server, server]);
+});
+
+await scenario('a remote that cannot be reached: said, and the session starts from the local branch', {}, async (h) => {
+  h.git('remote', 'add', 'origin', join(h.base, 'no-such-server.git'));
+  const local = h.git('rev-parse', 'main');
+  const [s] = await h.importPlan(fromMain(h, 'unreachable'));
+  h.chat.script(write('a.txt', 'a'), reply.done());
+  const task = (await h.run(s!.id)).tasks[0]!;
+  const started = (await h.session(s!.id)) as unknown as Started;
+  t.check('the fetch failed and was said, the task ran from the local main', [started.vcsStart?.update?.outcome, task.vcs?.baseCommit, task.status], ['fetch-failed', local, 'done']);
 });
 
 t.finish();

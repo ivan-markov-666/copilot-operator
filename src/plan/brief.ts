@@ -510,6 +510,11 @@ is clean: the runner commits after the checks, and its own commit is what leaves
   user already has. The branch must exist when the plan is imported; \`branchMode\`, \`branchName\`
   and the prefix do not apply.
 
+Before a session's first branch the runner fetches and fast-forwards the branch it starts from
+(\`baseBranch\`, or \`existingBranch\`), so the work begins from the server's code; it never resets or
+merges. \`"updateFromRemote": false\` turns that off — only when the user asks to work offline or from
+local commits on purpose.
+
 Put the same \`startFrom\` on every session that works in one repository unless the user wants it
 mixed. Leaving it out keeps the old behaviour — whatever branch the repository is on — which is
 the one to avoid.
@@ -561,6 +566,11 @@ const VCS_DETAIL_BG = `
   съществуващ локален клон, точно с това име (\`"existingBranch": "recovery/apz-migration"\`), една след
   друга, върху това, което вече е там. За нова работа, която продължава клон, който потребителят вече
   има. Клонът трябва да съществува при импорта; \`branchMode\`, \`branchName\` и представката не се прилагат.
+
+Преди първия клон на сесията runner-ът прави fetch и fast-forward на клона, от който тя тръгва
+(\`baseBranch\` или \`existingBranch\`), така че работата започва от кода на сървъра; никога не прави
+reset или merge. \`"updateFromRemote": false\` го изключва — само ако потребителят поиска да работи
+офлайн или нарочно от локални commit-и.
 
 Сложи един и същ \`startFrom\` на всички сесии в едно хранилище, освен ако потребителят не иска
 различни. Ако го пропуснеш, остава старото поведение — от който клон е хранилището в момента —

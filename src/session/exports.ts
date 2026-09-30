@@ -162,6 +162,8 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           ...(s.vcs?.startFrom ? { startFrom: s.vcs.startFrom } : {}),
           ...(s.vcs?.baseBranch ? { baseBranch: s.vcs.baseBranch } : {}),
           ...(s.vcs?.existingBranch ? { existingBranch: s.vcs.existingBranch } : {}),
+          // Only when switched off: absent is on.
+          ...(s.vcs?.updateFromRemote === false ? { updateFromRemote: false } : {}),
         },
         review: { enabled: s.review?.enabled !== false, model: s.review?.model ?? '' },
         mirror: {

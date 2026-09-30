@@ -972,7 +972,35 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
                   ? t('vcs.startedBranch', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
                   : t('vcs.startedHead', { commit: session.vcsStart.commit.slice(0, 8) })}
               {session.vcsStart.note ? ` — ${session.vcsStart.note}` : ''}
+              {session.vcsStart.update && (
+                <>
+                  <br />
+                  {session.vcsStart.update.outcome === 'updated'
+                    ? t('vcs.updated', { branch: session.vcsStart.update.branch, remote: session.vcsStart.update.remote ?? '', from: (session.vcsStart.update.from ?? '').slice(0, 8), to: (session.vcsStart.update.to ?? '').slice(0, 8) })
+                    : session.vcsStart.update.outcome === 'up-to-date'
+                      ? t('vcs.upToDate', { branch: session.vcsStart.update.branch, remote: session.vcsStart.update.remote ?? '' })
+                      : t('vcs.notUpdated', { branch: session.vcsStart.update.branch, why: session.vcsStart.update.detail ?? session.vcsStart.update.outcome })}
+                </>
+              )}
             </p>
+          )}
+          {/*
+            Before the session's first branch: the starting branch fetched and moved forward to the
+            server's, only ever forward. Off, it starts from the local branch as this checkout has it.
+          */}
+          {startFrom !== 'head' && (
+            <div className="option">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={vcs.updateFromRemote !== false}
+                  onChange={(e) => void save({ updateFromRemote: e.target.checked })}
+                  disabled={session.running}
+                />
+                <span>{t('vcs.updateFromRemote')}</span>
+              </label>
+              <p className="why">{t('vcs.updateFromRemoteWhy')}</p>
+            </div>
           )}
 
           <div className="option">

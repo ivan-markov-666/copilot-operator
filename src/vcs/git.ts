@@ -49,9 +49,9 @@ function noHooksDir(): string {
 }
 
 /** Runs one git command in a directory. Never throws: the caller decides what a failure means. */
-export function git(cwd: string, args: string[], timeoutMs = 60_000): Promise<GitResult> {
+export function git(cwd: string, args: string[], timeoutMs = 60_000, env?: NodeJS.ProcessEnv): Promise<GitResult> {
   return new Promise((resolve) => {
-    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(env ? { env } : {}) }, (error, stdout, stderr) => {
       const code = (error as NodeJS.ErrnoException & { code?: number })?.code;
       resolve({
         ok: !error,
@@ -204,6 +204,88 @@ export function plannedBranchName(raw: string, prefix = 'cop/', attempt = 1): st
 export async function isValidBranchName(dir: string, name: string): Promise<boolean> {
   const r = await git(dir, ['check-ref-format', '--branch', name]);
   return r.ok;
+}
+
+/**
+ * What bringing a local branch up to its remote did. `updated` moved it forward; every other outcome
+ * left it exactly where it was, and says why.
+ */
+export type BranchUpdate = {
+  branch: string;
+  /** The remote-tracking branch compared with, `origin/main`. */
+  remote?: string;
+  outcome: 'updated' | 'up-to-date' | 'ahead' | 'diverged' | 'no-remote' | 'fetch-failed' | 'failed';
+  from?: string;
+  to?: string;
+  detail?: string;
+};
+
+/**
+ * Brings a local branch up to date with its remote: `git fetch`, then a fast-forward and nothing else.
+ *
+ * Asked for on 2026-09-30, so a session's branch is cut from the code as it is on the server and not
+ * from whatever this checkout last pulled. Never a reset, a merge commit or a rewrite: a branch with
+ * commits of its own (ahead) or one that has gone its own way (diverged) is left as it is, and the
+ * outcome says so. The remote is the branch's upstream, or `origin` when it has none; a repository
+ * with neither is left alone. git is not allowed to ask for credentials — a prompt would hang the run,
+ * and a sign-in window on a machine nobody is watching is worse — so a remote that needs a password
+ * git does not already have fails the fetch, which is reported, not fatal.
+ */
+export async function updateFromRemote(dir: string, branch: string): Promise<BranchUpdate> {
+  const local = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
+  if (!local.ok || !local.stdout) return { branch, outcome: 'failed', detail: `there is no local branch ${branch}` };
+
+  const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${branch}@{upstream}`]);
+  let remote = '';
+  let remoteBranch = branch;
+  if (upstream.ok && upstream.stdout.includes('/')) {
+    remote = upstream.stdout.slice(0, upstream.stdout.indexOf('/'));
+    remoteBranch = upstream.stdout.slice(remote.length + 1);
+  } else {
+    const remotes = await git(dir, ['remote']);
+    const names = remotes.ok ? remotes.stdout.split(/\r?\n/).map((r) => r.trim()).filter(Boolean) : [];
+    if (names.includes('origin')) remote = 'origin';
+  }
+  if (!remote) return { branch, outcome: 'no-remote', detail: 'the repository has no remote to update from' };
+  const tracking = `${remote}/${remoteBranch}`;
+
+  const quiet = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS: '' };
+  const fetched = await git(dir, ['-c', 'credential.interactive=false', 'fetch', '--quiet', '--no-tags', remote, `+refs/heads/${remoteBranch}:refs/remotes/${tracking}`], 90_000, quiet);
+  if (!fetched.ok) {
+    return { branch, remote: tracking, outcome: 'fetch-failed', detail: (fetched.stderr || fetched.stdout || 'git fetch failed').split(/\r?\n/)[0] };
+  }
+  const theirs = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${tracking}^{commit}`]);
+  if (!theirs.ok || !theirs.stdout) return { branch, remote: tracking, outcome: 'no-remote', detail: `${tracking} does not exist on the remote` };
+
+  const from = local.stdout;
+  const to = theirs.stdout;
+  if (from === to) return { branch, remote: tracking, outcome: 'up-to-date', from, to };
+  if (await isAncestor(dir, to, from)) return { branch, remote: tracking, outcome: 'ahead', from, to, detail: `${branch} has commits ${tracking} does not; it was left as it is` };
+  if (!(await isAncestor(dir, from, to))) {
+    return { branch, remote: tracking, outcome: 'diverged', from, to, detail: `${branch} and ${tracking} have each gone their own way; ${branch} was left as it is` };
+  }
+
+  // Forward only. A branch that is checked out moves with its tree (clean, or the caller would not be
+  // here); one that is not is moved by its ref, and only if it still is where it was read.
+  const current = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const moved = current.ok && current.stdout === branch
+    ? await git(dir, ['merge', '--ff-only', '--quiet', to])
+    : await git(dir, ['update-ref', `refs/heads/${branch}`, to, from]);
+  if (!moved.ok) return { branch, remote: tracking, outcome: 'failed', from, to, detail: (moved.stderr || moved.stdout).split(/\r?\n/)[0] };
+  return { branch, remote: tracking, outcome: 'updated', from, to };
+}
+
+/** One line for the log and the session page. */
+export function describeUpdate(u: BranchUpdate): string {
+  const short = (c?: string): string => (c ? c.slice(0, 8) : '?');
+  switch (u.outcome) {
+    case 'updated':
+      return `${u.branch} brought up to date with ${u.remote}: ${short(u.from)} → ${short(u.to)}`;
+    case 'up-to-date':
+      return `${u.branch} was already up to date with ${u.remote}`;
+    default:
+      return `${u.branch} not updated from the remote: ${u.detail ?? u.outcome}`;
+  }
 }
 
 /** The local branches of a repository, by name; empty when it cannot be read. */

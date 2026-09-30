@@ -265,11 +265,15 @@ export type VersionControl = {
   baseBranch?: string;
   /** For `startFrom: existing-branch`: the branch every task works on, exactly as named. */
   existingBranch?: string;
+  /** Fetch and fast-forward the starting branch before the session's first branch. Absent means yes. */
+  updateFromRemote?: boolean;
 };
 
 /** Where a session's first branch was actually cut from, recorded at its first run. */
 export type SessionStart = {
   kind: 'branch' | 'previous-session' | 'head' | 'existing-branch';
+  /** What bringing the starting branch up to its remote did. */
+  update?: { branch: string; remote?: string; outcome: string; from?: string; to?: string; detail?: string };
   commit: string;
   branch?: string;
   fromSession?: { id: string; name: string };

@@ -460,6 +460,11 @@ export const dict = {
     'vcs.existingBranchMissing': 'The repository has no local branch "{branch}" right now: a task would be refused.',
     'vcs.startedExisting': 'Carries on the existing branch {branch}, from {commit}.',
     'vcs.branchesExisting': 'Does not apply: every task works on the existing branch {branch}, one after another.',
+    'vcs.updateFromRemote': 'Bring the starting branch up to date from the remote first',
+    'vcs.updateFromRemoteWhy': 'Before the session’s first branch: git fetch, then the local branch is moved forward to the remote’s — never reset or merged. A branch with commits of its own is left as it is and that is said. Off: it starts from the branch as this checkout has it.',
+    'vcs.updated': '{branch} was brought up to date with {remote}: {from} → {to}.',
+    'vcs.upToDate': '{branch} was already up to date with {remote}.',
+    'vcs.notUpdated': '{branch} was not updated from the remote: {why}.',
     'vcs.commit': 'Commit when a task finishes',
     'vcs.commitWhy':
       'One local commit per task, whatever the outcome, with the summary in the message. Off leaves the changes in the working tree.',
@@ -1657,6 +1662,11 @@ export const dict = {
     'vcs.existingBranchMissing': 'В момента хранилището няма локален клон „{branch}“: задачата ще бъде отказана.',
     'vcs.startedExisting': 'Продължава съществуващия клон {branch}, от {commit}.',
     'vcs.branchesExisting': 'Не се прилага: всяка задача работи на съществуващия клон {branch}, една след друга.',
+    'vcs.updateFromRemote': 'Първо обнови началния клон от отдалеченото хранилище',
+    'vcs.updateFromRemoteWhy': 'Преди първия клон на сесията: git fetch, после локалният клон се придвижва напред до този на сървъра — никога reset или merge. Клон със свои commit-и се оставя както е и това се казва. Изключено: тръгва от клона, както е в това копие.',
+    'vcs.updated': '{branch} е обновен от {remote}: {from} → {to}.',
+    'vcs.upToDate': '{branch} вече беше обновен спрямо {remote}.',
+    'vcs.notUpdated': '{branch} не е обновен от отдалеченото хранилище: {why}.',
     'vcs.commit': 'Комит при приключване на задача',
     'vcs.commitWhy':
       'По един локален комит на задача, независимо от изхода, с обяснението в съобщението. Изключено оставя промените в работното дърво.',

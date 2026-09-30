@@ -579,6 +579,12 @@ export type VersionControl = {
   startFrom?: 'branch' | 'previous-session' | 'head' | 'existing-branch';
   /** For `startFrom: 'existing-branch'`: the local branch the session works on, exactly as named. */
   existingBranch?: string;
+  /**
+   * Before the session's first branch is cut (or the existing branch carried on), fetch its remote
+   * and fast-forward the local branch it starts from — never anything that could lose a commit.
+   * Absent means yes; `false` starts from the local branch as it is. See `updateFromRemote` in vcs/git.ts.
+   */
+  updateFromRemote?: boolean;
   /** The local branch `startFrom: branch` starts from, and the fallback of `previous-session`. */
   baseBranch?: string;
 };
@@ -625,6 +631,15 @@ export function isContinuable(t: Pick<Task, 'status' | 'limit'>): boolean {
 /** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */
 export type SessionStart = {
   kind: 'branch' | 'previous-session' | 'head' | 'existing-branch';
+  /** What bringing the starting branch up to its remote did, when that was asked for. See `BranchUpdate`. */
+  update?: {
+    branch: string;
+    remote?: string;
+    outcome: 'updated' | 'up-to-date' | 'ahead' | 'diverged' | 'no-remote' | 'fetch-failed' | 'failed';
+    from?: string;
+    to?: string;
+    detail?: string;
+  };
   commit: string;
   /** The branch the commit was the tip of, when there was one. */
   branch?: string;

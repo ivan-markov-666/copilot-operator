@@ -60,6 +60,11 @@ const VcsInput = z
        * prefix. Given alone it means `startFrom: "existing-branch"`. See `VersionControl.startFrom`.
        */
       existingBranch: z.string().trim().optional(),
+      /**
+       * Fetch and fast-forward the branch the session starts from before its first branch is cut.
+       * Absent means true. See `VersionControl.updateFromRemote`.
+       */
+      updateFromRemote: z.boolean().optional(),
     },
     {
       error:

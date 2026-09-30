@@ -1292,6 +1292,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Точното име на клона, на който работи „Продължи съществуващ клон“; докато пишеш, се предлагат локалните клонове.',
           },
           {
+            key: 'vcs.updateFromRemote',
+            kind: 'checkbox',
+            en: 'Bring the starting branch up to date from the remote first',
+            bg: 'Първо обнови началния клон от отдалеченото хранилище',
+            doesEn: 'On by default. Before the session\'s first branch: git fetch, then a fast-forward of the starting branch only; a branch with its own commits is left and said.',
+            doesBg: 'Включено по подразбиране. Преди първия клон на сесията: git fetch и само fast-forward на началния клон; клон със свои commit-и се оставя и се казва.',
+          },
+          {
             key: 'vcs.baseBranch',
             kind: 'field',
             en: 'Local branch to start from',

@@ -574,6 +574,7 @@ export class OperatorService {
           (merged.startFrom ?? 'head') !== (s.vcs?.startFrom ?? 'head') ||
           (merged.baseBranch || 'main') !== (s.vcs?.baseBranch || 'main') ||
           (merged.existingBranch ?? '') !== (s.vcs?.existingBranch ?? '') ||
+          (merged.updateFromRemote !== false) !== (s.vcs?.updateFromRemote !== false) ||
           merged.repoDir.toLowerCase() !== (s.vcs?.repoDir ?? '').trim().toLowerCase();
         if (startChanged) {
           s.vcsBaseCommit = undefined;
