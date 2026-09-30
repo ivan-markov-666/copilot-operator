@@ -268,7 +268,9 @@ function ProjectSection() {
   };
 
   const others = project?.others ?? [];
-  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir, ...(o.mirror ? { mirror: o.mirror } : {}) }));
+  const plain = (list: typeof others) =>
+    list.map((o) => ({ name: o.name, rootDir: o.rootDir, ...(o.mirror ? { mirror: o.mirror } : {}), ...(o.desktop === false ? { desktop: false } : {}) }));
+  const onDesktopText = (on: boolean) => (on ? t('proj.desktopOn') : t('proj.desktopOff'));
 
   const toggleDesktop = (on: boolean) => save({ mirrorToDesktop: on }, (p) => (p.mirrorToDesktop ? t('proj.mirrorOn', { root: p.contextRoot }) : t('proj.mirrorOff')));
   const saveDefaultFolders = (sel: ProjectMirrorSelection) => save({ mirror: sel }, () => t('proj.foldersSaved'));
@@ -335,6 +337,9 @@ function ProjectSection() {
         onRemove={project?.rootDir ? () => void saveDefault('') : undefined}
         removeLabel={t('proj.clear')}
         onFolders={saveDefaultFolders}
+        desktop={project?.desktop ?? true}
+        desktopMaster={project?.mirrorToDesktop ?? false}
+        onDesktop={(v) => void save({ desktop: v }, () => onDesktopText(v))}
       />
       <SavedNote msg={msg} />
       {project && !project.rootDir && <p className="muted small" style={{ marginTop: 8 }}>{t('proj.none')}</p>}
@@ -360,6 +365,9 @@ function ProjectSection() {
           onRemove={() => void removeOther(o.name)}
           removeLabel={t('proj.otherRemove')}
           onFolders={(sel) => saveOtherFolders(o.name, sel)}
+          desktop={o.desktop}
+          desktopMaster={project?.mirrorToDesktop ?? false}
+          onDesktop={(v) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, desktop: v } : x))) }, () => onDesktopText(v))}
         />
       ))}
 
@@ -432,6 +440,9 @@ function ProjectEntry({
   onRemove,
   removeLabel,
   onFolders,
+  desktop,
+  desktopMaster,
+  onDesktop,
 }: {
   name: string;
   dir: string;
@@ -450,6 +461,10 @@ function ProjectEntry({
   onRemove?: () => void;
   removeLabel: string;
   onFolders: (sel: ProjectMirrorSelection) => Promise<boolean>;
+  /** This project's own tick for the Desktop copy, under the master switch at the top. */
+  desktop: boolean;
+  desktopMaster: boolean;
+  onDesktop: (on: boolean) => void;
 }) {
   const { t } = useT();
   const id = useId();
@@ -527,6 +542,13 @@ function ProjectEntry({
           <summary>{t('proj.folders')}</summary>
           <ProjectFolders rootDir={dir} value={mirror} onSave={onFolders} busy={busy} />
         </details>
+      )}
+      {dir && (
+        <label className="option-inline small" style={{ marginTop: 8 }} title={desktopMaster ? undefined : t('proj.desktopMasterOff')}>
+          <input type="checkbox" checked={desktop} disabled={busy || !desktopMaster} onChange={(e) => onDesktop(e.target.checked)} />{' '}
+          {t('proj.desktopThis')}
+          {!desktopMaster && <span className="muted"> — {t('proj.desktopMasterOff')}</span>}
+        </label>
       )}
       {dir && repoOk && <SyncCommand dir={dir} />}
     </div>

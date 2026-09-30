@@ -25,6 +25,8 @@ export type KnownProject = {
   rootDir: string;
   isDefault: boolean;
   mirror: ProjectMirrorSelection;
+  /** Whether this project is kept on the Desktop when the switch is on. Each project's own choice. */
+  desktop: boolean;
 };
 
 const EMPTY_SELECTION: ProjectMirrorSelection = { includeDirs: [], excludeDirs: [], respectGitignore: true, includeEnvFiles: false };
@@ -43,8 +45,10 @@ export function safeProjectName(name: string): string {
 export function knownProjects(cfg: ResolvedConfig): KnownProject[] {
   const out: KnownProject[] = [];
   const root = (cfg.project?.rootDir ?? '').trim();
-  if (root) out.push({ name: (cfg.project?.name ?? '').trim() || basename(root) || 'project', rootDir: root, isDefault: true, mirror: cfg.project?.mirror ?? EMPTY_SELECTION });
-  for (const o of cfg.project?.others ?? []) out.push({ name: o.name, rootDir: o.rootDir, isDefault: false, mirror: o.mirror ?? EMPTY_SELECTION });
+  if (root) {
+    out.push({ name: (cfg.project?.name ?? '').trim() || basename(root) || 'project', rootDir: root, isDefault: true, mirror: cfg.project?.mirror ?? EMPTY_SELECTION, desktop: cfg.project?.desktop !== false });
+  }
+  for (const o of cfg.project?.others ?? []) out.push({ name: o.name, rootDir: o.rootDir, isDefault: false, mirror: o.mirror ?? EMPTY_SELECTION, desktop: o.desktop !== false });
   return out;
 }
 
@@ -104,24 +108,37 @@ export async function mirrorKnownProject(cfg: ResolvedConfig, project: KnownProj
   return { name, rootDir: project.rootDir, targetDir, result };
 }
 
-/** Every known project, when the switch is on. Nothing when it is off. */
+/**
+ * Every known project that is kept on the Desktop, when the switch is on; nothing when it is off.
+ *
+ * The switch is the master control and each project has its own tick under it. A project whose
+ * tick is off has its Desktop folder removed here, for the same reason the switch going off
+ * removes them all: a stale copy of a code base in the cloud is worse than none.
+ */
 export async function mirrorAllProjects(cfg: ResolvedConfig): Promise<ProjectMirrorOutcome[]> {
   if (!cfg.project?.mirrorToDesktop) return [];
   await removeLegacyFlatMirror(cfg);
   const out: ProjectMirrorOutcome[] = [];
-  for (const p of knownProjects(cfg)) out.push(await mirrorKnownProject(cfg, p));
+  for (const p of knownProjects(cfg)) {
+    if (p.desktop) out.push(await mirrorKnownProject(cfg, p));
+    else await removeProjectFolder(cfg, p);
+  }
   return out;
+}
+
+async function removeProjectFolder(cfg: ResolvedConfig, p: KnownProject): Promise<boolean> {
+  const dir = projectTargetDir(cfg, p.name);
+  const info = await stat(dir).catch(() => null);
+  if (!info?.isDirectory()) return false;
+  await rm(dir, { recursive: true, force: true });
+  return true;
 }
 
 /** Removes every known project's folder from the Desktop. The switch going off. */
 export async function removeProjectMirrors(cfg: ResolvedConfig): Promise<string[]> {
   const removed: string[] = [];
   for (const p of knownProjects(cfg)) {
-    const dir = projectTargetDir(cfg, p.name);
-    const info = await stat(dir).catch(() => null);
-    if (!info?.isDirectory()) continue;
-    await rm(dir, { recursive: true, force: true });
-    removed.push(dir);
+    if (await removeProjectFolder(cfg, p)) removed.push(projectTargetDir(cfg, p.name));
   }
   return removed;
 }

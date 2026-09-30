@@ -3124,8 +3124,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'checkbox',
             en: 'Keep the projects on the Desktop',
             bg: 'Дръж проектите на Desktop-а',
-            doesEn: 'Copies every project on this page to its own Desktop folder before each run, which is how the files reach the chat.',
-            doesBg: 'Копира всеки проект от тази страница в собствена папка на Desktop-а преди всяко пускане — така файловете стигат до чата.',
+            doesEn: 'The master switch: copies the projects on this page to their own Desktop folders before a run and after every round of steps, which is how the files reach the chat.',
+            doesBg: 'Главният ключ: копира проектите от тази страница в собствени папки на Desktop-а преди пускане и след всеки кръг стъпки — така файловете стигат до чата.',
+          },
+          {
+            key: 'proj.desktopThis',
+            kind: 'checkbox',
+            en: 'Keep a copy of this project on the Desktop',
+            bg: 'Дръж копие на този проект на Desktop-а',
+            doesEn: 'Under each project, on by default: untick to keep that one off the Desktop while the switch is on. Greyed out while the switch is off.',
+            doesBg: 'Под всеки проект, включено по подразбиране: махнете отметката, за да не се копира точно той, докато ключът е включен. Неактивно, докато ключът е изключен.',
           },
           {
             key: 'proj.folders',

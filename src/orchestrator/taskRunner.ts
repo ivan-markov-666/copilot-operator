@@ -104,6 +104,12 @@ export type RunDeps = {
    * person had approved each step. The service that holds the switch answers this.
    */
   currentMode?: () => 'confirm' | 'unattended';
+  /**
+   * Told whenever the task may have changed files: after every round of steps, and when a task
+   * ends. The API uses it to keep the Desktop copies of the projects current while a run works,
+   * instead of only before it starts. It must not wait on anything and must not throw.
+   */
+  onWorkChanged?: () => void;
 };
 
 /** Why a task that was reported as done is being closed as failed. */
@@ -606,6 +612,8 @@ export async function runTask(
     await setTask((t) => {
       t.handoff = composeHandoff(t, notRun);
     });
+    // Its last changes, checks and commit included, go to the Desktop copies too.
+    deps.onWorkChanged?.();
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
     await log.close();
     /*
@@ -1760,6 +1768,9 @@ export async function runTask(
       }
 
       if (aborted) return await finish('aborted', 'the operator aborted the task', undefined, lastMarkdown);
+
+      // The files may have changed: the Desktop copies catch up, in the background (see RunDeps).
+      if (results.some((r) => r.outcome !== 'refused' && r.outcome !== 'aborted')) deps.onWorkChanged?.();
 
       // A loop in which every round looks new: see `progress.ts`. After the report is written, so
       // the evidence the diagnosis points at is on disk.

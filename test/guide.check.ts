@@ -281,6 +281,7 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^reg\.newTaskIn$/, why: 'the second half of the "New task" label' },
   { pattern: /^diff\.(before|after)$/, why: 'the two column headings of the changes view' },
   { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
+  { pattern: /^proj\.desktopMasterOff$/, why: 'the greyed-out note beside "Keep a copy of this project on the Desktop", which is guided' },
   { pattern: /^plan\.briefFileMessage$/, why: 'the text "Copy the message for the file" copies, also shown beside it; the button is guided' },
   { pattern: /^batch\.move(Up|Down)$/, why: 'only the screen-reader name of the ↑ and ↓ that reorder the sessions of a run; the buttons show an arrow, not this text' },
 ];

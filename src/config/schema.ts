@@ -302,6 +302,8 @@ export const RunConfigSchema = z.object({
             rootDir: z.string().trim().min(1),
             /** Which of this project's directories go to the Desktop. See `mirror` below. */
             mirror: ProjectMirrorSelection.optional(),
+            /** `false` keeps this project off the Desktop while the switch below is on. Absent means on. */
+            desktop: z.boolean().optional(),
           }),
         )
         .default([]),
@@ -317,6 +319,8 @@ export const RunConfigSchema = z.object({
       mirrorToDesktop: z.boolean().default(false),
       /** The default project's own selection. */
       mirror: ProjectMirrorSelection.optional(),
+      /** `false` keeps the default project off the Desktop while the switch is on. Absent means on. */
+      desktop: z.boolean().optional(),
     })
     .prefault({}),
 

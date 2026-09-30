@@ -360,6 +360,9 @@ try {
 
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {
     await page.goto(url('/defaults'));
+    const perProject = page.getByRole('checkbox', { name: 'Keep a copy of this project on the Desktop' }).first();
+    await perProject.waitFor();
+    t.check('the Desktop tick of a project is on, and greyed out while the master switch is off', [await perProject.isChecked(), await perProject.isDisabled()], [true, true]);
     const iterations = page.getByLabel('Most messages to the chat in one task');
     await iterations.fill('2');
     await iterations.blur();

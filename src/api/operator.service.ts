@@ -48,9 +48,11 @@ export type ProjectDefault = {
   name: string;
   repoOk: boolean;
   repoProblem?: string;
-  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection }>;
-  /** Whether every project's selection is kept on the Desktop, refreshed before each run. */
+  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection; desktop: boolean }>;
+  /** The master switch: whether the projects are kept on the Desktop, refreshed before and during runs. */
   mirrorToDesktop: boolean;
+  /** Whether the default project is among them, under the switch. */
+  desktop: boolean;
   /** The default project's selection. */
   mirror?: ProjectMirrorSelection;
   /** The Desktop folder that holds one subfolder per project. */
@@ -1145,6 +1147,8 @@ export class OperatorService {
       // The mode as it is now, not as it was: "run the rest without asking" changes it mid-run,
       // and the policy.json of a later task must say so.
       currentMode: () => this.running.get(sessionId)?.mode ?? mode,
+      // The Desktop copies follow the work while it happens, not only before the run.
+      onWorkChanged: () => this.requestDesktopRefresh(),
       // The session decides whether its tasks are one chain or a set of independent checks.
       continueOnFailure: session.onFailure === 'continue',
       transport,
@@ -2235,7 +2239,7 @@ export class OperatorService {
     const problem = repoUnusableReason(rootDir);
     const others = (cfg.project?.others ?? []).map((o) => {
       const p = repoUnusableReason(o.rootDir);
-      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}), mirror: o.mirror };
+      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}), mirror: o.mirror, desktop: o.desktop !== false };
     });
     return {
       rootDir,
@@ -2244,9 +2248,43 @@ export class OperatorService {
       ...(problem ? { repoProblem: problem } : {}),
       others,
       mirrorToDesktop: cfg.project?.mirrorToDesktop ?? false,
+      desktop: cfg.project?.desktop !== false,
       mirror: cfg.project?.mirror,
       contextRoot: contextRoot(cfg),
     };
+  }
+
+  private desktopRefresh: Promise<void> | null = null;
+  private desktopRefreshAgain = false;
+
+  /**
+   * Asks for the Desktop copies to be brought up to date, while a run works.
+   *
+   * They used to be refreshed once, before a run, so a task that changed files left the Desktop —
+   * and OneDrive, and the chat that reads from it — on the code as it was before the task. The
+   * runner now calls this after every round of steps and after every task. One refresh runs at a
+   * time: a request that arrives while one is running is remembered and served by one more pass
+   * after it, so a burst of rounds costs two passes, not one per round, and the last pass always
+   * sees the latest files. A failure is reported and never stops the run.
+   */
+  requestDesktopRefresh(): void {
+    if (this.desktopRefresh) {
+      this.desktopRefreshAgain = true;
+      return;
+    }
+    this.desktopRefresh = (async () => {
+      do {
+        this.desktopRefreshAgain = false;
+        await this.refreshDesktopMirrors();
+      } while (this.desktopRefreshAgain);
+    })().finally(() => {
+      this.desktopRefresh = null;
+    });
+  }
+
+  /** Resolves once no Desktop refresh is running or waiting. For the checks, and for a clean stop. */
+  async desktopRefreshSettled(): Promise<void> {
+    while (this.desktopRefresh) await this.desktopRefresh;
   }
 
   /**
@@ -2284,17 +2322,19 @@ export class OperatorService {
   async setProject(patch: {
     rootDir?: string;
     name?: string;
-    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
     mirrorToDesktop?: boolean;
     mirror?: ProjectMirrorSelection;
+    desktop?: boolean;
   }): Promise<ProjectDefault> {
     const raw = await this.settings.raw();
     const current = ((raw.project as Record<string, unknown>) ?? {}) as {
       rootDir?: string;
       name?: string;
-      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
       mirrorToDesktop?: boolean;
       mirror?: ProjectMirrorSelection;
+      desktop?: boolean;
     };
     const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
     const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
@@ -2304,6 +2344,8 @@ export class OperatorService {
       name: (o.name ?? '').trim(),
       rootDir: (o.rootDir ?? '').trim(),
       ...(o.mirror ? { mirror: o.mirror } : {}),
+      // Stored only when it is off: absent means the project goes to the Desktop with the rest.
+      ...(o.desktop === false ? { desktop: false } : {}),
     }));
     const seen = new Set<string>();
     for (const o of others) {
@@ -2318,7 +2360,12 @@ export class OperatorService {
 
     const mirrorToDesktop = patch.mirrorToDesktop ?? current.mirrorToDesktop ?? false;
     const mirror = patch.mirror ?? current.mirror;
-    const cfg = await this.settings.save({ ...raw, project: { ...current, rootDir, name, others, mirrorToDesktop, ...(mirror ? { mirror } : {}) } });
+    const desktop = patch.desktop ?? current.desktop ?? true;
+    const { desktop: _old, ...rest } = current;
+    const cfg = await this.settings.save({
+      ...raw,
+      project: { ...rest, rootDir, name, others, mirrorToDesktop, ...(mirror ? { mirror } : {}), ...(desktop === false ? { desktop: false } : {}) },
+    });
 
     /*
      * The switch acts at once, both ways. On: every project's folder appears on the Desktop

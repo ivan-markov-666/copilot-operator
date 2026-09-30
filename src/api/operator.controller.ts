@@ -659,13 +659,15 @@ export class OperatorController {
     body: {
       rootDir?: string;
       name?: string;
-      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+      others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
       mirrorToDesktop?: boolean;
       mirror?: ProjectMirrorSelection;
+      /** The default project's own tick for the Desktop copy. */
+      desktop?: boolean;
     },
   ): Promise<unknown> {
     return this.ops
-      .setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others, mirrorToDesktop: body?.mirrorToDesktop, mirror: body?.mirror })
+      .setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others, mirrorToDesktop: body?.mirrorToDesktop, mirror: body?.mirror, desktop: body?.desktop })
       .catch(fail);
   }
 

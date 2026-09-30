@@ -581,7 +581,7 @@ export type BatchState = {
 export type ProjectMirrorSelection = { includeDirs: string[]; excludeDirs: string[]; respectGitignore: boolean; includeEnvFiles: boolean };
 
 /** One of the other folders the operator works in, by name, with whether it can carry version control. */
-export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection };
+export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string; mirror?: ProjectMirrorSelection; desktop: boolean };
 
 /** The project folder new sessions start pointed at, whether it can carry version control, and the other folders by name. */
 export type ProjectDefault = {
@@ -591,8 +591,10 @@ export type ProjectDefault = {
   repoOk: boolean;
   repoProblem?: string;
   others: OtherProject[];
-  /** Whether every project's selection is kept on the Desktop, refreshed before each run. */
+  /** The master switch: whether the projects are kept on the Desktop, refreshed before and during runs. */
   mirrorToDesktop: boolean;
+  /** Whether the default project is among them, under the switch. */
+  desktop: boolean;
   /** The default project's selection. */
   mirror?: ProjectMirrorSelection;
   /** The Desktop folder that holds one subfolder per project. */
@@ -1031,7 +1033,8 @@ export const api = {
   setProject: (patch: {
     rootDir?: string;
     name?: string;
-    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection }>;
+    desktop?: boolean;
+    others?: Array<{ name: string; rootDir: string; mirror?: ProjectMirrorSelection; desktop?: boolean }>;
     mirrorToDesktop?: boolean;
     mirror?: ProjectMirrorSelection;
   }) => call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
