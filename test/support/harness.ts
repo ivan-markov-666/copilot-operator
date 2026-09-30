@@ -81,6 +81,7 @@ export type SessionView = {
   modelInUse?: string;
   vcsStart?: { kind?: string; commit?: string; branch?: string; fromSession?: { id: string; name: string } };
   vcsBaseCommit?: string;
+  vcs?: { enabled?: boolean; startFrom?: string; existingBranch?: string; branchMode?: string };
   tasks: TaskView[];
 };
 

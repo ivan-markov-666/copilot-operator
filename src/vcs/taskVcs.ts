@@ -19,7 +19,7 @@ import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
-import { branchNameFrom, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
+import { branchExists, branchNameFrom, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Session): string {
@@ -30,6 +30,12 @@ export type PrepareResult = {
   vcs: TaskVcs;
   /** What level 1 should tell Copilot about the repository, or empty when there is nothing. */
   note: string;
+  /**
+   * Set when the task must not run at all: the session is to carry on an existing branch and the
+   * runner cannot put the repository on it. Running anyway would put the work on whatever branch is
+   * checked out — the mixing of unrelated work this option exists to prevent.
+   */
+  refuse?: string;
 };
 
 /**
@@ -59,6 +65,8 @@ export async function prepareForTask(
       message: `version control is on but inactive: ${problem}` });
     return { vcs: { problem }, note: '' };
   }
+
+  if (settings.startFrom === 'existing-branch') return await onExistingBranch(session, task, dir, state, bus, saveSession);
 
   // A dirty tree is the operator's own work in progress. Committing it under the bot's name
   // or moving it to another branch would both be decisions that are not ours to make.
@@ -123,6 +131,58 @@ export async function prepareForTask(
   // attempt ended. That is the whole point of recording the base commit.
   const from = firstAttemptBase(task) ?? base;
   return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false, start });
+}
+
+/**
+ * A session that carries on an existing branch: every task on that branch, exactly as named.
+ *
+ * Nothing is created. The branch must exist and the tree must be clean — the uncommitted changes
+ * would otherwise be carried onto the branch, or stop the switch half-way — and anything else
+ * refuses the task before a message is sent. The first run records the branch's tip as where the
+ * session started, so the record and a restore know what was there before the work.
+ */
+async function onExistingBranch(
+  session: Session,
+  task: Task,
+  dir: string,
+  state: Awaited<ReturnType<typeof repoState>>,
+  bus: EventBus,
+  saveSession: (mutate: (s: Session) => void) => Promise<void>,
+): Promise<PrepareResult> {
+  const wanted = (session.vcs?.existingBranch ?? '').trim();
+  const refuse = (why: string): PrepareResult => {
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-refused', level: 'error', message: why });
+    return { vcs: { problem: why }, note: '', refuse: why };
+  };
+  if (!wanted) return refuse('this session is set to carry on an existing branch, and no branch is named. Name it (Version control → "Start from").');
+  if (!(await branchExists(dir, wanted))) {
+    const have = await localBranches(dir);
+    return refuse(
+      `this session is set to carry on the branch "${wanted}", and ${dir} has no such local branch` +
+        `${have.length > 0 ? ` (it has: ${have.slice(0, 12).join(', ')})` : ''}. Nothing was run.`,
+    );
+  }
+  if (state.dirty) {
+    return refuse(
+      `the repository has uncommitted changes (${state.changed.slice(0, 5).join(', ')}${state.changed.length > 5 ? `, and ${state.changed.length - 5} more` : ''}), ` +
+        `so the work cannot be put on "${wanted}" without taking them along. Commit or stash them first. Nothing was run.`,
+    );
+  }
+  let start = session.vcsStart;
+  if (!session.vcsBaseCommit || start?.kind !== 'existing-branch' || start.branch !== wanted) {
+    const tip = await branchTip(dir, wanted);
+    if (tip) {
+      const chosen: SessionStart = { kind: 'existing-branch', commit: tip, branch: wanted };
+      start = chosen;
+      await saveSession((s) => {
+        s.vcsBaseCommit = chosen.commit;
+        s.vcsStart = chosen;
+      });
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: 'info', message: describeStart(chosen), data: { ...chosen } });
+    }
+  }
+  const prepared = await switchTo(session, task, dir, wanted, undefined, bus, { reuseExisting: true, mustExist: true, start });
+  return prepared.vcs.branch === wanted ? prepared : refuse(`the repository could not be put on "${wanted}": ${prepared.vcs.problem ?? 'unknown reason'}. Nothing was run.`);
 }
 
 /**
@@ -207,7 +267,9 @@ export function describeStart(start: SessionStart): string {
   const said =
     start.kind === 'previous-session'
       ? `this session continues "${start.fromSession?.name ?? '?'}": it starts from the end of its branch ${start.branch} (${at})`
-      : start.kind === 'branch'
+      : start.kind === 'existing-branch'
+        ? `this session carries on the existing branch ${start.branch}, from its tip ${at}`
+        : start.kind === 'branch'
         ? `this session starts from the local branch ${start.branch} (${at})`
         : `this session starts from where the repository was (${at})`;
   return start.note ? `${said} — ${start.note}` : said;
@@ -254,7 +316,8 @@ async function switchTo(
   wantedName: string,
   from: string | undefined,
   bus: EventBus,
-  opts: { reuseExisting: boolean; start?: SessionStart },
+  /** `mustExist`: carry on this branch or nothing; never create it. */
+  opts: { reuseExisting: boolean; mustExist?: boolean; start?: SessionStart },
 ): Promise<PrepareResult> {
   if (!(await isValidBranchName(dir, wantedName))) {
     const problem = `"${wantedName}" is not a name git accepts.`;
@@ -270,7 +333,7 @@ async function switchTo(
     result = { ok: true, stdout: '', stderr: '', code: 0 };
   } else if (opts.reuseExisting) {
     const existing = await checkoutExisting(dir, wantedName);
-    result = existing.ok ? existing : await createBranch(dir, wantedName, from);
+    result = existing.ok || opts.mustExist ? existing : await createBranch(dir, wantedName, from);
   } else {
     name = await freeBranchName(dir, wantedName);
     result = await createBranch(dir, name, from);
@@ -292,7 +355,8 @@ async function switchTo(
   // What the task stands on, and what it does not: the base commit by name, and the other
   // tasks of this session that already ran, with the branch each of them worked on.
   const subject = vcs.baseCommit ? await commitSubject(dir, vcs.baseCommit) : '';
-  const mode = session.vcs?.branchMode ?? 'per-task';
+  // A session carrying on an existing branch has all its tasks on it, one after another.
+  const mode = session.vcs?.startFrom === 'existing-branch' ? 'per-session' : (session.vcs?.branchMode ?? 'per-task');
   // On this branch (per-session: their work is here) or on others (per-task: it is not). A
   // session whose mode was switched mid-way has both, and each kind is reported by where it is.
   const earlier = session.tasks
@@ -356,7 +420,9 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
   const began =
     ctx.start?.kind === 'previous-session'
       ? `This session continues the work of the earlier session "${ctx.start.fromSession?.name ?? ''}": it was started from the end of its branch \`${ctx.start.branch}\`, so that session's work is already in your working tree. Build on it; do not redo it.`
-      : ctx.start?.kind === 'branch'
+      : ctx.start?.kind === 'existing-branch'
+        ? `This session carries on the existing branch \`${ctx.start.branch}\`: the work already on it is in your working tree. Build on it; do not redo it.`
+        : ctx.start?.kind === 'branch'
         ? `This session started from the local branch \`${ctx.start.branch}\`, not from any earlier session's work${ctx.start.note ? ` (${ctx.start.note})` : ''}.`
         : '';
   return [

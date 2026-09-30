@@ -8,6 +8,9 @@
  * - a check that the tree is clean is decided after the runner's commit, not before it;
  * - a task that ends blocked says the runner committed its changes afterwards, and why no review ran;
  * - the handoff keeps the tree before the commit, the checks, the commit and the tree after it apart.
+ * - a plan can put a new task on an existing branch (`existingBranch`): no new branch, exactly that
+ *   name, task after task; a branch that is not there is refused at import, and at the run a missing
+ *   branch or a dirty tree refuses the task before anything is sent.
  *
  *   npm run check:e2e-vcs
  */
@@ -133,6 +136,82 @@ await scenario('a task that ends blocked says the runner committed afterwards, a
   t.truthy('the reason says the runner committed after the chat wrote its account', new RegExp(`runner committed the task's changes as ${ended.vcs!.commit!.slice(0, 8)}`).test(ended.reason ?? '') && /working tree is clean/.test(ended.reason ?? ''), ended.reason);
   t.truthy('a review that was on and never ran says why', ended.review?.verdict === 'skipped' && /ended blocked before its work reached the review/.test(ended.review.skippedBecause ?? ''), ended.review);
   t.check('the handoff: after the commit the tree is clean', ended.handoff?.lifecycle?.postCommitState?.clean, true);
+});
+
+/** A plan of one session that carries on `branch`, with the tasks given. */
+const onExisting = (h: Harness, name: string, branch: string, tasks: unknown[]): Record<string, unknown> => ({
+  version: 1,
+  sessions: [{
+    name,
+    onFailure: 'stop',
+    // `existingBranch` alone means startFrom "existing-branch"; branchMode is written to show it does not apply.
+    vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-task', existingBranch: branch },
+    review: { enabled: false },
+    tasks,
+  }],
+});
+const fileTask = (title: string, file: string, text: string): Record<string, unknown> => ({
+  title,
+  prompt: `Create ${file} in the repository root holding exactly the text ${text}, and nothing else.`,
+  checks: [{ name: `${file} written`, expect: 'file-contains', file, value: text }],
+});
+
+await scenario('new tasks on an existing branch: that branch, exactly, task after task', {}, async (h) => {
+  // A branch without a "/" — the case a prefix used to swallow.
+  h.git('checkout', '-q', '-b', 'develop');
+  writeFileSync(join(h.repo, 'earlier.txt'), 'work already on develop\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'earlier work');
+  const tip = h.git('rev-parse', 'HEAD');
+  h.git('checkout', '-q', 'main');
+
+  const [s] = await h.importPlan(onExisting(h, 'carry-on', 'develop', [fileTask('first', 'one.txt', 'one'), fileTask('second', 'two.txt', 'two')]));
+  t.check('imported as carrying on the branch', [s!.vcs?.startFrom, (s!.vcs as { existingBranch?: string } | undefined)?.existingBranch], ['existing-branch', 'develop']);
+  h.chat.script(
+    (m) => {
+      t.truthy('the chat is told it carries on the existing branch, with its work in the tree', /carries on the existing branch `develop`/.test(m.text), m.text.slice(0, 700));
+      return write('one.txt', 'one');
+    },
+    reply.done(),
+    write('two.txt', 'two'),
+    reply.done(),
+  );
+  const after = await h.run(s!.id);
+  const [one, two] = after.tasks as unknown as Array<{ status: string; vcs?: { branch?: string; baseCommit?: string; commit?: string } }>;
+  t.check('both done, both on develop', [one!.status, two!.status, one!.vcs?.branch, two!.vcs?.branch], ['done', 'done', 'develop', 'develop']);
+  t.check('the first starts from the branch as it was', one!.vcs?.baseCommit, tip);
+  t.check('the second builds on the first', h.git('rev-parse', `${two!.vcs?.commit}^`), one!.vcs?.commit);
+  t.check('develop now ends at the second task\'s commit', h.git('rev-parse', 'develop'), two!.vcs?.commit);
+  t.check('no other branch was made', h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads').split('\n').sort(), ['develop', 'main']);
+  const record = (await h.session(s!.id)) as unknown as { vcsStart?: { kind: string; branch?: string; commit: string } };
+  t.check('the session records where the branch was when it began', [record.vcsStart?.kind, record.vcsStart?.branch, record.vcsStart?.commit], ['existing-branch', 'develop', tip]);
+});
+
+await scenario('a branch that is not there: refused at import, naming the branches that are', {}, async (h) => {
+  const r = await h.call<{ ok: boolean; check?: { issues?: Array<{ path: string; message: string }> } }>('POST', '/plan/import', {
+    text: JSON.stringify(onExisting(h, 'nowhere', 'recovery/missing', [fileTask('lost', 'x.txt', 'x')])),
+  });
+  const issue = r.check?.issues?.[0];
+  t.truthy('refused, on existingBranch, listing main', !r.ok && issue?.path === 'sessions[0].vcs.existingBranch' && /no local branch "recovery\/missing"/.test(issue.message) && /main/.test(issue.message), r);
+  const plain = await h.call<{ ok: boolean; check?: { issues?: Array<{ message: string }> } }>('POST', '/plan/check', {
+    text: JSON.stringify({ ...onExisting(h, 'both', 'main', []), sessions: [{ ...(onExisting(h, 'both', 'main', [fileTask('t', 'x.txt', 'x')]).sessions as Array<Record<string, unknown>>)[0], vcs: { enabled: true, repoDir: h.repo, startFrom: 'branch', existingBranch: 'main' } }] }),
+  });
+  t.truthy('existingBranch with another startFrom is refused as contradictory', plain.ok === false, plain);
+});
+
+await scenario('at the run: a branch gone, or uncommitted changes, refuse the task before anything is sent', {}, async (h) => {
+  h.git('branch', 'feature/soon-gone');
+  const [s] = await h.importPlan(onExisting(h, 'gone', 'feature/soon-gone', [fileTask('never', 'x.txt', 'x')]));
+  h.git('branch', '-D', 'feature/soon-gone');
+  const gone = (await h.run(s!.id)).tasks[0]! as unknown as { status: string; reason?: string };
+  t.truthy('failed, saying the branch is missing, nothing sent', gone.status === 'failed' && /no such local branch/.test(gone.reason ?? '') && h.chat.sent.length === 0, gone);
+
+  h.git('branch', 'feature/dirty');
+  const [d] = await h.importPlan(onExisting(h, 'dirty', 'feature/dirty', [fileTask('never-either', 'y.txt', 'y')]));
+  writeFileSync(join(h.repo, 'operator-work.txt'), 'the operator\'s own change\n');
+  const dirty = (await h.run(d!.id)).tasks[0]! as unknown as { status: string; reason?: string };
+  t.truthy('failed, saying the tree has uncommitted changes, nothing sent', dirty.status === 'failed' && /uncommitted changes/.test(dirty.reason ?? '') && h.chat.sent.length === 0, dirty);
+  t.check('and the repository was left on main, the change untouched', [h.git('branch', '--show-current'), h.git('status', '--porcelain')], ['main', '?? operator-work.txt']);
 });
 
 t.finish();

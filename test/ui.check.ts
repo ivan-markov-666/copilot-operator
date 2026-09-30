@@ -325,6 +325,29 @@ try {
     t.check('it finished as attempt 2, on the same branch', [after.status, after.attempt, after.vcs?.branch], ['done', 2, 'cop/rowcontinue']);
   });
 
+  await scenario('a session set to carry on an existing branch, from its version control panel', {}, async (h, page, url) => {
+    h.git('branch', 'recovery/apz-migration');
+    const [s] = await h.importPlan(planFor(h, 'existing'));
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    // Checked once the API has saved it, so a click, then the field it brings.
+    await page.getByRole('radio', { name: 'Carry on an existing branch' }).click();
+    const field = page.getByLabel('The branch to carry on');
+    await field.waitFor();
+    const options = page.locator('#vcs-local-branches option');
+    await waitFor('the local branches to load', async () => (await options.count()) > 0);
+    const offered = await options.evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
+    t.truthy('the local branches are offered', offered.includes('recovery/apz-migration') && offered.includes('main'), offered);
+    await field.fill('recovery/apz-migration');
+    await field.blur();
+    await waitFor('the branch to be saved', async () => (await h.session(s!.id)).vcs?.existingBranch === 'recovery/apz-migration');
+    const saved = (await h.session(s!.id)).vcs;
+    t.check('saved: carry on that branch', [saved?.startFrom, saved?.existingBranch], ['existing-branch', 'recovery/apz-migration']);
+    await field.fill('recovery/typo');
+    await field.blur();
+    await page.getByText('The repository has no local branch "recovery/typo" right now').waitFor();
+    t.truthy('a branch that is not there is said before any run', true);
+  });
+
   await scenario('a new prompt for a done task: its old checks are offered, unticked, and it can be made read-only', {}, async (h, page, url) => {
     const [s] = await h.importPlan(planFor(h, 'newprompt'));
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());

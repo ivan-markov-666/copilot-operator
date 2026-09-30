@@ -671,6 +671,8 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
   useEffect(() => setBranchName((JSON.parse(saved) as VersionControl).branchName ?? ''), [saved]);
   const [baseBranch, setBaseBranch] = useState(vcs.baseBranch ?? '');
   useEffect(() => setBaseBranch((JSON.parse(saved) as VersionControl).baseBranch ?? ''), [saved]);
+  const [existingBranch, setExistingBranch] = useState(vcs.existingBranch ?? '');
+  useEffect(() => setExistingBranch((JSON.parse(saved) as VersionControl).existingBranch ?? ''), [saved]);
   const startFrom = vcs.startFrom ?? 'head';
   useEffect(() => {
     setRepoDir((JSON.parse(saved) as VersionControl).repoDir);
@@ -815,6 +817,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
           {effectiveRepo && !repoProblem && <SyncCommand dir={effectiveRepo} />}
 
           <h3>{t('vcs.branches')}</h3>
+          {startFrom === 'existing-branch' && <p className="muted small">{t('vcs.branchesExisting', { branch: vcs.existingBranch || '…' })}</p>}
           <div className="option">
             <label>
               <input
@@ -904,7 +907,47 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
             </label>
             <p className="why">{t('vcs.startHeadWhy')}</p>
           </div>
-          {startFrom !== 'head' && (
+          {/*
+            No new branch at all: the session carries on one that exists — a recovery branch, a
+            feature branch the team named — and a task is refused rather than run anywhere else.
+          */}
+          <div className="option">
+            <label>
+              <input
+                type="radio"
+                name="startFrom"
+                checked={startFrom === 'existing-branch'}
+                onChange={() => void save({ startFrom: 'existing-branch' })}
+                disabled={session.running}
+              />
+              <span>{t('vcs.startExisting')}</span>
+            </label>
+            <p className="why">{t('vcs.startExistingWhy')}</p>
+          </div>
+          {startFrom === 'existing-branch' && (
+            <>
+              <label htmlFor="vcs-existing-branch">{t('vcs.existingBranch')}</label>
+              <input
+                id="vcs-existing-branch"
+                type="text"
+                list="vcs-local-branches"
+                value={existingBranch}
+                onChange={(e) => setExistingBranch(e.target.value)}
+                onBlur={() => existingBranch.trim() !== (vcs.existingBranch ?? '') && void save({ existingBranch: existingBranch.trim() })}
+                disabled={session.running}
+              />
+              <datalist id="vcs-local-branches">
+                {(status?.branches ?? []).map((b) => (
+                  <option key={b} value={b} />
+                ))}
+              </datalist>
+              <p className="why">{t('vcs.existingBranchWhy')}</p>
+              {vcs.existingBranch && status?.branches && !status.branches.includes(vcs.existingBranch) && (
+                <p className="err small">{t('vcs.existingBranchMissing', { branch: vcs.existingBranch })}</p>
+              )}
+            </>
+          )}
+          {(startFrom === 'branch' || startFrom === 'previous-session') && (
             <>
               <label htmlFor="vcs-base-branch">{t('vcs.baseBranch')}</label>
               <input
@@ -921,7 +964,9 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
           )}
           {session.vcsStart && (
             <p className="muted small">
-              {session.vcsStart.kind === 'previous-session'
+              {session.vcsStart.kind === 'existing-branch'
+                ? t('vcs.startedExisting', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
+                : session.vcsStart.kind === 'previous-session'
                 ? t('vcs.startedPrevious', { name: session.vcsStart.fromSession?.name ?? '', branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
                 : session.vcsStart.kind === 'branch'
                   ? t('vcs.startedBranch', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })

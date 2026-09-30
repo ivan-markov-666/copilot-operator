@@ -67,7 +67,7 @@ function sameFolder(a: string, b: string): boolean {
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { readInterruption } from '../session/interruption.js';
 import { commitInterrupted, repoDirOf, vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
-import { changedFilesBetween, fileAt, gitAvailable, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
+import { branchExists, changedFilesBetween, fileAt, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { listSelectableDirs, collectFiles, findSelectionConflicts, describeConflicts, DEFAULT_IGNORE_DIRS } from '../context/projectMirror.js';
@@ -564,6 +564,7 @@ export class OperatorService {
           if (reason) throw new Error(reason);
         }
         if (merged.baseBranch !== undefined) merged.baseBranch = merged.baseBranch.trim();
+        if (merged.existingBranch !== undefined) merged.existingBranch = merged.existingBranch.trim();
         /*
          * Where the session starts is fixed at its first run. A new choice clears that record, so
          * the next task to run is cut from what was chosen now; the tasks that already ran keep
@@ -572,6 +573,7 @@ export class OperatorService {
         const startChanged =
           (merged.startFrom ?? 'head') !== (s.vcs?.startFrom ?? 'head') ||
           (merged.baseBranch || 'main') !== (s.vcs?.baseBranch || 'main') ||
+          (merged.existingBranch ?? '') !== (s.vcs?.existingBranch ?? '') ||
           merged.repoDir.toLowerCase() !== (s.vcs?.repoDir ?? '').trim().toLowerCase();
         if (startChanged) {
           s.vcsBaseCommit = undefined;
@@ -1730,6 +1732,30 @@ export class OperatorService {
     });
     if (repoIssues.length > 0) return { ok: false, issues: repoIssues, warnings: check.warnings, duplicates: [] };
 
+    /*
+     * A branch to carry on must be there to carry on — unless a session before it in this same plan
+     * is the one that makes it. Refused now, with the branches that are there, rather than at the
+     * first run with a task refused.
+     */
+    for (const [i, session] of check.plan.sessions.entries()) {
+      const wanted = session.vcs?.enabled === false ? '' : (session.vcs?.existingBranch ?? '').trim();
+      if (!wanted) continue;
+      const dir = session.vcs?.repoDir?.trim() || session.mirror?.rootDir?.trim() || '';
+      const madeEarlier = check.plan.sessions
+        .slice(0, i)
+        .some((e) => !!e.vcs?.branchName?.trim() && plannedBranchName(e.vcs.branchName, e.vcs.branchPrefix?.trim() || 'cop/') === wanted);
+      if (madeEarlier || (await branchExists(dir, wanted))) continue;
+      const have = await localBranches(dir);
+      repoIssues.push({
+        path: `sessions[${i}].vcs.existingBranch`,
+        message:
+          `${dir} has no local branch "${wanted}" to carry on. ` +
+          (have.length > 0 ? `Its branches: ${have.slice(0, 20).join(', ')}.` : 'It has no branches yet.') +
+          ' Give the exact name, or use startFrom "branch" to start a new one.',
+      });
+    }
+    if (repoIssues.length > 0) return { ok: false, issues: repoIssues, warnings: check.warnings, duplicates: [] };
+
     return { ...check, duplicates: await this.findDuplicates(check.plan) };
   }
 
@@ -1938,7 +1964,7 @@ export class OperatorService {
   /** Whether version control can do its job in this session, asked before a run. */
   async vcsStatus(
     sessionId: string,
-  ): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; git?: string | null; work?: SessionBranches }> {
+  ): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; git?: string | null; work?: SessionBranches; branches?: string[] }> {
     await this.init();
     const session = await this.store.getSession(sessionId);
     if (!session) throw new Error('No such session.');
@@ -1946,7 +1972,10 @@ export class OperatorService {
     if (!git) return { ok: false, repoDir: '', problem: "git is not installed, or not on this machine's PATH.", git: null };
     // `branch` is where HEAD is; `work` is where the session's work is. After a per-task run
     // those differ, and the second is the one the operator is asking about.
-    return { ...(await vcsPreflight(session)), git, work: sessionBranches(session) };
+    const preflight = await vcsPreflight(session);
+    // The local branches, so "carry on an existing branch" can offer them rather than be typed blind.
+    const branches = preflight.repoDir ? await localBranches(preflight.repoDir) : [];
+    return { ...preflight, git, work: sessionBranches(session), branches };
   }
 
   /**

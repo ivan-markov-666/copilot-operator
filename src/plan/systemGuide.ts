@@ -1276,6 +1276,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Старото поведение и това, което прави сесия без избор: какъвто клон е избран при първото ѝ пускане, често оставеният от предната сесия.',
           },
           {
+            key: 'vcs.startExisting',
+            kind: 'radio',
+            en: 'Carry on an existing branch',
+            bg: 'Продължи съществуващ клон',
+            doesEn: 'No new branch: every task works on the branch named under it, exactly as in git. A missing branch or uncommitted changes refuse the task; nothing runs.',
+            doesBg: 'Без нов клон: всяка задача работи на клона, посочен под него, точно както е в git. Липсващ клон или незакомитнати промени отказват задачата; нищо не се изпълнява.',
+          },
+          {
+            key: 'vcs.existingBranch',
+            kind: 'field',
+            en: 'The branch to carry on',
+            bg: 'Клонът, който да продължи',
+            doesEn: 'The exact name of the branch "Carry on an existing branch" works on; the repository\'s local branches are offered as you type.',
+            doesBg: 'Точното име на клона, на който работи „Продължи съществуващ клон“; докато пишеш, се предлагат локалните клонове.',
+          },
+          {
             key: 'vcs.baseBranch',
             kind: 'field',
             en: 'Local branch to start from',

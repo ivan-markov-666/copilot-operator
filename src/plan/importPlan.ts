@@ -218,6 +218,8 @@ export async function importPlan(
     const vcs = { ...DEFAULT_VCS, ...(planned.vcs ?? {}) };
     vcs.branchPrefix = vcs.branchPrefix.trim() || DEFAULT_VCS.branchPrefix;
     vcs.repoDir = vcs.repoDir.trim();
+    // A branch to carry on, given alone, is that choice: see `VersionControl.startFrom`.
+    if (vcs.existingBranch?.trim()) vcs.startFrom = 'existing-branch';
 
     const group = planned.conversationGroup.trim() || sharedGroup;
     await store.updateSession(created.id, (s: Session) => {

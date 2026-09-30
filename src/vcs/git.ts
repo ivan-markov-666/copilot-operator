@@ -206,6 +206,12 @@ export async function isValidBranchName(dir: string, name: string): Promise<bool
   return r.ok;
 }
 
+/** The local branches of a repository, by name; empty when it cannot be read. */
+export async function localBranches(dir: string): Promise<string[]> {
+  const r = await git(dir, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']);
+  return r.ok ? r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : [];
+}
+
 export async function branchExists(dir: string, name: string): Promise<boolean> {
   const r = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
   return r.ok && r.stdout.length > 0;

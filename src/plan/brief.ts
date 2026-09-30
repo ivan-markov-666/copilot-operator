@@ -504,6 +504,11 @@ is clean: the runner commits after the checks, and its own commit is what leaves
 - \`"previous-session"\` — the session carries on from the end of the branch of the session that
   ran before it **in the same repository**, so the sessions form a chain. The first session of
   such a chain starts from \`baseBranch\`. Sessions in other repositories do not count.
+- \`"existing-branch"\` with \`existingBranch\` — no new branch at all: every task of the session
+  works on that existing local branch, exactly as named (\`"existingBranch": "recovery/apz-migration"\`),
+  one after another, building on what is already on it. For new work that continues a branch the
+  user already has. The branch must exist when the plan is imported; \`branchMode\`, \`branchName\`
+  and the prefix do not apply.
 
 Put the same \`startFrom\` on every session that works in one repository unless the user wants it
 mixed. Leaving it out keeps the old behaviour — whatever branch the repository is on — which is
@@ -552,6 +557,10 @@ const VCS_DETAIL_BG = `
 - \`"previous-session"\` — сесията продължава от края на клона на сесията, пусната преди нея **в
   същото хранилище**, така че сесиите образуват верига. Първата сесия от веригата тръгва от
   \`baseBranch\`. Сесии в други хранилища не се броят.
+- \`"existing-branch"\` с \`existingBranch\` — без нов клон: всяка задача от сесията работи на този
+  съществуващ локален клон, точно с това име (\`"existingBranch": "recovery/apz-migration"\`), една след
+  друга, върху това, което вече е там. За нова работа, която продължава клон, който потребителят вече
+  има. Клонът трябва да съществува при импорта; \`branchMode\`, \`branchName\` и представката не се прилагат.
 
 Сложи един и същ \`startFrom\` на всички сесии в едно хранилище, освен ако потребителят не иска
 различни. Ако го пропуснеш, остава старото поведение — от който клон е хранилището в момента —

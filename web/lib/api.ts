@@ -260,14 +260,16 @@ export type VersionControl = {
   /** The one branch a per-session run works on. Empty means it is derived from the name. */
   branchName?: string;
   /** Where the session's first branch is cut from. Absent means wherever the repository is. */
-  startFrom?: 'branch' | 'previous-session' | 'head';
+  startFrom?: 'branch' | 'previous-session' | 'head' | 'existing-branch';
   /** The local branch `startFrom: branch` starts from; `main` when empty. */
   baseBranch?: string;
+  /** For `startFrom: existing-branch`: the branch every task works on, exactly as named. */
+  existingBranch?: string;
 };
 
 /** Where a session's first branch was actually cut from, recorded at its first run. */
 export type SessionStart = {
-  kind: 'branch' | 'previous-session' | 'head';
+  kind: 'branch' | 'previous-session' | 'head' | 'existing-branch';
   commit: string;
   branch?: string;
   fromSession?: { id: string; name: string };
@@ -319,6 +321,8 @@ export type VcsStatus = {
   branch?: string;
   problem?: string;
   git?: string | null;
+  /** The repository's local branches, for "carry on an existing branch". */
+  branches?: string[];
   /** Where the session's work is: one branch, or one per task. */
   work?: {
     mode: 'per-task' | 'per-session';

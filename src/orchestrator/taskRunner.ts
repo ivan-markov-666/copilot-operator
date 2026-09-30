@@ -817,6 +817,12 @@ export async function runTask(
       },
       () => store.listSessions(),
     );
+    if (prepared.refuse) {
+      await setTask((t) => {
+        t.vcs = prepared.vcs;
+      });
+      return await finish('failed', prepared.refuse);
+    }
     if (prepared.vcs.branch || prepared.vcs.problem) {
       await setTask((t) => {
         t.vcs = prepared.vcs;

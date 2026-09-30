@@ -761,6 +761,10 @@ export const SCRIPT: ScriptMessage[] = [
             en: "From the previous session's branch — the sessions form a chain (previous-session)",
             bg: 'От клона на предната сесия — сесиите образуват верига (previous-session)',
           },
+          {
+            en: 'On an existing branch — no new branch, the work continues on it; name it (existing-branch + existingBranch)',
+            bg: 'На съществуващ клон — без нов клон, работата продължава на него; посочи го (existing-branch + existingBranch)',
+          },
         ],
       },
       {

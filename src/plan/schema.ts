@@ -48,13 +48,18 @@ const VcsInput = z
        * Absent keeps the old behaviour, wherever the repository is. See `VersionControl.startFrom`.
        */
       startFrom: z
-        .enum(['branch', 'previous-session', 'head'], {
+        .enum(['branch', 'previous-session', 'head', 'existing-branch'], {
           error:
-            'startFrom must be "branch" (every session starts from the local branch in baseBranch, "main" unless said otherwise) or "previous-session" (each session carries on from the branch of the session before it in the same repository).',
+            'startFrom must be "branch" (every session starts from the local branch in baseBranch, "main" unless said otherwise), "previous-session" (each session carries on from the branch of the session before it in the same repository) or "existing-branch" (the session works on the existing branch named in existingBranch).',
         })
         .optional(),
       /** The local branch `startFrom: "branch"` starts from, and `previous-session`'s fallback. */
       baseBranch: z.string().trim().optional(),
+      /**
+       * The existing local branch the whole session works on, exactly as named: no new branch, no
+       * prefix. Given alone it means `startFrom: "existing-branch"`. See `VersionControl.startFrom`.
+       */
+      existingBranch: z.string().trim().optional(),
     },
     {
       error:
@@ -62,6 +67,20 @@ const VcsInput = z
     },
   )
   .superRefine((vcs, ctx) => {
+    if (vcs.startFrom === 'existing-branch' && !vcs.existingBranch) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['existingBranch'],
+        message: 'startFrom is "existing-branch", so "existingBranch" must name the local branch to carry on, exactly as it is in git (for example "recovery/apz-migration").',
+      });
+    }
+    if (vcs.existingBranch && vcs.startFrom && vcs.startFrom !== 'existing-branch') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['existingBranch'],
+        message: `"existingBranch" carries on a branch that exists, and startFrom "${vcs.startFrom}" cuts a new one. Keep one: startFrom "existing-branch" with existingBranch, or leave existingBranch out.`,
+      });
+    }
     if (vcs.enabled && !vcs.repoDir.trim()) {
       ctx.addIssue({
         code: 'custom',

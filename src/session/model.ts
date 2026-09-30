@@ -562,6 +562,11 @@ export type VersionControl = {
    *   previous-session  the end of the branch of the session that last committed work in this
    *                     same repository — in a run of several sessions, the one before it — so
    *                     the sessions form a chain and each carries on from the last.
+   *   existing-branch   no new branch at all: every task of the session works on the local branch
+   *                     `existingBranch`, exactly as named, and builds on what is already on it —
+   *                     carrying on a branch that exists (a recovery branch, a feature branch the
+   *                     team named). The branch must exist; a task is refused rather than run
+   *                     anywhere else. `branchMode`, `branchName` and the prefix do not apply.
    *   head              wherever the repository happens to be when the session first runs. What
    *                     it always was, and what absent still means, so no existing session or
    *                     plan changes; it is the one to avoid, because "wherever it happens to be"
@@ -571,7 +576,9 @@ export type VersionControl = {
    * Decided once, at the session's first run, and kept in `vcsStart`; changing it clears that, so
    * the next task that runs is cut from the new choice.
    */
-  startFrom?: 'branch' | 'previous-session' | 'head';
+  startFrom?: 'branch' | 'previous-session' | 'head' | 'existing-branch';
+  /** For `startFrom: 'existing-branch'`: the local branch the session works on, exactly as named. */
+  existingBranch?: string;
   /** The local branch `startFrom: branch` starts from, and the fallback of `previous-session`. */
   baseBranch?: string;
 };
@@ -617,7 +624,7 @@ export function isContinuable(t: Pick<Task, 'status' | 'limit'>): boolean {
 
 /** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */
 export type SessionStart = {
-  kind: 'branch' | 'previous-session' | 'head';
+  kind: 'branch' | 'previous-session' | 'head' | 'existing-branch';
   commit: string;
   /** The branch the commit was the tip of, when there was one. */
   branch?: string;
