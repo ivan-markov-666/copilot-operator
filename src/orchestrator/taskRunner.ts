@@ -24,7 +24,7 @@ import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell, type ShellProblem } from '../exec/shells.js';
 import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
-import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
+import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
 import { snapshotProcesses, reapLeftovers, describeLeftovers, ProcessTracker, type ProcessSnapshot } from '../exec/processes.js';
@@ -350,25 +350,74 @@ export async function enterSessionConversation(
 }
 
 /**
- * Whether the attempt a "Continue" carries on was held in another conversation than the one the
- * session is in now, and which, when that is known.
+ * Whether an attempt's task reached a conversation, and which, as its run folder records it.
  *
- * Each attempt keeps the conversation it was sent into as `chat.json` in its run folder (see
- * `runTask`), and that record answers it. An attempt from before every attempt kept one has none;
- * for those the session's own pointer answers it as far as it can: a conversation registered by
- * another attempt after this one started cannot hold it. That is what a later task's retry in a
- * fresh conversation leaves behind (see `runSession`), the one thing that moves a session.
+ * `chat.json` is written the moment the message that carries the task has gone into a conversation
+ * (see `runTask`), and never before: not when the attempt starts, and not when a new conversation
+ * answers the contract, which is a message earlier. The transcript answers for an attempt that has
+ * no `chat.json`. It records every opening message as it is sent (`message-sent`), and since
+ * 2026-10-01 how many the opening had and whether this one carried the task. So an attempt that sent
+ * nothing at all never delivered its task, whenever it ran; one that sent the second message of an
+ * opening delivered it, since the task is always the last and an opening has two at most. Only an
+ * older attempt that sent one message without saying more cannot be told: one message is a whole
+ * opening into a conversation that had the contract, or the contract alone, stopped before the task.
+ */
+async function deliveryOf(runDir: string): Promise<{ sent: true; pointer: ChatPointer | null } | { sent: false } | { sent: 'unknown' }> {
+  const pointer = await loadPointer(join(runDir, 'chat.json'));
+  if (pointer) return { sent: true, pointer };
+  const raw = await readFile(join(runDir, 'transcript.jsonl'), 'utf8').catch(() => null);
+  if (raw === null) return { sent: 'unknown' };
+  const sent: Array<{ index?: unknown; of?: unknown; task?: unknown }> = [];
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"message-sent"')) continue;
+    try {
+      const e = JSON.parse(line) as { type?: string; index?: unknown; of?: unknown; task?: unknown };
+      if (e.type === 'message-sent') sent.push(e);
+    } catch {
+      // A line cut in half by a crash: the lines around it still answer.
+    }
+  }
+  if (sent.length === 0) return { sent: false };
+  if (sent.some((e) => e.task === true || (typeof e.of !== 'number' && Number(e.index) >= 1))) return { sent: true, pointer: null };
+  return sent.every((e) => typeof e.of === 'number') ? { sent: false } : { sent: 'unknown' };
+}
+
+/**
+ * Where the assignment a "Continue" carries on is, against the conversation the session is in now.
+ *
+ * `here` — in the session's conversation, or nothing on record says otherwise; `elsewhere` — in
+ * another one, with its pointer when the attempt kept one; `nowhere` — no conversation was ever given
+ * it, because the attempt was stopped before its task was sent (see `deliveryOf`), and so was every
+ * attempt it continued. Then the assignment started with the first of those, and `buildsOn` is what
+ * that one was told about the work before it.
+ *
+ * The newest attempt that delivered its task is the one whose conversation has the assignment and
+ * the latest work on it; an undelivered continuation added nothing to any chat, so the one it
+ * continued is asked instead. An attempt whose record cannot say is answered from the session's own
+ * pointer, as far as that goes: a conversation registered by another attempt after this one started
+ * cannot hold it. That is what a later task's retry in a fresh conversation leaves behind (see
+ * `runSession`), the one thing that moves a session.
  */
 async function conversationOfAttempt(
   runsDir: string,
-  stopped: Pick<TaskAttempt, 'runId' | 'startedAt'> | undefined,
+  attempts: readonly TaskAttempt[],
   current: ChatPointer | undefined,
-): Promise<{ elsewhere: boolean; pointer: ChatPointer | null }> {
-  if (!stopped?.runId || !current) return { elsewhere: false, pointer: null };
-  const pointer = await loadPointer(join(runsDir, stopped.runId, 'chat.json'));
-  if (pointer) return { elsewhere: pointer.chatId !== current.chatId, pointer };
-  const registeredSince = current.runId !== stopped.runId && !!stopped.startedAt && Date.parse(current.createdAt) > Date.parse(stopped.startedAt);
-  return { elsewhere: registeredSince, pointer: null };
+): Promise<{ where: 'here' } | { where: 'elsewhere'; pointer: ChatPointer | null } | { where: 'nowhere'; buildsOn?: Task['buildsOn'] }> {
+  const fromThePointer = (a: TaskAttempt): { where: 'here' } | { where: 'elsewhere'; pointer: null } =>
+    current && current.runId !== a.runId && !!a.startedAt && Date.parse(current.createdAt) > Date.parse(a.startedAt)
+      ? { where: 'elsewhere', pointer: null }
+      : { where: 'here' };
+  for (let i = attempts.length - 1; i >= 0; i -= 1) {
+    const a = attempts[i]!;
+    const delivered = a.runId ? await deliveryOf(join(runsDir, a.runId)) : ({ sent: 'unknown' } as const);
+    if (delivered.sent === true) {
+      if (!delivered.pointer) return fromThePointer(a);
+      return current?.chatId === delivered.pointer.chatId ? { where: 'here' } : { where: 'elsewhere', pointer: delivered.pointer };
+    }
+    if (delivered.sent === 'unknown') return fromThePointer(a);
+    if (!a.continuing) return { where: 'nowhere', buildsOn: a.buildsOn };
+  }
+  return { where: 'here' };
 }
 
 /**
@@ -651,24 +700,43 @@ export async function runTask(
      * The checks about a clean tree, now that the runner has committed. A done task whose tree is
      * still not clean after the commit has failed; any other ending keeps its own reason, and the
      * results are recorded all the same.
+     *
+     * Not once the operator has stopped the run, for the reason a stopped round at the gate records
+     * nothing: these checks cannot run then, and one cut short or never started reads as failed ("the
+     * operator stopped the run before this check ran"). Such rows were recorded as the task's results
+     * and named as failures in its handoff, and a done task was failed on them. A Stop is no verdict
+     * on the work, whether it came before these checks or while they ran: they decide nothing, and a
+     * task that was done but whose tree was never judged ends `aborted`, as every Stop ends a task,
+     * which "Continue" carries on to be judged.
      */
     let afterCommitResults: Array<{ name: string; passed: boolean; detail: string }> = [];
     if (afterCommitChecks.length > 0 && runAfterCommit) {
-      const outcomes = await runAfterCommit(afterCommitChecks).catch((e: unknown) => {
-        sink.event('checks-after-commit-error', { error: String(e) }, `the checks after the commit could not run: ${(e as Error).message}`, 'warn');
-        return [] as CheckOutcome[];
-      });
-      afterCommitResults = outcomes.map((o) => ({ name: `${o.check.name} (after the commit)`, passed: o.passed, detail: o.detail }));
-      for (const o of outcomes) {
-        sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail, afterCommit: true },
-          `${o.passed ? 'passed' : 'FAILED'} after the commit: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
-      }
-      const failedAfter = outcomes.filter((o) => !o.passed);
-      if (status === 'done' && failedAfter.length > 0) {
-        status = 'failed';
-        reason =
-          `after the runner's commit${vcsAfter?.commit ? ` (${vcsAfter.commit.slice(0, 8)})` : ''}${vcsAfter?.problem ? `, which did not happen: ${vcsAfter.problem}` : ''}, ` +
-          `${failedAfter.length} check(s) about the working tree still failed: ${failedAfter.map((o) => `${o.check.name} (${o.detail})`).join('; ')}`;
+      const outcomes = signal?.aborted
+        ? []
+        : await runAfterCommit(afterCommitChecks).catch((e: unknown) => {
+            sink.event('checks-after-commit-error', { error: String(e) }, `the checks after the commit could not run: ${(e as Error).message}`, 'warn');
+            return [] as CheckOutcome[];
+          });
+      if (signal?.aborted) {
+        sink.event('checks-after-commit-stopped', { checks: afterCommitChecks.map((c) => c.name) },
+          `the operator stopped the run, so the check(s) after the commit decide nothing: ${afterCommitChecks.map((c) => c.name).join(', ')}`, 'warn');
+        if (status === 'done') {
+          status = 'aborted';
+          reason = 'stopped by the operator before the checks after the commit had decided';
+        }
+      } else {
+        afterCommitResults = outcomes.map((o) => ({ name: `${o.check.name} (after the commit)`, passed: o.passed, detail: o.detail }));
+        for (const o of outcomes) {
+          sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail, afterCommit: true },
+            `${o.passed ? 'passed' : 'FAILED'} after the commit: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
+        }
+        const failedAfter = outcomes.filter((o) => !o.passed);
+        if (status === 'done' && failedAfter.length > 0) {
+          status = 'failed';
+          reason =
+            `after the runner's commit${vcsAfter?.commit ? ` (${vcsAfter.commit.slice(0, 8)})` : ''}${vcsAfter?.problem ? `, which did not happen: ${vcsAfter.problem}` : ''}, ` +
+            `${failedAfter.length} check(s) about the working tree still failed: ${failedAfter.map((o) => `${o.check.name} (${o.detail})`).join('; ')}`;
+        }
       }
     }
     /*
@@ -937,11 +1005,24 @@ export async function runTask(
      * is opened again and the session goes back to it, the later queued tasks with it; where that
      * cannot be done, a fresh one is opened and the task goes out in full, with the contract,
      * saying that it continues an earlier attempt (see `composeOpening`).
+     *
+     * An attempt stopped before its task was sent gave it to no conversation at all, so "carry on"
+     * has nothing to point at anywhere: the task goes out in full where the session is, as it would
+     * have the first time, since no chat has done any of it. See `conversationOfAttempt`.
      */
+    /** What the opening says about the attempts before this one; see `composeOpening`. */
+    let continuing = task.continuing;
+    let buildsOn = task.buildsOn;
     if (task.continuing) {
-      const where = await conversationOfAttempt(cfg.resolved.runsDir, task.attempts?.at(-1), session.chat);
-      if (where.elsewhere) {
-        const own = where.pointer;
+      const found = await conversationOfAttempt(cfg.resolved.runsDir, task.attempts ?? [], session.chat);
+      if (found.where === 'nowhere') {
+        continuing = undefined;
+        buildsOn = found.buildsOn;
+        sink.event('continue-never-sent', { fromAttempt: task.continuing.fromAttempt },
+          'the attempt this continues was stopped before its task reached any conversation, so the task goes out in full');
+      }
+      if (found.where === 'elsewhere') {
+        const own = found.pointer;
         // By its id only. Every conversation of a session carries the session's name, the fresh
         // ones a retry opens included, so the name would find one of those just as readily.
         const back = !!own && (await transport.openConversation(own.chatId).catch(() => false));
@@ -955,12 +1036,24 @@ export async function runTask(
         });
         sink.event(
           back ? 'chat-returned' : 'chat-fresh-for-continue',
-          { chatId: chat?.chatId ?? null, from: where.pointer?.chatId ?? null },
+          { chatId: chat?.chatId ?? null, from: own?.chatId ?? null },
           back
             ? `continuing in the task's own conversation "${own?.name}", where it was stopped; the session carries on there`
-            : "the conversation this task was stopped in is not the session's any more and could not be opened again, so it continues in a fresh one, sent in full",
+            : `the conversation this task was stopped in is not the session's any more and ${own ? 'could not be opened again' : 'is not on record'}, so it continues in a fresh one, sent in full`,
           back ? 'info' : 'warn',
         );
+        /*
+         * The picker belongs to the conversation, and the run applied the session's model to the one
+         * it started in, not to this one: a fresh conversation opens on the chat's default, and the
+         * record would go on naming the model the session asked for. Applied again here, as the
+         * fresh-chat retry in `runSession` does for the same reason.
+         */
+        const modelNow = await applySessionModel(transport, session, bus, cfg);
+        if (effectiveModels(session, cfg).model) {
+          await store.updateSession(session.id, (s) => {
+            s.modelInUse = modelNow;
+          });
+        }
       }
     }
 
@@ -974,8 +1067,8 @@ export async function runTask(
       taskTitle: task.title,
       taskNumber,
       contractAlreadySent: session.contractSent,
-      continuing: task.continuing,
-      buildsOn: task.buildsOn,
+      continuing,
+      buildsOn,
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
       readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
@@ -993,16 +1086,24 @@ export async function runTask(
     await record('OPENING MESSAGE', opening.firstMessage);
 
     let lastMarkdown = '';
+    // The task is always in the last message of the opening; a first one before it is the contract.
+    const taskIndex = opening.messages.length - 1;
     for (const [index, message] of opening.messages.entries()) {
       if (signal?.aborted) return await finish('aborted', 'stopped before the task was sent');
       await pacer.throttleSend();
       const before = await transport.sendAndConfirm(message);
-      sink.event('message-sent', { index, chars: message.length },
+      const carriesTask = index === taskIndex;
+      sink.event('message-sent', { index, of: opening.messages.length, task: carriesTask, chatId: session.chat?.chatId ?? null, chars: message.length },
         `message ${index + 1}/${opening.messages.length} sent`);
-      // The conversation this attempt is in, kept in its run folder as soon as the attempt is in it:
-      // what "Continue" goes back to (see `conversationOfAttempt`). A new conversation is known only
-      // once it answers, and is kept where it is registered, below.
-      if (index === 0 && session.chat) await savePointer(log.path('chat.json'), session.chat);
+      /*
+       * Where this attempt's task is, kept in its run folder once the message carrying it is in a
+       * conversation, and not before: what "Continue" goes back to (see `conversationOfAttempt`). It
+       * was kept as soon as the attempt entered a conversation, so an attempt stopped before its task
+       * went out — or after a new conversation had answered only the contract — left a record saying
+       * the task was there, and "Continue" told that chat to carry on with an assignment it never had.
+       * A new conversation is known only once it answers, and is kept where it is registered, below.
+       */
+      if (carriesTask && session.chat) await savePointer(log.path('chat.json'), session.chat);
 
       const reply = await transport.waitForReply(before);
       lastMarkdown = reply.markdown;
@@ -1026,16 +1127,22 @@ export async function runTask(
           await store.updateSession(session.id, (s) => {
             s.chat = chat;
           });
-          await savePointer(log.path('chat.json'), chat);
+          if (carriesTask) await savePointer(log.path('chat.json'), chat);
           sink.event('chat-registered', { ...chat }, `chat: ${name}`);
         }
       }
-    }
-    if (!session.contractSent) {
-      session.contractSent = true;
-      await store.updateSession(session.id, (s) => {
-        s.contractSent = true;
-      });
+      /*
+       * The contract is in the conversation once its message has been answered, whether or not the
+       * task follows. Recorded only after the whole opening, a Stop between the two left a
+       * conversation that had the contract on record as one that had not, and the next task sent it
+       * a second time.
+       */
+      if (!session.contractSent) {
+        session.contractSent = true;
+        await store.updateSession(session.id, (s) => {
+          s.contractSent = true;
+        });
+      }
     }
 
     // --- the loop ---------------------------------------------------------------------
@@ -1113,7 +1220,7 @@ export async function runTask(
         defaultShell,
       };
       runAfterCommit = (cs) => runChecks(cs, checkOptions);
-      const outcomes: CheckOutcome[] = await runChecks(checks, checkOptions);
+      const ran: CheckOutcome[] = await runChecks(checks, checkOptions);
 
       /*
        * The operator stopped the run, which is not a verdict on the work. The check in flight was
@@ -1126,6 +1233,36 @@ export async function runTask(
         sink.event('checks-stopped', { round }, 'the operator stopped the run while the checks ran; this round decides nothing', 'warn');
         return 'stopped';
       }
+
+      /** Refused before it ran for its own command line, which nothing in the tree decides; see `lineRefusal`. */
+      const refusedForGood = (o: CheckOutcome): boolean => !!o.refusedBeforeRunning && !refusedForTheFiles.has((o.check.run ?? '').trim());
+
+      /*
+       * A reviewer's check the runner now refuses for its own line: dropped, and the round judged on
+       * the others. The review keeps no check the runner refuses (see `validateDerivedChecks`), but
+       * one it kept can be refused later — a deny pattern added in Settings, the allowlist narrowed,
+       * the project folders changed — and it then outlives every attempt, Continue and a rerun
+       * included. Read as a check of the task's that can never run, it ended each of them at the
+       * first "done" as `invalid-check`, with no way out; before that it was sent back as work to
+       * fix. The finding stands without it, as at the review, and the next reviewer judges the work.
+       */
+      const unrunnable = ran.filter((o) => isDerivedCheck(o.check) && refusedForGood(o));
+      if (unrunnable.length > 0) {
+        const why = new Map(unrunnable.map((o) => [o.check.name, o.detail]));
+        reviewChecks = reviewChecks.map((rc) =>
+          rc.state === 'active' && why.has(rc.check.name)
+            ? { ...rc, state: 'dropped' as const, droppedBecause: `the runner refuses it now, before it runs: ${why.get(rc.check.name)}` }
+            : rc,
+        );
+        await setTask((t) => {
+          t.reviewChecks = reviewChecks;
+        });
+        for (const o of unrunnable) {
+          sink.event('review-check-blocked', { round, name: o.check.name, detail: o.detail },
+            `the check "${o.check.name}" is refused by the runner now and never ran; dropped, the finding stands without it — ${o.detail}`, 'warn');
+        }
+      }
+      const outcomes = ran.filter((o) => !unrunnable.includes(o));
       lastOutcomes = outcomes;
 
       /*
@@ -1171,6 +1308,7 @@ export async function runTask(
        *
        * Every check still failing was refused before it ran, for its own command line, the
        * settings, or a folder or file outside the project: nothing the chat does can make it run.
+       * These are the plan's checks and the runner's own; a reviewer's is dropped instead (above).
        * Sending it back as "the task is not finished yet" spent the rounds on it, and with version
        * control on the second "done" with an unchanged tree ended the task `blocked` as no progress,
        * to be retried in fresh conversations that could not fix it either. So nothing is sent, the
@@ -1178,7 +1316,6 @@ export async function runTask(
        * for what a script it runs holds, or for a tool not installed yet, still goes back: those the
        * work can change (see `lineRefusal`).
        */
-      const refusedForGood = (o: CheckOutcome): boolean => !!o.refusedBeforeRunning && !refusedForTheFiles.has((o.check.run ?? '').trim());
       const failed = outcomes.filter((o) => !o.passed);
       if (failed.length > 0 && failed.every(refusedForGood)) {
         stopCode = 'invalid-check';

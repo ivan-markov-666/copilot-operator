@@ -1359,13 +1359,31 @@ export class OperatorService {
      */
     taskIds?: string[],
   ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
-    const onlyTasks = taskIds && taskIds.length > 0 ? new Set(taskIds.map((t) => t.trim()).filter(Boolean)) : undefined;
     const wanted = [...new Set(sessionIds.map((s) => s.trim()).filter(Boolean))];
     // Before anything is waited for (see `browser`): a second batch, a session running on its own
     // — one of these or any other — and a read of the models all have the browser already.
     const claim = this.claimBrowser({ kind: 'batch', sessionIds: wanted });
     if ('refused' in claim) return { started: false, reason: claim.refused };
-    // Given back on every refusal below; once the batch is under way, `runBatch` gives it back.
+    return await this.startBatchHolding(claim.holder, wanted, mode, onFailure, model, reviewModel, name, taskIds);
+  }
+
+  /**
+   * `startBatch` for a caller that has claimed the browser already, and the claim with it: handed on
+   * to the batch once it is under way (`runBatch` gives it back), and given back here on every
+   * refusal. "Run again from here" claims it before it moves anything and starts through this, so
+   * one claim covers the restore, the requeue and the run.
+   */
+  private async startBatchHolding(
+    holder: BrowserHolder,
+    wanted: string[],
+    mode: 'confirm' | 'unattended',
+    onFailure: 'stop' | 'continue',
+    model: string | undefined,
+    reviewModel: string | undefined,
+    name: string | undefined,
+    taskIds: string[] | undefined,
+  ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
+    const onlyTasks = taskIds && taskIds.length > 0 ? new Set(taskIds.map((t) => t.trim()).filter(Boolean)) : undefined;
     let handedOn = false;
     try {
       await this.init();
@@ -1374,10 +1392,10 @@ export class OperatorService {
       if (!begun.batch) return { started: false, reason: begun.reason };
       this.batch = begun.batch;
       handedOn = true;
-      void this.runBatch(begun.batch, claim.holder);
+      void this.runBatch(begun.batch, holder);
       return { started: true, batch: this.batchState() as BatchState };
     } finally {
-      if (!handedOn) this.releaseBrowser(claim.holder);
+      if (!handedOn) this.releaseBrowser(holder);
     }
   }
 
@@ -2305,13 +2323,47 @@ export class OperatorService {
     if (plan.sessions.some((s) => this.running.has(s.id))) {
       return { ...idle, reason: 'One of these sessions is running on its own. Stop it first.' };
     }
-    // Asked before anything is moved: the run this ends in needs the browser, and another session
-    // running on its own, or a read of the models, has it. Found out only at the start, the
-    // repositories were already taken back and the tasks queued, with nothing to run them.
-    if (opts.start !== false && this.browser) {
-      return { ...idle, reason: browserRefusal(this.browser, { kind: 'batch', sessionIds: plan.sessions.map((s) => s.id) }) };
+    /*
+     * Claimed before anything is moved, and held until the run it ends in has the browser: that run
+     * needs it, and another session running on its own, or a read of the models, may have it. Found
+     * out only at the start, the repositories were already taken back and the tasks queued, with
+     * nothing to run them; and only looked at here, the browser could still be taken by a start that
+     * came in while the repositories were being taken back, to the same end. Given back on every way
+     * out that does not start the run.
+     */
+    const ids = plan.sessions.map((s) => s.id);
+    if (opts.start === false) return await this.restartMoves(sessionId, taskId, plan, opts);
+    const claim = this.claimBrowser({ kind: 'batch', sessionIds: ids });
+    if ('refused' in claim) return { ...idle, reason: claim.refused };
+    let handedOn = false;
+    try {
+      const moved = await this.restartMoves(sessionId, taskId, plan, opts);
+      if (moved.reason !== undefined) return moved;
+      // Named after the task it goes back to, which is the one thing this run is about and the
+      // only thing a heading could usefully say. There is no field to type into on a task card,
+      // so leaving it to the operator meant leaving it blank every time.
+      const runName = await this.suggestRunName(ids, plan.from.title);
+      // From here the claim is the batch's to give back, whichever way its start goes.
+      handedOn = true;
+      const started = await this.startBatchHolding(claim.holder, ids, opts.mode ?? plan.mode, opts.onFailure ?? plan.onFailure, undefined, undefined, runName, undefined);
+      return { started: started.started, reason: started.reason, requeued: moved.requeued, restored: moved.restored, batch: started.batch };
+    } finally {
+      if (!handedOn) this.releaseBrowser(claim.holder);
     }
+  }
 
+  /**
+   * What `restartFrom` moves before its run starts: the repositories taken back, then the tasks
+   * queued again. A refusal, and "prepared, not started", come back with their reason; with none,
+   * everything is in place for the run.
+   */
+  private async restartMoves(
+    sessionId: string,
+    taskId: string,
+    plan: RestartPlan,
+    opts: { restore?: boolean; start?: boolean },
+  ): Promise<{ started: boolean; reason?: string; requeued: number; restored: string[] }> {
+    const idle = { started: false, requeued: 0, restored: [] as string[] };
     const restored: string[] = [];
     if (opts.restore !== false) {
       for (const entry of plan.restores) {
@@ -2358,22 +2410,7 @@ export class OperatorService {
     });
 
     if (opts.start === false) return { started: false, reason: 'prepared, not started', requeued, restored };
-
-    const started = await this.startBatch(
-      plan.sessions.map((x) => x.id),
-      opts.mode ?? plan.mode,
-      opts.onFailure ?? plan.onFailure,
-      undefined,
-      undefined,
-      // Named after the task it goes back to, which is the one thing this run is about and the
-      // only thing a heading could usefully say. There is no field to type into on a task card,
-      // so leaving it to the operator meant leaving it blank every time.
-      await this.suggestRunName(
-        plan.sessions.map((x) => x.id),
-        plan.from.title,
-      ),
-    );
-    return { started: started.started, reason: started.reason, requeued, restored, batch: started.batch };
+    return { started: false, requeued, restored };
   }
 
   /** Why a folder cannot be used for version control, or null when it can. */

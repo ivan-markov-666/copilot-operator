@@ -15,11 +15,14 @@
  * - a batch stop clears the approval on screen, aborts the task in flight and leaves the rest queued;
  * - "abort" on an approval ends the task at once, runs nothing after it and asks the chat nothing;
  * - "run the rest without asking" stops the asking for the rest of the run, and only the run;
- * - Stop while a step waits, Stop in an unattended run, Stop during the check gate: `aborted`, every time;
+ * - Stop while a step waits, Stop in an unattended run, Stop as a step is authorized, Stop during the
+ *   check gate (with version control too) and during the checks after the commit: `aborted`, every
+ *   time, with no result recorded that the Stop cut short; a Stop after a failed round sends nothing;
  *   and Stop's write of the session never collides with the runner's (checked on the store itself,
  *   where it does not depend on timing, as the two Stop scenarios do);
  * - one chat window at a time: a second start, a second batch and reading the models are refused
- *   while one is open, and a batch of two sessions opens one window;
+ *   while one is open, a batch of two sessions opens one window, and "Run again from here" holds the
+ *   browser from before it moves anything;
  * - a batch that stops on a failure leaves the sessions it never reached queued and stamped with the run;
  * - a browser that will not open fails the batch with that reason and touches no task;
  * - what the start routes refuse, and how; and what the run panel's model choice writes on a session.
@@ -27,8 +30,7 @@
  * Every scenario runs in a harness of its own (test/support/harness.ts): its own temporary data
  * folder, repository and port.
  *
- *   npm run check:e2e-batch        (once package.json names it; until then:)
- *   npx tsx test/e2e-batch.check.ts
+ *   npm run check:e2e-batch   (or: npx tsx test/e2e-batch.check.ts)
  */
 import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
@@ -610,6 +612,39 @@ console.log('\n--- a step proposed after Stop is not authorized, in any mode ---
 }
 
 /*
+ * The runner's own half of the rule above. A Stop can land after the authorizer has looked at the
+ * signal — while its answer is awaited, or while the runner writes the task down afterwards — and
+ * the answer is then "run" all the same. The runner looks at the signal again once the answer is in,
+ * so the step is never started. Here the authorizer itself presses Stop and then answers "run", which
+ * is that window at its widest: the authorizer guard cannot help, only the runner's look can.
+ */
+await scenario('a step answered "run" after Stop is never started', {}, async (h) => {
+  type Authorize = (step: unknown, ctx: { sessionId?: string }) => Promise<{ action: string }>;
+  const proto = OperatorService.prototype as unknown as { webAuthorizer: (...args: unknown[]) => { authorize: Authorize }; stop(id: string): Promise<unknown> };
+  const original = proto.webAuthorizer;
+  proto.webAuthorizer = function (this: typeof proto) {
+    const ops = this;
+    return {
+      authorize: async (_step, ctx) => {
+        await ops.stop(ctx.sessionId ?? '');
+        return { action: 'run' };
+      },
+    };
+  };
+  try {
+    const [s] = await h.importPlan({ version: 1, sessions: [plain(h, 'latestop', [job('latestop-task', 'late.txt')])] });
+    h.chat.script(write('late.txt', 'x'));
+    const task = (await h.run(s!.id)).tasks[0]!;
+    t.check('the task ended aborted', task.status, 'aborted');
+    t.check('the step\'s file was never written', existsSync(join(h.repo, 'late.txt')), false);
+    const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${s!.id}/events`);
+    t.check('no step was started', events.filter((e) => e.type === 'step-started').length, 0);
+  } finally {
+    proto.webAuthorizer = original;
+  }
+});
+
+/*
  * Stop while the task's own checks are running: the operator stopped a task, they did not fail it.
  * The check in flight is killed (a 20-second check must not hold the Stop for 20 seconds), the task
  * ends `aborted` — which is what makes "Continue" offer to carry it on — and the round that the Stop
@@ -659,6 +694,121 @@ await scenario('Stop during the check gate ends the task aborted, not failed', {
   // The round the Stop cut short decided nothing, so it rejected nothing.
   t.check('the cut-short round is not counted as a rejected "done"', task.stats?.doneRejected ?? 0, 0);
   t.check('nor recorded as the task\'s check results', (task as { checkResults?: unknown[] }).checkResults ?? [], []);
+});
+
+/** A session on a branch of its own in the harness's repository, with no review: the same controls, with version control on. */
+const versioned = (h: Harness, name: string, tasks: unknown[]): Record<string, unknown> => ({
+  name,
+  onFailure: 'stop',
+  vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: name },
+  review: { enabled: false },
+  tasks,
+});
+
+type Checked = { status: string; reason?: string; checkResults?: Array<{ name: string; passed: boolean }>; stats?: { doneRejected: number }; handoff?: { validation: Array<{ name: string; passed: boolean }> } };
+
+/*
+ * The same Stop with version control on, and a check about a clean tree, which is decided after the
+ * runner's commit rather than at the gate. The task still ends aborted; and that check is not run
+ * once the run is stopped. It was, with the stopped signal, so it read as failed ("the operator
+ * stopped the run before this check ran") and was recorded on the task and in its handoff.
+ */
+await scenario('Stop during the check gate with version control on: no check is run after the commit', {}, async (h) => {
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [
+      versioned(h, 'slowcheck-vcs', [
+        {
+          title: 'slow-check-commit',
+          prompt: 'Create hello.txt in the project folder holding exactly the word hi, and nothing else.',
+          checks: [
+            { name: 'slow', expect: 'exit-zero', run: 'New-Item started.flag -Force | Out-Null; Start-Sleep 20; exit 0' },
+            { name: 'hello written', expect: 'file-contains', file: 'hello.txt', value: 'hi' },
+            { name: 'tree clean', expect: 'output-omits', run: 'git status --porcelain', value: '??' },
+          ],
+        },
+      ]),
+    ],
+  });
+  h.chat.script(reply.steps('Set-Content hello.txt hi'), reply.done());
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  await waitFor('the check to start', async () => existsSync(join(h.repo, 'started.flag')));
+  await h.raw('POST', `/sessions/${s!.id}/stop`);
+  await h.idle();
+  const task = (await h.session(s!.id)).tasks[0] as unknown as Checked;
+  t.check('aborted, with no "done" rejected', [task.status, task.stats?.doneRejected ?? 0], ['aborted', 0]);
+  t.check('and no check result recorded, the one after the commit included', task.checkResults ?? [], []);
+  t.check('nor named in the handoff', task.handoff?.validation ?? [], []);
+});
+
+/*
+ * A Stop that lands while the checks after the commit run, on a task whose work was accepted. The
+ * check it cuts short is not a verdict on the tree: it was recorded as failed and the task failed
+ * on it, which "Continue" does not offer. The task ends aborted instead, with the work committed.
+ */
+await scenario('Stop while the checks after the commit run: aborted, not failed', {}, async (h) => {
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [
+      versioned(h, 'aftercommit', [
+        {
+          title: 'slow-after-commit',
+          prompt: 'Create hello.txt in the project folder holding exactly the word hi, and nothing else.',
+          checks: [
+            { name: 'hello written', expect: 'file-contains', file: 'hello.txt', value: 'hi' },
+            { name: 'tree clean, slowly', expect: 'output-omits', run: 'New-Item after.flag -Force | Out-Null; Start-Sleep 20; git status --porcelain', value: '??' },
+          ],
+        },
+      ]),
+    ],
+  });
+  h.chat.script(reply.steps('Set-Content hello.txt hi'), reply.done());
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  await waitFor('the check after the commit to start', async () => existsSync(join(h.repo, 'after.flag')));
+  await h.raw('POST', `/sessions/${s!.id}/stop`);
+  await h.idle();
+  const task = (await h.session(s!.id)).tasks[0] as unknown as Checked & { id: string };
+  t.check('aborted, not failed', task.status, 'aborted');
+  t.truthy('saying the checks after the commit never decided', /before the checks after the commit had decided/.test(task.reason ?? ''), task.reason);
+  t.check('with nothing recorded from after the commit', (task.checkResults ?? []).filter((c) => c.name.endsWith('(after the commit)')), []);
+  t.check('and the work committed on its branch', h.git('show', 'cop/aftercommit:hello.txt'), 'hi');
+  const row = (await h.call<Array<{ taskId: string; continuable?: boolean }>>('GET', '/tasks')).find((r) => r.taskId === task.id);
+  t.check('the register offers to continue it', row?.continuable, true);
+});
+
+/*
+ * A Stop that comes once every check of a round has run and some failed: the round stands — it ran,
+ * and it is counted and recorded — but nothing more goes to the chat, and the task ends aborted.
+ * Pressed here the moment the round's results are written, which is the last thing before the
+ * failures would be sent back.
+ */
+await scenario('Stop after a failed round of checks: the round stands and nothing is sent', {}, async (h) => {
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [plain(h, 'failedround', [{ ...job('failedround-task', 'f.txt'), checks: [{ name: 'a file never written', expect: 'file-contains', file: 'never-written.txt', value: 'never' }] }])],
+  });
+  h.chat.script(reply.done());
+  const original = SessionStore.prototype.updateTask;
+  let armed = true;
+  SessionStore.prototype.updateTask = async function (this: SessionStore, sid: string, tid: string, mutate: Parameters<typeof original>[2]) {
+    const r = await original.call(this, sid, tid, mutate);
+    if (armed && (r.checkResults ?? []).some((c) => !c.passed)) {
+      armed = false;
+      await h.call('POST', `/sessions/${sid}/stop`);
+    }
+    return r;
+  };
+  try {
+    await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    await h.idle();
+  } finally {
+    SessionStore.prototype.updateTask = original;
+  }
+  const task = (await h.session(s!.id)).tasks[0] as unknown as Checked;
+  t.check('the stop was pressed after the round', armed, false);
+  t.check('aborted', task.status, 'aborted');
+  t.check('nothing was sent back about the failure', h.chat.sent.filter((m) => m.text.includes('not finished yet')).length, 0);
+  t.check('the round stands: counted and recorded', [task.stats?.doneRejected, (task.checkResults ?? []).map((c) => c.passed)], [1, [false]]);
 });
 
 // --- one browser at a time -------------------------------------------------------------------------
@@ -716,6 +866,41 @@ await scenario('one browser at a time', { limits: { retryBlockedInFreshChat: 0 }
   t.check('never more than one chat window open at a time, in the whole scenario', w.max, 1);
   t.check('B and C were never started', [(await h.session(b!.id)).tasks[0]!.status, (await h.session(c!.id)).tasks[0]!.status], ['queued', 'queued']);
 }, { windowsAsserted: true });
+
+/*
+ * "Run again from here" takes the repositories back and queues the tasks again before its run
+ * starts, and the run needs the browser. It claims it before the first of those moves, as every
+ * entrance does: a start of another session that came in while the tasks were being queued again
+ * used to find the browser free and take it, and the run again was then refused with its moves made
+ * and nothing to run them. The start comes in here exactly then, from inside the store's requeue.
+ */
+await scenario('"Run again from here" holds the browser from before it moves anything', {}, async (h) => {
+  const [r, o] = await h.importPlan({
+    version: 1,
+    sessions: [plain(h, 'again', [job('again-task', 'again.txt')]), plain(h, 'outsider', [noSend('outsider-task')])],
+  });
+  h.chat.script(write('again.txt', 'a'), reply.done());
+  const first = (await h.run(r!.id)).tasks[0]!;
+  t.check('the task ran once', first.status, 'done');
+
+  const original = SessionStore.prototype.rerunTask;
+  let during: Started | undefined;
+  SessionStore.prototype.rerunTask = async function (this: SessionStore, ...args: Parameters<typeof original>) {
+    during ??= await h.call<Started>('POST', `/sessions/${o!.id}/start`, { mode: 'unattended' });
+    return await original.apply(this, args);
+  };
+  h.chat.script(write('again.txt', 'b'), reply.done());
+  let again: Started;
+  try {
+    again = await h.call<Started>('POST', `/sessions/${r!.id}/tasks/${first.id}/restart`, {});
+  } finally {
+    SessionStore.prototype.rerunTask = original;
+  }
+  t.check('a start that came in while the task was queued again is refused', [during?.started, during?.reason], [false, 'a batch of sessions is running']);
+  t.check('and the run again starts', [again.started, again.reason ?? null], [true, null]);
+  await h.idle();
+  t.check('the task ran again, and the other session was never started', [(await h.session(r!.id)).tasks[0]!.status, (await h.session(o!.id)).tasks[0]!.status], ['done', 'queued']);
+});
 
 // --- a batch that cannot go on ---------------------------------------------------------------------
 

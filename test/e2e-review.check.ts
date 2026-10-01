@@ -17,9 +17,12 @@
  * - the review runs on the review model from Settings, or the session's own;
  * - the implementer's declared deviations reach the reviewer and the commit;
  * - a check given with a finding joins the gate, a dispute suspends it, and the next review rules;
+ *   one the runner refuses later for its own line (the settings changed) is dropped, and the work is
+ *   judged without it rather than ended on it;
  * - after the review the implementer's conversation is the one the next task goes to;
  * - a secret a reviewer quotes in its evidence is redacted before it goes back to the chat;
- * - Stop pressed during the review ends the task stopped, not done (a known defect, marked below).
+ * - Stop pressed during the review ends the task aborted, not done, with nothing more sent to either
+ *   chat; pressed once the checks have accepted the work, it ends the task before a review opens.
  *
  *   npm run check:e2e-review   (or: npx tsx test/e2e-review.check.ts)
  */
@@ -27,6 +30,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply, type Incoming } from './support/fakeChat.js';
+import { SessionStore } from '../src/session/store.js';
+import { RunConfigSchema } from '../src/config/schema.js';
 
 const t = new Tally();
 
@@ -84,7 +89,8 @@ function plan(h: Harness, name: string, tasks: unknown[], review: Record<string,
 /** The parts of the task record this file reads beyond `TaskView`. */
 type Full = Omit<TaskView, 'review'> & {
   review?: { verdict?: string; rounds?: number; stepsRun?: number; problem?: string; model?: string; findings?: Array<{ id?: string; what: string; about?: string }> };
-  reviewChecks?: Array<{ findingId: string; state: string; check: { name: string } }>;
+  reviewChecks?: Array<{ findingId: string; state: string; check: { name: string }; droppedBecause?: string }>;
+  stopCode?: string;
   checkResults?: Array<{ name: string; passed: boolean; detail: string }>;
   deviations?: Array<{ instruction: string; did: string; why: string }>;
   limit?: { setting: string; value: number };
@@ -429,6 +435,46 @@ await scenario('a finding\'s check joins the gate and passes once the work is fi
   t.check('after the pass the check stays with the task for later attempts', task.reviewChecks?.map((rc) => rc.state), ['active']);
 });
 
+/*
+ * A check kept with a finding outlives the attempt it was given in, and the settings can change
+ * under it: here a deny pattern added afterwards refuses its command line. Nothing the implementer
+ * does can make it run, and it is a reviewer's check, which never ends a task on its own. So the gate
+ * drops it, saying why, and judges the work on the rest; the finding still stands for the next
+ * reviewer. It used to end the task at the first "done", failed with invalid-check, on every attempt.
+ */
+await scenario('a finding\'s check the runner refuses later is dropped, not the end of the task', { limits: { maxIterations: 2 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'refusedlater', [greeting]));
+  h.chat.script(
+    write('hi'),
+    reply.done(),
+    look(),
+    fail([finding({
+      what: 'hello.txt has no exclamation mark after hi',
+      where: 'hello.txt',
+      evidence: 'Get-Content hello.txt printed: hi',
+      check: { name: 'says hi!', expect: 'output-contains', run: 'Get-Content -Path hello.txt -Raw', value: 'hi!' },
+    })]),
+    // The answer to the findings is not read: the second iteration was the last one Settings allow.
+    reply.steps("Set-Content hello.txt 'hi!'"),
+  );
+  const first = full((await h.run(s!.id)).tasks[0]!);
+  t.check('the attempt stopped at the iteration limit, the finding\'s check kept with the task', [first.status, first.reviewChecks?.map((rc) => rc.state)], ['limit-reached', ['active']]);
+
+  // The command line of that check is refused from now on.
+  const settings = await h.call<{ raw: Record<string, unknown> & { execution?: Record<string, unknown> } }>('GET', '/settings');
+  const denyPatterns = [...RunConfigSchema.parse({}).execution.denyPatterns, 'hello\\.txt -Raw'];
+  await h.call('PUT', '/settings', { ...settings.raw, execution: { ...settings.raw.execution, denyPatterns } });
+
+  await h.call('POST', `/sessions/${s!.id}/tasks/${first.id}/continue`);
+  h.chat.script(reply.done(), look(), reply.pass());
+  const task = full((await h.run(s!.id)).tasks[0]!);
+  t.check('the task is done, judged without the check', [task.status, task.stopCode ?? null], ['done', null]);
+  t.check('the check is dropped', task.reviewChecks?.map((rc) => rc.state), ['dropped']);
+  t.truthy('saying the runner refuses it now', /refuses it now.*deny pattern/.test(task.reviewChecks?.[0]?.droppedBecause ?? ''), task.reviewChecks);
+  t.truthy('it is not among the results', !(task.checkResults ?? []).some((c) => c.name.startsWith('review r1f1')), task.checkResults);
+  t.truthy('and the record says so', (await events(h, s!.id)).some((e) => e.type === 'review-check-blocked'));
+});
+
 await scenario('a read-only task never carries a finding\'s check', {}, async (h) => {
   writeFileSync(join(h.repo, 'hello.txt'), 'hi\n');
   h.git('add', '-A');
@@ -590,6 +636,42 @@ await scenario('Stop pressed during the review', {}, async (h) => {
   t.check('a task stopped during its review ends aborted, not done', task.status, 'aborted');
   const cont = await h.raw('POST', `/sessions/${s!.id}/tasks/${task.id}/continue`);
   // Aborted is what "Continue" carries on.
+  t.truthy('and "Continue" can carry it on', cont.status >= 200 && cont.status < 300, cont);
+});
+
+/*
+ * Stop pressed after the checks have accepted the work and before the review has begun: the task
+ * ends there, aborted, and no review conversation is opened for a run that was stopped. Pressed at
+ * the moment the passing results are written, which is the gate's last act before it accepts.
+ */
+await scenario('Stop pressed once the checks have passed, before the review', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'beforereview', [greeting]));
+  h.chat.script(write('hi'), reply.done());
+  const original = SessionStore.prototype.updateTask;
+  let armed = true;
+  let sentAtStop = -1;
+  SessionStore.prototype.updateTask = async function (this: SessionStore, sid: string, tid: string, mutate: Parameters<typeof original>[2]) {
+    const r = await original.call(this, sid, tid, mutate);
+    if (armed && (r.checkResults ?? []).length > 0 && (r.checkResults ?? []).every((c) => c.passed)) {
+      armed = false;
+      sentAtStop = h.chat.sent.length;
+      await h.call('POST', `/sessions/${sid}/stop`);
+    }
+    return r;
+  };
+  try {
+    await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    await h.idle();
+  } finally {
+    SessionStore.prototype.updateTask = original;
+  }
+  const task = await taskNow(h, s!.id);
+  t.check('the stop was pressed once the checks had passed', armed, false);
+  // The reason goes on to say what the runner then committed, as for any ending that is not done.
+  t.check('the task ends aborted, before the review', [task.status, (task.reason ?? '').startsWith('stopped by the operator before the review')], ['aborted', true]);
+  t.check('no review conversation was opened', reviewConversations(h), 0);
+  t.check('and nothing reached the chat after the stop', h.chat.sent.slice(sentAtStop).map((m) => m.text.slice(0, 120)), []);
+  const cont = await h.raw('POST', `/sessions/${s!.id}/tasks/${task.id}/continue`);
   t.truthy('and "Continue" can carry it on', cont.status >= 200 && cont.status < 300, cont);
 });
 

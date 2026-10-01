@@ -576,11 +576,20 @@ await scenario('path and ownership guards on a task\'s files', {}, async (h) => 
   const pathGet = await get('/api/sessions/..%5C..%5Cx');
   // An id that could not be a session's file name names no session: the store answers it as missing.
   t.truthy('GET /sessions/<a path> is 400 or 404, never 500', pathGet.status === 400 || pathGet.status === 404, pathGet.status);
-  // So is every route that only reads a session, not only the session's own: a 404, or for the list
-  // of a task's files, the empty list any task it does not know gets.
-  for (const sub of ['tasks/x/log', 'tasks/x/story', 'tasks/x/files']) {
+  // So is every route that only reads a session, not only the session's own: exactly as it answers a
+  // well-formed id that names no session — a 404 for the log and the story, and for the list of a
+  // task's files the empty lists any task it does not know gets.
+  const answers: Record<string, { status: number; json?: unknown }> = {
+    'tasks/x/log': { status: 404 },
+    'tasks/x/story': { status: 404 },
+    'tasks/x/files': { status: 200, json: { reports: [], artifacts: [], replies: [] } },
+  };
+  for (const [sub, want] of Object.entries(answers)) {
     const res = await get(`/api/sessions/..%5C..%5Cx/${sub}`);
-    t.truthy(`GET /sessions/<a path>/${sub} is answered, never 500`, res.status >= 200 && res.status < 500, res.status);
+    const missing = await get(`/api/sessions/20000101-000000-none/${sub}`);
+    const shape = (w: Wire): { status: number; json?: unknown } => (want.json === undefined ? { status: w.status } : { status: w.status, json: w.json });
+    t.check(`GET /sessions/<a path>/${sub} answers ${want.status}`, shape(res), want);
+    t.check(`as it answers an id that names no session`, shape(res), shape(missing));
   }
   /*
    * A session id that climbs one level out of data/sessions: the store deletes `<id>.json`, so

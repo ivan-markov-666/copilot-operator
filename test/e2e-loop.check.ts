@@ -17,20 +17,21 @@
  * - a check refused before it ran ends as invalid-check; the check-round limit is exact;
  * - a clean-tree check decided after the runner's commit can overturn "done";
  * - a failed upload falls back to text; a chat error fails the task and names an Edge crash;
+ * - a check refused only for a package runner's tool not installed yet goes back to the chat;
  * - a model that cannot be selected, a conversation that moved or was deleted, and a fresh-chat
- *   retry that must not strand an earlier task's "Continue";
+ *   retry that must not strand an earlier task's "Continue", on the session's model;
+ * - "Continue" of a task whose message never reached a chat sends it in full, and an attempt with no
+ *   record of its conversation is placed by the session's own;
  * - the stop marker with steps; secrets redacted before anything reaches the chat;
  * - what each run folder holds, the stats counters, and a server left running being stopped.
  *
- *   npx tsx test/e2e-loop.check.ts
+ *   npm run check:e2e-loop   (or: npx tsx test/e2e-loop.check.ts)
  *
- * Meant to be wired as `npm run check:e2e-loop`; package.json has no such script yet. It is red on
- * purpose today: the check marked DEFECT below (the token in the checks message) fails until the
- * product is fixed, so it should not join the `npm run check` chain before then. Every other check
- * passes.
+ * It is red on purpose today: the check marked DEFECT below (the token in the checks message) fails
+ * until the product is fixed. Every other check passes.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { startHarness, waitFor, freePort, readJson, Tally, type Harness, type TaskView } from './support/harness.js';
@@ -38,6 +39,7 @@ import { reply, type Incoming, type Sent } from './support/fakeChat.js';
 import { detectShells, inventoryOf, type Shell } from '../src/exec/shells.js';
 import { setTransportFactory, type ChatTransport } from '../src/transport/chatTransport.js';
 import type { EdgeCrash } from '../src/transport/edgeCrash.js';
+import { SessionStore } from '../src/session/store.js';
 
 const t = new Tally();
 
@@ -308,6 +310,28 @@ await scenario('a check refused for its script goes back to the chat; one refuse
   t.check('with nothing sent back about it', h.chat.sent.slice(sent).filter((m) => m.text.includes('not finished yet')).length, 0);
 });
 
+/*
+ * The other thing the files decide: a package runner (`npx`) is held while the tool it names is not
+ * installed in the project, because npx would download it — and installing it is work the chat can
+ * do. So such a check goes back as any failing check does, and runs once the tool is there. Here the
+ * check exits 0 as soon as the tool's package is in node_modules, before npx is reached, so nothing
+ * is ever fetched.
+ */
+await scenario('a check whose package runner has no tool installed yet goes back to the chat', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const npxCheck = { name: 'the greet tool runs', expect: 'exit-zero', run: 'if (Test-Path node_modules\\greet-tool\\package.json) { exit 0 }; npx greet-tool hi' };
+  const [s] = await h.importPlan(plan(h, 'npx-check', [task('installs-its-tool', { checks: [npxCheck, readmeIntact] })], { vcs: false }));
+  h.chat.script(
+    reply.done(),
+    (m) => {
+      t.truthy('the chat is told the check is not satisfied yet, and to install the tool', m.text.includes('not finished yet') && attachedText(m).includes('install the tool into the project first'), attachedText(m).slice(0, 700));
+      return reply.steps("New-Item -ItemType Directory -Force node_modules\\greet-tool | Out-Null; Set-Content node_modules\\greet-tool\\package.json '{}'");
+    },
+    reply.done(),
+  );
+  const ended = (await h.run(s!.id)).tasks[0] as Ended;
+  t.check('not ended on the checks: done once the tool is installed', [ended.status, ended.stopCode ?? null], ['done', null]);
+});
+
 await scenario('invalid-check when the rounds run out: a check reading outside the project', { limits: { maxCheckRounds: 1 } }, async (h) => {
   const [s] = await h.importPlan(
     plan(h, 'outside', [task('outside-check', { checks: [{ name: 'the sibling file exists', expect: 'file-exists', file: '..\\outside.txt' }, readmeIntact] })], { vcs: false }),
@@ -439,7 +463,25 @@ await scenario('conversation re-entry: found again by name when moved, and a cle
   t.check('no conversation was made in its place', h.chat.conversations.size, size);
 });
 
-await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"', { limits: { maxIterations: 5, retryBlockedInFreshChat: 1 } }, async (h) => {
+/*
+ * Run on a model from Settings, in a chat whose new conversations open on "Auto", the way Copilot's
+ * do: the picker belongs to the conversation, so every conversation the run moves into — a retry's
+ * fresh one, the one a "Continue" goes back to or opens — has to be put on the session's model again.
+ */
+await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"', { limits: { maxIterations: 5, retryBlockedInFreshChat: 1 }, copilot: { defaultModel: 'Think deeper' } }, async (h) => {
+  const base = h.chat.factory();
+  /** How many models had been asked for when the last new conversation was opened. */
+  let requestsAtNewChat = 0;
+  setTransportFactory((opts) => {
+    const tr = base(opts);
+    const open = tr.newChat.bind(tr);
+    tr.newChat = async () => {
+      await open();
+      h.chat.currentModel = 'Auto';
+      requestsAtNewChat = h.chat.modelRequests.length;
+    };
+    return tr;
+  });
   const [s] = await h.importPlan(plan(h, 'strand', [task('long-first'), task('blocks-twice')], { vcs: false, onFailure: 'continue' }));
   let chatA = '';
   // Six replies for a limit of five: the answer to the fifth report is read before the count is.
@@ -460,6 +502,7 @@ await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"
   h.chat.script((m) => {
     // Each attempt keeps the conversation it ran in; "Continue" goes back to it, and the session with it.
     t.truthy('the continuation goes to the chat that has the first task, or carries its prompt', m.chatId === chatA || m.text.includes(prompt), { chatId: m.chatId, chatA, text: m.text.slice(0, 400) });
+    t.check('on the session\'s model', m.world.currentModel, 'Think deeper');
     return reply.done();
   });
   const continued = await h.run(s!.id);
@@ -490,10 +533,170 @@ await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"
       m.chatId !== chatA && m.chatId !== moved.chat?.chatId && m.chat.messages[0]?.contract === 'task' && m.text.includes(prompt3) && m.text.includes('continues an earlier attempt'),
       { chatId: m.chatId, first: m.chat.messages[0]?.text.slice(0, 80), text: m.text.slice(0, 600) },
     );
+    // The fresh conversation opened on "Auto"; the session's model is asked for again once it is open.
+    t.check('the fresh conversation is put on the session\'s model before the task goes out', [m.world.currentModel, h.chat.modelRequests.slice(requestsAtNewChat)], ['Think deeper', ['Think deeper']]);
     return reply.done();
   });
   const last = await h.run(s!.id);
+  t.check('and the session records the model it is on', last.modelInUse, 'Think deeper');
   t.check('and the third task is done, in the conversation the session is in now', [last.tasks[2]!.status, last.chat?.chatId !== moved.chat?.chatId], ['done', true]);
+});
+
+/** The task contract's first line, which is in every message that carries the contract. */
+const TASK_CONTRACT = readFileSync(join(import.meta.dirname, '..', 'prompts', 'level1.md'), 'utf8').split(/\r?\n/).find((l) => l.trim())?.trim() ?? '';
+
+/**
+ * Presses Stop, through the API, the first time the store writes the task `title` as running: after
+ * the task has started and before anything of it is sent. The API runs in this process on this store
+ * class, so the hook sits in the runner's own path. Returns its undo.
+ */
+function stopWhenRunning(h: Harness, title: string): () => void {
+  const orig = SessionStore.prototype.updateTask;
+  let armed = true;
+  SessionStore.prototype.updateTask = async function (this: SessionStore, sid: string, tid: string, mutate: Parameters<typeof orig>[2]) {
+    const r = await orig.call(this, sid, tid, mutate);
+    if (armed && r.status === 'running' && r.title === title) {
+      armed = false;
+      await h.call('POST', `/sessions/${sid}/stop`);
+    }
+    return r;
+  };
+  return () => {
+    SessionStore.prototype.updateTask = orig;
+  };
+}
+
+/*
+ * A task stopped after it started and before its message went out — while the runner prepared it —
+ * ends aborted, which "Continue" carries on. No conversation ever had it, so "carry on, the assignment
+ * is the one you were given above" would point at nothing: it goes out in full, where the session is.
+ */
+await scenario('"Continue" of a task stopped before its message was sent sends it in full', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'unsent', [task('sent-first'), task('stopped-unsent')], { vcs: false }));
+  let chatA = '';
+  h.chat.script((m) => {
+    chatA = m.chatId;
+    return reply.done();
+  });
+  const undo = stopWhenRunning(h, 'stopped-unsent');
+  const first = await h.run(s!.id).finally(undo);
+  const stopped = first.tasks[1] as Ended;
+  t.check('the second task was stopped before it was sent', [stopped.status, stopped.reason], ['aborted', 'stopped before the task was sent']);
+  t.check('its run folder records no conversation for it', existsSync(join(h.runsDir, stopped.runId!, 'chat.json')), false);
+  t.truthy('and no chat ever saw it', !h.chat.sent.some((m) => m.text.includes(stopped.prompt)), '');
+
+  await h.call('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`);
+  h.chat.script((m) => {
+    t.truthy(
+      'the task goes out in full into the session\'s conversation, not as "the assignment above"',
+      m.chatId === chatA && m.text.includes(stopped.prompt) && !m.text.includes('given above'),
+      { chatId: m.chatId, chatA, text: m.text.slice(0, 600) },
+    );
+    return reply.done();
+  });
+  const after = await h.run(s!.id);
+  t.check('and it is done', after.tasks[1]!.status, 'done');
+  t.check('the contract went out once', h.chat.sent.filter((m) => m.text.includes(TASK_CONTRACT)).length, 1);
+});
+
+/*
+ * The same with the Stop between the two messages that open a new conversation: the contract went
+ * out and was answered, the task did not. The conversation has the contract, so the next task gets
+ * the reminder rather than the contract again; and once a retry of that task has moved the session,
+ * "Continue" of the first still sends it in full, where the session is now — nothing says it ever
+ * reached the conversation it was stopped in.
+ */
+await scenario('a Stop between the contract and the task: "Continue" sends the task in full where the session is', { limits: { retryBlockedInFreshChat: 1 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'between', [task('stopped-after-contract')], { vcs: false }));
+  const base = h.chat.factory();
+  let armed = true;
+  setTransportFactory((opts) => {
+    const tr = base(opts);
+    const send = tr.sendAndConfirm.bind(tr);
+    tr.sendAndConfirm = async (text: string, attachments?: string[]) => {
+      const n = await send(text, attachments);
+      if (armed && text.includes(TASK_CONTRACT)) {
+        armed = false;
+        await h.call('POST', `/sessions/${s!.id}/stop`);
+      }
+      return n;
+    };
+    return tr;
+  });
+  const first = await h.run(s!.id);
+  const t1 = first.tasks[0] as Ended;
+  const chatA = first.chat?.chatId ?? '';
+  t.check('stopped before the task was sent', [t1.status, t1.reason], ['aborted', 'stopped before the task was sent']);
+  t.truthy('in a conversation that holds the contract and nothing else', !!chatA && h.chat.conversations.get(chatA)?.messages.length === 1, first.chat);
+  t.check('its run folder records no conversation for it', existsSync(join(h.runsDir, t1.runId!, 'chat.json')), false);
+
+  await h.call('POST', `/sessions/${s!.id}/tasks`, { title: 'blocks-twice', prompt: 'A second task that gives up, twice, the second time in a fresh conversation.' });
+  h.chat.script((m) => {
+    t.truthy('the next task goes into that conversation without the contract again', m.chatId === chatA && !m.text.includes(TASK_CONTRACT), { chatId: m.chatId, chatA, text: m.text.slice(0, 300) });
+    return reply.blocked();
+  }, reply.blocked());
+  const moved = await h.run(s!.id);
+  t.truthy('a retry in a fresh conversation moved the session', !!moved.chat && moved.chat.chatId !== chatA, moved.chat);
+
+  await h.call('POST', `/sessions/${s!.id}/tasks/${t1.id}/continue`);
+  h.chat.script((m) => {
+    t.truthy(
+      'the first task goes out in full where the session is now, not as "the assignment above"',
+      m.chatId === moved.chat?.chatId && m.text.includes(t1.prompt) && !m.text.includes('given above'),
+      { chatId: m.chatId, session: moved.chat?.chatId, text: m.text.slice(0, 600) },
+    );
+    return reply.done();
+  });
+  const after = await h.run(s!.id);
+  t.check('and it is done', after.tasks[0]!.status, 'done');
+});
+
+/*
+ * An attempt from before every attempt kept its conversation: no chat.json, and opening messages that
+ * do not say how many there were. Its second message went out, so the task reached a conversation,
+ * and nothing on record says which; the session's own pointer answers as far as it can. Here it was
+ * registered by a later task's retry after the attempt started, so it cannot hold it: the task goes
+ * out in full in a fresh conversation.
+ */
+await scenario('an attempt with no record of its conversation is placed by the session\'s own', { limits: { maxIterations: 1, retryBlockedInFreshChat: 1 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'unrecorded', [task('stops-at-limit'), task('blocks-twice')], { vcs: false, onFailure: 'continue' }));
+  let chatA = '';
+  // Two replies for a limit of one: the answer to the first report is read before the count is.
+  h.chat.script((m) => {
+    chatA = m.chatId;
+    return reply.steps("Write-Output 'one'");
+  }, reply.steps("Write-Output 'two'"));
+  h.chat.script(reply.blocked(), reply.blocked());
+  const after = await h.run(s!.id);
+  const [t1, t2] = after.tasks as Ended[];
+  t.check('the first stopped at the limit, the second blocked twice', [t1!.status, t2!.status], ['limit-reached', 'blocked']);
+  t.truthy('the session now points at the fresh chat', !!after.chat && after.chat.chatId !== chatA, [after.chat, chatA]);
+
+  const dir = join(h.runsDir, t1!.runId!);
+  t.check('control: the attempt kept its conversation', existsSync(join(dir, 'chat.json')), true);
+  rmSync(join(dir, 'chat.json'));
+  const transcript = join(dir, 'transcript.jsonl');
+  const older = readFileSync(transcript, 'utf8').split('\n').map((line) => {
+    if (!line.includes('"message-sent"')) return line;
+    const e = JSON.parse(line) as Record<string, unknown>;
+    delete e.of;
+    delete e.task;
+    delete e.chatId;
+    return JSON.stringify(e);
+  });
+  writeFileSync(transcript, older.join('\n'));
+
+  await h.call('POST', `/sessions/${s!.id}/tasks/${t1!.id}/continue`);
+  h.chat.script((m) => {
+    t.truthy(
+      'it goes out in full, in a fresh conversation opened with the contract, saying it continues an earlier attempt',
+      m.chatId !== chatA && m.chatId !== after.chat?.chatId && m.chat.messages[0]?.contract === 'task' && m.text.includes(t1!.prompt) && m.text.includes('continues an earlier attempt'),
+      { chatId: m.chatId, first: m.chat.messages[0]?.text.slice(0, 80), text: m.text.slice(0, 600) },
+    );
+    return reply.done();
+  });
+  const last = await h.run(s!.id);
+  t.check('and the first task is done', last.tasks[0]!.status, 'done');
 });
 
 await scenario('the stop marker with steps: done after one iteration, whatever the answer to its report', {}, async (h) => {
