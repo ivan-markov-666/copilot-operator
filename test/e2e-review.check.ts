@@ -23,7 +23,8 @@
  * - a secret a reviewer quotes in its evidence is redacted before it goes back to the chat, and a
  *   check turned down for passing on the work goes back with the operator's own patterns applied;
  * - Stop pressed during the review ends the task aborted, not done, with nothing more sent to either
- *   chat; pressed once the checks have accepted the work, it ends the task before a review opens.
+ *   chat, and the review loop ends on it by itself, not only because the runner's chat refuses to
+ *   send; pressed once the checks have accepted the work, it ends the task before a review opens.
  *
  *   npm run check:e2e-review   (or: npx tsx test/e2e-review.check.ts)
  */
@@ -32,7 +33,10 @@ import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply, type Incoming } from './support/fakeChat.js';
 import { SessionStore } from '../src/session/store.js';
-import { RunConfigSchema } from '../src/config/schema.js';
+import { loadConfigObject, RunConfigSchema } from '../src/config/schema.js';
+import { runReview } from '../src/orchestrator/review.js';
+import { Pacer } from '../src/util/pacing.js';
+import type { Session } from '../src/session/model.js';
 
 const t = new Tally();
 
@@ -668,6 +672,57 @@ await scenario('Stop pressed during the review', {}, async (h) => {
   const cont = await h.raw('POST', `/sessions/${s!.id}/tasks/${task.id}/continue`);
   // Aborted is what "Continue" carries on.
   t.truthy('and "Continue" can carry it on', cont.status >= 200 && cont.status < 300, cont);
+});
+
+/*
+ * The same Stop, as the review loop answers it on its own. The runner hands the review a chat that
+ * refuses to send once the run is stopped (`sendsUntilStopped`), which hides whether the review
+ * stops by itself; it did not — it uploaded the cut-short step's report and waited for the answer,
+ * and only the runner's chat kept that from reaching the reviewer. Run here on the chat as it is.
+ */
+await scenario('Stop during a reviewer\'s last step ends the review by itself, sending nothing more', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'selfstop', [greeting]));
+  // The whole record, as the API keeps it, and the settings the runner would have read.
+  const session = await h.call<Session>('GET', `/sessions/${s!.id}`);
+  const cfg = await loadConfigObject(JSON.parse(readFileSync(join(h.dataDir, 'settings.json'), 'utf8')), h.base);
+  const chat = h.chat.factory()({} as never);
+  await chat.open();
+  await chat.newChat();
+  const stop = new AbortController();
+  h.chat.script(
+    reply.steps('New-Item r.flag -Force | Out-Null; Start-Sleep 45; New-Item r.done -Force | Out-Null'),
+    // The answer to the cut-short step's report, should it be sent; discarded below when unused.
+    reply.pass(),
+  );
+  const review = runReview(chat, session, session.tasks[0]!, {
+    cfg,
+    authorizer: { authorize: async () => ({ action: 'run' }) },
+    signal: stop.signal,
+    pacer: new Pacer({ enabled: false, settleMs: 0, maxMessagesPerHour: 10_000 }),
+    dir: join(h.base, 'review-selfstop'),
+    round: 1,
+    cwd: h.repo,
+    roots: [h.repo],
+    changedFiles: [],
+    deviations: [],
+    disputes: [],
+    event: () => undefined,
+    record: async () => undefined,
+  });
+  try {
+    await waitFor('the reviewer\'s step to be running', async () => existsSync(join(h.repo, 'r.flag')));
+    const sentBefore = h.chat.sent.length;
+    stop.abort();
+    const outcome = await review;
+    t.check('nothing more was sent after the stop', h.chat.sent.slice(sentBefore).map((m) => m.text.slice(0, 120)), []);
+    t.check('the answer scripted for its report was never asked for', h.chat.discard(), 1);
+    t.truthy('the review ends on the stop, with no verdict', outcome.verdict === 'error' && /the run was stopped/.test(outcome.problem ?? ''), outcome);
+    t.truthy('the step was cut short by the stop, not waited out', !existsSync(join(h.repo, 'r.done')), '');
+  } finally {
+    stop.abort();
+    await review.catch(() => undefined);
+    await chat.close();
+  }
 });
 
 /*

@@ -22,6 +22,7 @@
  *   retry that must not strand an earlier task's "Continue", on the session's model;
  * - "Continue" of a task whose message never reached a chat sends it in full, and an attempt with no
  *   record of its conversation is placed by the session's own;
+ * - a Stop during the last step of an iteration ends the task at once, with nothing more sent;
  * - the stop marker with steps; secrets redacted before anything reaches the chat, by the operator's
  *   own patterns as well in the checks message, with an event for the checks round that hid them;
  * - what each run folder holds, the stats counters, and a server left running being stopped.
@@ -595,6 +596,34 @@ await scenario('"Continue" of a task stopped before its message was sent sends i
   const after = await h.run(s!.id);
   t.check('and it is done', after.tasks[1]!.status, 'done');
   t.check('the contract went out once', h.chat.sent.filter((m) => m.text.includes(TASK_CONTRACT)).length, 1);
+});
+
+/*
+ * Stop pressed while the last step of an iteration runs. The loop looked at the signal before each
+ * step and at the top of the next round, and after the last step nothing did: the cut-short step's
+ * report was uploaded and the chat's answer waited for before the task ended, a Stop that took as
+ * long as a reply. It ends the task at once, aborted, with nothing more sent.
+ */
+await scenario('a Stop during the last step of an iteration ends the task at once, sending nothing more', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'laststep', [task('stopped-in-its-step')], { vcs: false }));
+  h.chat.script(
+    // s.done is written only by a step that lives through its whole sleep, far longer than a stop takes.
+    reply.steps('New-Item s.flag -Force | Out-Null; Start-Sleep 45; New-Item s.done -Force | Out-Null'),
+    // The answer to the cut-short step's report, should it be sent: a regression then shows as the
+    // pins below failing rather than as an unscripted message. Discarded below when unused.
+    reply.done(),
+  );
+  const r = await h.call<{ started: boolean }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  t.check('the run started', r.started, true);
+  await waitFor('the step to be running', async () => existsSync(join(h.repo, 's.flag')));
+  const sentBefore = h.chat.sent.length;
+  await h.call('POST', `/sessions/${s!.id}/stop`);
+  await h.idle();
+  t.check('nothing more reached the chat after the stop', h.chat.sent.slice(sentBefore).map((m) => m.text.slice(0, 120)), []);
+  t.check('the answer scripted for its report was never asked for', h.chat.discard(), 1);
+  const ended = await only(h, s!.id);
+  t.check('the task ended aborted', ended.status, 'aborted');
+  t.truthy('the step was cut short by the stop, not waited out', !existsSync(join(h.repo, 's.done')), '');
 });
 
 /*

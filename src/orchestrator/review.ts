@@ -662,6 +662,8 @@ ${machineNote}` : contract);
         results.push(result);
         deps.event('review-step-finished', { round, id: step.id, outcome: result.outcome, exitCode: result.exitCode, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `review step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
+        // Stopped while it ran: no step after it is started, and the report waits below.
+        if (signal?.aborted) break;
         await pacer.settle();
       }
 
@@ -680,6 +682,15 @@ ${machineNote}` : contract);
         deps.event('report-redacted', { round, iteration: iterations, redactions: report.redactions },
           `redacted before upload: ${report.redactions.map((r) => `${r.count}× ${r.name}`).join(', ')}`, 'warn');
       }
+
+      /*
+       * Stopped while a step ran. The signal is looked at only at the top of the loop, so the report
+       * of the cut-short step was uploaded and the reviewer's answer waited for before the review
+       * noticed. The runner's chat refuses to send once the run is stopped (`sendsUntilStopped`),
+       * but that is the runner covering for this loop; the review ends on a Stop by itself, the way
+       * the runner's own loop does: the report is written for the record and nothing more is sent.
+       */
+      if (signal?.aborted) return { verdict: 'error', findings: [], stepsRun, iterations, problem: 'the run was stopped' };
 
       const covering = buildCoveringMessage({
         task: `review of "${task.title}"`,

@@ -227,10 +227,11 @@ function refusedResult(step: Step, reason: string, by: 'runner' | 'operator' = '
 /**
  * The same chat, refusing to send once the run has been stopped.
  *
- * Handed to the review, whose own loop looks at the signal only between its rounds of steps: a
- * Stop pressed while a reviewer's step ran still had that step's report sent, and the reviewer's
- * answer to it waited for, before the review noticed — a Stop that took as long as a reply. Refused
- * here, the review ends at the send, and the runner, seeing the Stop, ends the task `aborted` (see
+ * Handed to the review, whose own loop looks at the signal at the top of each round and after a
+ * step it ran. Every other message it sends — a format repair, a refused "pass", a turned-down
+ * check — goes out before it looks again, and a Stop pressed while the reviewer was answering would
+ * have one more sent and its answer waited for, a Stop that took as long as a reply. Refused here,
+ * the review ends at the send, and the runner, seeing the Stop, ends the task `aborted` (see
  * `gateOnReview`). Everything else is the chat itself, unchanged.
  */
 function sendsUntilStopped(transport: ChatTransport, signal: AbortSignal | undefined): ChatTransport {
@@ -2070,6 +2071,18 @@ export async function runTask(
         });
         sink.event('step-finished', { id: step.id, outcome: result.outcome, exitCode: result.exitCode, durationMs: result.durationMs, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
+
+        /*
+         * Stopped while it ran. The signal is looked at before each step, and after the last one
+         * there is no next one to look before: the cut-short step's report was uploaded and the
+         * chat's answer waited for before the top of the loop ended the task, a Stop that took as
+         * long as a reply. It ends here instead, the way a Stop between steps does: the report is
+         * written for the record, and nothing more is sent.
+         */
+        if (signal?.aborted) {
+          aborted = true;
+          break;
+        }
 
         /*
          * The shell itself would not start. The same rule as in the check gate applies, for the
