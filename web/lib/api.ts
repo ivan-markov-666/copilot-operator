@@ -457,7 +457,13 @@ export type RestartPlan = {
     leftBehind: string[];
     keptOn?: string;
   }>;
+  /** How the run it repeats was started; `confirm` when it left no record of its own. */
   mode: RunMode;
+  /**
+   * Why this machine would refuse that run unattended now, when it was: the dialog then offers it
+   * step by step, saying this.
+   */
+  unattendedRefused?: string;
   onFailure: OnFailure;
 };
 

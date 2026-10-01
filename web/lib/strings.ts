@@ -518,6 +518,8 @@ export const dict = {
     'restart.confirm':
       'Start again from "{title}"?\n\nThe code goes back first:\n{repos}\n\nNothing is deleted — the later commits stay on the branch they were made on, one checkout away.\n\nThen {tasks} task(s) in {sessions} session(s) are queued again and started {mode}:\n{list}\n\nAnything those tasks already produced is replaced by what they produce this time.',
     'restart.failed': 'It did not start: {problem}',
+    'restart.stepByStep':
+      '\n\nThe run it repeats went on its own, and this machine no longer allows that: {reason}\nSo this one goes step by step.',
     'restart.started': 'Started again: {requeued} task(s) queued, {repos} repository(ies) taken back.',
     'review.title': 'Independent review',
     'review.hint':
@@ -1645,6 +1647,8 @@ export const dict = {
     'restart.confirm':
       'Да пусна ли отново от „{title}“?\n\nПърво кодът се връща:\n{repos}\n\nНищо не се трие — по-късните комити остават на клона, на който са направени, на един checkout разстояние.\n\nСлед това {tasks} задача(и) в {sessions} сесия(и) се нареждат отново и тръгват {mode}:\n{list}\n\nВсичко, което тези задачи вече са произвели, се заменя с това, което произведат сега.',
     'restart.failed': 'Не тръгна: {problem}',
+    'restart.stepByStep':
+      '\n\nПускането, което се повтаря, вървеше самостоятелно, а тази машина вече не го позволява: {reason}\nЗатова това тръгва стъпка по стъпка.',
     'restart.started': 'Пуснато отново: {requeued} задача(и) в опашката, {repos} хранилище(а) върнати назад.',
     'review.title': 'Независима рецензия',
     'review.hint':

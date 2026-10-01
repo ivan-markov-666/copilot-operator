@@ -143,17 +143,24 @@ export function useTaskActions(onChange: () => void): TaskActions {
           .map((x) => `  ${x.sessionName} / ${x.title}${x.alreadyQueued ? t('restart.alreadyQueued') : ''}`)
           .join('\n');
 
-        const question = t('restart.confirm', {
-          title: plan.from.title,
-          tasks: plan.tasks.length,
-          sessions: plan.sessions.length,
-          list,
-          repos: repos || t('restart.noRepo'),
-          mode: t(plan.mode === 'unattended' ? 'run.unattended' : 'run.confirm'),
-        });
+        /*
+         * A run that went on its own, on a machine that no longer allows that: offered step by step,
+         * which is always allowed, saying why. Sent as it was recorded, it was refused every time,
+         * and this dialog had no other mode to start it in.
+         */
+        const stepByStep = plan.mode === 'unattended' && !!plan.unattendedRefused;
+        const question =
+          t('restart.confirm', {
+            title: plan.from.title,
+            tasks: plan.tasks.length,
+            sessions: plan.sessions.length,
+            list,
+            repos: repos || t('restart.noRepo'),
+            mode: t(plan.mode === 'unattended' && !stepByStep ? 'run.unattended' : 'run.confirm'),
+          }) + (stepByStep ? t('restart.stepByStep', { reason: plan.unattendedRefused ?? '' }) : '');
         if (!(await confirmDialog(question))) return;
 
-        const done = await api.restartFrom(task.sessionId, task.taskId);
+        const done = await api.restartFrom(task.sessionId, task.taskId, stepByStep ? { mode: 'confirm' } : {});
         if (!done.started) {
           say(task.taskId, t('restart.failed', { problem: done.reason ?? '' }));
           onChange();

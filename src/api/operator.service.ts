@@ -202,8 +202,18 @@ export type RestartPlan = {
     leftBehind: string[];
     keptOn?: string;
   }>;
-  /** How the original run was started, which is how this one will be unless told otherwise. */
+  /**
+   * How the original run was started, which is how this one will be unless told otherwise. A run
+   * with no record of its own — `cop run` from the terminal, or one from before runs were recorded —
+   * is `confirm`.
+   */
   mode: 'confirm' | 'unattended';
+  /**
+   * Why this machine would refuse the run unattended now, when `mode` says it was: isolation no
+   * longer accepted here, a policy lock added since. `restartFrom` refuses that run before anything
+   * moves; the dialog offers it step by step instead, which is always allowed, and says why.
+   */
+  unattendedRefused?: string;
   onFailure: 'stop' | 'continue';
 };
 
@@ -2408,9 +2418,16 @@ export class OperatorService {
       })),
       sessions: sessions.map((s) => ({ id: s.id, name: s.name, tasks: tasks.filter((x) => x.session.id === s.id).length })),
       restores: [],
-      mode: group?.mode ?? 'unattended',
+      /*
+       * Nothing on record says a run with no record of its own ever went unattended, and taken for
+       * one, it was refused on every machine that refuses unattended runs, the default among them:
+       * the dialog has no other mode to offer, so its button could never do anything for such a task.
+       */
+      mode: group?.mode ?? 'confirm',
       onFailure: group?.onFailure ?? session.onFailure ?? 'stop',
     };
+    // Asked of the machine as it is now, as `restartFrom` will ask it; see `unattendedRefused`.
+    if (plan.mode === 'unattended') plan.unattendedRefused = (await this.unattendedRefusal('unattended')) ?? undefined;
 
     for (const target of restoreTargets(tasks)) {
       const preview = await restorePreview(target.session, target.task);
@@ -2472,7 +2489,8 @@ export class OperatorService {
      * The run's entrance rule, asked before anything moves, for the same reason as the browser
      * below. Asked only when the batch began, a machine that no longer lets this run go unattended
      * (a policy lock added since, isolation no longer accepted) took the repositories back and
-     * queued the tasks, and only then refused the run they were moved for.
+     * queued the tasks, and only then refused the run they were moved for. The plan says so first
+     * (`unattendedRefused`), so the dialog asks for the run step by step instead.
      */
     const blocked = await this.unattendedRefusal(opts.mode ?? plan.mode);
     if (blocked) return { ...idle, reason: blocked };

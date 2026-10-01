@@ -33,7 +33,7 @@
  *   npm run check:e2e-branches        (or: npx tsx test/e2e-branches.check.ts)
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { makeRepo, startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
@@ -90,6 +90,8 @@ type RestartPlan = {
   problem?: string;
   tasks: Array<{ sessionId: string; taskId: string; alreadyQueued: boolean }>;
   restores: Array<{ repoDir: string; ok: boolean; problem?: string; baseCommit?: string; branchName?: string }>;
+  mode?: string;
+  unattendedRefused?: string;
 };
 type Restarted = { started: boolean; reason?: string; requeued: number; restored: string[] };
 type Approval = { id: string; sessionId: string };
@@ -931,6 +933,51 @@ await scenario('Run again from here when the machine no longer allows the run un
     [r.restored, r.requeued, h.git('branch', '--show-current'), h.git('rev-parse', 'HEAD'), (await read(h, s!.id)).tasks[0]!.status], [[], 0, 'cop/withdrawn', head, 'failed']);
   t.check('no restore branch was made', h.git('branch', '--list', 'cop/restore-*'), '');
   t.check('and no chat was opened for it', h.chat.opened, opened);
+});
+
+/*
+ * The same machine, from the page. The plan says that the run it repeats went on its own and why this
+ * machine no longer allows that, and the dialog then asks for the run step by step, which is always
+ * allowed: the dialog has no other mode to offer, so asked as recorded, its button was refused every
+ * time. And a run that left no record of its own — `cop run` from the terminal, or one older than the
+ * record — is run again step by step: taken for unattended, it was refused the same way on every
+ * machine that refuses unattended runs, the default among them.
+ */
+await scenario('Run again from here when the run cannot go unattended here: offered, and started, step by step', { limits: { maxCheckRounds: 1, retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'stepwise', [{ title: 'never-good', prompt: 'Create never.txt in the repository root, whatever it takes, and nothing else.', checks: [neverPasses] }]));
+  h.chat.script(...failTwice('a.txt', 'b.txt'));
+  const failed = (await run(h, s!.id)).tasks[0]!;
+  t.check('the task failed', failed.status, 'failed');
+  const runMode = async (): Promise<string | undefined> => (await h.call<{ runGroup?: { mode?: string } }>('GET', `/sessions/${s!.id}`)).runGroup?.mode;
+  t.check('in a run recorded as unattended', await runMode(), 'unattended');
+
+  const settings = await h.call<{ raw: Record<string, unknown> & { execution?: Record<string, unknown> } }>('GET', '/settings');
+  await h.call('PUT', '/settings', { ...settings.raw, execution: { ...settings.raw.execution, isolation: 'none' } });
+  const planned = await h.call<RestartPlan>('GET', `/sessions/${s!.id}/tasks/${failed.id}/restart`);
+  t.truthy('the plan says the run went on its own, and why this machine will not run it so now',
+    planned.mode === 'unattended' && /execution\.isolation/.test(planned.unattendedRefused ?? ''), planned);
+  h.chat.script(reply.blocked());
+  const r = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: true, mode: 'confirm' });
+  t.check('asked step by step, as the dialog then asks: started, the repository taken back and the task queued', [r.started, r.restored.length, r.requeued], [true, 1, 1]);
+  await h.idle();
+  t.check('and it ran, step by step', [(await read(h, s!.id)).tasks[0]!.status, await runMode()], ['blocked', 'confirm']);
+
+  // No record of the run, as `cop run` leaves none.
+  const file = join(h.dataDir, 'sessions', `${s!.id}.json`);
+  const record = JSON.parse(readFileSync(file, 'utf8')) as { runGroup?: unknown; tasks: Array<{ runGroup?: unknown; attempts?: Array<{ runGroup?: unknown }> }> };
+  delete record.runGroup;
+  for (const task of record.tasks) {
+    delete task.runGroup;
+    for (const attempt of task.attempts ?? []) delete attempt.runGroup;
+  }
+  writeFileSync(file, JSON.stringify(record, null, 2), 'utf8');
+  const unrecorded = await h.call<RestartPlan>('GET', `/sessions/${s!.id}/tasks/${failed.id}/restart`);
+  t.check('a run with no record of its own is run again step by step, nothing refused', [unrecorded.mode, unrecorded.unattendedRefused ?? null], ['confirm', null]);
+  h.chat.script(reply.blocked());
+  const again = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: true });
+  t.check('asked as the dialog asks it, with no mode: started', [again.started, again.reason ?? null], [true, null]);
+  await h.idle();
+  t.check('step by step', [(await read(h, s!.id)).tasks[0]!.status, await runMode()], ['blocked', 'confirm']);
 });
 
 /*

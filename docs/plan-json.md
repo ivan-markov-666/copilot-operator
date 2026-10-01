@@ -345,7 +345,10 @@ carry nothing and the two sessions that were never reached carry nothing either.
 tasks would give back only the half of the run that already happened, which is the opposite of
 what is wanted. So when a run starts it writes onto **every** session it selected: the run's id,
 where that session sat in the order, which of its tasks were queued at that moment, and how the
-run was started. Running it again then means running it the way it was run.
+run was started. Running it again then means running it the way it was run. A run that left no
+such record (`cop run` from the terminal, or one older than the record) is run again step by
+step, and so, when the dialog is confirmed, is one that went on its own on a machine that no
+longer allows that: the dialog says why, since the button would otherwise be refused every time.
 
 Repositories are taken back **once each**, not once per session: three sessions sharing one
 repository go back to before the earliest affected task, which is the state the whole re-run

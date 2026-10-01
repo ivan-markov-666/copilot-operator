@@ -1567,9 +1567,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Run again from here',
             bg: 'Пусни отново оттук',
             doesEn:
-              'Puts the code back, queues that task and every task after it — later sessions of its run included — and starts at once, in the mode that run had.',
+              'Puts the code back, queues that task and every task after it — later sessions of its run included — and starts at once, in the mode that run had: step by step when that run left no record of its own, or went on its own and this machine no longer allows that.',
             doesBg:
-              'Връща кода, нарежда отново тази задача и всички след нея — включително следващите сесии от пускането ѝ — и тръгва веднага, в режима на онова пускане.',
+              'Връща кода, нарежда отново тази задача и всички след нея — включително следващите сесии от пускането ѝ — и тръгва веднага, в режима на онова пускане: стъпка по стъпка, когато то не е оставило запис за себе си или е вървяло самостоятелно, а тази машина вече не го позволява.',
           },
           {
             key: 'task.delete',
