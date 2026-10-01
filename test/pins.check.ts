@@ -885,6 +885,19 @@ try {
   t.check('/docs covers a file deeper under docs', inScope('docs/sub/y.md', ['/docs']), true);
   // And still only that folder: not one that starts the same, nor a docs folder further down.
   t.check('/docs leaves out docs-old and src/docs', [inScope('docs-old/x.md', ['/docs']), inScope('src/docs/x.md', ['/docs'])], [false, false]);
+  // The class is the whole spelling, not only its front: a pattern is resolved as a path is, so an
+  // empty, `.` or `..` folder inside it changes nothing about which files it covers.
+  for (const pattern of ['src//docs', 'src/./docs', 'src/docs/.', 'src/docs/./', 'tests/../src/docs']) {
+    t.check(`${pattern} covers a file under src/docs`, inScope('src/docs/x.md', [pattern]), true);
+  }
+  t.check('src/docs still leaves out docs', inScope('docs/x.md', ['src/docs']), false);
+  t.check('../docs is outside the repository, so it covers nothing in it', inScope('docs/x.md', ['../docs']), false);
+  // The repository itself, written any way, is the whole project, as a plan means by it.
+  for (const pattern of ['.', './', '/', '\\', '.\\', './.']) {
+    t.check(`${JSON.stringify(pattern)} covers every file`, [inScope('docs/x.md', [pattern]), inScope('README.md', [pattern])], [true, true]);
+  }
+  // A blank entry is not the repository: it names nothing, so it covers nothing.
+  t.check('a blank entry covers nothing', [inScope('docs/x.md', ['']), inScope('docs/x.md', ['  '])], [false, false]);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

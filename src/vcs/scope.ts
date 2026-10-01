@@ -15,21 +15,25 @@
  *
  * Patterns are repository-relative and use `/`: `tests/e2e/editor.spec.ts` is one file,
  * `tests/e2e/` or `tests/e2e/**` is everything under that folder, `*` matches within one folder
- * and `**` across folders. A `./` or `/` in front changes nothing, and `\` is read as `/`. Matching
- * ignores case, as Windows does.
+ * and `**` across folders. A pattern is read the way a path is: `\` is `/`, a `./` or `/` in front
+ * and a `//` or `/./` inside change nothing, `src/../docs` is `docs`, and `.`, `./` or `/` alone is
+ * the whole repository. Matching ignores case, as Windows does.
  */
 import { readdir, rm, rmdir } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, posix, resolve, sep } from 'node:path';
 import { git, workingTreePaths } from './git.js';
 
 /**
- * A path or pattern in the one spelling the matching expects: `/` between folders and nothing in
- * front. A plan writes the same folder as `docs`, `./docs`, `/docs` or `.\docs`, and they must all
- * cover the same files; when the folder test and the pattern match each cleaned the front their
- * own way, `/docs` covered nothing, and every change the task made under it was put back.
+ * A path or pattern in the one spelling the matching expects: `/` between folders, nothing in front,
+ * and no empty, `.` or `..` folder anywhere in it. A plan writes the same folder as `docs`, `./docs`,
+ * `/docs`, `.\docs` or `src/../docs`, and they must all cover the same files: each spelling the
+ * matching did not expect covered nothing, so every change the task made under it was put back.
+ * Cleaning only the front left `src//docs` and `docs/.` the same way, so the whole path is resolved
+ * here, as a path would be. The repository itself (`.`, `./`, `/`) comes out as the empty string.
  */
 function normalise(p: string): string {
-  return p.replace(/\\/g, '/').replace(/^(?:\.?\/)+/, '');
+  const n = posix.normalize(p.replace(/\\/g, '/')).replace(/^\/+/, '');
+  return n === '.' || n === './' ? '' : n;
 }
 
 function toRegExp(pattern: string): RegExp {
@@ -60,9 +64,16 @@ export function inScope(path: string, scope: readonly string[]): boolean {
   if (scope.length === 0) return true;
   const p = normalise(path);
   return scope.some((pattern) => {
+    // A blank entry names nothing, so it covers nothing. It must not read as the repository below,
+    // which it would, since normalising it gives the same empty string as `.` does.
+    if (pattern.trim() === '') return false;
     const clean = normalise(pattern.trim()).replace(/\/+$/, '');
+    // `.`, `./` or `/` is the repository itself, so the whole project: a plan writes it to mean
+    // anywhere, and read as a file named `.`, or as no path at all, it covered nothing and every
+    // change the task made was put back.
+    if (clean === '') return true;
     // A plain folder name without a slash still means the folder: `pages` covers `pages/Home.ts`.
-    if (clean && !/[*?]/.test(clean) && p.toLowerCase().startsWith(`${clean.toLowerCase()}/`)) return true;
+    if (!/[*?]/.test(clean) && p.toLowerCase().startsWith(`${clean.toLowerCase()}/`)) return true;
     return toRegExp(pattern).test(p);
   });
 }
