@@ -22,8 +22,21 @@ import { findSuspicious } from './commitHygiene.js';
 import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type BranchUpdate, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
-export function repoDirOf(session: Session): string {
+export function repoDirOf(session: Pick<Session, 'vcs' | 'projectDir'>): string {
   return (session.vcs?.repoDir?.trim() || session.projectDir?.trim() || '').trim();
+}
+
+/**
+ * The repository version control keeps this session's work in, or '' when version control is off.
+ *
+ * What a reader asks when it wants "the session's repository": `repoDirOf` says which folder that
+ * is, and this says whether there is one. Readers that took `vcs.repoDir` itself missed a session
+ * whose repository is its project folder — version control on, `repoDir` empty, `projectDir` set,
+ * as the session page can save it — where the branch is cut and the work committed all the same:
+ * the reviewer was told there was no repository and no changed files.
+ */
+export function trackedRepoOf(session: Pick<Session, 'vcs' | 'projectDir'>): string {
+  return session.vcs?.enabled ? repoDirOf(session) : '';
 }
 
 export type PrepareResult = {

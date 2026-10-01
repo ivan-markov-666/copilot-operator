@@ -20,6 +20,8 @@
  *   one the runner refuses later for its own line (the settings changed) is dropped, and the work is
  *   judged without it rather than ended on it;
  * - after the review the implementer's conversation is the one the next task goes to;
+ * - a session whose repository is only its project folder (vcs.repoDir empty) is reviewed as one
+ *   with a repository: the reviewer is told where it is and what the task changed in it;
  * - a secret a reviewer quotes in its evidence is redacted before it goes back to the chat, and a
  *   check turned down for passing on the work goes back with the operator's own patterns applied;
  * - Stop pressed during the review ends the task aborted, not done, with nothing more sent to either
@@ -557,6 +559,34 @@ await scenario('after a review the next task goes to the implementer\'s conversa
   t.check('one review conversation per task', reviewConversations(h), 2);
   // Task 2's own steps ran: the file it was asked for is in what was committed.
   t.check('task 2\'s own work is what was committed', h.git('show', 'cop/returned:bye.txt'), 'bye');
+});
+
+/*
+ * A session whose repository is its project folder: version control on, `vcs.repoDir` left empty and
+ * `projectDir` set, as the session page can save it. The runner branches and commits in that folder
+ * (`repoDirOf`), and the reviewer must be told so; the review read `vcs.repoDir` itself, and was told
+ * there was no repository and no changed files for work committed right there.
+ */
+await scenario('the review finds the repository of a session that names it only as its project folder', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'projectonly', [greeting]));
+  await h.call('PUT', `/sessions/${s!.id}`, { projectDir: h.repo, vcs: { repoDir: '' } });
+  const saved = await h.call<Session>('GET', `/sessions/${s!.id}`);
+  t.check('control: version control on, no repoDir, the project folder set', [saved.vcs?.enabled, saved.vcs?.repoDir, saved.projectDir], [true, '', h.repo]);
+  let brief = '';
+  h.chat.script(
+    write('hi'),
+    reply.done(),
+    (m) => {
+      brief = m.text;
+      return look();
+    },
+    reply.pass(),
+  );
+  const task = full((await h.run(s!.id)).tasks[0]!);
+  t.check('the task is done', task.status, 'done');
+  t.check('its work was committed on the session\'s branch in that folder', h.git('show', 'cop/projectonly:hello.txt'), 'hi');
+  t.truthy('the reviewer is told where the repository is', brief.includes(`Repository: ${h.repo}`) && !brief.includes('There is no repository'), brief.slice(0, 1500));
+  t.truthy('and which file the task changed', /^- hello\.txt$/m.test(brief), brief.slice(0, 1500));
 });
 
 /*

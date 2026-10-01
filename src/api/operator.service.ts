@@ -625,8 +625,10 @@ export class OperatorService {
       /*
        * A folder given here is the session's repository too, in the shape a session made on the
        * Project page's folder has: both fields, one folder. Left empty, every reader that follows
-       * `repoDirOf` found the folder, but the review reads `vcs.repoDir` itself, and was told there
-       * was no repository and no changed files for work committed in that folder.
+       * `repoDirOf` found the folder, but the review read `vcs.repoDir` itself, and was told there
+       * was no repository and no changed files for work committed in that folder. The review asks
+       * `trackedRepoOf` now, so a session saved with `repoDir` empty is read right as well; this
+       * keeps the record saying what the session works in.
        */
       if (s.projectDir.trim() && s.vcs && !s.vcs.repoDir.trim()) s.vcs.repoDir = s.projectDir;
       // The same rule an import applies, for a session given no folder; see `applyDefaultProject`.

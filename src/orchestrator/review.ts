@@ -34,6 +34,7 @@ import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { mergeRedactions } from '../exec/redaction.js';
+import { trackedRepoOf } from '../vcs/taskVcs.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { Pacer } from '../util/pacing.js';
 import type { Session, Task, TaskCheck } from '../session/model.js';
@@ -189,7 +190,8 @@ export function reviewBrief(
   earlier: Array<{ title: string; prompt: string }> = [],
   deliverable?: Deliverable,
 ): string {
-  const repo = session.vcs?.enabled ? session.vcs.repoDir?.trim() : '';
+  // The same repository the runner branched and read the changed files from, however it is named.
+  const repo = trackedRepoOf(session);
   const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
 
   return [

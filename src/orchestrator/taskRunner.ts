@@ -53,7 +53,7 @@ import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
+import { prepareForTask, commitTaskResult, repoDirOf, trackedRepoOf } from '../vcs/taskVcs.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
 export type TaskOutcome = {
@@ -1178,7 +1178,7 @@ export async function runTask(
      * files are committed and marked, because refusing would leave the tree dirty and the next
      * task refusing to start over it.
      */
-    const willCommit = !!(session.vcs?.enabled && session.vcs.commitOnFinish && repoDirOf(session));
+    const willCommit = !!(session.vcs?.commitOnFinish && trackedRepoOf(session));
     /** The runner's own checks that have been pointed out to the chat once already. */
     const pointedOut = new Set<string>();
 
@@ -1472,7 +1472,7 @@ export async function runTask(
       reviewRounds += 1;
 
       const model = effectiveModels(session, cfg).reviewModel;
-      const repoDir = session.vcs?.enabled ? (session.vcs.repoDir ?? '').trim() : '';
+      const repoDir = trackedRepoOf(session);
       /*
        * What changed, read from git rather than from anybody's account of it.
        *
