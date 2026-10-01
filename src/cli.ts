@@ -60,14 +60,30 @@ const DEFAULT_PROFILE = expandPath('~/AppData/Local/copilot-operator/edge-profil
 
 program
   .command('start')
-  .description('start copilot-operator for this project: the API and the web interface, on 127.0.0.1')
+  .description(
+    "start copilot-operator for this project on 127.0.0.1: the API, and the web interface the package ships (a clone's interface comes from npm start)",
+  )
   .option('--port <port>', 'the port to listen on', '4000')
-  .option('--open', 'open the interface in the default browser once it is up')
+  .option('--open', 'open the interface in the default browser once it is up (an installed package; not in a clone)')
   .action(async (opts: { port: string; open?: boolean }) => {
     process.env.COP_API_PORT = String(Number(opts.port) || 4000);
+    /*
+     * A clone's API serves no web interface (see `installLayout`): its interface is the dev server
+     * `npm start` runs, which builds the token into its page. So `cop start` in a clone is the API
+     * alone, and it says so before anything else rather than leave the operator looking for a page;
+     * and --open is not followed there, because the page it would open on this port answers a
+     * browser with 401.
+     */
+    const clone = installLayout().mode === 'checkout';
+    if (clone) {
+      console.log("cop start in a clone of copilot-operator starts the API only: a clone's web interface comes from npm start, which runs the API and the interface together.");
+      if (opts.open) {
+        console.log('--open is not followed in a clone: this port serves no page there and would answer the browser with 401. npm run dev starts both and opens the interface.');
+      }
+    }
     // The API runs in this process; importing it starts it. See src/api/main.ts.
     await import('./api/main.js');
-    if (opts.open) {
+    if (opts.open && !clone) {
       const url = `http://127.0.0.1:${process.env.COP_API_PORT}/`;
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline) {

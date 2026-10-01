@@ -19,6 +19,8 @@
  * - `cop run` refuses a run it must not start before any browser is opened; `cop doctor` names a
  *   default model the picker on this machine does not have, and a settings file the API will not
  *   start on, which it reads as the API does (a byte-order mark is not damage);
+ * - `cop start` in a clone says it starts the API only, its interface coming from npm start, and does
+ *   not follow --open to the API's port, which answers a browser with 401;
  * - the API process logs a stray promise rejection and carries on, and fails loudly on a taken port;
  * - decision pin: `npm start` (scripts/dev.mjs, run here with its children replaced) keeps the token
  *   out of the API's environment and hands it to the dev web server, as the operator decided it
@@ -675,6 +677,58 @@ await section('cop doctor names a default model the picker lacks, and a settings
       /\bok\s+default model "Auto" is in the picker/.test(marked.stdout) && !/settings\.json/.test(marked.stdout), marked.stdout);
   } finally {
     await new Promise((r) => registry.close(r));
+  }
+});
+
+await section("cop start in a clone says its interface comes from npm start, and opens no page that answers 401", async () => {
+  /*
+   * A clone's API serves no web interface (see installLayout), so `cop start` there is the API alone.
+   * It described itself as starting "the API and the web interface", and --open sent the browser to
+   * the API's own port, which answers it with 401. Run here from the sources — a checkout — in a
+   * folder of its own, where its data and runs land.
+   *
+   * --open hands the address to explorer.exe. A copy of whoami.exe under that name is put first on
+   * the child's PATH, where spawn finds it before Windows' own, so a regression here opens no
+   * browser on the machine that runs this check; whoami ignores the address and exits.
+   */
+  const dir = join(base, 'clone-start');
+  const stubs = join(dir, 'stubs');
+  mkdirSync(stubs, { recursive: true });
+  cpSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), join(stubs, 'explorer.exe'));
+  const env = cleanEnv();
+  const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+  env[pathKey] = `${stubs};${env[pathKey] ?? ''}`;
+
+  const help = await cop(['start', '--help'], dir, env);
+  t.truthy("cop start --help says a clone's interface comes from npm start", help.stdout.includes("a clone's interface comes from npm start"), help.stdout);
+
+  const port = await freePort();
+  const child = spawn(process.execPath, ['--import', tsx, cliTs, 'start', '--port', String(port), '--open'], {
+    cwd: dir,
+    env,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (c: string) => (out += c));
+  child.stderr.setEncoding('utf8').on('data', (c: string) => (out += c));
+  try {
+    const origin = `http://127.0.0.1:${port}`;
+    const state = await waitFor(
+      'the API to answer /api/health, or to exit',
+      async () => (child.exitCode !== null ? 'exited' : (await fetch(`${origin}/api/health`)).status === 200 ? 'up' : false),
+      90_000,
+    ).catch(() => 'timed out');
+    t.truthy('the API came up', state === 'up', `${state}: ${out.slice(-1500)}`);
+    if (state !== 'up') return;
+    // The start-up lines come after the bootstrap, a moment after /api/health answers.
+    await waitFor('the start-up lines', async () => out.includes('listening on'), 30_000).catch(() => false);
+    t.truthy("it says it starts the API only, and that a clone's interface comes from npm start",
+      out.includes('starts the API only') && out.includes("a clone's web interface comes from npm start"), out);
+    t.truthy('and that --open is not followed in a clone', out.includes('--open is not followed in a clone'), out);
+    t.check('the page --open would have opened answers 401 here', (await fetch(`${origin}/`)).status, 401);
+  } finally {
+    await stopChild(child);
   }
 });
 
