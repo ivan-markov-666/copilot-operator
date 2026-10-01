@@ -683,6 +683,40 @@ function earliestBase(task: Task): string | undefined {
   return fromAttempts ?? task.vcs?.baseCommit;
 }
 
+/**
+ * Where going back to before this task lands: where it first started, on the line of work the
+ * session carries on now.
+ *
+ * In per-session mode that line is the session's one branch, and "Run again from here" moves the
+ * session onto a new one, the restore branch (see `OperatorService.rerunFromRestore`). The task's
+ * attempts from before that move are on the branch it left, the work it abandoned. Taken from the
+ * first attempt of all, a second restart, or a Restore after one, went back onto that abandoned line
+ * and dropped what was done again since. So the earliest attempt on the session's branch decides,
+ * live or archived; without a restart every attempt is on it and the answer is the first one's, as
+ * before. A task with no attempt on that branch (it ran only before a move, or the branch was
+ * renamed) falls back to its first attempt. Per-task mode cuts every attempt from where the task
+ * first started, so the first attempt is the answer there.
+ */
+export function restorePoint(session: Session, task: Task): string | undefined {
+  if (session.vcs?.branchMode === 'per-session' && session.vcs.startFrom !== 'existing-branch') {
+    const branch = sessionBranchName(session);
+    const onIt = [...(task.attempts ?? []).map((a) => a.vcs), task.vcs].find((v) => v?.branch === branch && !!v.baseCommit);
+    if (onIt?.baseCommit) return onIt.baseCommit;
+  }
+  return earliestBase(task);
+}
+
+/**
+ * Makes a branch at a commit without checking it out: the repository stays where it is, on the
+ * branch the operator was shown. Additive like every other change here; an existing name is refused
+ * by git, never moved.
+ */
+export async function branchAt(dir: string, name: string, commit: string): Promise<{ ok: boolean; problem?: string }> {
+  if (!(await isValidBranchName(dir, name))) return { ok: false, problem: `"${name}" is not a name git accepts.` };
+  const r = await git(dir, ['branch', name, commit]);
+  return r.ok ? { ok: true } : { ok: false, problem: r.stderr || r.stdout || 'the branch could not be made' };
+}
+
 /** What restoring this task would do, asked before anything is done. */
 export async function restorePreview(session: Session, task: Task): Promise<RestorePreview> {
   const repoDir = repoDirOf(session);
@@ -690,7 +724,7 @@ export async function restorePreview(session: Session, task: Task): Promise<Rest
 
   if (!session.vcs?.enabled) return { ...empty, problem: 'Version control is off for this session.' };
 
-  const base = earliestBase(task);
+  const base = restorePoint(session, task);
   if (!base) {
     return {
       ...empty,

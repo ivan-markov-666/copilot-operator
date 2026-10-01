@@ -619,6 +619,15 @@ await scenario('what a plan would duplicate, and a branch an earlier session mak
   );
   const tasked = await h.call<CheckAnswer>('POST', '/plan/check', { text: JSON.stringify(perTask) });
   t.truthy('a branch a task of an earlier per-task session names: accepted', tasked.ok, tasked);
+  // And run, as the per-session case above is: accepted at import, the branch has to be there when the
+  // later session reaches it, with the earlier task's work on it.
+  const [tasks, on] = await h.importPlan(perTask);
+  h.chat.script(write('t.txt', 't'), reply.done());
+  const ranTasked = (await h.run(tasks!.id)).tasks[0]!;
+  h.chat.script(write('on.txt', 'on'), reply.done());
+  const ranOn = (await h.run(on!.id)).tasks[0]!;
+  t.check('both done, the second on the branch the first task named', [ranTasked.status, ranOn.status, ranTasked.vcs?.branch, ranOn.vcs?.branch], ['done', 'done', 'cop/stage-7', 'cop/stage-7']);
+  t.check('the second task\'s commit sits on the first one\'s', ranOn.vcs?.commit ? h.git('rev-parse', `${ranOn.vcs.commit}^`) : null, ranTasked.vcs?.commit);
 });
 
 // --- 9. store integrity under concurrent writers -------------------------------------------------------
@@ -1026,15 +1035,28 @@ await scenario('the exports and the live events', { limits: { maxFormatRetries: 
   type DomainTask = { task: { id: string }; whyItFailed?: unknown; earlierAttempts?: Array<{ whyItFailed?: unknown }> };
   const doc = domain.body as { counts?: { failed: number }; tasks?: DomainTask[] };
   const entry = (doc.tasks ?? []).find((x) => x.task.id === failed.id);
-  t.truthy('the run\'s domain export still holds the task, with the failure on its earlier attempt', domain.status === 200 && !!entry?.earlierAttempts?.[0]?.whyItFailed, domain.status);
-  // A run's export takes each task at the attempt that ran in it (runScope). Taken as it is now (queued,
-  // attempt 2), the failure that happened in the run had no whyItFailed of its own, and the run's counts
-  // said nothing failed in it.
+  /*
+   * A run's export takes each task at the attempt that ran in it (runScope). Taken as it is now (queued,
+   * attempt 2), the failure that happened in the run had no whyItFailed of its own, and the run's counts
+   * said nothing failed in it. This check once read the failure under earlierAttempts, which was where
+   * that defect put it; at the attempt that ran in the run there is no earlier attempt, and the failure
+   * is the entry's own. Where the task is taken as it is now — the session's export, below — the failure
+   * is still under earlierAttempts, and that is checked there.
+   */
+  t.truthy('the run\'s domain export still holds the task, at the attempt that failed in it, with no earlier attempt',
+    domain.status === 200 && !!entry && (entry.earlierAttempts ?? []).length === 0, { status: domain.status, entry });
   t.truthy('and the task, as it ended in that run, says why it failed', !!entry?.whyItFailed, entry);
+  const sessionDoc = (await h.raw('GET', `/export/domain?session=${encodeURIComponent(f!.id)}`)).body as { tasks?: DomainTask[] };
+  const asNow = (sessionDoc.tasks ?? []).find((x) => x.task.id === failed.id);
+  t.truthy('the session\'s export, which takes the task as it is now, keeps the failure on its earlier attempt', !!asNow?.earlierAttempts?.[0]?.whyItFailed, asNow);
   t.check('the run\'s counts say one task failed in it', doc.counts?.failed, 1);
   type RunEntry = { task: { id: string; attempt: number }; outcome?: { status: string } };
   const asRan = (d: unknown): RunEntry | undefined => ((d as { tasks?: RunEntry[] }).tasks ?? []).find((x) => x.task.id === failed.id);
   t.check('described at the attempt that ran in it', [asRan(doc)?.task.attempt, asRan(doc)?.outcome?.status], [1, 'failed']);
+  // The file the run's export downloads as, named after the run.
+  const runFile = async (id: string): Promise<string> =>
+    (await fetch(`${origin}/export/domain?run=${encodeURIComponent(id)}`, { headers: { 'x-cop-token': h.api.token } })).headers.get('content-disposition') ?? '';
+  const fileBefore = await runFile(runId);
   // A later run takes the task (it fails the same way: the branch is still gone). The first run's export
   // still holds it as it ended there; taken as it is now, it would have left that run's export altogether.
   await h.run(f!.id);
@@ -1044,6 +1066,13 @@ await scenario('the exports and the live events', { limits: { maxFormatRetries: 
   t.check('after a later run, the first run\'s export still holds the task as it ended there',
     [laterRun !== '' && laterRun !== runId, asRan(first)?.task.attempt, asRan(first)?.outcome?.status], [true, 1, 'failed']);
   t.check('and the later run\'s export holds its own attempt', [asRan(later)?.task.attempt, asRan(later)?.outcome?.status], [2, 'failed']);
+  // Named from the session's record of the run while it had one, and from the task that ran in it once
+  // the later run replaced that record: without the second, the file was called "run-" and a timestamp.
+  const fileAfter = await runFile(runId);
+  // The name without the minute it was downloaded at, which is all that may differ between the two.
+  const named = (disposition: string): string => /filename="copilot-operator-domain-(.*)-\d{12}\.json"/.exec(disposition)?.[1] ?? '';
+  t.truthy('and its file keeps the run\'s name after the later run',
+    named(fileBefore) !== '' && named(fileAfter) === named(fileBefore) && named(fileAfter) !== 'run-', { fileBefore, fileAfter });
   t.check('an export kind that does not exist is refused', (await h.raw('GET', '/export/zzz?session=x')).status, 400);
 
   // The live events: what the page reads when it opens mid-run, and the stream itself.

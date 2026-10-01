@@ -382,7 +382,7 @@ const FIELD_ROWS_EN = [
     'projectDir',
     'session',
     'no',
-    'The project folder the session works in: where its commands run, and its repository when `vcs.repoDir` is "". Leave it out for the default project. A session with version control off says its project only here.',
+    'The project folder of a session with version control off: its commands run there. Leave it out for the default project. With version control on, `vcs.repoDir` is required and the commands run in it.',
   ],
   [
     'review',
@@ -453,7 +453,7 @@ const FIELD_ROWS_BG = [
     'projectDir',
     'сесия',
     'не',
-    'Папката на проекта, в който работи сесията: там се изпълняват командите ѝ, и тя е хранилището, когато `vcs.repoDir` е "". Пропусни го за проекта по подразбиране. Сесия с изключен контрол на версиите казва проекта си само тук.',
+    'Папката на проекта на сесия с изключен контрол на версиите: командите ѝ се изпълняват там. Пропусни го за проекта по подразбиране. С включен контрол на версиите `vcs.repoDir` е задължително и командите се изпълняват в него.',
   ],
   [
     'review',

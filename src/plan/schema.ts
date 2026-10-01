@@ -288,8 +288,9 @@ const SessionInput = z.object({
   vcs: VcsInput,
   review: ReviewInput.optional(),
   /**
-   * The session's project folder: where its commands run, and its repository when `vcs.repoDir` is
-   * empty. Absent means the default project on the Project page.
+   * The project folder of a session with version control off: where its commands run. Absent means
+   * the default project on the Project page. With version control on, `vcs.repoDir` is required (see
+   * `checkPlan`) and the commands run there, so this folder decides nothing for such a session.
    */
   projectDir: z.string().trim().optional(),
   /** Read only for old plans; see `LegacyMirrorInput`. */

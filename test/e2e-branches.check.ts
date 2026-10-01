@@ -17,21 +17,24 @@
  * - a branch name git refuses, and the branch and commit subject a plan names;
  * - tool output left in the tree is pointed out once, then either ignored or committed and marked;
  * - a failed task's work is still committed;
- * - a session made the way the UI makes it (POST /sessions, PUT, POST tasks) branches and commits;
+ * - a session made the way the UI makes it (POST /sessions, PUT, POST tasks) branches and commits, and so
+ *   does one made with a folder of its own, in that folder, with the review told what changed;
  * - Restore: preview, restore, a second restore, a dirty tree, a running session — and another session
- *   running alone in the same repository;
- * - Run again from here: across two repositories, only the run's own tasks, in per-session mode where the
- *   rerun's checkout once undid the restore, and with a later session of the same repository chained on
- *   the failed work;
+ *   running alone in the same repository, or in a folder inside it;
+ * - Run again from here: across two repositories (and a refusal at the second, after the first moved),
+ *   only the run's own tasks, in per-session mode where the rerun's checkout once undid the restore, a
+ *   second restart on the line of work the first one started, a later session of the same repository
+ *   chained on the failed work or started from a named branch, a machine that no longer allows the run
+ *   unattended, and (a decision pin) a session that carries on an existing branch;
  * - the update from the remote before a session's first branch: no remote, ahead, up to date.
  *
- * Every check here must pass.
+ * Every check here must pass. Checks marked as a decision pin hold behaviour that was chosen.
  *
  *   npm run check:e2e-branches        (or: npx tsx test/e2e-branches.check.ts)
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { makeRepo, startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
@@ -86,7 +89,7 @@ type RestartPlan = {
   ok: boolean;
   problem?: string;
   tasks: Array<{ sessionId: string; taskId: string; alreadyQueued: boolean }>;
-  restores: Array<{ repoDir: string; ok: boolean; problem?: string; baseCommit?: string }>;
+  restores: Array<{ repoDir: string; ok: boolean; problem?: string; baseCommit?: string; branchName?: string }>;
 };
 type Restarted = { started: boolean; reason?: string; requeued: number; restored: string[] };
 type Approval = { id: string; sessionId: string };
@@ -401,6 +404,40 @@ await scenario('a session made the way the UI makes it', {}, async (h) => {
 });
 
 /*
+ * A session made through the API with a folder of its own works in that folder, not in the Project page's:
+ * the folder is its repository as well, so the branch and the commit are made there, and the review, which
+ * reads the repository off the session, is told the files the task changed. With the repository left
+ * empty, the work went to the right folder, and the review was told there was no repository and that
+ * nothing had changed.
+ */
+await scenario('a session made with a folder of its own', {}, async (h) => {
+  const repo2 = join(h.base, 'repo2');
+  mkdirSync(repo2, { recursive: true });
+  await makeRepo(repo2);
+  const made = await h.call<{ id: string; projectDir?: string; vcs?: { enabled?: boolean; repoDir?: string } }>('POST', '/sessions', { name: 'own', projectDir: repo2 });
+  t.check('its folder is its project and its repository, with version control on', [made.projectDir, made.vcs?.repoDir, made.vcs?.enabled], [repo2, repo2, true]);
+  await h.call('PUT', `/sessions/${made.id}`, { review: { enabled: true } });
+  await h.call('POST', `/sessions/${made.id}/tasks`, { title: 't', prompt: 'Create own.txt in the repository root holding exactly the text own, and nothing else.' });
+
+  let reviewOpening = '';
+  h.chat.script(
+    write('own.txt', 'own'),
+    reply.done(),
+    (m) => {
+      reviewOpening = m.text;
+      return reply.steps('Get-Content own.txt');
+    },
+    reply.pass(),
+  );
+  const task = (await run(h, made.id)).tasks[0]!;
+  t.check('done', task.status, 'done');
+  t.check('the file is committed on its branch, in its own folder', task.vcs?.branch ? gitIn(repo2, 'show', `${task.vcs.branch}:own.txt`) : null, 'own');
+  t.check('nothing was branched in the Project page\'s folder', h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/'), '');
+  t.truthy('the review is told the repository', reviewOpening.includes(`Repository: ${repo2}`), reviewOpening);
+  t.truthy('and the file the task changed', /^- own\.txt$/m.test(reviewOpening) && !reviewOpening.includes('version control recorded no file changes'), reviewOpening);
+});
+
+/*
  * Restore moves the operator's repository, so it is checked against git: HEAD at the task's starting
  * commit on a new branch, the session's branch untouched, a second restore a second branch, and a refusal
  * whenever something else could be working in that repository at the time.
@@ -486,6 +523,39 @@ await scenario('Restore: preview, restore, again, dirty, running — and another
   t.truthy('the restore preview says so too, naming it', previewWhileOther?.ok === false && (previewWhileOther.problem ?? '').includes('other-runner'), previewWhileOther);
   t.truthy('and so does the preview of "Run again from here"',
     restartWhileOther?.restores.length === 1 && restartWhileOther.restores[0]!.ok === false && (restartWhileOther.restores[0]!.problem ?? '').includes('other-runner'), restartWhileOther?.restores);
+
+  // A session with version control off whose project is a folder inside the repository works in the
+  // tree a checkout rewrites. Compared as equal paths only, it was not seen, and the restore went ahead.
+  mkdirSync(join(h.repo, 'web'), { recursive: true });
+  const [inner] = await h.importPlan({
+    version: 1,
+    sessions: [{ name: 'sub-runner', onFailure: 'stop', vcs: { enabled: false }, projectDir: join(h.repo, 'web'), review: { enabled: false },
+      tasks: [{ title: 'look-in-web', prompt: 'Look at the web folder and report in the summary what is in it; change nothing at all.' }] }],
+  });
+  let releaseInner: ((text: string) => void) | undefined;
+  h.chat.script(() => new Promise<string>((resolve) => {
+    releaseInner = resolve;
+  }));
+  await h.call('POST', `/sessions/${inner!.id}/start`, { mode: 'unattended' });
+  let previewWhileInner: Preview | undefined;
+  let whileInner: { status: number; body: unknown } | undefined;
+  let headWhileInner = '';
+  try {
+    await waitFor('the inner session\'s reply to be held', async () => !!releaseInner);
+    headBefore = h.git('rev-parse', 'HEAD');
+    previewWhileInner = await h.call<Preview>('GET', path);
+    whileInner = await h.raw('POST', path);
+    headWhileInner = h.git('rev-parse', 'HEAD');
+  } finally {
+    releaseInner?.(reply.done());
+    await h.idle();
+  }
+  t.truthy('while a session runs in a folder inside the repository, the preview refuses, naming it',
+    previewWhileInner?.ok === false && (previewWhileInner.problem ?? '').includes('sub-runner'), previewWhileInner);
+  const innerBody = (whileInner?.body ?? {}) as { ok?: boolean; problem?: string };
+  t.truthy('and so does the restore, naming it',
+    !!whileInner && whileInner.status >= 200 && whileInner.status < 300 && innerBody.ok === false && (innerBody.problem ?? '').includes('sub-runner'), whileInner);
+  t.check('and the repository was not moved under it', headWhileInner, headBefore);
 });
 
 /*
@@ -519,8 +589,8 @@ await scenario('Run again from here across two repositories', { limits: { maxChe
 
   const r = await h.call<Restarted>('POST', `/sessions/${front!.id}/tasks/${failed.id}/restart`, { restore: true, start: false });
   // Checked against git, not against the count of strings in `restored`: the first repository is at the
-  // commit the failed task began from, on a restore branch. (This part works today; the failure is what
-  // comes after it.)
+  // commit the failed task began from, on a restore branch. (This part always worked; the failure was
+  // what came after it.)
   t.check('the first repository is back where the failed task began, on a restore branch',
     [h.git('rev-parse', 'HEAD'), h.git('branch', '--show-current').startsWith('cop/restore-')], [failed.vcs?.baseCommit, true]);
   t.check('the second repository was left on main', gitIn(repo2, 'branch', '--show-current'), 'main');
@@ -533,6 +603,54 @@ await scenario('Run again from here across two repositories', { limits: { maxChe
     [r.requeued, r.restored.length, r.reason ?? null], [1, 1, 'prepared, not started']);
   t.truthy('the repository it reports taking back is the first one', r.restored[0]?.startsWith(h.repo), r.restored);
   t.check('the failed task is queued again', (await read(h, front!.id)).tasks[0]!.status, 'queued');
+});
+
+/*
+ * The same two repositories, both reached this time, and the second refuses at the moment of moving,
+ * after the first has been taken back. Nothing undoes the first move, so the answer has to say it: in
+ * `restored`, and in the reason, which is the one thing the page shows.
+ */
+await scenario('Run again from here across two repositories: refused at the second, after the first moved', { limits: { maxCheckRounds: 1 } }, async (h) => {
+  const repo2 = join(h.base, 'repo2');
+  mkdirSync(repo2, { recursive: true });
+  await makeRepo(repo2);
+  const [front, back] = await h.importPlan({
+    version: 1,
+    sessions: [
+      { name: 'front', onFailure: 'continue', vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'front' }, review: { enabled: false },
+        tasks: [{ title: 'front-task', prompt: 'Create never.txt in the repository root, whatever it takes, and nothing else.', checks: [neverPasses] }] },
+      { name: 'back', onFailure: 'continue', vcs: { enabled: true, repoDir: repo2, branchMode: 'per-session', branchName: 'back' }, review: { enabled: false },
+        tasks: [fileTask('back-task', 'back.txt', 'back')] },
+    ],
+  });
+  h.chat.script(...failTwice('a.txt', 'b.txt'), write('back.txt', 'back'), reply.done());
+  await h.call('POST', '/batch/start', { sessionIds: [front!.id, back!.id], mode: 'unattended', onFailure: 'continue' });
+  await h.idle();
+  const failed = (await read(h, front!.id)).tasks[0]!;
+  t.check('the first session failed, and the second ran in the other repository', [failed.status, (await read(h, back!.id)).tasks[0]!.status], ['failed', 'done']);
+
+  const planned = await h.call<RestartPlan>('GET', `/sessions/${front!.id}/tasks/${failed.id}/restart`);
+  const second = planned.restores.find((x) => x.repoDir === repo2);
+  t.truthy('the preview: two restores, both ready', planned.restores.length === 2 && planned.restores.every((x) => x.ok) && !!second?.branchName, planned.restores);
+  // A lock left on the ref the second restore is to make, as a git that was killed leaves one: git then
+  // refuses to make that branch, and nothing the preview reads can see it coming.
+  const lock = join(repo2, '.git', 'refs', 'heads', `${second?.branchName ?? 'missing'}.lock`);
+  mkdirSync(dirname(lock), { recursive: true });
+  writeFileSync(lock, '');
+  const repo2At = [gitIn(repo2, 'rev-parse', 'HEAD'), gitIn(repo2, 'branch', '--show-current')];
+  let r: Restarted | undefined;
+  try {
+    r = await h.call<Restarted>('POST', `/sessions/${front!.id}/tasks/${failed.id}/restart`, { restore: true, start: false });
+  } finally {
+    rmSync(lock, { force: true });
+  }
+  t.check('nothing started, nothing queued', [r?.started, r?.requeued, (await read(h, front!.id)).tasks[0]!.status], [false, 0, 'failed']);
+  t.truthy('the reason names the second repository', (r?.reason ?? '').startsWith(`${repo2}:`), r?.reason);
+  t.truthy('the first repository, already taken back, is still reported', r?.restored.length === 1 && r.restored[0]!.startsWith(`${h.repo} -> cop/restore-`), r?.restored);
+  t.truthy('and the reason says so too', !!r?.restored[0] && (r.reason ?? '').includes(`Already done, and left as it is: taken back ${r.restored[0]}`), r?.reason);
+  t.check('the first repository is where the failed task began, on that restore branch',
+    [h.git('rev-parse', 'HEAD'), h.git('branch', '--show-current')], [failed.vcs?.baseCommit, r?.restored[0]?.split(' -> ')[1]]);
+  t.check('the second was not moved', [gitIn(repo2, 'rev-parse', 'HEAD'), gitIn(repo2, 'branch', '--show-current')], repo2At);
 });
 
 /*
@@ -566,9 +684,9 @@ await scenario('Run again from here runs only the run\'s own tasks', { limits: {
 });
 
 /*
- * In per-session mode a restore to before task B cuts a restore branch at B's starting commit — and then
- * the re-run of B checks the session's branch out again, which still has B's failed work on it. The
- * confirmation promises "The code goes back first"; as written, the code does not stay back.
+ * In per-session mode a restore to before task B cuts a restore branch at B's starting commit — and the
+ * re-run of B once checked the session's branch out again, which still had B's failed work on it. The
+ * confirmation promises "The code goes back first"; the code did not stay back.
  */
 await scenario('Run again from here in per-session mode: the rerun\'s checkout must not undo the restore', { limits: { maxCheckRounds: 1 } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'chain', [
@@ -652,12 +770,117 @@ await scenario('Run again from here: a later session in the same repository star
 });
 
 /*
- * A session that carries on an existing branch cannot be taken back: its run checks that branch out again
- * before its first task, so a restore branch would be left the moment it was made, and going back on the
- * branch itself would take a reset. "Run again from here" says so before anything moves, instead of
- * promising that the code goes back first.
+ * A later per-session session of the same repository that started from a named branch did not begin from
+ * the work being redone, but its own branch holds what its task did in the run. Checked out again, the
+ * task started over on its own first attempt: stale.txt, written only then, was in the tree, and attempt 2
+ * had nothing to commit. It gets a branch of its own from where its task began, and its start stays.
  */
-await scenario('Run again from here on a session that carries on an existing branch', { limits: { maxCheckRounds: 1 } }, async (h) => {
+await scenario('Run again from here: a later session from a named branch starts its task over where it began', { limits: { maxCheckRounds: 1 } }, async (h) => {
+  const fromMain = (name: string, tasks: unknown[]): Record<string, unknown> =>
+    (plan(h, name, tasks, { startFrom: 'branch', baseBranch: 'main', updateFromRemote: false }, { onFailure: 'continue' }).sessions as unknown[])[0] as Record<string, unknown>;
+  const [first, second] = await h.importPlan({
+    version: 1,
+    sessions: [fromMain('first-named', [fileTask('a-task', 'a.txt', 'a')]), fromMain('second-named', [fileTask('c-task', 'c.txt', 'c')])],
+  });
+  h.chat.script(
+    write('a.txt', 'a'),
+    reply.done(),
+    reply.steps("Set-Content -Path c.txt -Value 'c' -Encoding utf8", "Set-Content -Path stale.txt -Value 'old' -Encoding utf8"),
+    reply.done(),
+  );
+  await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'continue' });
+  await h.idle();
+  const a = (await read(h, first!.id)).tasks[0]!;
+  const c = (await read(h, second!.id)).tasks[0]!;
+  t.check('both done, and C\'s first attempt wrote stale.txt', [a.status, c.status, !!c.vcs?.commit && tree(h, c.vcs.commit).includes('stale.txt')], ['done', 'done', true]);
+  const oldC = c.vcs?.commit;
+  const startBefore = (await read(h, second!.id)).vcsStart?.commit;
+
+  h.chat.script(write('a.txt', 'a'), reply.done(), write('c.txt', 'c'), reply.done());
+  const r = await h.call<Restarted>('POST', `/sessions/${first!.id}/tasks/${a.id}/restart`, { restore: true });
+  t.check('started, after taking the one repository back', [r.started, r.restored.length], [true, 1]);
+  await h.idle();
+  const c2 = (await read(h, second!.id)).tasks[0]!;
+  t.check('C\'s attempt 2 is done, and committed', [c2.status, !!c2.vcs?.commit], ['done', true]);
+  t.check('it starts where attempt 1 did: main as it was', c2.vcs?.baseCommit, c.vcs?.baseCommit);
+  t.check('stale.txt, written only by attempt 1, is not in its tree', c2.vcs?.commit ? tree(h, c2.vcs.commit).includes('stale.txt') : 'no commit', false);
+  t.truthy('on a branch of its own', !!c2.vcs?.branch && c2.vcs.branch !== c.vcs?.branch, [c2.vcs?.branch, c.vcs?.branch]);
+  t.check('its old branch still holds attempt 1', c.vcs?.branch ? h.git('rev-parse', c.vcs.branch) : null, oldC);
+  t.check('and where the session started is kept as recorded', (await read(h, second!.id)).vcsStart?.commit, startBefore);
+});
+
+/*
+ * "Run again from here" moves a per-session session onto the restore branch, so its tasks' attempts from
+ * before are on the line of work it left. A second restart from a task that ran on both lines must go back
+ * on the line the session carries on now: taken from the task's first attempt of all, it went back onto
+ * the abandoned line, and the third attempt had the work the first restart replaced (old.txt) and not the
+ * work done again (new.txt).
+ */
+await scenario('Run again from here twice in per-session mode: the second goes back on the line the first one started', { limits: { maxCheckRounds: 1 } }, async (h) => {
+  const both = (f1: string, t1: string, f2: string, t2: string): string =>
+    reply.steps(`Set-Content -Path ${f1} -Value '${t1}' -Encoding utf8`, `Set-Content -Path ${f2} -Value '${t2}' -Encoding utf8`);
+  const [s] = await h.importPlan(plan(h, 'twice', [fileTask('a-task', 'a.txt', 'a'), fileTask('b-task', 'b.txt', 'b'), fileTask('c-task', 'c.txt', 'c')],
+    { startFrom: 'branch', baseBranch: 'main', updateFromRemote: false }, { onFailure: 'continue' }));
+  h.chat.script(write('a.txt', 'a'), reply.done(), both('b.txt', 'b', 'old.txt', 'old'), reply.done(), write('c.txt', 'c'), reply.done());
+  const [, b1, c1] = (await run(h, s!.id)).tasks;
+  t.check('the first run: B and C done', [b1!.status, c1!.status], ['done', 'done']);
+
+  h.chat.script(both('b.txt', 'b', 'new.txt', 'new'), reply.done(), write('c.txt', 'c'), reply.done());
+  const r1 = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${b1!.id}/restart`, { restore: true });
+  t.check('the first restart started', [r1.started, r1.restored.length], [true, 1]);
+  await h.idle();
+  const [, b2, c2] = (await read(h, s!.id)).tasks;
+  t.check('B and C done again, C\'s tree with new.txt and without old.txt',
+    [b2!.status, c2!.status, c2!.vcs?.commit ? [tree(h, c2!.vcs.commit).includes('new.txt'), tree(h, c2!.vcs.commit).includes('old.txt')] : 'no commit'],
+    ['done', 'done', [true, false]]);
+  t.check('C\'s second attempt began on B\'s second', c2!.vcs?.baseCommit, b2!.vcs?.commit);
+
+  h.chat.script(write('c.txt', 'c'), reply.done());
+  const planned = await h.call<RestartPlan>('GET', `/sessions/${s!.id}/tasks/${c2!.id}/restart`);
+  t.check('the second restart goes back to where C began on the line the session carries on now', planned.restores[0]?.baseCommit, c2!.vcs?.baseCommit);
+  const r2 = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${c2!.id}/restart`, { restore: true });
+  t.check('the second restart started', [r2.started, r2.restored.length], [true, 1]);
+  await h.idle();
+  const c3 = (await read(h, s!.id)).tasks[2]!;
+  t.check('C\'s third attempt has the work done again and not the work abandoned',
+    [c3.status, c3.vcs?.commit ? [tree(h, c3.vcs.commit).includes('new.txt'), tree(h, c3.vcs.commit).includes('old.txt')] : 'no commit'], ['done', [true, false]]);
+});
+
+/*
+ * The run "Run again from here" starts is unattended when the run it repeats was. A machine that no longer
+ * allows that — isolation no longer accepted here; a policy lock is the same rule — is asked before anything
+ * moves. Asked only when the batch began, the repository was taken back and the task queued, and then the
+ * run they were moved for was refused.
+ */
+await scenario('Run again from here when the machine no longer allows the run unattended: nothing moves', { limits: { maxCheckRounds: 1 } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'withdrawn', [{ title: 'never-good', prompt: 'Create never.txt in the repository root, whatever it takes, and nothing else.', checks: [neverPasses] }]));
+  h.chat.script(...failTwice('a.txt', 'b.txt'));
+  const failed = (await run(h, s!.id)).tasks[0]!;
+  t.check('the task failed, on the session\'s branch', [failed.status, h.git('branch', '--show-current')], ['failed', 'cop/withdrawn']);
+
+  const settings = await h.call<{ raw: Record<string, unknown> & { execution?: Record<string, unknown> } }>('GET', '/settings');
+  await h.call('PUT', '/settings', { ...settings.raw, execution: { ...settings.raw.execution, isolation: 'none' } });
+  const head = h.git('rev-parse', 'HEAD');
+  const opened = h.chat.opened;
+  const r = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: true });
+  t.truthy('refused, naming the setting that stops it', !r.started && /execution\.isolation/.test(r.reason ?? ''), r);
+  t.check('before anything moved: nothing taken back, nothing queued',
+    [r.restored, r.requeued, h.git('branch', '--show-current'), h.git('rev-parse', 'HEAD'), (await read(h, s!.id)).tasks[0]!.status], [[], 0, 'cop/withdrawn', head, 'failed']);
+  t.check('no restore branch was made', h.git('branch', '--list', 'cop/restore-*'), '');
+  t.check('and no chat was opened for it', h.chat.opened, opened);
+});
+
+/*
+ * DECISION PIN. A session that carries on an existing branch cannot be taken back: its run checks that
+ * branch out again before its first task, so a restore branch would be left the moment it was made, and
+ * going back on the branch itself would take a reset, which this tool never does. "Run again from here"
+ * says so before anything moves, instead of promising that the code goes back first. Before this was
+ * chosen it restored, queued and ran the task again on develop, on top of the attempt it was to replace;
+ * the other choice was to keep that and say so in the confirmation. The same holds for a later session of
+ * the same repository that carries on a branch (the second half). This is the scenario to change if the
+ * owner wants the restart to go ahead for such sessions, with the confirmation reworded.
+ */
+await scenario('Run again from here on a session that carries on an existing branch (decision pin)', { limits: { maxCheckRounds: 1 } }, async (h) => {
   h.git('branch', 'develop');
   const [s] = await h.importPlan(plan(h, 'carry-on', [{ title: 'dev-task', prompt: 'Create never.txt in the repository root, whatever it takes, and nothing else.', checks: [neverPasses] }], { existingBranch: 'develop' }));
   h.chat.script(...failTwice('a.txt', 'b.txt'));
@@ -671,6 +894,35 @@ await scenario('Run again from here on a session that carries on an existing bra
   t.check('and so does the restart: nothing moved, nothing queued',
     [r.requeued, r.restored, h.git('branch', '--show-current'), (await read(h, s!.id)).tasks[0]!.status], [0, [], 'develop', 'failed']);
   t.truthy('no restore branch was made', !h.git('branch', '--list', 'cop/restore-*').trim(), h.git('branch', '--list'));
+
+  // The second half: the session that decides where the repository goes back to starts from main, and a
+  // later session of the same repository, reached in the same run, carries on a branch. Its tasks would
+  // run again on top of what they did the first time, so the restart refuses for it as well.
+  h.git('checkout', '-q', 'main');
+  h.git('branch', 'release');
+  const [lead, follow] = await h.importPlan({
+    version: 1,
+    sessions: [
+      { name: 'lead', onFailure: 'continue', vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'lead', startFrom: 'branch', baseBranch: 'main', updateFromRemote: false },
+        review: { enabled: false }, tasks: [fileTask('lead-task', 'lead.txt', 'lead')] },
+      { name: 'follow', onFailure: 'continue', vcs: { enabled: true, repoDir: h.repo, existingBranch: 'release', updateFromRemote: false },
+        review: { enabled: false }, tasks: [fileTask('follow-task', 'follow.txt', 'follow')] },
+    ],
+  });
+  h.chat.script(write('lead.txt', 'lead'), reply.done(), write('follow.txt', 'follow'), reply.done());
+  await h.call('POST', '/batch/start', { sessionIds: [lead!.id, follow!.id], mode: 'unattended', onFailure: 'continue' });
+  await h.idle();
+  const leadTask = (await read(h, lead!.id)).tasks[0]!;
+  const followTask = (await read(h, follow!.id)).tasks[0]!;
+  t.check('both ran: the first from main, the later one on release', [leadTask.status, followTask.status, followTask.vcs?.branch], ['done', 'done', 'release']);
+  const at = [h.git('branch', '--show-current'), h.git('rev-parse', 'HEAD')];
+  const leadPlan = await h.call<RestartPlan>('GET', `/sessions/${lead!.id}/tasks/${leadTask.id}/restart`);
+  t.truthy('the preview refuses, naming the later session and its branch',
+    leadPlan.restores.length === 1 && leadPlan.restores[0]!.ok === false && /"follow" carries on the existing branch release/.test(leadPlan.restores[0]!.problem ?? ''), leadPlan.restores);
+  const again = await h.call<Restarted>('POST', `/sessions/${lead!.id}/tasks/${leadTask.id}/restart`, { restore: true, start: false });
+  t.check('and the restart moves nothing and queues nothing',
+    [again.requeued, again.restored, h.git('branch', '--show-current'), h.git('rev-parse', 'HEAD'), (await read(h, lead!.id)).tasks[0]!.status], [0, [], ...at, 'done']);
+  t.check('still no restore branch', h.git('branch', '--list', 'cop/restore-*'), '');
 });
 
 /*
