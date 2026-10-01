@@ -56,12 +56,13 @@ type ModelView = { model?: string; review?: { enabled?: boolean; model?: string 
  * whole scenario; the question "was a second one ever open beside the first" needs the count at
  * each moment, so every transport the product asks for is wrapped here, locally, without touching
  * test/support. `failOpen` makes the next window refuse to open, the way Edge does when the profile
- * is locked or the executable is missing.
+ * is locked or the executable is missing; `failSignIn` makes a window that did open fail to reach
+ * the chat, the way it does when sign-in or a verification challenge is not done in time.
  */
-type Windows = { live: number; max: number; failOpen: Error | null };
+type Windows = { live: number; max: number; failOpen: Error | null; failSignIn: Error | null };
 
 function countWindows(h: Harness): Windows {
-  const w: Windows = { live: 0, max: 0, failOpen: null };
+  const w: Windows = { live: 0, max: 0, failOpen: null, failSignIn: null };
   const inner = h.chat.factory();
   setTransportFactory((o) => {
     const c = inner(o);
@@ -83,6 +84,11 @@ function countWindows(h: Harness): Windows {
         isOpen = false;
         w.live -= 1;
       }
+    };
+    const signIn = c.ensureSignedIn.bind(c);
+    c.ensureSignedIn = async () => {
+      if (w.failSignIn) throw w.failSignIn;
+      await signIn();
     };
     return c;
   });
@@ -954,6 +960,33 @@ await scenario('a browser that cannot open fails the batch and touches no task',
     [undefined, undefined],
   );
   t.check('the batch is over', batch.running, false);
+});
+
+/*
+ * The window opens and then cannot reach the chat: sign-in, or a verification challenge, not done in
+ * time. It is closed before the run gives the browser up. It was left open, since the run had no
+ * transport yet to close, and the claim on the browser went with the run: the next start, the one the
+ * error asks for, met Edge still on the profile ("Edge is already running with this profile") until
+ * the window was closed by hand. Here a window left open is one never closed, and a second beside it
+ * is counted.
+ */
+await scenario('a window that cannot reach the chat is closed before the browser is given up', {}, async (h, w) => {
+  const [a, b] = await h.importPlan({ version: 1, sessions: [plain(h, 'signin-a', [job('signin-a-task', 'a.txt')]), plain(h, 'signin-b', [job('signin-b-task', 'b.txt')])] });
+  w.failSignIn = new Error('The chat is showing a human-verification challenge and it was not cleared in time. Complete it in the open Edge window, then start the run again.');
+  t.check('a start is accepted', (await h.call<Started>('POST', `/sessions/${a!.id}/start`, { mode: 'unattended' })).started, true);
+  await h.idle();
+  t.check('its window could not reach the chat, and was closed', [h.chat.opened, h.chat.closed, w.live], [1, 1, 0]);
+  t.check('a batch is accepted', (await h.call<Started>('POST', '/batch/start', { sessionIds: [b!.id], mode: 'unattended' })).started, true);
+  await h.idle();
+  t.check("the batch's window too", [h.chat.opened, h.chat.closed, w.live], [2, 2, 0]);
+  t.check('both tasks are still queued', [(await h.session(a!.id)).tasks[0]!.status, (await h.session(b!.id)).tasks[0]!.status], ['queued', 'queued']);
+
+  // The challenge cleared: the start the error asks for runs, in the only window open.
+  w.failSignIn = null;
+  h.chat.script(write('a.txt', 'signin-a-task'), reply.done());
+  t.check('started again, the session runs', (await h.call<Started>('POST', `/sessions/${a!.id}/start`, { mode: 'unattended' })).started, true);
+  await h.idle();
+  t.check('and its task is done, never beside another window', [(await h.session(a!.id)).tasks[0]!.status, w.max], ['done', 1]);
 });
 
 // --- the entrance ----------------------------------------------------------------------------------

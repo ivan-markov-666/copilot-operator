@@ -331,8 +331,21 @@ export async function openBrowser(
     },
   });
 
-  await transport.open();
-  await transport.ensureSignedIn();
+  /*
+   * A window that opened and then failed to reach the chat — sign-in not done in time, a
+   * verification challenge not cleared, the consumer Copilot — is closed here, since nobody else
+   * holds it: the caller has no transport yet, so its own `finally` closes nothing. Left open, the
+   * run ended and gave up its claim on the browser with Edge still on the profile, and the next start
+   * or read of the models, the one the error asks for, was refused as "Edge is already running with
+   * this profile" until the window was closed by hand.
+   */
+  try {
+    await transport.open();
+    await transport.ensureSignedIn();
+  } catch (e) {
+    await transport.close().catch(() => undefined);
+    throw e;
+  }
   return transport;
 }
 
