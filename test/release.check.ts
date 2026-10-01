@@ -31,7 +31,7 @@
  * Each section runs on its own: one that throws is reported as a failure of that section and the
  * rest still run.
  *
- *   npm run check:release        (not in package.json yet: npx tsx test/release.check.ts)
+ *   npm run check:release        (also run by the release workflow before it publishes)
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -211,7 +211,7 @@ await section('cop --version', async () => {
   // releases, so a bug report's "cop --version" names a version that never had the bug.
   const r = await cop(['--version'], root);
   t.check('cop --version exits 0', r.code, 0);
-  // DEFECT: src/cli.ts hard-codes program.version('0.1.0') instead of reading package.json.
+  // src/cli.ts reads the version from the package.json of copilot-operator it runs from, not a literal.
   t.check('cop --version prints the version in package.json', r.stdout.trim(), pkg.version);
 });
 
@@ -302,15 +302,15 @@ await section('what the tarball carries', async () => {
     t.check('ships nothing from data/, runs/, test/, web/, dist/web/server/, and no .map, .env or token file', forbidden, []);
     t.check('package.json bin.cop is the compiled CLI', pkg.bin?.cop, 'dist/src/cli.js');
 
-    // DEFECT: build-package.mjs does not empty dist/src before tsc, so a compiled file with no source ships.
+    // build-package.mjs prunes, after tsc, every file in dist/src that no source in src/ could have made.
     t.check('a stale file planted in dist/src before the build is not in the tarball', packedFiles.includes(markerRel), false);
-    // DEFECT: same cause: the build leaves dist/src as it found it, adding to it only.
+    // Removed from dist/src itself, not only left out of the tarball: dist/src holds what src/ compiles to.
     t.check('and the build removed it from dist/src', existsSync(marker), false);
     // The same question asked of what this checkout already had lying there.
     const orphans = packedFiles
       .filter((p) => p !== markerRel && p.startsWith('dist/src/') && p.endsWith('.js'))
       .filter((p) => !existsSync(join(root, p.replace(/^dist\//, '').replace(/\.js$/, '.ts'))));
-    // DEFECT: same cause; in this checkout dist/src/context/{contextFiles,desktopMirror,projectMirror}.js ship though their sources were deleted.
+    // The removed mirror and attachment modules (dist/src/context/{contextFiles,desktopMirror,projectMirror}.js) shipped this way once.
     t.check('every compiled file shipped has a source in src/ (nothing stale from a deleted module)', orphans, []);
   } finally {
     rmSync(marker, { force: true });
@@ -351,7 +351,7 @@ await section("the installed package starts, and stays out of the project's git"
   t.truthy('the installed CLI starts with a node shebang, which the bin shim needs', readFileSync(join(installed, 'dist', 'src', 'cli.js'), 'utf8').startsWith('#!/usr/bin/env node'));
   t.truthy('npm made the cop shim in node_modules/.bin', existsSync(join(project, 'node_modules', '.bin', 'cop.cmd')));
   const version = await run(process.execPath, [join(installed, 'dist', 'src', 'cli.js'), '--version'], { cwd: project, timeoutMs: 60_000 });
-  // DEFECT: the installed cop --version reports 0.1.0 (hard-coded in src/cli.ts), not the installed version.
+  // Read from node_modules/copilot-operator/package.json, not from the project's own package.json beside it.
   t.check('the installed cop --version is the installed version', version.stdout.trim(), shippedPkg.version);
 
   const port = await freePort();
@@ -429,10 +429,9 @@ await section('no token in what ships', async () => {
   }
   console.log(`(scanned ${webFiles.length} shipped files: ${hexRuns} run(s) of 64 hex digits)`);
   t.check("no shipped file holds this clone's API token", [...new Set(holdsToken)], []);
-  // The name left in a chunk is Next's unreplaced `process.env.NEXT_PUBLIC_COP_TOKEN` fallback in
-  // web/lib/api.ts: the export build was handed no value for it, so the lookup survives — and the
-  // same build run from a shell that has the variable set replaces it with the token itself.
-  // DEFECT: the static export still reads NEXT_PUBLIC_COP_TOKEN; build-package.mjs never pins it (to '') for the export build.
+  // The name left in a chunk would be Next's unreplaced `process.env.NEXT_PUBLIC_COP_TOKEN` fallback
+  // in web/lib/api.ts: a lookup that the same build run from a shell with the variable set replaces
+  // with the token itself. build-package.mjs pins it to '' for the export build, so it compiles away.
   t.check('no shipped file mentions NEXT_PUBLIC_COP_TOKEN', namesIt, []);
 });
 
@@ -440,7 +439,7 @@ await section('the package build cannot bake in a token from its environment', a
   // build-package.mjs run for real, but with child_process.spawnSync and the file operations
   // replaced before it loads: tsc and next are not started, dist/ and web/ are not touched, and the
   // environment each would have been given is written down. The clone's data/api-token reads as
-  // absent, as in CI, where the script's own token scan is skipped.
+  // absent, as in CI, so only the shell's variables could carry a token in.
   const record = join(base, 'build-env.json');
   const preload = join(base, 'build-preload.mjs');
   writeFileSync(
@@ -454,7 +453,12 @@ const read = fs.readFileSync;
 const exists = fs.existsSync;
 cp.spawnSync = (cmd, args = [], opts = {}) => {
   const env = opts.env ?? process.env;
-  calls.push({ cmd, args: args.map(String), token: Object.prototype.hasOwnProperty.call(env, 'NEXT_PUBLIC_COP_TOKEN') ? env.NEXT_PUBLIC_COP_TOKEN : null });
+  calls.push({
+    cmd,
+    args: args.map(String),
+    token: Object.prototype.hasOwnProperty.call(env, 'NEXT_PUBLIC_COP_TOKEN') ? env.NEXT_PUBLIC_COP_TOKEN : null,
+    publics: Object.keys(env).filter((k) => /^NEXT_PUBLIC_/i.test(k)),
+  });
   write(${JSON.stringify(record)}, JSON.stringify(calls), 'utf8');
   return { status: 0, stdout: '', stderr: '', output: [], pid: 0, signal: null };
 };
@@ -472,15 +476,21 @@ syncBuiltinESMExports();
   const canary = 'c0ffee'.repeat(10) + 'c0de';
   const r = await run(process.execPath, ['--import', pathToFileURL(preload).href, join(root, 'scripts', 'build-package.mjs')], {
     cwd: root,
-    env: cleanEnv({ NEXT_PUBLIC_COP_TOKEN: canary }),
+    // A second NEXT_PUBLIC_* of the shell's, in lower case as Windows allows: Next inlines any of them.
+    env: cleanEnv({ NEXT_PUBLIC_COP_TOKEN: canary, next_public_release_check: canary }),
     timeoutMs: 60_000,
   });
   t.check('the build ran to its end with its children replaced', r.code, 0);
-  const calls = existsSync(record) ? (JSON.parse(readFileSync(record, 'utf8')) as Array<{ args: string[]; token: string | null }>) : [];
+  const calls = existsSync(record) ? (JSON.parse(readFileSync(record, 'utf8')) as Array<{ args: string[]; token: string | null; publics: string[] }>) : [];
   const nextBuild = calls.find((c) => c.args.some((a) => /next[\\/]dist[\\/]bin[\\/]next$/.test(a)) && c.args.includes('build'));
   t.truthy('it would have started next build', nextBuild, calls);
-  // DEFECT: build-package.mjs hands next build {...process.env}, so a NEXT_PUBLIC_COP_TOKEN in the shell is inlined into dist/web.
+  // build-package.mjs gives its children the shell's environment without any NEXT_PUBLIC_* and pins the token to ''.
   t.truthy('next build is not handed the NEXT_PUBLIC_COP_TOKEN of the shell that runs the build', nextBuild !== undefined && (nextBuild.token === null || nextBuild.token === ''), nextBuild?.token === canary ? 'the canary token was passed through' : nextBuild);
+  t.check(
+    'nor any other NEXT_PUBLIC_* variable of that shell',
+    (nextBuild?.publics ?? []).filter((k) => !/^NEXT_PUBLIC_COP_(API|TOKEN)$/.test(k)),
+    [],
+  );
 });
 
 await section('cop run refuses before any browser opens', async () => {
@@ -719,11 +729,11 @@ syncBuiltinESMExports();
   t.truthy('web/lib/api.ts reads process.env.NEXT_PUBLIC_COP_TOKEN as its fallback, so the dev chunks carry it', /process\.env\.NEXT_PUBLIC_COP_TOKEN/.test(apiTs));
 
   /*
-   * With that pinned, the doc comment on apiToken() in web/lib/api.ts says the token "is no longer
-   * in any file the web server hands out". That is true of the package's static interface only:
-   * `npm start`'s dev server hands it out in every chunk that imports api.ts. A reader deciding
-   * whether a command step can reach the token is told it cannot. The claim may stay if the same
-   * sentence limits it (static interface, package, cop start), or go.
+   * With that pinned, the doc comment on apiToken() in web/lib/api.ts must not say the token "is no
+   * longer in any file the web server hands out", as it once did. That is true of the package's
+   * static interface only: `npm start`'s dev server hands it out in every chunk that imports api.ts,
+   * and a reader deciding whether a command step can reach the token would be told it cannot. The
+   * claim may stand only if the same sentence limits it (static interface, package, cop start).
    */
   const whole = readFileSync(join(root, 'web', 'lib', 'api.ts'), 'utf8');
   const doc = /\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*export function apiToken/.exec(whole)?.[1] ?? '';
@@ -731,7 +741,7 @@ syncBuiltinESMExports();
   const claim = /[^.]*no longer in any file the web server hands out[^.]*\./i.exec(prose)?.[0]?.trim() ?? '';
   const limited = /static|package|cop start|installed|except|dev server|npm start (still|builds|compiles)/i.test(claim);
   t.truthy('found the doc comment of apiToken() in web/lib/api.ts', doc !== '');
-  // DEFECT: web/lib/api.ts says the token is in no file the web server hands out, but npm start's dev server inlines it into its chunks.
+  // The comment now says which page carries the token in its chunks (npm start's) and which does not (the package's).
   t.truthy(
     "web/lib/api.ts does not claim, unqualified, that no served file holds the token while npm start's dev chunks do",
     !(webGetsToken && claim !== '' && !limited),

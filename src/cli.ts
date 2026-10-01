@@ -24,17 +24,37 @@ import { checkSettings, parseSettings, SettingsUnusableError } from './api/setti
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
-import { isOwnCheckout } from './exec/workDir.js';
+import { botRootDir, isOwnCheckout } from './exec/workDir.js';
 import { desktopIsSynced, resolveDesktopDir } from './context/desktopDir.js';
 import { Url } from './transport/locators.js';
 import { findEdgeUsingProfile } from './transport/profileLock.js';
 import { assessIsolation, readIsolationSignals, type IsolationClaim } from './exec/isolation.js';
 
+/**
+ * The version of the copilot-operator that is running, from its own package.json.
+ *
+ * It was a literal, '0.1.0', and stayed that through thirteen releases, so a bug report's
+ * `cop --version` named a version that never had the bug. Read where the code is — `src/` under
+ * tsx, `dist/src/` in a clone, `node_modules/copilot-operator/dist/src/` once installed — so it
+ * cannot drift from what npm installed. botRootDir() falls back to the working directory when it
+ * finds no package.json of ours, and that one is the user's project's: its version is not ours to
+ * print, so the name is checked and anything else says "unknown".
+ */
+function ownVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(join(botRootDir(), 'package.json'), 'utf8')) as { name?: string; version?: string };
+    if (pkg.name === 'copilot-operator' && typeof pkg.version === 'string' && pkg.version) return pkg.version;
+  } catch {
+    // No readable package.json: say so rather than guess.
+  }
+  return 'unknown';
+}
+
 const program = new Command();
 program
   .name('cop')
   .description('Runs a task loop with Microsoft 365 Copilot on a Windows machine.')
-  .version('0.1.0');
+  .version(ownVersion());
 
 const DEFAULT_PROFILE = expandPath('~/AppData/Local/copilot-operator/edge-profile', process.cwd());
 

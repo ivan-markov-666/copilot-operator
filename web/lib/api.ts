@@ -14,13 +14,22 @@ const TOKEN_KEY = 'cop-api-token';
 /**
  * The API's per-install token, as this browser was given it.
  *
- * It used to be compiled into the page's JavaScript by `npm start`. That made it readable by
- * anything able to ask `localhost:3210` for a script — including a command step the bot itself was
- * running, which could then drive the API that approves its own steps. So it is no longer in any
- * file the web server hands out. `npm start` prints a link, `http://localhost:3210/#token=…`; the
- * part after `#` never leaves the browser (it is not sent to the server and not logged), and the
- * page moves it into this browser's storage and removes it from the address bar. Opened once per
- * browser. See `src/api/security.ts` for what the token guards.
+ * Where it comes from depends on what serves the page. The static interface of the npm package
+ * (`npx cop start`) carries it in no file: scripts/build-package.mjs compiles the fallback below to
+ * '' and refuses a build that holds a token, and the API hands that page the token as the
+ * `cop_token` cookie, which the browser sends with each request and no script can read.
+ *
+ * The dev server of `npm start` is different, by the operator's decision: scripts/dev.mjs gives the
+ * web process NEXT_PUBLIC_COP_TOKEN, and Next compiles it into the dev chunks, so anything able to
+ * ask `localhost:3210` for a script can read it there. What keeps a command step the bot runs from
+ * doing that, and then driving the API that approves its own steps: `npm start` starts the API,
+ * which starts every step, without the token in its environment, and a step that names the API's
+ * or the page's port is refused (src/exec/network.ts).
+ *
+ * A `#token=…` link is the fallback for a browser given neither. The part after `#` never leaves
+ * the browser (it is not sent to the server and not logged), and the page moves it into this
+ * browser's storage and removes it from the address bar. See `src/api/security.ts` for what the
+ * token guards.
  */
 export function apiToken(): string {
   if (typeof window === 'undefined') return process.env.NEXT_PUBLIC_COP_TOKEN ?? '';
