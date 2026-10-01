@@ -23,6 +23,7 @@ import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, type WriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type ResolvedShell, type Shell, type ShellProblem } from './shells.js';
 import { stopTree, type ProcessTracker } from './processes.js';
@@ -96,6 +97,9 @@ export type Heartbeat = (info: {
   lastLine: string;
 }) => void;
 
+/** One piece of a step's output, decoded, and the stream it came on. */
+export type OutputListener = (text: string, stream: 'out' | 'err') => void;
+
 const DEFAULT_HARD_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 /** How often a running step says how it is doing, unless the caller asks for another pace. */
@@ -112,6 +116,35 @@ export const MAX_CAPTURE_CHARS = 200_000;
  * heartbeat shows is a whole line. Bounded, because a program can print a megabyte with no newline.
  */
 const LINE_CARRIED_CHARS = 2_000;
+/** The longest delay a Node timer can hold: 2^31-1 ms, about 24.8 days. */
+const LONGEST_TIMER_MS = 2_147_483_647;
+
+/**
+ * A delay a timer will really wait.
+ *
+ * Node does not refuse a delay it cannot hold. Above 2^31-1 ms, Infinity included, and below 1 ms
+ * or not a number at all, it sets the timer to 1 ms and prints a warning nobody reads. For the
+ * heartbeat that is a beat every millisecond; for the hard clock it is a step killed as it starts,
+ * which is what a step allowed a month would get. So a delay too long for a timer becomes the
+ * longest one there is, and one that is not a delay at all becomes the default.
+ */
+function timerDelay(ms: number | undefined, fallback: number): number {
+  if (ms === undefined || !(ms >= 1)) return fallback;
+  return Math.min(ms, LONGEST_TIMER_MS);
+}
+
+/**
+ * A piece of stderr as the log shows it: every line marked once, at its start.
+ *
+ * It used to be marked with `^` in multiline mode, which also counts a `\r` as the end of a line.
+ * On Windows each line came out as `[stderr] text\r[stderr] \n`, a piece that ended a line put a
+ * mark at its very end, ahead of whatever was written next, and a piece that went on with a line
+ * already begun put another in the middle of it. A pipe hands over pieces, not lines, so whether a
+ * piece begins a line is known only from the one before it, and the caller says.
+ */
+function markStderr(text: string, atLineStart: boolean): string {
+  return `${atLineStart ? '[stderr] ' : ''}${text.replace(/\n(?=[^])/g, '\n[stderr] ')}`;
+}
 
 /**
  * The result of a step that never started because the machine has no shell for it.
@@ -144,9 +177,10 @@ function unrunnable(req: RunRequest, problem: ShellProblem): RunResult {
  *
  * Shaped like a stop in the middle of a run, because that is what the operator asked for and what
  * whoever reads the result has to act on, but with nothing started and nothing logged: there is no
- * process to account for and no stream to point at.
+ * process to account for and no stream to point at. Its duration is the time runStep took to find
+ * that out, measured like any other, so that a stop which was slow to be noticed shows as slow.
  */
-function stoppedBeforeStart(req: RunRequest, resolved: ResolvedShell): RunResult {
+function stoppedBeforeStart(req: RunRequest, resolved: ResolvedShell, startedAt: number): RunResult {
   return {
     id: req.id,
     shell: resolved.shell,
@@ -155,7 +189,7 @@ function stoppedBeforeStart(req: RunRequest, resolved: ResolvedShell): RunResult
     command: req.command,
     exitCode: -3,
     outcome: 'aborted',
-    durationMs: 0,
+    durationMs: Date.now() - startedAt,
     stdout: '',
     stderr: '[runner] the command was not run: the operator stopped the run before it started\n',
     truncated: false,
@@ -181,13 +215,18 @@ export async function runStep(
    * `heartbeatMs` is how often `onHeartbeat` is called while the step runs. The live log wants a
    * beat every half minute and no more; a caller that needs to see what a beat carries during a
    * step of a few seconds asks for a shorter one, since at the default none would come at all.
+   *
+   * `onOutput` is given every piece of output as it is decoded, all of it, including what falls
+   * past MAX_CAPTURE_CHARS and is kept on disk only. It is how a caller decides something about the
+   * whole output (an output check does) without the runner holding the whole output in memory. It
+   * is called from the stream's handler, so it has to be quick.
    */
-  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat; heartbeatMs?: number; tracker?: ProcessTracker } = {},
+  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat; heartbeatMs?: number; onOutput?: OutputListener; tracker?: ProcessTracker } = {},
 ): Promise<RunResult> {
-  const hardTimeoutMs = req.hardTimeoutMs ?? DEFAULT_HARD_TIMEOUT_MS;
-  const idleTimeoutMs = req.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-  // Anything that is not a positive interval would be a timer firing as fast as it can.
-  const heartbeatMs = opts.heartbeatMs !== undefined && opts.heartbeatMs > 0 ? opts.heartbeatMs : HEARTBEAT_EVERY_MS;
+  // Every clock goes through `timerDelay`: a delay Node cannot hold would fire after 1 ms.
+  const hardTimeoutMs = timerDelay(req.hardTimeoutMs, DEFAULT_HARD_TIMEOUT_MS);
+  const idleTimeoutMs = timerDelay(req.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS);
+  const heartbeatMs = timerDelay(opts.heartbeatMs, HEARTBEAT_EVERY_MS);
   const startedAt = Date.now();
 
   // Every path into the shell goes through here, which is what makes a step and a post-task
@@ -207,7 +246,7 @@ export async function runStep(
    * before anything is written or started, because from this line to the listener below everything
    * runs in one go: no abort can arrive in between and be missed.
    */
-  if (opts.signal?.aborted) return stoppedBeforeStart(req, resolved);
+  if (opts.signal?.aborted) return stoppedBeforeStart(req, resolved, startedAt);
   const log: WriteStream = createWriteStream(req.logPath, { flags: 'a' });
   /*
    * A step log that cannot be written must never take the process down with it.
@@ -282,14 +321,39 @@ export async function runStep(
       });
     };
 
+    /*
+     * Each stream has a decoder of its own, which holds back the first bytes of a character that a
+     * chunk ended in the middle of until the rest arrives. A pipe cuts where it cuts, not between
+     * characters, and a chunk decoded by itself turned the two halves of a '✕' or a Cyrillic letter
+     * into two replacement characters: in the captured text, the log, the last line, and the output
+     * a check is decided on, where an output-omits would then pass on output that did contain it.
+     */
+    const decoders = { out: new StringDecoder('utf8'), err: new StringDecoder('utf8') };
+
     const capture = (chunk: Buffer, stream: 'out' | 'err'): void => {
-      const text = chunk.toString('utf8');
       lastOutputAt = Date.now();
       bytesOut += chunk.length;
+      take(decoders[stream].write(chunk), stream);
+    };
+
+    const take = (text: string, stream: 'out' | 'err'): void => {
+      if (!text) return;
       // Output can still arrive after the child has closed and the step has been settled: the
       // pipes flush independently of the close event. Writing then would be a write to an
       // ended stream, so the tail goes to the captured text and not to the file.
-      if (!settled) log.write(stream === 'err' ? text.replace(/^/gm, '[stderr] ') : text);
+      if (!settled) {
+        log.write(stream === 'err' ? markStderr(text, unfinished.err === '') : text);
+        /*
+         * The caller's listener runs inside this stream handler, where a throw would be an uncaught
+         * exception and take the API down in the middle of a run. What it was working out is the
+         * caller's to get right; the step itself goes on either way.
+         */
+        try {
+          opts.onOutput?.(text, stream);
+        } catch {
+          /* the listener's fault, not the step's */
+        }
+      }
 
       const joined = unfinished[stream] + text;
       const end = joined.lastIndexOf('\n');
@@ -334,9 +398,16 @@ export async function runStep(
       if (enoent && !existsSync(resolved.path)) shellProblem = missingShellProblem(resolved);
       finish('spawn-error', -2);
     });
-    // While the runner is stopping the step the process exiting is the stop working, not the step
-    // completing, so the reason recorded is the runner's.
-    child.on('close', (code) => (stopping ? finish(stopping.outcome, stopping.exitCode) : finish('completed', code ?? -1)));
+    child.on('close', (code) => {
+      // Both streams have ended, so whatever a decoder still holds is the last of its stream: the
+      // start of a character the process never finished, given as the replacement character.
+      take(decoders.out.end(), 'out');
+      take(decoders.err.end(), 'err');
+      // While the runner is stopping the step the process exiting is the stop working, not the step
+      // completing, so the reason recorded is the runner's.
+      if (stopping) finish(stopping.outcome, stopping.exitCode);
+      else finish('completed', code ?? -1);
+    });
 
     /*
      * Stops the step's whole tree — `taskkill /T`, then `/F` — and gives the result only

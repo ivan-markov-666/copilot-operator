@@ -8,12 +8,14 @@
  *   - the two clocks of `runStep`: a silent step is stopped by the idle clock, a chatty one never is,
  *     and the hard clock takes the step's whole tree down, so the port it held is free again;
  *   - an operator's stop, including one that came before the step began;
- *   - the output cap, the step log's shape, and the named (not inherited) environment;
- *   - what a heartbeat carries while a step runs;
+ *   - the output cap, the step log's shape, text decoded whole across chunks, and the named (not
+ *     inherited) environment;
+ *   - what a heartbeat carries while a step runs, and clocks given a delay no timer can hold;
  *   - `stopTree`'s fallback and `stopProcesses` never touching this process or its parent;
- *   - every check kind, output checks judged on the whole output, the checks that cannot be evaluated
- *     failing rather than passing, the gate refusing a download in a check, the messages the chat
- *     gets and the secrets kept out of them, derived checks, and commit-clean.
+ *   - every check kind, output checks judged on the whole output (past the capture limit too) and a
+ *     check's pattern on a clock, the checks that cannot be evaluated failing rather than passing, the
+ *     gate refusing a download in a check, the messages the chat gets and the secrets kept out of
+ *     them, derived checks, and commit-clean.
  *
  * Only `powershell` and `cmd` are used, which every Windows machine has: the old runner check asked
  * for `pwsh` and died of `spawn ENOENT` on a machine without PowerShell 7. Everything is written
@@ -25,7 +27,7 @@
  * The heartbeat checks ask for a beat every fraction of a second through `heartbeatMs`, beside
  * `onHeartbeat`: at the live log's own pace of one every 30 s, none would come during a short step.
  *
- *   npx tsx test/exec.check.ts        (npm run check:exec, once package.json names it)
+ *   npx tsx test/exec.check.ts        (npm run check:exec, which `npm run check` runs)
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -34,7 +36,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runStep, type RunRequest } from '../src/exec/runner.js';
+import { MAX_CAPTURE_CHARS, runStep, type RunRequest } from '../src/exec/runner.js';
 import { isAlive, ProcessTracker, stopProcesses, stopTree } from '../src/exec/processes.js';
 import { COMMIT_CLEAN_CHECK, describeCheck, failureMessage, failureReport, runCheck, runChecks, type CheckOutcome } from '../src/exec/checks.js';
 import { checkCommandRefusal } from '../src/exec/policy.js';
@@ -188,15 +190,19 @@ setTimeout(() => process.exit(0), 45_000);
 
     const logPath = join(logs, 'pre-aborted.log');
     const preTracker = new ProcessTracker();
+    // Timed here as well as by runStep: the step's own durationMs is runStep's word for it, and the
+    // clock on the wall is what says the operator's Stop was not kept waiting.
+    const preAt = Date.now();
     const pre = await runStep(
       { id: 99, shell: 'cmd', command: 'ping -n 3 127.0.0.1', cwd: base, logPath, idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
       { signal: AbortSignal.abort(), tracker: preTracker },
     );
+    const preTook = Date.now() - preAt;
     const log = existsSync(logPath) ? await readFile(logPath, 'utf8') : '';
     // 'abort' fires once, so a signal aborted before runStep listens never fires for it: runStep asks
     // the signal itself after its last await, before the log is opened or the shell is started.
     t.check('an already-aborted signal ends the step aborted', pre.outcome, 'aborted');
-    t.truthy(`and at once (took ${pre.durationMs} ms)`, pre.durationMs < 500);
+    t.truthy(`and at once (took ${pre.durationMs} ms by its own count, ${preTook} ms on the wall)`, pre.durationMs < 500 && preTook < 500);
     t.check('and no process was started (the log has no "# step" header)', log.includes('# step'), false);
     t.check('and none was recorded as started', preTracker.roots.length, 0);
     t.truthy('stderr says the operator stopped it before it started', pre.stderr.includes('before it started'), pre.stderr);
@@ -209,14 +215,16 @@ setTimeout(() => process.exit(0), 45_000);
     const lateLog = join(logs, 'late-abort', 'step.log');
     const lateAc = new AbortController();
     const lateTracker = new ProcessTracker();
+    const lateAt = Date.now();
     const lateRun = runStep(
       { id: 98, shell: 'cmd', command: 'ping -n 3 127.0.0.1', cwd: base, logPath: lateLog, idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
       { signal: lateAc.signal, tracker: lateTracker },
     );
     lateAc.abort();
     const late = await lateRun;
+    const lateTook = Date.now() - lateAt;
     t.check('an abort right after the call ends the step aborted', late.outcome, 'aborted');
-    t.truthy(`and at once (took ${late.durationMs} ms)`, late.durationMs < 500);
+    t.truthy(`and at once (took ${late.durationMs} ms by its own count, ${lateTook} ms on the wall)`, late.durationMs < 500 && lateTook < 500);
     t.check('and no process was started for it', lateTracker.roots.length, 0);
   });
 
@@ -247,6 +255,42 @@ setTimeout(() => process.exit(0), 45_000);
   });
 
   /*
+   * A pipe cuts the output where it cuts, not between characters. A program that writes a three-byte
+   * '✕' in two writes a moment apart hands it over in two chunks, and each chunk decoded by itself
+   * made two replacement characters of it: a jest '✕' or a Cyrillic word an output check looks for
+   * was then not there to find. Both streams, since each has a decoder of its own; and a stderr line
+   * that arrives in pieces is still marked once in the log.
+   */
+  await scenario('a character cut in two by the pipe is decoded whole', async () => {
+    /*
+     * PowerShell writes the bytes itself, straight to its standard handles, so nothing between it and
+     * the runner decodes or re-encodes them: the first write ends inside a character, the second
+     * finishes it 300 ms later. The characters are built from their code points so that the command
+     * line itself carries nothing but ASCII.
+     */
+    const send =
+      'function Send($s, $text, $cut) { $b = [Text.Encoding]::UTF8.GetBytes($text); $s.Write($b, 0, $cut); $s.Flush(); ' +
+      'Start-Sleep -Milliseconds 300; $s.Write($b, $cut, $b.Length - $cut); $s.Flush() }';
+    // 'before ' is 7 bytes, so byte 8 is the first of the three of U+2715; 'err ' is 4, so byte 5 is
+    // the first of the two of U+0444.
+    const out = "Send ([Console]::OpenStandardOutput()) ('before ' + [char]0x2715 + ' after' + [char]10) 8";
+    const err = "Send ([Console]::OpenStandardError()) ('err ' + [char]0x0444 + [char]0x2715 + ' end' + [char]10) 5";
+    const r = await step('powershell', `${send}; ${out}; ${err}`, { idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 });
+    t.check('the step completed', r.outcome, 'completed');
+    t.truthy('stdout has the character whole', r.stdout.includes('before \u2715 after') && !r.stdout.includes('\uFFFD'), JSON.stringify(r.stdout));
+    t.truthy('and so has stderr', r.stderr.includes('err \u0444\u2715 end') && !r.stderr.includes('\uFFFD'), JSON.stringify(r.stderr));
+    const log = await settledLog(r.logPath);
+    t.truthy('the log has them whole too, the stderr line marked once', log.includes('before \u2715 after') && /^\[stderr\] err \u0444\u2715 end\r?$/m.test(log), JSON.stringify(log));
+
+    // Only the stdout half, so that the one '✕' printed is the one cut in two.
+    const omits = await runCheck({ name: 'no failure mark', expect: 'output-omits', value: '\u2715', run: `${send}; ${out}`, shell: 'powershell', cwd: base }, 0, {
+      cwd: base,
+      logDir: join(base, 'utf8-check-logs'),
+    });
+    t.check('an output-omits of that character fails, because it was printed', omits.passed, false);
+  });
+
+  /*
    * The step log is what the operator opens when a step behaved oddly: which shell, which executable,
    * which folder, both streams told apart, and how it ended. And the environment a step gets is named,
    * not inherited — the bot's own token was once readable by any step (2026-09-27).
@@ -264,6 +308,10 @@ setTimeout(() => process.exit(0), 45_000);
     const outcomeAt = lines.findIndex((l) => l.startsWith('# outcome='));
     t.truthy('stdout is in the log, as its own line before the outcome', outAt > 0 && outcomeAt > outAt, log);
     t.truthy('stderr is in the log, marked', log.includes('[stderr] err'), log);
+    // Marked once, at the start of its line: a mark used to land between the `\r` and the `\n` of
+    // every Windows line end, and another at the end of the piece, ahead of whatever came next.
+    t.truthy('the stderr line is marked once, as a whole line', lines.some((l) => /^\[stderr\] err\s*$/.test(l)), JSON.stringify(log));
+    t.truthy('and no mark stands anywhere but at the start of a line', !/[^\n]\[stderr\]/.test(log) && !lines.some((l) => /^\[stderr\]\s*$/.test(l)), JSON.stringify(log));
     const last = log.trimEnd().split(/\r?\n/).pop() ?? '';
     t.truthy('the last line is the outcome', /# outcome=completed exit=0/.test(last), last);
 
@@ -337,6 +385,24 @@ setTimeout(() => process.exit(0), 45_000);
     t.check('the two-piece step completed', halves.outcome, 'completed');
     t.truthy('a beat after the join carries the whole line', split.includes('first-half-second-half'), split);
     t.truthy('and no beat carries only its second piece', !split.includes('second-half'), split);
+  });
+
+  /*
+   * Node does not refuse a delay it cannot hold: above 2^31-1 ms, Infinity included, and below 1 ms or
+   * not a number at all, it fires the timer after 1 ms. A heartbeat asked for every half millisecond,
+   * or every Infinity, would beat a thousand times a second, and a hard clock of a month would kill the
+   * step as it starts. Each step here runs about a second: at the default pace or the longest a timer
+   * holds, no beat comes in it.
+   */
+  await scenario('a clock given a delay no timer can hold', async () => {
+    for (const heartbeatMs of [0.5, 0, -5, Number.NaN, Number.POSITIVE_INFINITY, 3e9]) {
+      let beats = 0;
+      const r = await step('cmd', 'ping -n 2 127.0.0.1 >nul', { idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 }, { heartbeatMs, onHeartbeat: () => (beats += 1) });
+      t.truthy(`heartbeatMs ${heartbeatMs}: the step completed with no beat at all (${beats} in ${r.durationMs} ms)`, r.outcome === 'completed' && beats === 0);
+    }
+    const month = 30 * 24 * 60 * 60 * 1000;
+    const long = await step('cmd', 'ping -n 2 127.0.0.1 >nul', { idleTimeoutMs: month, hardTimeoutMs: month });
+    t.check('a step allowed a month runs to its end', long.outcome, 'completed');
   });
 
   /*
@@ -430,24 +496,72 @@ setTimeout(() => process.exit(0), 45_000);
     t.truthy(`the reported output is still shortened (${(contains.output ?? '').length} characters)`, (contains.output ?? '').length < 5_000);
 
     /*
-     * The same rule one layer down. The runner keeps 200,000 characters of each stream in memory and
-     * the rest on disk only, so past that the output a verdict would need was never read. Finding the
-     * text in the part kept still decides; not finding it decides nothing, and the check fails saying
-     * so — above all output-omits, which passing here would open the gate on output nobody read.
+     * The same rule one layer down. The runner keeps MAX_CAPTURE_CHARS of each stream in memory and the
+     * rest on disk only, and a verdict taken on the part kept is a verdict on part of the output: an
+     * output-omits passed on a marker printed past it, and an output-contains could never find the
+     * summary a long test run prints last. A check is handed all of the output as it comes, so past the
+     * limit it decides exactly as before it. The padding is sized from the limit, so that raising the
+     * limit cannot quietly turn this into a check of output that fits.
      */
-    const huge = "'x' * 250000; 'LATE-MARKER'";
+    const pad = MAX_CAPTURE_CHARS + 50_000;
+    const huge = `'x' * ${pad}; 'LATE-MARKER'`;
+    const premise = await step('powershell', huge, { hardTimeoutMs: 60_000 });
+    t.check('the padding is past the capture limit', premise.truncated, true);
     const big = { shell: 'powershell' as const, run: huge, cwd: checksDir };
     const lateOmits = await runCheck({ name: 'late marker should be absent', expect: 'output-omits', value: 'LATE-MARKER', ...big }, 0, opts);
     const lateContains = await runCheck({ name: 'late marker present', expect: 'output-contains', value: 'LATE-MARKER', ...big }, 0, opts);
     const lateMatches = await runCheck({ name: 'late marker on its line', expect: 'output-matches', value: '^LATE-MARKER$', ...big }, 0, opts);
     const earlyContains = await runCheck({ name: 'early text present', expect: 'output-contains', value: 'xxxxxxxx', ...big }, 0, opts);
-    t.check('output-omits past the capture limit fails rather than passing on the part kept', lateOmits.passed, false);
-    t.truthy('and says the rest was never read', /never read/.test(lateOmits.detail), lateOmits.detail);
-    t.check('output-contains past the capture limit fails', lateContains.passed, false);
-    t.truthy('saying it cannot be decided, not that the text is missing', /cannot be decided/.test(lateContains.detail), lateContains.detail);
-    t.check('output-matches past the capture limit fails', lateMatches.passed, false);
-    t.truthy('saying it cannot be decided', /cannot be decided/.test(lateMatches.detail), lateMatches.detail);
+    const neverOmits = await runCheck({ name: 'a text printed nowhere is absent', expect: 'output-omits', value: 'NEVER-PRINTED', ...big }, 0, opts);
+    const neverContains = await runCheck({ name: 'a text printed nowhere is present', expect: 'output-contains', value: 'NEVER-PRINTED', ...big }, 0, opts);
+    const neverMatches = await runCheck({ name: 'a line printed nowhere', expect: 'output-matches', value: '^NEVER-PRINTED$', ...big }, 0, opts);
+    t.check('output-omits fails on a marker printed past the capture limit', lateOmits.passed, false);
+    t.truthy('saying the output contains it', /but it does/.test(lateOmits.detail), lateOmits.detail);
+    t.check('output-contains finds a marker printed past the capture limit', lateContains.passed, true);
+    t.check('output-matches finds a line printed past the capture limit', lateMatches.passed, true);
     t.check('text found in the part kept still passes output-contains', earlyContains.passed, true);
+    t.check('output-omits of a text printed nowhere passes, however long the output', neverOmits.passed, true);
+    t.check('output-contains of it fails', neverContains.passed, false);
+    t.truthy('saying the text is not there', /and it does not$/.test(neverContains.detail), neverContains.detail);
+    t.check('output-matches of a line printed nowhere fails', neverMatches.passed, false);
+    t.truthy('saying how the output past the limit was read', /a line at a time/.test(neverMatches.detail), neverMatches.detail);
+
+    /*
+     * Past the limit, a marker that arrives in two pieces, and one on stderr. The pieces are written
+     * to the raw handle 300 ms apart, so they come in two chunks whatever the pipe's buffer size, and
+     * each stream is padded past the limit on its own.
+     */
+    const pieces =
+      `$o = [Console]::Out; $o.Write('x' * ${pad} + [char]10 + 'SPLIT-'); $o.Flush(); Start-Sleep -Milliseconds 300; ` +
+      `$o.Write('MARKER' + [char]10); $o.Flush(); [Console]::Error.Write('y' * ${pad} + [char]10 + 'ERR-MARKER' + [char]10)`;
+    const split = { shell: 'powershell' as const, run: pieces, cwd: checksDir };
+    const splitContains = await runCheck({ name: 'a marker in two pieces', expect: 'output-contains', value: 'SPLIT-MARKER', ...split }, 0, opts);
+    const splitMatches = await runCheck({ name: 'its line', expect: 'output-matches', value: '^SPLIT-MARKER$', ...split }, 0, opts);
+    const errContains = await runCheck({ name: 'a marker on stderr', expect: 'output-contains', value: 'ERR-MARKER', ...split }, 0, opts);
+    const errOmits = await runCheck({ name: 'no marker on stderr', expect: 'output-omits', value: 'ERR-MARKER', ...split }, 0, opts);
+    const errMatches = await runCheck({ name: 'its line on stderr', expect: 'output-matches', value: '^ERR-MARKER$', ...split }, 0, opts);
+    t.check('a marker cut in two past the limit is found whole', splitContains.passed, true);
+    t.check('and its line matches', splitMatches.passed, true);
+    t.check('a marker on stderr past its limit is found', errContains.passed, true);
+    t.check('output-omits fails on it', errOmits.passed, false);
+    t.check('and its line matches', errMatches.passed, true);
+
+    /*
+     * A check's pattern runs on a clock. `.*passed` on one line of 150,000 characters costs a
+     * backtracking engine about half a minute, and the server's event loop (the interface, Stop, the
+     * chat's timers) stood still for all of it. The pattern has a few seconds in all; one that needs
+     * more fails as undecidable instead of freezing the bot. The time is taken round runCheck, so it
+     * includes PowerShell's start; unbounded, the pattern alone would run far past the bound.
+     */
+    const slowAt = Date.now();
+    const slow = await runCheck({ name: 'a slow pattern', expect: 'output-matches', value: '.*passed', shell: 'powershell', run: "'x' * 150000", cwd: checksDir }, 0, opts);
+    const slowTook = Date.now() - slowAt;
+    t.check('a pattern that runs out of time fails', slow.passed, false);
+    t.truthy('saying it cannot be decided, and why', /cannot be decided: the pattern ran for more than/.test(slow.detail), slow.detail);
+    t.truthy(`and the check comes back within seconds (took ${slowTook} ms)`, slowTook < 15_000);
+    // The clock is the check's own: the next check, with an ordinary pattern, decides as usual.
+    const quick = await runCheck({ name: 'an ordinary pattern', expect: 'output-matches', value: '^x+$', shell: 'powershell', run: "'x' * 150000", cwd: checksDir }, 0, opts);
+    t.check('an ordinary pattern on the same output still matches', quick.passed, true);
   });
 
   /*

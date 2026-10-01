@@ -16,9 +16,10 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { createContext, Script, type Context } from 'node:vm';
 import { isWithin } from './confinement.js';
 
-import { MAX_CAPTURE_CHARS, runStep, type RunResult } from './runner.js';
+import { MAX_CAPTURE_CHARS, runStep, type OutputListener, type RunResult } from './runner.js';
 import type { ProcessTracker } from './processes.js';
 import { redactSecrets } from './redaction.js';
 import { resolveShell, type Shell, type ShellProblem } from './shells.js';
@@ -131,6 +132,162 @@ function needsCommand(check: TaskCheck): boolean {
 }
 
 /**
+ * How long a check's pattern may spend on the output, all of it together, before the check is given
+ * up as undecidable.
+ *
+ * The pattern is written by whoever wrote the check, often a model, and some patterns cost a
+ * backtracking engine quadratic time or worse: `.*passed` on one line of 150,000 characters runs for
+ * half a minute, and on two full streams for minutes. It runs on the server's event loop, which is
+ * also the interface, Stop, the live log and the chat's timers, and every one of them stood still
+ * with it. A pattern that suits the output it is tried on is done in milliseconds; one that needs
+ * seconds is not going to finish.
+ */
+const PATTERN_BUDGET_MS = 5_000;
+
+/** Compiles the check's pattern inside its context. `source` is a value there, never code. */
+const COMPILE_PATTERN = new Script('re = new RegExp(source, "m")');
+/** Whether any of `texts` matches it. */
+const TRY_PATTERN = new Script('texts.some((t) => re.test(t))');
+
+/**
+ * A check's regular expression, run on a clock.
+ *
+ * V8 cannot be told to give up on a regular expression, but a script run in a `vm` context can be
+ * interrupted when its time is up, and a regular expression running inside one is interrupted with
+ * it. So the pattern is compiled and tried there, each try against what is left of one budget. A try
+ * that runs out of it, or that the engine abandons by itself, leaves the pattern undecided: whether
+ * the output matches is then not known, and the check says so rather than guessing either way.
+ */
+class TimedPattern {
+  private readonly context: Context;
+  private leftMs = PATTERN_BUDGET_MS;
+  /** Set once any text tried has matched. */
+  matched = false;
+  /** Why the pattern could not be tried to the end, once it could not. */
+  stopped: string | null = null;
+
+  /** Throws, with the engine's own message, when the source is not a regular expression. */
+  constructor(source: string) {
+    this.context = createContext({ source, texts: [] as string[] });
+    COMPILE_PATTERN.runInContext(this.context);
+  }
+
+  /** Whether the answer is already known: it matched, or it cannot be found out. */
+  get settled(): boolean {
+    return this.matched || this.stopped !== null;
+  }
+
+  /** Tries the texts unless the answer is already known; true once any text tried has matched. */
+  tryOn(texts: string[]): boolean {
+    if (this.settled || texts.length === 0) return this.matched;
+    if (this.leftMs <= 0) {
+      this.stopped = this.overtime();
+      return false;
+    }
+    const started = Date.now();
+    this.context.texts = texts;
+    try {
+      this.matched = TRY_PATTERN.runInContext(this.context, { timeout: this.leftMs }) === true;
+    } catch (e) {
+      this.stopped =
+        (e as NodeJS.ErrnoException).code === 'ERR_SCRIPT_EXECUTION_TIMEOUT'
+          ? this.overtime()
+          : `the pattern could not be run to the end (${(e as Error).message})`;
+    } finally {
+      this.leftMs -= Date.now() - started;
+      this.context.texts = [];
+    }
+    return this.matched;
+  }
+
+  private overtime(): string {
+    return (
+      `the pattern ran for more than ${PATTERN_BUDGET_MS / 1000} s on the output and was stopped ` +
+      '(a pattern such as `.*x` can take minutes on one long line)'
+    );
+  }
+}
+
+/**
+ * What an output check watches: everything the command prints, as it prints it.
+ *
+ * The runner keeps MAX_CAPTURE_CHARS of each stream in memory and the rest on disk only. A verdict
+ * taken on the part kept is a verdict on part of the output: past it an output-omits passed on text
+ * nobody had read, and an output-contains could never find the summary a long test run prints last.
+ * So a check is handed every piece as the runner decodes it (`onOutput`), whatever the runner keeps,
+ * and holds only what its verdict needs.
+ */
+type OutputWatch = { see: OutputListener; end: () => void };
+
+/**
+ * For output-contains and output-omits: whether the text appears anywhere in either stream.
+ *
+ * Exact, in bounded memory: each piece is searched together with the last `value.length - 1`
+ * characters of its stream before it, so a text that arrived cut in two is still found whole.
+ */
+function watchForText(value: string): OutputWatch & { found: () => boolean } {
+  const carried = { out: '', err: '' };
+  let found = value === '';
+  return {
+    found: () => found,
+    see: (text, stream) => {
+      if (found) return;
+      const joined = carried[stream] + text;
+      if (joined.includes(value)) found = true;
+      else carried[stream] = value.length > 1 ? joined.slice(1 - value.length) : '';
+    },
+    end: () => undefined,
+  };
+}
+
+/**
+ * For output-matches: the pattern on every line of the output that is not wholly in the part kept.
+ *
+ * The part kept is tried afterwards as one text, as it always was, so a pattern written to span lines
+ * still can there. Past it there is no text, only a stream, and a line is the unit a pattern with `^`
+ * and `$` is written against, so each line is tried as it ends. A line longer than MAX_CAPTURE_CHARS
+ * is tried as far as that and the rest of it passed over, so memory stays bounded whatever a program
+ * prints; `partLine` says when that happened.
+ */
+function watchForPattern(pattern: TimedPattern): OutputWatch & { partLine: () => boolean } {
+  const held = { out: '', err: '' };
+  const received = { out: 0, err: 0 };
+  const skipping = { out: false, err: false };
+  let partLine = false;
+  // A line that ends inside the part kept is in the text tried afterwards; trying it here as well
+  // would only spend the budget twice.
+  const pastKept = (end: number): boolean => end > MAX_CAPTURE_CHARS;
+  return {
+    partLine: () => partLine,
+    see: (text, stream) => {
+      const at = received[stream];
+      received[stream] += text.length;
+      if (pattern.settled) return;
+      const ended: string[] = [];
+      let start = 0;
+      for (let nl = text.indexOf('\n'); nl >= 0; nl = text.indexOf('\n', start)) {
+        if (skipping[stream]) skipping[stream] = false;
+        else if (pastKept(at + nl)) ended.push(held[stream] + text.slice(start, nl));
+        held[stream] = '';
+        start = nl + 1;
+      }
+      if (!skipping[stream]) {
+        held[stream] += text.slice(start);
+        if (held[stream].length > MAX_CAPTURE_CHARS) {
+          ended.push(held[stream]);
+          held[stream] = '';
+          skipping[stream] = true;
+          partLine = true;
+        }
+      }
+      pattern.tryOn(ended);
+    },
+    // The last line of a stream need not end in a newline; it has ended all the same.
+    end: () => pattern.tryOn((['out', 'err'] as const).filter((s) => held[s] !== '' && pastKept(received[s])).map((s) => held[s])),
+  };
+}
+
+/**
  * One check, decided.
  *
  * A check that cannot be evaluated — no command where one is needed, a command the policy
@@ -208,6 +365,21 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
     const refused = opts.deny?.(command, shell, cwd);
     if (refused) return fail(`the command was refused before it ran: ${refused}`, { refusedBeforeRunning: true });
 
+    // A pattern that is not one is known before anything runs, and running the command anyway would
+    // spend a test suite's minutes on a verdict that cannot be taken.
+    const value = check.value ?? '';
+    let pattern: TimedPattern | null = null;
+    if (check.expect === 'output-matches') {
+      try {
+        pattern = new TimedPattern(value);
+      } catch (e) {
+        return fail(`the pattern is not a valid regular expression: ${(e as Error).message}`);
+      }
+    }
+    const text = watchForText(value);
+    const lines = pattern ? watchForPattern(pattern) : null;
+    const watch: OutputWatch | null = lines ?? (check.expect.startsWith('output-') ? text : null);
+
     let result: RunResult;
     try {
       result = await runStep(
@@ -223,25 +395,17 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
           logPath: join(opts.logDir, `check-${index + 1}.txt`),
           passEnv: opts.passEnv,
         },
-        { signal: opts.signal, tracker: opts.tracker },
+        { signal: opts.signal, tracker: opts.tracker, onOutput: watch?.see },
       );
     } catch (e) {
       return fail(`the check could not be run: ${(e as Error).message}`);
     }
+    watch?.end();
 
-    // Everything the runner kept is what the verdict is taken on; only the copy that is reported
-    // is shortened.
+    // What the runner kept: shortened, it is the copy that is reported, and whole it is the one text
+    // a pattern is tried on. The verdict on a text is taken by the watch, which saw all of it.
     const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`.trim();
     const seen = { exitCode: result.exitCode, output: shorten(output), shell: result.shell, shellPath: result.shellPath };
-    /*
-     * Past the runner's capture limit the rest of the output is on disk only, so a verdict that
-     * would need it cannot be taken. Finding the text in the part kept still decides the check;
-     * not finding it decides nothing, and an output-omits that passed on it would open the gate on
-     * output nobody read. So it fails, and says why, rather than claiming what the output holds.
-     */
-    const unread = (what: string): string =>
-      `the command printed more than the runner keeps (${MAX_CAPTURE_CHARS} characters of each stream), and the part kept ` +
-      `${what}; whether the rest does was never read, so the check cannot be decided`;
 
     // The shell was there when the run began and would not start when it was wanted. Nothing
     // about the work has been learned, so this is reported as what it is rather than as a
@@ -264,26 +428,28 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
           ? pass(`the command failed, as expected (exit ${result.exitCode})`, seen)
           : fail('expected the command to fail, but it succeeded', seen);
       case 'output-contains':
-        if (output.includes(check.value ?? '')) return pass(`the output contains "${check.value}"`, seen);
-        return result.truncated
-          ? fail(unread(`does not contain "${check.value}"`), seen)
+        return text.found()
+          ? pass(`the output contains "${check.value}"`, seen)
           : fail(`expected the output to contain "${check.value}", and it does not`, seen);
       case 'output-omits':
-        if (output.includes(check.value ?? '')) return fail(`expected the output not to contain "${check.value}", but it does`, seen);
-        return result.truncated
-          ? fail(unread(`does not contain "${check.value}"`), seen)
+        return text.found()
+          ? fail(`expected the output not to contain "${check.value}", but it does`, seen)
           : pass(`the output does not contain "${check.value}"`, seen);
       case 'output-matches': {
-        let re: RegExp;
-        try {
-          re = new RegExp(check.value ?? '', 'm');
-        } catch (e) {
-          return fail(`the pattern is not a valid regular expression: ${(e as Error).message}`, seen);
-        }
-        if (re.test(output)) return pass(`the output matches /${check.value}/`, seen);
-        return result.truncated
-          ? fail(unread(`does not match /${check.value}/`), seen)
-          : fail(`expected the output to match /${check.value}/, and it does not`, seen);
+        // The lines past the part kept were tried as they came; the part kept is tried now, as one
+        // text. A pattern that cannot be run is a check that fails, never one that passes.
+        if (pattern?.tryOn([output])) return pass(`the output matches /${check.value}/`, seen);
+        if (pattern?.stopped) return fail(`whether the output matches /${check.value}/ cannot be decided: ${pattern.stopped}`, seen);
+        /*
+         * Said plainly when it is not the whole truth. Past what the runner keeps, the output was
+         * tried a line at a time, so a match spanning lines there, or in a line longer than the
+         * runner keeps, was not looked for; the chat is told so, rather than told the text is absent.
+         */
+        const how = result.truncated
+          ? ` (past the first ${MAX_CAPTURE_CHARS} characters of each stream the output was tried a line at a time, so a match ` +
+            `spanning lines there was not looked for${lines?.partLine() ? `, nor one past the first ${MAX_CAPTURE_CHARS} characters of a longer line` : ''})`
+          : '';
+        return fail(`expected the output to match /${check.value}/, and it does not${how}`, seen);
       }
       default:
         return fail(`unknown check kind "${check.expect}"`, seen);
