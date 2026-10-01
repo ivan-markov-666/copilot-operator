@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type VcsStatus, type VersionControl } from '../../../lib/api';
+import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type SnapshotPlan, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { AttemptRecord, SaveLog } from '../../saveLog';
 import { fmtDuration, isContinuable } from '../../../lib/api';
@@ -644,6 +644,71 @@ function ReviewPanel({ session, onChange }: { session: Session; onChange: () => 
   );
 }
 
+/**
+ * The uncommitted files a starting snapshot would take, one choice each, and the button that takes
+ * it. What is sent is the whole list as shown: a repository that changed since is refused, so what
+ * was approved is what is committed. Not taking it changes nothing; the run is refused until it is.
+ */
+function SnapshotList({ session, plan, onDone }: { session: Session; plan: SnapshotPlan; onDone: () => void }) {
+  const { t } = useT();
+  const initial = (): Record<string, 'include' | 'leave-out'> =>
+    Object.fromEntries(plan.entries.filter((e) => e.choice).map((e) => [e.path, e.choice as 'include' | 'leave-out']));
+  const key = JSON.stringify(plan.entries.map((e) => [e.path, e.choice]));
+  const [choices, setChoices] = useState(initial);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setChoices(initial()), [key]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const taken = plan.entries.filter((e) => choices[e.path] === 'include').length;
+
+  const take = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const r = await api.vcsSnapshot(session.id, choices);
+      setMsg(r.ok ? t('vcs.snapshotTaken', { branch: r.branch ?? '', commit: (r.commit ?? '').slice(0, 8) }) : (r.problem ?? ''));
+      onDone();
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="option">
+      <p className="small">{t('vcs.snapshotList', { n: plan.entries.length, branch: plan.baselineBranch ?? '—' })}</p>
+      <ul style={{ margin: '4px 0', paddingLeft: 0, listStyle: 'none' }}>
+        {plan.entries.map((e) => (
+          <li key={e.path} style={{ marginBottom: 4, overflowWrap: 'anywhere' }}>
+            <code>{e.path}</code> <span className="muted small">({t(`vcs.snapshotKind.${e.kind}`)})</span>{' '}
+            {e.allowed.length === 0 ? (
+              <span className="err small">{t('vcs.snapshotBlocked')}</span>
+            ) : (
+              <select
+                aria-label={e.path}
+                value={choices[e.path] ?? ''}
+                onChange={(ev) => setChoices({ ...choices, [e.path]: ev.target.value as 'include' | 'leave-out' })}
+                disabled={busy || session.running || e.allowed.length < 2}
+              >
+                {e.allowed.map((a) => (
+                  <option key={a} value={a}>{t(a === 'include' ? 'vcs.snapshotInclude' : 'vcs.snapshotLeaveOut')}</option>
+                ))}
+              </select>
+            )}
+            {e.reason && <div className="muted small">{e.reason}</div>}
+          </li>
+        ))}
+      </ul>
+      <button className="primary" onClick={() => void take()} disabled={busy || session.running || !plan.ok || taken === 0}>
+        {t('vcs.snapshotTake')}
+      </button>
+      <p className="why">{t('vcs.snapshotCancelWhy')}</p>
+      {msg && <p className="small" role="status">{msg}</p>}
+    </div>
+  );
+}
+
 function VcsPanel({ session, onChange }: { session: Session; onChange: () => void }) {
   const { t } = useT();
   const vcs = session.vcs ?? { enabled: true, repoDir: '', branchMode: 'per-task' as const, commitOnFinish: true, branchPrefix: 'cop/' };
@@ -958,7 +1023,15 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
                 ? t('vcs.startedPrevious', { name: session.vcsStart.fromSession?.name ?? '', branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
                 : session.vcsStart.kind === 'branch'
                   ? t('vcs.startedBranch', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
-                  : t('vcs.startedHead', { commit: session.vcsStart.commit.slice(0, 8) })}
+                  : session.vcsStart.kind === 'snapshot'
+                    ? t('vcs.startedSnapshot', {
+                        branch: session.vcsStart.branch ?? '',
+                        commit: session.vcsStart.commit.slice(0, 8),
+                        from: session.vcsStart.snapshot?.fromBranch ?? 'HEAD',
+                        n: session.vcsStart.snapshot?.included.length ?? 0,
+                        out: session.vcsStart.snapshot?.leftOut.length ?? 0,
+                      })
+                    : t('vcs.startedHead', { commit: session.vcsStart.commit.slice(0, 8) })}
               {session.vcsStart.note ? ` — ${session.vcsStart.note}` : ''}
               {session.vcsStart.update && (
                 <>
@@ -1004,11 +1077,54 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
             <p className="why">{t('vcs.commitWhy')}</p>
           </div>
 
+          {/*
+            Uncommitted changes before the first task: kept out, as always, or taken as the commit
+            the session starts from. Not for a session carrying on an existing branch: a snapshot is
+            a branch of its own, and that session works on the one it was given.
+          */}
+          {startFrom !== 'existing-branch' && (
+            <>
+              <h3>{t('vcs.dirty')}</h3>
+              {(['reject', 'snapshot', 'tracked-only-snapshot'] as const).map((p) => (
+                <div className="option" key={p}>
+                  <label>
+                    <input
+                      type="radio"
+                      name={`vcs-dirty-${session.id}`}
+                      checked={(vcs.dirtyWorktree?.policy ?? 'reject') === p}
+                      onChange={() => void save({ dirtyWorktree: { policy: p, requireApproval: vcs.dirtyWorktree?.requireApproval } })}
+                      disabled={session.running}
+                    />
+                    <span>{t(p === 'reject' ? 'vcs.dirtyReject' : p === 'snapshot' ? 'vcs.dirtySnapshot' : 'vcs.dirtyTracked')}</span>
+                  </label>
+                  <p className="why">{t(p === 'reject' ? 'vcs.dirtyRejectWhy' : p === 'snapshot' ? 'vcs.dirtySnapshotWhy' : 'vcs.dirtyTrackedWhy')}</p>
+                </div>
+              ))}
+              {(vcs.dirtyWorktree?.policy ?? 'reject') !== 'reject' && (
+                <div className="option">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={vcs.dirtyWorktree?.requireApproval !== false}
+                      onChange={(e) => void save({ dirtyWorktree: { policy: vcs.dirtyWorktree?.policy ?? 'snapshot', requireApproval: e.target.checked } })}
+                      disabled={session.running}
+                    />
+                    <span>{t('vcs.dirtyApproval')}</span>
+                  </label>
+                  <p className="why">{t('vcs.dirtyApprovalWhy')}</p>
+                </div>
+              )}
+            </>
+          )}
+
           {/* Whether it will actually work, checked against the real repository. */}
           {status && !status.ok && (
             <div className="notice caution" role="status">
               <strong>{t('vcs.notReady')}</strong> {status.problem}
             </div>
+          )}
+          {status?.snapshot?.needed && status.snapshot.entries.length > 0 && (
+            <SnapshotList session={session} plan={status.snapshot} onDone={() => { onChange(); check(); }} />
           )}
           {status?.ok && (
             <div className="muted small">

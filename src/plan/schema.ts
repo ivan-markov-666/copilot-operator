@@ -65,6 +65,24 @@ const VcsInput = z
        * Absent means true. See `VersionControl.updateFromRemote`.
        */
       updateFromRemote: z.boolean().optional(),
+      /**
+       * What the session's first run does with uncommitted changes. See `DirtyWorktree`. Accepts the
+       * longer spelling a chat model may write — `includeUntracked: false` is `tracked-only-snapshot`,
+       * and `includeIgnoredOnlyWhenScoped` can only be true, since that is the rule, not a choice.
+       */
+      dirtyWorktree: z
+        .object({
+          policy: z.enum(['reject', 'snapshot', 'tracked-only-snapshot'], {
+            error:
+              'dirtyWorktree.policy must be "reject" (uncommitted changes keep version control out, as until now), "snapshot" (they become the commit the session starts from) or "tracked-only-snapshot" (the same, tracked changes only). "discard" is not offered: the runner never throws work away.',
+          }),
+          requireApproval: z.boolean().optional(),
+          includeUntracked: z.boolean().optional(),
+          includeIgnoredOnlyWhenScoped: z
+            .literal(true, { error: 'dirtyWorktree.includeIgnoredOnlyWhenScoped can only be true: an ignored file goes into a snapshot only when a task\'s scope names it. Leave the field out.' })
+            .optional(),
+        })
+        .optional(),
     },
     {
       error:
@@ -84,6 +102,13 @@ const VcsInput = z
         code: 'custom',
         path: ['existingBranch'],
         message: `"existingBranch" carries on a branch that exists, and startFrom "${vcs.startFrom}" cuts a new one. Keep one: startFrom "existing-branch" with existingBranch, or leave existingBranch out.`,
+      });
+    }
+    if (vcs.dirtyWorktree?.policy === 'tracked-only-snapshot' && vcs.dirtyWorktree.includeUntracked === true) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dirtyWorktree', 'includeUntracked'],
+        message: '"tracked-only-snapshot" takes tracked changes only, and includeUntracked true asks for new files too. Keep one: policy "snapshot", or leave includeUntracked out.',
       });
     }
     if (vcs.enabled && !vcs.repoDir.trim()) {

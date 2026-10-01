@@ -1364,6 +1364,26 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'По един локален комит на задача, независимо от изхода; без отметка промените остават свободни в работното дърво.',
           },
           {
+            key: 'vcs.dirty',
+            kind: 'note',
+            en: 'Uncommitted changes',
+            bg: 'Некомитнати промени',
+            doesEn:
+              'What the first task does when the repository has uncommitted changes: keep version control out (as until now), or take them — all, or tracked only — as a starting snapshot: one commit on a branch of its own that the session starts from. In a plan: "dirtyWorktree": { "policy": "snapshot" }. Not shown for "Carry on an existing branch".',
+            doesBg:
+              'Какво прави първата задача, когато хранилището има некомитнати промени: без контрол на версиите (както досега) или ги взема — всички или само tracked — като начална снимка: един комит на отделен клон, от който сесията тръгва. В план: "dirtyWorktree": { "policy": "snapshot" }. Не се показва при „Продължи съществуващ клон“.',
+          },
+          {
+            key: 'vcs.snapshotTake',
+            kind: 'button',
+            en: 'Take the starting snapshot',
+            bg: 'Направи началната снимка',
+            doesEn:
+              'Under the list of uncommitted files, each set to "Include in the starting snapshot" or "Leave out of the run": commits the included ones on the snapshot branch; left-out files go to the repository\'s .git/info/exclude. Until it is pressed a run of the session is refused and nothing changes.',
+            doesBg:
+              'Под списъка с некомитнати файлове, всеки с „Включи в началната снимка“ или „Остави извън изпълнението“: комитва включените на клона на снимката; оставените извън отиват в .git/info/exclude на хранилището. Докато не е натиснат, пускане на сесията се отказва и нищо не се променя.',
+          },
+          {
             key: 'vcs.ready',
             kind: 'note',
             en: 'Ready: {dir}, currently on {branch}.',

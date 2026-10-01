@@ -580,6 +580,37 @@ export type VersionControl = {
   updateFromRemote?: boolean;
   /** The local branch `startFrom: branch` starts from, and the fallback of `previous-session`. */
   baseBranch?: string;
+  /**
+   * What a session's first run does when the repository has uncommitted changes. Absent is
+   * `reject`, what it always was. See `DirtyWorktree` and `vcs/snapshot.ts`.
+   */
+  dirtyWorktree?: DirtyWorktree;
+};
+
+/**
+ * Uncommitted changes in the repository before a session's first task.
+ *
+ *   reject                 version control does not take them: the run goes on without a branch,
+ *                          as it always did (a session carrying on an existing branch is refused).
+ *   snapshot               they become one commit, "Capture operator baseline before run", on a new
+ *                          branch of their own, and the session starts from that commit. Tracked
+ *                          changes and new files are taken; secrets, tool output and files outside
+ *                          the project folder never are; an ignored file only when a task's scope
+ *                          names it and the operator ticks it.
+ *   tracked-only-snapshot  the same with tracked changes only; new files can only be left out.
+ *
+ * A file left out of a snapshot is added to the repository's own `.git/info/exclude` — local,
+ * never committed, `.gitignore` untouched — because a file left loose in the tree would be swept
+ * into the first task's commit, or removed by a task's scope.
+ *
+ * `requireApproval` (absent means true): the operator approves the exact list on the session's
+ * page before the run, and a run without that approval is refused. False takes the snapshot when
+ * the first task starts, and refuses when anything would have to be left out — writing to
+ * `.git/info/exclude` is the operator's call.
+ */
+export type DirtyWorktree = {
+  policy: 'reject' | 'snapshot' | 'tracked-only-snapshot';
+  requireApproval?: boolean;
 };
 
 /**
@@ -623,7 +654,7 @@ export function isContinuable(t: Pick<Task, 'status' | 'limit'>): boolean {
 
 /** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */
 export type SessionStart = {
-  kind: 'branch' | 'previous-session' | 'head' | 'existing-branch';
+  kind: 'branch' | 'previous-session' | 'head' | 'existing-branch' | 'snapshot';
   /** What bringing the starting branch up to its remote did, when that was asked for. See `BranchUpdate`. */
   update?: {
     branch: string;
@@ -640,6 +671,12 @@ export type SessionStart = {
   fromSession?: { id: string; name: string };
   /** Said when the start is not what was asked for: no earlier session in this repository. */
   note?: string;
+  /**
+   * For `snapshot`: where the repository was when the operator's changes were committed — the
+   * branch and commit the snapshot sits on — and which files went in and which were left out.
+   * `branch` above is the snapshot's own branch.
+   */
+  snapshot?: { fromBranch?: string; fromCommit: string; included: string[]; leftOut: string[]; approved: boolean };
 };
 
 /** What version control did for one task, recorded so a re-run can go back to where it began. */

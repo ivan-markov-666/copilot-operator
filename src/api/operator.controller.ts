@@ -711,6 +711,12 @@ export class OperatorController {
     return this.ops.vcsStatus(id).catch(fail);
   }
 
+  /** The operator's approval of the starting snapshot: one choice per file of the list they saw. */
+  @Post('sessions/:id/vcs/snapshot')
+  vcsSnapshot(@Param('id') id: string, @Body() body: { choices?: Record<string, 'include' | 'leave-out'> }): Promise<unknown> {
+    return this.ops.vcsSnapshot(id, body?.choices ?? {}).catch(fail);
+  }
+
   // --- the model picker ---------------------------------------------------------------------
 
   /** The cached list. Returns null when the picker has never been read on this machine. */

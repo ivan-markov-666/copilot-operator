@@ -210,6 +210,21 @@ branch. Two more refusals: a repository with uncommitted changes is left alone w
 explanation, because that work is the operator's, and a folder that is not a repository is
 reported rather than initialised.
 
+**Uncommitted changes can be a starting snapshot instead.** Version control → "Uncommitted
+changes" → "Take them as a starting snapshot" (or tracked changes only; in a plan,
+`"dirtyWorktree": { "policy": "snapshot" }`). Before the first task the page lists every
+uncommitted file, each set to "Include in the starting snapshot" or "Leave out of the run";
+"Take the starting snapshot" commits the included ones as "Capture operator baseline before
+run" on `cop/baseline/<session id>`, and the session's branches are cut from that commit. The
+operator's own branch is not moved. Secrets (`.env*`), tool output and files outside the project
+folder are never included; an ignored file only when a task's scope names it and it is ticked. A
+left-out file goes into the repository's `.git/info/exclude` (local, never committed,
+`.gitignore` untouched), because a file left loose would be swept into the first task's commit or
+removed by a scope. Until the snapshot is taken, a run of the session is refused and nothing
+changes. With "Show me the list to approve first" unticked, it is taken when the first task
+starts, and refused if anything would have to be left out. Not available when carrying on an
+existing branch. Verified by `npm run check:snapshot`.
+
 ## One chain, or independent tasks
 
 A queue can be either, and the runner cannot guess which. The choice sits above the tasks and

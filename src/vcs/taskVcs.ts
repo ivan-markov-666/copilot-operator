@@ -19,6 +19,7 @@ import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../session/model.js';
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
+import { dirtyPolicy, planSnapshot, someOf, takeSnapshot, type SnapshotPlan } from './snapshot.js';
 import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type BranchUpdate, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
@@ -70,7 +71,7 @@ export async function prepareForTask(
   if (!settings?.enabled) return { vcs: {}, note: '' };
 
   const dir = repoDirOf(session);
-  const state = await repoState(dir);
+  let state = await repoState(dir);
 
   if (!state.isRepo) {
     const problem = state.problem ?? 'The repository could not be read.';
@@ -81,8 +82,40 @@ export async function prepareForTask(
 
   if (settings.startFrom === 'existing-branch') return await onExistingBranch(session, task, dir, state, bus, saveSession);
 
+  // The session's base is fixed the first time it runs: every per-task branch is cut from it,
+  // which is what makes the tasks independent of each other rather than of the calendar. Where
+  // it is taken from is the session's `startFrom`; see `sessionStart`.
+  let base = session.vcsBaseCommit;
+  let start = session.vcsStart;
+
+  /*
+   * The operator's own changes before the session's first task, under a snapshot policy: they
+   * become the commit the session starts from (see `snapshot.ts`). Asked for approval, the run is
+   * refused until the list has been approved on the session's page; running without version
+   * control instead would be the one outcome the operator chose against.
+   */
+  const dirty = dirtyPolicy(settings);
+  if (state.dirty && !base && dirty.policy !== 'reject') {
+    const refuse = (why: string): PrepareResult => {
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-refused', level: 'error', message: why });
+      return { vcs: { problem: why }, note: '', refuse: why };
+    };
+    if (dirty.requireApproval) {
+      return refuse(
+        `the repository has uncommitted changes (${someOf(state.changed)}), and this session takes them as its starting snapshot ` +
+          'once you have approved the list: on the session\'s page, Version control → "Uncommitted changes", choose what goes in and take the snapshot. Nothing was run.',
+      );
+    }
+    const taken = await takeSnapshot(session, { approved: false }, bus, saveSession, allSessions);
+    if (!taken.ok) return refuse(`the starting snapshot of the uncommitted changes was not taken: ${taken.problem} Nothing was run.`);
+    base = taken.start.commit;
+    start = taken.start;
+    state = await repoState(dir);
+  }
+
   // A dirty tree is the operator's own work in progress. Committing it under the bot's name
-  // or moving it to another branch would both be decisions that are not ours to make.
+  // or moving it to another branch would both be decisions that are not ours to make — unless
+  // the operator made it, with a snapshot policy, above.
   if (state.dirty) {
     const problem =
       `the repository has uncommitted changes (${state.changed.slice(0, 5).join(', ')}` +
@@ -93,11 +126,6 @@ export async function prepareForTask(
     return { vcs: { problem }, note: '' };
   }
 
-  // The session's base is fixed the first time it runs: every per-task branch is cut from it,
-  // which is what makes the tasks independent of each other rather than of the calendar. Where
-  // it is taken from is the session's `startFrom`; see `sessionStart`.
-  let base = session.vcsBaseCommit;
-  let start = session.vcsStart;
   if (!base) {
     const resolved = await sessionStart(session, dir, state.head, allSessions);
     if ('problem' in resolved) {
@@ -196,7 +224,8 @@ async function onExistingBranch(
   if (state.dirty) {
     return refuse(
       `the repository has uncommitted changes (${state.changed.slice(0, 5).join(', ')}${state.changed.length > 5 ? `, and ${state.changed.length - 5} more` : ''}), ` +
-        `so the work cannot be put on "${wanted}" without taking them along. Commit or stash them first. Nothing was run.`,
+        `so the work cannot be put on "${wanted}" without taking them along. Commit or stash them first. Nothing was run.` +
+        (dirtyPolicy(session.vcs).policy !== 'reject' ? ' A starting snapshot does not apply here: it is a branch of its own, and this session works on the branch you named.' : ''),
     );
   }
   let start = session.vcsStart;
@@ -299,7 +328,9 @@ function normalise(dir: string): string {
 export function describeStart(start: SessionStart): string {
   const at = start.commit.slice(0, 8);
   const said =
-    start.kind === 'previous-session'
+    start.kind === 'snapshot'
+      ? `this session starts from a snapshot of your uncommitted changes: ${start.branch} (${at}), taken on ${start.snapshot?.fromBranch ?? 'a detached HEAD'} at ${(start.snapshot?.fromCommit ?? '').slice(0, 8)}`
+      : start.kind === 'previous-session'
       ? `this session continues "${start.fromSession?.name ?? '?'}": it starts from the end of its branch ${start.branch} (${at})`
       : start.kind === 'existing-branch'
         ? `this session carries on the existing branch ${start.branch}, from its tip ${at}`
@@ -457,7 +488,9 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
    * doubt; one that starts from `main` has none of them, and a model not told so goes looking.
    */
   const began =
-    ctx.start?.kind === 'previous-session'
+    ctx.start?.kind === 'snapshot'
+      ? `This session started from \`${ctx.start.branch}\`: a commit of the operator's own uncommitted changes, taken before the run so that your work is kept apart from theirs. Those files are in your working tree as the starting point; they are not work for you to redo or undo.`
+      : ctx.start?.kind === 'previous-session'
       ? `This session continues the work of the earlier session "${ctx.start.fromSession?.name ?? ''}": it was started from the end of its branch \`${ctx.start.branch}\`, so that session's work is already in your working tree. Build on it; do not redo it.`
       : ctx.start?.kind === 'existing-branch'
         ? `This session carries on the existing branch \`${ctx.start.branch}\`: the work already on it is in your working tree. Build on it; do not redo it.`
@@ -826,13 +859,31 @@ export async function restoreToBase(
 }
 
 /** What the UI shows before a run: is version control going to work here? */
-export async function vcsPreflight(session: Session): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string }> {
+export async function vcsPreflight(
+  session: Session,
+  allSessions: () => Promise<Session[]> = async () => [],
+): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; snapshot?: SnapshotPlan }> {
   const settings: VersionControl | undefined = session.vcs;
   if (!settings?.enabled) return { ok: false, repoDir: '', problem: 'off' };
 
   const repoDir = repoDirOf(session);
   const state = await repoState(repoDir);
   if (!state.isRepo) return { ok: false, repoDir, problem: state.problem };
+  // Before the first task, under a snapshot policy: the list to approve, file by file.
+  if (state.dirty && !session.vcsBaseCommit && dirtyPolicy(settings).policy !== 'reject' && settings.startFrom !== 'existing-branch') {
+    const snapshot = await planSnapshot(session, allSessions);
+    if (snapshot.needed) {
+      return {
+        ok: false,
+        repoDir,
+        branch: state.branch ?? undefined,
+        problem: snapshot.ok
+          ? `There are uncommitted changes (${someOf(state.changed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once you approve the list below' : 'when its first task starts'}.`
+          : `There are uncommitted changes, and no starting snapshot can be taken: ${snapshot.problem}`,
+        snapshot,
+      };
+    }
+  }
   if (state.dirty) {
     return {
       ok: false,

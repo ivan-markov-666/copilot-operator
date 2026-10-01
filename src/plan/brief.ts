@@ -528,6 +528,16 @@ Before a session's first branch the runner fetches and fast-forwards the branch 
 merges. \`"updateFromRemote": false\` turns that off — only when the user asks to work offline or from
 local commits on purpose.
 
+**dirtyWorktree** — what happens when the repository has uncommitted changes (the user's own, such as
+input files a task needs) before a session's first task. Ask only when the user mentions such files:
+\`{ "policy": "snapshot" }\` makes them one commit, "Capture operator baseline before run", on a branch of
+its own, and the session starts from it; the user approves the exact list on the session's page first.
+\`"tracked-only-snapshot"\` takes tracked changes only. Secrets (\`.env\`), tool output and files outside
+the project are never taken, and an ignored file only when a task's \`scope\` names it. The snapshot is
+taken where the changes are, so use it with \`startFrom\` \`"branch"\` only when the repository is already on
+that branch, and never with \`"existing-branch"\`. Leaving it out keeps \`"reject"\`: version control stays out
+of a tree with uncommitted changes.
+
 Put the same \`startFrom\` on every session that works in one repository unless the user wants it
 mixed. Leaving it out keeps the old behaviour — whatever branch the repository is on — which is
 the one to avoid.
@@ -586,6 +596,16 @@ const VCS_DETAIL_BG = `
 (\`baseBranch\` или \`existingBranch\`), така че работата започва от кода на сървъра; никога не прави
 reset или merge. \`"updateFromRemote": false\` го изключва — само ако потребителят поиска да работи
 офлайн или нарочно от локални commit-и.
+
+**dirtyWorktree** — какво става, когато хранилището има некомитнати промени (на потребителя, например
+входни файлове, които задача използва) преди първата задача на сесията. Питай само ако потребителят
+спомене такива файлове: \`{ "policy": "snapshot" }\` ги прави един commit, „Capture operator baseline before
+run“, на отделен клон, и сесията тръгва от него; потребителят първо одобрява точния списък на страницата на
+сесията. \`"tracked-only-snapshot"\` взема само tracked промени. Тайни (\`.env\`), изход от инструменти и
+файлове извън проекта никога не се вземат, а ignored файл — само когато \`scope\` на задача го посочва.
+Снимката се прави там, където са промените, затова с \`startFrom\` \`"branch"\` само ако хранилището вече е на
+този клон, и никога с \`"existing-branch"\`. Ако го пропуснеш, остава \`"reject"\`: контролът на версиите
+не влиза в дърво с некомитнати промени.
 
 Сложи един и същ \`startFrom\` на всички сесии в едно хранилище, освен ако потребителят не иска
 различни. Ако го пропуснеш, остава старото поведение — от който клон е хранилището в момента —

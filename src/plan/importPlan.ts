@@ -11,7 +11,7 @@
  */
 import type { SessionStore } from '../session/store.js';
 import { DEFAULT_VCS, applyDefaultProject } from '../session/store.js';
-import type { Session } from '../session/model.js';
+import type { Session, VersionControl } from '../session/model.js';
 import { availableShells, detectShells, type Shell } from '../exec/shells.js';
 import type { Plan, PlanSession, PlanTask } from './schema.js';
 
@@ -220,7 +220,11 @@ export async function importPlan(
       );
     }
     const created = await store.createSession(planned.name, planned.projectDir || planned.mirror?.rootDir || '');
-    const vcs = { ...DEFAULT_VCS, ...(planned.vcs ?? {}) };
+    const { dirtyWorktree: plannedDirty, ...plannedVcs } = planned.vcs ?? ({} as NonNullable<typeof planned.vcs>);
+    const vcs: VersionControl = { ...DEFAULT_VCS, ...plannedVcs };
+    // Stored in the one spelling the session has: see `DirtyWorktree`.
+    const policy = plannedDirty?.policy === 'snapshot' && plannedDirty.includeUntracked === false ? 'tracked-only-snapshot' : plannedDirty?.policy;
+    if (policy && policy !== 'reject') vcs.dirtyWorktree = { policy, ...(plannedDirty?.requireApproval === false ? { requireApproval: false } : {}) };
     vcs.branchPrefix = vcs.branchPrefix.trim() || DEFAULT_VCS.branchPrefix;
     vcs.repoDir = vcs.repoDir.trim();
     // A branch to carry on, given alone, is that choice: see `VersionControl.startFrom`.

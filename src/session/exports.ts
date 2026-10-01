@@ -164,6 +164,8 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           ...(s.vcs?.existingBranch ? { existingBranch: s.vcs.existingBranch } : {}),
           // Only when switched off: absent is on.
           ...(s.vcs?.updateFromRemote === false ? { updateFromRemote: false } : {}),
+          // Only when chosen: absent is reject, as it always was.
+          ...(s.vcs?.dirtyWorktree && s.vcs.dirtyWorktree.policy !== 'reject' ? { dirtyWorktree: { ...s.vcs.dirtyWorktree } } : {}),
         },
         review: { enabled: s.review?.enabled !== false, model: s.review?.model ?? '' },
         ...(s.projectDir ? { projectDir: s.projectDir } : {}),

@@ -65,6 +65,7 @@ import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
+import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
@@ -703,6 +704,10 @@ export class OperatorService {
         }
         if (merged.baseBranch !== undefined) merged.baseBranch = merged.baseBranch.trim();
         if (merged.existingBranch !== undefined) merged.existingBranch = merged.existingBranch.trim();
+        // Only the two known fields, and absent when it says what absent says: reject, asking first.
+        const dirty = dirtyPolicy(merged);
+        if (dirty.policy === 'reject') delete merged.dirtyWorktree;
+        else merged.dirtyWorktree = { policy: dirty.policy, ...(dirty.requireApproval ? {} : { requireApproval: false }) };
         // Only the program marks a name as one of its own branches, and a name changed is not that one.
         const stillOwn = !!s.vcs?.branchNameExact && (merged.branchName ?? '').trim() === (s.vcs.branchName ?? '').trim();
         if (stillOwn) merged.branchNameExact = true;
@@ -2262,10 +2267,31 @@ export class OperatorService {
     if (!git) return { ok: false, repoDir: '', problem: "git is not installed, or not on this machine's PATH.", git: null };
     // `branch` is where HEAD is; `work` is where the session's work is. After a per-task run
     // those differ, and the second is the one the operator is asking about.
-    const preflight = await vcsPreflight(session);
+    const preflight = await vcsPreflight(session, () => this.store.listSessions());
     // The local branches, so "carry on an existing branch" can offer them rather than be typed blind.
     const branches = preflight.repoDir ? await localBranches(preflight.repoDir) : [];
     return { ...preflight, git, work: sessionBranches(session), branches };
+  }
+
+  /**
+   * The operator's approval of the starting snapshot: their uncommitted changes become the commit the
+   * session starts from, each file taken or left out as they chose on the list. See `vcs/snapshot.ts`.
+   * Refused while anything could be working in the repository, as a restore is: it changes branches.
+   */
+  async vcsSnapshot(sessionId: string, choices: Record<string, SnapshotChoice>): Promise<{ ok: boolean; problem?: string; branch?: string; commit?: string }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw new Error('No such session.');
+    const refused = await this.restoreRefusal(session);
+    if (refused) return { ok: false, problem: refused };
+    const taken = await takeSnapshot(
+      session,
+      { approved: true, choices: choices && typeof choices === 'object' ? choices : {} },
+      this.bus,
+      async (mutate) => void (await this.store.updateSession(sessionId, mutate)),
+      () => this.store.listSessions(),
+    );
+    return taken.ok ? { ok: true, branch: taken.start.branch, commit: taken.start.commit } : { ok: false, problem: taken.problem };
   }
 
   /**

@@ -269,17 +269,44 @@ export type VersionControl = {
   existingBranch?: string;
   /** Fetch and fast-forward the starting branch before the session's first branch. Absent means yes. */
   updateFromRemote?: boolean;
+  /** Uncommitted changes before the first task: kept out (absent), or taken as a starting snapshot. */
+  dirtyWorktree?: { policy: 'reject' | 'snapshot' | 'tracked-only-snapshot'; requireApproval?: boolean };
 };
 
 /** Where a session's first branch was actually cut from, recorded at its first run. */
 export type SessionStart = {
-  kind: 'branch' | 'previous-session' | 'head' | 'existing-branch';
+  kind: 'branch' | 'previous-session' | 'head' | 'existing-branch' | 'snapshot';
   /** What bringing the starting branch up to its remote did. */
   update?: { branch: string; remote?: string; outcome: string; from?: string; to?: string; detail?: string };
   commit: string;
   branch?: string;
   fromSession?: { id: string; name: string };
   note?: string;
+  /** For `snapshot`: where the operator's changes were taken from, and what went in. */
+  snapshot?: { fromBranch?: string; fromCommit: string; included: string[]; leftOut: string[]; approved: boolean };
+};
+
+/** One uncommitted file on the starting-snapshot list, and what may be done with it. */
+export type SnapshotEntry = {
+  path: string;
+  from?: string;
+  kind: 'tracked' | 'untracked' | 'ignored';
+  allowed: Array<'include' | 'leave-out'>;
+  choice: 'include' | 'leave-out' | null;
+  reason?: string;
+};
+
+export type SnapshotPlan = {
+  needed: boolean;
+  ok: boolean;
+  problem?: string;
+  policy: 'reject' | 'snapshot' | 'tracked-only-snapshot';
+  requireApproval: boolean;
+  repoDir: string;
+  branch: string | null;
+  head: string | null;
+  baselineBranch?: string;
+  entries: SnapshotEntry[];
 };
 
 /** What version control did for one attempt of a task. */
@@ -329,6 +356,8 @@ export type VcsStatus = {
   git?: string | null;
   /** The repository's local branches, for "carry on an existing branch". */
   branches?: string[];
+  /** Before the first task, under a snapshot policy: the uncommitted files to approve. */
+  snapshot?: SnapshotPlan;
   /** Where the session's work is: one branch, or one per task. */
   work?: {
     mode: 'per-task' | 'per-session';
@@ -1040,6 +1069,9 @@ export const api = {
 
   /** Can version control do its job in this session right now? */
   vcsStatus: (id: string) => call<VcsStatus>(`/sessions/${id}/vcs`),
+  /** Takes the starting snapshot, one choice per file of the list that was shown. */
+  vcsSnapshot: (id: string, choices: Record<string, 'include' | 'leave-out'>) =>
+    call<{ ok: boolean; problem?: string; branch?: string; commit?: string }>(`/sessions/${id}/vcs/snapshot`, { method: 'POST', body: JSON.stringify({ choices }) }),
 
   /** What going back to before this task would do. Changes nothing. */
   restorePreview: (id: string, taskId: string) => call<RestorePreview>(`/sessions/${id}/tasks/${taskId}/restore`),
