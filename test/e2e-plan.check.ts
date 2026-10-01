@@ -703,9 +703,28 @@ await scenario('a settings file that no longer parses', {}, async (h) => {
     .filter((f) => f.isFile())
     .map((f) => join(f.parentPath, f.name))
     .filter((p) => resolve(p) !== resolve(settingsFile) && readFileSync(p, 'utf8').includes('{broken'));
-  // DEFECT: Settings.raw() reads a broken file as {}, and the save writes {copilot:{defaultModel}} over it: every other setting is silently gone, with no backup
+  // A file that exists and does not parse is not read as {}: read that way, the save wrote
+  // {copilot:{defaultModel}} over it, and every other setting was gone without a word or a copy.
   t.truthy('the broken file is refused, or kept aside, not silently replaced', (r.status >= 400 && now === '{broken') || backups.length > 0,
     { status: r.status, settingsNow: now.slice(0, 120), backups });
+  // Every way in to the file: the other one-setting saves, and a whole set from the Defaults page,
+  // which builds it on a copy read before the file broke.
+  const others = [
+    await h.raw('PUT', '/models/review-default', { model: 'Y' }),
+    await h.raw('PUT', '/project', { rootDir: h.repo }),
+    await h.raw('PUT', '/settings', { limits: { maxIterations: 5 } }),
+  ];
+  t.check('nor by any other save: each is refused, and the file is as it was',
+    [others.map((o) => o.status >= 400), readFileSync(settingsFile, 'utf8')], [[true, true, true], '{broken']);
+  t.truthy('and the refusal names the file and says what to do',
+    /settings\.json is not valid JSON.*(Mend|delete)/s.test(message(r.body)), message(r.body));
+
+  // A file saved by hand with a byte-order mark is not broken: its settings are read and kept.
+  writeFileSync(settingsFile, `${String.fromCharCode(0xfeff)}${JSON.stringify({ runsDir: h.runsDir, project: { rootDir: h.repo }, limits: { maxIterations: 7 } })}`, 'utf8');
+  const marked = await h.raw('PUT', '/models/default', { model: 'Z' });
+  const kept = JSON.parse(readFileSync(settingsFile, 'utf8').replace(String.fromCharCode(0xfeff), '')) as { limits?: { maxIterations?: number }; copilot?: { defaultModel?: string } };
+  t.check('a settings file that starts with a byte-order mark is read, and a save keeps what it held',
+    [marked.status, kept.limits?.maxIterations, kept.copilot?.defaultModel], [200, 7, 'Z']);
 });
 
 // --- 11. the task routes -----------------------------------------------------------------------------------
