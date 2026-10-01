@@ -21,7 +21,7 @@ import { isWithin } from './confinement.js';
 
 import { MAX_CAPTURE_CHARS, runStep, type OutputListener, type RunResult } from './runner.js';
 import type { ProcessTracker } from './processes.js';
-import { redactSecrets } from './redaction.js';
+import { findRedactions, mergeRedactions, redactSecrets, type RedactionHit } from './redaction.js';
 import { resolveShell, type Shell, type ShellProblem } from './shells.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { findSuspicious, suspiciousDetail } from '../vcs/commitHygiene.js';
@@ -57,6 +57,12 @@ export type CheckOutcome = {
   exitCode?: number;
   /** Trimmed output of the command, when there was one. */
   output?: string;
+  /**
+   * What was taken out of `detail` and `output` before anything could quote them, by name; absent
+   * when nothing was. Kept because the text is redacted where it is made (see `runCheck`), and once
+   * it is, nothing downstream can tell any more that a secret was ever there to say so.
+   */
+  redactions?: RedactionHit[];
   /** The shell the command was given to, and the executable that was started. */
   shell?: Shell;
   shellPath?: string;
@@ -109,6 +115,13 @@ export type CheckRunOptions = {
    * first shell the machine has, which is what a caller with no configuration to offer wants.
    */
   defaultShell?: Shell;
+  /**
+   * The operator's own patterns (`report.redactPatterns`), applied to what an outcome says on top of
+   * the built-in shapes. Passed in, like `passEnv`, because this module does not read the settings,
+   * and applied here because every caller that quotes an outcome — the checks message, the reviewer's
+   * brief, the message that turns down a reviewer's check — would otherwise have to remember to.
+   */
+  redactPatterns?: string[];
 };
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -299,13 +312,24 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
    * What an outcome says is quoted to the chat by more than one caller — the checks message, the
    * reviewer's brief ("Last result"), the message that turns down a reviewer's check — and it
    * repeats the value the check looked for and the output it saw. So it is redacted where it is
-   * made, once, rather than at each place that happens to quote it.
+   * made, once, rather than at each place that happens to quote it — with the operator's own
+   * patterns as well as the built-in shapes, which until 2026-10-01 only the checks file got, so a
+   * company's key format reached the chat in every message beside it. What was taken out is kept
+   * on the outcome, for the event that says so.
    */
-  const said = (outcome: CheckOutcome): CheckOutcome => ({
-    ...outcome,
-    detail: redactSecrets(outcome.detail),
-    ...(outcome.output !== undefined ? { output: redactSecrets(outcome.output) } : {}),
-  });
+  const patterns = opts.redactPatterns ?? [];
+  const said = (outcome: CheckOutcome): CheckOutcome => {
+    const found = mergeRedactions([
+      findRedactions(outcome.detail, patterns),
+      outcome.output !== undefined ? findRedactions(outcome.output, patterns) : [],
+    ]);
+    return {
+      ...outcome,
+      detail: redactSecrets(outcome.detail, patterns),
+      ...(outcome.output !== undefined ? { output: redactSecrets(outcome.output, patterns) } : {}),
+      ...(found.length > 0 ? { redactions: found } : {}),
+    };
+  };
   const fail = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => said({ check, passed: false, detail, ...extra });
   const pass = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => said({ check, passed: true, detail, ...extra });
 
@@ -527,10 +551,11 @@ export function describeCheck(check: TaskCheck): string {
  * It quotes the checks themselves — the command, the value looked for, the detail that repeats
  * it — and a plan may well carry a token in one of them, so it leaves here with every
  * secret-shaped string already redacted (see `redaction.ts`). It used to be redacted only where a
- * caller remembered to, which for this message was nowhere. The operator's own patterns are the
- * caller's to apply on top; they live in the configuration, which this module does not read.
+ * caller remembered to, which for this message was nowhere. The operator's own patterns are applied
+ * on top when the caller passes them (`report.redactPatterns`; this module does not read the
+ * settings): left to the caller, they were applied to the file beside this message and not to it.
  */
-export function failureMessage(outcomes: CheckOutcome[], round: number, maxRounds: number): string {
+export function failureMessage(outcomes: CheckOutcome[], round: number, maxRounds: number, extraPatterns: string[] = []): string {
   const failed = outcomes.filter((o) => !o.passed);
   const lines = [
     '## The task is not finished yet',
@@ -566,11 +591,26 @@ export function failureMessage(outcomes: CheckOutcome[], round: number, maxRound
       `have reason to believe these checks will pass. This is attempt ${round} of ${maxRounds}: after that the ` +
       'task is closed as failed and the operator reads it.',
   );
-  return redactSecrets(lines.join('\n'));
+  return redactSecrets(lines.join('\n'), extraPatterns);
 }
 
 /** The same, as the plain text file that travels with the message, redacted here for the same reason. */
-export function failureReport(outcomes: CheckOutcome[]): string {
+export function failureReport(outcomes: CheckOutcome[], extraPatterns: string[] = []): string {
+  return redactSecrets(reportText(outcomes), extraPatterns);
+}
+
+/**
+ * What a round's checks file and message had taken out, by name, for the event that says so: what
+ * each outcome's own words lost where they were made (see `runCheck`), and what the checks' words
+ * — the name, the command, the value, the file — lose in the file. The file quotes everything the
+ * message does, so it stands for both, and a secret the two of them carry is counted once.
+ */
+export function failureRedactions(outcomes: CheckOutcome[], extraPatterns: string[] = []): RedactionHit[] {
+  return mergeRedactions([...outcomes.map((o) => o.redactions ?? []), findRedactions(reportText(outcomes), extraPatterns)]);
+}
+
+/** The checks file before it is redacted. What its outcomes say already is, where it was made. */
+function reportText(outcomes: CheckOutcome[]): string {
   const parts = ['CHECKS THAT DID NOT PASS', '='.repeat(60), ''];
   for (const o of outcomes.filter((x) => !x.passed)) {
     parts.push(`CHECK : ${o.check.name}`);
@@ -590,5 +630,5 @@ export function failureReport(outcomes: CheckOutcome[]): string {
     parts.push('CHECKS THAT PASSED', '-'.repeat(60));
     for (const o of passed) parts.push(`- ${o.check.name}: ${o.detail}`);
   }
-  return redactSecrets(parts.join('\n'));
+  return parts.join('\n');
 }

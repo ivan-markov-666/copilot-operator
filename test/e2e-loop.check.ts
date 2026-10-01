@@ -22,7 +22,8 @@
  *   retry that must not strand an earlier task's "Continue", on the session's model;
  * - "Continue" of a task whose message never reached a chat sends it in full, and an attempt with no
  *   record of its conversation is placed by the session's own;
- * - the stop marker with steps; secrets redacted before anything reaches the chat;
+ * - the stop marker with steps; secrets redacted before anything reaches the chat, by the operator's
+ *   own patterns as well in the checks message, with an event for the checks round that hid them;
  * - what each run folder holds, the stats counters, and a server left running being stopped.
  *
  *   npm run check:e2e-loop   (or: npx tsx test/e2e-loop.check.ts)
@@ -757,6 +758,31 @@ await scenario('secrets never reach the chat: the checks file, the step report',
   );
   await h.run(s!.id);
   t.truthy('the redaction is an event', (await eventsOf(h, s!.id)).some((e) => e.type === 'report-redacted'), '');
+});
+
+/*
+ * The operator's own patterns (report.redactPatterns) hold for the checks as they hold for a step
+ * report. A key in a company's own format is a shape no built-in rule knows, and the message that
+ * quotes a failing check's command used to get the built-in shapes only: the file beside it hid the
+ * key and the message sent it. A checks round that hid something says so, as a step report does.
+ */
+await scenario('the operator\'s own patterns hold for the checks message, and the round says it hid something', { report: { redactPatterns: ['CORP-[0-9]{6}'] }, limits: { maxCheckRounds: 1 } }, async (h) => {
+  const [s] = await h.importPlan(
+    plan(h, 'own-pattern', [task('echoes-a-company-key', { checks: [{ name: 'the key is not echoed', expect: 'exit-nonzero', run: 'echo X-Key: CORP-123456' }, readmeIntact] })], { vcs: false }),
+  );
+  h.chat.script(
+    reply.done(),
+    (m) => {
+      t.truthy('the checks message carries no key in the operator\'s format', m.text.includes('not finished yet') && !m.text.includes('CORP-123456'), m.text.slice(0, 900));
+      t.truthy('nor does the checks file beside it', attachedText(m).includes('[REDACTED]') && !attachedText(m).includes('CORP-123456'), attachedText(m).slice(0, 900));
+      return reply.done();
+    },
+  );
+  const ended = (await h.run(s!.id)).tasks[0] as Ended;
+  t.check('failed on the check', ended.status, 'failed');
+  const redacted = (await eventsOf(h, s!.id)).filter((e) => e.type === 'report-redacted');
+  t.truthy('a redaction event carries the checks round and names the operator\'s pattern',
+    redacted.some((e) => e.data?.round === 1 && JSON.stringify(e.data?.redactions ?? []).includes('CORP-[0-9]{6}')), redacted);
 });
 
 // --- the records --------------------------------------------------------------------------------

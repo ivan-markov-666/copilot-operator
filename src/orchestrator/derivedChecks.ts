@@ -57,6 +57,7 @@ export async function validateDerivedChecks(
     defaultShell?: CheckRunOptions['defaultShell'];
     tracker?: CheckRunOptions['tracker'];
     passEnv?: CheckRunOptions['passEnv'];
+    redactPatterns?: CheckRunOptions['redactPatterns'];
   },
 ): Promise<DerivedValidation> {
   const out: DerivedValidation = { kept: [], refused: [], blocked: [] };
@@ -73,6 +74,7 @@ export async function validateDerivedChecks(
       defaultShell: opts.defaultShell,
       tracker: opts.tracker,
       passEnv: opts.passEnv,
+      redactPatterns: opts.redactPatterns,
     });
     if (outcome.refusedBeforeRunning) out.blocked.push({ finding, check, outcome });
     else (outcome.passed ? out.refused : out.kept).push({ finding, check, outcome });

@@ -10,7 +10,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunResult } from './runner.js';
 import { silentFailure } from '../protocol/reporter.js';
-import { findSecrets, redactSecrets, type RedactionHit } from './redaction.js';
+import { findRedactions, mergeRedactions, redactSecrets, type RedactionHit } from './redaction.js';
 
 export type ReportOptions = {
   runId: string;
@@ -33,7 +33,7 @@ export type WrittenReport = {
   names: string[];
   bytes: number;
   parts: number;
-  /** What was taken out before the file was written: secret-shaped strings, by shape. */
+  /** What was taken out before the file was written: secret-shaped strings by shape, and the operator's patterns. */
   redactions: RedactionHit[];
 };
 
@@ -156,9 +156,9 @@ export async function writeReport(
   const raw = results.map((r) => sectionFor(r, opts.maxOutputChars));
   // Counted before redaction so the event can say what kind of thing was taken out — the
   // operator on a work machine wants to know a token was printed, not only that it was hidden.
-  const byShape = new Map<string, number>();
-  for (const hit of raw.flatMap(findSecrets)) byShape.set(hit.name, (byShape.get(hit.name) ?? 0) + hit.count);
-  const redactions: RedactionHit[] = [...byShape.entries()].map(([name, count]) => ({ name, count }));
+  // Their own patterns are counted too: a report whose only secret matched one of them was
+  // redacted without the event ever saying so.
+  const redactions: RedactionHit[] = mergeRedactions(raw.map((s) => findRedactions(s, opts.redactPatterns)));
   const sections = raw.map((s) => redact(s, opts.redactPatterns));
 
   const chunks: string[][] = [[]];

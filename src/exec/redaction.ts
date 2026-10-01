@@ -79,20 +79,65 @@ export function findSecrets(text: string): RedactionHit[] {
 }
 
 /**
+ * One of the operator's own patterns, as a regular expression, or null when it is not one. Such a
+ * pattern is applied as a plain string instead, as it always was, so a typo in one cannot switch
+ * redaction off.
+ */
+function operatorPattern(p: string): RegExp | null {
+  try {
+    return new RegExp(p, 'gi');
+  } catch {
+    return null;
+  }
+}
+
+/** The text with every built-in shape replaced, before the operator's own patterns are tried. */
+function withoutShapes(text: string): string {
+  let out = text;
+  for (const s of SHAPES) out = out.replace(s.pattern, s.replace as string);
+  return out;
+}
+
+/**
  * The text with every secret-shaped string replaced, then the operator's own patterns.
  *
  * A pattern from the configuration that is not a valid regular expression is applied as a
  * plain string, as it always was, so a typo in one cannot switch redaction off.
  */
 export function redactSecrets(text: string, extraPatterns: string[] = []): string {
-  let out = text;
-  for (const s of SHAPES) out = out.replace(s.pattern, s.replace as string);
+  let out = withoutShapes(text);
   for (const p of extraPatterns) {
-    try {
-      out = out.replace(new RegExp(p, 'gi'), '[REDACTED]');
-    } catch {
-      out = out.split(p).join('[REDACTED]');
-    }
+    const re = operatorPattern(p);
+    out = re ? out.replace(re, '[REDACTED]') : out.split(p).join('[REDACTED]');
   }
   return out;
+}
+
+/**
+ * What `redactSecrets` takes out of a text, by name: the built-in shapes as `findSecrets` names
+ * them, and each of the operator's own patterns under the setting it comes from.
+ *
+ * `findSecrets` alone could not see the operator's patterns, so a report whose only secret was one
+ * of theirs — a company's ticket or key format, which no built-in shape knows — was redacted without
+ * a word, and the event that tells the operator something was taken out never came. Each pattern is
+ * counted on the text as `redactSecrets` reaches it, after the shapes, so what a shape already took
+ * is not counted a second time under the operator's name.
+ */
+export function findRedactions(text: string, extraPatterns: string[] = []): RedactionHit[] {
+  const hits = findSecrets(text);
+  let out = withoutShapes(text);
+  for (const p of extraPatterns) {
+    const re = operatorPattern(p);
+    const count = re ? [...out.matchAll(re)].length : p ? out.split(p).length - 1 : 0;
+    if (count > 0) hits.push({ name: `report.redactPatterns "${p}"`, count });
+    out = re ? out.replace(re, '[REDACTED]') : out.split(p).join('[REDACTED]');
+  }
+  return hits;
+}
+
+/** Several counts as one, summed by name, in the order the names were first met. */
+export function mergeRedactions(lists: RedactionHit[][]): RedactionHit[] {
+  const byName = new Map<string, number>();
+  for (const hit of lists.flat()) byName.set(hit.name, (byName.get(hit.name) ?? 0) + hit.count);
+  return [...byName.entries()].map(([name, count]) => ({ name, count }));
 }

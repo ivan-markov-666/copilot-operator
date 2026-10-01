@@ -23,7 +23,7 @@ import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes,
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell, type ShellProblem } from '../exec/shells.js';
-import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
+import { runChecks, failureMessage, failureRedactions, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
@@ -1218,6 +1218,9 @@ export async function runTask(
         // The same shell a step that named none is given, so the gate and the work it judges
         // cannot have been read by different interpreters.
         defaultShell,
+        // What a check says is quoted to the chat — here, and in a reviewer's brief — so the
+        // operator's own patterns are applied where it is said, with the built-in shapes.
+        redactPatterns: cfg.report.redactPatterns,
       };
       runAfterCommit = (cs) => runChecks(cs, checkOptions);
       const ran: CheckOutcome[] = await runChecks(checks, checkOptions);
@@ -1375,12 +1378,23 @@ export async function runTask(
       // The failures go back exactly the way step output does: a message with a file attached,
       // because a compiler's opinion belongs in a file and not in a chat bubble.
       const path = join(reportsDir, `checks-${checkRounds}.txt`);
-      // Check output is uploaded too, so it is redacted the same way a step report is.
-      const checkReport = redactSecrets(failureReport(outcomes), cfg.report.redactPatterns);
+      /*
+       * Check output is uploaded too, so it is redacted the same way a step report is — the file and
+       * the message beside it alike, with the operator's patterns on top of the built-in shapes. The
+       * message quotes each failing check's command and value, and it used to get the shapes only,
+       * so a key in a company's own format went to the chat in it while the file beside it hid it.
+       */
+      const checkReport = failureReport(outcomes, cfg.report.redactPatterns);
       await writeFile(path, checkReport, 'utf8');
       await record(`CHECKS ${checkRounds}`, checkReport);
-      const message = failureMessage(outcomes, checkRounds, maxCheckRounds);
+      const message = failureMessage(outcomes, checkRounds, maxCheckRounds, cfg.report.redactPatterns);
       await record(`CHECKS ${checkRounds} MESSAGE SENT`, message);
+      // Said as a step report's redaction is, so a checks round that hid something is not silent.
+      const redactions = failureRedactions(outcomes, cfg.report.redactPatterns);
+      if (redactions.length > 0) {
+        sink.event('report-redacted', { round: checkRounds, iteration: iterations, checks: true, redactions },
+          `redacted from the checks of round ${checkRounds} before upload: ${redactions.map((r) => `${r.count}× ${r.name}`).join(', ')}`, 'warn');
+      }
 
       await pacer.throttleSend();
       const before = await transport.sendAndConfirm(message, [path]);

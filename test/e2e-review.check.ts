@@ -20,7 +20,8 @@
  *   one the runner refuses later for its own line (the settings changed) is dropped, and the work is
  *   judged without it rather than ended on it;
  * - after the review the implementer's conversation is the one the next task goes to;
- * - a secret a reviewer quotes in its evidence is redacted before it goes back to the chat;
+ * - a secret a reviewer quotes in its evidence is redacted before it goes back to the chat, and a
+ *   check turned down for passing on the work goes back with the operator's own patterns applied;
  * - Stop pressed during the review ends the task aborted, not done, with nothing more sent to either
  *   chat; pressed once the checks have accepted the work, it ends the task before a review opens.
  *
@@ -583,6 +584,36 @@ await scenario('a secret in a finding\'s evidence is redacted before it goes bac
   const kept = task.runId ? join(h.runsDir, task.runId, 'review', '1', 'findings-sent.md') : '';
   const file = kept && existsSync(kept) ? readFileSync(kept, 'utf8') : '';
   t.truthy('and so has the copy in the run folder', file.includes('[REDACTED') && !file.includes('ghp_abcdef'), file.slice(0, 900) || kept);
+});
+
+/*
+ * The operator's own patterns (report.redactPatterns) hold for what goes back to a reviewer as well.
+ * A check given with a finding that passes on the work is turned down with its result quoted, and
+ * that result repeats the value the check looked for: a key in a company's own format, which no
+ * built-in shape knows, went back to the reviewer in it.
+ */
+await scenario('a turned-down check goes back to the reviewer with the operator\'s patterns applied', { report: { redactPatterns: ['CORP-[0-9]{6}'] } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'ownpattern', [greeting]));
+  let turnedDown = '';
+  h.chat.script(
+    write('hi'),
+    reply.done(),
+    look(),
+    fail([finding({
+      what: 'hello.txt does not carry the company key next to hi',
+      where: 'hello.txt',
+      check: { name: 'prints the key', expect: 'output-contains', run: 'Write-Output CORP-123456', value: 'CORP-123456' },
+    })]),
+    (m: Incoming) => {
+      turnedDown = m.text;
+      return reply.pass();
+    },
+  );
+  const task = full((await h.run(s!.id)).tasks[0]!);
+  t.check('the task is done', task.status, 'done');
+  t.truthy('the reviewer is told its check passed on the work, without the key', turnedDown.includes('it passed') && !turnedDown.includes('CORP-123456'), turnedDown.slice(0, 900));
+  const redacted = (await events(h, s!.id)).filter((e) => e.type === 'report-redacted');
+  t.truthy('and the record says something was taken out of it', redacted.some((e) => e.data?.refusedChecks === true && e.data?.round === 1), redacted);
 });
 
 /*

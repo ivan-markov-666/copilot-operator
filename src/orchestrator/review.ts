@@ -33,6 +33,7 @@ import { describeStep, checkCommandRefusal } from '../exec/policy.js';
 import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
+import { mergeRedactions } from '../exec/redaction.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { Pacer } from '../util/pacing.js';
 import type { Session, Task, TaskCheck } from '../session/model.js';
@@ -550,11 +551,19 @@ ${machineNote}` : contract);
           defaultShell,
           tracker: deps.tracker,
           passEnv: cfg.execution.passEnv,
+          // What these checks say goes back to the reviewer (below) and into the next brief, so it
+          // is redacted with the operator's patterns where it is said, as the gate's checks are.
+          redactPatterns: cfg.report.redactPatterns,
         });
         if (validation.refused.length > 0 && !derivedRetried) {
           derivedRetried = true;
           deps.event('review-check-refused', { round, refused: validation.refused.map((r) => r.finding.id) },
             `${validation.refused.length} check(s) given with findings pass on the work as it is, so they do not capture the defect; sent back once`, 'warn');
+          const redactions = mergeRedactions(validation.refused.map((r) => r.outcome.redactions ?? []));
+          if (redactions.length > 0) {
+            deps.event('report-redacted', { round, refusedChecks: true, redactions },
+              `redacted from the checks sent back to the reviewer: ${redactions.map((r) => `${r.count}× ${r.name}`).join(', ')}`, 'warn');
+          }
           await pacer.throttleSend();
           const b = await transport.sendAndConfirm(refusedChecksMessage(validation.refused.map((r) => ({ id: r.finding.id, detail: r.outcome.detail }))));
           markdown = (await transport.waitForReply(b)).markdown;
