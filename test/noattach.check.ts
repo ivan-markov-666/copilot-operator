@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionStore } from '../src/session/store.js';
+import { planBrief } from '../src/plan/brief.js';
 import { startHarness, Tally } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
@@ -83,6 +84,29 @@ console.log('\n--- what the chat is told ---');
 {
   const level1 = await readFile(join(import.meta.dirname, '..', 'prompts', 'level1.md'), 'utf8');
   t.truthy('no file of the project is attached; it is read with commands', /No file of the project is attached/.test(level1) && /running commands in its folder/.test(level1), '');
+}
+
+console.log('\n--- what Kerrigan is told, and never asks ---');
+{
+  // Seen on 2026-10-01: Kerrigan still asked how the bot would get the project's files. The brief now
+  // says how — commands in the project folder — and that it is not a question; no scripted question
+  // asks it.
+  for (const lang of ['en', 'bg'] as const) {
+    for (const [which, opts] of [
+      ['first run', { lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' }],
+      ['settled', { lang, organisation: 'the organisation', persona: 'the persona', work: 'this work' }],
+    ] as const) {
+      const brief = planBrief(opts);
+      const says = lang === 'en'
+        ? /How the working chat learns the project: by running commands/.test(brief) && /never ask the user how the chat will get the project's files/.test(brief)
+        : /Как работният чат опознава проекта: с команди/.test(brief) && /никога не питай потребителя как чатът ще получи файловете на проекта/.test(brief);
+      t.truthy(`${lang} ${which}: the brief says the chat reads the project with commands, and not to ask`, says, '');
+      const asks = lang === 'en'
+        ? /How do I read its code from this chat|Project files for the chat|Desktop mirror|copilot-operator-context|howToReachItFromTheChat/.test(brief)
+        : /Как да чета кода му от този чат|Файлове на проекта към чата|огледалото на Desktop|copilot-operator-context|howToReachItFromTheChat/.test(brief);
+      t.check(`${lang} ${which}: and nothing in it asks how the files reach the chat`, asks, false);
+    }
+  }
 }
 
 t.finish();

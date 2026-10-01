@@ -1554,6 +1554,13 @@ bot actually does, because it changes what a good task looks like:
   reads it and decides the next step. This repeats until Copilot writes a final summary.
 - Nothing is interactive. A command that waits for a keypress, opens an editor or needs a
   browser login will hang the task.
+- **How the working chat learns the project: by running commands.** No file of the project is
+  copied, attached or uploaded to it. In each task it reads what it needs itself, with terminal
+  commands in the project folder — it lists the folders, opens the files, looks at the git log —
+  and the output comes back to it. So never ask the user how the chat will get the project's files,
+  how it will see the code or whether to attach anything; that is settled. If the organisation
+  document still says how the chat reaches a project (attached files, a Desktop copy), ignore it:
+  that way no longer exists. Write prompts that name the paths to read, not files to attach.
 - **Only the project folders.** The runner refuses any command, check or file path that reaches
   outside the session's folder and the projects listed below — reading as well as writing — and
   anything that manages the machine: the registry, services, the network, users, installs that
@@ -1773,6 +1780,13 @@ function buildBg(projects: KnownProject[], ctx: OperatorContext = {}): string {
   чете и решава следващата стъпка. Това се повтаря, докато Copilot не напише финално резюме.
 - Нищо не е интерактивно. Команда, която чака клавиш, отваря редактор или иска вход през
   браузър, ще увисне.
+- **Как работният чат опознава проекта: с команди.** Никой файл от проекта не се копира, прикачва
+  или качва в него. Във всяка задача той сам чете каквото му трябва, с терминални команди в папката
+  на проекта — изброява папките, отваря файловете, гледа git историята — и изходът се връща при него.
+  Затова никога не питай потребителя как чатът ще получи файловете на проекта, как ще види кода или
+  дали да прикачи нещо; това е решено. Ако документът за организацията още казва как чатът стига до
+  проект (прикачени файлове, копие на Desktop-а), не го слушай: такъв начин вече няма. Пиши prompt-ове,
+  които назовават пътищата за четене, а не файлове за прикачване.
 - **Само папките на проектите.** Runner-ът отказва всяка команда, проверка или път към файл, който
   излиза извън папката на сесията и проектите, изброени по-долу — и за четене, и за запис — и всичко,
   което управлява машината: регистъра, услугите, мрежата, потребителите, инсталации извън проекта.
