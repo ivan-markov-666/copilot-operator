@@ -505,6 +505,8 @@ export type ModelCatalogue = {
 export type Session = {
   /** `false` when set aside on the Sessions page: not started by anything until made active. */
   active?: boolean;
+  /** Where it sits in the sessions list, smaller higher; the API returns the list in this order. */
+  position?: number;
   id: string;
   name: string;
   createdAt: string;
@@ -814,6 +816,8 @@ export const api = {
   deletePersona: (name: string) => call<{ ok: true }>(`/personas/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   sessions: () => call<Session[]>('/sessions'),
+  /** The sessions list in this order: every session id, top to bottom. Returns the list as stored. */
+  reorderSessions: (ids: string[]) => call<Session[]>('/sessions-order', { method: 'PUT', body: JSON.stringify({ ids }) }),
   metrics: () => call<Metrics>('/metrics'),
   syncPlan: (dir: string) => call<SyncPlan>(`/repo/sync?dir=${encodeURIComponent(dir)}`),
   session: (id: string) => call<Session>(`/sessions/${id}`),

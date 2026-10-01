@@ -940,6 +940,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Изтрива всички отметнати в първата колона сесии след един въпрос, и по време на пускане; никога работещата. Папките и разговорите остават.',
           },
           {
+            key: 'home.moveUp',
+            kind: 'button',
+            en: 'Move {name} up in the list',
+            bg: 'Премести {name} нагоре в списъка',
+            doesEn: 'The ↑ arrow in the Order column: one place up. ↓ is one place down. Dragging a row onto another moves it there. An imported plan comes in on top in its own order.',
+            doesBg: 'Стрелката ↑ в колона „Ред“: едно място нагоре. ↓ е едно надолу. Плъзгане на ред върху друг го мести там. Импортиран план идва най-отгоре в своя ред.',
+          },
+          {
+            key: 'home.moveDown',
+            kind: 'button',
+            en: 'Move {name} down in the list',
+            bg: 'Премести {name} надолу в списъка',
+            doesEn: 'The ↓ arrow in the Order column: one place down. A run of several takes the ticked sessions top to bottom.',
+            doesBg: 'Стрелката ↓ в колона „Ред“: едно място надолу. Пускане на няколко взима отметнатите сесии отгоре надолу.',
+          },
+          {
             key: 'home.delete',
             kind: 'button',
             en: 'Delete',

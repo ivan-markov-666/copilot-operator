@@ -193,20 +193,60 @@ export default function SessionsPage() {
   const queuedIn = (s: Session) => s.tasks.filter((x) => x.status === 'queued').length;
 
   /**
-   * Ticking a session puts it in its place rather than at the end.
+   * Ticking a session puts it in its place in the list rather than at the end.
    *
-   * The list on this page is newest first, so appending in the order they are clicked would
-   * run an imported plan backwards. Oldest first is the order the sessions were created in,
-   * which for an imported plan is the order the plan asked for.
+   * The list is the operator's order — an imported plan's sessions in the plan's order, moved by
+   * the arrows or by dragging — so the run takes the ticked ones top to bottom, as they are seen.
    */
   const toggle = (id: string) => {
     setSelected((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
-      const order = (sessions ?? []).map((s) => s.id).reverse();
+      const order = (sessions ?? []).map((s) => s.id);
       const next = [...prev, id];
       return next.sort((a, b) => order.indexOf(a) - order.indexOf(b));
     });
   };
+
+  /**
+   * The list in a new order, shown at once and then stored.
+   *
+   * The whole order is sent, not one move: two pages moving rows at the same time then end in the
+   * order last sent instead of in positions that contradict each other. What comes back is what is
+   * stored; a refusal reloads the list as it is.
+   */
+  const reorder = async (ids: string[]) => {
+    if (!sessions) return;
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    setSessions(ids.map((id) => byId.get(id)).filter((s): s is Session => !!s));
+    try {
+      setSessions(await api.reorderSessions(ids));
+      setError('');
+    } catch (e) {
+      setError((e as Error).message);
+      void load();
+    }
+  };
+  /** One row up or down, by the arrows. */
+  const shift = (id: string, by: -1 | 1) => {
+    const ids = (sessions ?? []).map((s) => s.id);
+    const i = ids.indexOf(id);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+    void reorder(ids);
+  };
+  /** Dropped on another row: it takes that row's place, and the rest close up around it. */
+  const dropOnto = (dragged: string, target: string) => {
+    const ids = (sessions ?? []).map((s) => s.id);
+    const from = ids.indexOf(dragged);
+    const to = ids.indexOf(target);
+    if (from < 0 || to < 0 || from === to) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, dragged);
+    void reorder(ids);
+  };
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   const move = (id: string, by: -1 | 1) => {
     setSelected((prev) => {
@@ -299,6 +339,7 @@ export default function SessionsPage() {
           </div>
         )}
         {sessions && sessions.length > 0 && <p className="muted small">{t('home.deleteWhy')}</p>}
+        {sessions && sessions.length > 1 && <p className="muted small">{t('home.orderWhy')}</p>}
         {msg && (
           <div className="muted small" role="status">
             {msg}
@@ -323,10 +364,11 @@ export default function SessionsPage() {
                     type="checkbox"
                     aria-label={t('home.selectAll')}
                     checked={sessions.length > 0 && selected.length === sessions.filter((x) => x.active !== false).length}
-                    onChange={(e) => setSelected(e.target.checked ? sessions.filter((x) => x.active !== false).map((x) => x.id).reverse() : [])}
+                    onChange={(e) => setSelected(e.target.checked ? sessions.filter((x) => x.active !== false).map((x) => x.id) : [])}
                     disabled={batch?.running === true}
                   />
                 </th>
+                <th>{t('home.col.order')}</th>
                 <th>{t('home.col.name')}</th>
                 <th>{t('home.col.tasks')}</th>
                 <th>{t('home.col.state')}</th>
@@ -338,11 +380,41 @@ export default function SessionsPage() {
               </tr>
             </thead>
             <tbody>
-              {sessions.map((s) => {
+              {sessions.map((s, index) => {
                 const done = s.tasks.filter((x) => x.status === 'done').length;
                 const queued = queuedIn(s);
+                const rowClass = [s.active === false ? 'inactive' : '', dragging === s.id ? 'dragging' : '', dropTarget === s.id && dragging !== s.id ? 'drop-target' : '']
+                  .filter(Boolean)
+                  .join(' ');
                 return (
-                  <tr key={s.id} className={s.active === false ? 'inactive' : undefined}>
+                  <tr
+                    key={s.id}
+                    className={rowClass || undefined}
+                    // The whole row can be dragged onto another; the arrows do the same from the keyboard.
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', s.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                      setDragging(s.id);
+                    }}
+                    onDragOver={(e) => {
+                      if (!dragging) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dropTarget !== s.id) setDropTarget(s.id);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const dragged = e.dataTransfer.getData('text/plain') || dragging;
+                      setDragging(null);
+                      setDropTarget(null);
+                      if (dragged) dropOnto(dragged, s.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragging(null);
+                      setDropTarget(null);
+                    }}
+                  >
                     <td>
                       <input
                         type="checkbox"
@@ -362,6 +434,29 @@ export default function SessionsPage() {
                         aria-label={s.name}
                         title={s.active === false ? t('home.inactiveWhy') : undefined}
                       />
+                    </td>
+                    <td className="order-cell">
+                      <span className="drag-handle" aria-hidden="true" title={t('home.dragHint')}>
+                        ⠿
+                      </span>
+                      <button
+                        className="quiet small"
+                        onClick={() => shift(s.id, -1)}
+                        disabled={index === 0}
+                        aria-label={t('home.moveUp', { name: s.name })}
+                        title={t('home.moveUp', { name: s.name })}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="quiet small"
+                        onClick={() => shift(s.id, 1)}
+                        disabled={index === sessions.length - 1}
+                        aria-label={t('home.moveDown', { name: s.name })}
+                        title={t('home.moveDown', { name: s.name })}
+                      >
+                        ↓
+                      </button>
                     </td>
                     <td>
                       <Link href={sessionHref(s.id)}>{s.name}</Link>
@@ -645,7 +740,7 @@ function BatchPanel({
             <strong className="small">{t('batch.selected', { n: runnable.length, tasks: queuedTotal })}</strong>
             <button
               className="quiet"
-              onClick={() => setSelected(sessions.filter((s) => queuedIn(s) > 0).map((s) => s.id).reverse())}
+              onClick={() => setSelected(sessions.filter((s) => queuedIn(s) > 0).map((s) => s.id))}
             >
               {t('batch.selectQueued')}
             </button>

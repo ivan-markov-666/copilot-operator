@@ -398,6 +398,43 @@ try {
     t.check('it ran again and is done; the other stayed queued', (await h.session(s!.id)).tasks.map((x) => x.status), ['done', 'queued']);
   });
 
+  /*
+   * Asked for on 2026-10-01: an imported plan used to show upside down, and the list could not be
+   * arranged. The plan now comes in on top in its own order; the arrows and dragging move a row,
+   * and the order is stored, so a reload shows it again.
+   */
+  await scenario('the sessions list: a plan in its own order, moved by the arrows and by dragging', {}, async (h, page, url) => {
+    await h.importPlan({
+      version: 1,
+      sessions: ['alpha', 'beta', 'gamma'].map((name) => ({
+        name,
+        onFailure: 'stop',
+        vcs: { enabled: false, repoDir: '' },
+        review: { enabled: false },
+        tasks: [{ title: `${name}-task`, prompt: 'Create here.txt in the project folder holding exactly here, and nothing else.' }],
+      })),
+    });
+    const order = async (): Promise<string[]> =>
+      (await page.locator('table tbody tr td:nth-child(4) a').allTextContents()).map((x) => x.trim());
+    await page.goto(url('/'));
+    await page.getByRole('link', { name: 'gamma' }).waitFor();
+    t.check('the plan in its own order', await order(), ['alpha', 'beta', 'gamma']);
+
+    await page.getByRole('button', { name: 'Move alpha down in the list' }).click();
+    await waitFor('the arrow to move it', async () => (await order()).join() === 'beta,alpha,gamma');
+    t.check('↓ moves a row one place down', await order(), ['beta', 'alpha', 'gamma']);
+    t.check('the first row cannot go up, the last cannot go down', [await page.getByRole('button', { name: 'Move beta up in the list' }).isDisabled(), await page.getByRole('button', { name: 'Move gamma down in the list' }).isDisabled()], [true, true]);
+
+    await page.locator('tr', { hasText: 'gamma' }).dragTo(page.locator('tr', { hasText: 'beta' }));
+    await waitFor('the drop to move it', async () => (await order()).join() === 'gamma,beta,alpha');
+    t.check('dragging a row onto another puts it there', await order(), ['gamma', 'beta', 'alpha']);
+
+    await page.reload();
+    await page.getByRole('link', { name: 'gamma' }).waitFor();
+    t.check('and the order is kept after a reload', await order(), ['gamma', 'beta', 'alpha']);
+    t.check('the API holds the same order', (await h.call<Array<{ name: string }>>('GET', '/sessions')).map((x) => x.name), ['gamma', 'beta', 'alpha']);
+  });
+
   await scenario('a new prompt for a done task: its old checks are offered, unticked, and it can be made read-only', {}, async (h, page, url) => {
     const [s] = await h.importPlan(planFor(h, 'newprompt'));
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());

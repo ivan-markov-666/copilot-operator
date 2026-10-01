@@ -373,9 +373,10 @@ try {
   });
 
   /*
-   * The run panel on the Sessions page. A tick puts a session in creation order, not click order, so an
-   * imported plan does not run backwards; the arrows reorder; the name and "carry on" reach the run; an
-   * inactive session cannot be ticked and leaves the selection.
+   * The run panel on the Sessions page. A tick puts a session in the list's order, top to bottom, not in
+   * click order (since 2026-10-01 the list is the operator's order, and each import comes in on top, so
+   * three plans imported alpha, bravo, charlie list charlie first); the arrows reorder; the name and
+   * "carry on" reach the run; an inactive session cannot be ticked and leaves the selection.
    */
   await scenario('the run panel: tick order, moving, the name and "carry on" reach the run, an inactive session is left out', {}, async (h, page, url) => {
     const ids: Record<string, string> = {};
@@ -388,9 +389,9 @@ try {
     await tick('charlie').waitFor();
     await tick('charlie').check();
     await tick('alpha').check();
-    t.check('ticked charlie then alpha: listed oldest first', await runOrder(page), ['alpha', 'charlie']);
+    t.check('ticked alpha after charlie: listed as the list shows them, top to bottom', await runOrder(page), ['charlie', 'alpha']);
     await tick('bravo').check();
-    t.check('bravo takes its place between them', await runOrder(page), ['alpha', 'bravo', 'charlie']);
+    t.check('bravo takes its place between them', await runOrder(page), ['charlie', 'bravo', 'alpha']);
 
     await page.getByRole('checkbox', { name: 'Manage bravo' }).check();
     await page.getByRole('button', { name: 'Make inactive' }).click();
@@ -398,10 +399,10 @@ try {
     // The message is set before the list is read again; the checkbox turns off only once that read lands.
     const disabled = await waitFor('bravo to be disabled', async () => await tick('bravo').isDisabled(), 5_000).then(() => true, () => false);
     t.truthy('made inactive, bravo cannot be ticked', disabled);
-    t.check('and it left the selection', [await tick('bravo').isChecked(), await runOrder(page)], [false, ['alpha', 'charlie']]);
+    t.check('and it left the selection', [await tick('bravo').isChecked(), await runOrder(page)], [false, ['charlie', 'alpha']]);
 
-    await page.getByRole('button', { name: 'Move alpha down' }).click();
-    t.check('↓ on alpha puts it after charlie', await runOrder(page), ['charlie', 'alpha']);
+    await page.getByRole('button', { name: 'Move charlie down', exact: true }).click();
+    t.check('↓ on charlie puts it after alpha', await runOrder(page), ['alpha', 'charlie']);
     await page.locator('#batch-run-name').fill('nightly');
     await page.getByRole('radio', { name: 'Carry on with the next session' }).check();
 
@@ -411,7 +412,7 @@ try {
       const x = await h.call<Batch | null>('GET', '/batch');
       return x?.running ? x : null;
     }, 15_000);
-    t.check('the run has the sessions in the order shown', b.sessions.map((s) => s.name), ['charlie', 'alpha']);
+    t.check('the run has the sessions in the order shown', b.sessions.map((s) => s.name), ['alpha', 'charlie']);
     t.check('its name and "carry on" are the ones chosen, step by step', [b.name, b.onFailure, b.mode], ['nightly', 'continue', 'confirm']);
     t.check('bravo is not in it', b.sessions.some((s) => s.sessionId === ids.bravo), false);
     await waitFor('the first step to wait', async () => (await h.call<Approval[]>('GET', '/approvals')).length > 0, 30_000);

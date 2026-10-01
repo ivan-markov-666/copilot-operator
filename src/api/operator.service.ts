@@ -605,6 +605,14 @@ export class OperatorService {
 
   // --- sessions and tasks ---------------------------------------------------------------
 
+  /** The operator's order for the sessions list, top to bottom. See `SessionStore.reorderSessions`. */
+  async reorderSessions(ids: unknown): Promise<Array<Session & { running: boolean }>> {
+    await this.init();
+    if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string')) throw new Error('ids must be a list of session ids.');
+    await this.store.reorderSessions(ids as string[]);
+    return await this.listSessions();
+  }
+
   async listSessions(): Promise<Array<Session & { running: boolean }>> {
     await this.init();
     const all = await this.store.listSessions();

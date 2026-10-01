@@ -684,6 +684,12 @@ export type Session = {
   createdAt: string;
   status: SessionStatus;
   /**
+   * Where the session sits in the sessions list: smaller is higher. Set when it is created (on top),
+   * by an import (the plan's sessions on top, in the plan's order) and when the operator moves it.
+   * Absent on a session saved before the list could be arranged; see `sessionListKey`.
+   */
+  position?: number;
+  /**
    * `false` when the operator has set the session aside: it is not started — not on its own, not
    * in a run of several, not by "Continue" in the register — until it is made active again. Absent
    * means active, which is what every session is when it is created or imported.

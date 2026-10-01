@@ -154,6 +154,12 @@ export class OperatorController {
     return this.ops.listSessions();
   }
 
+  /** The sessions list in the operator's order: every session id, top to bottom. */
+  @Put('sessions-order')
+  reorderSessions(@Body() body: { ids?: unknown }): Promise<unknown> {
+    return this.ops.reorderSessions(body?.ids).catch(fail);
+  }
+
   @Post('sessions')
   createSession(@Body() body: { name: string; projectDir?: string }): Promise<unknown> {
     return this.ops.createSession(body?.name ?? '', body?.projectDir).catch(fail);

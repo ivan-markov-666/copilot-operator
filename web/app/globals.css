@@ -683,6 +683,11 @@ th, td { position: relative; }
 
 /* A session set aside on the Sessions page (Session.active false): still listed, visibly not in play. */
 tr.inactive td { opacity: 0.6; }
+/* The sessions list can be arranged: a row being dragged, and the row it would take the place of. */
+tr.dragging td { opacity: 0.4; }
+tr.drop-target td { box-shadow: inset 0 2px 0 var(--accent); }
+.order-cell { white-space: nowrap; }
+.drag-handle { cursor: grab; color: var(--muted); padding: 0 4px; user-select: none; }
 tr.inactive td:first-child { opacity: 1; }
 .chip.inactive { color: var(--warn); border-color: var(--warn); }
 

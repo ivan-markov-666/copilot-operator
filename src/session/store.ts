@@ -65,6 +65,26 @@ export const DEFAULT_REVIEW: ReviewSettings = { enabled: true, model: '' };
  */
 export type ContextKind = 'organisation' | 'persona' | 'work';
 
+/**
+ * Where a session sits in the list: its position, or, for one saved before the list could be
+ * arranged, minus the time it was created — which keeps those newest first, as they always were,
+ * and above any arranged session only if they are newer than the list's top was.
+ */
+export function sessionListKey(s: Pick<Session, 'position' | 'createdAt'>): number {
+  if (typeof s.position === 'number' && Number.isFinite(s.position)) return s.position;
+  const t = Date.parse(s.createdAt);
+  return Number.isNaN(t) ? 0 : -t;
+}
+
+/** The sessions list's order: by position, then newest first, then by id so it never wobbles. */
+export function bySessionList(a: Session, b: Session): number {
+  const byKey = sessionListKey(a) - sessionListKey(b);
+  if (byKey !== 0) return byKey;
+  const byTime = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+  if (byTime !== 0 && !Number.isNaN(byTime)) return byTime;
+  return b.id.localeCompare(a.id);
+}
+
 export const DEFAULT_VCS: VersionControl = {
   enabled: true,
   repoDir: '',
@@ -300,11 +320,49 @@ export class SessionStore {
       const s = await this.readSession(join(this.sessionsDir, f));
       if (s) out.push(s);
     }
-    return out.sort((a, b) => {
-      const byTime = Date.parse(b.createdAt) - Date.parse(a.createdAt);
-      if (byTime !== 0 && !Number.isNaN(byTime)) return byTime;
-      return b.id.localeCompare(a.id);
-    });
+    return out.sort(bySessionList);
+  }
+
+  /**
+   * Puts these sessions at the top of the list, in this order.
+   *
+   * An import calls it with the plan's sessions, so they appear as the plan wrote them. Before
+   * this, the list was newest first, and a plan whose sessions were created one after another
+   * read upside down.
+   */
+  async placeOnTop(ids: string[]): Promise<void> {
+    const wanted = new Set(ids);
+    const others = (await this.listSessions()).filter((s) => !wanted.has(s.id));
+    const top = others.length > 0 ? Math.min(...others.map(sessionListKey)) : 0;
+    for (const [i, id] of ids.entries()) {
+      await this.updateSession(id, (s) => {
+        s.position = top - ids.length + i;
+      });
+    }
+  }
+
+  /**
+   * The operator's own order: every session, top to bottom.
+   *
+   * The whole list is given, not one move, so two pages moving rows at once cannot leave positions
+   * that contradict each other: the last order sent is the order there is. A list that names a
+   * session that does not exist, or leaves one out, is refused rather than guessed at.
+   */
+  async reorderSessions(ids: string[]): Promise<Session[]> {
+    const all = await this.listSessions();
+    const known = new Set(all.map((s) => s.id));
+    const given = new Set(ids);
+    if (given.size !== ids.length) throw new Error('The order names a session twice.');
+    const unknown = ids.filter((id) => !known.has(id));
+    if (unknown.length > 0) throw new Error(`The order names a session that does not exist: ${unknown.join(', ')}.`);
+    const missing = all.filter((s) => !given.has(s.id)).map((s) => s.name);
+    if (missing.length > 0) throw new Error(`The order leaves out ${missing.length} session(s): ${missing.slice(0, 5).join(', ')}. Reload the list and try again.`);
+    for (const [i, id] of ids.entries()) {
+      await this.updateSession(id, (s) => {
+        s.position = i;
+      });
+    }
+    return await this.listSessions();
   }
 
   /**
@@ -328,10 +386,13 @@ export class SessionStore {
   }
 
   async createSession(name: string, projectDir = ''): Promise<Session> {
+    // A new session goes on top of the list, where it is looked for.
+    const existing = await this.listSessions();
     const session: Session = {
       id: newId(),
       name: name.trim() || 'untitled',
       createdAt: new Date().toISOString(),
+      position: existing.length > 0 ? Math.min(...existing.map(sessionListKey)) - 1 : 0,
       status: 'idle',
       contractSent: false,
       // A queue is a chain until the operator says otherwise, which is how it has always

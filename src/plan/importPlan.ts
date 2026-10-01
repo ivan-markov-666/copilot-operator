@@ -262,5 +262,7 @@ export async function importPlan(
     sessions.push({ id: created.id, name: created.name, tasks: titles.length, titles });
   }
 
+  // The plan's sessions on top of the list, in the order the plan gives them, not newest first.
+  await store.placeOnTop(sessions.map((s) => s.id));
   return { sessions, taskCount: sessions.reduce((n, s) => n + s.tasks, 0), warnings };
 }
