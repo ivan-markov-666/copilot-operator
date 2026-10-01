@@ -4,10 +4,12 @@
  * JSON files, not a database. A single operator on one machine gets nothing from a
  * database except a dependency, and files can be read, diffed and backed up with nothing
  * installed. Writes go through a temp file and a rename, so a crash mid-write cannot leave a
- * half-written session behind.
+ * half-written session behind, and the writes of one file wait their turn (see `inTurn`), so two
+ * at once cannot fail each other or undo each other's change.
  */
 import { mkdir, readFile, writeFile, readdir, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import type {
   Session,
@@ -140,11 +142,11 @@ export class SessionStore {
   }
 
   async setLevel1(content: string): Promise<void> {
-    await this.atomicWrite(this.level1Path, content);
+    await writeFileAtomically(this.level1Path, content);
   }
 
   async resetLevel1(): Promise<void> {
-    await rm(this.level1Path, { force: true });
+    await removeFile(this.level1Path);
   }
 
   // --- the organisation's part of the plan persona -------------------------------------
@@ -165,11 +167,11 @@ export class SessionStore {
   }
 
   async setContext(kind: ContextKind, content: string): Promise<void> {
-    await this.atomicWrite(join(this.dir, `context-${kind}.md`), content);
+    await writeFileAtomically(join(this.dir, `context-${kind}.md`), content);
   }
 
   async resetContext(kind: ContextKind): Promise<void> {
-    await rm(join(this.dir, `context-${kind}.md`), { force: true });
+    await removeFile(join(this.dir, `context-${kind}.md`));
   }
 
   // --- the model catalogue ----------------------------------------------------------------
@@ -184,7 +186,7 @@ export class SessionStore {
   }
 
   async saveModels(catalogue: ModelCatalogue): Promise<void> {
-    await this.atomicWrite(this.modelsPath, JSON.stringify(catalogue, null, 2));
+    await writeFileAtomically(this.modelsPath, JSON.stringify(catalogue, null, 2));
   }
 
   // --- level 2 presets ------------------------------------------------------------------
@@ -203,15 +205,23 @@ export class SessionStore {
     return out;
   }
 
+  /**
+   * Saves a preset under the name it can later be deleted by.
+   *
+   * Stripping the characters a file name cannot hold is not enough on its own: a leading dot and
+   * ".." survive it, and `safePresetName` refuses both, so ".env" and "a..b" were saved and then
+   * could never be deleted. The name goes through the same rule as the delete, the way a persona's
+   * always has, so a name that could not be removed is refused here instead.
+   */
   async savePreset(name: string, content: string): Promise<Level2Preset> {
     const safe = name.replace(/[^\p{L}\p{N}._ -]/gu, '').trim();
     if (!safe) throw new Error('Preset name is empty after removing unsafe characters.');
-    await this.atomicWrite(join(this.presetsDir, `${safe}.md`), content);
+    await writeFileAtomically(join(this.presetsDir, `${safePresetName(safe)}.md`), content);
     return { name: safe, content, updatedAt: new Date().toISOString() };
   }
 
   async deletePreset(name: string): Promise<void> {
-    await rm(join(this.presetsDir, `${safePresetName(name)}.md`), { force: true });
+    await removeFile(await namedFile(this.presetsDir, name));
   }
 
   // --- named personas -------------------------------------------------------------------
@@ -239,12 +249,12 @@ export class SessionStore {
     const safe = name.replace(/[^\p{L}\p{N}._ -]/gu, '').trim();
     if (!safe) throw new Error('The persona name is empty after removing unsafe characters.');
     await mkdir(this.personasDir, { recursive: true });
-    await this.atomicWrite(join(this.personasDir, `${safePresetName(safe)}.md`), content);
+    await writeFileAtomically(join(this.personasDir, `${safePresetName(safe)}.md`), content);
     return { name: safe, content, updatedAt: new Date().toISOString() };
   }
 
   async deletePersona(name: string): Promise<void> {
-    await rm(join(this.personasDir, `${safePresetName(name)}.md`), { force: true });
+    await removeFile(await namedFile(this.personasDir, name));
   }
 
   // --- sessions -------------------------------------------------------------------------
@@ -278,7 +288,7 @@ export class SessionStore {
   }
 
   async getSession(id: string): Promise<Session | null> {
-    return await this.readSession(join(this.sessionsDir, `${safeName(id)}.json`));
+    return await this.readSession(this.sessionPath(id));
   }
 
   async createSession(name: string, projectDir = ''): Promise<Session> {
@@ -300,20 +310,32 @@ export class SessionStore {
   }
 
   async saveSession(session: Session): Promise<void> {
-    await this.atomicWrite(join(this.sessionsDir, `${safeName(session.id)}.json`), JSON.stringify(session, null, 2));
+    await writeFileAtomically(this.sessionPath(session.id), JSON.stringify(session, null, 2));
   }
 
   async deleteSession(id: string): Promise<void> {
-    await rm(join(this.sessionsDir, `${safeName(id)}.json`), { force: true });
+    await removeFile(this.sessionPath(id));
   }
 
-  /** Applies a change under a fresh read, so two writers cannot clobber each other. */
+  /**
+   * Applies a change under a fresh read, so two writers cannot clobber each other.
+   *
+   * The read, the change and the write happen in the file's turn, with nothing else of this
+   * process writing the session in between. A fresh read alone did not keep that promise: Stop
+   * writes "stopping" at the moment it answers an approval, and the runner it has just woken
+   * writes the task at the same moment. Both read the session before either had written, so
+   * whichever wrote second put back what the first had changed, or, when both renamed at once,
+   * one of them failed and took the stop or the task down with it.
+   */
   async updateSession(id: string, mutate: (s: Session) => void): Promise<Session> {
-    const s = await this.getSession(id);
-    if (!s) throw new Error(`Session ${id} does not exist.`);
-    mutate(s);
-    await this.saveSession(s);
-    return s;
+    const path = this.sessionPath(id);
+    return await inTurn(path, async () => {
+      const s = await this.readSession(path);
+      if (!s) throw new Error(`Session ${id} does not exist.`);
+      mutate(s);
+      await replaceFile(path, JSON.stringify(s, null, 2));
+      return s;
+    });
   }
 
   async addTask(
@@ -528,21 +550,26 @@ export class SessionStore {
   async recoverInterrupted(): Promise<Array<{ sessionId: string; taskId: string; title: string }>> {
     const recovered: Array<{ sessionId: string; taskId: string; title: string }> = [];
 
-    for (const session of await this.listSessions()) {
-      const stuck = session.tasks.filter((t) => ACTIVE_STATUSES.includes(t.status));
-      const busySession = session.status !== 'idle';
-      if (stuck.length === 0 && !busySession) continue;
+    for (const listed of await this.listSessions()) {
+      if (listed.status === 'idle' && !listed.tasks.some((t) => ACTIVE_STATUSES.includes(t.status))) continue;
 
-      for (const t of stuck) {
-        t.status = 'aborted';
-        t.finishedAt = t.finishedAt ?? new Date().toISOString();
-        t.reason =
-          'The bot stopped while this task was in progress (the program was closed, the machine went off, or it crashed), so it never finished. ' +
-          'Its work so far is kept; "Continue in the same chat" carries it on where it stopped.';
-        recovered.push({ sessionId: session.id, taskId: t.id, title: t.title });
-      }
-      session.status = 'idle';
-      await this.saveSession(session);
+      // Read again in the file's turn, like any other change, so a write that landed since the
+      // list was read is kept rather than replaced by the copy in the list.
+      const path = this.sessionPath(listed.id);
+      await inTurn(path, async () => {
+        const session = await this.readSession(path);
+        if (!session) return;
+        for (const t of session.tasks.filter((x) => ACTIVE_STATUSES.includes(x.status))) {
+          t.status = 'aborted';
+          t.finishedAt = t.finishedAt ?? new Date().toISOString();
+          t.reason =
+            'The bot stopped while this task was in progress (the program was closed, the machine went off, or it crashed), so it never finished. ' +
+            'Its work so far is kept; "Continue in the same chat" carries it on where it stopped.';
+          recovered.push({ sessionId: session.id, taskId: t.id, title: t.title });
+        }
+        session.status = 'idle';
+        await replaceFile(path, JSON.stringify(session, null, 2));
+      });
     }
     return recovered;
   }
@@ -569,45 +596,121 @@ export class SessionStore {
     }
   }
 
-  /**
-   * Write through a temp file and a rename, and keep trying when Windows says no.
-   *
-   * The rename is what makes the write atomic: a crash halfway through leaves the temp file
-   * behind and the real one untouched. On Windows it is also the step that fails, because
-   * renaming onto a destination that any other process has open is refused outright — and this
-   * file is read constantly, by the register polling every few seconds, by the sessions list,
-   * and by whatever virus scanner has decided to look inside a JSON file that just changed.
-   *
-   * The failure is EPERM and it is transient: the handle closes microseconds later. Letting it
-   * through unretried meant a task dying mid-run with a message about a temp file, which is
-   * what happened — a scaffold that had finished three tasks was killed by a file lock on the
-   * fourth. So it is retried, briefly and with a growing pause, and only then given up on.
-   */
-  private async atomicWrite(path: string, content: string): Promise<void> {
-    const tmp = `${path}.${process.pid}.tmp`;
-    await writeFile(tmp, content, 'utf8');
+  private sessionPath(id: string): string {
+    return join(this.sessionsDir, `${safeName(id)}.json`);
+  }
+}
 
-    const backoffMs = [10, 25, 60, 120, 250, 500];
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await rename(tmp, path);
-        return;
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code ?? '';
-        const transient = code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
-        if (!transient || attempt >= backoffMs.length) {
-          // The temp file is no use to anyone now, and leaving one per failed write behind
-          // would slowly fill the folder with them.
-          await rm(tmp, { force: true }).catch(() => undefined);
-          throw new Error(
-            `Could not save ${path}: ${code || (e as Error).message}. ` +
-              'Something else is holding the file open — an editor, a sync client or a virus scanner.',
-          );
-        }
-        await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+// --- writing a file -------------------------------------------------------------------------
+
+/**
+ * The work queued on each file, by the file's full path: the tail of its chain.
+ *
+ * Kept for the module, not for one store, because every store in a process writes the same
+ * files: the API has one, but a check or the terminal may make another over the same folder,
+ * and a queue each would let their writes meet again.
+ */
+const queued = new Map<string, Promise<void>>();
+
+/**
+ * Runs `work` once everything queued earlier on the same file has finished, failed or not.
+ *
+ * Every write of the store goes through here, and `updateSession` holds the turn across its read
+ * as well, so a change is always made to what the last write left. `work` must not wait for
+ * another turn on the same file, which would wait for itself; nothing here does, and a session's
+ * `mutate` is synchronous, so it cannot.
+ *
+ * In this process only: another process writing the same file at the same time is not waited
+ * for. The one that might, a run from the terminal, makes a session of its own and writes only that.
+ */
+function inTurn<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const full = resolve(path);
+  // Windows treats `A.json` and `a.json` as one file, so they share one queue there.
+  const key = process.platform === 'win32' ? full.toLowerCase() : full;
+  const run = (queued.get(key) ?? Promise.resolve()).then(work);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queued.set(key, tail);
+  // Forgotten once nothing is queued behind it, so the map holds only the files being written.
+  void tail.then(() => {
+    if (queued.get(key) === tail) queued.delete(key);
+  });
+  return run;
+}
+
+/**
+ * Writes a file whole, in its turn: a crash, or another write of the same file, cannot leave it
+ * half written or lose either write. For any file the program keeps, not only the store's.
+ */
+export async function writeFileAtomically(path: string, content: string): Promise<void> {
+  await inTurn(path, () => replaceFile(path, content));
+}
+
+/** Removes a file in its turn, so a delete and a write of it land in the order they were asked for. */
+async function removeFile(path: string): Promise<void> {
+  await inTurn(path, () => rm(path, { force: true }));
+}
+
+/**
+ * Write through a temp file and a rename, and keep trying when Windows says no. Not queued: the
+ * caller holds the file's turn (see `inTurn`).
+ *
+ * The rename is what makes the write atomic: a crash halfway through leaves the temp file
+ * behind and the real one untouched. On Windows it is also the step that fails, because
+ * renaming onto a destination that any other process has open is refused outright — and this
+ * file is read constantly, by the register polling every few seconds, by the sessions list,
+ * and by whatever virus scanner has decided to look inside a JSON file that just changed.
+ *
+ * The failure is EPERM and it is transient: the handle closes microseconds later. Letting it
+ * through unretried meant a task dying mid-run with a message about a temp file, which is
+ * what happened — a scaffold that had finished three tasks was killed by a file lock on the
+ * fourth. So it is retried, briefly and with a growing pause, and only then given up on.
+ *
+ * Each write has a temp file of its own. One name per process was shared by every write of the
+ * same file, so when two overlapped, the first rename took the temp file the second was about to
+ * rename, and the second failed with ENOENT — reported as a lock it was not.
+ */
+async function replaceFile(path: string, content: string): Promise<void> {
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tmp, content, 'utf8');
+
+  const backoffMs = [10, 25, 60, 120, 250, 500];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(tmp, path);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      const transient = code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+      if (!transient || attempt >= backoffMs.length) {
+        // The temp file is no use to anyone now, and leaving one per failed write behind
+        // would slowly fill the folder with them.
+        await rm(tmp, { force: true }).catch(() => undefined);
+        throw new Error(
+          transient
+            ? `Could not save ${path}: ${code}. Something else is holding the file open — an editor, a sync client or a virus scanner.`
+            : `Could not save ${path}: ${(e as Error).message}`,
+        );
       }
+      await new Promise((r) => setTimeout(r, backoffMs[attempt]));
     }
   }
+}
+
+/**
+ * The file a preset or persona of this name is kept in, for removing it.
+ *
+ * A name `safePresetName` accepts, or one that is already a file in the folder. The save did not
+ * always apply that rule, so a preset called ".env" or "a..b" may be on disk from before; without
+ * the second way it is listed and can never be deleted. A name matched against the folder's own
+ * listing is a file name, which cannot hold a separator, so it cannot reach outside the folder.
+ */
+async function namedFile(dir: string, name: string): Promise<string> {
+  const onDisk = await readdir(dir).catch(() => [] as string[]);
+  if (onDisk.includes(`${name}.md`)) return join(dir, `${name}.md`);
+  return join(dir, `${safePresetName(name)}.md`);
 }
 
 /**

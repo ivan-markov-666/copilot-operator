@@ -16,8 +16,8 @@
  * - "abort" on an approval ends the task at once, runs nothing after it and asks the chat nothing;
  * - "run the rest without asking" stops the asking for the rest of the run, and only the run;
  * - Stop while a step waits, Stop in an unattended run, Stop during the check gate: `aborted`, every time;
- *   and Stop's write of the session never collides with the runner's (the store race behind the
- *   intermittent failures of the two Stop scenarios, reproduced on the store itself);
+ *   and Stop's write of the session never collides with the runner's (checked on the store itself,
+ *   where it does not depend on timing, as the two Stop scenarios do);
  * - one chat window at a time: a second start, a second batch and reading the models are refused
  *   while one is open, and a batch of two sessions opens one window;
  * - a batch that stops on a failure leaves the sessions it never reached queued and stamped with the run;
@@ -31,7 +31,7 @@
  *   npx tsx test/e2e-batch.check.ts
  */
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
@@ -311,10 +311,10 @@ await scenario('a batch stop clears the approval on screen and leaves the rest q
   t.check('the approval is gone at once', await approvals(h), []);
   await h.idle();
   const task = (await h.session(a!.id)).tasks[0]!;
-  // One check for the answer and the outcome, because the store race below decides which of the
-  // two a given run gets wrong: Stop's write loses (a 500 here) or the runner's does (the task
-  // ends 'failed', "Could not save"), and now and then neither shows.
-  // DEFECT (intermittent): Stop's write of the session races the runner's; atomicWrite's temporary file is per process, not per write, so one of them fails with ENOENT.
+  // One check for the answer and the outcome, because they are the two sides of one rule: Stop
+  // writes the session at the moment the runner it has woken writes it too, and the store takes
+  // the two writes in turn (see the store scenario below). When it did not, a given run lost
+  // either Stop's write (a 500 here) or the runner's (the task ended 'failed', "Could not save").
   t.check(
     'the batch stop is taken, and the task in flight ended aborted with its step never run',
     [stopped.status >= 200 && stopped.status < 300, stopped.body, task.status, existsSync(join(h.repo, 'a1.txt'))],
@@ -439,9 +439,8 @@ await scenario('Stop while a step waits for approval', {}, async (h) => {
   t.check('the approval left the screen with the answer', await approvals(h), []);
   await h.idle();
   const task = (await h.session(s!.id)).tasks[0]!;
-  // Folded into one check for the reason given in the batch-stop scenario: which half the race
-  // turns red changes from run to run.
-  // DEFECT (intermittent): the store race (see the store scenario below); Stop answers 500, or the task ends 'failed' with "Could not save".
+  // Folded into one check for the reason given in the batch-stop scenario: Stop and the runner
+  // write the session at once, and a store that let them race failed a different half each run.
   t.check(
     'the stop is taken, and the task ended aborted with the step never run',
     [stopped.status >= 200 && stopped.status < 300, stopped.body, task.status, existsSync(join(h.repo, 's.txt'))],
@@ -451,13 +450,15 @@ await scenario('Stop while a step waits for approval', {}, async (h) => {
 });
 
 /*
- * Why the two Stop scenarios above fail now and then. Stop writes the session ("stopping") at the
- * moment it answers the approval, and the answer wakes the runner, which writes the same session
- * (the task is running again). `updateSession` promises that two writers cannot clobber each other,
- * but it is a read, a change and a write with nothing held in between, and `atomicWrite` names its
- * temporary file after the process, so the two writes share one: one rename takes it, the other
- * finds nothing and throws "Could not save … ENOENT" — a Stop that answers 500, or a task that ends
- * failed instead of aborted. Reproduced here directly on the store, where it does not depend on timing.
+ * What the two Stop scenarios above rest on. Stop writes the session ("stopping") at the moment it
+ * answers the approval, and the answer wakes the runner, which writes the same session (the task is
+ * running again). `updateSession` promises that two writers cannot clobber each other, so the store
+ * takes the writes of one file in turn, each a read, a change and a write with nothing else in
+ * between, and each through a temporary file of its own. It used to do neither: both writes read
+ * the session before either had written, and their temporary file was named after the process, so
+ * one rename took it from the other ("Could not save … ENOENT"), or the second write put back what
+ * the first had changed — a Stop that answered 500, or a task that ended failed instead of aborted.
+ * Checked here directly on the store, where it does not depend on timing.
  */
 console.log('\n--- Stop and the runner write the session at the same moment ---');
 {
@@ -476,14 +477,43 @@ console.log('\n--- Stop and the runner write the session at the same moment ---'
       }),
     ]);
     const after = await store.getSession(s.id);
-    // One check for both ways it goes wrong, because which one a given run shows is down to timing:
-    // DEFECT: atomicWrite's temporary file is `<file>.<pid>.tmp`, shared by every write of that session in this process, so one of two concurrent writes fails its rename with ENOENT;
-    // and when both renames land, updateSession has read, changed and written with nothing serialising the writers, so the later write drops the earlier one's change.
+    // One check for both ways it can go wrong, because which one a given run would show is down to
+    // timing: a write that fails, or one that is saved and then undone by the other.
     t.check(
       'two writes at once are both saved, and neither undoes the other',
       [...writes.map((w) => (w.status === 'fulfilled' ? 'saved' : String((w.reason as Error).message).slice(0, 80))), after?.status, after?.tasks[0]?.status],
       ['saved', 'saved', 'stopping', 'running'],
     );
+
+    // The same with many writers of every kind, from two stores over the same folder (the turn is
+    // the file's, not one store's), and one change that throws: it fails alone, and the writes
+    // queued behind it still land.
+    const other = new SessionStore(dir, join(dir, 'level1.md'));
+    const added = Array.from({ length: 10 }, (_, i) => `added-${i}`);
+    const many = await Promise.allSettled([
+      ...added.map((title, i) => (i % 2 === 0 ? store : other).addTask(s.id, { title, level2: '', prompt: 'A prompt that is comfortably long enough to be a real task.' })),
+      other.updateTask(s.id, after!.tasks[0]!.id, (k) => {
+        k.status = 'aborted';
+      }),
+      store.updateSession(s.id, () => {
+        throw new Error('a change that fails');
+      }),
+      other.updateSession(s.id, (x) => {
+        x.status = 'idle';
+      }),
+    ]);
+    const settled = await store.getSession(s.id);
+    t.check(
+      'many writes at once, from two stores: only the change that threw fails, and every other one is kept',
+      [
+        many.filter((w) => w.status === 'rejected').map((w) => ((w as PromiseRejectedResult).reason as Error).message),
+        added.filter((title) => !settled?.tasks.some((k) => k.title === title)),
+        settled?.tasks[0]?.status,
+        settled?.status,
+      ],
+      [['a change that fails'], [], 'aborted', 'idle'],
+    );
+    t.check('and no temporary file is left behind', (await readdir(join(dir, 'sessions'))).filter((n) => !n.endsWith('.json')), []);
   } catch (e) {
     t.truthy('the store scenario ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
@@ -726,7 +756,7 @@ await scenario('the entrance: what a start or a batch is refused for, and how', 
   const clash = await h.call<Started>('POST', '/batch/start', { sessionIds: [s1!.id], mode: 'confirm' });
   t.truthy('a batch of a session running on its own is refused, saying so', !clash.started && /already running on its own/.test(clash.reason ?? ''), clash);
   // Ended by aborting the step rather than with Stop: this scenario is about the entrance, and Stop
-  // has scenarios of its own (and a defect of its own, the store race further down).
+  // has scenarios of its own, and its write of the session is checked on the store further down.
   await h.call('POST', `/approvals/${w1.id}`, { action: 'abort' });
   await h.idle();
 

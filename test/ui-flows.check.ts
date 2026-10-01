@@ -401,8 +401,8 @@ try {
     t.check('its name and "carry on" are the ones chosen, step by step', [b.name, b.onFailure, b.mode], ['nightly', 'continue', 'confirm']);
     t.check('bravo is not in it', b.sessions.some((s) => s.sessionId === ids.bravo), false);
     await waitFor('the first step to wait', async () => (await h.call<Approval[]>('GET', '/approvals')).length > 0, 30_000);
-    // Only teardown: a stop can meet the save race pinned in the hold scenario below and answer 500,
-    // which is not what this scenario is about; settle() clears whatever is left.
+    // Only teardown: what the stop answers is pinned in the hold scenario below, not here, so a
+    // failure of it must not end this scenario; settle() clears whatever is left.
     await h.call('POST', '/batch/stop').catch(() => undefined);
     await h.idle();
   });
@@ -551,20 +551,20 @@ try {
     /*
      * "Stop after the current step" says the task it interrupts ends aborted. `stop()` answers the waiting
      * step with abort and, in the same breath, writes `status: 'stopping'` to the session file, while the
-     * runner writes the aborted task to the same file. Both go through `<file>.<pid>.tmp`, so one rename
-     * finds the temp file already renamed away, and which side loses varies from run to run: either the
-     * stop's own save throws and the page's Stop is answered 500, or the task dies "failed: Could not
-     * save …: ENOENT". Both sides are pinned by name, so the defect is reported whichever way it lands,
-     * and every other check below still runs.
+     * runner writes the aborted task to the same file. The store takes the two writes in turn, each through
+     * a temporary file of its own. When both went through one `<file>.<pid>.tmp`, one rename found the temp
+     * file already renamed away, and which side lost varied from run to run: either the stop's own save
+     * threw and the page's Stop was answered 500, or the task died "failed: Could not save …: ENOENT".
+     * Both sides are pinned by name, so a race brought back is reported whichever way it lands, and every
+     * other check below still runs.
      */
-    // DEFECT: concurrent session writes share the temp file `<file>.<pid>.tmp` (store.atomicWrite), so the stop's own save can throw and Stop is answered 500.
     await accepted('Stop is accepted, not a 500 from the save race', stopResponse);
     t.check('Stop: the run is stopping', (await batchOf(h)).stopping, true);
     await h.idle();
     const stopped = await batchOf(h);
     t.check('and then over, its waiting step never run', [stopped.running, existsSync(join(h.repo, 'stopped.txt'))], [false, false]);
     const cut = (await cards(h, two!.id))[0]!;
-    // DEFECT: concurrent session writes share the temp file `<file>.<pid>.tmp` (store.atomicWrite), so stopping a run can fail its task with "Could not save …: ENOENT" instead of aborting it.
+    // The runner's write of the aborted task is taken in its turn after the stop's, not lost to it.
     t.check('the interrupted task ends aborted, not failed on a save', [cut.status, /Could not save/.test(cut.reason ?? '')], ['aborted', false]);
   });
 

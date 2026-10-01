@@ -601,9 +601,11 @@ await scenario('the store keeps every write when several arrive at once', {}, as
     h.raw('PUT', `/sessions/${s!.id}/tasks/${t0}`, { title: 'z' }),
   ]);
   const after = await full(h, s!.id);
-  // DEFECT: no per-session write queue: concurrent writes share one temp file name (path.<pid>.tmp) and a rename fails
+  // The store takes the writes of one file in turn, each through a temporary file of its own. With
+  // one temporary name per process, two writes at once renamed each other's file away and one failed.
   t.truthy('all nine writes were accepted', answers.every((a) => a.status < 300), answers.map((a) => (a.status < 300 ? a.status : `${a.status} ${message(a.body)}`)));
-  // DEFECT: no per-session write queue: each write reads the session before the others land, so all but the last are lost
+  // And each write reads the session in its turn, after the one before has landed: read all at once,
+  // every write but the last was undone by the next.
   t.check('the session has every new task and the rename', [titles.filter((title) => !after.tasks.some((k) => k.title === title)), after.tasks.find((k) => k.id === t0)?.title],
     [[], 'z']);
 
@@ -663,11 +665,23 @@ await scenario('a broken file, odd preset names, a refused setting', {}, async (
   const payments = await roundTrip('Payments team!');
   t.check('"Payments team!" is saved as "Payments team" and deleted by that name', [payments.saved, payments.deleted, payments.gone], ['Payments team', 200, true]);
   const env = await roundTrip('.env');
-  // DEFECT: savePreset keeps a leading dot but deletePreset's safePresetName refuses it, so ".env" can be saved and never deleted (500)
+  // The save applies the delete's rule (safePresetName): it used to keep a leading dot, which the
+  // delete refuses, so ".env" was saved and could never be deleted (500).
   t.truthy('".env" is refused at the save, or deleted by the name it was saved under', refusedOrDeleted(env), env);
   const dots = await roundTrip('a..b');
-  // DEFECT: savePreset keeps ".." but safePresetName refuses it on delete, so "a..b" can be saved and never deleted (500)
+  // The same for "..", which the save kept and the delete refuses.
   t.truthy('"a..b" is refused at the save, or deleted by the name it was saved under', refusedOrDeleted(dots), dots);
+  // A preset saved under such a name before the save refused it is still on disk, and listed: it
+  // must be deletable by the name the list shows, without letting a name reach outside the folder.
+  writeFileSync(join(h.dataDir, 'level2', '.env.md'), 'saved before the rule', 'utf8');
+  const listedBefore = (await h.call<Array<{ name: string }>>('GET', '/presets')).some((p) => p.name === '.env');
+  const legacy = await h.raw('DELETE', `/presets/${encodeURIComponent('.env')}`);
+  t.check('an old ".env" preset already on disk is listed, and deleted by that name',
+    [listedBefore, legacy.status, existsSync(join(h.dataDir, 'level2', '.env.md'))], [true, 200, false]);
+  writeFileSync(join(h.dataDir, 'kept.md'), 'outside the presets folder', 'utf8');
+  const climb = await h.raw('DELETE', `/presets/${encodeURIComponent('..\\kept')}`);
+  t.check('a name that climbs out of the folder is still refused, and the file it names is kept',
+    [climb.status >= 400, existsSync(join(h.dataDir, 'kept.md'))], [true, true]);
 
   // A setting the schema refuses is refused before anything is written.
   const settingsFile = join(h.dataDir, 'settings.json');
