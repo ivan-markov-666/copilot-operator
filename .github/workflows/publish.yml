@@ -51,5 +51,17 @@ jobs:
 
       - run: npm run check
 
+      # The checks below are the rest of `npm run check:all`, so nothing is published that has not
+      # passed every check there is. The browser checks drive Playwright's headless Chromium, which a
+      # fresh runner does not have; it goes into the user profile's cache, no administrator needed.
+      - run: npx playwright install chromium
+
+      # Builds the package and runs the browser checks against the interface it serves
+      # (test/ui.check.ts and test/ui-flows.check.ts).
+      - run: npm run check:ui
+
+      # Packs the package, installs it in a throwaway project and starts it there, as a user gets it.
+      - run: npm run check:release
+
       # prepack builds the API, the CLI and the static interface (scripts/build-package.mjs).
       - run: npm publish --provenance --access public

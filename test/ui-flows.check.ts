@@ -6,8 +6,8 @@
  * places where a wrong click costs a night of unattended commands or a branch moved under somebody:
  *
  * - the release: `.github/workflows/publish.yml` must run `npm run check:ui` (and install the browser
- *   it drives) before `npm publish`, or no browser check guards a release. Today `check:ui` runs
- *   test/ui.check.ts; this file guards a release once `check:ui` (or a step of its own) runs it too;
+ *   it drives) before `npm publish`, or no browser check guards a release; `check:ui` runs
+ *   test/ui.check.ts and this file, and the workflow runs every other part of `check:all` too;
  * - an unattended start asks "are you sure" unless Settings say not to, and Cancel changes nothing;
  * - the approvals banner: "run the rest without asking" really switches the run, "Abort task" really
  *   stops it, a download is never offered "the rest", and the card names the session;
@@ -28,8 +28,8 @@
  * The chat is the scripted one of test/support/fakeChat.ts; the steps it sends run for real in a
  * throwaway repository. Nothing here opens Edge or Copilot or touches the operator's data.
  *
- *   npm run check:ui-flows      (once package.json names it, as `node scripts/build-package.mjs && tsx test/ui-flows.check.ts`)
- *   npx tsx test/ui-flows.check.ts   (on an interface already built with `npm run build:package`)
+ *   npm run check:ui            (builds the package, then runs test/ui.check.ts and this file)
+ *   npm run check:ui-flows      (this file alone, on an interface already built with `npm run build:package`)
  *
  * Set COP_UI_SHOTS to a folder to keep a screenshot of every scenario that fails.
  */
@@ -111,10 +111,24 @@ console.log('\n--- release gate: publishing runs the browser checks ---');
   const ui = at(/\bnpm run check:ui\b/);
   const publish = at(/\bnpm publish\b/);
   t.truthy('publish.yml runs the plain checks before publishing', plainCheck >= 0 && publish > plainCheck, { plainCheck, publish });
-  // DEFECT: publish.yml never runs `npm run check:ui`, so a release is published without one browser check.
+  // Without this step a release went out with not one browser check run.
   t.truthy('publish.yml runs npm run check:ui', ui >= 0, 'no "npm run check:ui" step in .github/workflows/publish.yml');
-  // DEFECT: and never installs the Chromium those checks drive, which a fresh windows-latest runner does not have.
+  // A fresh windows-latest runner has no Chromium, and the browser checks cannot start without one.
   t.truthy('it installs Chromium first, after npm run check and before npm publish', install > plainCheck && ui > install && publish > ui, { plainCheck, install, ui, publish });
+
+  // The same question for every check, not only the browser ones: whatever `check:all` runs, the
+  // workflow runs before it publishes, so a check added there cannot be left out of the release.
+  const scripts = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+  const parts = (scripts['check:all'] ?? '').split('&&').map((p) => p.trim()).filter(Boolean);
+  t.truthy('package.json has a check:all that runs the checks', parts.length > 0, scripts['check:all']);
+  const command = (l: string): string => l.trim().replace(/^-\s*/, '').replace(/^run:\s*/, '').trim();
+  const missing = parts.filter((p) => {
+    const i = lines.findIndex((l) => !/^\s*#/.test(l) && command(l) === p);
+    return i < 0 || i > publish;
+  });
+  t.check('publish.yml runs every part of check:all before npm publish', missing, []);
+  // And this file is one of them: check:ui is the gate that runs it.
+  t.truthy('check:ui runs this file', /\btest\/ui-flows\.check\.ts\b/.test(scripts['check:ui'] ?? ''), scripts['check:ui']);
 }
 
 // ---------------------------------------------------------------------------------------------
