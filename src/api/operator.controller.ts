@@ -10,10 +10,15 @@ import { Observable } from 'rxjs';
 import { OperatorService } from './operator.service.js';
 import type { TaskCheck } from '../session/model.js';
 import type { ContextKind } from '../session/store.js';
+import { SettingsUnusableError } from './settings.js';
 
 type Msg = { data: string; type?: string; id?: string };
 
 function fail(e: unknown): never {
+  // A settings file that cannot be used is not the request's fault, and every route that reads the
+  // settings meets it, wrapped here or not: it is passed on as it is, for the server to answer the
+  // same way on all of them (see `server.ts`).
+  if (e instanceof SettingsUnusableError) throw e;
   throw new BadRequestException((e as Error).message);
 }
 
@@ -108,7 +113,7 @@ export class OperatorController {
 
   @Delete('presets/:name')
   async deletePreset(@Param('name') name: string): Promise<{ ok: true }> {
-    await this.ops.deletePreset(name);
+    await this.ops.deletePreset(name).catch(fail);
     return { ok: true };
   }
 

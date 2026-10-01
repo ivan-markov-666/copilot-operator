@@ -616,9 +616,10 @@ const queued = new Map<string, Promise<void>>();
  * Runs `work` once everything queued earlier on the same file has finished, failed or not.
  *
  * Every write of the store goes through here, and `updateSession` holds the turn across its read
- * as well, so a change is always made to what the last write left. `work` must not wait for
- * another turn on the same file, which would wait for itself; nothing here does, and a session's
- * `mutate` is synchronous, so it cannot.
+ * as well, as does a write worked out from the file (see `writeFileAtomically`), so a change is
+ * always made to what the last write left. `work` must not wait for another turn on the same file,
+ * which would wait for itself; nothing here does, and a session's `mutate` is synchronous, so it
+ * cannot.
  *
  * In this process only: another process writing the same file at the same time is not waited
  * for. The one that might, a run from the terminal, makes a session of its own and writes only that.
@@ -643,9 +644,15 @@ function inTurn<T>(path: string, work: () => Promise<T>): Promise<T> {
 /**
  * Writes a file whole, in its turn: a crash, or another write of the same file, cannot leave it
  * half written or lose either write. For any file the program keeps, not only the store's.
+ *
+ * `content` may be a function instead, for a write worked out from what the file holds: it is
+ * called in the file's turn, so what it reads is what the last write left, and nothing else of this
+ * process writes the file until its answer has landed. Read first and written here, a change of one
+ * setting put back whatever another had changed in between. If it throws, nothing is written. Like
+ * any work in a turn, it must not wait for another turn on the same file (see `inTurn`).
  */
-export async function writeFileAtomically(path: string, content: string): Promise<void> {
-  await inTurn(path, () => replaceFile(path, content));
+export async function writeFileAtomically(path: string, content: string | (() => Promise<string>)): Promise<void> {
+  await inTurn(path, async () => replaceFile(path, typeof content === 'string' ? content : await content()));
 }
 
 /** Removes a file in its turn, so a delete and a write of it land in the order they were asked for. */

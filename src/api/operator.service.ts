@@ -480,6 +480,9 @@ export class OperatorService {
 
   async createSession(name: string, folder?: string): Promise<Session> {
     await this.init();
+    // Read before the session is made: a settings file that cannot be read refuses the request,
+    // and a refusal must leave nothing behind, or each retry adds a session with no project.
+    const cfg = await this.settings.load();
     const session = await this.store.createSession(name, folder ?? '');
 
     /*
@@ -488,7 +491,6 @@ export class OperatorService {
      * choosing a model there reaches every such session, the ones created before it included.
      * It used to be copied here, which meant a model chosen after an import reached nothing.
      */
-    const cfg = await this.settings.load();
     const projectDir = (cfg.project?.rootDir ?? '').trim();
     if (!projectDir) return session;
 
@@ -2281,34 +2283,37 @@ export class OperatorService {
     name?: string;
     others?: Array<{ name: string; rootDir: string }>;
   }): Promise<ProjectDefault> {
-    const raw = await this.settings.raw();
-    const current = ((raw.project as Record<string, unknown>) ?? {}) as {
-      rootDir?: string;
-      name?: string;
-      others?: Array<{ name: string; rootDir: string }>;
-    };
-    const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
-    const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
-    if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
+    // Worked out from the file in its turn (see `Settings.update`), so a model chosen at the same
+    // moment is kept, and a refusal below leaves the file as it was.
+    await this.settings.update((raw) => {
+      const current = ((raw.project as Record<string, unknown>) ?? {}) as {
+        rootDir?: string;
+        name?: string;
+        others?: Array<{ name: string; rootDir: string }>;
+      };
+      const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
+      const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
+      if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
 
-    const others = (patch.others ?? current.others ?? []).map((o) => ({
-      name: (o.name ?? '').trim(),
-      rootDir: (o.rootDir ?? '').trim(),
-    }));
-    const seen = new Set<string>();
-    for (const o of others) {
-      if (!o.name) throw new Error(`Every other project needs a name; the one at ${o.rootDir || '(no folder)'} has none.`);
-      if (!o.rootDir) throw new Error(`The project "${o.name}" needs a folder.`);
-      if (!existsSync(o.rootDir)) throw new Error(`The folder ${o.rootDir} for "${o.name}" does not exist on this machine.`);
-      if (sameFolder(o.rootDir, rootDir)) throw new Error(`${o.rootDir} is already the default project; it does not need listing again.`);
-      const key = o.name.toLowerCase();
-      if (seen.has(key)) throw new Error(`Two projects are named "${o.name}". Names are how the folders are told apart, so each needs its own.`);
-      seen.add(key);
-    }
+      const others = (patch.others ?? current.others ?? []).map((o) => ({
+        name: (o.name ?? '').trim(),
+        rootDir: (o.rootDir ?? '').trim(),
+      }));
+      const seen = new Set<string>();
+      for (const o of others) {
+        if (!o.name) throw new Error(`Every other project needs a name; the one at ${o.rootDir || '(no folder)'} has none.`);
+        if (!o.rootDir) throw new Error(`The project "${o.name}" needs a folder.`);
+        if (!existsSync(o.rootDir)) throw new Error(`The folder ${o.rootDir} for "${o.name}" does not exist on this machine.`);
+        if (sameFolder(o.rootDir, rootDir)) throw new Error(`${o.rootDir} is already the default project; it does not need listing again.`);
+        const key = o.name.toLowerCase();
+        if (seen.has(key)) throw new Error(`Two projects are named "${o.name}". Names are how the folders are told apart, so each needs its own.`);
+        seen.add(key);
+      }
 
-    // What the removed Desktop copies left in the stored project is dropped with the next save.
-    const { mirror: _m, desktop: _d, mirrorToDesktop: _t, ...rest } = current as typeof current & { mirror?: unknown; desktop?: unknown; mirrorToDesktop?: unknown };
-    await this.settings.save({ ...raw, project: { ...rest, rootDir, name, others } });
+      // What the removed Desktop copies left in the stored project is dropped with the next save.
+      const { mirror: _m, desktop: _d, mirrorToDesktop: _t, ...rest } = current as typeof current & { mirror?: unknown; desktop?: unknown; mirrorToDesktop?: unknown };
+      return { ...raw, project: { ...rest, rootDir, name, others } };
+    });
     return await this.project();
   }
 
@@ -2338,9 +2343,7 @@ export class OperatorService {
    */
   async setDefaultReviewModel(name: string): Promise<{ defaultReviewModel: string }> {
     await this.init();
-    const raw = await this.settings.raw();
-    const copilot = { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultReviewModel: name.trim() };
-    await this.settings.save({ ...raw, copilot });
+    await this.settings.update((raw) => ({ ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultReviewModel: name.trim() } }));
     this.bus.publish({
       sessionId: '*',
       type: 'default-review-model-changed',
@@ -2359,9 +2362,7 @@ export class OperatorService {
    */
   async setDefaultModel(name: string): Promise<{ defaultModel: string }> {
     await this.init();
-    const raw = await this.settings.raw();
-    const copilot = { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultModel: name.trim() };
-    await this.settings.save({ ...raw, copilot });
+    await this.settings.update((raw) => ({ ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultModel: name.trim() } }));
     this.bus.publish({
       sessionId: '*',
       type: 'default-model-changed',

@@ -14,6 +14,8 @@
  * - that a plan is checked against the machine and imported whole or not at all, and says what it
  *   would duplicate;
  * - that the store keeps every write when several arrive at once, and survives a broken file;
+ * - that a settings file that cannot be used is refused by name on every route and never written
+ *   over, and that saves of one setting each, made at once, keep each other's;
  * - the task routes: edit, add, delete, run again, continue — and what a re-run keeps on the record;
  * - level 1 and the context texts, the text export's headers, the run exports and the live events.
  *
@@ -680,8 +682,11 @@ await scenario('a broken file, odd preset names, a refused setting', {}, async (
     [listedBefore, legacy.status, existsSync(join(h.dataDir, 'level2', '.env.md'))], [true, 200, false]);
   writeFileSync(join(h.dataDir, 'kept.md'), 'outside the presets folder', 'utf8');
   const climb = await h.raw('DELETE', `/presets/${encodeURIComponent('..\\kept')}`);
-  t.check('a name that climbs out of the folder is still refused, and the file it names is kept',
-    [climb.status >= 400, existsSync(join(h.dataDir, 'kept.md'))], [true, true]);
+  const climbPersona = await h.raw('DELETE', `/personas/${encodeURIComponent('..\\kept')}`);
+  // Refused as the request's fault, on both routes that delete by name: the preset route let the
+  // store's refusal through as it was, and it was answered "Internal server error".
+  t.check('a name that climbs out of the folder is still refused (400, not a 500), and the file it names is kept',
+    [climb.status, climbPersona.status, existsSync(join(h.dataDir, 'kept.md'))], [400, 400, true]);
 
   // A setting the schema refuses is refused before anything is written.
   const settingsFile = join(h.dataDir, 'settings.json');
@@ -689,6 +694,25 @@ await scenario('a broken file, odd preset names, a refused setting', {}, async (
   const zero = await h.raw('PUT', '/settings', { limits: { maxIterations: 0 } });
   t.check('maxIterations 0 is refused', zero.status, 400);
   t.truthy('and settings.json is unchanged, byte for byte', readFileSync(settingsFile).equals(bytes), readFileSync(settingsFile, 'utf8').slice(0, 200));
+
+  // Saves of one setting each, sent at once: each reads the file, changes its own setting and writes
+  // it back in the file's turn. Read before the turn, both read the same file, and the one written
+  // second put back the setting the first had just changed, though both answered 200.
+  const rounds: unknown[] = [];
+  for (let i = 0; i < 5; i += 1) {
+    const answers = await Promise.all([
+      h.raw('PUT', '/models/default', { model: `M${i}` }),
+      h.raw('PUT', '/models/review-default', { model: `R${i}` }),
+      h.raw('PUT', '/project', { name: `P${i}` }),
+    ]);
+    const now = JSON.parse(readFileSync(settingsFile, 'utf8')) as { copilot?: { defaultModel?: string; defaultReviewModel?: string }; project?: { name?: string } };
+    rounds.push([answers.map((a) => a.status), now.copilot?.defaultModel, now.copilot?.defaultReviewModel, now.project?.name]);
+  }
+  t.check('three one-setting saves at once, five times: every one answered 200 and every one kept',
+    rounds, Array.from({ length: 5 }, (_, i) => [[200, 200, 200], `M${i}`, `R${i}`, `P${i}`]));
+  type Held = { runsDir?: string; project?: { rootDir?: string } };
+  const [before, after] = [JSON.parse(bytes.toString('utf8')) as Held, JSON.parse(readFileSync(settingsFile, 'utf8')) as Held];
+  t.check('and what the file held besides is kept too', [after.runsDir, after.project?.rootDir], [before.runsDir, before.project?.rootDir]);
 });
 
 await scenario('a settings file that no longer parses', {}, async (h) => {
@@ -717,7 +741,23 @@ await scenario('a settings file that no longer parses', {}, async (h) => {
   t.check('nor by any other save: each is refused, and the file is as it was',
     [others.map((o) => o.status >= 400), readFileSync(settingsFile, 'utf8')], [[true, true, true], '{broken']);
   t.truthy('and the refusal names the file and says what to do',
-    /settings\.json is not valid JSON.*(Mend|delete)/s.test(message(r.body)), message(r.body));
+    /settings\.json is not valid JSON.*(Mend|delete)/s.test(message(r.body)), { status: r.status, body: r.body });
+  const named = (body: unknown): boolean => /settings\.json is not valid JSON.*(Mend|delete)/s.test(message(body));
+
+  // Every route that reads the settings meets the broken file, not only the saves, and each answers
+  // it the same way: 409, by name. As an unknown error it was "Internal server error" on the Defaults
+  // page, the Project page and the model picker, the pages the operator opens to find out what is wrong.
+  const readers = await Promise.all(['/settings', '/project', '/models'].map((path) => h.raw('GET', path)));
+  t.check('GET /settings, /project and /models each answer 409, naming the file and saying what to do',
+    readers.map((g) => [g.status, named(g.body)]), [[409, true], [409, true], [409, true]]);
+  t.check('and the saves answer it the same way, not as a fault of their request',
+    [r, ...others].map((o) => [o.status, named(o.body)]), [[409, true], [409, true], [409, true], [409, true]]);
+  // A new session reads the settings for its folder: refused before it is made, or every retry of
+  // the refused request left one more session behind, with no project.
+  const sessionFiles = (): number => readdirSync(join(h.dataDir, 'sessions')).length;
+  const filesBefore = sessionFiles();
+  const made = await h.raw('POST', '/sessions', { name: 'made-while-broken' });
+  t.check('a new session is refused the same way, and none is made', [made.status, named(made.body), sessionFiles()], [409, true, filesBefore]);
 
   // A file saved by hand with a byte-order mark is not broken: its settings are read and kept.
   writeFileSync(settingsFile, `${String.fromCharCode(0xfeff)}${JSON.stringify({ runsDir: h.runsDir, project: { rootDir: h.repo }, limits: { maxIterations: 7 } })}`, 'utf8');
@@ -725,6 +765,14 @@ await scenario('a settings file that no longer parses', {}, async (h) => {
   const kept = JSON.parse(readFileSync(settingsFile, 'utf8').replace(String.fromCharCode(0xfeff), '')) as { limits?: { maxIterations?: number }; copilot?: { defaultModel?: string } };
   t.check('a settings file that starts with a byte-order mark is read, and a save keeps what it held',
     [marked.status, kept.limits?.maxIterations, kept.copilot?.defaultModel], [200, 7, 'Z']);
+
+  // A file that parses but holds a value the settings do not allow cannot be used either, and is
+  // answered the same way, naming the value; the API would not start on it.
+  writeFileSync(settingsFile, JSON.stringify({ runsDir: h.runsDir, project: { rootDir: h.repo }, limits: { maxIterations: 0 } }), 'utf8');
+  const disallowed = await h.raw('GET', '/settings');
+  t.check('a file holding maxIterations 0: GET /settings answers 409, naming the file, the value and what to do',
+    [disallowed.status, /settings\.json holds settings that are not allowed \(limits\.maxIterations: .*(Mend|delete)/s.test(message(disallowed.body))],
+    [409, true]);
 });
 
 // --- 11. the task routes -----------------------------------------------------------------------------------

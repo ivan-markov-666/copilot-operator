@@ -602,17 +602,18 @@ await scenario('Stop during the check gate ends the task aborted, not failed', {
   await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   await waitFor('the check to start', async () => existsSync(join(h.repo, 'started.flag')));
   const stoppedAt = Date.now();
-  // Read raw rather than through h.call: the killed check wakes the runner, which writes the
-  // session while Stop is writing it (the store race), and a 500 thrown here would skip every
-  // check below along with the harness's own.
+  // Read raw rather than through h.call, so a refused Stop is reported by the check below with what
+  // it answered, instead of being thrown past every check after it and the harness's own. The
+  // killed check wakes the runner, which writes the session as Stop writes it; the store takes the
+  // two writes in turn (see the store scenario above).
   const stopped = await h.raw('POST', `/sessions/${s!.id}/stop`);
   await h.idle();
   t.truthy('the check was cut short rather than waited out', Date.now() - stoppedAt < 15_000, `${Date.now() - stoppedAt} ms after the stop`);
   const task = (await h.session(s!.id)).tasks[0]!;
   const row = (await h.call<Array<{ taskId: string; continuable?: boolean }>>('GET', '/tasks')).find((r) => r.taskId === task.id);
-  // The answer and the outcome in one check, as in the other two Stop scenarios, so the red line
-  // does not move with the race.
-  // DEFECT: gateOnChecks counts the killed check as a failed round (doneRejected += 1) and returns 'give-up' on an aborted signal, so the runner finishes 'failed' instead of 'aborted'; (intermittent) the store race can also make Stop answer 500.
+  // The answer and the outcome in one check, as in the other two Stop scenarios: they are the two
+  // sides of one rule, Stop and the runner writing the session at once.
+  // DEFECT: gateOnChecks counts the killed check as a failed round (doneRejected += 1) and returns 'give-up' on an aborted signal, so the runner finishes 'failed' instead of 'aborted'.
   t.check(
     'the stop is taken, and the task ended aborted',
     [stopped.status >= 200 && stopped.status < 300, stopped.body, task.status],

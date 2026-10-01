@@ -3,11 +3,13 @@
  * whatever the previous process left running. See `main.ts` for the process around it.
  */
 import 'reflect-metadata';
-import { NestFactory } from '@nestjs/core';
+import { Catch, ConflictException, type ArgumentsHost } from '@nestjs/common';
+import { BaseExceptionFilter, NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'node:path';
 import { AppModule } from './app.module.js';
 import { OperatorService } from './operator.service.js';
+import { SettingsUnusableError } from './settings.js';
 import { ensureApiToken, localApiGuard } from './security.js';
 import { secureDataDir } from './dataAcl.js';
 import { pruneRuns } from '../session/retention.js';
@@ -36,6 +38,21 @@ export type StartedApi = {
   dataDir: string;
   close: () => Promise<void>;
 };
+
+/**
+ * A settings file that cannot be used, answered the same way on every route: 409, with the message
+ * that names the file and says what to do (see `SettingsUnusableError`).
+ *
+ * Here, once, because the routes that meet it are most of them: every one whose work reads the
+ * settings. Left to the default it was "Internal server error" wherever a route did not wrap its
+ * errors, which included the Defaults page, the Project page and the model picker.
+ */
+@Catch(SettingsUnusableError)
+class SettingsUnusableFilter extends BaseExceptionFilter {
+  override catch(e: SettingsUnusableError, host: ArgumentsHost): void {
+    super.catch(new ConflictException(e.message), host);
+  }
+}
 
 /**
  * Everything `main` used to do, as a function that returns the running server instead of owning the
@@ -67,6 +84,7 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
     exposedHeaders: ['content-disposition'],
   });
   app.setGlobalPrefix('api');
+  app.useGlobalFilters(new SettingsUnusableFilter(app.getHttpAdapter()));
 
   /*
    * Who may drive this. Mounted before routing so it covers every route including the SSE stream,
@@ -100,11 +118,22 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
     app.useStaticAssets(webDir, { extensions: ['html'], index: 'index.html' });
   }
 
+  /*
+   * The settings, read before the port is open and before anything the last process left is
+   * recovered. A file the API cannot use stops it here, with the reason; read after the recovery,
+   * it stopped the API once the tasks were already marked aborted but not yet settled (their record
+   * goes in the runs folder the file names), and nothing comes back to settle them.
+   */
+  const ops = app.get(OperatorService);
+  const cfg = await ops.settings.load().catch(async (e: unknown) => {
+    await app.close();
+    throw e;
+  });
+
   await app.listen(PORT, '127.0.0.1');
 
   // Close whatever the previous process left open before anyone can look at it, rather than
   // waiting for the first request to trigger it.
-  const ops = app.get(OperatorService);
   await ops.bootstrap();
 
   /*
@@ -112,7 +141,6 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
    * as much the bot's records as data/ is, and until 2026-09-27 left with whatever permissions its
    * parent folder had. Narrowed the same way, and pruned to the configured retention.
    */
-  const cfg = await ops.settings.load();
   await mkdir(cfg.resolved.runsDir, { recursive: true });
   const runsAcl = secureDataDir(cfg.resolved.runsDir);
   if (!runsAcl.ok) {

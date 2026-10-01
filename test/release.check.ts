@@ -15,7 +15,8 @@
  * - the installed package starts in a throwaway project, serves its page with the token as a cookie,
  *   keeps its records out of the project's git, and leaves its port free once it is stopped;
  * - `cop run` refuses a run it must not start before any browser is opened; `cop doctor` names a
- *   default model the picker on this machine does not have;
+ *   default model the picker on this machine does not have, and a settings file the API will not
+ *   start on, which it reads as the API does (a byte-order mark is not damage);
  * - the API process logs a stray promise rejection and carries on, and fails loudly on a taken port;
  * - decision pin: `npm start` (scripts/dev.mjs, run here with its children replaced) keeps the token
  *   out of the API's environment and hands it to the dev web server, as the operator decided it
@@ -526,7 +527,7 @@ await section('cop run refuses before any browser opens', async () => {
   t.truthy('naming execution.mode', /execution\.mode/.test(sometimes.stderr), sometimes.stderr.slice(0, 400));
 });
 
-await section('cop doctor names a default model the picker lacks', async () => {
+await section('cop doctor names a default model the picker lacks, and a settings file that is broken', async () => {
   // `npm ping` goes to a registry on 127.0.0.1 that answers everything: the check stays on this
   // machine, and the npm line is not what decides the result.
   const registry = createHttpServer((_req, res) => {
@@ -536,21 +537,37 @@ await section('cop doctor names a default model the picker lacks', async () => {
   await new Promise<void>((r) => registry.listen(0, '127.0.0.1', () => r()));
   const registryUrl = `http://127.0.0.1:${(registry.address() as AddressInfo).port}/`;
   try {
-    const doctor = async (model: string): Promise<Ran & { problems: number }> => {
+    const doctor = async (model: string, settings = JSON.stringify({ copilot: { defaultModel: model } })): Promise<Ran & { problems: number }> => {
       const data = join(base, `doctor-${model}`);
       mkdirSync(data, { recursive: true });
-      writeFileSync(join(data, 'settings.json'), JSON.stringify({ copilot: { defaultModel: model } }), 'utf8');
+      writeFileSync(join(data, 'settings.json'), settings, 'utf8');
       writeFileSync(join(data, 'models.json'), JSON.stringify({ options: [{ name: 'Auto' }] }), 'utf8');
       const r = await cop(['doctor'], data, cleanEnv({ COP_DATA_DIR: data, npm_config_registry: registryUrl }), 90_000);
       const m = /(\d+) problem\(s\) to fix first/.exec(r.stdout);
       return { ...r, problems: m ? Number(m[1]) : /\bReady\./.test(r.stdout) ? 0 : -1 };
     };
-    const [nope, auto] = await Promise.all([doctor('Nope'), doctor('Auto')]);
+    const [nope, auto, broken, marked] = await Promise.all([
+      doctor('Nope'),
+      doctor('Auto'),
+      doctor('broken', '{broken'),
+      doctor('marked', `${String.fromCharCode(0xfeff)}${JSON.stringify({ copilot: { defaultModel: 'Auto' } })}`),
+    ]);
     t.truthy('with defaultModel "Nope": FAIL default model "Nope" is not in the picker', /FAIL\s+default model "Nope" is not in the picker/.test(nope.stdout), nope.stdout);
     t.check('and it exits 1', nope.code, 1);
     t.truthy('with defaultModel "Auto": ok default model "Auto" is in the picker', /\bok\s+default model "Auto" is in the picker/.test(auto.stdout), auto.stdout);
     // Everything else about this machine is the same in both runs, so the model is the one difference.
     t.check('the unknown model is exactly one more problem than the known one', nope.problems - auto.problems, 1);
+
+    // Read as the API reads it: a file it will not start on is the problem to name, not a file to
+    // take for empty. Taken for empty, doctor said "isolation: none" and "no default model is set"
+    // of a file that may say otherwise, and never that it was broken.
+    t.truthy('with settings.json "{broken": FAIL naming the file, why, and that the API will not start on it',
+      /FAIL\s+\S*settings\.json is not valid JSON .*the API will not start until it is mended or deleted/.test(broken.stdout), broken.stdout);
+    t.check('and nothing said about what the broken file holds',
+      [/isolation:/.test(broken.stdout), /no default model is set/.test(broken.stdout), broken.code], [false, false, 1]);
+    // A file saved by hand in Notepad starts with a byte-order mark; it is read, as the API reads it.
+    t.truthy('a settings file that starts with a byte-order mark is read: ok default model "Auto" is in the picker',
+      /\bok\s+default model "Auto" is in the picker/.test(marked.stdout) && !/settings\.json/.test(marked.stdout), marked.stdout);
   } finally {
     await new Promise((r) => registry.close(r));
   }

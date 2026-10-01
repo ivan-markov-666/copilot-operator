@@ -20,6 +20,7 @@ import { loadConfig, expandPath } from './config/schema.js';
 import { CopilotTransport } from './transport/copilotTransport.js';
 import { runSession } from './orchestrator/taskRunner.js';
 import { SessionStore } from './session/store.js';
+import { checkSettings, parseSettings, SettingsUnusableError } from './api/settings.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
@@ -276,40 +277,61 @@ program
         return null;
       }
     };
-    const settings = readJson('settings.json');
-
     /*
-     * Where the bot is running, which is the only thing that actually contains a command once it
-     * runs. Reported here rather than left to the README, because a machine that ignored the
-     * recommendation looked exactly like one that had followed it. The claim is the operator's;
-     * `doctor` only says what it can see and where the two disagree. See `exec/isolation.ts`.
+     * The settings, read the way the API reads them: a file that is there and cannot be used is the
+     * problem to report, since the API will not start on it, not a file to take for empty. Taken for
+     * empty, doctor said "isolation: none" and "no default model is set" of a file that may say
+     * otherwise, and never that it was broken. The checks below that read it wait until it is mended.
      */
-    const posture = assessIsolation(
-      (settings?.execution as { isolation?: IsolationClaim } | undefined)?.isolation ?? 'none',
-      readIsolationSignals(),
-    );
-    say(
-      posture.warnings.length === 0,
-      `isolation: ${posture.claim}, running as ${posture.signals.user}${posture.signals.elevated === true ? ' (ELEVATED)' : ''}`,
-    );
-    for (const concern of posture.warnings) say(false, `  ${concern}`);
-    const models = readJson('models.json') as { options?: Array<{ name: string }> } | null;
-    const copilot = (settings?.copilot as { defaultModel?: string; defaultReviewModel?: string } | undefined) ?? {};
-    const wanted: Array<[string, string]> = [
-      ['default model', (copilot.defaultModel ?? '').trim()],
-      ['default review model', (copilot.defaultReviewModel ?? '').trim()],
-    ].filter(([, name]) => name !== '') as Array<[string, string]>;
-    if (wanted.length === 0) {
-      console.log('  note  no default model is set; sessions leave the chat on whatever it shows');
-    } else if (!models?.options?.length) {
-      console.log(`  note  ${wanted.map(([w, n]) => `${w} "${n}"`).join(', ')} set, but the picker has never been read here — read it from the Settings page before trusting them`);
-    } else {
-      const names = new Set(models.options.map((o) => o.name));
-      for (const [what, name] of wanted) {
-        say(names.has(name), names.has(name) ? `${what} "${name}" is in the picker read on this machine` : `${what} "${name}" is not in the picker read on this machine (${models.options.length} option(s)) — the run would fall back to whatever the chat shows`);
+    const settingsFile = join(dataDir, 'settings.json');
+    let settings: Record<string, unknown> | null = {};
+    try {
+      const value = parseSettings(readFileSync(settingsFile, 'utf8'), settingsFile);
+      checkSettings(value, settingsFile);
+      settings = value;
+    } catch (e) {
+      // No file is the defaults, as it is for the API.
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        settings = null;
+        const what = e instanceof SettingsUnusableError ? `${e.path} ${e.problem}` : `${settingsFile} could not be read (${(e as Error).message})`;
+        say(false, `${what}; the API will not start until it is mended or deleted`);
       }
-      if (wanted.length === 2 && wanted[0]![1] === wanted[1]![1]) {
-        console.log('  note  the review runs on the same model as the work; a different one catches more');
+    }
+
+    if (settings) {
+      /*
+       * Where the bot is running, which is the only thing that actually contains a command once it
+       * runs. Reported here rather than left to the README, because a machine that ignored the
+       * recommendation looked exactly like one that had followed it. The claim is the operator's;
+       * `doctor` only says what it can see and where the two disagree. See `exec/isolation.ts`.
+       */
+      const posture = assessIsolation(
+        (settings.execution as { isolation?: IsolationClaim } | undefined)?.isolation ?? 'none',
+        readIsolationSignals(),
+      );
+      say(
+        posture.warnings.length === 0,
+        `isolation: ${posture.claim}, running as ${posture.signals.user}${posture.signals.elevated === true ? ' (ELEVATED)' : ''}`,
+      );
+      for (const concern of posture.warnings) say(false, `  ${concern}`);
+      const models = readJson('models.json') as { options?: Array<{ name: string }> } | null;
+      const copilot = (settings.copilot as { defaultModel?: string; defaultReviewModel?: string } | undefined) ?? {};
+      const wanted: Array<[string, string]> = [
+        ['default model', (copilot.defaultModel ?? '').trim()],
+        ['default review model', (copilot.defaultReviewModel ?? '').trim()],
+      ].filter(([, name]) => name !== '') as Array<[string, string]>;
+      if (wanted.length === 0) {
+        console.log('  note  no default model is set; sessions leave the chat on whatever it shows');
+      } else if (!models?.options?.length) {
+        console.log(`  note  ${wanted.map(([w, n]) => `${w} "${n}"`).join(', ')} set, but the picker has never been read here — read it from the Settings page before trusting them`);
+      } else {
+        const names = new Set(models.options.map((o) => o.name));
+        for (const [what, name] of wanted) {
+          say(names.has(name), names.has(name) ? `${what} "${name}" is in the picker read on this machine` : `${what} "${name}" is not in the picker read on this machine (${models.options.length} option(s)) — the run would fall back to whatever the chat shows`);
+        }
+        if (wanted.length === 2 && wanted[0]![1] === wanted[1]![1]) {
+          console.log('  note  the review runs on the same model as the work; a different one catches more');
+        }
       }
     }
 
