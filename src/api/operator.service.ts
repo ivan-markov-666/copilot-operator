@@ -677,6 +677,10 @@ export class OperatorService {
         }
         if (merged.baseBranch !== undefined) merged.baseBranch = merged.baseBranch.trim();
         if (merged.existingBranch !== undefined) merged.existingBranch = merged.existingBranch.trim();
+        // Only the program marks a name as one of its own branches, and a name changed is not that one.
+        const stillOwn = !!s.vcs?.branchNameExact && (merged.branchName ?? '').trim() === (s.vcs.branchName ?? '').trim();
+        if (stillOwn) merged.branchNameExact = true;
+        else delete merged.branchNameExact;
         /*
          * Where the session starts is fixed at its first run. A new choice clears that record, so
          * the next task to run is cut from what was chosen now; the tasks that already ran keep
@@ -2604,8 +2608,12 @@ export class OperatorService {
   private async rerunFromRestore(target: RestoreTarget, branch: string, tasks: Array<{ session: Session; task: Task }>): Promise<void> {
     if (target.session.vcs?.branchMode === 'per-session') {
       const left = sessionBranchName(target.session);
+      // The restore branch exists by this name, so the name is kept as it is (see `branchNameExact`).
       await this.store.updateSession(target.session.id, (s) => {
-        if (s.vcs) s.vcs.branchName = branch;
+        if (s.vcs) {
+          s.vcs.branchName = branch;
+          s.vcs.branchNameExact = true;
+        }
       });
       this.bus.publish({
         sessionId: target.session.id,
@@ -2644,7 +2652,10 @@ export class OperatorService {
           x.vcsBaseCommit = undefined;
           x.vcsStart = undefined;
         }
-        if (x.vcs) x.vcs.branchName = fresh;
+        if (x.vcs) {
+          x.vcs.branchName = fresh;
+          x.vcs.branchNameExact = true;
+        }
       });
       this.bus.publish({
         sessionId: s.id,

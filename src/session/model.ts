@@ -533,8 +533,19 @@ export type VersionControl = {
    * Empty means it is derived from the session's name, which is what it always was. A plan
    * can set it so the branch says what the work is rather than what the session was called.
    * It has no effect in `per-task` mode, where the name comes from each task.
+   *
+   * With `branchNameExact`, the whole name of a branch this program made, prefix and all.
    */
   branchName?: string;
+  /**
+   * `branchName` is a branch this program made, used exactly as written rather than made safe as a
+   * chosen name is (`plannedBranchName`). Set by "Run again from here" when it moves a session onto
+   * the restore branch, or onto a fresh one (see `OperatorService.rerunFromRestore`): made safe again,
+   * a name past forty characters under a prefix without a "/" came out shorter, a branch nobody had
+   * made, and the run cut it from the session's start instead of carrying on the branch it was moved
+   * to. Never taken from a request; it goes when the name is changed.
+   */
+  branchNameExact?: boolean;
   /**
    * Where this session's first branch is cut from.
    *

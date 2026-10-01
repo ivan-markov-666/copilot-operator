@@ -150,8 +150,18 @@ export async function prepareForTask(
  */
 export function sessionBranchName(session: Session): string {
   const prefix = session.vcs?.branchPrefix || 'cop/';
-  const planned = session.vcs?.branchName?.trim();
-  return planned ? plannedBranchName(planned, prefix) : branchNameFrom([session.name, session.id.slice(0, 13)], prefix);
+  return namedSessionBranch(session.vcs) ?? branchNameFrom([session.name, session.id.slice(0, 13)], prefix);
+}
+
+/**
+ * The branch a session's `branchName` names, or undefined when it names none: a name a plan or the
+ * operator chose, made safe (`plannedBranchName`), or a branch this program made, as it is written
+ * (`branchNameExact`). The one reading of the field, for the run and for what the pages show.
+ */
+export function namedSessionBranch(vcs: VersionControl | undefined): string | undefined {
+  const named = vcs?.branchName?.trim();
+  if (!named) return undefined;
+  return vcs?.branchNameExact ? named : plannedBranchName(named, vcs?.branchPrefix || 'cop/');
 }
 
 /**
@@ -327,8 +337,7 @@ export function sessionBranches(session: Session): SessionBranches {
     .filter((t) => !!t.vcs?.branch)
     .map((t) => ({ title: t.title, branch: t.vcs?.branch as string, commit: t.vcs?.commit, status: t.status }));
   if (mode === 'per-session') {
-    const planned = session.vcs?.branchName?.trim();
-    const complete = branches[branches.length - 1]?.branch ?? (planned ? plannedBranchName(planned, session.vcs?.branchPrefix || 'cop/') : undefined);
+    const complete = branches[branches.length - 1]?.branch ?? namedSessionBranch(session.vcs);
     return { mode, complete, branches };
   }
   return { mode, branches };

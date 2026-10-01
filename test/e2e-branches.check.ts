@@ -82,7 +82,7 @@ type TaskRec = {
   firstMessage?: string;
 };
 type Update = { outcome: string; from?: string; to?: string; remote?: string };
-type SessionRec = { id: string; name: string; chat?: { chatId: string }; vcsStart?: { commit?: string; update?: Update }; tasks: TaskRec[] };
+type SessionRec = { id: string; name: string; chat?: { chatId: string }; vcs?: { branchName?: string; branchNameExact?: boolean }; vcsStart?: { commit?: string; update?: Update }; tasks: TaskRec[] };
 type Preview = { ok: boolean; problem?: string; baseCommit?: string; leftBehind: string[]; keptOn?: string; branchName?: string; currentBranch?: string };
 type Restored = { ok: boolean; problem?: string; branch?: string; commit?: string };
 type RestartPlan = {
@@ -724,6 +724,69 @@ await scenario('Run again from here in per-session mode: the rerun\'s checkout m
   t.check('bad.txt is not in attempt 2\'s tree', b2.vcs?.commit ? tree(h, b2.vcs.commit).includes('bad.txt') : 'no commit', false);
   t.check('attempt 2 is on the restore branch the restart reported', b2.vcs?.branch, r.restored[0]?.split(' -> ')[1]);
   t.check('and cop/chain still holds the attempt that failed', h.git('rev-parse', 'cop/chain'), b!.vcs?.commit);
+});
+
+/*
+ * The same, under a prefix without a "/" and with names past forty characters: a task title, and the
+ * name of a later session of the run that carries on from this one. The session is moved onto the
+ * restore branch, and the later one onto a fresh branch, by their whole names. Read back, each was made
+ * safe again as a name a plan chose: the prefix came off and the rest was cut at forty, a branch nobody
+ * had made. B's rerun was then cut from the session's start, without A's work, and the later session ran
+ * on a branch other than the one it was said to carry on.
+ */
+await scenario('Run again from here under a prefix without a "/", with long names: each session carries on the branch it was moved to', { limits: { maxCheckRounds: 1 } }, async (h) => {
+  const LONG_TITLE = 'b-task that rewrites the integration tests for the editor page';
+  const LONG_NAME = 'second-session-whose-name-runs-well-past-forty-characters';
+  const bot = (name: string, tasks: unknown[], vcs: Record<string, unknown> = {}): Record<string, unknown> =>
+    (plan(h, name, tasks, { branchPrefix: 'bot-', startFrom: 'branch', baseBranch: 'main', updateFromRemote: false, ...vcs }).sessions as unknown[])[0] as Record<string, unknown>;
+  const [first, second] = await h.importPlan({
+    version: 1,
+    sessions: [
+      bot('first-bot', [
+        fileTask('a-task', 'a.txt', 'a'),
+        { title: LONG_TITLE, prompt: 'Create good.txt in the repository root holding exactly the text good, and nothing else.', checks: [{ name: 'good.txt written', expect: 'file-contains', file: 'good.txt', value: 'good' }] },
+      ]),
+      // No branch name of its own: it is made from the session's name and id, past forty characters.
+      bot(LONG_NAME, [fileTask('c-task', 'c.txt', 'c')], { startFrom: 'previous-session', branchName: '' }),
+    ],
+  });
+  h.chat.script(write('a.txt', 'a'), reply.done(), write('bad.txt', 'bad'), reply.done(), write('good.txt', 'nope'), reply.done(), write('c.txt', 'c'), reply.done());
+  await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'continue' });
+  await h.idle();
+  const [a, b] = (await read(h, first!.id)).tasks;
+  t.check('A done, B failed, C ran after it', [a!.status, b!.status, (await read(h, second!.id)).tasks[0]!.status], ['done', 'failed', 'done']);
+
+  let aAtStart: boolean | undefined;
+  h.chat.script(
+    () => {
+      aAtStart = existsSync(join(h.repo, 'a.txt'));
+      return write('good.txt', 'good');
+    },
+    reply.done(),
+    write('c.txt', 'c'),
+    reply.done(),
+  );
+  const r = await h.call<Restarted>('POST', `/sessions/${first!.id}/tasks/${b!.id}/restart`, { restore: true });
+  const restoreBranch = r.restored[0]?.split(' -> ')[1] ?? '';
+  t.truthy('started, onto a restore branch under bot- whose name runs past the prefix and forty characters',
+    r.started && restoreBranch.startsWith('bot-restore-') && restoreBranch.length > 'bot-'.length + 40, r);
+  await h.idle();
+  const b2 = (await read(h, first!.id)).tasks[1]!;
+  t.check('B\'s second attempt is done', b2.status, 'done');
+  t.check('on the restore branch the restart reported, from A\'s commit, with a.txt in its tree',
+    [b2.vcs?.branch, b2.vcs?.baseCommit, aAtStart, b2.vcs?.commit ? tree(h, b2.vcs.commit).includes('a.txt') : 'no commit'],
+    [restoreBranch, a!.vcs?.commit, true, true]);
+  const later = await read(h, second!.id);
+  const c2 = later.tasks[0]!;
+  t.truthy('the later session was moved onto a fresh branch by its whole name, past forty characters after the prefix',
+    (later.vcs?.branchName ?? '').startsWith('bot-') && (later.vcs?.branchName ?? '').length > 'bot-'.length + 40, later.vcs);
+  t.check('and its task ran again on that branch, from B\'s attempt 2', [c2.status, c2.vcs?.branch, c2.vcs?.baseCommit], ['done', later.vcs?.branchName, b2.vcs?.commit]);
+
+  // Kept as written because the program made that branch: a name the operator changes is a chosen
+  // name again, made safe, and a request cannot mark one as the program's own.
+  await h.call('PUT', `/sessions/${first!.id}`, { vcs: { branchName: 'My Renamed Line', branchNameExact: true } });
+  const renamed = await read(h, first!.id);
+  t.check('a name changed through the page is a chosen name again, whatever the request says', [renamed.vcs?.branchName, renamed.vcs?.branchNameExact ?? null], ['My Renamed Line', null]);
 });
 
 /*
