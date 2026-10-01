@@ -13,6 +13,9 @@
  */
 import { chromium, type Page } from 'playwright';
 import { CopilotTransport } from '../src/transport/copilotTransport.js';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Tally } from './support/harness.js';
 
 const t = new Tally();
@@ -77,7 +80,8 @@ try {
   for (const mode of ['any', 'focused', 'toggle', 'outside']) {
     console.log(`\n=== a menu that closes on: ${mode} ===`);
     const page = await browser.newPage();
-    const transport = new CopilotTransport({ profileDir: '', transportDir: '', chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000 });
+    const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000 });
     // The transport is given this page instead of opening Edge; `open()` is never called.
     (transport as unknown as { page: Page }).page = page;
     await page.setContent(PAGE.replace('__MODE__', mode));
@@ -106,6 +110,13 @@ try {
 
     const listed = await transport.listModels();
     t.check(`${mode}: reading the whole list leaves the menu closed`, [listed.options.map((o) => o.name), await menuOpen()], [['Auto', 'Think deeper', 'GPT 5.6 Think deeper', 'GPT 5.6 Quick response'], false]);
+    // The menu as it was is kept beside the reading (2026-10-01), so a wrong list can be looked into.
+    const kept = ['models-top.html', 'models-top.png', 'models-top.json', 'models-group-GPT.json', 'models-result.json'].map((f) => existsSync(join(transportDir, f)));
+    t.check(`${mode}: the menu, a picture of it, and what was read from it are kept`, kept, [true, true, true, true, true]);
+    const result = JSON.parse(readFileSync(join(transportDir, 'models-result.json'), 'utf8')) as { options: Array<{ name: string }> };
+    t.check(`${mode}: the kept result is the list returned`, result.options.map((o) => o.name), listed.options.map((o) => o.name));
+    t.truthy(`${mode}: the kept HTML is the menu's`, readFileSync(join(transportDir, 'models-top.html'), 'utf8').includes('Think deeper'), '');
+    rmSync(transportDir, { recursive: true, force: true });
     await page.close();
   }
 } finally {

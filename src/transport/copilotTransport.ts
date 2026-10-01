@@ -695,6 +695,7 @@ Current URL: ${url}`);
     }
 
     const top = await this.readMenuRows();
+    await this.captureMenu('top', top);
     await this.closeMenu();
 
     const options: ModelOption[] = top.filter((r) => !r.opensSubmenu).map(({ opensSubmenu, ...o }) => o);
@@ -712,7 +713,42 @@ Current URL: ${url}`);
     }
 
     this.emit('models-read', { count: options.length, groups: groups.length, current });
+    await this.captureMenu('result', top, { current, options }).catch(() => undefined);
     return { options, current };
+  }
+
+  /**
+   * What the picker showed, kept beside the reading: the menu as HTML, a picture of it, and the rows
+   * that were read from it.
+   *
+   * The picker is Microsoft's markup and it changes without notice; when "Read the list from
+   * Copilot" comes back with the wrong models, the only way to see why is the menu as it was at that
+   * moment. Written to this transport's folder (runs/_models for that button), overwritten by the
+   * next reading, and never a reason for the reading to fail. Nothing personal is in a model menu.
+   */
+  private async captureMenu(label: string, rows: MenuRow[], extra?: Record<string, unknown>): Promise<void> {
+    try {
+      await mkdir(this.opts.transportDir, { recursive: true });
+      const base = join(this.opts.transportDir, `models-${label}`);
+      if (label !== 'result') {
+        const html = await this.p
+          .evaluate((selectors) => {
+            const parts: string[] = [];
+            for (const sel of selectors) {
+              for (const el of Array.from(document.querySelectorAll(sel))) {
+                if ((el as HTMLElement).getClientRects().length > 0) parts.push(`<!-- ${sel} -->\n${el.outerHTML}`);
+              }
+            }
+            return parts.join('\n\n');
+          }, [...Model.popupSelectors])
+          .catch((e: unknown) => `<!-- could not read the menu: ${String(e)} -->`);
+        await writeFile(`${base}.html`, html, 'utf8');
+        await this.p.screenshot({ path: `${base}.png` }).catch(() => undefined);
+      }
+      await writeFile(`${base}.json`, JSON.stringify({ at: new Date().toISOString(), rows, ...(extra ?? {}) }, null, 2), 'utf8');
+    } catch {
+      /* a diagnostic, never the reason a reading fails */
+    }
   }
 
   /** Every visible menu row right now, across the menu and whatever submenu is open. */
@@ -782,6 +818,7 @@ Current URL: ${url}`);
       await trigger.click().catch(() => undefined);
       children = await this.waitForNewRows(topNames);
     }
+    await this.captureMenu(`group-${groupName.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)}`, children);
 
     await this.closeMenu();
     return children;
