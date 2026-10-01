@@ -1753,6 +1753,11 @@ export async function runTask(
      * one that comes after the checks have accepted the work ends it before a review conversation
      * is opened for it. A verdict the checks reached on their own — out of rounds, no progress,
      * checks that cannot run — stands.
+     *
+     * With the review switched off there is no conversation to keep from opening, and nothing left
+     * to judge once the checks have accepted the work: a Stop then leaves the task done, its review
+     * recorded as skipped. Ended `aborted` "before the review", it named a review that did not
+     * exist, and a batch that stops on a failure counted it as one and skipped the sessions after.
      */
     const settleDone = async (summary: string | undefined): Promise<TaskOutcome | null> => {
       const verdict = await gateOnChecks();
@@ -1770,7 +1775,7 @@ export async function runTask(
         return await finish('failed', checksFailedReason(lastOutcomes), summary, lastMarkdown);
       }
       if (verdict === 'retry') return null;
-      if (signal?.aborted) return await finish('aborted', 'stopped by the operator before the review', summary, lastMarkdown);
+      if (reviewWanted && signal?.aborted) return await finish('aborted', 'stopped by the operator before the review', summary, lastMarkdown);
       const reviewed = await gateOnReview(summary);
       if (reviewed === 'stopped') return await finish('aborted', 'stopped by the operator during the review', summary, lastMarkdown);
       if (reviewed === 'accept') return await finish('done', undefined, summary, lastMarkdown);

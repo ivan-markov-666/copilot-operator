@@ -26,7 +26,8 @@
  *   check turned down for passing on the work goes back with the operator's own patterns applied;
  * - Stop pressed during the review ends the task aborted, not done, with nothing more sent to either
  *   chat, and the review loop ends on it by itself, not only because the runner's chat refuses to
- *   send; pressed once the checks have accepted the work, it ends the task before a review opens.
+ *   send; pressed once the checks have accepted the work, it ends the task before a review opens,
+ *   and with the review switched off it leaves the task done, there being nothing left to judge.
  *
  *   npm run check:e2e-review   (or: npx tsx test/e2e-review.check.ts)
  */
@@ -792,6 +793,37 @@ await scenario('Stop pressed once the checks have passed, before the review', {}
   t.check('and nothing reached the chat after the stop', h.chat.sent.slice(sentAtStop).map((m) => m.text.slice(0, 120)), []);
   const cont = await h.raw('POST', `/sessions/${s!.id}/tasks/${task.id}/continue`);
   t.truthy('and "Continue" can carry it on', cont.status >= 200 && cont.status < 300, cont);
+});
+
+/*
+ * The same Stop with the review switched off, and nothing else left to judge: no checks, version
+ * control off, so the checks accept at once. The chat ended with its stop word and one last step;
+ * the step ran and the operator pressed Stop while the chat answered its report, as one does to stop
+ * the queue after this task. There is no review to keep from opening, so the task is done, its review
+ * recorded as skipped. It ended aborted "before the review", naming a review that did not exist, and
+ * a batch that stops on a failure counted it as one and skipped the sessions after it.
+ */
+await scenario('Stop pressed with the review switched off and nothing left to judge: the task is done', {}, async (h) => {
+  const plan1 = {
+    version: 1,
+    sessions: [{ name: 'noreview', onFailure: 'stop', vcs: { enabled: false }, projectDir: h.repo, review: { enabled: false }, tasks: [greeting] }],
+  };
+  const [s] = await h.importPlan(plan1);
+  const summary = 'I wrote hello.txt holding the word hi, and changed nothing else in the repository.';
+  const last = 'Here is my answer.\n\n```json\n' +
+    JSON.stringify({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: "Set-Content -Path hello.txt -Value 'hi' -Encoding utf8" }], summary }, null, 2) +
+    '\n```\nКрай\n';
+  h.chat.script(last, async () => {
+    await h.call('POST', `/sessions/${s!.id}/stop`);
+    return reply.done();
+  });
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  await h.idle();
+  const task = await taskNow(h, s!.id);
+  t.check('the step ran', readFileSync(join(h.repo, 'hello.txt'), 'utf8').trim(), 'hi');
+  t.check('the task is done, not aborted before a review that is switched off', [task.status, (task.reason ?? '').includes('review')], ['done', false]);
+  t.check('its review is recorded as skipped', task.review?.verdict, 'skipped');
+  t.check('no review conversation was opened', reviewConversations(h), 0);
 });
 
 console.log(`\nruntime: ${((Date.now() - started) / 1000).toFixed(1)} s`);
