@@ -717,6 +717,12 @@ export class OperatorController {
    * Re-reads the picker from the live chat. Slow on purpose: it opens the browser with the
    * bot profile, so it cannot run while a session is running.
    */
+  /** "Sign in" from Settings: opens the bot's Edge and waits for the operator to sign in. See `OperatorService.login`. */
+  @Post('login')
+  login(@Body() body: { account?: string }): Promise<unknown> {
+    return this.ops.login(body?.account).catch(fail);
+  }
+
   @Post('models/refresh')
   refreshModels(): Promise<unknown> {
     return this.ops.refreshModels().catch(fail);

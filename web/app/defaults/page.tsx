@@ -71,6 +71,7 @@ export default function DefaultsPage() {
         <p className="why">{t('def.autoSave')}</p>
       </div>
       <ProjectSection />
+      <LoginSection />
       <ModelSection {...shared} />
       <ReviewModelSection {...shared} />
       <ExecutionSection />
@@ -769,6 +770,71 @@ function ExecutionSection() {
 // ---------------------------------------------------------------------------------------
 // The models: one for the work, one for the second opinion
 // ---------------------------------------------------------------------------------------
+
+/**
+ * "Sign in to Copilot": what `cop login` does in a terminal, from here.
+ *
+ * The bot works in an Edge profile of its own, and it has to be signed in to Microsoft 365 once
+ * before anything can run or the models can be read. The button opens that window and waits; the
+ * person signs in there themselves — the bot never types a password — and the window closes when
+ * the chat appears. An account, when given, is asked for by name after signing the profile out,
+ * because Edge on a work machine otherwise picks whichever account Windows knows.
+ */
+function LoginSection() {
+  const { t } = useT();
+  const [account, setAccount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const signIn = async () => {
+    setBusy(true);
+    setErr('');
+    setMsg(t('login.waiting'));
+    try {
+      const r = await api.login(account);
+      if (r.ok) setMsg(r.message);
+      else {
+        setMsg('');
+        setErr(r.message);
+      }
+    } catch (e) {
+      setMsg('');
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel" id="login">
+      <h2>{t('login.title')}</h2>
+      <p className="muted small">{t('login.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      <label htmlFor="login-account">{t('login.account')}</label>
+      <div className="row">
+        <input
+          id="login-account"
+          type="email"
+          className="grow"
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+          placeholder="name@company.com"
+          disabled={busy}
+        />
+        <button className="primary" onClick={() => void signIn()} disabled={busy}>
+          {busy ? t('login.busy') : t('login.button')}
+        </button>
+      </div>
+      <p className="why">{t('login.accountWhy')}</p>
+      {msg && (
+        <div className="small" role="status">
+          {msg}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels) {
   const { t } = useT();

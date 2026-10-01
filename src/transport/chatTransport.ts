@@ -39,6 +39,9 @@ export type ChatTransport = Pick<
   | 'waitForReply'
   | 'dumpFailure'
   | 'recentCrash'
+  | 'signOut'
+  | 'gotoChatAs'
+  | 'findAccountsInPage'
 >;
 
 export type TransportFactory = (opts: TransportOptions) => ChatTransport;

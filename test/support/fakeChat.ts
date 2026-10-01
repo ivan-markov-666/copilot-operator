@@ -67,6 +67,12 @@ export class FakeCopilot {
   currentModel = 'Auto';
   /** Every model the runner asked for, in order. */
   readonly modelRequests: string[] = [];
+  /** The accounts the page shows once signed in, for "Sign in" from Settings. */
+  accounts: string[] = [];
+  /** How often the sign-in was waited for and the profile signed out, and which accounts were asked for. */
+  signIns = 0;
+  signOuts = 0;
+  readonly askedAccounts: string[] = [];
 
   private readonly queue: Script[] = [];
   private nextChat = 1;
@@ -158,6 +164,21 @@ class FakeChat implements ChatTransport {
 
   async ensureSignedIn(): Promise<void> {
     if (!this.isOpen) throw new Error('ensureSignedIn before open');
+    this.world.signIns += 1;
+  }
+
+  async signOut(): Promise<void> {
+    if (!this.isOpen) throw new Error('signOut before open');
+    this.world.signOuts += 1;
+  }
+
+  async gotoChatAs(upn: string | undefined): Promise<void> {
+    if (!this.isOpen) throw new Error('gotoChatAs before open');
+    this.world.askedAccounts.push(upn ?? '');
+  }
+
+  async findAccountsInPage(): Promise<string[]> {
+    return [...this.world.accounts];
   }
 
   async newChat(): Promise<void> {

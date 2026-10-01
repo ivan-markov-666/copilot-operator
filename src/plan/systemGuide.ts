@@ -3062,6 +3062,37 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         ],
       },
       {
+        headingKey: 'login.title',
+        en: 'Sign in to Copilot',
+        bg: 'Вход в Copilot',
+        controls: [
+          {
+            key: 'login.account',
+            kind: 'field',
+            en: 'Account (optional)',
+            bg: 'Акаунт (по желание)',
+            doesEn: 'The work or school address to sign in as. Empty: whichever account is chosen in the window. With one, the profile is signed out first and Microsoft is asked for it.',
+            doesBg: 'Служебният адрес, с който да се влезе. Празно: какъвто акаунт се избере в прозореца. С адрес профилът първо излиза и Microsoft се пита точно за него.',
+          },
+          {
+            key: 'login.button',
+            kind: 'button',
+            en: 'Sign in to Copilot',
+            bg: 'Вход в Copilot',
+            doesEn: 'What "cop login" does: opens the bot\'s own Edge, waits for the operator to sign in there (the bot never types a password), and closes once the chat appears. Needed once before a run or a reading of the models.',
+            doesBg: 'Това, което прави „cop login“: отваря собствения Edge на бота, чака операторът да влезе в него (ботът никога не пише парола) и се затваря, щом чатът се появи. Нужно е веднъж преди пускане или четене на моделите.',
+          },
+          {
+            key: 'login.busy',
+            kind: 'note',
+            en: 'Waiting for you to sign in…',
+            bg: 'Чака да влезете…',
+            doesEn: 'The same button while the sign-in window is open; runs and the reading of the models wait for it.',
+            doesBg: 'Същият бутон, докато прозорецът за вход е отворен; пусканията и четенето на моделите чакат.',
+          },
+        ],
+      },
+      {
         headingKey: 'def.modelTitle',
         en: 'Model for new sessions',
         bg: 'Модел за новите сесии',

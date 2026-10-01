@@ -88,10 +88,10 @@ type Running = {
 type Waiting = { approval: PendingApproval; resolve: (d: PolicyDecision) => void };
 
 /** Who has the browser profile: a session's run of its own, a batch, or a read of the model list. */
-type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'batch' } | { kind: 'models' };
+type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'batch' } | { kind: 'models' } | { kind: 'login' };
 
 /** Who is asking for the browser, so a refusal can be said in terms of what they pressed. */
-type BrowserAsk = { kind: 'run'; sessionId: string } | { kind: 'batch'; sessionIds: string[] } | { kind: 'models' };
+type BrowserAsk = { kind: 'run'; sessionId: string } | { kind: 'batch'; sessionIds: string[] } | { kind: 'models' } | { kind: 'login' };
 
 /** How one finished run went, counted over the tasks that were queued when it started. */
 export type RunTally = {
@@ -315,6 +315,14 @@ export type RegistryEntry = {
  */
 function browserRefusal(held: BrowserHolder, ask: BrowserAsk): string {
   const modelsWhileRunning = 'A session is running and it is using the browser profile. Stop it first, then read the models.';
+  const loginWhileBusy = 'The browser profile is in use right now. Sign in once the run, or the reading of the models, has finished.';
+  // The sign-in window holds the profile until the operator has signed in and it closes.
+  if (held.kind === 'login') {
+    return ask.kind === 'login'
+      ? 'The sign-in window is already open. Finish signing in there.'
+      : 'the sign-in window is open and has the browser profile; finish signing in first';
+  }
+  if (ask.kind === 'login') return loginWhileBusy;
   if (held.kind === 'batch') {
     if (ask.kind === 'models') return modelsWhileRunning;
     return ask.kind === 'batch' ? 'a batch is already running' : 'a batch of sessions is running';
@@ -2856,6 +2864,75 @@ export class OperatorService {
    * gets to choose from, which is the only way this keeps working when Microsoft changes the
    * line-up.
    */
+  /**
+   * "Sign in" from Settings: what `cop login` does, from the page.
+   *
+   * Opens Edge with the bot's own profile — the one in Settings, which is the one every run uses —
+   * and waits for the operator to sign in to Microsoft 365 Copilot. With an account, the profile is
+   * signed out first and the chat asked for that account, because Edge on a work machine otherwise
+   * signs the profile in with whatever account Windows knows. The bot never types a credential:
+   * the person signs in, completes any verification, and the window closes once the chat is there.
+   *
+   * The request stays open until then (up to `copilot.signInTimeoutSec`). It takes the browser like
+   * a run does, so it is refused while a run or a reading of the models has it, and they are while
+   * it is open.
+   */
+  async login(account?: string): Promise<{ ok: boolean; accounts: string[]; account?: string; matched?: boolean; message: string }> {
+    const upn = account?.trim() || undefined;
+    if (upn && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(upn)) {
+      throw new Error(`"${upn}" is not an account address. Give the work or school address, for example name@company.com, or leave it empty.`);
+    }
+    const claim = this.claimBrowser({ kind: 'login' });
+    if ('refused' in claim) throw new Error(claim.refused);
+    let transport: ChatTransport | null = null;
+    try {
+      await this.init();
+      const cfg = await this.settings.load();
+      transport = createTransport({
+        profileDir: cfg.resolved.profileDir,
+        transportDir: join(cfg.resolved.runsDir, '_login'),
+        chatUrl: cfg.copilot.url,
+        channel: cfg.copilot.channel,
+        // Always on screen, whatever Settings say: a person has to see the window to sign in.
+        headless: false,
+        replyTimeoutMs: 60_000,
+        signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
+        humanWaitMs: cfg.copilot.signInTimeoutSec * 1000,
+        keepFailurePage: cfg.copilot.keepFailurePage,
+      });
+      await transport.open();
+      if (upn) {
+        await transport.signOut();
+        await transport.gotoChatAs(upn, cfg.copilot.url);
+      }
+      await transport.ensureSignedIn(upn ? undefined : cfg.copilot.url);
+      const accounts = await transport.findAccountsInPage();
+      if (!upn) {
+        return {
+          ok: true,
+          accounts,
+          message: accounts.length > 0 ? `Signed in. The page shows: ${accounts.join(', ')}.` : 'Signed in.',
+        };
+      }
+      const matched = accounts.some((a) => a.toLowerCase() === upn.toLowerCase());
+      if (matched) return { ok: true, accounts, account: upn, matched, message: `Signed in as ${upn}.` };
+      if (accounts.length > 0) {
+        return {
+          ok: false,
+          accounts,
+          account: upn,
+          matched,
+          message: `Signed in, but not as ${upn}: the page shows ${accounts.join(', ')}. Sign in again and choose "Use another account".`,
+        };
+      }
+      return { ok: true, accounts, account: upn, message: `Signed in. The account could not be read from the page, so ${upn} is not confirmed.` };
+    } finally {
+      // Always closed: a window left open keeps the profile locked, and the next run would fail on it.
+      await transport?.close().catch(() => undefined);
+      this.releaseBrowser(claim.holder);
+    }
+  }
+
   async refreshModels(): Promise<ModelCatalogue> {
     // Asked of the one claim every window goes through (see `browser`), before anything is waited
     // for. It used to count the sessions running, which is none in the moment between two

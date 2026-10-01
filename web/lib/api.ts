@@ -337,6 +337,9 @@ export type VcsStatus = {
   };
 };
 
+/** What "Sign in" from Settings found once the chat was there. */
+export type LoginResult = { ok: boolean; accounts: string[]; account?: string; matched?: boolean; message: string };
+
 export type FolderPick = { ok: true; path: string } | { ok: false; cancelled: boolean; reason?: string };
 
 /** One task of one session, as the registry page lists it. */
@@ -1066,6 +1069,9 @@ export const api = {
   /** Opens the browser and re-reads the picker. Slow, and refused while a session runs. */
   // Opens the chat in a browser window and signs in first: minutes, not seconds.
   refreshModels: () => call<ModelCatalogue>('/models/refresh', { method: 'POST', body: '{}' }, { timeoutMs: null }),
+  /** Opens the bot's Edge and waits until the operator has signed in: open as long as that takes. */
+  login: (account?: string) =>
+    call<LoginResult>('/login', { method: 'POST', body: JSON.stringify({ account: account?.trim() || undefined }) }, { timeoutMs: null }),
 };
 
 /** Bytes as something a person reads, not a number to decode. */
