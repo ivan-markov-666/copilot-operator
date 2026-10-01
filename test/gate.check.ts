@@ -20,11 +20,10 @@
  * - the environment a step is started with, named rather than inherited;
  * - and one decision pin: an administrator's lock does not cap `execution.networkFetch`.
  *
- * A check marked `// DEFECT:` fails on purpose: it names a product defect, and turns green when the
- * defect is fixed. Nothing here starts a server, opens a browser or touches the operator's data: the
- * only files are in a temporary folder, removed at the end.
+ * Nothing here starts a server, opens a browser or touches the operator's data: the only files are
+ * in a temporary folder, removed at the end.
  *
- *   npx tsx test/gate.check.ts        (npm run check:gate once it is added to package.json)
+ *   npm run check:gate
  */
 import { rmSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';

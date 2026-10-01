@@ -23,9 +23,7 @@
  * throwaway repository of its own: to ask what a restore would name its branch, and whether the
  * branch names built here are ones git accepts.
  *
- * A check marked `// DEFECT:` fails on purpose until the product is fixed; see the comment on it.
- *
- *   npm run check:pins      (not wired into package.json yet: npx tsx test/pins.check.ts)
+ *   npm run check:pins
  */
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';

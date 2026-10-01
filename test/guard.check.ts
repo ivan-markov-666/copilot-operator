@@ -14,9 +14,7 @@
  * harness has its own data folder, runs folder, repository and a free port; nothing touches the
  * operator's own data, and no browser is opened.
  *
- * Checks marked `// DEFECT:` fail on purpose until the product is fixed; see the comment on each.
- *
- *   npm run check:guard      (until package.json has the script: npx tsx test/guard.check.ts)
+ *   npm run check:guard
  */
 import { request, type IncomingHttpHeaders } from 'node:http';
 import { spawnSync } from 'node:child_process';
