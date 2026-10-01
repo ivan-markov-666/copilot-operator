@@ -287,8 +287,24 @@ export class SessionStore {
     });
   }
 
+  /**
+   * The session of this id, or null when there is none.
+   *
+   * An id that could not be a session's file name — a path, `..`, anything `safeName` refuses —
+   * names no session, and is answered as one that does not exist. It used to throw here, so every
+   * route that only reads a session (the session itself, a task's log, story or files, a start)
+   * answered a path for an id with a 500 rather than the 404 or "no such session" a missing one
+   * gets. A write or a delete of such an id is still refused outright: those go through
+   * `sessionPath` themselves.
+   */
   async getSession(id: string): Promise<Session | null> {
-    return await this.readSession(this.sessionPath(id));
+    let path: string;
+    try {
+      path = this.sessionPath(id);
+    } catch {
+      return null;
+    }
+    return await this.readSession(path);
   }
 
   async createSession(name: string, projectDir = ''): Promise<Session> {

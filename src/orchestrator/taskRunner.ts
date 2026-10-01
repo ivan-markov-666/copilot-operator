@@ -17,12 +17,12 @@ import { join } from 'node:path';
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ReplyCapture } from '../transport/copilotTransport.js';
 import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
-import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
+import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
-import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type ShellProblem } from '../exec/shells.js';
+import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell, type ShellProblem } from '../exec/shells.js';
 import { runChecks, failureMessage, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
@@ -33,10 +33,11 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, checkCommandRefusal } from '../exec/policy.js';
+import { describeStep, checkCommandRefusal, commandRefusal, type PolicyConfig } from '../exec/policy.js';
+import { networkFetchReason } from '../exec/network.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
-import { projectRoots, type Confinement } from '../exec/confinement.js';
+import { confinementRefusal, projectRoots, type Confinement } from '../exec/confinement.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -51,7 +52,7 @@ import { treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import type { Session, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { prepareForTask, commitTaskResult, repoDirOf } from '../vcs/taskVcs.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
@@ -112,6 +113,29 @@ function checksFailedReason(outcomes: CheckOutcome[]): string {
     : `the task reported itself as done, but these checks did not pass: ${failed
         .map((o) => `${o.check.name} (${o.detail})`)
         .join('; ')}`;
+}
+
+/** A package runner (`npx` and its kin): it fetches the tool it names unless the project has it installed. */
+const PACKAGE_RUNNER = /\b(?:npx|pnpx|bunx)(?:\.cmd|\.exe)?\s|\b(?:pnpm|yarn)(?:\.cmd)?\s+dlx\s|\bnpm(?:\.cmd)?\s+exec\s/i;
+
+/**
+ * Why a check's command line is refused for itself, or null when the gate refuses it, if at all,
+ * only for what the project's files hold now.
+ *
+ * `checkCommandRefusal` is the gate; this is the part of it that nothing in the tree decides — the
+ * command's own words, the settings, the folders it reaches. The other two parts read the files,
+ * and the work can change both: the scripts the command runs, refused while missing or while they
+ * hold a line the gate refuses (see `scriptFiles.ts`), and a package runner, held only while its
+ * tool is not installed in the project (see `network.ts`). A command with a package runner in it is
+ * left to them whatever else it fetches: ending a task on a check the work could still have made
+ * run is the worse mistake of the two.
+ */
+function lineRefusal(command: string, shell: Shell, cwd: string, cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms'>, roots: string[]): string | null {
+  return (
+    commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms) ??
+    confinementRefusal(command, { roots, cwd }) ??
+    (PACKAGE_RUNNER.test(command) ? null : networkFetchReason(command, cwd))
+  );
 }
 
 /**
@@ -198,6 +222,29 @@ function refusedResult(step: Step, reason: string, by: 'runner' | 'operator' = '
     logPath: '',
     lastOutputAgoMs: 0,
   };
+}
+
+/**
+ * The same chat, refusing to send once the run has been stopped.
+ *
+ * Handed to the review, whose own loop looks at the signal only between its rounds of steps: a
+ * Stop pressed while a reviewer's step ran still had that step's report sent, and the reviewer's
+ * answer to it waited for, before the review noticed — a Stop that took as long as a reply. Refused
+ * here, the review ends at the send, and the runner, seeing the Stop, ends the task `aborted` (see
+ * `gateOnReview`). Everything else is the chat itself, unchanged.
+ */
+function sendsUntilStopped(transport: ChatTransport, signal: AbortSignal | undefined): ChatTransport {
+  if (!signal) return transport;
+  return new Proxy(transport, {
+    get(target, key) {
+      if (key === 'sendAndConfirm') {
+        return (...args: Parameters<ChatTransport['sendAndConfirm']>) =>
+          signal.aborted ? Promise.reject(new Error('the run was stopped; nothing more is sent')) : target.sendAndConfirm(...args);
+      }
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 /** One place that writes to the transcript, the console and the live stream at once. */
@@ -300,6 +347,28 @@ export async function enterSessionConversation(
   } else {
     await transport.newChat();
   }
+}
+
+/**
+ * Whether the attempt a "Continue" carries on was held in another conversation than the one the
+ * session is in now, and which, when that is known.
+ *
+ * Each attempt keeps the conversation it was sent into as `chat.json` in its run folder (see
+ * `runTask`), and that record answers it. An attempt from before every attempt kept one has none;
+ * for those the session's own pointer answers it as far as it can: a conversation registered by
+ * another attempt after this one started cannot hold it. That is what a later task's retry in a
+ * fresh conversation leaves behind (see `runSession`), the one thing that moves a session.
+ */
+async function conversationOfAttempt(
+  runsDir: string,
+  stopped: Pick<TaskAttempt, 'runId' | 'startedAt'> | undefined,
+  current: ChatPointer | undefined,
+): Promise<{ elsewhere: boolean; pointer: ChatPointer | null }> {
+  if (!stopped?.runId || !current) return { elsewhere: false, pointer: null };
+  const pointer = await loadPointer(join(runsDir, stopped.runId, 'chat.json'));
+  if (pointer) return { elsewhere: pointer.chatId !== current.chatId, pointer };
+  const registeredSince = current.runId !== stopped.runId && !!stopped.startedAt && Date.parse(current.createdAt) > Date.parse(stopped.startedAt);
+  return { elsewhere: registeredSince, pointer: null };
 }
 
 /**
@@ -860,6 +929,41 @@ export async function runTask(
       return await finish('blocked', `the task contradicts itself, so it was not started: ${conflicts.join(' ')} Change the prompt, the checks, the scope or read-only, and queue it again.`);
     }
 
+    /*
+     * "Continue" carries a task on in the conversation that has it, which is the session's own
+     * unless the session has moved since — a later task's retry in a fresh conversation moves it.
+     * Then "carry on; the assignment is the one you were given above", sent where the session is
+     * now, landed in a conversation that had never seen the task. So the attempt's own conversation
+     * is opened again and the session goes back to it, the later queued tasks with it; where that
+     * cannot be done, a fresh one is opened and the task goes out in full, with the contract,
+     * saying that it continues an earlier attempt (see `composeOpening`).
+     */
+    if (task.continuing) {
+      const where = await conversationOfAttempt(cfg.resolved.runsDir, task.attempts?.at(-1), session.chat);
+      if (where.elsewhere) {
+        const own = where.pointer;
+        // By its id only. Every conversation of a session carries the session's name, the fresh
+        // ones a retry opens included, so the name would find one of those just as readily.
+        const back = !!own && (await transport.openConversation(own.chatId).catch(() => false));
+        if (!back) await transport.newChat();
+        const chat = back && own ? own : undefined;
+        session.chat = chat;
+        session.contractSent = !!chat;
+        await store.updateSession(session.id, (s) => {
+          s.chat = chat;
+          s.contractSent = !!chat;
+        });
+        sink.event(
+          back ? 'chat-returned' : 'chat-fresh-for-continue',
+          { chatId: chat?.chatId ?? null, from: where.pointer?.chatId ?? null },
+          back
+            ? `continuing in the task's own conversation "${own?.name}", where it was stopped; the session carries on there`
+            : "the conversation this task was stopped in is not the session's any more and could not be opened again, so it continues in a fresh one, sent in full",
+          back ? 'info' : 'warn',
+        );
+      }
+    }
+
     // --- opening messages -------------------------------------------------------------
     const { content: level1 } = await store.getLevel1();
     const taskNumber = session.tasks.findIndex((t) => t.id === task.id) + 1;
@@ -895,6 +999,10 @@ export async function runTask(
       const before = await transport.sendAndConfirm(message);
       sink.event('message-sent', { index, chars: message.length },
         `message ${index + 1}/${opening.messages.length} sent`);
+      // The conversation this attempt is in, kept in its run folder as soon as the attempt is in it:
+      // what "Continue" goes back to (see `conversationOfAttempt`). A new conversation is known only
+      // once it answers, and is kept where it is registered, below.
+      if (index === 0 && session.chat) await savePointer(log.path('chat.json'), session.chat);
 
       const reply = await transport.waitForReply(before);
       lastMarkdown = reply.markdown;
@@ -955,11 +1063,13 @@ export async function runTask(
      *
      * Returns `accept` when there is nothing to check or everything passed, `retry` when the
      * failures have been sent back for Copilot to fix, `give-up` when it has had its rounds,
-     * and `environment` when the machine could not run the checks at all. The checks run here,
-     * at the end, and not as steps: they are not work, they are the question of whether the work
-     * happened, and a task cannot be trusted to answer that about itself.
+     * `environment` when the machine could not run the checks at all, `invalid` when every
+     * failing check was refused for good (see `refusedForGood`), and `stopped` when the operator
+     * stopped the run while they ran. The checks run here, at the end, and not as steps: they are
+     * not work, they are the question of whether the work happened, and a task cannot be trusted
+     * to answer that about itself.
      */
-    const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up' | 'environment'> => {
+    const gateOnChecks = async (): Promise<'accept' | 'retry' | 'give-up' | 'environment' | 'invalid' | 'stopped'> => {
       const every = [...(task.checks ?? []), ...activeChecks(reviewChecks)];
       // Whether the tree is clean is decided after the runner's commit; see `afterCommitChecks`.
       const deferred = willCommit ? every.filter(readsTreeClean) : [];
@@ -977,6 +1087,8 @@ export async function runTask(
       sink.event('checks-started', { round, count: checks.length },
         `checking the task against ${checks.length} condition(s)`);
 
+      /** The commands this round refused only for what the project's files hold now; see `lineRefusal`. */
+      const refusedForTheFiles = new Set<string>();
       const checkOptions: Parameters<typeof runChecks>[1] = {
         cwd: work.cwd,
         tracker,
@@ -988,7 +1100,11 @@ export async function runTask(
          * reviewer's — is refused rather than held: there is no approval screen here. Requests to
          * this machine are not downloads and still run. See `network.ts`.
          */
-        deny: (command, shell, cwd) => checkCommandRefusal(command, shell, cfg.execution, { roots: confinement.roots, cwd }),
+        deny: (command, shell, cwd) => {
+          const refused = checkCommandRefusal(command, shell, cfg.execution, { roots: confinement.roots, cwd });
+          if (refused && !lineRefusal(command, shell, cwd, cfg.execution, confinement.roots)) refusedForTheFiles.add(command);
+          return refused;
+        },
         roots: confinement.roots,
         repoDir: willCommit ? repoDirOf(session) : undefined,
         baseCommit: prepared.vcs.baseCommit,
@@ -997,7 +1113,20 @@ export async function runTask(
         defaultShell,
       };
       runAfterCommit = (cs) => runChecks(cs, checkOptions);
-      const outcomes: CheckOutcome[] = (lastOutcomes = await runChecks(checks, checkOptions));
+      const outcomes: CheckOutcome[] = await runChecks(checks, checkOptions);
+
+      /*
+       * The operator stopped the run, which is not a verdict on the work. The check in flight was
+       * killed and the ones after it never ran, so what this round "found" is only the Stop: it is
+       * not recorded as the task's results, not counted as a rejected "done", and the task ends
+       * `aborted` — continuable, like every other Stop. It used to be read as a failed round and
+       * end the task `failed`, which "Continue" does not offer.
+       */
+      if (deps.signal?.aborted) {
+        sink.event('checks-stopped', { round }, 'the operator stopped the run while the checks ran; this round decides nothing', 'warn');
+        return 'stopped';
+      }
+      lastOutcomes = outcomes;
 
       /*
        * The runner's own checks are advice given once, not a gate: a second "done" with the finding
@@ -1036,6 +1165,30 @@ export async function runTask(
           problem.message, 'error');
         return 'environment';
       }
+
+      /*
+       * The checks, not the work — the same reasoning as the machine above.
+       *
+       * Every check still failing was refused before it ran, for its own command line, the
+       * settings, or a folder or file outside the project: nothing the chat does can make it run.
+       * Sending it back as "the task is not finished yet" spent the rounds on it, and with version
+       * control on the second "done" with an unchanged tree ended the task `blocked` as no progress,
+       * to be retried in fresh conversations that could not fix it either. So nothing is sent, the
+       * round is not counted, and the task ends `failed` with `invalid-check`. A check refused only
+       * for what a script it runs holds, or for a tool not installed yet, still goes back: those the
+       * work can change (see `lineRefusal`).
+       */
+      const refusedForGood = (o: CheckOutcome): boolean => !!o.refusedBeforeRunning && !refusedForTheFiles.has((o.check.run ?? '').trim());
+      const failed = outcomes.filter((o) => !o.passed);
+      if (failed.length > 0 && failed.every(refusedForGood)) {
+        stopCode = 'invalid-check';
+        for (const o of failed) {
+          sink.event('check-failed', { name: o.check.name, detail: o.detail }, `FAILED: ${o.check.name} — ${o.detail}`, 'warn');
+        }
+        sink.event('checks-invalid', { round, checks: failed.map((o) => o.check.name) },
+          `${failed.length} check(s) were refused before they ran, and nothing the chat does can change that; the task ends on the checks, not on the work`, 'error');
+        return 'invalid';
+      }
       checkRounds = round;
 
       for (const o of outcomes) {
@@ -1043,13 +1196,11 @@ export async function runTask(
           `${o.passed ? 'passed' : 'FAILED'}: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
       }
 
-      const failed = outcomes.filter((o) => !o.passed);
       if (failed.length === 0) {
         sink.event('checks-passed', { count: outcomes.length }, `all ${outcomes.length} check(s) passed`);
         return 'accept';
       }
       stats.doneRejected += 1;
-      if (deps.signal?.aborted) return 'give-up';
       // The same failures as last time, and not a file changed since they were reported.
       const stuck = progress.afterFailedChecks(await treeNow(), failed.map((o) => ({ name: o.check.name, detail: o.detail })));
       if (stuck) {
@@ -1081,6 +1232,8 @@ export async function runTask(
           `${failed.length} check(s) still failing after ${maxCheckRounds} attempt(s); the task is closed as failed`, 'warn');
         return 'give-up';
       }
+      // A Stop that came after every check had run: the round stands, and nothing more is sent.
+      if (deps.signal?.aborted) return 'stopped';
 
       // The failures go back exactly the way step output does: a message with a file attached,
       // because a compiler's opinion belongs in a file and not in a chat bubble.
@@ -1140,8 +1293,9 @@ export async function runTask(
      * `accept` — reviewed and passed, or not reviewed at all.
      * `retry` — the reviewer found problems and they have been sent back to the implementer.
      * `give-up` — the rounds are spent and the findings are still standing.
+     * `stopped` — the operator stopped the run while the review was going.
      */
-    const gateOnReview = async (closing: string | undefined): Promise<'accept' | 'retry' | 'give-up'> => {
+    const gateOnReview = async (closing: string | undefined): Promise<'accept' | 'retry' | 'give-up' | 'stopped'> => {
       if (!reviewWanted) {
         await saveReview({ verdict: 'skipped', rounds: 0, stepsRun: 0, skippedBecause: `the review is switched off for this ${task.reviewEnabled === false ? 'task' : 'session'}` });
         return 'accept';
@@ -1180,7 +1334,7 @@ export async function runTask(
             picked.ok ? 'info' : 'warn');
         }
 
-        outcome = await runReview(transport, session, task, {
+        outcome = await runReview(sendsUntilStopped(transport, signal), session, task, {
           cfg,
           authorizer,
           signal,
@@ -1219,6 +1373,27 @@ export async function runTask(
 
       // A reviewer that left its own server listening once failed the work for it.
       roundLeftovers = [...roundLeftovers, ...(await reap(beforeReview, `review round ${reviewRounds}`))];
+
+      /*
+       * Stopped by the operator: neither a verdict on the work nor the machinery failing.
+       *
+       * The review reports a Stop the way it reports a broken browser — an error, "the run was
+       * stopped" — and an error accepts the work unreviewed (below), so a task stopped in its
+       * review was closed `done` and committed, and "Continue" could not carry it on. The round is
+       * recorded as cut short, and the task ends `aborted`, as every Stop ends it.
+       */
+      if (signal?.aborted) {
+        await saveReview({
+          verdict: 'error',
+          rounds: reviewRounds,
+          stepsRun: outcome.stepsRun,
+          problem: `the run was stopped by the operator during review round ${reviewRounds}, before a verdict was acted on`,
+          model: model || undefined,
+        });
+        sink.event('review-stopped', { round: reviewRounds, stepsRun: outcome.stepsRun },
+          `the operator stopped the run during review round ${reviewRounds}; the work is neither accepted nor sent back`, 'warn');
+        return 'stopped';
+      }
 
       /*
        * Which findings an earlier round already raised.
@@ -1357,6 +1532,8 @@ export async function runTask(
 
       sink.event('review-failed', { round: reviewRounds, findings: outcome.findings.length },
         `the review found ${outcome.findings.length} problem(s); sending them back to be fixed`, 'warn');
+      // A Stop that came after the verdict: it stands on the record, and nothing more is sent.
+      if (signal?.aborted) return 'stopped';
 
       await pacer.throttleSend();
       // The reviewer quotes output in its evidence, so the message gets the same treatment.
@@ -1385,6 +1562,41 @@ export async function runTask(
           `so there was nothing to send back for fixing: ${listed}`
         : `an independent review found ${findings.length} problem(s) that were still there after ` +
           `${maxReviewRounds} round(s) of fixing: ${listed}`;
+    };
+
+    /**
+     * What a reported "done" comes to: the checks, then the review, either of which may end the
+     * task here. Null means the work went back to the chat and the loop goes on.
+     *
+     * One place for both ways a "done" arrives — on its own, and after the report of its last
+     * steps — which used to be two copies of the same lines, and the Stop has to be answered the
+     * same way in both. A Stop while the checks run, or during the review, ends the task `aborted`;
+     * one that comes after the checks have accepted the work ends it before a review conversation
+     * is opened for it. A verdict the checks reached on their own — out of rounds, no progress,
+     * checks that cannot run — stands.
+     */
+    const settleDone = async (summary: string | undefined): Promise<TaskOutcome | null> => {
+      const verdict = await gateOnChecks();
+      if (verdict === 'stopped') return await finish('aborted', 'stopped by the operator while the checks ran', summary, lastMarkdown);
+      if (verdict === 'environment') {
+        stopCode = 'environment';
+        return await finish('failed', shellProblemReason(environmentProblem), summary, lastMarkdown);
+      }
+      // Its stop code is set by the gate: every failing check was refused for good.
+      if (verdict === 'invalid') return await finish('failed', checksFailedReason(lastOutcomes), summary, lastMarkdown);
+      if (verdict === 'give-up') {
+        if (noProgressReason) return await finish('blocked', noProgressReason, summary, lastMarkdown);
+        // Every failing check was refused before it ran: a verdict on the checks, not on the work.
+        if (lastOutcomes.some((o) => !o.passed) && lastOutcomes.every((o) => o.passed || o.refusedBeforeRunning)) stopCode = 'invalid-check';
+        return await finish('failed', checksFailedReason(lastOutcomes), summary, lastMarkdown);
+      }
+      if (verdict === 'retry') return null;
+      if (signal?.aborted) return await finish('aborted', 'stopped by the operator before the review', summary, lastMarkdown);
+      const reviewed = await gateOnReview(summary);
+      if (reviewed === 'stopped') return await finish('aborted', 'stopped by the operator during the review', summary, lastMarkdown);
+      if (reviewed === 'accept') return await finish('done', undefined, summary, lastMarkdown);
+      if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), summary, lastMarkdown);
+      return null;
     };
 
     let formatRetries = 0;
@@ -1580,22 +1792,8 @@ export async function runTask(
       }
 
       if (done && reply.steps.length === 0) {
-        const verdict = await gateOnChecks();
-        if (verdict === 'environment') {
-          stopCode = 'environment';
-          return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
-        }
-        if (verdict === 'give-up') {
-          if (noProgressReason) return await finish('blocked', noProgressReason, reply.summary, lastMarkdown);
-          // Every failing check was refused before it ran: a verdict on the checks, not on the work.
-          if (lastOutcomes.some((o) => !o.passed) && lastOutcomes.every((o) => o.passed || o.refusedBeforeRunning)) stopCode = 'invalid-check';
-          return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
-        }
-        if (verdict === 'accept') {
-          const reviewed = await gateOnReview(reply.summary);
-          if (reviewed === 'accept') return await finish('done', undefined, reply.summary, lastMarkdown);
-          if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), reply.summary, lastMarkdown);
-        }
+        const ended = await settleDone(reply.summary);
+        if (ended) return ended;
         continue;
       }
 
@@ -1664,10 +1862,15 @@ export async function runTask(
           t.status = 'waiting-approval';
         });
         sink.event('step-proposed', { id: step.id, description: describeStep(step) }, `step ${step.id}: ${describeStep(step)}`);
-        const decision = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement });
+        const decided = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement });
         await setTask((t) => {
           t.status = 'running';
         });
+        // A Stop can land while the answer is awaited or written down, after the look at the signal
+        // above; whatever was decided, a stopped run does not start the step.
+        const decision: typeof decided = decided.action === 'run' && signal?.aborted
+          ? { action: 'abort', reason: 'stopped by the operator', by: 'operator' }
+          : decided;
 
         if (decision.action === 'abort') {
           results.push(refusedResult(step, decision.reason, decision.by === 'operator' ? 'operator' : 'runner'));
@@ -1914,22 +2117,8 @@ export async function runTask(
       }
 
       if (done) {
-        const verdict = await gateOnChecks();
-        if (verdict === 'environment') {
-          stopCode = 'environment';
-          return await finish('failed', shellProblemReason(environmentProblem), reply.summary, lastMarkdown);
-        }
-        if (verdict === 'give-up') {
-          if (noProgressReason) return await finish('blocked', noProgressReason, reply.summary, lastMarkdown);
-          // Every failing check was refused before it ran: a verdict on the checks, not on the work.
-          if (lastOutcomes.some((o) => !o.passed) && lastOutcomes.every((o) => o.passed || o.refusedBeforeRunning)) stopCode = 'invalid-check';
-          return await finish('failed', checksFailedReason(lastOutcomes), reply.summary, lastMarkdown);
-        }
-        if (verdict === 'accept') {
-          const reviewed = await gateOnReview(reply.summary);
-          if (reviewed === 'accept') return await finish('done', undefined, reply.summary, lastMarkdown);
-          if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), reply.summary, lastMarkdown);
-        }
+        const ended = await settleDone(reply.summary);
+        if (ended) return ended;
         continue;
       }
       await pacer.settle();

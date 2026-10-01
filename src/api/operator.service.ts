@@ -87,6 +87,12 @@ type Running = {
 
 type Waiting = { approval: PendingApproval; resolve: (d: PolicyDecision) => void };
 
+/** Who has the browser profile: a session's run of its own, a batch, or a read of the model list. */
+type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'batch' } | { kind: 'models' };
+
+/** Who is asking for the browser, so a refusal can be said in terms of what they pressed. */
+type BrowserAsk = { kind: 'run'; sessionId: string } | { kind: 'batch'; sessionIds: string[] } | { kind: 'models' };
+
 /** How one finished run went, counted over the tasks that were queued when it started. */
 export type RunTally = {
   ran: number;
@@ -292,6 +298,34 @@ export type RegistryEntry = {
   interrupted?: boolean;
 };
 
+/**
+ * Why the browser cannot be had now, said in terms of what was pressed. The sentences a start, a
+ * batch and the model picker gave before there was one rule for all three are kept where they still
+ * apply, so the page reads as it did.
+ */
+function browserRefusal(held: BrowserHolder, ask: BrowserAsk): string {
+  const modelsWhileRunning = 'A session is running and it is using the browser profile. Stop it first, then read the models.';
+  if (held.kind === 'batch') {
+    if (ask.kind === 'models') return modelsWhileRunning;
+    return ask.kind === 'batch' ? 'a batch is already running' : 'a batch of sessions is running';
+  }
+  if (held.kind === 'models') {
+    return ask.kind === 'models'
+      ? 'The model list is already being read.'
+      : 'the model list is being read from the chat, which has the browser; start this once it has finished';
+  }
+  // A session running on its own.
+  if (ask.kind === 'models') return modelsWhileRunning;
+  if (ask.kind === 'run') {
+    return ask.sessionId === held.sessionId
+      ? 'already running'
+      : 'another session is running, and the browser takes one run at a time; start this one once it has finished';
+  }
+  return ask.sessionIds.includes(held.sessionId)
+    ? 'one of the selected sessions is already running on its own'
+    : 'a session is running on its own, and the browser takes one run at a time; start the batch once it has finished';
+}
+
 /** A folder as compared: absolute, forward slashes, no trailing slash, and case folded as Windows does. */
 function normaliseDir(dir: string): string {
   if (!dir.trim()) return '';
@@ -317,8 +351,21 @@ export class OperatorService {
   /** The batch in progress, or the last one that finished. At most one ever exists. */
   private batch: BatchState | null = null;
   private ready: Promise<void> | null = null;
-  /** One model read at a time: it launches a browser and holds the profile lock. */
-  private readingModels = false;
+  /**
+   * What has the browser now: one session's run, a batch, or a read of the model list.
+   *
+   * The Edge profile takes one writer, and every way into a chat window goes through here: a
+   * start, a batch, and reading the models. Each used to look only at its own kind — a start
+   * refused only while a batch ran, a batch only a second batch — so while one session ran on its
+   * own, starting another or a batch of others opened a second window on the same profile, which
+   * fails minutes later with a message about a closed browser. The profile lock is no help inside
+   * one process: it waves through a lock this process already holds.
+   *
+   * Taken at the entrance before its first wait, so two presses that arrive together cannot both
+   * find it free, and given back when the window it was taken for has closed or the entrance has
+   * refused. See `claimBrowser`.
+   */
+  private browser: BrowserHolder | null = null;
 
   /**
    * One-time startup work, run lazily on the first request that needs the store.
@@ -1025,32 +1072,53 @@ export class OperatorService {
   }
 
   /**
+   * Takes the browser for `ask`, or says why it cannot have it. Synchronous on purpose (see
+   * `browser`). What it hands back is what `releaseBrowser` is given, so a release that comes late
+   * cannot free a browser somebody else has taken since.
+   */
+  private claimBrowser(ask: BrowserAsk): { holder: BrowserHolder } | { refused: string } {
+    if (this.browser) return { refused: browserRefusal(this.browser, ask) };
+    const holder: BrowserHolder = ask.kind === 'run' ? { kind: 'run', sessionId: ask.sessionId } : { kind: ask.kind };
+    this.browser = holder;
+    return { holder };
+  }
+
+  private releaseBrowser(holder: BrowserHolder): void {
+    if (this.browser === holder) this.browser = null;
+  }
+
+  /**
    * Starts the session's queued tasks in the background. Returns immediately; progress
-   * arrives on the event stream. One run per session at a time.
+   * arrives on the event stream. One run at a time, of this session or any other.
    */
   async start(sessionId: string, mode: 'confirm' | 'unattended' = 'confirm', name?: string): Promise<{ started: boolean; reason?: string }> {
     // One conversation at a time is not a policy, it is the browser profile: a second run
-    // does not get a second browser, it gets an error about a closed one. A batch already
-    // holds that turn, so a single session asking for it now is refused where the reason can
-    // still be read, rather than three minutes later in a stack trace.
-    if (this.batch?.running) return { started: false, reason: 'a batch of sessions is running' };
-    // A run nobody named is named after what it is a run of, rather than left to show up in the
-    // register as "Unnamed run" beside five others of the same description.
-    const chosenName = name?.trim() || (await this.suggestRunName([sessionId]));
-    const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
-    // A run of one is still a run, and it records the same thing a batch does, so that going
-    // back and starting again from a task works the same whether one session was started or six.
-    await this.store.updateSession(sessionId, (s) => {
-      s.runGroup = {
-        ...runGroup,
-        order: 0,
-        taskIds: s.tasks.filter((t) => t.status === 'queued').map((t) => t.id),
-        mode,
-        onFailure: s.onFailure === 'continue' ? 'continue' : 'stop',
-      };
-    });
-    const begun = await this.beginRun(sessionId, mode, undefined, runGroup);
-    return { started: begun.started, reason: begun.reason };
+    // does not get a second browser, it gets an error about a closed one. Whatever has the
+    // browser now — a batch, another session, a read of the models — the start is refused where
+    // the reason can still be read, rather than three minutes later in a stack trace.
+    const claim = this.claimBrowser({ kind: 'run', sessionId });
+    if ('refused' in claim) return { started: false, reason: claim.refused };
+    try {
+      // A run nobody named is named after what it is a run of, rather than left to show up in the
+      // register as "Unnamed run" beside five others of the same description.
+      const chosenName = name?.trim() || (await this.suggestRunName([sessionId]));
+      const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
+      // A run of one is still a run, and it records the same thing a batch does, so that going
+      // back and starting again from a task works the same whether one session was started or six.
+      // Recorded by `beginRun` once the start is accepted, not here: see `recordOnSession`.
+      const begun = await this.beginRun(sessionId, mode, undefined, runGroup, undefined, { recordOnSession: true });
+      if (!begun.started) {
+        this.releaseBrowser(claim.holder);
+        return { started: false, reason: begun.reason };
+      }
+      // The window closes before the run's promise settles (see `runSession`), so the browser is
+      // free again exactly when it is.
+      void begun.done.finally(() => this.releaseBrowser(claim.holder));
+      return { started: true };
+    } catch (e) {
+      this.releaseBrowser(claim.holder);
+      throw e;
+    }
   }
 
   /**
@@ -1071,6 +1139,27 @@ export class OperatorService {
     runGroup?: TaskRunGroup,
     /** Only these queued tasks, when the operator chose some; the rest stay queued. */
     onlyTasks?: ReadonlySet<string>,
+    how: {
+      /**
+       * Write `runGroup` onto the session as its run (`Session.runGroup`), with the tasks it is
+       * taking — once every reason to refuse the start has been looked at, and only then.
+       *
+       * A single start wrote it before anything was checked, so a start refused for having nothing
+       * queued, for an unattended precondition, or for running already left a run on the session
+       * that never happened: it replaced the record of a batch the session belonged to, which
+       * "start again from here" reads, or of the run actually in progress; and for a session that
+       * does not exist, the write threw and the start answered 500. A batch records its runs itself,
+       * on every session it selected, before it starts (see `runBatch`), and does not ask for this.
+       */
+      recordOnSession?: boolean;
+      /**
+       * Whether to hold the queue between tasks. Only a batch has a pause, so only a batch passes
+       * one, and it answers for itself: a run of its own reads nobody's pause. It used to read the
+       * batch record, which outlives the batch, so a pause left on when a batch ended held every
+       * later run of any session before its first task.
+       */
+      shouldPause?: () => boolean;
+    } = {},
   ): Promise<{ started: boolean; reason?: string; done: Promise<RunTally> }> {
     await this.init();
     const idle: RunTally = { ran: 0, failed: 0, leftQueued: 0, failedTitles: [] };
@@ -1102,6 +1191,12 @@ export class OperatorService {
      */
     const precondition = unattendedPrecondition(policy);
     if (precondition) return { started: false, reason: precondition, done: Promise.resolve(idle) };
+    if (how.recordOnSession && runGroup) {
+      // The tasks this run takes, as worked out above, so the record and the run cannot disagree.
+      await this.store.updateSession(sessionId, (s) => {
+        s.runGroup = { ...runGroup, order: 0, taskIds: queuedIds, mode, onFailure: s.onFailure === 'continue' ? 'continue' : 'stop' };
+      });
+    }
     const controller = new AbortController();
     /*
      * The same authorizer in both modes. It used to be `unattendedAuthorizer` here for an unattended
@@ -1132,9 +1227,9 @@ export class OperatorService {
       bus: this.bus,
       authorizer,
       signal: controller.signal,
-      // Read between tasks, so the one in flight finishes properly first. The batch owns the
-      // flag, because a pause is about the whole run and not about this session.
-      shouldPause: () => !!this.batch?.pausing,
+      // Read between tasks, so the one in flight finishes properly first. The batch that owns
+      // this run answers it, because a pause is about the whole run and not about this session.
+      shouldPause: how.shouldPause,
       // The mode as it is now, not as it was: "run the rest without asking" changes it mid-run,
       // and the policy.json of a later task must say so.
       currentMode: () => this.running.get(sessionId)?.mode ?? mode,
@@ -1264,18 +1359,46 @@ export class OperatorService {
      */
     taskIds?: string[],
   ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
-    await this.init();
     const onlyTasks = taskIds && taskIds.length > 0 ? new Set(taskIds.map((t) => t.trim()).filter(Boolean)) : undefined;
-    if (this.batch?.running) return { started: false, reason: 'a batch is already running' };
     const wanted = [...new Set(sessionIds.map((s) => s.trim()).filter(Boolean))];
-    if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
+    // Before anything is waited for (see `browser`): a second batch, a session running on its own
+    // — one of these or any other — and a read of the models all have the browser already.
+    const claim = this.claimBrowser({ kind: 'batch', sessionIds: wanted });
+    if ('refused' in claim) return { started: false, reason: claim.refused };
+    // Given back on every refusal below; once the batch is under way, `runBatch` gives it back.
+    let handedOn = false;
+    try {
+      await this.init();
+      if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
+      const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name);
+      if (!begun.batch) return { started: false, reason: begun.reason };
+      this.batch = begun.batch;
+      handedOn = true;
+      void this.runBatch(begun.batch, claim.holder);
+      return { started: true, batch: this.batchState() as BatchState };
+    } finally {
+      if (!handedOn) this.releaseBrowser(claim.holder);
+    }
+  }
+
+  /**
+   * Everything `startBatch` decides before the batch exists: which sessions it has work in, whether
+   * an unattended run may begin, and the models the run panel chose. A refusal comes back as the
+   * reason; nothing is started here.
+   */
+  private async prepareBatch(
+    wanted: string[],
+    onlyTasks: Set<string> | undefined,
+    mode: 'confirm' | 'unattended',
+    onFailure: 'stop' | 'continue',
+    model: string | undefined,
+    reviewModel: string | undefined,
+    name: string | undefined,
+  ): Promise<{ batch: BatchState; reason?: undefined } | { batch?: undefined; reason: string }> {
     // Worked out here rather than asked of the operator again: every way into this — the run
     // panel, continuing after a failure, "Run again from here" — either has a field they may
     // have left empty or has no field at all.
     const chosenName = name?.trim() || (await this.suggestRunName(wanted));
-    if (wanted.some((id) => this.running.has(id))) {
-      return { started: false, reason: 'one of the selected sessions is already running on its own' };
-    }
 
     const sessions: BatchSession[] = [];
     for (const id of wanted) {
@@ -1293,7 +1416,7 @@ export class OperatorService {
     }
 
     if (!sessions.some((s) => s.state === 'waiting')) {
-      return { started: false, reason: 'none of the selected sessions has a queued task' };
+      return { reason: 'none of the selected sessions has a queued task' };
     }
 
     /*
@@ -1312,7 +1435,7 @@ export class OperatorService {
         isolation: cfg.execution.isolation,
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       });
-      if (blocked) return { started: false, reason: blocked };
+      if (blocked) return { reason: blocked };
     }
 
     // One model for the whole run, chosen here rather than opened on every session first. It
@@ -1345,20 +1468,20 @@ export class OperatorService {
       }
     }
 
-    this.batch = {
-      id: newId('b-'),
-      startedAt: new Date().toISOString(),
-      name: chosenName,
-      ...(onlyTasks ? { onlyTasks: [...onlyTasks] } : {}),
-      mode,
-      onFailure,
-      stopping: false,
-      pausing: false,
-      running: true,
-      sessions,
+    return {
+      batch: {
+        id: newId('b-'),
+        startedAt: new Date().toISOString(),
+        name: chosenName,
+        ...(onlyTasks ? { onlyTasks: [...onlyTasks] } : {}),
+        mode,
+        onFailure,
+        stopping: false,
+        pausing: false,
+        running: true,
+        sessions,
+      },
     };
-    void this.runBatch();
-    return { started: true, batch: this.batchState() as BatchState };
   }
 
   /** Stops the session that is running now and leaves the rest of the batch unstarted. */
@@ -1413,16 +1536,31 @@ export class OperatorService {
   }
 
   /**
+   * Runs a batch that has just been started, and ends what only the batch may end: its hold and
+   * its claim on the browser. Both are let go here, once, however the loop came out — finished,
+   * stopped, failed, or never able to open its window.
+   */
+  private async runBatch(batch: BatchState, holder: BrowserHolder): Promise<void> {
+    try {
+      await this.batchLoop(batch);
+    } finally {
+      // A pause holds this batch's queue and nothing after it. Left on, it read as "pausing" on a
+      // batch that had ended, and it was what every later run read, so each stopped before its
+      // first task (see `shouldPause` in `beginRun`).
+      batch.pausing = false;
+      // The batch's window is closed by now, in the loop's own ending.
+      this.releaseBrowser(holder);
+    }
+  }
+
+  /**
    * The batch loop. Nothing here runs in parallel, on purpose: see `beginRun`.
    *
    * Each session is judged by the tasks it was given. A session that ran everything without a
    * failure is `done`; one with a failed task is `failed`; one the operator stopped, or one
    * whose chain stopped early with no failure of its own, is `stopped`.
    */
-  private async runBatch(): Promise<void> {
-    const batch = this.batch;
-    if (!batch) return;
-
+  private async batchLoop(batch: BatchState): Promise<void> {
     /*
      * One browser for the whole batch.
      *
@@ -1529,7 +1667,11 @@ export class OperatorService {
           data: { batchId: batch.id },
         });
 
-        const begun = await this.beginRun(entry.sessionId, batch.mode, browser, runGroup, batch.onlyTasks ? new Set(batch.onlyTasks) : undefined);
+        // In the batch's mode as it is now: "run the rest without asking" in an earlier session
+        // switched the batch with it (see `setRunMode`). The hold is this batch's own.
+        const begun = await this.beginRun(entry.sessionId, batch.mode, browser, runGroup, batch.onlyTasks ? new Set(batch.onlyTasks) : undefined, {
+          shouldPause: () => batch.pausing,
+        });
         if (!begun.started) {
           entry.state = 'skipped';
           entry.reason = begun.reason;
@@ -1866,15 +2008,26 @@ export class OperatorService {
      * one would read.
      */
     run.policy.mode = mode;
+    /*
+     * A batch is one run. The dialog behind "run the rest without asking" says "until this run
+     * ends", and the run the operator started is the batch: the switch used to reach only the
+     * session on screen, and the next session started in the batch's old mode and asked again. So
+     * the sessions the batch has not reached yet start in the mode it is switched to — and back,
+     * when the asking is switched on again. Each still meets the unattended precondition as it
+     * starts (see `beginRun`), under the settings of that moment, and the run recorded on it
+     * (`Session.runGroup`) keeps the mode it was started in.
+     */
+    const batch = this.batch?.running && this.batch.sessions.some((e) => e.sessionId === sessionId && e.state === 'running') ? this.batch : null;
+    if (batch) batch.mode = mode;
     this.bus.publish({
       sessionId,
       type: 'run-mode-changed',
       level: mode === 'unattended' ? 'warn' : 'info',
       message:
         mode === 'unattended'
-          ? 'the rest of this run will execute without asking; denied patterns are still refused'
-          : 'every further step will be shown for approval again',
-      data: { mode },
+          ? `the rest of this run${batch ? ', the sessions of the batch after this one included,' : ''} will execute without asking; denied patterns are still refused`
+          : `every further step${batch ? ', in this session and the ones of the batch after it,' : ''} will be shown for approval again`,
+      data: { mode, ...(batch ? { batchId: batch.id } : {}) },
     });
 
     if (mode === 'unattended') {
@@ -1897,6 +2050,12 @@ export class OperatorService {
   private webAuthorizer(policy: PolicyConfig, signal: AbortSignal): StepAuthorizer {
     return makeAuthorizer(policy, (step, ctx, held) =>
       new Promise<PolicyDecision>((resolvePromise) => {
+        // A stopped run answers before anything else, the mode included: "run the rest without
+        // asking" is permission to run the steps of a run that is going, not of one that was stopped.
+        if (signal.aborted) {
+          resolvePromise({ action: 'abort', reason: 'stopped by the operator', by: 'operator' });
+          return;
+        }
         // The operator may have pressed "run the rest without asking" on an earlier step.
         // This is checked per step rather than captured once, which is what makes the switch
         // take effect from the very next step instead of the next run. A held step is the
@@ -1915,10 +2074,6 @@ export class OperatorService {
           createdAt: new Date().toISOString(),
           ...(held ? { network: held.network } : {}),
         };
-        if (signal.aborted) {
-          resolvePromise({ action: 'abort', reason: 'stopped by the operator', by: 'operator' });
-          return;
-        }
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });
         this.bus.publish({ sessionId: approval.sessionId, taskId: approval.taskId, type: 'approval-requested', level: 'warn',
           message: held
@@ -1926,6 +2081,7 @@ export class OperatorService {
             : `waiting for approval: ${approval.description}`,
           data: { ...approval } });
       }),
+      signal,
     );
   }
 
@@ -2148,6 +2304,12 @@ export class OperatorService {
     if (!plan.ok) return { ...idle, reason: plan.problem };
     if (plan.sessions.some((s) => this.running.has(s.id))) {
       return { ...idle, reason: 'One of these sessions is running on its own. Stop it first.' };
+    }
+    // Asked before anything is moved: the run this ends in needs the browser, and another session
+    // running on its own, or a read of the models, has it. Found out only at the start, the
+    // repositories were already taken back and the tasks queued, with nothing to run them.
+    if (opts.start !== false && this.browser) {
+      return { ...idle, reason: browserRefusal(this.browser, { kind: 'batch', sessionIds: plan.sessions.map((s) => s.id) }) };
     }
 
     const restored: string[] = [];
@@ -2384,27 +2546,26 @@ export class OperatorService {
    * line-up.
    */
   async refreshModels(): Promise<ModelCatalogue> {
-    await this.init();
-    if (this.running.size > 0) {
-      throw new Error('A session is running and it is using the browser profile. Stop it first, then read the models.');
-    }
-    if (this.readingModels) throw new Error('The model list is already being read.');
-
-    this.readingModels = true;
-    const cfg = await this.settings.load();
-    const transport = createTransport({
-      profileDir: cfg.resolved.profileDir,
-      transportDir: join(cfg.resolved.runsDir, '_models'),
-      chatUrl: cfg.copilot.url,
-      channel: cfg.copilot.channel,
-      headless: cfg.copilot.headless,
-      replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
-      signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
-      humanWaitMs: cfg.copilot.humanWaitSec * 1000,
-      keepFailurePage: cfg.copilot.keepFailurePage,
-    });
-
+    // Asked of the one claim every window goes through (see `browser`), before anything is waited
+    // for. It used to count the sessions running, which is none in the moment between two
+    // sessions of a batch, while the batch's window is still open.
+    const claim = this.claimBrowser({ kind: 'models' });
+    if ('refused' in claim) throw new Error(claim.refused);
+    let transport: ChatTransport | null = null;
     try {
+      await this.init();
+      const cfg = await this.settings.load();
+      transport = createTransport({
+        profileDir: cfg.resolved.profileDir,
+        transportDir: join(cfg.resolved.runsDir, '_models'),
+        chatUrl: cfg.copilot.url,
+        channel: cfg.copilot.channel,
+        headless: cfg.copilot.headless,
+        replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
+        signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
+        humanWaitMs: cfg.copilot.humanWaitSec * 1000,
+        keepFailurePage: cfg.copilot.keepFailurePage,
+      });
       await transport.open();
       await transport.ensureSignedIn();
       const { options, current, note } = await transport.listModels();
@@ -2412,8 +2573,8 @@ export class OperatorService {
       await this.store.saveModels(catalogue);
       return catalogue;
     } finally {
-      await transport.close().catch(() => undefined);
-      this.readingModels = false;
+      await transport?.close().catch(() => undefined);
+      this.releaseBrowser(claim.holder);
     }
   }
 

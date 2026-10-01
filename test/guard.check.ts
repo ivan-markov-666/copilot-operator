@@ -356,7 +356,7 @@ await scenario('no isolation: every entrance refuses an unattended run', { setti
   t.truthy('naming execution.isolation', (single.reason ?? '').includes('execution.isolation'), single.reason);
   t.check('and no chat was opened', h.chat.opened, 0);
   const untouched = (await h.session(id)) as unknown as RunState;
-  // DEFECT: start() writes runGroup onto the session before beginRun refuses; a refused start leaves a run record behind.
+  // The run is written onto the session only once every reason to refuse it has been looked at.
   t.truthy('and no run was recorded on the session (runGroup still absent)', untouched.runGroup === undefined, untouched.runGroup);
 
   const batch = await h.call<Refusal>('POST', '/batch/start', { sessionIds: [id], mode: 'unattended' });
@@ -574,8 +574,14 @@ await scenario('path and ownership guards on a task\'s files', {}, async (h) => 
   t.check('and no story: 404', (await get(`${C}/story`)).status, 404);
 
   const pathGet = await get('/api/sessions/..%5C..%5Cx');
-  // DEFECT: safeName throws inside getSession and the route answers 500 instead of a 400/404.
+  // An id that could not be a session's file name names no session: the store answers it as missing.
   t.truthy('GET /sessions/<a path> is 400 or 404, never 500', pathGet.status === 400 || pathGet.status === 404, pathGet.status);
+  // So is every route that only reads a session, not only the session's own: a 404, or for the list
+  // of a task's files, the empty list any task it does not know gets.
+  for (const sub of ['tasks/x/log', 'tasks/x/story', 'tasks/x/files']) {
+    const res = await get(`/api/sessions/..%5C..%5Cx/${sub}`);
+    t.truthy(`GET /sessions/<a path>/${sub} is answered, never 500`, res.status >= 200 && res.status < 500, res.status);
+  }
   /*
    * A session id that climbs one level out of data/sessions: the store deletes `<id>.json`, so
    * `..\settings` names data/settings.json — a real file, so a missing guard would show as a

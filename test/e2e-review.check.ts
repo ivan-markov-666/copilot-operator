@@ -540,10 +540,11 @@ await scenario('a secret in a finding\'s evidence is redacted before it goes bac
 });
 
 /*
- * Stop pressed while a reviewer's step runs. The step is cut short; the task must then end as the
- * operator stopped it — `aborted`, which "Continue" carries on — not as done. Today the review returns
- * "the run was stopped" as a review error, and a review error accepts the work, so the stopped task is
- * closed `done` and committed.
+ * Stop pressed while a reviewer's step runs. The step is cut short; the task then ends as the
+ * operator stopped it — `aborted`, which "Continue" carries on — not as done. The review reports a
+ * Stop the way it reports a broken browser, as a review error, and a review error accepts the work;
+ * so the runner asks about the Stop before it reads the verdict. (It did not, and the stopped task
+ * was closed `done` and committed.)
  */
 await scenario('Stop pressed during the review', {}, async (h) => {
   const [s] = await h.importPlan(plan(h, 'stopped', [greeting]));
@@ -554,18 +555,20 @@ await scenario('Stop pressed during the review', {}, async (h) => {
     // than a stop takes (about 9 s: taskkill /T, the close grace, then /F), and shorter than the wait
     // for the run to go idle, so a stop that kills nothing still ends inside the scenario and fails it.
     reply.steps('New-Item r.flag -Force | Out-Null; Start-Sleep 45; New-Item r.done -Force | Out-Null'),
-    // The report of the cut-short step still goes to the reviewer after the stop; a reply for it keeps
-    // the chat from failing on an unscripted message. Whether that message should go at all is not
-    // what this scenario pins, so an unused reply is discarded below rather than counted.
+    // The report of the cut-short step is not sent after the stop (pinned below). A reply for it is
+    // scripted all the same, so that a regression shows as that pin failing rather than as the chat
+    // failing on an unscripted message, and it is discarded below when unused.
     reply.pass(),
   );
   const r = await h.call<{ started: boolean }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   t.check('the run started', r.started, true);
   await waitFor('the reviewer\'s step to be running', async () => existsSync(join(h.repo, 'r.flag')));
   const stopAt = Date.now();
+  const sentBefore = h.chat.sent.length;
   await h.call('POST', `/sessions/${s!.id}/stop`);
   await h.idle();
   const stoppedIn = (Date.now() - stopAt) / 1000;
+  t.check('nothing more reached either chat after the stop', h.chat.sent.slice(sentBefore).map((m) => m.text.slice(0, 120)), []);
   h.chat.discard();
   const task = await taskNow(h, s!.id);
   const step = (await events(h, s!.id)).find((e) => e.type === 'review-step-finished');
@@ -583,10 +586,10 @@ await scenario('Stop pressed during the review', {}, async (h) => {
     !existsSync(join(h.repo, 'r.done')) && !committed.includes('r.done'), { stoppedIn, committed });
   t.check('and it is recorded as aborted', step?.data?.outcome, 'aborted');
   t.truthy('the review records that the run was stopped', /the run was stopped/.test(task.review?.problem ?? ''), task.review);
-  // DEFECT: gateOnReview takes a review cut short by Stop as a review "error" and accepts the work, so the task ends done
+  // A review cut short by Stop is not an error that accepts the work: the task ends as Stop ends every task.
   t.check('a task stopped during its review ends aborted, not done', task.status, 'aborted');
   const cont = await h.raw('POST', `/sessions/${s!.id}/tasks/${task.id}/continue`);
-  // DEFECT: the same cause — closed done, the stopped task cannot be continued
+  // Aborted is what "Continue" carries on.
   t.truthy('and "Continue" can carry it on', cont.status >= 200 && cont.status < 300, cont);
 });
 

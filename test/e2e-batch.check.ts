@@ -25,7 +25,7 @@
  * - what the start routes refuse, and how; and what the run panel's model choice writes on a session.
  *
  * Every scenario runs in a harness of its own (test/support/harness.ts): its own temporary data
- * folder, repository and port. Checks marked `DEFECT` fail on purpose until the product is fixed.
+ * folder, repository and port.
  *
  *   npm run check:e2e-batch        (once package.json names it; until then:)
  *   npx tsx test/e2e-batch.check.ts
@@ -210,9 +210,10 @@ const entry = (b: BatchView, sessionId: string): BatchEntry | undefined => b.ses
  * Pause is "finish the task in flight, then hold": the task it interrupts runs to done, the task
  * behind it and the session after it stay queued, and the batch record says which is which. And
  * once the batch has ended, the hold has nothing left to hold: pressing Start on the session later
- * is an ordinary start. The flag lives on the batch record, which outlives the batch, and every run
- * reads it through `shouldPause` — so a hold nobody switches off stops the next single run before
- * its first task.
+ * is an ordinary start. The flag lives on the batch record, which outlives the batch, and a run used
+ * to read it through `shouldPause` whoever had started it — so a hold nobody switched off stopped the
+ * next single run before its first task. Only a batch's own runs read its pause now, and it is
+ * switched off when the batch ends.
  */
 await scenario('a pause holds the queue behind the task in flight, and does not stay switched on', {}, async (h) => {
   const [a, b] = await h.importPlan({
@@ -245,8 +246,9 @@ await scenario('a pause holds the queue behind the task in flight, and does not 
   t.check('a single start after the paused batch is accepted', again.started, true);
   await h.idle();
   const second = (await h.session(a!.id)).tasks[1]!;
-  // DEFECT: batch.pausing is never reset when the batch ends, so shouldPause stays true and every later run of any session stops before its first task.
+  // A single start reads no batch's pause: the hold belonged to the batch, and ended with it.
   t.check('and it runs the queued task: the hold ended with the batch', second.status, 'done');
+  t.check('and the finished batch no longer says it is pausing', (await h.call<BatchView>('GET', '/batch')).pausing, false);
   // Counted once, above: when the hold outlives the batch, the two replies for that task were never asked for.
   if (second.status !== 'done') h.chat.discard();
 });
@@ -392,8 +394,9 @@ await scenario('"run the rest without asking" runs the rest of the task unasked,
 /*
  * The same answer inside a watched batch of two sessions. The confirmation dialog says the commands
  * will run without asking "until this run ends", and the run the operator started is the batch —
- * so the second session's steps should not be put to them either. Today the switch belongs to the
- * first session's run only: the second session starts in the batch's mode and asks again.
+ * so the second session's steps are not put to them either: the switch moves the batch's mode with
+ * the session's, and the next session starts in it. (It used to belong to the first session's run
+ * only, and the second session started in the batch's old mode and asked again.)
  *
  * The first session's reply has two steps, so that "nothing more of it was asked about" has a step
  * it could have been asked about: with one step, the one answered, that half could never fail.
@@ -421,8 +424,40 @@ await scenario('"run the rest without asking" inside a batch reaches as far as t
   });
   t.check('nothing more of the first session was asked about', askedLater.filter((a) => a.sessionId === s1!.id).map((a) => a.stepId), []);
   t.check('and its second step ran', existsSync(join(h.repo, 'r1b.txt')), true);
-  // DEFECT: run-all switches only the running session (setRunMode on one entry of `running`); the batch's next session starts in batch.mode 'confirm' and asks again, though the dialog says "until this run ends".
+  // The switch is the batch's as well as the session's, so the next session starts unattended.
   t.check('nor, "until this run ends", the second session\'s step', askedLater.filter((a) => a.sessionId === s2!.id).length, 0);
+  t.check('both sessions finished their task', [(await h.session(s1!.id)).tasks[0]!.status, (await h.session(s2!.id)).tasks[0]!.status], ['done', 'done']);
+});
+
+/*
+ * And back: "ask again" pressed in the first session of a batch started unattended. The switch is
+ * the batch's as well, in this direction too, so the second session's step is put to the operator
+ * like the first one's — a person who has started watching again is watching the rest of the run.
+ */
+await scenario('"ask again" inside a batch reaches the sessions after it too', {}, async (h) => {
+  const [s1, s2] = await h.importPlan({ version: 1, sessions: [plain(h, 'again-one', [job('again-one-task', 'q1.txt')]), plain(h, 'again-two', [job('again-two-task', 'q2.txt')])] });
+  let switched: unknown = 'never pressed';
+  h.chat.script(
+    async () => {
+      switched = await h.call('POST', `/sessions/${s1!.id}/mode`, { mode: 'confirm' }).catch((e: unknown) => (e as Error).message);
+      return write('q1.txt', 'one');
+    },
+    reply.done(),
+    write('q2.txt', 'two'),
+    reply.done(),
+  );
+  t.check('the batch starts unattended', (await h.call<Started>('POST', '/batch/start', { sessionIds: [s1!.id, s2!.id], mode: 'unattended' })).started, true);
+  const asked: Approval[] = [];
+  await waitFor('the batch to end', async () => {
+    for (const a of await approvals(h)) {
+      asked.push(a);
+      await h.call('POST', `/approvals/${a.id}`, { action: 'run' });
+    }
+    const act = await h.call<{ running: boolean; batch: boolean }>('GET', '/activity');
+    return !act.running && !act.batch;
+  });
+  t.check('"ask again" was taken while the first session ran', switched, { ok: true, mode: 'confirm' });
+  t.check('the first session\'s step was asked about, and so was the second\'s', [s1!.id, s2!.id].map((id) => asked.filter((a) => a.sessionId === id).length), [1, 1]);
   t.check('both sessions finished their task', [(await h.session(s1!.id)).tasks[0]!.status, (await h.session(s2!.id)).tasks[0]!.status], ['done', 'done']);
 });
 
@@ -524,8 +559,8 @@ console.log('\n--- Stop and the runner write the session at the same moment ---'
 /*
  * Stop in an unattended run, at the moment a step is being authorized. The runner checks the signal
  * before each step, but between that check and the authorization it writes the task to disk; a Stop
- * landing there reaches the authorizer, and `runStep` does not look at a signal that was aborted
- * before it started — so whatever the authorizer answers is what happens. Driven through the
+ * landing there reaches the authorizer, so the authorizer looks at the signal first, before any mode
+ * lets a step through (and the runner looks again once the answer is in). Driven through the
  * service's own authorizer, as test/network.check.ts drives it, with a run entry of each kind.
  */
 console.log('\n--- a step proposed after Stop is not authorized, in any mode ---');
@@ -556,14 +591,14 @@ console.log('\n--- a step proposed after Stop is not authorized, in any mode ---
     const unattended = stoppedRun('unattended', 'unattended');
     unattended.controller.abort();
     const u = await unattended.auth.authorize(step, { sessionId: 'unattended', taskId: 't1', iteration: 1 });
-    // DEFECT: makeAuthorizer answers 'run' for an unattended policy before `ask` is reached, and webAuthorizer's own `ask` also answers 'run' for unattended before it looks at signal.aborted.
+    // The signal is asked before the unattended mode, which would otherwise answer 'run' without asking anybody.
     t.check('an unattended run that was stopped: the step is not authorized to run', u.action, 'abort');
 
     const switched = stoppedRun('switched', 'confirm');
     t.check('"run the rest without asking" switches it', ops.setRunMode('switched', 'unattended').ok, true);
     switched.controller.abort();
     const s = await switched.auth.authorize(step, { sessionId: 'switched', taskId: 't1', iteration: 1 });
-    // DEFECT: same cause, reached by "run the rest without asking": the policy object is switched to unattended and the signal is never consulted.
+    // The same rule reached by "run the rest without asking": the switch is permission for a run that is going, not for one that was stopped.
     t.check('a run switched to unattended and then stopped: the step is not authorized to run', s.action, 'abort');
   } catch (e) {
     t.truthy('the authorizer scenario ran without throwing', false, (e as Error).stack ?? String(e));
@@ -612,17 +647,18 @@ await scenario('Stop during the check gate ends the task aborted, not failed', {
   const task = (await h.session(s!.id)).tasks[0]!;
   const row = (await h.call<Array<{ taskId: string; continuable?: boolean }>>('GET', '/tasks')).find((r) => r.taskId === task.id);
   // The answer and the outcome in one check, as in the other two Stop scenarios: they are the two
-  // sides of one rule, Stop and the runner writing the session at once.
-  // DEFECT: gateOnChecks counts the killed check as a failed round (doneRejected += 1) and returns 'give-up' on an aborted signal, so the runner finishes 'failed' instead of 'aborted'.
+  // sides of one rule, Stop and the runner writing the session at once. The killed check is the
+  // Stop, not a verdict: the gate says so, and the task ends aborted rather than failed.
   t.check(
     'the stop is taken, and the task ended aborted',
     [stopped.status >= 200 && stopped.status < 300, stopped.body, task.status],
     [true, { stopping: true }, 'aborted'],
   );
-  // DEFECT: follows from the above: a 'failed' task with no limit is not continuable.
+  // Aborted is what "Continue" carries on.
   t.check('the register offers to continue it', [!!row, row?.continuable], [true, true]);
-  // DEFECT: the check round the Stop cut short is counted as a rejected "done".
+  // The round the Stop cut short decided nothing, so it rejected nothing.
   t.check('the cut-short round is not counted as a rejected "done"', task.stats?.doneRejected ?? 0, 0);
+  t.check('nor recorded as the task\'s check results', (task as { checkResults?: unknown[] }).checkResults ?? [], []);
 });
 
 // --- one browser at a time -------------------------------------------------------------------------
@@ -651,10 +687,10 @@ await scenario('one browser at a time', { limits: { retryBlockedInFreshChat: 0 }
   await waitFor("A's first reply to be held", async () => hold.reached);
 
   const other = await h.call<Started>('POST', `/sessions/${b!.id}/start`, { mode: 'unattended' });
-  // DEFECT: start() refuses only while a batch runs, and beginRun only a second run of the same session; another session's run opens a second window on the same profile.
+  // A start, a batch and a read of the models all claim the one browser first; whoever has it, the others are refused.
   t.check('while A holds the window, starting B is refused', other.started, false);
+  t.truthy('saying another session has the browser', /another session is running/.test(other.reason ?? ''), other.reason);
   const batch = await h.call<Started>('POST', '/batch/start', { sessionIds: [c!.id], mode: 'unattended' });
-  // DEFECT: startBatch refuses only a second batch or a selected session that is itself running; a batch of other sessions opens a second window.
   t.check('and so is a batch of another session', batch.started, false);
   const refresh = await h.raw('POST', '/models/refresh');
   t.truthy('and reading the models is refused', refresh.status >= 400 && refresh.status < 500, refresh);
@@ -670,12 +706,15 @@ await scenario('one browser at a time', { limits: { retryBlockedInFreshChat: 0 }
   await waitFor("the batch's first reply to be held", async () => hold2.reached);
   const refresh2 = await h.raw('POST', '/models/refresh');
   t.truthy('reading the models is refused while the batch holds the window', refresh2.status >= 400 && refresh2.status < 500, refresh2);
+  const during = await h.call<Started>('POST', `/sessions/${b!.id}/start`, { mode: 'unattended' });
+  t.check('and so is a single start of a session outside the batch', [during.started, during.reason], [false, 'a batch of sessions is running']);
   hold2.release();
   await h.idle();
   t.check('both sessions of the batch finished', [(await h.session(a2!.id)).tasks[0]!.status, (await h.session(b2!.id)).tasks[0]!.status], ['done', 'done']);
   t.check('the batch opened one window and closed it', [h.chat.opened - before.opened, h.chat.closed - before.closed], [1, 1]);
-  // DEFECT: the two starts above that should have been refused each opened a second window beside A's.
+  // The refused starts above opened nothing beside A's window.
   t.check('never more than one chat window open at a time, in the whole scenario', w.max, 1);
+  t.check('B and C were never started', [(await h.session(b!.id)).tasks[0]!.status, (await h.session(c!.id)).tasks[0]!.status], ['queued', 'queued']);
 }, { windowsAsserted: true });
 
 // --- a batch that cannot go on ---------------------------------------------------------------------
@@ -773,8 +812,17 @@ await scenario('the entrance: what a start or a batch is refused for, and how', 
   t.check('the session the second batch named was not touched', (await h.session(s3!.id)).tasks[0]!.status, 'queued');
 
   const nope = await h.raw('POST', '/sessions/nope-0000/start', { mode: 'confirm' });
-  // DEFECT: start() writes the run onto the session (store.updateSession) before beginRun looks the session up, so a missing session throws and the route answers 500.
+  // Nothing is written onto the session before the start is accepted, so a missing one is beginRun's own refusal.
   t.check('a start for a session that does not exist is an answer, not a server error', [nope.status >= 200 && nope.status < 300, nope.body], [true, { started: false, reason: 'no such session' }]);
+  const path = await h.raw('POST', `/sessions/${encodeURIComponent('..\\..\\x')}/start`, { mode: 'confirm' });
+  t.check('and so is one for an id that is a path', [path.status >= 200 && path.status < 300, path.body], [true, { started: false, reason: 'no such session' }]);
+
+  // A refused start leaves the run the session last belonged to on record: here, the single run of
+  // s1 above. Its task ended aborted, so a start now finds nothing queued.
+  const recorded = (await h.call<ModelView>('GET', `/sessions/${s1!.id}`)).runGroup;
+  const empty1 = await h.call<Started>('POST', `/sessions/${s1!.id}/start`, { mode: 'confirm' });
+  t.check('a start with nothing queued is refused', [empty1.started, empty1.reason], [false, 'no queued tasks']);
+  t.truthy('and the run on record is the one that ran', !!recorded && JSON.stringify((await h.call<ModelView>('GET', `/sessions/${s1!.id}`)).runGroup) === JSON.stringify(recorded), recorded);
 });
 
 // --- the run panel's model choice ------------------------------------------------------------------

@@ -25,9 +25,9 @@
  *   npx tsx test/e2e-loop.check.ts
  *
  * Meant to be wired as `npm run check:e2e-loop`; package.json has no such script yet. It is red on
- * purpose today: the checks marked DEFECT below (the invalid-check pair, the fresh-chat "Continue",
- * the token in the checks message) fail until the product is fixed, so it should not join the
- * `npm run check` chain before then. Every other check passes.
+ * purpose today: the check marked DEFECT below (the token in the checks message) fails until the
+ * product is fixed, so it should not join the `npm run check` chain before then. Every other check
+ * passes.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -269,10 +269,43 @@ await scenario('invalid-check: a check refused before it ran ends the task as th
   h.chat.discard();
   const detail = ended.checkResults?.[0]?.detail ?? '';
   t.truthy('the check was refused before it ran, for fetching from the network', detail.includes('refused before it ran') && detail.includes('fetches from the network'), detail);
-  // DEFECT: a check refused before it ran is sent back to the chat as work to fix; with version control on, the second "done" ends the task blocked as no-progress (and is retried in fresh chats by default) instead of failed with stopCode invalid-check.
+  // Nothing the chat does can make a check run that its own command line keeps from running, so the
+  // first "done" ends the task on the checks — before the unchanged tree could read as no progress.
   t.check('failed, stopCode invalid-check', [ended.status, ended.stopCode ?? null], ['failed', 'invalid-check']);
-  // DEFECT: (same) the chat is told "The task is not finished yet" about a check nothing it does can make run.
+  // And the chat is not sent it as work to fix.
   t.check('the chat was never asked to fix a check that could not run', h.chat.sent.filter((m) => m.text.includes('not finished yet')).length, 0);
+});
+
+/*
+ * Where the line ends: a check refused for what a script it runs holds — here, a script that does
+ * not exist yet — is the chat's to fix, so it goes back as any failing check does, and the task ends
+ * done once the chat has written it. A check that runs a script in a way the settings refuse for the
+ * line itself (`.\verify.ps1` names a program that is not on the allowlist) is the checks' fault
+ * however the script reads, and ends the task at once.
+ */
+await scenario('a check refused for its script goes back to the chat; one refused for its line does not', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan(
+    plan(h, 'script-check', [task('writes-its-verify', { checks: [{ name: 'verify.ps1 passes', expect: 'exit-zero', run: 'pwsh -NoProfile -File verify.ps1' }, readmeIntact] })]),
+  );
+  h.chat.script(
+    reply.done(),
+    (m) => {
+      t.truthy('the chat is told the check was refused, and why', m.text.includes('not finished yet') && attachedText(m).includes('does not exist yet'), attachedText(m).slice(0, 600));
+      return write('verify.ps1', 'exit 0');
+    },
+    reply.done(),
+  );
+  const ended = (await h.run(s!.id)).tasks[0] as Ended;
+  t.check('done once the script is there', [ended.status, ended.stopCode ?? null], ['done', null]);
+
+  const [p] = await h.importPlan(
+    plan(h, 'script-line', [task('runs-it-by-path', { checks: [{ name: 'verify.ps1 by path', expect: 'exit-zero', run: '.\\verify.ps1' }, readmeIntact] })]),
+  );
+  const sent = h.chat.sent.length;
+  h.chat.script(reply.done());
+  const byPath = (await h.run(p!.id)).tasks[0] as Ended;
+  t.check('refused for the line itself: failed, stopCode invalid-check', [byPath.status, byPath.stopCode ?? null], ['failed', 'invalid-check']);
+  t.check('with nothing sent back about it', h.chat.sent.slice(sent).filter((m) => m.text.includes('not finished yet')).length, 0);
 });
 
 await scenario('invalid-check when the rounds run out: a check reading outside the project', { limits: { maxCheckRounds: 1 } }, async (h) => {
@@ -425,12 +458,42 @@ await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"
   const prompt = t1!.prompt;
   await h.call('POST', `/sessions/${s!.id}/tasks/${t1!.id}/continue`);
   h.chat.script((m) => {
-    // DEFECT: "Continue" of the first task is sent into the second task's fresh chat, which never saw the first task, as "the assignment you were given above".
+    // Each attempt keeps the conversation it ran in; "Continue" goes back to it, and the session with it.
     t.truthy('the continuation goes to the chat that has the first task, or carries its prompt', m.chatId === chatA || m.text.includes(prompt), { chatId: m.chatId, chatA, text: m.text.slice(0, 400) });
     return reply.done();
   });
   const continued = await h.run(s!.id);
   t.check('and the first task is done', continued.tasks[0]!.status, 'done');
+  t.check('the session is back in the conversation that has it', continued.chat?.chatId, chatA);
+
+  // Where that conversation cannot be opened again, the task goes out in full in a fresh one, with
+  // the contract, saying it continues an earlier attempt — never as "the assignment above".
+  await h.call('POST', `/sessions/${s!.id}/tasks`, { title: 'long-third', prompt: 'A third task that stops at the limit, in the conversation the session is in now.' });
+  h.chat.script(reply.steps("Write-Output 'third 1'"));
+  for (let i = 2; i <= 6; i++) h.chat.script(reply.steps(`Write-Output 'third ${i}'`));
+  const third = (await h.run(s!.id)).tasks[2] as Ended;
+  t.check('the third stopped at the limit', third.status, 'limit-reached');
+  // A retry of another task in a fresh conversation moves the session again; then the third's
+  // conversation is deleted outright.
+  await h.call('POST', `/sessions/${s!.id}/tasks`, { title: 'blocks-again', prompt: 'A fourth task that gives up, twice, the second time in a fresh conversation.' });
+  h.chat.script(reply.blocked(), reply.blocked());
+  const moved = await h.run(s!.id);
+  t.truthy('the session moved on from the conversation of the third', !!moved.chat && moved.chat.chatId !== chatA, [moved.chat, chatA]);
+  h.chat.conversations.delete(chatA);
+  await h.call('POST', `/sessions/${s!.id}/tasks/${third.id}/continue`);
+  const prompt3 = third.prompt;
+  h.chat.script((m) => {
+    // Not by name either: every conversation of the session has the session's name, the fresh one
+    // the retry just opened included, and that one never saw the third task.
+    t.truthy(
+      'the third task goes out in full, in a fresh conversation opened with the contract, saying it continues an earlier attempt',
+      m.chatId !== chatA && m.chatId !== moved.chat?.chatId && m.chat.messages[0]?.contract === 'task' && m.text.includes(prompt3) && m.text.includes('continues an earlier attempt'),
+      { chatId: m.chatId, first: m.chat.messages[0]?.text.slice(0, 80), text: m.text.slice(0, 600) },
+    );
+    return reply.done();
+  });
+  const last = await h.run(s!.id);
+  t.check('and the third task is done, in the conversation the session is in now', [last.tasks[2]!.status, last.chat?.chatId !== moved.chat?.chatId], ['done', true]);
 });
 
 await scenario('the stop marker with steps: done after one iteration, whatever the answer to its report', {}, async (h) => {

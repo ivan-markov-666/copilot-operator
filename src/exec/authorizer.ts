@@ -46,10 +46,17 @@ export type Ask = (step: Step, ctx: AuthorizeContext, held?: HeldFor) => Promise
  * step. Only for unattended runs — a watched run shows the fetch like every other step, and the
  * person reading it is the whole point of watching. `cfg` is read on every call, not captured, so
  * a run switched to unattended half-way is judged as one from its next step on.
+ *
+ * `signal` is the run's Stop, and it is asked first, before any rule and before the mode: a step
+ * proposed after Stop is aborted in every mode. It used to be asked only inside `ask`, which an
+ * unattended run never reaches, so in a run started unattended — or switched to it by "run the rest
+ * without asking" — a Stop that landed between the runner's own look at the signal and this answer
+ * let one more step run.
  */
-export function makeAuthorizer(cfg: PolicyConfig, ask: Ask): StepAuthorizer {
+export function makeAuthorizer(cfg: PolicyConfig, ask: Ask, signal?: AbortSignal): StepAuthorizer {
   return {
     async authorize(step, ctx) {
+      if (signal?.aborted) return { action: 'abort', reason: 'stopped by the operator', by: 'operator' };
       const blocked = staticCheck(step, cfg, undefined, ctx.confinement);
       if (blocked) return blocked;
       const cwd = ctx.confinement?.cwd;
