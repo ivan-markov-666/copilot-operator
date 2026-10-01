@@ -686,8 +686,8 @@ ${machineNote}` : contract);
       }
 
       /*
-       * Stopped while a step ran. The signal is looked at only at the top of the loop, so the report
-       * of the cut-short step was uploaded and the reviewer's answer waited for before the review
+       * Stopped while a step ran. Looked at only at the top of the loop, the signal let the report of
+       * the cut-short step be uploaded and the reviewer's answer be waited for before the review
        * noticed. The runner's chat refuses to send once the run is stopped (`sendsUntilStopped`),
        * but that is the runner covering for this loop; the review ends on a Stop by itself, the way
        * the runner's own loop does: the report is written for the record and nothing more is sent.
