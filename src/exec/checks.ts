@@ -18,8 +18,9 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { isWithin } from './confinement.js';
 
-import { runStep, type RunResult } from './runner.js';
+import { MAX_CAPTURE_CHARS, runStep, type RunResult } from './runner.js';
 import type { ProcessTracker } from './processes.js';
+import { redactSecrets } from './redaction.js';
 import { resolveShell, type Shell, type ShellProblem } from './shells.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { findSuspicious, suspiciousDetail } from '../vcs/commitHygiene.js';
@@ -110,7 +111,13 @@ export type CheckRunOptions = {
 };
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
-/** How much of a command's output travels back to the chat with a failure. */
+/**
+ * How much of a command's output travels back to the chat with a failure.
+ *
+ * Only what travels: a verdict is never taken on this shortened text. An output check is a claim
+ * about everything the command printed, and a marker printed after the first few thousand
+ * characters — the FAIL line at the end of a test run — is exactly the one it exists to see.
+ */
 const OUTPUT_KEPT = 4000;
 
 function shorten(text: string, max = OUTPUT_KEPT): string {
@@ -131,8 +138,19 @@ function needsCommand(check: TaskCheck): boolean {
  * a gate that opens when it breaks, which is the one behaviour a gate must never have.
  */
 export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOptions): Promise<CheckOutcome> {
-  const fail = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => ({ check, passed: false, detail, ...extra });
-  const pass = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => ({ check, passed: true, detail, ...extra });
+  /*
+   * What an outcome says is quoted to the chat by more than one caller — the checks message, the
+   * reviewer's brief ("Last result"), the message that turns down a reviewer's check — and it
+   * repeats the value the check looked for and the output it saw. So it is redacted where it is
+   * made, once, rather than at each place that happens to quote it.
+   */
+  const said = (outcome: CheckOutcome): CheckOutcome => ({
+    ...outcome,
+    detail: redactSecrets(outcome.detail),
+    ...(outcome.output !== undefined ? { output: redactSecrets(outcome.output) } : {}),
+  });
+  const fail = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => said({ check, passed: false, detail, ...extra });
+  const pass = (detail: string, extra: Partial<CheckOutcome> = {}): CheckOutcome => said({ check, passed: true, detail, ...extra });
 
   if (check.expect === 'commit-clean') {
     const dir = (opts.repoDir ?? '').trim();
@@ -211,8 +229,19 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
       return fail(`the check could not be run: ${(e as Error).message}`);
     }
 
-    const output = shorten(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`);
-    const seen = { exitCode: result.exitCode, output, shell: result.shell, shellPath: result.shellPath };
+    // Everything the runner kept is what the verdict is taken on; only the copy that is reported
+    // is shortened.
+    const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`.trim();
+    const seen = { exitCode: result.exitCode, output: shorten(output), shell: result.shell, shellPath: result.shellPath };
+    /*
+     * Past the runner's capture limit the rest of the output is on disk only, so a verdict that
+     * would need it cannot be taken. Finding the text in the part kept still decides the check;
+     * not finding it decides nothing, and an output-omits that passed on it would open the gate on
+     * output nobody read. So it fails, and says why, rather than claiming what the output holds.
+     */
+    const unread = (what: string): string =>
+      `the command printed more than the runner keeps (${MAX_CAPTURE_CHARS} characters of each stream), and the part kept ` +
+      `${what}; whether the rest does was never read, so the check cannot be decided`;
 
     // The shell was there when the run began and would not start when it was wanted. Nothing
     // about the work has been learned, so this is reported as what it is rather than as a
@@ -235,12 +264,14 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
           ? pass(`the command failed, as expected (exit ${result.exitCode})`, seen)
           : fail('expected the command to fail, but it succeeded', seen);
       case 'output-contains':
-        return output.includes(check.value ?? '')
-          ? pass(`the output contains "${check.value}"`, seen)
+        if (output.includes(check.value ?? '')) return pass(`the output contains "${check.value}"`, seen);
+        return result.truncated
+          ? fail(unread(`does not contain "${check.value}"`), seen)
           : fail(`expected the output to contain "${check.value}", and it does not`, seen);
       case 'output-omits':
-        return output.includes(check.value ?? '')
-          ? fail(`expected the output not to contain "${check.value}", but it does`, seen)
+        if (output.includes(check.value ?? '')) return fail(`expected the output not to contain "${check.value}", but it does`, seen);
+        return result.truncated
+          ? fail(unread(`does not contain "${check.value}"`), seen)
           : pass(`the output does not contain "${check.value}"`, seen);
       case 'output-matches': {
         let re: RegExp;
@@ -249,8 +280,9 @@ export async function runCheck(check: TaskCheck, index: number, opts: CheckRunOp
         } catch (e) {
           return fail(`the pattern is not a valid regular expression: ${(e as Error).message}`, seen);
         }
-        return re.test(output)
-          ? pass(`the output matches /${check.value}/`, seen)
+        if (re.test(output)) return pass(`the output matches /${check.value}/`, seen);
+        return result.truncated
+          ? fail(unread(`does not match /${check.value}/`), seen)
           : fail(`expected the output to match /${check.value}/, and it does not`, seen);
       }
       default:
@@ -325,6 +357,12 @@ export function describeCheck(check: TaskCheck): string {
  * Written as an instruction rather than as a complaint: it says what was asked, what happened,
  * and that the task is not over. The full output is attached as a file by the caller, the same
  * way step output is, because a chat message is the wrong place for a compiler's opinion.
+ *
+ * It quotes the checks themselves — the command, the value looked for, the detail that repeats
+ * it — and a plan may well carry a token in one of them, so it leaves here with every
+ * secret-shaped string already redacted (see `redaction.ts`). It used to be redacted only where a
+ * caller remembered to, which for this message was nowhere. The operator's own patterns are the
+ * caller's to apply on top; they live in the configuration, which this module does not read.
  */
 export function failureMessage(outcomes: CheckOutcome[], round: number, maxRounds: number): string {
   const failed = outcomes.filter((o) => !o.passed);
@@ -362,10 +400,10 @@ export function failureMessage(outcomes: CheckOutcome[], round: number, maxRound
       `have reason to believe these checks will pass. This is attempt ${round} of ${maxRounds}: after that the ` +
       'task is closed as failed and the operator reads it.',
   );
-  return lines.join('\n');
+  return redactSecrets(lines.join('\n'));
 }
 
-/** The same, as the plain text file that travels with the message. */
+/** The same, as the plain text file that travels with the message, redacted here for the same reason. */
 export function failureReport(outcomes: CheckOutcome[]): string {
   const parts = ['CHECKS THAT DID NOT PASS', '='.repeat(60), ''];
   for (const o of outcomes.filter((x) => !x.passed)) {
@@ -386,5 +424,5 @@ export function failureReport(outcomes: CheckOutcome[]): string {
     parts.push('CHECKS THAT PASSED', '-'.repeat(60));
     for (const o of passed) parts.push(`- ${o.check.name}: ${o.detail}`);
   }
-  return parts.join('\n');
+  return redactSecrets(parts.join('\n'));
 }

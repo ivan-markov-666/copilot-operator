@@ -11,8 +11,9 @@
  *   - the output cap, the step log's shape, and the named (not inherited) environment;
  *   - what a heartbeat carries while a step runs;
  *   - `stopTree`'s fallback and `stopProcesses` never touching this process or its parent;
- *   - every check kind, the checks that cannot be evaluated failing rather than passing, the gate
- *     refusing a download in a check, the messages the chat gets, derived checks, and commit-clean.
+ *   - every check kind, output checks judged on the whole output, the checks that cannot be evaluated
+ *     failing rather than passing, the gate refusing a download in a check, the messages the chat
+ *     gets and the secrets kept out of them, derived checks, and commit-clean.
  *
  * Only `powershell` and `cmd` are used, which every Windows machine has: the old runner check asked
  * for `pwsh` and died of `spawn ENOENT` on a machine without PowerShell 7. Everything is written
@@ -21,9 +22,8 @@
  * is under `.invalid` (RFC 2606), which never resolves — so even a check that stopped asking the gate
  * at all would cost a failed name lookup, not a download.
  *
- * A check marked `DEFECT` is a real fault in the product, kept failing on purpose until it is fixed.
- * The heartbeat checks are among them: the interval is a 30 s constant in runner.ts, and they are
- * written against the option (`heartbeatMs`, beside `onHeartbeat`) that makes it shorter.
+ * The heartbeat checks ask for a beat every fraction of a second through `heartbeatMs`, beside
+ * `onHeartbeat`: at the live log's own pace of one every 30 s, none would come during a short step.
  *
  *   npx tsx test/exec.check.ts        (npm run check:exec, once package.json names it)
  */
@@ -35,7 +35,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runStep, type RunRequest } from '../src/exec/runner.js';
-import { isAlive, stopProcesses, stopTree } from '../src/exec/processes.js';
+import { isAlive, ProcessTracker, stopProcesses, stopTree } from '../src/exec/processes.js';
 import { COMMIT_CLEAN_CHECK, describeCheck, failureMessage, failureReport, runCheck, runChecks, type CheckOutcome } from '../src/exec/checks.js';
 import { checkCommandRefusal } from '../src/exec/policy.js';
 import { writeReport } from '../src/exec/reportFile.js';
@@ -187,17 +187,37 @@ setTimeout(() => process.exit(0), 45_000);
     t.truthy('stderr says the user aborted it', aborted.stderr.includes('aborted by the user'), aborted.stderr);
 
     const logPath = join(logs, 'pre-aborted.log');
+    const preTracker = new ProcessTracker();
     const pre = await runStep(
       { id: 99, shell: 'cmd', command: 'ping -n 3 127.0.0.1', cwd: base, logPath, idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
-      { signal: AbortSignal.abort() },
+      { signal: AbortSignal.abort(), tracker: preTracker },
     );
     const log = existsSync(logPath) ? await readFile(logPath, 'utf8') : '';
-    // DEFECT: runStep only listens for a future 'abort' event, so an already-aborted signal runs the step to completion.
+    // 'abort' fires once, so a signal aborted before runStep listens never fires for it: runStep asks
+    // the signal itself after its last await, before the log is opened or the shell is started.
     t.check('an already-aborted signal ends the step aborted', pre.outcome, 'aborted');
-    // DEFECT: same cause — the step runs its full two seconds instead of returning at once.
     t.truthy(`and at once (took ${pre.durationMs} ms)`, pre.durationMs < 500);
-    // DEFECT: same cause — the shell is spawned, and the log has the header written just before it.
     t.check('and no process was started (the log has no "# step" header)', log.includes('# step'), false);
+    t.check('and none was recorded as started', preTracker.roots.length, 0);
+    t.truthy('stderr says the operator stopped it before it started', pre.stderr.includes('before it started'), pre.stderr);
+
+    /*
+     * The same Stop a moment later: pressed after runStep was called, while it is still preparing the
+     * step's log folder and before it listens. That await is the window an abort used to fall into;
+     * the step must not start either.
+     */
+    const lateLog = join(logs, 'late-abort', 'step.log');
+    const lateAc = new AbortController();
+    const lateTracker = new ProcessTracker();
+    const lateRun = runStep(
+      { id: 98, shell: 'cmd', command: 'ping -n 3 127.0.0.1', cwd: base, logPath: lateLog, idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
+      { signal: lateAc.signal, tracker: lateTracker },
+    );
+    lateAc.abort();
+    const late = await lateRun;
+    t.check('an abort right after the call ends the step aborted', late.outcome, 'aborted');
+    t.truthy(`and at once (took ${late.durationMs} ms)`, late.durationMs < 500);
+    t.check('and no process was started for it', lateTracker.roots.length, 0);
   });
 
   /*
@@ -270,15 +290,15 @@ setTimeout(() => process.exit(0), 45_000);
    * 300 ms for about 2.5 s, and the beat comes every 500 ms, so a beat that says anything true has to
    * carry a line printed before it and not long before it — not a stale one, and not one it made up.
    *
-   * The interval is asked for through `heartbeatMs`, which runStep does not have yet: today every
-   * beat is 30 s apart and none comes while this step runs, so these checks fail until it does.
+   * The interval is asked for through `heartbeatMs`. The live log's own pace is a beat every 30 s, at
+   * which none would come while this step runs, and what a beat carries could not be checked at all.
    */
   await scenario('a heartbeat says how long, how much, and the last line printed', async () => {
     const beats: Array<{ elapsedMs: number; idleMs: number; bytesOut: number; lastLine: string; at: number }> = [];
-    const hbOpts = {
+    const hbOpts: Parameters<typeof runStep>[1] = {
       heartbeatMs: 500,
-      onHeartbeat: (b: { elapsedMs: number; idleMs: number; bytesOut: number; lastLine: string }) => beats.push({ ...b, at: Date.now() }),
-    } as Parameters<typeof runStep>[1];
+      onHeartbeat: (b) => beats.push({ ...b, at: Date.now() }),
+    };
     const r = await step(
       'powershell',
       '1..8 | % { "beat-line $_ " + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); Start-Sleep -Milliseconds 300 }',
@@ -288,18 +308,35 @@ setTimeout(() => process.exit(0), 45_000);
     t.check('the step completed', r.outcome, 'completed');
     const stamp = (line: string): number => Number(/^beat-line \d+ (\d+)$/.exec(line)?.[1] ?? NaN);
     const good = beats.find((b) => b.elapsedMs > 0 && b.bytesOut > 0 && /^beat-line \d+ \d+$/.test(b.lastLine));
-    // DEFECT: the heartbeat interval is a fixed 30 s (HEARTBEAT_EVERY_MS) with no heartbeatMs option, so no beat comes during a 2.5 s step.
     t.truthy(`a beat carried the time run, the bytes printed and a printed line (${beats.length} beats)`, good !== undefined, beats);
     // The clocks are the same system clock; 20 ms is only its resolution. A line printed more than a
     // second before the beat would be one the beat kept after newer lines had come (they come every 300 ms).
-    // DEFECT: same cause.
     t.truthy(
       "that beat's line was printed before it, and less than a second before it",
       good !== undefined && stamp(good.lastLine) <= good.at + 20 && good.at - stamp(good.lastLine) < 1_000,
       good,
     );
-    // DEFECT: same cause.
+    // A pipe hands over chunks, not lines; the beat carries the line the step printed, never the
+    // second half of one that arrived in two chunks.
     t.truthy("and it is a whole line of the step's stdout", good !== undefined && r.stdout.split(/\r?\n/).some((l) => l.trimEnd() === good.lastLine), r.stdout);
+    // Every beat, not just the one picked above: none carries text the step did not print as a line.
+    const lines = new Set(r.stdout.split(/\r?\n/).map((l) => l.trimEnd()));
+    t.truthy('every beat with a line carries a whole printed line', beats.every((b) => b.lastLine === '' || lines.has(b.lastLine)), beats.map((b) => b.lastLine));
+
+    /*
+     * The same rule where it is easy to break: one line printed in two pieces a second apart (`set /p`
+     * prints without a newline), then a second of quiet, so beats come on both sides of the join.
+     * Before the join the beat shows the line as far as it has come; after it, the whole line, not
+     * only its second piece. No space before an `&`: cmd prints it as part of the text.
+     */
+    const split: string[] = [];
+    const halves = await step('cmd', '<nul set /p =first-half-& ping -n 2 127.0.0.1 >nul & echo second-half& ping -n 2 127.0.0.1 >nul', { idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 }, {
+      heartbeatMs: 200,
+      onHeartbeat: (b) => split.push(b.lastLine),
+    });
+    t.check('the two-piece step completed', halves.outcome, 'completed');
+    t.truthy('a beat after the join carries the whole line', split.includes('first-half-second-half'), split);
+    t.truthy('and no beat carries only its second piece', !split.includes('second-half'), split);
   });
 
   /*
@@ -386,13 +423,31 @@ setTimeout(() => process.exit(0), 45_000);
     const contains = await runCheck({ name: 'marker after the padding', expect: 'output-contains', value: 'MARKER', ...ps }, 0, opts);
     const omits = await runCheck({ name: 'marker should be absent', expect: 'output-omits', value: 'MARKER', ...ps }, 0, opts);
     const matches = await runCheck({ name: 'marker on its own line', expect: 'output-matches', value: '^MARKER$', ...ps }, 0, opts);
-    // DEFECT: shorten() cuts the output to 4000 characters before the verdict, so a marker printed later is never seen.
+    // The verdict is taken on everything the runner kept; only the reported copy is shortened.
     t.check('output-contains finds a marker printed after 4000 characters', contains.passed, true);
-    // DEFECT: same cause — output-omits passes although the command printed the marker.
     t.check('output-omits fails when the marker was printed after 4000 characters', omits.passed, false);
-    // DEFECT: same cause — output-matches does not see the line.
     t.check('output-matches finds a line printed after 4000 characters', matches.passed, true);
     t.truthy(`the reported output is still shortened (${(contains.output ?? '').length} characters)`, (contains.output ?? '').length < 5_000);
+
+    /*
+     * The same rule one layer down. The runner keeps 200,000 characters of each stream in memory and
+     * the rest on disk only, so past that the output a verdict would need was never read. Finding the
+     * text in the part kept still decides; not finding it decides nothing, and the check fails saying
+     * so — above all output-omits, which passing here would open the gate on output nobody read.
+     */
+    const huge = "'x' * 250000; 'LATE-MARKER'";
+    const big = { shell: 'powershell' as const, run: huge, cwd: checksDir };
+    const lateOmits = await runCheck({ name: 'late marker should be absent', expect: 'output-omits', value: 'LATE-MARKER', ...big }, 0, opts);
+    const lateContains = await runCheck({ name: 'late marker present', expect: 'output-contains', value: 'LATE-MARKER', ...big }, 0, opts);
+    const lateMatches = await runCheck({ name: 'late marker on its line', expect: 'output-matches', value: '^LATE-MARKER$', ...big }, 0, opts);
+    const earlyContains = await runCheck({ name: 'early text present', expect: 'output-contains', value: 'xxxxxxxx', ...big }, 0, opts);
+    t.check('output-omits past the capture limit fails rather than passing on the part kept', lateOmits.passed, false);
+    t.truthy('and says the rest was never read', /never read/.test(lateOmits.detail), lateOmits.detail);
+    t.check('output-contains past the capture limit fails', lateContains.passed, false);
+    t.truthy('saying it cannot be decided, not that the text is missing', /cannot be decided/.test(lateContains.detail), lateContains.detail);
+    t.check('output-matches past the capture limit fails', lateMatches.passed, false);
+    t.truthy('saying it cannot be decided', /cannot be decided/.test(lateMatches.detail), lateMatches.detail);
+    t.check('text found in the part kept still passes output-contains', earlyContains.passed, true);
   });
 
   /*
@@ -481,6 +536,30 @@ setTimeout(() => process.exit(0), 45_000);
     t.truthy('and lists the checks that passed', report.includes('CHECKS THAT PASSED'), report);
     // One line per check for the live log and the task card: its name, its kind and what it runs.
     t.check('a check in one line', describeCheck(failing), 'typescript compiles: exit-zero — exit /b 2');
+
+    /*
+     * The message and its file quote the checks — the command, the value looked for, and the detail
+     * that repeats that value — so a token in any of them is redacted where the text is written, not
+     * only where a caller remembers to.
+     */
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const key = 'sk-live-0123456789abcdefghij';
+    const secretive = await runChecks(
+      [
+        { name: 'the token command fails', expect: 'exit-nonzero', ...cmd(`echo token=${token}`) },
+        { name: 'the key is printed', expect: 'output-contains', value: key, ...cmd('echo nothing') },
+      ],
+      opts,
+    );
+    t.check('both secret-carrying checks fail', secretive.map((o) => o.passed), [false, false]);
+    // The outcome itself, which the reviewer's brief and the reply to a reviewer's check quote too.
+    t.truthy('the detail of an outcome carries no key', !secretive[1]!.detail.includes('sk-live-0123') && secretive[1]!.detail.includes('[REDACTED'), secretive[1]!.detail);
+    t.truthy('nor the output it kept', !(secretive[0]!.output ?? '').includes('ghp_abcdef') && (secretive[0]!.output ?? '').includes('[REDACTED'), secretive[0]!.output);
+    const told = failureMessage(secretive, 1, 3);
+    t.truthy('a token in a check command is redacted in the message', !told.includes('ghp_abcdef') && told.includes('[REDACTED'), told);
+    t.truthy('a key in a check value, and in the detail quoting it, is redacted in the message', !told.includes('sk-live-0123'), told);
+    const attached = failureReport(secretive);
+    t.truthy('and both are redacted in the attached report', !attached.includes('ghp_abcdef') && !attached.includes('sk-live-0123'), attached);
   });
 
   /*
@@ -503,6 +582,17 @@ setTimeout(() => process.exit(0), 45_000);
     t.check('refused: the check that passes on the defective work', validated.refused.map((r) => r.finding.id), ['r1f1']);
     t.check('blocked: none', validated.blocked.length, 0);
     t.check('named so it cannot clash', validated.kept[0]?.check.name, derivedCheckName('r1f2', 'the build passes'));
+
+    // A refused check's detail goes back to the reviewer's chat; a token it looked for is not in it.
+    const leaky = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const findingWithSecret = {
+      id: 'r1f5', what: 'x', evidence: 'y', basis: 'the build must pass', where: 'z', about: 'work' as const,
+      check: { name: 'prints the token', expect: 'output-contains' as const, value: leaky, run: `echo ${leaky}`, shell: 'cmd' as const, cwd: checksDir },
+    };
+    const leakyValidated = await validateDerivedChecks([findingWithSecret], { cwd: checksDir, logDir: checkLogs });
+    t.check('a check that passes on the work as it is is refused', leakyValidated.refused.map((r) => r.finding.id), ['r1f5']);
+    const shown = leakyValidated.refused[0]?.outcome.detail ?? '';
+    t.truthy('and the detail the reviewer is shown carries no token', shown !== '' && !shown.includes('ghp_abcdef'), shown);
 
     const other: TaskReviewCheck = {
       check: { name: derivedCheckName('r1f4', 'the page renders'), expect: 'exit-zero', run: 'exit /b 1', shell: 'cmd' },

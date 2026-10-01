@@ -26,9 +26,6 @@
  * - what each run folder holds, the stats counters, and a server left running being stopped.
  *
  *   npm run check:e2e-loop   (or: npx tsx test/e2e-loop.check.ts)
- *
- * It is red on purpose today: the check marked DEFECT below (the token in the checks message) fails
- * until the product is fixed. Every other check passes.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -727,14 +724,28 @@ await scenario('the stop marker with steps: done after one iteration, whatever t
 
 await scenario('secrets never reach the chat: the checks file, the step report', { limits: { maxCheckRounds: 1 } }, async (h) => {
   const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
-  const [s] = await h.importPlan(plan(h, 'secrets', [task('prints-a-token', { checks: [{ name: 'the token command fails', expect: 'exit-nonzero', run: `echo token=${token}` }] })], { vcs: false }));
+  // A second secret, in the value an output check looks for, which the message quotes twice: as what
+  // was required, and again in the detail of what happened.
+  const key = 'sk-live-0123456789abcdefghij';
+  const [s] = await h.importPlan(
+    plan(h, 'secrets', [
+      task('prints-a-token', {
+        checks: [
+          { name: 'the token command fails', expect: 'exit-nonzero', run: `echo token=${token}` },
+          { name: 'the key is printed', expect: 'output-contains', value: key, run: 'echo nothing' },
+        ],
+      }),
+    ], { vcs: false }),
+  );
   h.chat.script(
     reply.done(),
     (m) => {
       const file = attachedText(m);
       t.truthy('the checks file is redacted', file.includes('[REDACTED') && !file.includes('ghp_abcdef'), file.slice(0, 900));
-      // DEFECT: the checks message itself quotes the plan's check command ("- Command: ...") unredacted, so the token reaches the chat in the message text.
+      // The message quotes each failing check's command and value, so it is redacted where it is
+      // written, the same as the file beside it.
       t.truthy('and the message beside it carries no token either', !m.text.includes('ghp_abcdef'), m.text.slice(0, 900));
+      t.truthy('nor the key a check looks for, in its value or its detail', !m.text.includes('sk-live-0123') && !file.includes('sk-live-0123'), m.text.slice(0, 900));
       return reply.steps(`echo token=${token}`);
     },
     (m) => {

@@ -24,7 +24,7 @@ import { createWriteStream, existsSync, type WriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type Shell, type ShellProblem } from './shells.js';
+import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type ResolvedShell, type Shell, type ShellProblem } from './shells.js';
 import { stopTree, type ProcessTracker } from './processes.js';
 import { stepEnvironment } from './stepEnv.js';
 
@@ -98,9 +98,20 @@ export type Heartbeat = (info: {
 
 const DEFAULT_HARD_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+/** How often a running step says how it is doing, unless the caller asks for another pace. */
 const HEARTBEAT_EVERY_MS = 30_000;
-/** Cap on what is held in memory and echoed into the report body. */
-const MAX_CAPTURE_CHARS = 200_000;
+/**
+ * Cap on what is held in memory and echoed into the report body, per stream.
+ *
+ * Exported because whatever decides something from the captured text has to know where it stops:
+ * past it the text is not the whole output, and an answer read from it may not be the true one.
+ */
+export const MAX_CAPTURE_CHARS = 200_000;
+/**
+ * How much of a line that has not ended yet is carried over to the next chunk, so the last line a
+ * heartbeat shows is a whole line. Bounded, because a program can print a megabyte with no newline.
+ */
+const LINE_CARRIED_CHARS = 2_000;
 
 /**
  * The result of a step that never started because the machine has no shell for it.
@@ -129,6 +140,31 @@ function unrunnable(req: RunRequest, problem: ShellProblem): RunResult {
 }
 
 /**
+ * The result of a step the operator stopped before it began.
+ *
+ * Shaped like a stop in the middle of a run, because that is what the operator asked for and what
+ * whoever reads the result has to act on, but with nothing started and nothing logged: there is no
+ * process to account for and no stream to point at.
+ */
+function stoppedBeforeStart(req: RunRequest, resolved: ResolvedShell): RunResult {
+  return {
+    id: req.id,
+    shell: resolved.shell,
+    requestedShell: resolved.requested,
+    shellPath: resolved.path,
+    command: req.command,
+    exitCode: -3,
+    outcome: 'aborted',
+    durationMs: 0,
+    stdout: '',
+    stderr: '[runner] the command was not run: the operator stopped the run before it started\n',
+    truncated: false,
+    logPath: '',
+    lastOutputAgoMs: 0,
+  };
+}
+
+/**
  * The longest a step that is being stopped may take before its result is given anyway. The stop
  * itself is `taskkill /T`, a grace period, then `/F` (see `processes.ts`), which with reading the
  * process table comes to about ten seconds at worst; this is the ceiling on
@@ -141,11 +177,17 @@ export async function runStep(
   /**
    * `tracker` records the shell this step starts, which is what later lets the runner tell the
    * processes the bot started from ones the operator started by hand. See `processes.ts`.
+   *
+   * `heartbeatMs` is how often `onHeartbeat` is called while the step runs. The live log wants a
+   * beat every half minute and no more; a caller that needs to see what a beat carries during a
+   * step of a few seconds asks for a shorter one, since at the default none would come at all.
    */
-  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat; tracker?: ProcessTracker } = {},
+  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat; heartbeatMs?: number; tracker?: ProcessTracker } = {},
 ): Promise<RunResult> {
   const hardTimeoutMs = req.hardTimeoutMs ?? DEFAULT_HARD_TIMEOUT_MS;
   const idleTimeoutMs = req.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  // Anything that is not a positive interval would be a timer firing as fast as it can.
+  const heartbeatMs = opts.heartbeatMs !== undefined && opts.heartbeatMs > 0 ? opts.heartbeatMs : HEARTBEAT_EVERY_MS;
   const startedAt = Date.now();
 
   // Every path into the shell goes through here, which is what makes a step and a post-task
@@ -155,6 +197,17 @@ export async function runStep(
   const resolved = choice.resolved;
 
   await mkdir(dirname(req.logPath), { recursive: true });
+  /*
+   * A Stop that came before the step began means the step never begins.
+   *
+   * The signal is listened to only once the process exists, and 'abort' is fired once: a signal
+   * already aborted by then — Stop pressed while the previous step was ending, or during the await
+   * just above — never fires again, and the step used to run its whole course, hours under the
+   * default ceiling, with the operator's Stop on record. It is asked here, after the last await and
+   * before anything is written or started, because from this line to the listener below everything
+   * runs in one go: no abort can arrive in between and be missed.
+   */
+  if (opts.signal?.aborted) return stoppedBeforeStart(req, resolved);
   const log: WriteStream = createWriteStream(req.logPath, { flags: 'a' });
   /*
    * A step log that cannot be written must never take the process down with it.
@@ -175,6 +228,12 @@ export async function runStep(
     let bytesOut = 0;
     let truncated = false;
     let lastLine = '';
+    /*
+     * The end of each stream that has no newline yet. A pipe hands over whatever is there, not
+     * whole lines, so a line can arrive in two chunks; read chunk by chunk, the last line would be
+     * the second half of it, which is text the step never printed on its own.
+     */
+    const unfinished = { out: '', err: '' };
     let lastOutputAt = Date.now();
     let settled = false;
     /** Set when the shell itself would not start, which is not a failure of the command. */
@@ -232,7 +291,10 @@ export async function runStep(
       // ended stream, so the tail goes to the captured text and not to the file.
       if (!settled) log.write(stream === 'err' ? text.replace(/^/gm, '[stderr] ') : text);
 
-      const trimmed = text.trimEnd();
+      const joined = unfinished[stream] + text;
+      const end = joined.lastIndexOf('\n');
+      unfinished[stream] = (end >= 0 ? joined.slice(end + 1) : joined).slice(-LINE_CARRIED_CHARS);
+      const trimmed = joined.trimEnd();
       const nl = trimmed.lastIndexOf('\n');
       if (trimmed) lastLine = nl >= 0 ? trimmed.slice(nl + 1) : trimmed;
 
@@ -315,7 +377,7 @@ export async function runStep(
         bytesOut,
         lastLine,
       });
-    }, HEARTBEAT_EVERY_MS);
+    }, heartbeatMs);
 
     const onAbort = (): void => {
       stop('aborted', -3, 'aborted by the user');
