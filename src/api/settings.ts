@@ -107,8 +107,8 @@ export class Settings {
    *
    * A file whose values the schema refuses stops here with the reason, as it always has; it is the
    * file's problem, not the request's, so it is refused as one (see `SettingsUnusableError`).
-   * Anything else that stops the load, such as a policy lock that does not parse, is not this
-   * file's, and goes on as it is.
+   * Anything else that stops the load is not this file's, and goes on as it is: a policy lock that
+   * does not parse is a `PolicyLockUnusableError`, answered by name on every route as this one is.
    */
   async load(): Promise<ResolvedConfig> {
     const value = { ...this.installDefaults, ...(await this.raw()), dataDir: this.dataDir };

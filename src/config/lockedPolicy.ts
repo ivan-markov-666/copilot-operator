@@ -179,6 +179,33 @@ export async function readPolicyLocks(baseDir: string, env: NodeJS.ProcessEnv = 
   return out;
 }
 
+/**
+ * A policy lock that is there and cannot be used: it is not JSON, or not a lock.
+ *
+ * Its own class for the reason `SettingsUnusableError` has one (see `api/settings.ts`). Every
+ * configuration passes through `resolveConfig`, which reads the locks, so every request that reads
+ * the settings meets a broken one, not only the saves; as a plain error it was "Internal server
+ * error" wherever a route did not wrap its errors — the System page, the Defaults page, the Project
+ * page and the model picker among them, the pages the operator opens to find out what is wrong. The
+ * server answers this one the same way on every route, with this message (see `server.ts`).
+ */
+export class PolicyLockUnusableError extends Error {
+  constructor(
+    readonly path: string,
+    /** What is wrong, said of the file: "is not valid JSON: …". */
+    readonly problem: string,
+  ) {
+    // The way out goes in the same message, as it does for the settings file. Unlike that file,
+    // this one is not the operator's to delete in passing: it is somebody's decision about this
+    // machine, and the one thing a broken lock must not do is read as no lock at all.
+    super(
+      `${path} ${problem}\nNothing that reads the settings runs until it is mended: a policy lock that cannot be read as one ` +
+        'is never taken for no lock. Whoever administers this machine placed it; mend it there, or remove it if no lock was meant.',
+    );
+    this.name = 'PolicyLockUnusableError';
+  }
+}
+
 async function readPolicyLockAt(path: string): Promise<PolicyLock | null> {
   let text: string;
   try {
@@ -190,11 +217,11 @@ async function readPolicyLockAt(path: string): Promise<PolicyLock | null> {
   try {
     value = JSON.parse(text) as unknown;
   } catch (e) {
-    throw new Error(`${path} is not valid JSON: ${(e as Error).message}`);
+    throw new PolicyLockUnusableError(path, `is not valid JSON: ${(e as Error).message}`);
   }
   const parsed = PolicyLockSchema.safeParse(value);
   if (!parsed.success) {
-    throw new Error(`${path} is not a valid policy lock:\n${parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n')}`);
+    throw new PolicyLockUnusableError(path, `is not a valid policy lock:\n${parsed.error.issues.map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`).join('\n')}`);
   }
   return parsed.data;
 }

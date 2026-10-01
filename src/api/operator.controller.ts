@@ -11,14 +11,15 @@ import { OperatorService } from './operator.service.js';
 import type { TaskCheck } from '../session/model.js';
 import type { ContextKind } from '../session/store.js';
 import { SettingsUnusableError } from './settings.js';
+import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 
 type Msg = { data: string; type?: string; id?: string };
 
 function fail(e: unknown): never {
-  // A settings file that cannot be used is not the request's fault, and every route that reads the
-  // settings meets it, wrapped here or not: it is passed on as it is, for the server to answer the
-  // same way on all of them (see `server.ts`).
-  if (e instanceof SettingsUnusableError) throw e;
+  // A settings file or a policy lock that cannot be used is not the request's fault, and every route
+  // that reads the settings meets it, wrapped here or not: it is passed on as it is, for the server
+  // to answer the same way on all of them (see `server.ts`).
+  if (e instanceof SettingsUnusableError || e instanceof PolicyLockUnusableError) throw e;
   throw new BadRequestException((e as Error).message);
 }
 

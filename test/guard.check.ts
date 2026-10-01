@@ -1,6 +1,7 @@
 /**
  * The API door, on the real server: the guard as it is wired in front of every route, the cookie the
  * served interface hands out, the refusal every entrance gives an unattended run it may not start,
+ * a policy lock that breaks while the server runs, named on every route that reads the settings,
  * the step that tries to reach the bot itself, and the path guards on a task's own files.
  *
  * `security.check.ts` and `package.check.ts` hold the rules as functions. This holds them as they
@@ -524,6 +525,48 @@ console.log('\n--- a malformed lock refuses to load ---');
     // The declined lock field for execution.networkFetch is pinned once, in gate.check.ts, not here.
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/*
+ * The same lock broken while the API runs, which every route that reads the settings meets: reading
+ * the settings reads the locks. It was a plain error, so the routes that did not wrap their errors —
+ * the System page's /doctor, the Defaults page's /settings, /project, /models, the plan brief, a
+ * start — answered 500, "Internal server error", with nothing naming the file, and the others 400.
+ * Each now answers 409 with the lock's own message, as a settings file that cannot be used is
+ * answered, and the routes that read no settings go on answering.
+ */
+{
+  const lockDir = mkdtempSync(join(tmpdir(), 'cop-guard-brokenlock-'));
+  const lock = join(lockDir, 'policy.lock.json');
+  process.env.COP_PROJECT_ROOT = lockDir;
+  try {
+    await scenario('a policy lock that breaks while the API runs is named on every route that reads the settings', {}, async (h) => {
+      const [s] = await h.importPlan(plan(h, 'lockbroken', [writes('write-one', 'one.txt', 'a')]));
+      writeFileSync(lock, '{not json', 'utf8');
+      const routes: Array<[string, string, unknown?]> = [
+        ['GET', '/settings'],
+        ['GET', '/doctor'],
+        ['GET', '/project'],
+        ['GET', '/models'],
+        ['GET', '/plan/brief?lang=en'],
+        ['PUT', '/settings', {}],
+        ['POST', `/sessions/${s!.id}/start`, { mode: 'confirm' }],
+      ];
+      for (const [method, path, body] of routes) {
+        const r = await h.raw(method, path, body);
+        const message = typeof r.body === 'object' && r.body && 'message' in r.body ? String((r.body as { message: unknown }).message) : String(r.body);
+        t.truthy(`${method} ${path}: 409, naming the broken lock and what is wrong with it`,
+          r.status === 409 && message.includes(lock) && message.includes('is not valid JSON'), { status: r.status, message: message.slice(0, 300) });
+      }
+      t.check('a route that reads no settings still answers', (await h.raw('GET', '/sessions')).status, 200);
+      t.check('no chat was opened', h.chat.opened, 0);
+      rmSync(lock);
+      t.check('once the lock is gone, the settings answer again', (await h.raw('GET', '/settings')).status, 200);
+    });
+  } finally {
+    delete process.env.COP_PROJECT_ROOT;
+    rmSync(lockDir, { recursive: true, force: true });
   }
 }
 

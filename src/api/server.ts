@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { AppModule } from './app.module.js';
 import { OperatorService } from './operator.service.js';
 import { SettingsUnusableError } from './settings.js';
+import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { ensureApiToken, localApiGuard } from './security.js';
 import { secureDataDir } from './dataAcl.js';
 import { pruneRuns } from '../session/retention.js';
@@ -41,16 +42,18 @@ export type StartedApi = {
 };
 
 /**
- * A settings file that cannot be used, answered the same way on every route: 409, with the message
- * that names the file and says what to do (see `SettingsUnusableError`).
+ * A settings file, or a policy lock, that cannot be used, answered the same way on every route: 409,
+ * with the message that names the file and says what to do (see `SettingsUnusableError` and
+ * `PolicyLockUnusableError`).
  *
  * Here, once, because the routes that meet it are most of them: every one whose work reads the
- * settings. Left to the default it was "Internal server error" wherever a route did not wrap its
- * errors, which included the Defaults page, the Project page and the model picker.
+ * settings, and reading the settings reads the locks. Left to the default it was "Internal server
+ * error" wherever a route did not wrap its errors, which included the Defaults page, the Project
+ * page and the model picker; a broken lock was that on the System page as well, until 2026-10-01.
  */
-@Catch(SettingsUnusableError)
+@Catch(SettingsUnusableError, PolicyLockUnusableError)
 class SettingsUnusableFilter extends BaseExceptionFilter {
-  override catch(e: SettingsUnusableError, host: ArgumentsHost): void {
+  override catch(e: SettingsUnusableError | PolicyLockUnusableError, host: ArgumentsHost): void {
     super.catch(new ConflictException(e.message), host);
   }
 }
