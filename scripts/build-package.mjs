@@ -132,8 +132,11 @@ const ships = (path) => {
 
 /*
  * The interface of an earlier build goes first, whatever this one finds below. It was built from
- * other sources, and a clone's API serves dist/web whenever it holds an index.html
- * (src/config/layout.ts), so a build refused below must leave nothing there to serve.
+ * other sources, and dist/web is what `npm pack` and `npm publish` ship (package.json "files") and
+ * what the browser checks serve, by name, through startApi's webDir (test/ui.check.ts,
+ * test/ui-flows.check.ts), so a build refused below must leave nothing there for a pack or a check
+ * to pick up. A clone's own API serves none of it, whatever is built there: installLayout gives a
+ * checkout no webDir (src/config/layout.ts).
  */
 const target = join(root, 'dist', 'web');
 rmSync(target, { recursive: true, force: true });

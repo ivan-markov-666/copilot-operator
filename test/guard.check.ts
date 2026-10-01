@@ -316,6 +316,10 @@ console.log('\n--- a checkout never hands the token out by accident (layout) ---
     writeFileSync(join(pkg, 'dist', 'web', 'index.html'), '<p>built</p>', 'utf8');
     const installed = installLayout({}, join(base, 'my-app'), pkg);
     t.check('control: a package with the same build serves it', [installed.mode, installed.webDir], ['package', join(pkg, 'dist', 'web')]);
+    // The package build clears dist/web, and its comment gave as the reason that a clone's API serves
+    // it, citing layout.ts: a reader who believed it would make layout.ts serve it again.
+    const buildScript = await readFile(join(import.meta.dirname, '..', 'scripts', 'build-package.mjs'), 'utf8');
+    t.check("scripts/build-package.mjs does not say a clone's API serves dist/web", /clone's API serves dist\/web/i.test(buildScript), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

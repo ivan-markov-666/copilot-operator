@@ -13,7 +13,7 @@
  *   nor a compiled file whose source was deleted (a stale file planted in dist/src must not ship);
  * - no API token is baked into the shipped interface, and the package build cannot bake one in from
  *   whatever the shell that runs it happens to hold; a build whose interface holds one is refused,
- *   and leaves no interface in dist/web for a clone's API to serve;
+ *   and leaves no interface in dist/web for a pack to ship or a browser check to serve;
  * - the installed package starts in a throwaway project, serves its page with the token as a cookie,
  *   keeps its records out of the project's git, and leaves its port free once it is stopped;
  * - `cop run` refuses a run it must not start before any browser is opened; `cop doctor` names a
@@ -568,9 +568,10 @@ syncBuiltinESMExports();
    * The build's own guard, the scan of the export, for each way it knows a token: by value (here the
    * shell's), by the name a build from another shell would fill, and by shape. Each run plants one
    * such file beside a harmless page and script. The build must fail naming that file and print no
-   * token, and must copy nothing to dist/web: a clone's API serves dist/web whenever it holds an
-   * index.html (src/config/layout.ts), so a refused interface left there would be served all the
-   * same. The interface of an earlier build goes too, since it was built from other sources.
+   * token, and must copy nothing to dist/web: dist/web is what a pack ships and what the browser
+   * checks serve by name, so a refused interface left there would be packed or served all the same.
+   * (A clone's own API serves none of it: src/config/layout.ts.) The interface of an earlier build
+   * goes too, since it was built from other sources.
    */
   const hex = 'ab'.repeat(32);
   const refusals: Array<{ name: string; what: string; text: string; secret: string }> = [
