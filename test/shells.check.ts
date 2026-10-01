@@ -116,15 +116,30 @@ check('a label never refuses', effectiveShell(undefined, withoutPwsh), 'powershe
 // refusal that follows is about the shell that was asked for.
 check('and does not rename what was asked for', effectiveShell('pwsh', withoutPwsh), 'pwsh');
 
-console.log('\n--- how each shell is invoked, unchanged ---');
+console.log('\n--- how each shell is invoked ---');
 const psCall = invocationFor({ requested: 'pwsh', shell: 'pwsh', path: 'P:\\pwsh.exe' }, 'Get-Date');
 // RemoteSigned, not Bypass: nothing is downloaded, and a script marked as from the web must not run.
 check('pwsh takes -Command', psCall.args.join(' '), '-NoProfile -NonInteractive -Command Get-Date');
 check('at the executable that was resolved', psCall.file, 'P:\\pwsh.exe');
-const cmdCall = invocationFor({ requested: null, shell: 'cmd', path: 'C:\\cmd.exe' }, 'echo hi');
-check('cmd takes /d /s /c', cmdCall.args.join(' '), '/d /s /c echo hi');
+check('and Node quotes its arguments, as before', psCall.windowsVerbatimArguments, false);
+/*
+ * `cmd` gets the line verbatim, in one more pair of quotes that `/s` takes off again. Quoted by Node
+ * instead, every `"` in a step reached `cmd` as `\"`, which it does not understand; exec.check.ts runs
+ * the commands that broke.
+ */
+const cmdCall = invocationFor({ requested: null, shell: 'cmd', path: 'C:\\cmd.exe' }, 'echo "hi"');
+check('cmd takes /d /s /c and the line in quotes', cmdCall.args.join(' '), '/d /s /c "echo "hi""');
+check('given verbatim, so nothing quotes it again', cmdCall.windowsVerbatimArguments, true);
 const scriptCall = invocationFor({ requested: 'powershell', shell: 'powershell', path: 'W:\\powershell.exe' }, 'C:\\a.ps1', ['--one']);
 check('a script is run with -File', scriptCall.args.slice(-3).join(' '), '-File C:\\a.ps1 --one');
+check('a PowerShell script is quoted by Node too', scriptCall.windowsVerbatimArguments, false);
+const cmdScript = invocationFor({ requested: 'cmd', shell: 'cmd', path: 'C:\\cmd.exe' }, 'C:\\a b\\x.cmd', ['--one', 'two words', 'a&b', '', 'C:\\dir\\', 'x"y']);
+check(
+  'a cmd script: path quoted, arguments quoted for cmd',
+  cmdScript.args.join(' '),
+  '/d /s /c ""C:\\a b\\x.cmd" --one "two words" "a&b" "" C:\\dir\\ "x""y""',
+);
+check('and given verbatim as well', cmdScript.windowsVerbatimArguments, true);
 
 /*
  * The two paths that used to disagree, run against the same pretended machine.

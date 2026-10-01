@@ -259,7 +259,7 @@ export async function runStep(
   log.on('error', () => undefined);
   log.write(`# step ${req.id} shell=${resolved.shell} exe=${resolved.path} cwd=${req.cwd}\n# ${req.command}\n`);
 
-  const { file, args } = invocationFor(resolved, req.command, req.scriptArgs);
+  const { file, args, windowsVerbatimArguments } = invocationFor(resolved, req.command, req.scriptArgs);
 
   return await new Promise<RunResult>((resolve) => {
     let stdout = '';
@@ -286,6 +286,9 @@ export async function runStep(
       // Named, not inherited: a step must not see the bot's own token or whatever else the
       // operator's shell holds. See `stepEnv.ts`.
       env: stepEnvironment(req.env ?? process.env, req.passEnv),
+      // True for `cmd`, whose command line `invocationFor` has already written in full: quoted again
+      // here, every double quote in a step would reach `cmd` as `\"`, which it does not understand.
+      windowsVerbatimArguments,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

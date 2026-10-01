@@ -318,22 +318,61 @@ export function shellNote(inventory: ShellInventory = detectShells(), fallback?:
  * a security review can take at face value. The cost is on a machine set to `Restricted` or
  * `AllSigned`: the `.ps1` shims that npm and its kin install are then refused, and the chat is told
  * (in the contract) to call the `.cmd` form of the tool instead.
+ *
+ * `cmd` is given its command line exactly as written, which is the other thing here that is not
+ * incidental. Left to itself, Node quotes every argument by the rules the C runtime splits a command
+ * line with, and those rules escape a double quote with a backslash. `cmd` does not split its command
+ * line by them and has no such escape, so every quote in a step reached it as `\"`: `echo "hello
+ * world"` printed the backslashes, `node -e "console.log(1+1)"` handed node a string literal that
+ * printed nothing, and a quoted path such as `"C:\Program Files\nodejs\node.exe"` was looked up with
+ * the backslashes in its name and not found. So, as Node does for itself under `shell: true`, the
+ * line is passed verbatim and wrapped in one more pair of quotes: with `/s`, `cmd` removes exactly the
+ * first and the last quote on the line, which are those two, and reads everything between them as it
+ * was written. A script is run the same way, its path quoted and each argument quoted for `cmd` by
+ * `cmdArgument`, because nothing else quotes them any more. PowerShell is not touched: it reads its
+ * arguments by the C runtime's rules, and Node's quoting is the right quoting for it.
  */
-export function invocationFor(resolved: ResolvedShell, command: string, scriptArgs?: string[]): { file: string; args: string[] } {
+export function invocationFor(
+  resolved: ResolvedShell,
+  command: string,
+  scriptArgs?: string[],
+): { file: string; args: string[]; windowsVerbatimArguments: boolean } {
   const isScript = Array.isArray(scriptArgs);
   switch (resolved.shell) {
     case 'pwsh':
     case 'powershell': {
       const base = ['-NoProfile', '-NonInteractive'];
       return isScript
-        ? { file: resolved.path, args: [...base, '-File', command, ...(scriptArgs ?? [])] }
-        : { file: resolved.path, args: [...base, '-Command', command] };
+        ? { file: resolved.path, args: [...base, '-File', command, ...(scriptArgs ?? [])], windowsVerbatimArguments: false }
+        : { file: resolved.path, args: [...base, '-Command', command], windowsVerbatimArguments: false };
     }
-    case 'cmd':
-      return isScript
-        ? { file: resolved.path, args: ['/d', '/c', command, ...(scriptArgs ?? [])] }
-        : { file: resolved.path, args: ['/d', '/s', '/c', command] };
+    case 'cmd': {
+      const line = isScript ? [`"${command}"`, ...(scriptArgs ?? []).map(cmdArgument)].join(' ') : command;
+      return { file: resolved.path, args: ['/d', '/s', '/c', `"${line}"`], windowsVerbatimArguments: true };
+    }
   }
+}
+
+/**
+ * One argument to a script run in `cmd`, written so that it arrives as the one argument it is.
+ *
+ * The line is passed verbatim, so nothing quotes this on the way and it has to be done here, for the
+ * reader that is actually there. A space would make one argument two. `&`, `|`, `<` and `>` would
+ * make the rest of it a second command or a redirection, `^` would be taken as an escape and the
+ * parentheses as a group, and a quote is the only thing that makes `cmd` read any of them as text.
+ * `,`, `;` and `=` divide a batch file's arguments the way a space does. `%` quotes an argument too: `%NAME%` is expanded inside quotes as well as outside,
+ * as it is anywhere on a `cmd` line, but what it expands to then stays inside this argument.
+ *
+ * Inside the quotes, a program built on the C runtime gets back exactly what was given. The
+ * backslashes in front of a quote are doubled, which its rules ask for, and a quote is written `""`,
+ * which it reads as one quote. `\"` would not do: `cmd` counts every quote, with or without a
+ * backslash, so it would take that one as the end of the quoted text and run whatever came after it.
+ * A batch file sees an inner quote and a closing backslash doubled, which is as near as `cmd` lets
+ * anything come.
+ */
+function cmdArgument(arg: string): string {
+  if (arg !== '' && !/[\s"&|<>^(),;=%]/.test(arg)) return arg;
+  return `"${arg.replace(/(\\*)"/g, '$1$1""').replace(/(\\+)$/, '$1$1')}"`;
 }
 
 /**

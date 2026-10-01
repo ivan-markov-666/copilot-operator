@@ -333,6 +333,59 @@ setTimeout(() => process.exit(0), 45_000);
   });
 
   /*
+   * `cmd` reads a step as it was written. Node used to quote the line by the C runtime's rules, which
+   * escape a quote as `\"`, and `cmd` has no such escape: every quote in a cmd step or check reached it
+   * with a backslash in front, so `git commit -m "msg"` committed the quotes and any quoted path was
+   * "not recognized". Every command here printed or did the wrong thing before the fix.
+   */
+  await scenario('cmd reads a step as it was written: quotes, quoted paths, & and >', async () => {
+    const echoed = await step('cmd', 'echo "hello world"');
+    t.check('echo "hello world" prints the quotes, without backslashes', [echoed.exitCode, echoed.stdout.trim()], [0, '"hello world"']);
+
+    const code = await step('cmd', 'node -e "console.log(1+1)"');
+    t.check('node -e "..." runs the code rather than reading a string', [code.exitCode, code.stdout.trim()], [0, '2']);
+
+    // The node this check runs under, named the way a step names an executable under Program Files.
+    const quoted = await step('cmd', `"${process.execPath}" -v`);
+    t.check(`a quoted executable runs (${process.execPath})`, [quoted.exitCode, quoted.stdout.trim()], [0, process.version]);
+
+    // A folder with a space, so the quotes are needed wherever node happens to be installed.
+    const spaced = join(base, 'with space');
+    await mkdir(spaced, { recursive: true });
+    await writeFile(join(spaced, 'say.cmd'), '@echo said %*\r\n', 'utf8');
+    const said = await step('cmd', `"${join(spaced, 'say.cmd')}" "two words"`);
+    t.check('a quoted script in a folder with a space runs, with its argument', [said.exitCode, said.stdout.trim()], [0, 'said "two words"']);
+
+    const chained = await step('cmd', 'echo first& echo second> "out file.txt"& type "out file.txt"');
+    const lines = chained.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    t.check('& chains and > redirects into a quoted file name', [chained.exitCode, lines], [0, ['first', 'second']]);
+    const written = existsSync(join(base, 'out file.txt')) ? (await readFile(join(base, 'out file.txt'), 'utf8')).trim() : null;
+    t.check('the file has its own name, with no quotes or backslashes in it', written, 'second');
+
+    // The case that was reported.
+    const repo = join(base, 'quoted-commit');
+    await mkdir(repo, { recursive: true });
+    await makeRepo(repo);
+    const commit = await step('cmd', 'git commit -q --allow-empty -m "two words"', { cwd: repo });
+    const subject = spawnSync('git', ['-C', repo, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).stdout.trim();
+    t.check('git commit -m "two words" commits the words, not the quotes', [commit.exitCode, subject], [0, 'two words']);
+
+    /*
+     * A script and its arguments, which nothing quotes for `cmd` now but the runner. node reads its
+     * arguments by the C runtime's rules, as most programs do, and has to get back exactly what was
+     * given: a space, an `&` that must not become a second command, an empty argument, a closing
+     * backslash and a quote inside.
+     */
+    const argsJs = join(spaced, 'args.js');
+    await writeFile(argsJs, 'console.log(JSON.stringify(process.argv.slice(2)))\n', 'utf8');
+    const given = ['two words', 'a&echo INJECTED', '', 'C:\\dir\\', 'x"y', 'plain'];
+    const script = await step('cmd', process.execPath, { scriptArgs: [argsJs, ...given] });
+    t.check('a program run as a script gets each argument whole', [script.exitCode, script.stdout.trim()], [0, JSON.stringify(given)]);
+    const batch = await step('cmd', join(spaced, 'say.cmd'), { scriptArgs: ['two words', 'a&echo INJECTED'] });
+    t.check('so does a batch file in a folder with a space', [batch.exitCode, batch.stdout.trim()], [0, 'said "two words" "a&echo INJECTED"']);
+  });
+
+  /*
    * The heartbeat is what the live log shows during a long step: how long it has run, how much it has
    * printed, and the last line it printed. The step prints a numbered line with its own clock every
    * 300 ms for about 2.5 s, and the beat comes every 500 ms, so a beat that says anything true has to
