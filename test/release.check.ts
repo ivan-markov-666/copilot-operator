@@ -6,12 +6,14 @@
  * `scripts/build-package.mjs`, packed by npm, unpacked into a stranger's `node_modules` — so a
  * packaging mistake would only be found by whoever installs it next. Held here:
  *
- * - `cop --version` says the version that is actually installed;
+ * - `cop --version` says the version that is actually installed, and "unknown" rather than the
+ *   version of whatever package.json it finds when it cannot find its own;
  * - the tarball carries the compiled CLI and API, the static interface, the prompts, the README and
  *   the licence, and none of the operator's records, the checks, the web sources or build leftovers;
  *   nor a compiled file whose source was deleted (a stale file planted in dist/src must not ship);
  * - no API token is baked into the shipped interface, and the package build cannot bake one in from
- *   whatever the shell that runs it happens to hold;
+ *   whatever the shell that runs it happens to hold; a build whose interface holds one is refused,
+ *   and leaves no interface in dist/web for a clone's API to serve;
  * - the installed package starts in a throwaway project, serves its page with the token as a cookie,
  *   keeps its records out of the project's git, and leaves its port free once it is stopped;
  * - `cop run` refuses a run it must not start before any browser is opened; `cop doctor` names a
@@ -20,7 +22,8 @@
  * - the API process logs a stray promise rejection and carries on, and fails loudly on a taken port;
  * - decision pin: `npm start` (scripts/dev.mjs, run here with its children replaced) keeps the token
  *   out of the API's environment and hands it to the dev web server, as the operator decided it
- *   should stay; web/lib/api.ts must then not say the token is in no file the web server hands out.
+ *   should stay; web/lib/api.ts must then not say the token is in no file the web server hands out,
+ *   nor send its reader after a `#token=` link that nothing prints.
  *
  * Nothing here opens Edge or Copilot or touches the operator's data: every folder is a new temporary
  * one, every port is asked of the system, the doctor's `npm ping` is answered by a server on
@@ -220,8 +223,9 @@ await section('what the tarball carries', async () => {
    * tsc writes dist/src but never removes a file whose source is gone, and `files` ships all of
    * dist/src. So code deleted from src/ — the project mirror, the Desktop copies and the file
    * attachments, removed on purpose — would be installed on every machine that takes the next
-   * release unless the build empties dist/src first. A marker planted there before the build shows
-   * whether it does, whatever this checkout happens to hold (a fresh clone holds nothing stale).
+   * release unless the build prunes, after compiling, every file there that no source could have
+   * made. A marker planted there before the build shows whether it does, whatever this checkout
+   * happens to hold (a fresh clone holds nothing stale).
    */
   const markerRel = 'dist/src/__release_check_stale.js';
   const marker = join(root, markerRel);
@@ -353,6 +357,22 @@ await section("the installed package starts, and stays out of the project's git"
   const version = await run(process.execPath, [join(installed, 'dist', 'src', 'cli.js'), '--version'], { cwd: project, timeoutMs: 60_000 });
   // Read from node_modules/copilot-operator/package.json, not from the project's own package.json beside it.
   t.check('the installed cop --version is the installed version', version.stdout.trim(), shippedPkg.version);
+  /*
+   * botRootDir() looks above the running code for the package.json of copilot-operator and, finding
+   * none, falls back to the working directory: the user's project, whose package.json (1.0.0 here)
+   * says nothing about the bot. The installed code is copied beside it under another package's name,
+   * so that fallback is all the copy finds; it must say "unknown", not the project's version nor the
+   * other package's.
+   */
+  const stranger = join(project, 'node_modules', 'someone-else');
+  try {
+    cpSync(join(installed, 'dist', 'src'), join(stranger, 'dist', 'src'), { recursive: true });
+    writeFileSync(join(stranger, 'package.json'), JSON.stringify({ ...shippedPkg, name: 'someone-else', version: '9.9.9' }, null, 2), 'utf8');
+    const lost = await run(process.execPath, [join(stranger, 'dist', 'src', 'cli.js'), '--version'], { cwd: project, timeoutMs: 60_000 });
+    t.check('the same CLI under a package.json that is not copilot-operator\'s says its version is unknown', lost.stdout.trim(), 'unknown');
+  } finally {
+    rmSync(stranger, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
 
   const port = await freePort();
   const child = spawn(process.execPath, [join(installed, 'dist', 'src', 'cli.js'), 'start', '--port', String(port)], {
@@ -419,16 +439,19 @@ await section('no token in what ships', async () => {
 
   const namesIt: string[] = [];
   const holdsToken: string[] = [];
-  let hexRuns = 0;
+  const hexRuns: string[] = [];
   for (const rel of webFiles) {
     const text = readFileSync(join(stage, rel), 'latin1');
     if (text.includes('NEXT_PUBLIC_COP_TOKEN')) namesIt.push(rel);
-    hexRuns += (text.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/gi) ?? []).length;
+    if (/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/i.test(text)) hexRuns.push(rel);
     const lower = text.toLowerCase();
     for (const tok of cloneTokens) if (lower.includes(tok)) holdsToken.push(rel);
   }
-  console.log(`(scanned ${webFiles.length} shipped files: ${hexRuns} run(s) of 64 hex digits)`);
+  console.log(`(scanned ${webFiles.length} shipped files)`);
   t.check("no shipped file holds this clone's API token", [...new Set(holdsToken)], []);
+  // A token this clone does not hold, another machine's, is known here only by its shape: 64 hex
+  // digits, as src/api/security.ts makes it. build-package.mjs refuses a build that has one.
+  t.check('no shipped file holds a run of 64 hex digits, the shape of an API token', hexRuns, []);
   // The name left in a chunk would be Next's unreplaced `process.env.NEXT_PUBLIC_COP_TOKEN` fallback
   // in web/lib/api.ts: a lookup that the same build run from a shell with the variable set replaces
   // with the token itself. build-package.mjs pins it to '' for the export build, so it compiles away.
@@ -436,52 +459,98 @@ await section('no token in what ships', async () => {
 });
 
 await section('the package build cannot bake in a token from its environment', async () => {
-  // build-package.mjs run for real, but with child_process.spawnSync and the file operations
-  // replaced before it loads: tsc and next are not started, dist/ and web/ are not touched, and the
-  // environment each would have been given is written down. The clone's data/api-token reads as
-  // absent, as in CI, so only the shell's variables could carry a token in.
-  const record = join(base, 'build-env.json');
-  const preload = join(base, 'build-preload.mjs');
-  writeFileSync(
-    preload,
-    `import cp from 'node:child_process';
+  /*
+   * build-package.mjs run for real, but with child_process.spawnSync and the file operations
+   * replaced before it loads: tsc and next are not started, and the environment each would have been
+   * given is written down, as is every folder the build would remove and every copy it would make.
+   * Nothing in dist/ or web/.next-export is read from disk: their listings come back empty, or with
+   * only the files a run plants there, and rmSync, rmdirSync and cpSync change nothing. So what an
+   * earlier build left in this clone cannot decide a run. The clone's data/api-token reads as absent,
+   * as in CI, so only the shell's variables could carry a token in.
+   */
+  const exportedDir = join(root, 'web', '.next-export');
+  const distWeb = join(root, 'dist', 'web');
+  type BuildRecord = {
+    spawned: Array<{ args: string[]; token: string | null; publics: string[] }>;
+    removed: string[];
+    copied: Array<[string, string]>;
+  };
+  /**
+   * One run of the build with its children replaced. `plant` is files of web/.next-export, by their
+   * lower-case path inside it, with their text.
+   */
+  const mockedBuild = async (name: string, plant: Record<string, string>, env: NodeJS.ProcessEnv): Promise<{ r: Ran; rec: BuildRecord }> => {
+    const record = join(base, `build-${name}.json`);
+    const preload = join(base, `build-preload-${name}.mjs`);
+    writeFileSync(
+      preload,
+      `import cp from 'node:child_process';
 import fs from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
-const calls = [];
+const rec = { spawned: [], removed: [], copied: [] };
 const write = fs.writeFileSync;
 const read = fs.readFileSync;
+const readdir = fs.readdirSync;
 const exists = fs.existsSync;
+const save = () => write(${JSON.stringify(record)}, JSON.stringify(rec), 'utf8');
+const exported = ${JSON.stringify(exportedDir)};
+const dist = ${JSON.stringify(join(root, 'dist'))};
+const key = (p) => resolve(String(p)).toLowerCase();
+const inside = (p, dir) => key(p) === key(dir) || key(p).startsWith(key(dir) + sep);
+const planted = new Map(Object.entries(${JSON.stringify(plant)}).map(([rel, text]) => [key(join(exported, rel)), text]));
 cp.spawnSync = (cmd, args = [], opts = {}) => {
   const env = opts.env ?? process.env;
-  calls.push({
-    cmd,
+  rec.spawned.push({
     args: args.map(String),
     token: Object.prototype.hasOwnProperty.call(env, 'NEXT_PUBLIC_COP_TOKEN') ? env.NEXT_PUBLIC_COP_TOKEN : null,
     publics: Object.keys(env).filter((k) => /^NEXT_PUBLIC_/i.test(k)),
   });
-  write(${JSON.stringify(record)}, JSON.stringify(calls), 'utf8');
+  save();
   return { status: 0, stdout: '', stderr: '', output: [], pid: 0, signal: null };
 };
-fs.rmSync = () => undefined;
-fs.cpSync = () => undefined;
+fs.rmSync = (p) => { rec.removed.push(resolve(String(p))); save(); };
+fs.rmdirSync = () => undefined;
+fs.cpSync = (from, to) => { rec.copied.push([resolve(String(from)), resolve(String(to))]); save(); };
+fs.readdirSync = function (p, ...rest) {
+  if (inside(p, exported)) {
+    // The planted files directly in this folder, and the folders that lead to the others.
+    const here = key(p);
+    const found = new Map();
+    for (const file of planted.keys()) {
+      if (!file.startsWith(here + sep)) continue;
+      const parts = file.slice(here.length + sep.length).split(sep);
+      found.set(parts[0], parts.length > 1);
+    }
+    const typed = Boolean(rest[0] && typeof rest[0] === 'object' && rest[0].withFileTypes);
+    return [...found].map(([name, dir]) => (typed ? { name, isDirectory: () => dir, isFile: () => !dir, isSymbolicLink: () => false } : name));
+  }
+  if (inside(p, dist)) return [];
+  return readdir.call(this, p, ...rest);
+};
 fs.readFileSync = function (p, ...rest) {
   if (/api-token$/.test(String(p))) { const e = new Error('ENOENT (release.check)'); e.code = 'ENOENT'; throw e; }
+  if (planted.has(key(p))) return planted.get(key(p));
   return read.call(this, p, ...rest);
 };
-fs.existsSync = (p) => (/\\.next-export[\\\\/]index\\.html$/.test(String(p)) ? true : exists(p));
+fs.existsSync = (p) => (key(p) === key(join(exported, 'index.html')) ? true : exists(p));
 syncBuiltinESMExports();
 `,
-    'utf8',
-  );
+      'utf8',
+    );
+    const r = await run(process.execPath, ['--import', pathToFileURL(preload).href, join(root, 'scripts', 'build-package.mjs')], { cwd: root, env, timeoutMs: 60_000 });
+    const rec = existsSync(record) ? (JSON.parse(readFileSync(record, 'utf8')) as BuildRecord) : { spawned: [], removed: [], copied: [] };
+    return { r, rec };
+  };
+  const lower = (pairs: Array<[string, string]>): string[][] => pairs.map((pair) => pair.map((p) => p.toLowerCase()));
+
   const canary = 'c0ffee'.repeat(10) + 'c0de';
-  const r = await run(process.execPath, ['--import', pathToFileURL(preload).href, join(root, 'scripts', 'build-package.mjs')], {
-    cwd: root,
-    // A second NEXT_PUBLIC_* of the shell's, in lower case as Windows allows: Next inlines any of them.
-    env: cleanEnv({ NEXT_PUBLIC_COP_TOKEN: canary, next_public_release_check: canary }),
-    timeoutMs: 60_000,
-  });
+  // A second NEXT_PUBLIC_* of the shell's, in lower case as Windows allows: Next inlines any of them.
+  const shell = cleanEnv({ NEXT_PUBLIC_COP_TOKEN: canary, next_public_release_check: canary });
+  const { r, rec } = await mockedBuild('clean', {}, shell);
   t.check('the build ran to its end with its children replaced', r.code, 0);
-  const calls = existsSync(record) ? (JSON.parse(readFileSync(record, 'utf8')) as Array<{ args: string[]; token: string | null; publics: string[] }>) : [];
+  t.check('and copied the export to dist/web', lower(rec.copied), lower([[exportedDir, distWeb]]));
+  const calls = rec.spawned;
   const nextBuild = calls.find((c) => c.args.some((a) => /next[\\/]dist[\\/]bin[\\/]next$/.test(a)) && c.args.includes('build'));
   t.truthy('it would have started next build', nextBuild, calls);
   // build-package.mjs gives its children the shell's environment without any NEXT_PUBLIC_* and pins the token to ''.
@@ -491,6 +560,32 @@ syncBuiltinESMExports();
     (nextBuild?.publics ?? []).filter((k) => !/^NEXT_PUBLIC_COP_(API|TOKEN)$/.test(k)),
     [],
   );
+
+  /*
+   * The build's own guard, the scan of the export, for each way it knows a token: by value (here the
+   * shell's), by the name a build from another shell would fill, and by shape. Each run plants one
+   * such file beside a harmless page and script. The build must fail naming that file and print no
+   * token, and must copy nothing to dist/web: a clone's API serves dist/web whenever it holds an
+   * index.html (src/config/layout.ts), so a refused interface left there would be served all the
+   * same. The interface of an earlier build goes too, since it was built from other sources.
+   */
+  const hex = 'ab'.repeat(32);
+  const refusals: Array<{ name: string; what: string; text: string; secret: string }> = [
+    { name: 'planted-token', what: "the token of the build's shell", text: `self.t="${canary}";`, secret: canary },
+    { name: 'planted-name', what: 'the name NEXT_PUBLIC_COP_TOKEN', text: 'self.t=process.env.NEXT_PUBLIC_COP_TOKEN;', secret: canary },
+    { name: 'planted-hex', what: 'a run of 64 hex digits', text: `self.t="${hex}";`, secret: hex },
+  ];
+  for (const { name, what, text, secret } of refusals) {
+    const rel = `_next/static/chunks/${name}.js`;
+    const { r: refused, rec: after } = await mockedBuild(name, { 'index.html': '<html></html>', '_next/static/chunks/main.js': 'self.ok=1;', [rel]: text }, shell);
+    const said = refused.stdout + refused.stderr;
+    t.truthy(`an export holding ${what}: the build fails`, refused.code !== 0 && refused.code !== null, `exit ${refused.code}: ${said.slice(-600)}`);
+    t.truthy(`an export holding ${what}: the build names the file`, refused.stderr.includes(`web/.next-export/${rel}`), refused.stderr.slice(-600));
+    t.truthy(`an export holding ${what}: and no other`, !said.includes('chunks/main.js') && !said.includes('index.html'), said.slice(-600));
+    t.truthy(`an export holding ${what}: no token is printed`, !said.includes(canary) && !said.includes(secret));
+    t.check(`an export holding ${what}: nothing is copied to dist/web`, after.copied, []);
+    t.truthy(`an export holding ${what}: the interface of an earlier build is removed from dist/web`, after.removed.some((p) => p.toLowerCase() === distWeb.toLowerCase()), after.removed);
+  }
 });
 
 await section('cop run refuses before any browser opens', async () => {
@@ -747,6 +842,15 @@ syncBuiltinESMExports();
     !(webGetsToken && claim !== '' && !limited),
     claim,
   );
+
+  /*
+   * Nor may it send its reader after a way of handing the token over that nothing uses. It once said
+   * `npm start` prints a `#token=…` link, and later that such a link is the fallback, while no code
+   * prints one. The page does read such a link, for one written by hand, and may say that.
+   */
+  const devPrintsLink = /#token=/.test(code('scripts/dev.mjs'));
+  const linkClaim = /[^.]*(?:prints? a link|link (?:is |gets )?printed|#token=[^.]*\bfallback\b|\bfallback\b[^.]*#token=)[^.]*\./i.exec(prose)?.[0]?.trim() ?? '';
+  t.truthy('web/lib/api.ts does not say a #token= link is printed, or is the fallback, while scripts/dev.mjs prints none', devPrintsLink || linkClaim === '', linkClaim);
 });
 
 try {

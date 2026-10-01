@@ -123,27 +123,31 @@ run('building the web interface as static files', [bin('next/dist/bin/next'), 'b
 });
 if (!existsSync(join(exported, 'index.html'))) die('the web build produced no index.html in web/.next-export');
 
+/** What of the export ships: the static pages and their assets, not Next's build bookkeeping beside them. */
+const ships = (path) => {
+  const rel = path.slice(exported.length).replace(/\\/g, '/');
+  if (rel.startsWith('/_next/')) return true;
+  return !/^\/(cache|server|types|trace|diagnostics)(\/|$)/i.test(rel) && !/\.json$/i.test(rel);
+};
+
+/*
+ * The interface of an earlier build goes first, whatever this one finds below. It was built from
+ * other sources, and a clone's API serves dist/web whenever it holds an index.html
+ * (src/config/layout.ts), so a build refused below must leave nothing there to serve.
+ */
 const target = join(root, 'dist', 'web');
 rmSync(target, { recursive: true, force: true });
-// The static pages and their assets, not Next's build bookkeeping beside them.
-cpSync(exported, target, {
-  recursive: true,
-  filter: (src) => {
-    const rel = src.slice(exported.length).replace(/\\/g, '/');
-    if (rel.startsWith('/_next/')) return true;
-    return !/^\/(cache|server|types|trace|diagnostics)(\/|$)/i.test(rel) && !/\.json$/i.test(rel);
-  },
-});
-log(`interface copied to ${target}`);
 
 /*
  * The one thing the package must never carry: a token baked into the page. Checked on every build,
- * whether or not this clone has a token of its own (CI has none). The name NEXT_PUBLIC_COP_TOKEN
- * left in a chunk is a lookup that a build run from another shell would fill, and a run of exactly
- * 64 hex digits is what an API token looks like wherever it came from. The tokens this machine does
- * have, in the clone's data folders and in the shell, are looked for by value as well; a value under
- * 16 characters is none this program made, and would be found in some file by chance. Only file
- * names are printed, never a token.
+ * whether or not this clone has a token of its own (CI has none), and on the export before any of it
+ * is copied to dist/web: a build refused here leaves no interface to be served or packed. The files
+ * scanned are the ones the copy below keeps. The name NEXT_PUBLIC_COP_TOKEN left in a chunk is a
+ * lookup that a build run from another shell would fill, and a run of exactly 64 hex digits is what
+ * an API token looks like wherever it came from. The tokens this machine does have, in the clone's
+ * data folders and in the shell, are looked for by value as well; a value under 16 characters is
+ * none this program made, and would be found in some file by chance. Only file names are printed,
+ * never a token.
  */
 const tokens = new Set();
 const lookFor = (value) => {
@@ -164,12 +168,15 @@ lookFor(process.env.NEXT_PUBLIC_COP_TOKEN);
 
 /*
  * Read with a file or folder allowed to vanish under the scan: another build in this clone empties
- * dist/web when it starts, and what is gone is no longer anything this build would ship.
+ * web/.next-export when it starts, and what is gone is no longer anything this build would ship.
  */
 const gone = (e) => e?.code === 'ENOENT';
 
-/** Every file under a folder, or none when the folder is not there. */
-function filesUnder(dir) {
+/**
+ * Every file under a folder that `keep` keeps, never walking into a folder it does not (Next's cache
+ * beside the pages is large), or none when the folder is not there.
+ */
+function filesUnder(dir, keep) {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -177,13 +184,17 @@ function filesUnder(dir) {
     if (gone(e)) return [];
     throw e;
   }
-  return entries.flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)]));
+  return entries.flatMap((e) => {
+    const path = join(dir, e.name);
+    if (!keep(path)) return [];
+    return e.isDirectory() ? filesUnder(path, keep) : [path];
+  });
 }
 
 const holders = [];
 const names = [];
 const hexRuns = [];
-for (const file of filesUnder(target)) {
+for (const file of filesUnder(exported, ships)) {
   let text;
   try {
     // latin1 reads any byte as one character, so fonts and images are scanned without failing.
@@ -200,4 +211,7 @@ for (const file of filesUnder(target)) {
 if (holders.length > 0) die(`the built interface contains this machine's API token: ${[...new Set(holders)].join(', ')}`);
 if (names.length > 0) die(`the built interface still reads NEXT_PUBLIC_COP_TOKEN, which a build from another shell would fill with a token: ${names.join(', ')}`);
 if (hexRuns.length > 0) die(`the built interface holds a run of 64 hex digits, the shape of an API token: ${hexRuns.join(', ')}`);
+
+cpSync(exported, target, { recursive: true, filter: ships });
+log(`interface copied to ${target}`);
 log('done');
