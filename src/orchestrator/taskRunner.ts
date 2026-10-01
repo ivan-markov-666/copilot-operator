@@ -186,6 +186,21 @@ export function earlierTasksForReview(session: Session, task: Task, limit = 3, m
 }
 
 /**
+ * Parts of a reason joined as the sentences they are: every part that another follows ends with a
+ * full stop unless it already ends as a sentence does, and an empty part is left out.
+ *
+ * A reason is mostly written as a clause — "stopped by the operator before the review" — so that it
+ * reads inside other sentences too, and one followed by the next with only a space between them ran
+ * into it: "… before the review After that, the runner committed …". A part that already ends with
+ * its own full stop is not given a second one, and the last part is left as it was written, so a
+ * reason of one clause reads as it always has.
+ */
+function sentences(...parts: Array<string | undefined>): string {
+  const kept = parts.map((p) => (p ?? '').trim()).filter(Boolean);
+  return kept.map((p, i) => (i === kept.length - 1 || /[.!?…]["'”’)\]]*$/.test(p) ? p : `${p}.`)).join(' ');
+}
+
+/**
  * The reason line for a task the model gave up on, built from what it says it tried.
  *
  * The approaches are kept, not summarised away. "Blocked" on its own is no more useful than
@@ -746,10 +761,11 @@ export async function runTask(
      * tree is dirty" is not left standing beside a commit on the record.
      */
     if (status !== 'done' && vcsAfter?.commit && vcsAfter.commit !== task.vcs?.commit) {
-      reason =
-        `${reason ?? ''} After that, the runner committed the task's changes as ${vcsAfter.commit.slice(0, 8)} on ${vcsAfter.branch}` +
-        `${vcsAfter.afterCommit ? (vcsAfter.afterCommit.clean ? '; the working tree is clean' : `; still uncommitted: ${vcsAfter.afterCommit.changed.slice(0, 8).join(', ')}`) : ''}.`;
-      reason = reason.trim();
+      reason = sentences(
+        reason,
+        `After that, the runner committed the task's changes as ${vcsAfter.commit.slice(0, 8)} on ${vcsAfter.branch}` +
+          `${vcsAfter.afterCommit ? (vcsAfter.afterCommit.clean ? '; the working tree is clean' : `; still uncommitted: ${vcsAfter.afterCommit.changed.slice(0, 8).join(', ')}`) : ''}.`,
+      );
     }
     if (vcsAfter?.branch) {
       await record(
@@ -1817,8 +1833,12 @@ export async function runTask(
           limitHit = { setting: 'maxFormatRetries', value: cfg.limits.maxFormatRetries };
           return await finish(
             'limit-reached',
-            `format repair exhausted: ${formatRetries} replies in a row did not match the format (maxFormatRetries ${cfg.limits.maxFormatRetries}), ` +
-              `the last because ${parsed.detail}. Nothing from those replies was run; the work so far is kept.`,
+            // The parser's detail is a sentence of its own, often with its own full stop.
+            sentences(
+              `format repair exhausted: ${formatRetries} replies in a row did not match the format (maxFormatRetries ${cfg.limits.maxFormatRetries}), ` +
+                `the last one refused for this: ${parsed.detail}`,
+              'Nothing from those replies was run; the work so far is kept.',
+            ),
             undefined,
             lastMarkdown,
           );
@@ -1938,9 +1958,9 @@ export async function runTask(
         sink.event('task-blocked', { tried: reply.tried, needed: reply.needed },
           `the task was given up as blocked after ${reply.tried.length} approach(es)`, 'warn');
         const early = reply.tried.length < minApproaches
-          ? ` It gave up after ${reply.tried.length} of the ${minApproaches} approaches Settings ask for, having been asked ${earlyBlocks} time(s) for another.`
+          ? `It gave up after ${reply.tried.length} of the ${minApproaches} approaches Settings ask for, having been asked ${earlyBlocks} time(s) for another.`
           : '';
-        return await finish('blocked', blockedReason(reply.tried, reply.needed) + early, reply.summary, lastMarkdown);
+        return await finish('blocked', sentences(blockedReason(reply.tried, reply.needed), early), reply.summary, lastMarkdown);
       }
 
       if (done && reply.steps.length === 0) {

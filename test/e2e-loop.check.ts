@@ -15,6 +15,7 @@
  * - a damaged step, and a step naming a shell this machine has not got, never reach a process;
  * - a shell that will not start is an environment problem that ends the task with nothing sent;
  * - a check refused before it ran ends as invalid-check; the check-round limit is exact;
+ * - a reason of several sentences is joined as sentences, a full stop between each and one only;
  * - a clean-tree check decided after the runner's commit can overturn "done";
  * - a failed upload falls back to text; a chat error fails the task and names an Edge crash;
  * - a check refused only for a package runner's tool not installed yet goes back to the chat;
@@ -352,6 +353,28 @@ await scenario('the check-round limit is exact', { limits: { maxCheckRounds: 2 }
   // five replies used.
   t.check('exactly 2 "not finished yet" messages', h.chat.sent.filter((m) => m.text.includes('not finished yet')).length, 2);
   t.check('two of the five "done" replies were never asked for', h.chat.discard(), 2);
+});
+
+/*
+ * A reason made of more than one sentence reads as more than one. The parts are written as clauses,
+ * and two of them were joined with only a space between — "… To unblock it: the missing file It gave
+ * up after …" — or with a second full stop after the one the parser's own sentence ends with.
+ */
+await scenario('a reason of several sentences is joined as sentences', { limits: { maxFormatRetries: 1, minApproachesBeforeBlocked: 5, retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [a] = await h.importPlan(plan(h, 'gave-up-early', [task('gives-up-early')], { vcs: false }));
+  // Asked three times for another approach, the fourth "blocked" is accepted.
+  for (let i = 0; i < 4; i++) h.chat.script(reply.blocked());
+  const early = (await h.run(a!.id)).tasks[0] as Ended;
+  t.check('blocked', early.status, 'blocked');
+  t.truthy('what was needed ends with a full stop before how early it gave up',
+    (early.reason ?? '').includes('the missing file. It gave up after 2 of the 5 approaches'), early.reason);
+
+  const [b] = await h.importPlan(plan(h, 'no-format', [task('keeps-no-format')], { vcs: false }));
+  h.chat.script(reply.prose(), reply.prose());
+  const repaired = (await h.run(b!.id)).tasks[0] as Ended;
+  t.check('stopped at the format-repair limit', [repaired.status, repaired.stopCode ?? null], ['limit-reached', 'format-repair-exhausted']);
+  t.truthy('the parser\'s sentence keeps its one full stop before what was kept',
+    (repaired.reason ?? '').includes('no JSON object at all. Nothing from those replies was run') && !(repaired.reason ?? '').includes('..'), repaired.reason);
 });
 
 await scenario('a clean-tree check after the runner\'s commit can overturn "done"', {}, async (h) => {

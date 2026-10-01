@@ -755,6 +755,9 @@ await scenario('Stop pressed once the checks have passed, before the review', {}
   t.check('the stop was pressed once the checks had passed', armed, false);
   // The reason goes on to say what the runner then committed, as for any ending that is not done.
   t.check('the task ends aborted, before the review', [task.status, (task.reason ?? '').startsWith('stopped by the operator before the review')], ['aborted', true]);
+  // Two sentences, read as two: "… before the review After that, …" ran them together.
+  t.truthy('and what the runner committed after it follows as a sentence of its own',
+    (task.reason ?? '').includes('stopped by the operator before the review. After that, the runner committed'), task.reason);
   t.check('no review conversation was opened', reviewConversations(h), 0);
   t.check('and nothing reached the chat after the stop', h.chat.sent.slice(sentAtStop).map((m) => m.text.slice(0, 120)), []);
   const cont = await h.raw('POST', `/sessions/${s!.id}/tasks/${task.id}/continue`);
