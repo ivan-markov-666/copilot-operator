@@ -764,10 +764,11 @@ try {
   await mkdir(refRepo, { recursive: true });
   await makeRepo(refRepo);
   /*
-   * The restore branch is named from the task's title, and the title goes through the same
-   * plannedBranchName. A title is a label, not a branch name anybody chose, yet the namespace rule
-   * above applies to it: a "/" in the title puts the restore branch outside the session's prefix,
-   * in the title's case. A title without one gives cop/restore-<slug>, which is the control.
+   * The restore branch is named from the task's title. A title is a label, not a branch name anybody
+   * chose, so the namespace rule above must not apply to it: it went through plannedBranchName once,
+   * and a "/" in the title put the restore branch outside the session's prefix, in the title's case.
+   * It is a derived name, built like every other (branchNameFrom). A title without one gives
+   * cop/restore-<slug>, which is the control.
    */
   const baseCommit = execFileSync('git', ['-C', refRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const restoreSession = { vcs: { enabled: true, repoDir: refRepo, branchMode: 'per-task', commitOnFinish: true, branchPrefix: 'cop/' } } as unknown as Session;
@@ -777,8 +778,9 @@ try {
   };
   t.check('a restore branch is cop/restore-<the title, made safe>', await restoreName('Add CI pipeline'), 'cop/restore-add-ci-pipeline');
   const slashed = await restoreName('Add CI/CD pipeline');
-  // DEFECT: restorePreview (taskVcs.ts:717) passes the task's title through plannedBranchName, so a title with "/" gives the restore branch "restore-Add-CI/CD-pipeline", outside the session's cop/ prefix.
+  // A "/" in the title is slugged like any other punctuation: the branch stays under cop/, one level deep.
   t.truthy('a title with a "/" still gives a restore branch under cop/, one level deep', !!slashed?.startsWith('cop/') && slashed.split('/').length === 2, slashed);
+  t.check('and it is the title made safe, "/" and all', slashed, 'cop/restore-add-ci-cd-pipeline');
   const refused = names.filter((n) => {
     try {
       execFileSync('git', ['-C', refRepo, 'check-ref-format', '--branch', n], { stdio: 'pipe' });

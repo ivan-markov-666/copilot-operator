@@ -417,28 +417,42 @@ function unknownKeys(value: unknown, kind: keyof typeof KNOWN_KEYS, where: strin
   }
 }
 
+/**
+ * A value of the raw document as an object whose fields can be read, or nothing.
+ *
+ * The warning walk runs on the document as it arrived, before the schema has said anything about
+ * it, so every level of it may be null, a number or a list where an object belongs. A cast does
+ * not make it one: `sessions: [null]` read `null.vcs` and threw, where the schema would have
+ * refused it by its path. What is not an object has no fields to warn about, and is left for the
+ * schema to refuse.
+ */
+function fieldsOf(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
 /** Fields a model invented, walked by hand because the schema drops them silently. */
 function collectWarnings(raw: unknown): string[] {
   const out: string[] = [];
-  if (!raw || typeof raw !== 'object') return out;
-  unknownKeys(raw, 'plan', 'plan', out);
-  const sessions = (raw as { sessions?: unknown }).sessions;
-  if (!Array.isArray(sessions)) return out;
-  sessions.forEach((s, i) => {
-    unknownKeys(s, 'session', `sessions[${i}]`, out);
-    const session = s as { tasks?: unknown; vcs?: unknown; review?: unknown };
+  const plan = fieldsOf(raw);
+  if (!plan) return out;
+  unknownKeys(plan, 'plan', 'plan', out);
+  if (!Array.isArray(plan.sessions)) return out;
+  plan.sessions.forEach((s, i) => {
+    const session = fieldsOf(s);
+    if (!session) return;
+    unknownKeys(session, 'session', `sessions[${i}]`, out);
     unknownKeys(session.vcs, 'vcs', `sessions[${i}].vcs`, out);
     unknownKeys(session.review, 'review', `sessions[${i}].review`, out);
-    if (Array.isArray(session.tasks)) {
-      session.tasks.forEach((t, j) => {
-        unknownKeys(t, 'task', `sessions[${i}].tasks[${j}]`, out);
-        unknownKeys((t as { vcs?: unknown })?.vcs, 'taskVcs', `sessions[${i}].tasks[${j}].vcs`, out);
-        const checks = (t as { checks?: unknown })?.checks;
-        if (Array.isArray(checks)) {
-          checks.forEach((c, k) => unknownKeys(c, 'check', `sessions[${i}].tasks[${j}].checks[${k}]`, out));
-        }
-      });
-    }
+    if (!Array.isArray(session.tasks)) return;
+    session.tasks.forEach((t, j) => {
+      const task = fieldsOf(t);
+      if (!task) return;
+      unknownKeys(task, 'task', `sessions[${i}].tasks[${j}]`, out);
+      unknownKeys(task.vcs, 'taskVcs', `sessions[${i}].tasks[${j}].vcs`, out);
+      if (Array.isArray(task.checks)) {
+        task.checks.forEach((c, k) => unknownKeys(c, 'check', `sessions[${i}].tasks[${j}].checks[${k}]`, out));
+      }
+    });
   });
   return out;
 }
@@ -483,8 +497,25 @@ export function summarise(plan: Plan): PlanSummary {
  *
  * Never throws. Every way this can fail — not JSON at all, the wrong version, a task with no
  * prompt — is an answer the user is meant to see and hand back to the chat model.
+ *
+ * That promise is kept here, around the whole reading, and not only by each walk being careful:
+ * the walks run on whatever a chat produced, and one of them reading a field of null once turned
+ * a malformed plan into a request error carrying a JavaScript message, which neither the page nor
+ * the chat that wrote the plan can do anything with. A walk that throws again is an answer too.
  */
 export function checkPlan(text: string): PlanCheck {
+  try {
+    return readPlan(text);
+  } catch (e) {
+    return {
+      ok: false,
+      warnings: [],
+      issues: [{ path: '', message: `This plan could not be read: ${(e as Error).message}. Check that every session, task and check is a JSON object.` }],
+    };
+  }
+}
+
+function readPlan(text: string): PlanCheck {
   const source = extractJson(text ?? '');
   if (!source.trim()) {
     return { ok: false, warnings: [], issues: [{ path: '', message: 'There is nothing here to import.' }] };

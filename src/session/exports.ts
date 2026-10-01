@@ -268,6 +268,52 @@ export function withTask(session: Session, task: Task): Session {
   return { ...session, tasks: session.tasks.map((t) => (t.id === task.id ? task : t)) };
 }
 
+/**
+ * The task as it ended in one run: the last of its attempts that ran in it, live or archived, or
+ * null when none did. Several attempts can share a run (a retry in a fresh chat is one); the last
+ * is how the run left it, with the ones before it as its history.
+ */
+export function taskInRun(task: Task, runId: string): Task | null {
+  if (task.runGroup?.id === runId) return task;
+  const attempts = task.attempts ?? [];
+  for (let i = attempts.length - 1; i >= 0; i -= 1) {
+    if (attempts[i]?.runGroup?.id === runId) return taskAtAttempt(task, i + 1);
+  }
+  return null;
+}
+
+/**
+ * One run's sessions, with each task as it ended in that run, and only the tasks that were part of it.
+ *
+ * A run is a record of what happened, and the task on the record moves on after it: "run again"
+ * queues it as a new attempt, and another run may finish it. Taken as it is now, a task that
+ * failed in the run read as queued, its failure only among the earlier attempts, and the run's
+ * counts said nothing failed in it; once a later run had stamped it, the task was not in the
+ * first run's export at all. So each task is taken at its attempt in the run (`taskInRun`), and
+ * the three views describe the run whichever is asked for. A task the run was asked to do and
+ * never reached has no such attempt; it is still the run's, as it stands, through the run's own
+ * record on the session.
+ */
+export function runScope(sessions: Session[], runId: string, label: string): ExportScope {
+  const chosen = new Map<string, Set<string>>();
+  const asInRun = sessions.map((s) => {
+    let session = s;
+    const ids = new Set<string>();
+    for (const t of s.tasks) {
+      const ran = taskInRun(t, runId);
+      if (ran) {
+        ids.add(t.id);
+        if (ran !== t) session = withTask(session, ran);
+      } else if (s.runGroup?.id === runId && s.runGroup.taskIds.includes(t.id)) {
+        ids.add(t.id);
+      }
+    }
+    chosen.set(s.id, ids);
+    return session;
+  });
+  return { sessions: asInRun, taskFilter: (s, t) => !!chosen.get(s.id)?.has(t.id), label };
+}
+
 /** What the runner export says about the machine, from the configuration in force. */
 export function exportMachine(cfg: {
   resolved: { cwd: string };

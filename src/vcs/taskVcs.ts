@@ -109,11 +109,7 @@ export async function prepareForTask(
   const prefix = settings.branchPrefix || 'cop/';
 
   if (settings.branchMode === 'per-session') {
-    const planned = settings.branchName?.trim();
-    const wanted = planned
-      ? plannedBranchName(planned, prefix)
-      : branchNameFrom([session.name, session.id.slice(0, 13)], prefix);
-    return await switchTo(session, task, dir, wanted, base, bus, { reuseExisting: true, start });
+    return await switchTo(session, task, dir, sessionBranchName(session), base, bus, { reuseExisting: true, start });
   }
 
   // A name the task carries wins over one derived from its title: whoever wrote the plan knew
@@ -131,6 +127,18 @@ export async function prepareForTask(
   // attempt ended. That is the whole point of recording the base commit.
   const from = firstAttemptBase(task) ?? base;
   return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false, start });
+}
+
+/**
+ * The one branch a `per-session` session works on: the name it was given, else one made from its
+ * name and id. Every task of the session is put on it, and an existing branch of that name is
+ * carried on, not copied — which is why "Run again from here" names the restore branch here when it
+ * takes a chain back (see `OperatorService.rerunFromRestore`).
+ */
+export function sessionBranchName(session: Session): string {
+  const prefix = session.vcs?.branchPrefix || 'cop/';
+  const planned = session.vcs?.branchName?.trim();
+  return planned ? plannedBranchName(planned, prefix) : branchNameFrom([session.name, session.id.slice(0, 13)], prefix);
 }
 
 /**
@@ -714,7 +722,13 @@ export async function restorePreview(session: Session, task: Task): Promise<Rest
     currentBranch: state.branch ?? undefined,
     leftBehind: await commitsBetween(repoDir, base, 'HEAD'),
     keptOn: state.branch ?? undefined,
-    branchName: await freeBranchName(repoDir, plannedBranchName(`restore-${task.title}`, prefix)),
+    /*
+     * Derived from the title, so built the way every derived name is. A title is a label for the
+     * list, not a branch name anybody chose: put through `plannedBranchName`, a "/" in it ("Add
+     * CI/CD pipeline") read as a namespace the plan wanted and gave "restore-Add-CI/CD-pipeline",
+     * outside the session's prefix and in the title's case.
+     */
+    branchName: await freeBranchName(repoDir, branchNameFrom(['restore', task.title], prefix)),
   };
 }
 

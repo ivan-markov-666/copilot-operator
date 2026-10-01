@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { installLayout } from '../config/layout.js';
 
-import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, applyTaskPatch } from '../session/store.js';
+import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, applyDefaultProject, applyTaskPatch } from '../session/store.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -30,11 +30,11 @@ import { isContinuable, newId, tidyVcsPlan, type TaskPatch } from '../session/mo
 import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
-import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, taskAtAttempt, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
+import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, runScope, taskAtAttempt, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
 import type { ContextKind } from '../session/store.js';
-import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSummary } from '../plan/schema.js';
+import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSession, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions, type UnattendedBlock } from '../plan/brief.js';
 
 /** The folders the operator works in: the default new sessions start on, and the rest by name. */
@@ -54,8 +54,8 @@ function sameFolder(a: string, b: string): boolean {
 }
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { readInterruption } from '../session/interruption.js';
-import { commitInterrupted, repoDirOf, vcsPreflight, restorePreview, restoreToBase, sessionBranches, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
-import { branchExists, changedFilesBetween, fileAt, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
+import { commitInterrupted, repoDirOf, vcsPreflight, restorePreview, restoreToBase, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
+import { branchExists, changedFilesBetween, fileAt, freeBranchName, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
@@ -332,6 +332,72 @@ function normaliseDir(dir: string): string {
   return resolve(dir.trim()).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
+/** The repository a planned session will work in, read the way `repoDirOf` reads an imported one. */
+function plannedRepoDir(session: PlanSession): string {
+  return session.vcs?.repoDir?.trim() || session.projectDir?.trim() || session.mirror?.rootDir?.trim() || '';
+}
+
+/**
+ * The branches a planned session will make by name when it runs, as `prepareForTask` names them.
+ *
+ * None with version control off, and none when it carries on an existing branch, which makes
+ * nothing. In per-session mode the one `branchName`; in per-task mode the branch each task names,
+ * since `branchName` is ignored there. A branch named for the session's id is not known before the
+ * import, and is not one a plan can ask to carry on.
+ */
+function branchesMadeBy(session: PlanSession): string[] {
+  const vcs = session.vcs;
+  if (!vcs || vcs.enabled === false || vcs.startFrom === 'existing-branch' || vcs.existingBranch?.trim()) return [];
+  const prefix = vcs.branchPrefix?.trim() || 'cop/';
+  if (vcs.branchMode === 'per-session') return vcs.branchName?.trim() ? [plannedBranchName(vcs.branchName, prefix)] : [];
+  return session.tasks.flatMap((t) => (t.vcs?.branch?.trim() ? [plannedBranchName(t.vcs.branch, prefix)] : []));
+}
+
+/** One repository "Run again from here" takes back, the task that decides where to, and why it cannot. */
+type RestoreTarget = { dir: string; session: Session; task: Task; problem?: string };
+
+/**
+ * The one restore each repository gets when a run starts again from a task: the rule, in one place,
+ * for the preview and for the restore itself, which used to keep a copy each and drifted apart.
+ *
+ * One per repository, keyed on the folder as compared rather than on the path as written or on the
+ * session: three sessions working in one repository must not take it back three times to three
+ * different commits. The earliest affected task that ran is the one that decides, because that is
+ * the state the whole re-run starts from.
+ *
+ * A repository whose affected tasks never ran has nothing to go back to: the run never touched it.
+ * Taking "no base commit recorded" as a refusal blocked "run again from here" for every plan whose
+ * later sessions had not started yet — which is the usual shape of a run that stopped in the middle.
+ *
+ * A session that carries on an existing branch cannot be taken back: its run checks that branch out
+ * again before the first task, so a restore branch would be left the moment it was made, and going
+ * back on the branch itself would take a reset, which this tool never does.
+ */
+function restoreTargets(tasks: Array<{ session: Session; task: Task }>): RestoreTarget[] {
+  const byRepo = new Map<string, RestoreTarget>();
+  for (const { session, task } of tasks) {
+    if (!session.vcs?.enabled || !task.startedAt) continue;
+    const dir = repoDirOf(session);
+    const key = normaliseDir(dir);
+    if (!key || byRepo.has(key)) continue;
+    const existing = session.vcs.startFrom === 'existing-branch' ? (session.vcs.existingBranch ?? '').trim() : '';
+    byRepo.set(key, {
+      dir,
+      session,
+      task,
+      ...(existing
+        ? {
+            problem:
+              `"${session.name}" carries on the existing branch ${existing}, and its run checks that branch out again, so the code ` +
+              `would not stay back; going back on ${existing} itself would take a reset, which this tool never does. ` +
+              `Queue its tasks again with "Run again" on each, which carries on ${existing} as it is, or move that branch yourself first.`,
+          }
+        : {}),
+    });
+  }
+  return [...byRepo.values()];
+}
+
 @Injectable()
 export class OperatorService {
   /** Where this install keeps its prompts and its records. See `config/layout.ts`. */
@@ -541,14 +607,8 @@ export class OperatorService {
     const projectDir = (cfg.project?.rootDir ?? '').trim();
     if (!projectDir) return session;
 
-    return await this.store.updateSession(session.id, (s) => {
-      if (projectDir) {
-        // Both fields, because they answer different questions about the same folder: where the
-        // work is and where the branches go. Version control is not switched on by being filled in.
-        if (!s.projectDir.trim()) s.projectDir = projectDir;
-        if (s.vcs && !s.vcs.repoDir.trim()) s.vcs.repoDir = projectDir;
-      }
-    });
+    // The same rule an import applies; see `applyDefaultProject`.
+    return await this.store.updateSession(session.id, (s) => applyDefaultProject(s, projectDir));
   }
 
   async updateSession(
@@ -975,13 +1035,8 @@ export class OperatorService {
       if (sessions.length === 0) throw new Error(`No session took part in run ${runId}.`);
       const group = sessions.map((s) => s.runGroup).find((g) => g?.id === runId);
       const name = group?.name?.trim() || `run-${(group?.startedAt ?? '').slice(0, 16).replace(/[:T]/g, '-')}`;
-      scope = {
-        sessions,
-        // A task belongs to the run if this attempt ran in it, or if it was queued for it and
-        // never reached — that second kind is what the run's own record on the session is for.
-        taskFilter: (s, t) => t.runGroup?.id === runId || (s.runGroup?.id === runId && s.runGroup.taskIds.includes(t.id)),
-        label: name,
-      };
+      // Each task as it ended in this run, not as it is now; see `runScope`.
+      scope = runScope(sessions, runId, name);
     } else if (where.sessionId) {
       const session = await this.store.getSession(where.sessionId);
       if (!session) throw new Error('No such session.');
@@ -1806,11 +1861,18 @@ export class OperatorService {
      */
     const cfg = await this.settings.load();
     const unattendedRule = { mode: 'unattended' as const, allowedPrograms: cfg.execution.allowedPrograms, isolation: cfg.execution.isolation, lockedToConfirm: cfg.policyLock?.maxMode === 'confirm' };
+    /*
+     * Which of its refusals it is, asked in the order the rule asks them: the lock, then isolation,
+     * then the allowlist. Anything that was not isolation used to be told as an empty allowlist, so
+     * under a policy lock the brief sent the operator to fill in a list that was already full.
+     */
     const unattendedBlocked: UnattendedBlock | undefined = !unattendedPrecondition(unattendedRule)
       ? undefined
-      : unattendedIsolationRefusal('unattended', cfg.execution.isolation)
-        ? 'isolation'
-        : 'allowlist';
+      : unattendedRule.lockedToConfirm
+        ? 'lock'
+        : unattendedIsolationRefusal('unattended', cfg.execution.isolation)
+          ? 'isolation'
+          : 'allowlist';
     return {
       text: planBrief({
         lang,
@@ -1858,7 +1920,7 @@ export class OperatorService {
     const repoIssues: PlanIssue[] = [];
     check.plan.sessions.forEach((session, i) => {
       if (session.vcs?.enabled === false) return;
-      const dir = session.vcs?.repoDir?.trim() || session.projectDir?.trim() || session.mirror?.rootDir?.trim() || '';
+      const dir = plannedRepoDir(session);
       const reason = repoUnusableReason(dir);
       if (reason) repoIssues.push({ path: `sessions[${i}].vcs.repoDir`, message: reason });
       else if (!dir) {
@@ -1874,16 +1936,22 @@ export class OperatorService {
 
     /*
      * A branch to carry on must be there to carry on — unless a session before it in this same plan
-     * is the one that makes it. Refused now, with the branches that are there, rather than at the
-     * first run with a task refused.
+     * is the one that makes it, in this same repository. Refused now, with the branches that are
+     * there, rather than at the first run with a task refused.
+     *
+     * The repository is part of the question. A branch is a branch of one repository, and the name
+     * alone let a branch an earlier session makes somewhere else count here: the plan was accepted,
+     * and the session failed at its first task with "no such local branch" — the failure this check
+     * exists to bring forward.
      */
     for (const [i, session] of check.plan.sessions.entries()) {
       const wanted = session.vcs?.enabled === false ? '' : (session.vcs?.existingBranch ?? '').trim();
       if (!wanted) continue;
-      const dir = session.vcs?.repoDir?.trim() || session.projectDir?.trim() || session.mirror?.rootDir?.trim() || '';
+      const dir = plannedRepoDir(session);
+      const here = normaliseDir(dir);
       const madeEarlier = check.plan.sessions
         .slice(0, i)
-        .some((e) => !!e.vcs?.branchName?.trim() && plannedBranchName(e.vcs.branchName, e.vcs.branchPrefix?.trim() || 'cop/') === wanted);
+        .some((e) => normaliseDir(plannedRepoDir(e)) === here && branchesMadeBy(e).includes(wanted));
       if (madeEarlier || (await branchExists(dir, wanted))) continue;
       const have = await localBranches(dir);
       repoIssues.push({
@@ -1951,7 +2019,9 @@ export class OperatorService {
      */
     const persona = (await this.getContext('persona', 'en')).content;
     // No default models passed: a session the plan gives no model follows Settings at run time.
-    const result = await importPlan(this.store, check.plan, '', '', persona);
+    // The default project is passed, so a session the plan gives no folder works where one made
+    // on the Sessions page would, and not in execution.cwd.
+    const result = await importPlan(this.store, check.plan, '', '', persona, (cfg.project?.rootDir ?? '').trim());
     return {
       ok: true,
       result: { ...result, warnings: [...check.warnings, ...result.warnings] },
@@ -2144,7 +2214,11 @@ export class OperatorService {
     if (!session) throw new Error('No such session.');
     const task = session.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error('No such task.');
-    return await restorePreview(session, task);
+    const preview = await restorePreview(session, task);
+    // Said in the preview too, so the dialog refuses before the operator agrees to anything,
+    // rather than showing what would happen and refusing when they say yes.
+    const refused = await this.restoreRefusal(session);
+    return refused ? { ...preview, ok: false, problem: refused } : preview;
   }
 
   async restore(
@@ -2152,17 +2226,43 @@ export class OperatorService {
     taskId: string,
   ): Promise<{ ok: boolean; problem?: string; branch?: string; commit?: string; leftBehind?: string[]; keptOn?: string }> {
     await this.init();
-    if (this.running.has(sessionId)) {
-      return { ok: false, problem: 'This session is running. Stop it before moving the repository to another branch.' };
-    }
-    if (this.batch?.running) {
-      return { ok: false, problem: 'A batch is running. Stop it before moving the repository to another branch.' };
-    }
     const session = await this.store.getSession(sessionId);
     if (!session) throw new Error('No such session.');
     const task = session.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error('No such task.');
+    const refused = await this.restoreRefusal(session);
+    if (refused) return { ok: false, problem: refused };
     return await restoreToBase(session, task, this.bus);
+  }
+
+  /**
+   * Why the repository of this session cannot be moved to another branch now, or null when it can.
+   *
+   * Anything that may be working in that folder at this moment: the session itself, a batch (which
+   * may reach a session in it next), and any other session running there on its own. Only the first
+   * two used to be asked, so a restore checked out a branch under another session in the middle of
+   * its task — and that session then found its repository moved, and left its work uncommitted.
+   * Version control being off for the other session does not make it safe: its commands still run
+   * in that folder.
+   */
+  private async restoreRefusal(session: Session): Promise<string | null> {
+    if (this.running.has(session.id)) return 'This session is running. Stop it before moving the repository to another branch.';
+    if (this.batch?.running) return 'A batch is running. Stop it before moving the repository to another branch.';
+    const other = await this.runningIn(repoDirOf(session));
+    return other
+      ? `Session "${other.name}" is running in this repository. Stop it before moving the repository to another branch.`
+      : null;
+  }
+
+  /** A session running right now whose repository, or project folder, is this folder. */
+  private async runningIn(dir: string): Promise<Session | undefined> {
+    const here = normaliseDir(dir);
+    if (!here) return undefined;
+    for (const id of this.running.keys()) {
+      const s = await this.store.getSession(id);
+      if (s && normaliseDir(repoDirOf(s)) === here) return s;
+    }
+    return undefined;
   }
 
   /**
@@ -2262,31 +2362,16 @@ export class OperatorService {
       onFailure: group?.onFailure ?? session.onFailure ?? 'stop',
     };
 
-    /*
-     * One restore per repository, keyed on the folder rather than on the session.
-     *
-     * Three sessions working in one repository must not take it back three times to three
-     * different commits; the earliest affected task is the one that decides, because that is
-     * the state the whole re-run starts from.
-     */
-    const byRepo = new Map<string, { session: Session; task: Task }>();
-    for (const entry of tasks) {
-      const dir = (entry.session.vcs?.enabled ? entry.session.vcs.repoDir : '')?.trim();
-      if (!dir) continue;
-      // A repository whose affected tasks never ran has nothing to go back to: the run never
-      // touched it. Taking "no base commit recorded" as a refusal blocked "run again from
-      // here" for every plan whose later sessions had not started yet — which is the usual
-      // shape of a run that stopped in the middle.
-      if (!entry.task.startedAt) continue;
-      if (!byRepo.has(dir)) byRepo.set(dir, entry);
-    }
-    for (const [dir, entry] of byRepo) {
-      const preview = await restorePreview(entry.session, entry.task);
+    for (const target of restoreTargets(tasks)) {
+      const preview = await restorePreview(target.session, target.task);
+      // What would stop the restore itself, asked here as well, so the dialog says it before the
+      // operator agrees rather than after.
+      const refused = target.problem ?? (await this.restoreRefusal(target.session));
       plan.restores.push({
-        repoDir: preview.repoDir || dir,
-        ok: preview.ok,
-        problem: preview.problem,
-        forTask: entry.task.title,
+        repoDir: preview.repoDir || target.dir,
+        ok: preview.ok && !refused,
+        problem: refused ?? preview.problem,
+        forTask: target.task.title,
         baseCommit: preview.baseCommit,
         branchName: preview.branchName,
         leftBehind: preview.leftBehind,
@@ -2345,7 +2430,13 @@ export class OperatorService {
       const runName = await this.suggestRunName(ids, plan.from.title);
       // From here the claim is the batch's to give back, whichever way its start goes.
       handedOn = true;
-      const started = await this.startBatchHolding(claim.holder, ids, opts.mode ?? plan.mode, opts.onFailure ?? plan.onFailure, undefined, undefined, runName, undefined);
+      /*
+       * Exactly the tasks the preview listed, which are the tasks the run was asked to do from this
+       * one on. Started with none named, the batch took every queued task of these sessions, so a
+       * task the run never chose — queued beside it, or added since — was sent to the chat as well.
+       */
+      const taskIds = plan.tasks.map((x) => x.taskId);
+      const started = await this.startBatchHolding(claim.holder, ids, opts.mode ?? plan.mode, opts.onFailure ?? plan.onFailure, undefined, undefined, runName, taskIds);
       return { started: started.started, reason: started.reason, requeued: moved.requeued, restored: moved.restored, batch: started.batch };
     } finally {
       if (!handedOn) this.releaseBrowser(claim.holder);
@@ -2369,19 +2460,27 @@ export class OperatorService {
       for (const entry of plan.restores) {
         if (!entry.ok) return { ...idle, reason: `${entry.repoDir}: ${entry.problem ?? 'the restore could not be prepared.'}` };
       }
-      // Re-read each repository's own pivot and do it for real. The preview above is what the
-      // operator agreed to; this is the same call, one step further.
+      /*
+       * Re-read each repository's own pivot and do it for real. The preview above is what the
+       * operator agreed to; this is the same choice (`restoreTargets`), one step further. It was
+       * worked out a second time here, by a copy of the rule that had not been given the preview's
+       * "never started" skip, so a run whose later repository was never reached failed on it after
+       * the first repository had already been moved — and queued nothing.
+       *
+       * A refusal part-way still says what was already moved: a repository taken back is the
+       * operator's to know about, whatever happened after it.
+       */
       const session = (await this.store.getSession(sessionId)) as Session;
       const task = session.tasks.find((t) => t.id === taskId) as Task;
       const { tasks } = await this.affectedByRestart(session, task);
-      const seenRepo = new Set<string>();
-      for (const entry of tasks) {
-        const dir = (entry.session.vcs?.enabled ? entry.session.vcs.repoDir : '')?.trim();
-        if (!dir || seenRepo.has(dir)) continue;
-        seenRepo.add(dir);
-        const done = await restoreToBase(entry.session, entry.task, this.bus);
-        if (!done.ok) return { ...idle, reason: `${dir}: ${done.problem ?? 'the restore failed.'}` };
-        restored.push(`${dir} -> ${done.branch ?? ''}`);
+      for (const target of restoreTargets(tasks)) {
+        // Asked again at the moment of moving: a session may have started in this folder since.
+        const refused = target.problem ?? (await this.restoreRefusal(target.session));
+        if (refused) return { ...idle, restored, reason: `${target.dir}: ${refused}` };
+        const done = await restoreToBase(target.session, target.task, this.bus);
+        if (!done.ok || !done.branch) return { ...idle, restored, reason: `${target.dir}: ${done.problem ?? 'the restore failed.'}` };
+        restored.push(`${target.dir} -> ${done.branch}`);
+        await this.rerunFromRestore(target, done.branch, tasks);
       }
     }
 
@@ -2411,6 +2510,67 @@ export class OperatorService {
 
     if (opts.start === false) return { started: false, reason: 'prepared, not started', requeued, restored };
     return { started: false, requeued, restored };
+  }
+
+  /**
+   * Makes a restore hold for the run that follows it.
+   *
+   * The restore puts the repository on a new branch at the pivot task's starting commit, and the
+   * re-run then puts each session on its own branch. In per-task mode that is right: a re-run cuts
+   * a fresh branch from where the task first started, which is the restore commit. In per-session
+   * mode it undid the restore: the session's one branch was checked out again, with the failed
+   * attempt's commit still on it, so the attempt that was to start from the code as it was began on
+   * the work it was meant to replace, and committed it a second time. So the pivot's session now
+   * works on the restore branch — the code as it was before that task, with the tasks before it —
+   * and its old branch keeps the attempt that failed, as the confirmation says.
+   *
+   * A per-session session after it in the same repository that started from where the repository
+   * was, or from the session before it, began from work this run is now redoing, and its one branch
+   * carries what it built on that work: checked out again, it would bring the undone work back the
+   * same way. So its start is forgotten, to be worked out again when it is reached (for a
+   * `previous-session` chain, from the work done again), and it gets a branch of its own; the old
+   * one keeps what it did. A per-task session is left as it is: a re-run in that mode is cut from
+   * where the task first started, by that mode's own rule (see `prepareForTask`).
+   */
+  private async rerunFromRestore(target: RestoreTarget, branch: string, tasks: Array<{ session: Session; task: Task }>): Promise<void> {
+    if (target.session.vcs?.branchMode === 'per-session') {
+      const left = sessionBranchName(target.session);
+      await this.store.updateSession(target.session.id, (s) => {
+        if (s.vcs) s.vcs.branchName = branch;
+      });
+      this.bus.publish({
+        sessionId: target.session.id,
+        taskId: target.task.id,
+        type: 'vcs-session-branch',
+        level: 'info',
+        message: `the session carries on from ${branch}, the code as it was before "${target.task.title}"; ${left} keeps the work that came after`,
+        data: { branch, left },
+      });
+    }
+
+    const here = normaliseDir(target.dir);
+    const inOrder = [...new Map(tasks.map(({ session }) => [session.id, session])).values()];
+    const later = inOrder.slice(inOrder.findIndex((s) => s.id === target.session.id) + 1);
+    for (const s of later) {
+      if (!s.vcs?.enabled || s.vcs.branchMode !== 'per-session' || s.vcs.startFrom === 'existing-branch') continue;
+      if (!s.vcsBaseCommit || normaliseDir(repoDirOf(s)) !== here) continue;
+      // One that started from a named branch did not begin from anything this run redoes.
+      if (s.vcsStart?.kind === 'branch' || s.vcsStart?.kind === 'existing-branch') continue;
+      const left = sessionBranchName(s);
+      const fresh = await freeBranchName(target.dir, left);
+      await this.store.updateSession(s.id, (x) => {
+        x.vcsBaseCommit = undefined;
+        x.vcsStart = undefined;
+        if (x.vcs) x.vcs.branchName = fresh;
+      });
+      this.bus.publish({
+        sessionId: s.id,
+        type: 'vcs-session-branch',
+        level: 'info',
+        message: `the session began from work this run is doing again, so it starts again when it is reached, on a new branch ${fresh}; ${left} keeps what it did before`,
+        data: { branch: fresh, left },
+      });
+    }
   }
 
   /** Why a folder cannot be used for version control, or null when it can. */

@@ -19,8 +19,7 @@
  * - the task routes: edit, add, delete, run again, continue — and what a re-run keeps on the record;
  * - level 1 and the context texts, the text export's headers, the run exports and the live events.
  *
- * Checks marked `// DEFECT:` fail today on purpose: each names a defect in the product, and passes
- * once that defect is fixed. Checks marked as a decision pin hold behaviour that was chosen.
+ * Every check here must pass. Checks marked as a decision pin hold behaviour that was chosen.
  *
  *   npm run check:e2e-plan        (or: npx tsx test/e2e-plan.check.ts)
  */
@@ -130,10 +129,26 @@ unit('checkPlan answers every document, and never throws', () => {
   } catch (e) {
     thrown = (e as Error).message;
   }
-  // DEFECT: collectWarnings reads null.vcs, so sessions:[null] throws a TypeError instead of being refused
+  // The warning walk reads only what is an object, and leaves the rest to the schema: it once read
+  // null.vcs, and sessions:[null] threw a TypeError instead of being refused.
   t.truthy('sessions:[null] is answered, not thrown', thrown === undefined, thrown);
-  // DEFECT: the same throw: no refusal comes back for sessions:[null] at all
   t.truthy('sessions:[null] is refused at a path under sessions[0]', issuesOf(nullSession).some((i) => i.path.startsWith('sessions[0]')), nullSession ?? thrown);
+  // Every other place a session, task or check may be something other than an object.
+  for (const [what, doc] of Object.entries({
+    'sessions:[1]': { version: 1, sessions: [1] },
+    'sessions:[[]]': { version: 1, sessions: [[]] },
+    'tasks:[7]': { version: 1, sessions: [{ name: 'nulls', vcs: { enabled: false }, tasks: [7] }] },
+    'tasks:null': { version: 1, sessions: [{ name: 'nulls', vcs: { enabled: false }, tasks: null }] },
+  })) {
+    let r: PlanCheck | undefined;
+    let err: string | undefined;
+    try {
+      r = checkPlan(JSON.stringify(doc));
+    } catch (e) {
+      err = (e as Error).message;
+    }
+    t.truthy(`${what}: answered, refused at a path under sessions[0]`, !err && issuesOf(r).some((i) => i.path.startsWith('sessions[0]')), r ?? err);
+  }
 
   // The same null one level down, and two levels down: the warning walk already guards these.
   const deeper = {
@@ -185,8 +200,8 @@ unit('checkPlan answers every document, and never throws', () => {
 
 await scenario('POST /plan/check with a document that used to throw', {}, async (h) => {
   const r = await h.raw('POST', '/plan/check', { text: '{"version":1,"sessions":[null]}' });
-  // A malformed plan is an answer (2xx, ok:false) the page shows, not a request error.
-  // DEFECT: the TypeError from checkPlan escapes and the route answers 400 with it, instead of ok:false and the issue
+  // A malformed plan is an answer (2xx, ok:false) the page shows, not a request error: a TypeError from
+  // checkPlan once escaped, and the route answered 400 with a JavaScript message in it.
   t.truthy('answered 2xx with ok:false and an issue under sessions[0]', r.status >= 200 && r.status < 300 && (r.body as CheckAnswer).ok === false &&
     ((r.body as CheckAnswer).issues ?? []).some((i) => i.path.startsWith('sessions[0]')), r);
 });
@@ -327,7 +342,8 @@ unit('warnings and the brief agree with the schema', () => {
     const brief = planBrief({ lang });
     // Named the way the brief names fields: in code, in quotes, in a table cell, or as vcs.<field>.
     const named = (k: string): boolean => new RegExp(`(?:\`|"|\\| |vcs\\.)${k}(?:\`|"|:| \\|)`).test(brief);
-    // DEFECT: the brief never mentions projectDir, the field that says where a session without version control works
+    // projectDir, the field that says where a session without version control works, was once the one
+    // field the brief never named.
     t.check(`${lang}: the brief names every field of the format`, keys.filter((k) => !named(k)), []);
 
     const start = brief.indexOf('| expect |');
@@ -508,13 +524,15 @@ await scenario('sessions of a plan that share one conversation', {}, async (h) =
       tasks: [{ title: 'write-y', prompt: 'Create y.txt in the project folder holding exactly y, and nothing else.' }],
     }));
     const imported = await full(h, d!.id);
-    // DEFECT: importPlan does not fill the Project page's folder into projectDir (createSession in the service does), so it stays ''
+    // The import applies the same rule as a session made on the Sessions page (applyDefaultProject); it
+    // once left projectDir '', and the session ran in execution.cwd instead of the operator's project.
     t.check('an imported session with no folder gets the Project page\'s folder', imported.projectDir, h.repo);
     h.chat.script(write('y.txt', 'y'), reply.done());
     await h.run(d!.id);
-    // DEFECT: with projectDir empty the session runs in execution.cwd, not in the project the operator chose
     t.truthy('and its step wrote y.txt in that project', existsSync(join(h.repo, 'y.txt')),
       `y.txt in the project: ${existsSync(join(h.repo, 'y.txt'))}; in execution.cwd (${configCwd}): ${existsSync(join(configCwd, 'y.txt'))}`);
+    // A session that names a folder keeps it: the default fills only what a plan left out.
+    t.check('the session that named its folder kept it', (await full(h, p!.id)).projectDir, elsewhere);
   });
   rmSync(configCwd, { recursive: true, force: true });
 }
@@ -584,8 +602,23 @@ await scenario('what a plan would duplicate, and a branch an earlier session mak
     { ...onBranch(h, 'stage-near', [fileTask('near-task', 'near.txt', 'near')]), vcs: { enabled: true, repoDir: h.repo, existingBranch: 'cop/stage-9', updateFromRemote: false } },
   );
   const far = await h.call<CheckAnswer>('POST', '/plan/check', { text: JSON.stringify(elsewhere) });
-  // DEFECT: madeEarlier compares branch names only, not repositories, so a branch made in repo2 lets a session in another repository pass the import check
+  // A branch made earlier counts only in the repository it is made in: matched on the name alone, a
+  // branch made in repo2 let a session in another repository pass, and fail at its first task.
   t.truthy('a branch an earlier session makes in another repository does not count: refused', !far.ok && (far.issues ?? []).some((i) => i.path === 'sessions[1].vcs.existingBranch'), far);
+  // Nor does a branchName an earlier session never makes: with version control off it makes no branch.
+  const offEarlier = planOf(
+    { ...onBranch(h, 'stage-off', [fileTask('off-task', 'off.txt', 'off')]), vcs: { enabled: false, repoDir: h.repo, branchMode: 'per-session', branchName: 'stage-8' } },
+    { ...onBranch(h, 'stage-after', [fileTask('after-task', 'after.txt', 'after')]), vcs: { enabled: true, repoDir: h.repo, existingBranch: 'cop/stage-8', updateFromRemote: false } },
+  );
+  const off = await h.call<CheckAnswer>('POST', '/plan/check', { text: JSON.stringify(offEarlier) });
+  t.truthy('a branch an earlier session without version control would name does not count: refused', !off.ok && (off.issues ?? []).some((i) => i.path === 'sessions[1].vcs.existingBranch'), off);
+  // A per-task session makes the branches its tasks name, and a later session may carry one on.
+  const perTask = planOf(
+    { ...onBranch(h, 'stage-tasks', [fileTask('tasked', 't.txt', 't', { vcs: { branch: 'stage-7' } })]), vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-task', startFrom: 'branch', baseBranch: 'main', updateFromRemote: false } },
+    { ...onBranch(h, 'stage-on', [fileTask('on-task', 'on.txt', 'on')]), vcs: { enabled: true, repoDir: h.repo, existingBranch: 'cop/stage-7', updateFromRemote: false } },
+  );
+  const tasked = await h.call<CheckAnswer>('POST', '/plan/check', { text: JSON.stringify(perTask) });
+  t.truthy('a branch a task of an earlier per-task session names: accepted', tasked.ok, tasked);
 });
 
 // --- 9. store integrity under concurrent writers -------------------------------------------------------
@@ -994,10 +1027,23 @@ await scenario('the exports and the live events', { limits: { maxFormatRetries: 
   const doc = domain.body as { counts?: { failed: number }; tasks?: DomainTask[] };
   const entry = (doc.tasks ?? []).find((x) => x.task.id === failed.id);
   t.truthy('the run\'s domain export still holds the task, with the failure on its earlier attempt', domain.status === 200 && !!entry?.earlierAttempts?.[0]?.whyItFailed, domain.status);
-  // DEFECT: a run's export describes the task as it is now (queued, attempt 2), so the failure that happened in that run has no whyItFailed of its own
+  // A run's export takes each task at the attempt that ran in it (runScope). Taken as it is now (queued,
+  // attempt 2), the failure that happened in the run had no whyItFailed of its own, and the run's counts
+  // said nothing failed in it.
   t.truthy('and the task, as it ended in that run, says why it failed', !!entry?.whyItFailed, entry);
-  // DEFECT: for the same reason the run's counts say nothing failed in it
   t.check('the run\'s counts say one task failed in it', doc.counts?.failed, 1);
+  type RunEntry = { task: { id: string; attempt: number }; outcome?: { status: string } };
+  const asRan = (d: unknown): RunEntry | undefined => ((d as { tasks?: RunEntry[] }).tasks ?? []).find((x) => x.task.id === failed.id);
+  t.check('described at the attempt that ran in it', [asRan(doc)?.task.attempt, asRan(doc)?.outcome?.status], [1, 'failed']);
+  // A later run takes the task (it fails the same way: the branch is still gone). The first run's export
+  // still holds it as it ended there; taken as it is now, it would have left that run's export altogether.
+  await h.run(f!.id);
+  const laterRun = (await full(h, f!.id)).runGroup?.id ?? '';
+  const first = (await h.raw('GET', `/export/domain?run=${encodeURIComponent(runId)}`)).body;
+  const later = (await h.raw('GET', `/export/domain?run=${encodeURIComponent(laterRun)}`)).body;
+  t.check('after a later run, the first run\'s export still holds the task as it ended there',
+    [laterRun !== '' && laterRun !== runId, asRan(first)?.task.attempt, asRan(first)?.outcome?.status], [true, 1, 'failed']);
+  t.check('and the later run\'s export holds its own attempt', [asRan(later)?.task.attempt, asRan(later)?.outcome?.status], [2, 'failed']);
   t.check('an export kind that does not exist is refused', (await h.raw('GET', '/export/zzz?session=x')).status, 400);
 
   // The live events: what the page reads when it opens mid-run, and the stream itself.

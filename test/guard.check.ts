@@ -445,8 +445,16 @@ await scenario('isolation claimed but no allowlist: an unattended start is refus
       // The brief a chat model writes the plan from must not send the operator to a button that says no.
       const brief = await h.call<{ text: string }>('GET', '/plan/brief?lang=en');
       t.truthy('the plan brief says runs with nobody watching are refused here', brief.text.includes('runs with nobody watching are refused'), brief.text.slice(0, 300));
-      // DEFECT: OperatorService.planBrief maps every non-isolation refusal to 'allowlist' (UnattendedBlock in src/plan/brief.ts has no lock kind), so a lock is explained as "the list of allowed programs is empty".
+      // The reason is the one the run gives, asked in the same order: a lock is a lock. Every refusal
+      // that was not isolation used to be told as an empty allowlist, which sent the operator to fill
+      // in a list that was already full.
       t.truthy('and does not blame an allowlist that is not empty', !brief.text.includes('the list of allowed programs is empty'));
+      const why = brief.text.split('runs with nobody watching are refused')[1]?.slice(0, 600) ?? '';
+      t.truthy('it names the lock as the reason', why.includes('policy.lock.json'), why);
+      const briefBg = await h.call<{ text: string }>('GET', '/plan/brief?lang=bg');
+      const whyBg = briefBg.text.split('пускане без надзор се отказва')[1]?.slice(0, 600) ?? '';
+      t.truthy('and so does the Bulgarian brief, without blaming the allowlist',
+        whyBg.includes('policy.lock.json') && !whyBg.includes('списъкът с позволени програми е празен'), whyBg);
     });
   } finally {
     delete process.env.COP_PROJECT_ROOT;

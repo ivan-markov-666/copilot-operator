@@ -74,6 +74,26 @@ export const DEFAULT_VCS: VersionControl = {
 };
 
 /**
+ * Points a new session that names no folder at the default project, the one on the Project page.
+ *
+ * The one rule for every way a session is made: on the Sessions page and by importing a plan. The
+ * import used to skip it, so a plan's session with version control off and no `projectDir` — the
+ * brief's own example has one — kept an empty folder and ran its commands in `execution.cwd`,
+ * somewhere the operator never chose, while the same session made by hand worked in their project.
+ *
+ * Both fields, because they answer different questions about the same folder: where the work is
+ * and where the branches go. Version control is not switched on by being filled in. A session that
+ * names either keeps what it named and gets nothing here: a plan's repository with the default
+ * project beside it as its folder would say the work is in two places.
+ */
+export function applyDefaultProject(session: Session, defaultDir: string): void {
+  const dir = defaultDir.trim();
+  if (!dir || session.projectDir.trim() || session.vcs?.repoDir.trim()) return;
+  session.projectDir = dir;
+  if (session.vcs) session.vcs.repoDir = dir;
+}
+
+/**
  * Applies an edit to a task: the one place the rule about a new intent lives.
  *
  * A task given a new prompt is a new question. The checks the reviews of its earlier attempts

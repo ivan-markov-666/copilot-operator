@@ -10,7 +10,7 @@
  * is the one moment the operator gets to read what a chat model decided on their behalf.
  */
 import type { SessionStore } from '../session/store.js';
-import { DEFAULT_VCS } from '../session/store.js';
+import { DEFAULT_VCS, applyDefaultProject } from '../session/store.js';
 import type { Session } from '../session/model.js';
 import { availableShells, detectShells, type Shell } from '../exec/shells.js';
 import type { Plan, PlanSession, PlanTask } from './schema.js';
@@ -188,6 +188,12 @@ export async function importPlan(
   defaultReviewModel = '',
   /** The operator's persona at the moment of import, written into every task's level 2. */
   persona = '',
+  /**
+   * The default project on the Project page, for a session that names no folder of its own. The
+   * service passes it, so an imported session works where one made by hand would; see
+   * `applyDefaultProject`. Empty leaves such a session without a folder.
+   */
+  defaultProjectDir = '',
 ): Promise<ImportResult> {
   const sessions: ImportedSession[] = [];
   const warnings: string[] = [...unavailableShellWarnings(plan)];
@@ -231,6 +237,8 @@ export async function importPlan(
       s.model = (planned.model || defaultModel).trim() || undefined;
       s.planName = plan.plan.trim() || undefined;
       s.vcs = vcs;
+      // After the plan's own folders are in place, so only a session that named none is pointed at it.
+      applyDefaultProject(s, defaultProjectDir);
     });
 
     const titles: string[] = [];

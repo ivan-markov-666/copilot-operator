@@ -38,8 +38,12 @@ import { PLAN_VERSION } from './schema.js';
 import { systemGuideSection } from './systemGuide.js';
 import { scriptSection, renderMessage, SCRIPT, OPENING, type Stage, type StartState } from './script.js';
 
-/** Why a run with nobody watching cannot start here, when it cannot. See `unattendedPrecondition`. */
-export type UnattendedBlock = 'isolation' | 'allowlist';
+/**
+ * Why a run with nobody watching cannot start here, when it cannot: one kind for each refusal of
+ * `unattendedPrecondition`, which the caller asks in the same order. `lock` is the machine's
+ * `policy.lock.json`, which no setting on any page can change.
+ */
+export type UnattendedBlock = 'lock' | 'isolation' | 'allowlist';
 
 export type BriefOptions = {
   lang?: string;
@@ -144,21 +148,28 @@ ${lines.join('\n')}
  * Whether a run with nobody watching can start on this machine — and when it cannot, what to press.
  *
  * Kerrigan's phase 2 script offers the unattended button first, because on a machine that allows it
- * that is the ordinary way to run. On one that does not — no isolation claimed, or no allowlist —
- * the runner refuses it at the entrance, and a persona that recommends it has sent the operator to
- * a button that says no. She cannot see the machine; the app can, so it tells her, and only when it
- * matters. The labels are the ones on the screens, so check:guide holds them.
+ * that is the ordinary way to run. On one that does not — a policy lock, no isolation claimed, or no
+ * allowlist — the runner refuses it at the entrance, and a persona that recommends it has sent the
+ * operator to a button that says no. She cannot see the machine; the app can, so it tells her, and
+ * only when it matters. The labels are the ones on the screens, so check:guide holds them.
  */
 function machineSection(unattendedBlocked: UnattendedBlock | undefined, lang: 'en' | 'bg'): string {
   if (!unattendedBlocked) return '';
-  const whyBg =
-    unattendedBlocked === 'isolation'
-      ? '**„Къде върви ботът“** в `/defaults` още казва, че ботът върви в акаунта на оператора, без изолация'
-      : 'списъкът с позволени програми е празен, а без него нищо не ограничава стъпка, която никой не гледа';
-  const whyEn =
-    unattendedBlocked === 'isolation'
-      ? '**"Where the bot runs"** on `/defaults` still says the bot runs in the operator\'s own account, with no isolation'
-      : 'the list of allowed programs is empty, and without it nothing limits a step that nobody is watching';
+  /*
+   * Each reason named as it is, because each sends the operator somewhere different. A lock blamed
+   * on the allowlist sent them to fill in a list that was already full, and the run was refused all
+   * the same: the lock is the machine's, set beside the install, and no page changes it.
+   */
+  const whyBg = {
+    lock: 'файлът `policy.lock.json` до инсталацията на тази машина забранява пускания без надзор, и никоя настройка на страниците не го променя',
+    isolation: '**„Къде върви ботът“** в `/defaults` още казва, че ботът върви в акаунта на оператора, без изолация',
+    allowlist: 'списъкът с позволени програми е празен, а без него нищо не ограничава стъпка, която никой не гледа',
+  }[unattendedBlocked];
+  const whyEn = {
+    lock: "this machine's `policy.lock.json`, beside the install, forbids runs with nobody watching, and no setting on any page changes it",
+    isolation: '**"Where the bot runs"** on `/defaults` still says the bot runs in the operator\'s own account, with no isolation',
+    allowlist: 'the list of allowed programs is empty, and without it nothing limits a step that nobody is watching',
+  }[unattendedBlocked];
   return lang === 'bg'
     ? `
 ## На тази машина пускане без надзор се отказва
@@ -368,6 +379,12 @@ const FIELD_ROWS_EN = [
     'Overrides the setting above for this one session: give the same name to the sessions that should share a chat, and leave it "" for a session that should have its own.',
   ],
   [
+    'projectDir',
+    'session',
+    'no',
+    'The project folder the session works in: where its commands run, and its repository when `vcs.repoDir` is "". Leave it out for the default project. A session with version control off says its project only here.',
+  ],
+  [
     'review',
     'session',
     'no',
@@ -431,6 +448,12 @@ const FIELD_ROWS_BG = [
     'сесия',
     'не',
     'Отменя настройката горе само за тази сесия: дай едно и също име на сесиите, които да споделят чат, и остави "" на онази, която да е сама.',
+  ],
+  [
+    'projectDir',
+    'сесия',
+    'не',
+    'Папката на проекта, в който работи сесията: там се изпълняват командите ѝ, и тя е хранилището, когато `vcs.repoDir` е "". Пропусни го за проекта по подразбиране. Сесия с изключен контрол на версиите казва проекта си само тук.',
   ],
   [
     'review',
@@ -527,7 +550,9 @@ commit is written: imperative, short, about the change rather than about the tas
 \`"vcs": { "enabled": false, "repoDir": "", "branchMode": "per-task", "commitOnFinish": false, "branchPrefix": "cop/" }\`.
 Then give its tasks no \`vcs\` at all — no branch, no commit message — because there is nothing
 to name. Read-only work, audits and reports are the usual reason. Say in \`notes\` why you turned
-it off, so the operator can disagree with you.
+it off, so the operator can disagree with you. Its commands run in the default project; when its
+work is in another one, give that project's path as the session's \`projectDir\`, since the empty
+\`repoDir\` cannot say it.
 
 **Do not leave \`vcs\` out of a session.** The system refuses the whole document and hands the
 user a line saying so, and you will have to ask the question then anyway — after wasting their
@@ -584,7 +609,9 @@ reset или merge. \`"updateFromRemote": false\` го изключва — са
 \`"vcs": { "enabled": false, "repoDir": "", "branchMode": "per-task", "commitOnFinish": false, "branchPrefix": "cop/" }\`.
 На нейните задачи не давай \`vcs\` изобщо — нито клон, нито текст на комит — защото няма какво да
 се именува. Обичайната причина е работа само за четене, одит или отчет. Напиши в \`notes\` защо си
-го изключил, за да може операторът да не се съгласи с теб.
+го изключил, за да може операторът да не се съгласи с теб. Командите ѝ се изпълняват в проекта по
+подразбиране; когато работата ѝ е в друг, дай пътя на този проект като \`projectDir\` на сесията,
+защото празното \`repoDir\` не може да го каже.
 
 **Не пропускай \`vcs\` в сесия.** Системата отказва целия документ и връща на потребителя ред,
 който го казва, а ти пак ще трябва да зададеш въпроса — след като си му загубил времето. Задай
