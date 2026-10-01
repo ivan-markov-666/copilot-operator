@@ -4,9 +4,11 @@
  * The UI edits this file through the API. Anything not present falls back to the schema
  * defaults, so an empty file is a valid, safe configuration.
  */
-import { readFile, mkdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { loadConfigObject, RunConfigSchema, type ResolvedConfig, type RunConfig } from '../config/schema.js';
+import { readHandWritten } from '../config/handWritten.js';
+import type { InstallLayout } from '../config/layout.js';
 import { writeFileAtomically } from '../session/store.js';
 
 /**
@@ -43,8 +45,10 @@ export class SettingsUnusableError extends Error {
  * the stock limits.
  */
 export function parseSettings(text: string, path: string): Record<string, unknown> {
-  // A file saved by hand in Notepad or Windows PowerShell may start with a byte-order mark,
-  // which JSON.parse refuses; it is not part of the settings, and the file is not broken.
+  // A file saved by hand in Notepad or Windows PowerShell may start with a byte-order mark, which
+  // JSON.parse refuses; it is not part of the settings, and the file is not broken. Read through
+  // `readHandWritten`, the mark has gone already and said how the file is encoded, UTF-16 included;
+  // a text handed here with the mark still on it is read the same.
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   if (body.trim() === '') return {};
   let value: unknown;
@@ -68,6 +72,18 @@ export function checkSettings(value: Record<string, unknown>, path: string): voi
   if (parsed.success) return;
   const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
   throw new SettingsUnusableError(path, `holds settings that are not allowed (${issues})`);
+}
+
+/**
+ * The settings of this install, with the defaults its layout implies: the one way they are built,
+ * for the API and for `cop doctor`, so the doctor reads them as the API that it vouches for will.
+ */
+export function settingsOf(layout: InstallLayout): Settings {
+  return new Settings(
+    layout.projectRoot,
+    layout.dataDir,
+    layout.mode === 'package' ? { runsDir: layout.runsDir, level1File: join(layout.promptsDir, 'level1.md') } : {},
+  );
 }
 
 export class Settings {
@@ -94,7 +110,7 @@ export class Settings {
   async raw(): Promise<Record<string, unknown>> {
     let text: string;
     try {
-      text = await readFile(this.path, 'utf8');
+      text = await readHandWritten(this.path);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
       throw new SettingsUnusableError(this.path, `could not be read (${(e as Error).message})`);

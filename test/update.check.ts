@@ -11,7 +11,10 @@
  */
 // @ts-expect-error — a plain .mjs helper, deliberately outside the TypeScript build because the
 // updater has to run before anything is built.
-import { compareRemote, normaliseRemote, remoteChangedMessage, signatureVerdict, updateRecord } from '../scripts/updateTrust.mjs';
+import { compareRemote, normaliseRemote, readLockFile, remoteChangedMessage, signatureVerdict, updateRecord } from '../scripts/updateTrust.mjs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -63,6 +66,54 @@ check('which commit to which', `${String(line.from)}->${String(line.to)}`, 'aaa-
 check('how many came in', line.commits, 3);
 check('whether a signature was demanded', line.signatureChecked, 'verified');
 check('and it defaults to not-required', (JSON.parse(updateRecord({})) as Record<string, unknown>).signatureChecked, 'not-required');
+
+/*
+ * The policy lock as the updater reads it: only a missing file is no lock, and a lock Windows
+ * PowerShell 5.1 saved, with a byte-order mark or as UTF-16, is read. The updater used to report a
+ * lock it could not open as "not valid JSON", and refused one with a mark as just that.
+ */
+console.log('\n--- the policy lock, as the updater reads it ---');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'cop-update-lock-'));
+  const lock = join(dir, 'policy.lock.json');
+  const text = JSON.stringify({ update: { requireSigned: true } });
+  const errorOf = (run: () => unknown): string => {
+    try {
+      run();
+      return '';
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  try {
+    check('no file is no lock', readLockFile(lock, readFileSync), null);
+    writeFileSync(join(dir, 'nope'), 'a file, not a folder', 'utf8');
+    check('nor is a path through a file, where no lock can be', readLockFile(join(dir, 'nope', 'policy.lock.json'), readFileSync), null);
+    const encodings: Array<[string, Buffer]> = [
+      ['UTF-8', Buffer.from(text, 'utf8')],
+      ['UTF-8 with a byte-order mark', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')])],
+      ['UTF-16 little-endian, as > writes it', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')])],
+      ['UTF-16 big-endian', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()])],
+    ];
+    for (const [how, bytes] of encodings) {
+      writeFileSync(lock, bytes);
+      check(`a lock saved as ${how} is read`, JSON.stringify(readLockFile(lock, readFileSync)), text);
+    }
+    writeFileSync(lock, '{ "update": { "requireSigned": true }, }', 'utf8');
+    check('a lock that does not parse is refused as not valid JSON', /policy\.lock\.json is not valid JSON/.test(errorOf(() => readLockFile(lock, readFileSync))), true);
+    rmSync(lock);
+    mkdirSync(lock);
+    const folder = errorOf(() => readLockFile(lock, readFileSync));
+    check('a folder where the lock should be is refused, as could not be read', /policy\.lock\.json could not be read/.test(folder), true);
+    check('and not called invalid JSON', folder.includes('not valid JSON'), false);
+    const denied = errorOf(() => readLockFile(lock, () => {
+      throw Object.assign(new Error('EPERM: operation not permitted, open'), { code: 'EPERM' });
+    }));
+    check('a lock this account may not read is refused, as could not be read', /policy\.lock\.json could not be read: EPERM/.test(denied), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;

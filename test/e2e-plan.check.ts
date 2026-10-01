@@ -807,6 +807,15 @@ await scenario('a settings file that no longer parses', {}, async (h) => {
   const kept = JSON.parse(readFileSync(settingsFile, 'utf8').replace(String.fromCharCode(0xfeff), '')) as { limits?: { maxIterations?: number }; copilot?: { defaultModel?: string } };
   t.check('a settings file that starts with a byte-order mark is read, and a save keeps what it held',
     [marked.status, kept.limits?.maxIterations, kept.copilot?.defaultModel], [200, 7, 'Z']);
+  // Nor is one Windows PowerShell 5.1 wrote with `>`, which is UTF-16 with a mark of its own: read
+  // as UTF-8 it was "not valid JSON", and the API would not start on it.
+  const wideText = JSON.stringify({ runsDir: h.runsDir, project: { rootDir: h.repo }, limits: { maxIterations: 8 } });
+  writeFileSync(settingsFile, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(wideText, 'utf16le')]));
+  const wideRead = await h.raw('GET', '/settings');
+  const wideSaved = await h.raw('PUT', '/models/default', { model: 'W' });
+  const keptWide = JSON.parse(readFileSync(settingsFile, 'utf8')) as { limits?: { maxIterations?: number }; copilot?: { defaultModel?: string } };
+  t.check('a settings file saved as UTF-16 is read, and a save keeps what it held (written back as UTF-8)',
+    [wideRead.status, wideSaved.status, keptWide.limits?.maxIterations, keptWide.copilot?.defaultModel], [200, 200, 8, 'W']);
 
   // A file that parses but holds a value the settings do not allow cannot be used either, and is
   // answered the same way, naming the value; the API would not start on it.

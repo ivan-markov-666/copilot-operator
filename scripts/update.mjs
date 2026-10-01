@@ -27,7 +27,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, cpSync, mkdirSync, readdirSync } from 'node:fs';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { compareRemote, remoteChangedMessage, signatureVerdict, updateRecord, REMOTE_PIN, UPDATE_LOG } from './updateTrust.mjs';
+import { compareRemote, readLockFile, remoteChangedMessage, signatureVerdict, updateRecord, REMOTE_PIN, UPDATE_LOG } from './updateTrust.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -72,12 +72,11 @@ function readUpdateLock() {
   ].filter(Boolean);
   const out = { requireSigned: false, remote: null };
   for (const path of candidates) {
-    if (!existsSync(path)) continue;
     let lock;
     try {
-      lock = JSON.parse(readFileSync(path, 'utf8'));
+      lock = readLockFile(path, readFileSync);
     } catch (e) {
-      die(path + ' is not valid JSON: ' + e.message, 'A lock that cannot be read must not be a lock that is skipped.');
+      die(e.message, 'A lock that cannot be read must not be a lock that is skipped.');
     }
     const update = lock && lock.update;
     if (!update) continue;

@@ -26,8 +26,8 @@
  * one task and never put back — and it gives a security team a single artefact to point at.
  */
 import { z } from 'zod';
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { readHandWritten } from './handWritten.js';
 import type { IsolationClaim } from '../exec/isolation.js';
 
 export const POLICY_LOCK_FILE = 'policy.lock.json';
@@ -147,9 +147,9 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
 /**
  * Reads `policy.lock.json` from a directory, or null when there is none.
  *
- * A file that is present but malformed is an error and not a shrug: a deployment that meant to
- * lock something down and mistyped it must not silently run unlocked, because the one thing worse
- * than no lock is a lock everybody believes in.
+ * A file that is present but malformed, or that cannot be read, is an error and not a shrug: a
+ * deployment that meant to lock something down and mistyped it must not silently run unlocked,
+ * because the one thing worse than no lock is a lock everybody believes in.
  */
 export async function readPolicyLock(baseDir: string): Promise<PolicyLock | null> {
   return await readPolicyLockAt(join(baseDir, POLICY_LOCK_FILE));
@@ -166,7 +166,7 @@ export function machineLockPath(env: NodeJS.ProcessEnv = process.env): string | 
   return base ? join(base, 'copilot-operator', POLICY_LOCK_FILE) : null;
 }
 
-/** Every lock that applies: the machine-wide one, then the install's own. Each is malformed-fatal. */
+/** Every lock that applies: the machine-wide one, then the install's own. Each is fatal when it is there and unusable. */
 export async function readPolicyLocks(baseDir: string, env: NodeJS.ProcessEnv = process.env): Promise<PolicyLock[]> {
   const out: PolicyLock[] = [];
   const machine = machineLockPath(env);
@@ -180,7 +180,8 @@ export async function readPolicyLocks(baseDir: string, env: NodeJS.ProcessEnv = 
 }
 
 /**
- * A policy lock that is there and cannot be used: it is not JSON, or not a lock.
+ * A policy lock that is there and cannot be used: it cannot be read, it is not JSON, or it is not a
+ * lock.
  *
  * Its own class for the reason `SettingsUnusableError` has one (see `api/settings.ts`). Every
  * configuration passes through `resolveConfig`, which reads the locks, so every request that reads
@@ -206,12 +207,26 @@ export class PolicyLockUnusableError extends Error {
   }
 }
 
+/**
+ * Whether a failed read means the file is not there. Only then is there no lock: ENOENT, or
+ * ENOTDIR, where a part of the path is a file and so nothing can be below it.
+ */
+function lockIsAbsent(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 async function readPolicyLockAt(path: string): Promise<PolicyLock | null> {
   let text: string;
   try {
-    text = await readFile(path, 'utf8');
-  } catch {
-    return null;
+    text = await readHandWritten(path);
+  } catch (e) {
+    // Any other failure is a lock that is there and cannot be read, and is refused as a broken
+    // one is. Every failure was taken for no lock: a lock whose folder an administrator protected
+    // and left this account no read on (EPERM), a folder where the file should be (EISDIR), a
+    // file another program held for a moment (EBUSY), and the "confirm only" it held was gone.
+    if (lockIsAbsent(e)) return null;
+    throw new PolicyLockUnusableError(path, `could not be read (${(e as Error).message})`);
   }
   let value: unknown;
   try {

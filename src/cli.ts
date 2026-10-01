@@ -20,7 +20,8 @@ import { loadConfig, expandPath } from './config/schema.js';
 import { CopilotTransport } from './transport/copilotTransport.js';
 import { runSession } from './orchestrator/taskRunner.js';
 import { SessionStore } from './session/store.js';
-import { checkSettings, parseSettings, SettingsUnusableError } from './api/settings.js';
+import { settingsOf, SettingsUnusableError } from './api/settings.js';
+import { PolicyLockUnusableError } from './config/lockedPolicy.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
@@ -305,7 +306,8 @@ program
         : `npm cannot reach ${registry} — behind a proxy, set it for npm (npm config set proxy / https-proxy) or HTTPS_PROXY; every plan starts with npm install`,
     );
 
-    const dataDir = installLayout().dataDir;
+    const layout = installLayout();
+    const dataDir = layout.dataDir;
     const readJson = (file: string): Record<string, unknown> | null => {
       try {
         return JSON.parse(readFileSync(join(dataDir, file), 'utf8')) as Record<string, unknown>;
@@ -318,20 +320,22 @@ program
      * problem to report, since the API will not start on it, not a file to take for empty. Taken for
      * empty, doctor said "isolation: none" and "no default model is set" of a file that may say
      * otherwise, and never that it was broken. The checks below that read it wait until it is mended.
+     *
+     * Read by the API's own `Settings` and loaded as the API loads them before it opens its port,
+     * which reads the policy locks too. Parsed and checked here on its own, the file was all doctor
+     * looked at: a lock that did not parse stopped `npm start` while doctor said "Ready.".
      */
-    const settingsFile = join(dataDir, 'settings.json');
-    let settings: Record<string, unknown> | null = {};
+    const store = settingsOf(layout);
+    let settings: Record<string, unknown> | null = null;
     try {
-      const value = parseSettings(readFileSync(settingsFile, 'utf8'), settingsFile);
-      checkSettings(value, settingsFile);
+      const value = await store.raw();
+      await store.load();
       settings = value;
     } catch (e) {
-      // No file is the defaults, as it is for the API.
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
-        settings = null;
-        const what = e instanceof SettingsUnusableError ? `${e.path} ${e.problem}` : `${settingsFile} could not be read (${(e as Error).message})`;
-        say(false, `${what}; the API will not start until it is mended or deleted`);
-      }
+      if (e instanceof SettingsUnusableError) say(false, `${e.path} ${e.problem}; the API will not start until it is mended or deleted`);
+      // Not the operator's to delete: an administrator placed it (see `PolicyLockUnusableError`).
+      else if (e instanceof PolicyLockUnusableError) say(false, `${e.path} ${e.problem}; the API will not start until it is mended`);
+      else say(false, `the settings in ${join(dataDir, 'settings.json')} could not be loaded (${(e as Error).message}); the API will not start until that is put right`);
     }
 
     if (settings) {

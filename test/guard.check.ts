@@ -529,6 +529,67 @@ console.log('\n--- a malformed lock refuses to load ---');
 }
 
 /*
+ * A lock that is there and cannot be read is refused the same way: every failure to read it was
+ * taken for no lock, so a lock whose folder an administrator protected and left this account no
+ * read on lost its "confirm only" without a word. Only a lock that is not there is no lock.
+ */
+console.log('\n--- a lock that cannot be read refuses to load ---');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'cop-guard-unreadlock-'));
+  const lock = join(dir, 'policy.lock.json');
+  const me = currentSid();
+  try {
+    t.check('control: with no lock there, there is none', (await readPolicyLocks(dir, {})).length, 0);
+    // A folder where the file should be: EISDIR.
+    mkdirSync(lock);
+    await rejects('a folder named policy.lock.json: readPolicyLocks rejects, saying it could not be read', () => readPolicyLocks(dir, {}), /policy\.lock\.json could not be read/);
+    await rejects('and so does loadConfigObject', () => loadConfigObject({}, dir), /policy\.lock\.json could not be read/);
+    rmSync(lock, { recursive: true });
+    // A file this account is denied reading, as an administrator's ACL that forgot Users leaves it.
+    writeFileSync(lock, JSON.stringify({ maxMode: 'confirm' }), 'utf8');
+    t.check('control: the same lock, readable, is read', await readPolicyLocks(dir, {}), [{ maxMode: 'confirm' }]);
+    t.truthy("this account's SID was read, to deny it", /^S-1-5-/.test(me), me);
+    const icacls = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'icacls.exe');
+    const denied = spawnSync(icacls, [lock, '/deny', `*${me}:(R)`], { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+    try {
+      t.check('reading it is denied to this account', denied.status, 0);
+      await rejects('a lock this account may not read: readPolicyLocks rejects, saying it could not be read', () => readPolicyLocks(dir, {}), /policy\.lock\.json could not be read/);
+      await rejects('and so does loadConfigObject, so the confirm-only it holds is not lost', () => loadConfigObject({}, dir), /policy\.lock\.json could not be read/);
+    } finally {
+      spawnSync(icacls, [lock, '/remove:d', `*${me}`], { windowsHide: true, timeout: 30_000 });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/*
+ * A lock saved by Windows PowerShell 5.1 is read as the lock it is. `Set-Content -Encoding utf8`
+ * puts a byte-order mark in front of it, and `>` writes UTF-16; each was refused as "not valid
+ * JSON", and with it every route that reads the settings, over a lock that looks right in Notepad.
+ */
+console.log('\n--- a lock saved by Windows PowerShell is read ---');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'cop-guard-psl-'));
+  const lock = join(dir, 'policy.lock.json');
+  const text = JSON.stringify({ maxMode: 'confirm' });
+  try {
+    const encodings: Array<[string, Buffer]> = [
+      ['with a UTF-8 byte-order mark', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')])],
+      ['as UTF-16 little-endian, as > writes it', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')])],
+      ['as UTF-16 big-endian', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()])],
+    ];
+    for (const [how, bytes] of encodings) {
+      writeFileSync(lock, bytes);
+      t.check(`a lock saved ${how} is read, and holds confirm`, await readPolicyLocks(dir, {}), [{ maxMode: 'confirm' }]);
+      t.check('and it caps the configuration', (await loadConfigObject({ execution: { mode: 'unattended' } }, dir)).execution.mode, 'confirm');
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/*
  * The same lock broken while the API runs, which every route that reads the settings meets: reading
  * the settings reads the locks. It was a plain error, so the routes that did not wrap their errors —
  * the System page's /doctor, the Defaults page's /settings, /project, /models, the plan brief, a

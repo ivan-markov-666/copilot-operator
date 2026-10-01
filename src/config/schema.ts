@@ -6,8 +6,8 @@
  * commands denied.
  */
 import { z } from 'zod';
-import { readFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
+import { readHandWritten } from './handWritten.js';
 import { applyPolicyLock, readPolicyLocks, type LockOutcome, type LockablePolicy } from './lockedPolicy.js';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -428,7 +428,8 @@ export type ResolvedConfig = RunConfig & {
 async function textOf(value: z.infer<typeof TextOrFile> | undefined, baseDir: string): Promise<string> {
   if (value === undefined) return '';
   if (typeof value === 'string') return value;
-  return await readFile(expandPath(value.file, baseDir), 'utf8');
+  // A file the run.yaml names is written by hand as the run.yaml is: see `handWritten.ts`.
+  return await readHandWritten(expandPath(value.file, baseDir));
 }
 
 /** Turns parsed config plus a base directory into absolute paths and loaded texts. */
@@ -491,7 +492,8 @@ function formatIssues(issues: z.ZodIssue[]): string {
 /** Loads a YAML run config from disk. */
 export async function loadConfig(configPath: string): Promise<ResolvedConfig> {
   const abs = resolve(configPath);
-  const raw = await readFile(abs, 'utf8');
+  // Written by hand, in whatever encoding its editor chose: see `handWritten.ts`.
+  const raw = await readHandWritten(abs);
   const parsed = RunConfigSchema.safeParse(parseYaml(raw) ?? {});
   if (!parsed.success) throw new Error(`${abs} is not a valid run config:\n${formatIssues(parsed.error.issues)}`);
   return await resolveConfig(parsed.data, abs, dirname(abs));

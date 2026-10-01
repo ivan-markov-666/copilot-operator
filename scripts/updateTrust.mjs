@@ -105,3 +105,44 @@ export function updateRecord({ at, remote, from, to, incoming, signed }) {
     signatureChecked: signed ?? 'not-required',
   });
 }
+
+/**
+ * The text of a hand-written file, by its byte-order mark: UTF-8 with or without one, UTF-16 in
+ * either order with one. The same reading as `decodeHandWritten` in src/config/handWritten.ts,
+ * repeated here because the updater runs before anything is built. A policy lock saved by Windows
+ * PowerShell 5.1 starts with a mark (`Set-Content -Encoding utf8`) or is UTF-16 (`>`), and
+ * JSON.parse refused both as "not valid JSON" of a lock that looks right in Notepad.
+ */
+export function decodeHandWritten(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.subarray(3).toString('utf8');
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return Buffer.from(bytes.subarray(2, bytes.length - (bytes.length % 2))).swap16().toString('utf16le');
+  }
+  return bytes.toString('utf8');
+}
+
+/**
+ * A policy lock as the updater reads it: null where there is none, its value where there is one,
+ * and an error saying why for a lock that is there and cannot be read or parsed.
+ *
+ * Only a missing file is no lock, as in readPolicyLockAt (src/config/lockedPolicy.ts). The updater
+ * asked `existsSync` first, then reported any failure to read as "not valid JSON", which sent the
+ * administrator to look for a typo in a file the account was not allowed to open.
+ *
+ * `read` is `readFileSync` unless a check hands in its own.
+ */
+export function readLockFile(path, read) {
+  let bytes;
+  try {
+    bytes = read(path);
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+    throw new Error(path + ' could not be read: ' + (e && e.message));
+  }
+  try {
+    return JSON.parse(decodeHandWritten(bytes));
+  } catch (e) {
+    throw new Error(path + ' is not valid JSON: ' + e.message);
+  }
+}

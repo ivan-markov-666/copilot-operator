@@ -68,7 +68,7 @@ import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
-import { Settings } from './settings.js';
+import { settingsOf } from './settings.js';
 import type { ResolvedConfig } from '../config/schema.js';
 
 /**
@@ -420,11 +420,7 @@ export class OperatorService {
   readonly layout = installLayout();
   readonly projectRoot = this.layout.projectRoot;
   readonly dataDir = this.layout.dataDir;
-  readonly settings = new Settings(
-    this.projectRoot,
-    this.dataDir,
-    this.layout.mode === 'package' ? { runsDir: this.layout.runsDir, level1File: join(this.layout.promptsDir, 'level1.md') } : {},
-  );
+  readonly settings = settingsOf(this.layout);
   readonly store = new SessionStore(this.dataDir, join(this.layout.promptsDir, 'level1.md'));
   readonly bus = new EventBus();
 
