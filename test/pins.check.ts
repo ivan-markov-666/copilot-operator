@@ -210,9 +210,10 @@ try {
    * An empty stop word.
    *
    * `copilot.stopMarker` is a free string in the settings, and `markdown.includes('')` is true for
-   * every reply: with the word emptied, any `continue` that carries a summary counts as done, its
-   * steps are never run, and the task closes as a success. Either the settings refuse an empty
-   * word or the parser ignores one; today neither does.
+   * every reply: with the word emptied, any `continue` that carries a summary would count as done,
+   * and the task would close after that one round although the chat asked to go on. Either the
+   * settings refuse an empty word or the parser ignores one; the parser does, so a settings file
+   * that already holds one still loads and simply has no stop word.
    */
   // The refusal has to be the stop marker's: settings refused for some other field would say
   // nothing about the word, so only an issue at copilot.stopMarker counts, and the same settings
@@ -221,8 +222,16 @@ try {
   const emptyRejected = !emptyParsed.success && emptyParsed.error.issues.some((i) => i.path.join('.') === 'copilot.stopMarker');
   t.check('the same settings with a real marker are accepted', RunConfigSchema.safeParse({ copilot: { stopMarker: 'Край' } }).success, true);
   const emptyIgnored = doneOf(block({ ...withSteps, summary }), { stopMarker: '', defaultShell: 'pwsh' });
-  // DEFECT: an empty copilot.stopMarker is accepted and makes every continue reply with a summary "done" (parser.ts: markdown.includes('')).
+  // A blank marker means there is none (parser.ts trims it and searches only for a word that is left).
   t.check('an empty stop marker is refused by the settings or ignored by the parser', emptyRejected || JSON.stringify(emptyIgnored) === JSON.stringify({ done: false, blocked: false }), true);
+  // Blank is the class, not only '': nearly every reply has a space or a line break in it, this one both.
+  for (const blank of [' ', '\n']) {
+    t.check(`a marker of ${JSON.stringify(blank)} is ignored too`, doneOf(block({ ...withSteps, summary }), { stopMarker: blank, defaultShell: 'pwsh' }), { done: false, blocked: false });
+  }
+  // Trimming keeps a padded word working: it is the word that is searched for, not the padding.
+  t.check('a marker padded with spaces still ends the task', doneOf(block({ ...withSteps, summary }) + '\nКрай', { stopMarker: ' Край ', defaultShell: 'pwsh' }), { done: true, blocked: false });
+  // With no stop word, a task still ends the way the contract says: through its status.
+  t.check('with no marker, done is still done', doneOf(block({ status: 'done', steps: [], summary }), { stopMarker: '', defaultShell: 'pwsh' }), { done: true, blocked: false });
 
   /*
    * Citation markers.
@@ -865,8 +874,17 @@ try {
   t.check('? matches one character', inScope('src/a1.ts', ['src/a?.ts']), true);
   t.check('and not two', inScope('src/a12.ts', ['src/a?.ts']), false);
   t.check('./docs/ covers a file under docs', inScope('docs/x.md', ['./docs/']), true);
-  // DEFECT: a scope folder written "/docs" (no trailing slash) covers nothing under it, while "docs", "docs/" and "/docs/" do: inScope's plain-folder test does not strip the leading "/".
+  // "/docs" with no trailing slash is the same folder as "docs": the plain-folder test and the
+  // pattern match clean the front of a pattern in one shared way (scope.ts `normalise`), so no
+  // spelling of it can cover less than another.
   t.check('/docs covers a file under docs', inScope('docs/x.md', ['/docs']), true);
+  // Every spelling of the front: repeated, mixed, with backslashes, with a pattern after it.
+  for (const pattern of ['//docs', '/./docs', './/docs', '.\\docs', '\\docs', '/docs/**', '/docs/*.md']) {
+    t.check(`${pattern} covers a file under docs`, inScope('docs/x.md', [pattern]), true);
+  }
+  t.check('/docs covers a file deeper under docs', inScope('docs/sub/y.md', ['/docs']), true);
+  // And still only that folder: not one that starts the same, nor a docs folder further down.
+  t.check('/docs leaves out docs-old and src/docs', [inScope('docs-old/x.md', ['/docs']), inScope('src/docs/x.md', ['/docs'])], [false, false]);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

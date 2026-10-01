@@ -15,14 +15,25 @@
  *
  * Patterns are repository-relative and use `/`: `tests/e2e/editor.spec.ts` is one file,
  * `tests/e2e/` or `tests/e2e/**` is everything under that folder, `*` matches within one folder
- * and `**` across folders. Matching ignores case, as Windows does.
+ * and `**` across folders. A `./` or `/` in front changes nothing, and `\` is read as `/`. Matching
+ * ignores case, as Windows does.
  */
 import { readdir, rm, rmdir } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { git, workingTreePaths } from './git.js';
 
+/**
+ * A path or pattern in the one spelling the matching expects: `/` between folders and nothing in
+ * front. A plan writes the same folder as `docs`, `./docs`, `/docs` or `.\docs`, and they must all
+ * cover the same files; when the folder test and the pattern match each cleaned the front their
+ * own way, `/docs` covered nothing, and every change the task made under it was put back.
+ */
+function normalise(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^(?:\.?\/)+/, '');
+}
+
 function toRegExp(pattern: string): RegExp {
-  let p = pattern.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  let p = normalise(pattern.trim());
   // A folder, written with or without `**`, is everything under it.
   if (p.endsWith('/')) p += '**';
   let re = '';
@@ -47,9 +58,9 @@ function toRegExp(pattern: string): RegExp {
 /** Whether a repository-relative path is one the task may change. An empty scope allows everything. */
 export function inScope(path: string, scope: readonly string[]): boolean {
   if (scope.length === 0) return true;
-  const p = path.replace(/\\/g, '/').replace(/^\.\//, '');
+  const p = normalise(path);
   return scope.some((pattern) => {
-    const clean = pattern.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    const clean = normalise(pattern.trim()).replace(/\/+$/, '');
     // A plain folder name without a slash still means the folder: `pages` covers `pages/Home.ts`.
     if (clean && !/[*?]/.test(clean) && p.toLowerCase().startsWith(`${clean.toLowerCase()}/`)) return true;
     return toRegExp(pattern).test(p);

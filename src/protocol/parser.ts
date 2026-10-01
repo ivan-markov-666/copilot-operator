@@ -155,7 +155,7 @@ const FORMAT_EXAMPLE = [
 ].join('\n');
 
 export type ParseOptions = {
-  /** The word that ends the run when Copilot writes it. */
+  /** The word that ends the run when Copilot writes it. Blank means there is none. */
   stopMarker: string;
   /** Default shell for steps that do not name one. */
   defaultShell: 'pwsh' | 'powershell' | 'cmd';
@@ -199,7 +199,11 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       reply.notes = stripCitations(reply.notes);
       reply.summary = stripCitations(reply.summary);
       const steps = reply.steps.map<Step>((s) => ({ ...s, shell: s.shell ?? opts.defaultShell }));
-      const markerHit = markdown.includes(opts.stopMarker);
+      // A blank stop word is no stop word. The setting is free text, and every reply contains the
+      // empty string and nearly every one a space, so searching for either would read each
+      // `continue` that carries a summary as done and close the task after one round.
+      const marker = opts.stopMarker.trim();
+      const markerHit = marker !== '' && markdown.includes(marker);
       const hasSummary = (reply.summary ?? '').trim().length > 0;
 
       // The stop word alone is not enough to end a task any more: the summary is the
