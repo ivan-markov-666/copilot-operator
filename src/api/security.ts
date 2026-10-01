@@ -42,9 +42,14 @@
  *
  * The honest limit, since this is the file somebody will quote: none of this contains a process
  * already running as the operator. It raises the floor from "anything on this machine, and quite a
- * few things off it" to "something that can read a file in the install" — and, where this process
- * serves the interface, to anything on this machine that can open the port and ask for a page, since
- * the page is how a browser is given the token. The boundary is still the account the runner runs in.
+ * few things off it" to "something that can read a file in the install" — and, wherever the
+ * interface is served, to anything on this machine that can open that port and ask for a page, since
+ * the page is how a browser is given the token. In a package install that is this process's port.
+ * In a clone it is the Next.js dev server `npm start` runs on 127.0.0.1:3210, which this guard does
+ * not stand in front of: the token is built into that page's script (`NEXT_PUBLIC_COP_TOKEN`, see
+ * scripts/dev.mjs), as plain text that anything running in the page can read, where a package's
+ * HttpOnly cookie is out of a script's reach. A clone's API port serving no page of its own closes
+ * one way to the token, not every way. The boundary is still the account the runner runs in.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';

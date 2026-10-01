@@ -10,7 +10,8 @@
  *   reaches somewhere else;
  * - the built-in floor (`dangerous.ts`), which must refuse a dropper run from Temp and must not
  *   refuse a project that happens to have a folder called `temp`, or a sentence with "ii" in it;
- * - the shipped deny list (`schema.ts`), line by line, git writes refused and git reads left open;
+ * - the shipped deny list (`schema.ts`), line by line, git writes refused and git reads left open,
+ *   and given whole to every settings file that names no list of its own;
  * - `Start-Process` on a name PowerShell resolves to a `.ps1` shim, refused by the trap itself (not
  *   by some other gate) with the `.cmd` fix;
  * - the scripts a line runs, read from disk and screened like the line;
@@ -280,6 +281,18 @@ try {
   for (const cmd of ['net user', 'net user bob', 'net localgroup administrators', 'Get-LocalUser', 'Get-LocalGroupMember -Group Administrators']) {
     t.check(`the deny list leaves alone: ${cmd}`, matchDenyPattern(cmd, shipped.denyPatterns), null);
   }
+  /*
+   * Where the shipped list reaches. Nothing writes it into a settings file: the Settings page, the
+   * project picker and the two model choices each merge the one key they change into the file as it
+   * stands, and no page edits the deny list. So a file names `execution.denyPatterns` only where a
+   * person wrote a list out, and every other one, saved before this pattern changed or after, is
+   * given the list as it is today when it is loaded, the ordinary password form included.
+   */
+  const savedBase = join(tmp, 'saved-settings');
+  await mkdir(savedBase, { recursive: true });
+  const saved = await loadConfigObject({ execution: { isolation: 'separate-account', mode: 'unattended' }, limits: { retryBlockedInFreshChat: 2 } }, savedBase);
+  t.check('a settings file that names no deny list is given the shipped one, entry for entry', saved.execution.denyPatterns, shipped.denyPatterns);
+  t.truthy(`and so refuses: ${netUserAdd}`, matchDenyPattern(netUserAdd, saved.execution.denyPatterns) !== null, 'no pattern of the loaded list matched');
   const gitReads = [
     'git status',
     'git log -1',

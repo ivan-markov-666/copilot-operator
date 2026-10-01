@@ -15,7 +15,7 @@ import { secureDataDir } from './dataAcl.js';
 import { pruneRuns } from '../session/retention.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { installLayout } from '../config/layout.js';
+import { installLayout, type InstallLayout } from '../config/layout.js';
 
 export type StartOptions = {
   /** Defaults to COP_API_PORT, then 4000. */
@@ -156,15 +156,48 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   const pruned = await pruneRuns(cfg.resolved.runsDir, cfg.runsRetentionDays);
   if (pruned.length > 0) log(`  removed ${pruned.length} run folder(s) older than ${cfg.runsRetentionDays} days (runsRetentionDays)`);
 
-  // Said by what is served, not by what the layout found, so the lines match the guard's choice above.
-  if (webDir) {
-    log(`copilot-operator is running for ${layout.projectRoot}`);
-    log(`  open http://127.0.0.1:${PORT}/ in your browser`);
-    log(`  records are kept in ${layout.homeDir}`);
-  } else {
-    log(`copilot-operator api listening on http://127.0.0.1:${PORT}/api  (web origin ${WEB_ORIGIN})`);
-    log(`  requests need the token in ${join(dataDir, 'api-token')}; npm start hands it to the UI`);
-  }
+  const lines = startupLines({
+    served: webDir !== null,
+    mode: layout.mode,
+    port: PORT,
+    webOrigin: WEB_ORIGIN,
+    projectRoot: layout.projectRoot,
+    homeDir: layout.homeDir,
+    tokenFile: join(dataDir, 'api-token'),
+  });
+  for (const line of lines) log(line);
 
   return { app, port: PORT, token, dataDir, close: () => app.close() };
+}
+
+/**
+ * What the start-up tells the operator to open. Said by what is served, not by what the layout
+ * found, so the lines match the guard's choice in `startApi`.
+ *
+ * A clone's API serves no page, and `cop start` run in a clone ends up here as well as `npm start`
+ * does, so a clone's lines name the dev server that holds its interface. Without that, the only
+ * address in sight was this port, which answers a browser with a 401.
+ */
+export function startupLines(o: {
+  served: boolean;
+  mode: InstallLayout['mode'];
+  port: number;
+  webOrigin: string;
+  projectRoot: string;
+  homeDir: string;
+  tokenFile: string;
+}): string[] {
+  if (o.served) {
+    return [
+      `copilot-operator is running for ${o.projectRoot}`,
+      `  open http://127.0.0.1:${o.port}/ in your browser`,
+      `  records are kept in ${o.homeDir}`,
+    ];
+  }
+  const lines = [
+    `copilot-operator api listening on http://127.0.0.1:${o.port}/api  (web origin ${o.webOrigin})`,
+    `  requests need the token in ${o.tokenFile}; npm start hands it to the UI`,
+  ];
+  if (o.mode === 'checkout') lines.push(`  this port serves no web interface: a clone's is the dev server npm start runs, at ${o.webOrigin}`);
+  return lines;
 }

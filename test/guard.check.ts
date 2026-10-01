@@ -291,13 +291,14 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
 // --- a checkout does not serve the interface -----------------------------------------------------
 
 /*
- * A clone is started with `npm start`, which runs the Next.js dev server and hands the token to it
- * itself (scripts/dev.mjs). A clone never serves the prebuilt interface — and so never hands the
- * token to whatever loads its root — however `dist/web` came to be there: `npm run check:ui` and
- * `build:package` both leave a built interface in the clone. The layout once served it whenever the
- * file existed, so on a machine that ran either, the API of `npm start` gave the token to any GET /.
- * The layout check builds such a clone in a temporary folder, so it holds on every machine; the
- * wire check holds for this checkout, built or not.
+ * A clone is started with `npm start`, which runs the Next.js dev server and builds the token into
+ * its page (scripts/dev.mjs). A clone's API never serves the prebuilt interface — and so never hands
+ * the token to whatever loads the API's root — however `dist/web` came to be there: `npm run
+ * check:ui` and `build:package` both leave a built interface in the clone. The layout once served it
+ * whenever the file existed, so on a machine that ran either, the API of `npm start` gave the token
+ * to any GET /, a second way to it beside the dev server. The layout check builds such a clone in a
+ * temporary folder, so it holds on every machine; the wire check holds for this checkout, built or
+ * not.
  */
 console.log('\n--- a checkout never hands the token out by accident (layout) ---');
 {
@@ -330,6 +331,24 @@ await scenario('a checkout never hands the token out by accident (on the wire)',
   // And so the token is never handed out as a cookie to whoever asks for the root.
   t.check('and sets no cookie', root.headers['set-cookie']?.map((c) => c.replace(/=[0-9a-f]{64}/, '=<token>')) ?? null, null);
 });
+
+/*
+ * And what a checkout's start-up says. `cop start` run in a clone starts this same API, which serves
+ * no page there, so its lines must not send the operator to an address on the API's port that
+ * answers 401; they name the dev server `npm start` runs, where a clone's interface is.
+ */
+console.log('\n--- a checkout says where its interface is ---');
+{
+  // Imported here, as the harness imports the server: once the environment it reads has been set.
+  const { startupLines } = await import('../src/api/server.js');
+  const common = { port: 4000, webOrigin: 'http://localhost:3210', projectRoot: 'C:\\p', homeDir: 'C:\\p', tokenFile: 'C:\\p\\data\\api-token' };
+  const clone = startupLines({ ...common, served: false, mode: 'checkout' }).join('\n');
+  t.truthy("a checkout's start-up does not send the browser to the API's port", !clone.includes('open http://127.0.0.1:4000/'), clone);
+  t.truthy('and names the dev server npm start runs', clone.includes('the dev server npm start runs, at http://localhost:3210'), clone);
+  // The control: a package that serves its interface sends the browser to its own port.
+  const served = startupLines({ ...common, served: true, mode: 'package' }).join('\n');
+  t.truthy('control: a package serving its interface says to open its own port', served.includes('open http://127.0.0.1:4000/'), served);
+}
 
 // --- the token file and the folders' permissions --------------------------------------------------
 

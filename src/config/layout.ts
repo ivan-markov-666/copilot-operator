@@ -94,12 +94,14 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
     dataDir: resolve(env.COP_DATA_DIR ?? join(projectRoot, 'data')),
     runsDir: join(projectRoot, 'runs'),
     /*
-     * A clone never serves the prebuilt interface, even with one built in it. `build:package` (run
-     * by every `npm pack`) and `check:ui` both leave `dist/web/index.html` behind, and serving it
-     * made the API of `npm start` hand the token, as a cookie, to anything on the machine that asked
-     * for `/` — while the token file itself is narrowed to this account. A clone's interface is the
-     * dev server, which `npm start` gives the token to itself; the browser checks that want the
-     * built one on the API's own port pass it to `startApi` by name.
+     * A clone's API never serves the prebuilt interface, even with one built in it. `build:package`
+     * (run by every `npm pack`) and `check:ui` both leave `dist/web/index.html` behind, and serving
+     * it made the API of `npm start` hand the token, as a cookie, to anything on the machine that
+     * asked for `/`: a second way to the token beside the dev server, and one nobody chose. A
+     * clone's interface is the dev server, and `npm start` builds the token into its page, so that
+     * port is as open to this machine as a package's is; see the honest limit in `api/security.ts`.
+     * The browser checks that want the built interface on the API's own port pass it to `startApi`
+     * by name.
      */
     webDir: null,
   };
