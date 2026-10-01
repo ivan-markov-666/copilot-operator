@@ -107,10 +107,21 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
   },
   {
     name: 'run-from-temp',
-    // Any path with a Temp component, however it is spelled — `%TEMP%`, `$env:TEMP`,
-    // `$env:LOCALAPPDATA\\Temp`, `C:\\Windows\\Temp`, `/tmp/`. Matching the one literal spelling
-    // `\\AppData\\Local\\Temp` was matching one of several.
-    pattern: /(%TEMP%|\$env:TEMP|[\\\/]Temp[\\\/]|\/tmp\/)[^\s"';|]*\.(exe|js|jse|vbs|vbe|ps1|bat|cmd|hta|wsf|scr|dll|msi)\b/i,
+    /*
+     * The system's Temp, however it is spelled: `%TEMP%` and `%TMP%`, `$env:TEMP`, `$env:TMP` and
+     * `${env:TEMP}`, Temp under `%LOCALAPPDATA%`, `%SystemRoot%`, `%windir%` or their `$env:` forms,
+     * any `AppData\Local\Temp`, `C:\Temp`, `C:\tmp` and `C:\Windows\Temp` on any drive, and a `/tmp/`
+     * that starts a path. Matching the one literal spelling `\AppData\Local\Temp` was matching one
+     * of several.
+     *
+     * Only those. A folder of the project's own called `temp` or `tmp` — `.\temp\seed.js`,
+     * `test/tmp/fixture.test.js` — is where a project keeps its seed scripts and fixtures, and
+     * refusing it refused honest work in a rule nobody can switch off (found on 2026-10-01, when any
+     * path segment named temp counted). The variable names end at a word boundary, so
+     * `$env:TEMPLATE_DIR` is not Temp either.
+     */
+    pattern:
+      /(%(?:TEMP|TMP)%|\$\{?env:(?:TEMP|TMP)\b\}?|(?:%(?:LOCALAPPDATA|SystemRoot|windir)%|\$\{?env:(?:LOCALAPPDATA|SystemRoot|windir)\b\}?)[\\\/]Temp[\\\/]|AppData[\\\/]Local[\\\/]Temp[\\\/]|\b[A-Za-z]:[\\\/](?:(?:Windows[\\\/])?Temp|tmp)[\\\/]|(?:^|[\s"'=(])\/tmp\/)[^\s"';|]*\.(exe|js|jse|vbs|vbe|ps1|bat|cmd|hta|wsf|scr|dll|msi)\b/i,
     why: 'this runner never executes anything out of Temp, and it downloads nothing: the code a task runs is written into the project by a command step. A binary or script run from Temp is the shape of a dropper.',
   },
   {
@@ -132,9 +143,16 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
      * asks the shell to "open" something. Asking is how a `.hta`, a `.js` or a `.lnk` ends up run by
      * `mshta`, the script host or whatever a shortcut points at, under this runner as the parent,
      * and how a page ends up in the signed-in browser with the bot's process behind it.
+     *
+     * `Invoke-Item` is matched wherever it is written, with or without an argument, since the name
+     * never turns up in prose. `ii` is an ordinary word — "phase ii", "Type II error", a list's
+     * "(ii)" — and matching it anywhere refused honest lines (found on 2026-10-01), so it is matched
+     * only where PowerShell runs it as a command: after a pipe, at the start of a statement or a
+     * block (`;`, `&`, `(`, `{`, a new line, an assignment) with something to open, or anywhere in
+     * the arguments of a nested `pwsh`/`powershell`, whose string is a command line of its own.
      */
     pattern:
-      /\b(Invoke-Item|ii)\s+\S|\b(Start-Process|saps|start)\s+(?:-\w+\s+)*(?:-FilePath\s+)?["']?(?:[^\s"']+\.(hta|vbs|vbe|js|jse|wsf|wsh|lnk|url|scr|cpl|msc|reg|inf|msi|msp|chm|pif)\b|https?:\/\/|ms-\w+:|file:\/\/)/i,
+      /\bInvoke-Item\b|\|\s*ii(?![\w.\-:\\\/])|(?:^|[;&({\n]|\$[\w:.{}\[\]]+\s*=)\s*[.&]?\s*ii(?:\s+[^\s;|&)}]|\()|\b(?:pwsh|powershell)(?:\.exe)?\b[^|;\n]*[\s"',]ii(?![\w.\-:\\\/])|\b(Start-Process|saps|start)\s+(?:-\w+\s+)*(?:-FilePath\s+)?["']?(?:[^\s"']+\.(hta|vbs|vbe|js|jse|wsf|wsh|lnk|url|scr|cpl|msc|reg|inf|msi|msp|chm|pif)\b|https?:\/\/|ms-\w+:|file:\/\/)/i,
     why: 'a file opened through its registered handler, or a URL opened in the browser, runs whatever Windows has registered for it under this runner. Start the program itself, by name, with the file as its argument.',
   },
   {

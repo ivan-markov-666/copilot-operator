@@ -248,7 +248,12 @@ export const RunConfigSchema = z.object({
           'Set-ExecutionPolicy\\s+Unrestricted',
           'diskpart|bcdedit|vssadmin',
           'Disable-WindowsOptionalFeature',
-          'net\\s+user\\s+\\w+\\s+/add',
+          // An account made, or put into a group, however the line spells it. `net user bob p /add`
+          // gives the password before `/add` and is the ordinary form; the pattern that wanted
+          // `/add` straight after the name missed it, as it missed `net.exe`, `net1`, `localgroup`
+          // and the cmdlets that do the same thing.
+          '\\bnet1?(?:\\.exe)?\\s+(?:user|localgroup|group)\\b[^|;&\\n]*\\s/add\\b',
+          '\\b(?:New-LocalUser|Add-LocalGroupMember|New-ADUser|Add-ADGroupMember)\\b',
           // git that changes something. See GIT_WRITE_NOTE below.
           `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})(?![\\w-])`,
           `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_SOMETIMES_WRITES})`,

