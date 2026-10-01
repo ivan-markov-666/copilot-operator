@@ -203,6 +203,14 @@ try {
     "Set-Content README.md '## Phase II of the rollout'",
     "Write-Output 'II Results'",
     'Write-Output "Steps: (i) build, (ii) test, (iii) ship"',
+    // And on a line that also names PowerShell: as a word in a message, and as a script's own
+    // parameter after -File, neither of which is a command line of its own.
+    'Write-Host "Configuring PowerShell, part ii"',
+    'Write-Host "Install PowerShell 7 (step ii)"',
+    'pwsh -NoProfile -File .\\scripts\\migrate.ps1 -Phase ii',
+    'powershell -ExecutionPolicy Bypass -File .\\migrate.ps1 -Phase ii',
+    'pwsh .\\scripts\\migrate.ps1 -Phase ii',
+    "Write-Output 'needs PowerShell 7, phase ii'",
   ];
   for (const cmd of honest) {
     // Temp is the system's Temp, by its own spellings, never a project folder named temp or tmp; and
@@ -231,6 +239,14 @@ try {
     '$null = ii .\\x.hta',
     "pwsh -c 'ii .\\x.hta'",
     "Start-Process pwsh -ArgumentList '-c','ii x.hta'",
+    // The nested shell's command string in its other spellings, and Windows PowerShell's command
+    // given as its first word, with or without switches before it.
+    'pwsh -NoProfile -Command "ii .\\x.hta"',
+    'powershell.exe -ExecutionPolicy Bypass -c ii x.hta',
+    'Start-Process powershell -ArgumentList "-NoProfile -Command ii x.hta"',
+    'powershell "ii .\\x.hta"',
+    'cmd /c powershell -NoProfile ii x.hta',
+    'pwsh -c "Get-ChildItem; ii x.hta"',
   ];
   for (const cmd of droppers) t.truthy(`still refused: ${cmd}`, dangerousRefusal(cmd) !== null, 'dangerousRefusal returned null');
 

@@ -148,11 +148,18 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
      * never turns up in prose. `ii` is an ordinary word — "phase ii", "Type II error", a list's
      * "(ii)" — and matching it anywhere refused honest lines (found on 2026-10-01), so it is matched
      * only where PowerShell runs it as a command: after a pipe, at the start of a statement or a
-     * block (`;`, `&`, `(`, `{`, a new line, an assignment) with something to open, or anywhere in
-     * the arguments of a nested `pwsh`/`powershell`, whose string is a command line of its own.
+     * block (`;`, `&`, `(`, `{`, a new line, an assignment) with something to open, or at the start
+     * of a nested `pwsh`/`powershell`'s command string, which is a command line of its own: after its
+     * `-Command` (`-c` and the other short forms, given on the line or in an `-ArgumentList`), or,
+     * with no `-File` before it, as its first word after its switches, which Windows PowerShell runs
+     * as a command. Within that string, the pipe, statement and block cases above find the rest.
+     *
+     * Not anywhere after the shell's name: matched so, it refused `Write-Host "Configuring
+     * PowerShell, part ii"`, where PowerShell is a word in a message, and `pwsh -File
+     * .\migrate.ps1 -Phase ii`, where the words after the script are its own parameters.
      */
     pattern:
-      /\bInvoke-Item\b|\|\s*ii(?![\w.\-:\\\/])|(?:^|[;&({\n]|\$[\w:.{}\[\]]+\s*=)\s*[.&]?\s*ii(?:\s+[^\s;|&)}]|\()|\b(?:pwsh|powershell)(?:\.exe)?\b[^|;\n]*[\s"',]ii(?![\w.\-:\\\/])|\b(Start-Process|saps|start)\s+(?:-\w+\s+)*(?:-FilePath\s+)?["']?(?:[^\s"']+\.(hta|vbs|vbe|js|jse|wsf|wsh|lnk|url|scr|cpl|msc|reg|inf|msi|msp|chm|pif)\b|https?:\/\/|ms-\w+:|file:\/\/)/i,
+      /\bInvoke-Item\b|\|\s*ii(?![\w.\-:\\\/])|(?:^|[;&({\n]|\$[\w:.{}\[\]]+\s*=)\s*[.&]?\s*ii(?:\s+[^\s;|&)}]|\()|\b(?:pwsh|powershell)(?:\.exe)?\b(?:(?:(?![\s'"]-f)[^|;\n])*?[\s'"]-(?:c|co|com|comm|comma|comman|command)\b['"]?(?:\s*,\s*|\s+)|(?:\s+-(?!f)\w+(?::\S+)?(?:\s+(?![-'"])[\w.]+)?)*\s+)["']?ii(?![\w.\-:\\\/])|\b(Start-Process|saps|start)\s+(?:-\w+\s+)*(?:-FilePath\s+)?["']?(?:[^\s"']+\.(hta|vbs|vbe|js|jse|wsf|wsh|lnk|url|scr|cpl|msc|reg|inf|msi|msp|chm|pif)\b|https?:\/\/|ms-\w+:|file:\/\/)/i,
     why: 'a file opened through its registered handler, or a URL opened in the browser, runs whatever Windows has registered for it under this runner. Start the program itself, by name, with the file as its argument.',
   },
   {
