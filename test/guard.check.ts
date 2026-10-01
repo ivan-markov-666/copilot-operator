@@ -85,9 +85,9 @@ type Opts = { settings?: Record<string, unknown>; webDir?: string };
  * One harness per scenario, as in e2e-run.check.ts, plus the check that every scripted reply was
  * used: a reply left in the queue means the runner stopped talking earlier than the scenario says.
  *
- * The "no reply it had no script for" check below also fails in the served-interface scenario for
- * as long as the /API case bypass (a DEFECT there) lets a request with no token start a run: that
- * run talks to a chat nobody scripted, which is exactly how the bypass shows up.
+ * The "no reply it had no script for" check below is also how a way round the token shows up in the
+ * served-interface scenario: a request with no token that started a run would make that run talk to
+ * a chat nobody scripted.
  */
 async function scenario(title: string, opts: Opts, body: (h: Harness) => Promise<void>): Promise<void> {
   console.log(`\n--- ${title} ---`);
@@ -221,9 +221,11 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
  * the token as a cookie that script cannot read and no other site's page can send. The cookie is
  * the token and nothing else: the right flags, scoped to /api, and accepted there on its own.
  *
- * The upper-case paths are the bypass. The guard decides "is this the interface or the API" with a
- * case-sensitive `startsWith('/api/')`, while Express routes case-insensitively: `/API/sessions` is
- * an interface path to the guard (no token needed) and the sessions route to the router.
+ * The upper-case paths were the way round it. Express routes without regard to case, so
+ * `/API/sessions` is the sessions route; the guard once decided "is this the interface or the API"
+ * with a case-sensitive `startsWith('/api/')` and called it a page, which needs no token. The guard
+ * now compares in lower case, as the router does, and only a read is ever a page: a request that
+ * writes needs the token whatever its path, so the next such disagreement cannot start a run.
  */
 {
   const web = mkdtempSync(join(tmpdir(), 'cop-guard-web-'));
@@ -247,23 +249,39 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
 
       const [s] = await h.importPlan(plan(h, 'upper', [writes('write-hello', 'hello.txt', 'hi')]));
       const upperList = await wire(port, 'GET', '/API/sessions');
-      // DEFECT: isInterfacePath compares case-sensitively while Express 5 routes case-insensitively, so /API/... skips the token.
+      // The router's case is the guard's case: an upper-case API path is an API path and needs the token.
       t.check('GET /API/sessions with no token is refused (401)', upperList.status, 401);
+      const mixedList = await wire(port, 'GET', '/Api/sessions/');
+      t.check('GET /Api/sessions/ (mixed case, trailing slash) with no token is refused (401)', mixedList.status, 401);
       const upperStart = await wire(port, 'POST', `/API/sessions/${s!.id}/start`, { 'content-type': 'application/json' }, JSON.stringify({ mode: 'confirm' }));
-      // DEFECT: the same bypass starts a run with no token (a started run also shows up as a chat problem below: nothing was scripted).
+      // Nor can it start a run: a started run would also show up as a chat problem below, since nothing was scripted.
       t.check('POST /API/sessions/<id>/start with no token is refused (401)', upperStart.status, 401);
       await h.idle();
       const after = (await h.session(s!.id)) as unknown as RunState;
-      // DEFECT: consequence of the bypass above — the run starts, opens the chat and ends its task.
+      // What a start with no token would have done: open the chat and end the task.
       t.check('the session stays idle: its task still queued, no chat opened', [after.status, after.tasks[0]?.status, h.chat.opened], ['idle', 'queued', 0]);
+      // The open health path is open in any case too, as the router answers it.
+      const upperHealth = await wire(port, 'GET', '/API/health');
+      t.check('GET /API/health answers with no token, as /api/health does', [upperHealth.status, upperHealth.json?.ok], [200, true]);
 
-      // The same rule without the server, so a fix can be seen in the function as well as on the wire.
-      const verdict = judgeRequest(
-        { path: '/API/sessions', headers: { host: `127.0.0.1:${port}` } },
-        { servesInterface: true, token, port, allowedOrigins: [`http://127.0.0.1:${port}`, `http://localhost:${port}`] },
-      );
-      // DEFECT: judgeRequest treats /API/sessions as an interface path and waves it through without a token.
+      /*
+       * Only a read is a page. The interface is static files; a request that writes is never one of
+       * them, so it needs the token on any path and is handed no cookie. A HEAD of the page is a read.
+       */
+      const posted = await wire(port, 'POST', '/', { 'content-type': 'application/json' }, '{}');
+      t.check('POST / with no token is refused (401)', [posted.status, posted.json?.error], [401, 'token']);
+      t.check('and is handed no cookie', posted.headers['set-cookie'] ?? null, null);
+      const deleted = await wire(port, 'DELETE', '/sessions/view');
+      t.check('DELETE of an interface path with no token is refused (401)', deleted.status, 401);
+      const head = await wire(port, 'HEAD', '/');
+      t.check('HEAD / is a read of the page: 200, with the cookie', [head.status, (head.headers['set-cookie'] ?? []).length], [200, 1]);
+
+      // The same rules without the server, so a fix can be seen in the function as well as on the wire.
+      const served = { servesInterface: true, token, port, allowedOrigins: [`http://127.0.0.1:${port}`, `http://localhost:${port}`] };
+      const verdict = judgeRequest({ path: '/API/sessions', headers: { host: `127.0.0.1:${port}` } }, served);
       t.check('judgeRequest refuses /API/sessions without a token when the interface is served', verdict.ok, false);
+      t.check('judgeRequest refuses a POST to an interface path without a token', judgeRequest({ method: 'POST', path: '/import', headers: { host: `127.0.0.1:${port}` } }, served).ok, false);
+      t.check('judgeRequest lets a GET of an interface path through without one', judgeRequest({ method: 'GET', path: '/import', headers: { host: `127.0.0.1:${port}` } }, served).ok, true);
     });
   } finally {
     rmSync(web, { recursive: true, force: true });
@@ -276,8 +294,10 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
  * A clone is started with `npm start`, which runs the Next.js dev server and hands the token to it
  * itself (scripts/dev.mjs). A clone never serves the prebuilt interface — and so never hands the
  * token to whatever loads its root — however `dist/web` came to be there: `npm run check:ui` and
- * `build:package` both leave a built interface in the clone. Today the layout serves it whenever the
- * file exists, so on a machine that ran either, the API of `npm start` gives the token to any GET /.
+ * `build:package` both leave a built interface in the clone. The layout once served it whenever the
+ * file existed, so on a machine that ran either, the API of `npm start` gave the token to any GET /.
+ * The layout check builds such a clone in a temporary folder, so it holds on every machine; the
+ * wire check holds for this checkout, built or not.
  */
 console.log('\n--- a checkout never hands the token out by accident (layout) ---');
 {
@@ -288,8 +308,14 @@ console.log('\n--- a checkout never hands the token out by accident (layout) ---
   try {
     const layout = installLayout({}, clone, clone);
     t.check('a clone with a built dist/web is still a checkout', layout.mode, 'checkout');
-    // DEFECT: installLayout returns dist/web as webDir for a checkout whenever dist/web/index.html exists, so a clone serves the UI and the token cookie.
+    // A built interface left in a clone is not served: the clone's interface is the dev server.
     t.check('and serves no interface of its own (webDir null)', layout.webDir, null);
+    // The control: the same build inside a package install is the interface it ships, and is served.
+    const pkg = join(base, 'my-app', 'node_modules', 'copilot-operator');
+    mkdirSync(join(pkg, 'dist', 'web'), { recursive: true });
+    writeFileSync(join(pkg, 'dist', 'web', 'index.html'), '<p>built</p>', 'utf8');
+    const installed = installLayout({}, join(base, 'my-app'), pkg);
+    t.check('control: a package with the same build serves it', [installed.mode, installed.webDir], ['package', join(pkg, 'dist', 'web')]);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -299,9 +325,9 @@ await scenario('a checkout never hands the token out by accident (on the wire)',
   const builtHere = existsSync(join(import.meta.dirname, '..', 'dist', 'web', 'index.html'));
   console.log(`      (this checkout ${builtHere ? 'has' : 'has no'} dist/web/index.html)`);
   const root = await wire(h.api.port, 'GET', '/');
-  // DEFECT: with dist/web/index.html left in the checkout, GET / is served with the token cookie, no token asked.
+  // A checkout serves no page of its own, built or not, so the root is an unknown path that needs the token.
   t.check('GET / with no token and no webDir is refused (401)', root.status, 401);
-  // DEFECT: same cause — the token is handed out as a cookie to whoever asks for the root.
+  // And so the token is never handed out as a cookie to whoever asks for the root.
   t.check('and sets no cookie', root.headers['set-cookie']?.map((c) => c.replace(/=[0-9a-f]{64}/, '=<token>')) ?? null, null);
 });
 

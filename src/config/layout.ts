@@ -35,7 +35,10 @@ export type InstallLayout = {
   homeDir: string;
   dataDir: string;
   runsDir: string;
-  /** The prebuilt web interface, when this install carries one; null means the dev server runs it. */
+  /**
+   * The prebuilt web interface, when this is a package that carries one; null means the dev server
+   * runs it. Always null in a checkout: see `installLayout`.
+   */
   webDir: string | null;
 };
 
@@ -60,8 +63,6 @@ function isInside(dir: string, root: string): boolean {
 
 export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd(), botRoot: string = botRootDir()): InstallLayout {
   const promptsDir = join(botRoot, 'prompts');
-  const shippedWeb = join(botRoot, 'dist', 'web');
-  const webDir = existsSync(join(shippedWeb, 'index.html')) ? shippedWeb : null;
   const packaged = projectOfPackage(botRoot);
 
   if (packaged) {
@@ -70,6 +71,7 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
     const owner = isInside(cwd, packaged) ? packaged : cwd;
     const projectRoot = resolve(env.COP_PROJECT_ROOT ?? owner);
     const homeDir = join(projectRoot, HOME_FOLDER);
+    const shippedWeb = join(botRoot, 'dist', 'web');
     return {
       mode: 'package',
       botRoot,
@@ -78,7 +80,7 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
       homeDir,
       dataDir: resolve(env.COP_DATA_DIR ?? join(homeDir, 'data')),
       runsDir: join(homeDir, 'runs'),
-      webDir,
+      webDir: existsSync(join(shippedWeb, 'index.html')) ? shippedWeb : null,
     };
   }
 
@@ -91,6 +93,14 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
     homeDir: projectRoot,
     dataDir: resolve(env.COP_DATA_DIR ?? join(projectRoot, 'data')),
     runsDir: join(projectRoot, 'runs'),
-    webDir,
+    /*
+     * A clone never serves the prebuilt interface, even with one built in it. `build:package` (run
+     * by every `npm pack`) and `check:ui` both leave `dist/web/index.html` behind, and serving it
+     * made the API of `npm start` hand the token, as a cookie, to anything on the machine that asked
+     * for `/` — while the token file itself is narrowed to this account. A clone's interface is the
+     * dev server, which `npm start` gives the token to itself; the browser checks that want the
+     * built one on the API's own port pass it to `startApi` by name.
+     */
+    webDir: null,
   };
 }

@@ -33,15 +33,18 @@
  * make the start-up race harder to debug for no gain.
  *
  * The web interface, when this process serves it (an install from npm, `cop start`): its pages are
- * static files and answer without a token — the host check still applies, so a rebound domain gets
+ * static files and are read without a token — the host check still applies, so a rebound domain gets
  * nothing — and every page hands the browser the token as a cookie scoped to `/api`, HttpOnly (no
  * script reads it) and SameSite=Strict (no other site's page sends it). The page's own requests
  * then carry it by themselves, the stream and the downloads included, and no URL ever holds it.
+ * Only a read is a page: a request that writes needs the token whatever its path says, so a path the
+ * guard calls a page and the router calls a route can at worst show something, never start a run.
  *
  * The honest limit, since this is the file somebody will quote: none of this contains a process
  * already running as the operator. It raises the floor from "anything on this machine, and quite a
- * few things off it" to "something that can read a file in the install". The boundary is still the
- * account the runner runs in.
+ * few things off it" to "something that can read a file in the install" — and, where this process
+ * serves the interface, to anything on this machine that can open the port and ask for a page, since
+ * the page is how a browser is given the token. The boundary is still the account the runner runs in.
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -110,9 +113,31 @@ export function tokenMatches(presented: string | undefined, expected: string): b
 /** The cookie the served interface is given the token in. */
 export const TOKEN_COOKIE = 'cop_token';
 
-/** Whether a path is the web interface rather than the API. */
+/**
+ * Whether a path is the web interface rather than the API.
+ *
+ * Compared in lower case, because that is how the router compares it: Express matches a route
+ * without regard to case, so `/API/sessions` is the sessions route. Compared as written, it was a
+ * page to this test and needed no token, and a request with none listed the sessions and started
+ * a run (found on 2026-10-01).
+ */
 export function isInterfacePath(path: string): boolean {
-  return path !== '/api' && !path.startsWith('/api/');
+  const p = path.toLowerCase();
+  return p !== '/api' && !p.startsWith('/api/');
+}
+
+/**
+ * Whether a request is a read of the served interface: a page or one of its files.
+ *
+ * The interface is static files, and static files are only ever read, so a request that writes is
+ * not the interface whatever its path is. Keeping the no-token exemption to GET and HEAD means the
+ * next disagreement between this guard and the router about what a path is — a spelling, an
+ * encoding, a prefix nobody thought of — can at worst answer a read, never start a run.
+ * An absent method is a GET, as it is for any request that names none.
+ */
+export function isInterfaceRequest(method: string | undefined, path: string): boolean {
+  const m = (method ?? 'GET').toUpperCase();
+  return (m === 'GET' || m === 'HEAD') && isInterfacePath(path);
 }
 
 /** The `Set-Cookie` value that hands a served page the token. */
@@ -175,7 +200,7 @@ export type GuardVerdict = { ok: true } | { ok: false; status: number; reason: s
  * than through a running server. `localApiGuard` is the thin wrapper that puts it on the wire.
  */
 export function judgeRequest(
-  req: { path: string; headers: Record<string, unknown>; query?: Record<string, unknown> },
+  req: { method?: string; path: string; headers: Record<string, unknown>; query?: Record<string, unknown> },
   opts: GuardOptions,
 ): GuardVerdict {
   const host = typeof req.headers.host === 'string' ? req.headers.host : undefined;
@@ -191,10 +216,11 @@ export function judgeRequest(
   if (!originAllowed(origin, opts.allowedOrigins)) {
     return { ok: false, status: 403, reason: 'origin', detail: `requests from ${origin} are not accepted by this API` };
   }
-  if (OPEN_PATHS.includes(req.path)) return { ok: true };
-  // The interface's own files: answered to the right host with no token, since they are how the
+  // In lower case, as the router matches it: `/API/health` is the health route too.
+  if (OPEN_PATHS.includes(req.path.toLowerCase())) return { ok: true };
+  // The interface's own files: read from the right host with no token, since they are how the
   // browser gets one. Only when this process serves them; see `localApiGuard`.
-  if (opts.servesInterface && isInterfacePath(req.path)) return { ok: true };
+  if (opts.servesInterface && isInterfaceRequest(req.method, req.path)) return { ok: true };
   const presented = presentedToken({ headers: req.headers as Request['headers'], query: (req.query ?? {}) as Request['query'] });
   if (!tokenMatches(presented, opts.token)) {
     return {
@@ -223,9 +249,12 @@ export function localApiGuard(opts: GuardOptions) {
       next();
       return;
     }
-    const verdict = judgeRequest({ path: req.path, headers: req.headers as Record<string, unknown>, query: req.query as Record<string, unknown> }, opts);
+    const verdict = judgeRequest(
+      { method: req.method, path: req.path, headers: req.headers as Record<string, unknown>, query: req.query as Record<string, unknown> },
+      opts,
+    );
     if (verdict.ok) {
-      if (opts.servesInterface && isInterfacePath(req.path)) res.setHeader('Set-Cookie', tokenCookie(opts.token));
+      if (opts.servesInterface && isInterfaceRequest(req.method, req.path)) res.setHeader('Set-Cookie', tokenCookie(opts.token));
       next();
       return;
     }

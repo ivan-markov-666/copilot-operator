@@ -27,6 +27,7 @@ export type StartOptions = {
   /**
    * The prebuilt interface to serve, when this is not a package install (which finds its own).
    * The browser checks use it to put the page and the API on one origin, the way a package runs.
+   * A checkout serves none unless it is named here, whatever is built in its `dist/web`.
    */
   webDir?: string;
 };
@@ -155,7 +156,8 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   const pruned = await pruneRuns(cfg.resolved.runsDir, cfg.runsRetentionDays);
   if (pruned.length > 0) log(`  removed ${pruned.length} run folder(s) older than ${cfg.runsRetentionDays} days (runsRetentionDays)`);
 
-  if (layout.webDir) {
+  // Said by what is served, not by what the layout found, so the lines match the guard's choice above.
+  if (webDir) {
     log(`copilot-operator is running for ${layout.projectRoot}`);
     log(`  open http://127.0.0.1:${PORT}/ in your browser`);
     log(`  records are kept in ${layout.homeDir}`);
