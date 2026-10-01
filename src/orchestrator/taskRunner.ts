@@ -1083,7 +1083,9 @@ export async function runTask(
       prompt: task.prompt,
       taskTitle: task.title,
       taskNumber,
-      contractAlreadySent: session.contractSent,
+      // Said of the session's conversation, so with none on record nothing has had it: this run
+      // entered a fresh one (see `enterSessionConversation`), whatever an older record says.
+      contractAlreadySent: session.contractSent && !!session.chat,
       continuing,
       buildsOn,
       workDirNote: workingDirNote(work),
@@ -1105,6 +1107,8 @@ export async function runTask(
     let lastMarkdown = '';
     // The task is always in the last message of the opening; a first one before it is the contract.
     const taskIndex = opening.messages.length - 1;
+    /** Whether this opening's contract has been answered, to be recorded once the conversation is. */
+    let contractAnswered = false;
     for (const [index, message] of opening.messages.entries()) {
       if (signal?.aborted) return await finish('aborted', 'stopped before the task was sent');
       await pacer.throttleSend();
@@ -1153,8 +1157,15 @@ export async function runTask(
        * task follows. Recorded only after the whole opening, a Stop between the two left a
        * conversation that had the contract on record as one that had not, and the next task sent it
        * a second time.
+       *
+       * And recorded once that conversation is on record itself, which may be a message later: its
+       * id is read from the page's address, which may not have changed yet when the contract is
+       * answered (the registration above tries again after the task). Recorded before, a Stop in
+       * between left a session with no conversation that said it had the contract, and the next
+       * task opened a fresh one and sent it only the reminder that the contract "still applies".
        */
-      if (!session.contractSent) {
+      if (index < taskIndex) contractAnswered = true;
+      if (contractAnswered && session.chat && !session.contractSent) {
         session.contractSent = true;
         await store.updateSession(session.id, (s) => {
           s.contractSent = true;

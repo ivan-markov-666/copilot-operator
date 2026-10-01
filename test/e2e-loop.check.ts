@@ -702,6 +702,53 @@ await scenario('a Stop between the contract and the task: "Continue" sends the t
 });
 
 /*
+ * The same Stop, in a conversation whose address had not changed yet when the contract was answered.
+ * Its id is read from the page, so the session had no conversation on record, and the runner tries
+ * again after the task. It was recorded as having the contract all the same, and the next opening —
+ * in a fresh conversation, there being none to go back to — sent only the reminder that the contract
+ * "still applies", to a chat that had never been given it.
+ */
+await scenario('a Stop after the contract, before its conversation is known: the next opening sends the contract', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'unknown', [task('stopped-unregistered')], { vcs: false }));
+  const base = h.chat.factory();
+  let armed = true;
+  let sends = 0;
+  setTransportFactory((opts) => {
+    const tr = base(opts);
+    const send = tr.sendAndConfirm.bind(tr);
+    const id = tr.currentChatId.bind(tr);
+    // The page's address has not changed yet while the conversation holds one message.
+    tr.currentChatId = async () => (sends < 2 ? null : await id());
+    tr.sendAndConfirm = async (text: string, attachments?: string[]) => {
+      const n = await send(text, attachments);
+      sends += 1;
+      if (armed && text.includes(TASK_CONTRACT)) {
+        armed = false;
+        await h.call('POST', `/sessions/${s!.id}/stop`);
+      }
+      return n;
+    };
+    return tr;
+  });
+  const first = (await h.run(s!.id)) as Awaited<ReturnType<Harness['session']>> & { contractSent?: boolean };
+  const t1 = first.tasks[0] as Ended;
+  t.check('stopped before the task was sent, with no conversation on record', [t1.status, t1.reason, first.chat ?? null], ['aborted', 'stopped before the task was sent', null]);
+  t.check('and the session is not on record as having the contract', first.contractSent, false);
+
+  await h.call('POST', `/sessions/${s!.id}/tasks/${t1.id}/continue`);
+  h.chat.script((m) => {
+    t.truthy(
+      'the task goes into a conversation that was given the contract first, not only the reminder of it',
+      m.chat.messages[0]?.contract === 'task' && m.chat.messages.length === 2 && !m.text.includes('still applies'),
+      { first: m.chat.messages[0]?.text.slice(0, 120), count: m.chat.messages.length, text: m.text.slice(0, 300) },
+    );
+    return reply.done();
+  });
+  const after = (await h.run(s!.id)) as Awaited<ReturnType<Harness['session']>> & { contractSent?: boolean };
+  t.check('it is done, and the session now has its conversation and the contract on record', [after.tasks[0]!.status, !!after.chat, after.contractSent], ['done', true, true]);
+});
+
+/*
  * An attempt from before every attempt kept its conversation: no chat.json, and opening messages that
  * do not say how many there were. Its second message went out, so the task reached a conversation,
  * and nothing on record says which; the session's own pointer answers as far as it can. Here it was
