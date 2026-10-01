@@ -631,6 +631,71 @@ console.log('\n--- a lock saved by Windows PowerShell is read ---');
   }
 }
 
+/*
+ * The downloads write their own response, and each answered every error itself with a 400 in plain
+ * text, so a broken lock or settings file came back there as a fault of the request while every other
+ * route named it with a 409. They read the settings once the task, session or run they name is found,
+ * so a task is run first, and each is asked with the lock broken, then with the settings broken.
+ */
+{
+  const lockDir = mkdtempSync(join(tmpdir(), 'cop-guard-exportlock-'));
+  const lock = join(lockDir, 'policy.lock.json');
+  process.env.COP_PROJECT_ROOT = lockDir;
+  try {
+    await scenario('a broken lock or settings file is named by the downloads as by every other route', {}, async (h) => {
+      const [s] = await h.importPlan(plan(h, 'lockexports', [writes('write-one', 'one.txt', 'a')]));
+      const id = s!.id;
+      const taskId = s!.tasks[0]!.id;
+      h.chat.script(write('one.txt', 'a'), reply.done());
+      t.check('control: a supervised start is allowed', (await h.call<Refusal>('POST', `/sessions/${id}/start`, { mode: 'confirm' })).started, true);
+      const step = await waitFor('the step to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
+      await h.call('POST', `/approvals/${step.id}`, { action: 'run' });
+      await h.idle();
+      t.check('control: the task ran, so its record can be downloaded', (await h.session(id)).tasks[0]!.status, 'done');
+
+      const downloads: Array<[string, string, unknown?]> = [
+        ['GET', `/sessions/${id}/export`],
+        ['GET', `/debug/export?sessions=${id}`],
+        ['POST', '/export/bundle', { tasks: [{ sessionId: id, taskId }] }],
+        ['GET', `/export/plan?session=${id}`],
+      ];
+      const answers = async (): Promise<Array<{ status: number; message: string }>> => {
+        const out: Array<{ status: number; message: string }> = [];
+        for (const [method, path, body] of downloads) {
+          const r = await h.raw(method, path, body);
+          const message = typeof r.body === 'object' && r.body && 'message' in r.body ? String((r.body as { message: unknown }).message) : String(r.body);
+          out.push({ status: r.status, message });
+        }
+        return out;
+      };
+      t.check('control: with nothing broken, each download answers', (await answers()).map((a) => a.status >= 200 && a.status < 300), [true, true, true, true]);
+
+      writeFileSync(lock, '{not json', 'utf8');
+      for (const [i, a] of (await answers()).entries()) {
+        t.truthy(`${downloads[i]![0]} ${downloads[i]![1].split('?')[0]}, the lock broken: 409, naming it and what is wrong with it`,
+          a.status === 409 && a.message.includes(lock) && a.message.includes('is not valid JSON'), { status: a.status, message: a.message.slice(0, 300) });
+      }
+      rmSync(lock);
+
+      const settingsFile = join(h.dataDir, 'settings.json');
+      const settingsText = await readFile(settingsFile, 'utf8');
+      writeFileSync(settingsFile, '{broken', 'utf8');
+      try {
+        for (const [i, a] of (await answers()).entries()) {
+          t.truthy(`${downloads[i]![0]} ${downloads[i]![1].split('?')[0]}, the settings broken: 409, naming the file and what to do`,
+            a.status === 409 && /settings\.json is not valid JSON.*(Mend|delete)/s.test(a.message), { status: a.status, message: a.message.slice(0, 300) });
+        }
+      } finally {
+        writeFileSync(settingsFile, settingsText, 'utf8');
+      }
+      t.check('and a request of their own that is wrong is still a 400 in plain text', [(await h.raw('GET', '/export/plan')).status, (await h.raw('GET', '/export/plan')).body], [400, 'Name a run, a session or a task.']);
+    });
+  } finally {
+    delete process.env.COP_PROJECT_ROOT;
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
 // --- a step cannot reach the bot ---------------------------------------------------------------------
 
 /*

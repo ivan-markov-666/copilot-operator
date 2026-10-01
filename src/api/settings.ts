@@ -145,7 +145,7 @@ export class Settings {
    * replacement `raw` refuses, by another route.
    */
   async save(value: Record<string, unknown>): Promise<ResolvedConfig> {
-    return await this.write(() => value);
+    return await this.write(() => value, 'replaces');
   }
 
   /**
@@ -160,7 +160,7 @@ export class Settings {
    * then nothing is written.
    */
   async update(change: (raw: Record<string, unknown>) => Record<string, unknown>): Promise<ResolvedConfig> {
-    return await this.write(change);
+    return await this.write(change, 'keeps');
   }
 
   /**
@@ -169,12 +169,25 @@ export class Settings {
    * over one. The write is atomic, because a crash in the middle of a plain write is one way a
    * settings file stops parsing.
    */
-  private async write(next: (raw: Record<string, unknown>) => Record<string, unknown>): Promise<ResolvedConfig> {
+  private async write(next: (raw: Record<string, unknown>) => Record<string, unknown>, rest: 'keeps' | 'replaces'): Promise<ResolvedConfig> {
     await mkdir(dirname(this.path), { recursive: true });
     let resolved: ResolvedConfig | undefined;
     await writeFileAtomically(this.path, async () => {
-      const value = next(await this.raw());
-      resolved = await loadConfigObject({ ...this.installDefaults, ...value, dataDir: this.dataDir }, this.projectRoot, this.path);
+      const raw = await this.raw();
+      const value = next(raw);
+      try {
+        resolved = await loadConfigObject({ ...this.installDefaults, ...value, dataDir: this.dataDir }, this.projectRoot, this.path);
+      } catch (e) {
+        /*
+         * A save of one setting carries every other over from the file, so a value the schema
+         * refuses that was in the file already is refused again here. That is the file's problem,
+         * as `load` says of it, not the request's: it was answered as a bad request that blamed the
+         * new default model, without the way out, while a read of the same file named it. A whole
+         * set replaces what the file holds, and what the schema refuses in it is the request's own.
+         */
+        if (rest === 'keeps') checkSettings({ ...this.installDefaults, ...raw, dataDir: this.dataDir }, this.path);
+        throw e;
+      }
       return JSON.stringify(value, null, 2);
     });
     return resolved as ResolvedConfig;

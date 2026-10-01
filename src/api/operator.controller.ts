@@ -24,6 +24,17 @@ function fail(e: unknown): never {
 }
 
 /**
+ * `fail` for a route that writes its own response, as the downloads do: the request's own problem
+ * as plain text with a 400, and a settings file or a policy lock that cannot be used passed on to
+ * the server's answer for it. Each download answered both itself, so a broken file came back as a
+ * bad request there and as a 409 everywhere else.
+ */
+function failText(res: Response, e: unknown): void {
+  if (e instanceof SettingsUnusableError || e instanceof PolicyLockUnusableError) throw e;
+  res.status(400).send((e as Error).message);
+}
+
+/**
  * A `content-disposition` header a session name cannot break.
  *
  * Header values are ASCII. A session called "тест4" produced a file name with Cyrillic in it,
@@ -368,7 +379,7 @@ export class OperatorController {
       res.setHeader('content-disposition', contentDisposition(fileName));
       res.send(content);
     } catch (e) {
-      res.status(400).send((e as Error).message);
+      failText(res, e);
     }
   }
 
@@ -388,7 +399,7 @@ export class OperatorController {
       res.setHeader('content-disposition', contentDisposition(fileName));
       res.send(content);
     } catch (e) {
-      res.status(400).send((e as Error).message);
+      failText(res, e);
     }
   }
 
@@ -417,7 +428,7 @@ export class OperatorController {
       res.setHeader('content-disposition', contentDisposition(fileName));
       res.send(content);
     } catch (e) {
-      res.status(400).send((e as Error).message);
+      failText(res, e);
     }
   }
 
@@ -444,7 +455,7 @@ export class OperatorController {
       res.setHeader('content-disposition', contentDisposition(fileName));
       res.send(content);
     } catch (e) {
-      res.status(400).send((e as Error).message);
+      failText(res, e);
     }
   }
 

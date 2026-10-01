@@ -14,8 +14,9 @@
  * - that a plan is checked against the machine and imported whole or not at all, and says what it
  *   would duplicate;
  * - that the store keeps every write when several arrive at once, and survives a broken file;
- * - that a settings file that cannot be used is refused by name on every route and never written
- *   over, and that saves of one setting each, made at once, keep each other's;
+ * - that a settings file that cannot be used is refused by name on every route, saves of one setting
+ *   among them, and never written over; that one Windows PowerShell saved, with a byte-order mark
+ *   or as UTF-16, is read; and that saves of one setting each, made at once, keep each other's;
  * - the task routes: edit, add, delete, run again, continue — and what a re-run keeps on the record;
  * - level 1 and the context texts, the text export's headers, the run exports and the live events.
  *
@@ -824,6 +825,17 @@ await scenario('a settings file that no longer parses', {}, async (h) => {
   t.check('a file holding maxIterations 0: GET /settings answers 409, naming the file, the value and what to do',
     [disallowed.status, /settings\.json holds settings that are not allowed \(limits\.maxIterations: .*(Mend|delete)/s.test(message(disallowed.body))],
     [409, true]);
+  // A save of one setting carries that value over with every other, so it meets the same file and is
+  // answered the same way. It was a 400 that blamed the request, without the way out.
+  const refusedFile = readFileSync(settingsFile, 'utf8');
+  const overRefused = [
+    await h.raw('PUT', '/models/default', { model: 'X' }),
+    await h.raw('PUT', '/models/review-default', { model: 'Y' }),
+    await h.raw('PUT', '/project', { name: 'P' }),
+  ];
+  t.check('and each save of one setting over it answers 409 the same way, the file as it was',
+    [overRefused.map((o) => [o.status, /settings\.json holds settings that are not allowed \(limits\.maxIterations: .*(Mend|delete)/s.test(message(o.body))]), readFileSync(settingsFile, 'utf8')],
+    [[[409, true], [409, true], [409, true]], refusedFile]);
 });
 
 // --- 11. the task routes -----------------------------------------------------------------------------------
