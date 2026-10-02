@@ -257,7 +257,10 @@ holds each task to the inputs of its own starting commit and never removes a fil
 before the task. Artifacts kept with a run are only the files a task created or changed, inside its
 scope, or under its declared `outputs`; an artifacts pattern that covers the input files is refused.
 Every export and attempt record says which copilot-operator made it (`botVersion`), and the System page
-shows it. Verified by `npm run check:e2e-commit`, `check:inputs` and `check:e2e-inputs`.
+shows it. A session's start is recorded only when its first task gets past the whole preparation:
+a task refused before that (input files not there yet) leaves nothing behind, so its retry starts
+afresh, with the starting snapshot offered for approval (reported on 0.1.18, run 20261002-175647).
+Verified by `npm run check:e2e-commit`, `check:e2e-retry-inputs`, `check:inputs` and `check:e2e-inputs`.
 
 ## One chain, or independent tasks
 

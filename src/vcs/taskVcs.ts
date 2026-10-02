@@ -199,6 +199,7 @@ async function prepare(
     return { vcs: { problem }, note: '' };
   }
 
+  let startIsNew = false;
   if (!base) {
     const resolved = await sessionStart(session, dir, state.head, allSessions);
     if ('problem' in resolved) {
@@ -208,15 +209,13 @@ async function prepare(
     }
     start = resolved.start;
     base = start?.commit;
-    if (start) {
-      const chosen = start;
-      await saveSession((s) => {
-        s.vcsBaseCommit = chosen.commit;
-        s.vcsStart = chosen;
-      });
-      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: chosen.note || updateWarns(chosen) ? 'warn' : 'info',
-        message: describeStart(chosen), data: { ...chosen } });
-    }
+    /*
+     * Recorded below, once the inputs are settled too, not here. Recorded here, a task refused for its
+     * inputs (a pattern matching nothing yet) left the session started: the retry, with the files added,
+     * skipped the starting snapshot and ran with version control off (reported on 0.1.18). A start that
+     * is refused records nothing, and the retry starts afresh.
+     */
+    startIsNew = !!start;
   }
 
   /*
@@ -226,15 +225,20 @@ async function prepare(
   if (inputs && start && !start.inputs) {
     const settled = await settleInputs(session, dir, start, allSessions);
     if ('problem' in settled) return refuse(`${settled.problem} Nothing was run.`);
-    const chosen = settled.start;
-    start = chosen;
-    base = chosen.commit;
+    start = settled.start;
+    base = settled.start.commit;
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-inputs', level: 'info',
+      message: describeInputs(settled.start), data: { files: settled.start.inputs?.files.length ?? 0, carried: settled.start.inputs?.carried } });
+    startIsNew = true;
+  }
+  if (startIsNew && start) {
+    const chosen = start;
     await saveSession((s) => {
       s.vcsBaseCommit = chosen.commit;
       s.vcsStart = chosen;
     });
-    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-inputs', level: 'info',
-      message: describeInputs(chosen), data: { files: chosen.inputs?.files.length ?? 0, carried: chosen.inputs?.carried } });
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: chosen.note || updateWarns(chosen) ? 'warn' : 'info',
+      message: describeStart(chosen), data: { ...chosen } });
   }
 
   const attempt = task.attempt ?? 1;

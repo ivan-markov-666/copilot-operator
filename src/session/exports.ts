@@ -477,6 +477,8 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
     session: {
       id: session.id,
       name: session.name,
+      // The commit the session's tasks are cut from, by the name a report looks for.
+      ...(session.vcsBaseCommit ? { baselineCommit: session.vcsBaseCommit } : {}),
       ...(session.vcsStart
         ? {
             start: {
