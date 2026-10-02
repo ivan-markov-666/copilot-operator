@@ -189,13 +189,6 @@ export type Task = {
   /** Turns the independent review off for this one task. Absent means the session decides. */
   reviewEnabled?: boolean;
   /**
-   * How many times the runner ran this task again in a fresh conversation after it ended
-   * `blocked`, on its own (`limits.retryBlockedInFreshChat`). A row that says "retried in a
-   * fresh chat, then done" means the chat was the cause; one that says "retried twice, still
-   * blocked" means it was not.
-   */
-  autoRetries?: number;
-  /**
    * The task must not change files. The runner fails it if the working tree changed when it
    * ends, and still commits the change on its branch so nothing is lost. A flag rather than a
    * sentence, because a sentence is advice: a smoke test told to change nothing renamed the
@@ -209,6 +202,10 @@ export type Task = {
   scope?: string[];
   /** Changes the runner put back because they were outside `scope`, over the whole attempt. */
   scopeReverted?: string[];
+  /** The operator's input files the runner put back because the task changed them; see `UserInputs`. */
+  inputsRestored?: string[];
+  /** Files kept with the attempt's record under `artifacts/project/`; see `VersionControl.artifacts`. */
+  artifactsKept?: Array<{ path: string; size: number; sha256: string }>;
   /** How the attempt ended, in one fixed shape the runner puts together. See `session/handoff.ts`. */
   handoff?: Handoff;
   /** What went wrong on the way, counted by the runner; the register adds them up. Absent on older tasks. */
@@ -455,6 +452,10 @@ export type TaskAttempt = {
   runId?: string;
   /** The run this attempt belonged to. */
   runGroup?: TaskRunGroup;
+  /** What the runner stopped that this attempt left running. */
+  leftovers?: Task['leftovers'];
+  /** The machine's tools when this attempt ran. */
+  environment?: Task['environment'];
   status: TaskStatus;
   startedAt?: string;
   finishedAt?: string;
@@ -495,7 +496,13 @@ export type TaskAttempt = {
   stopCode?: Task['stopCode'];
   limit?: TaskLimit;
   scope?: string[];
+  /** Whether the task was read-only when this attempt ran; it can be changed between attempts. */
+  readOnly?: boolean;
   scopeReverted?: string[];
+  inputsRestored?: string[];
+  artifactsKept?: Task['artifactsKept'];
+  /** How this attempt ended, in the runner's fixed shape. */
+  handoff?: Handoff;
   /**
    * What version control did for this attempt, including the commit it started from.
    *
@@ -585,7 +592,40 @@ export type VersionControl = {
    * `reject`, what it always was. See `DirtyWorktree` and `vcs/snapshot.ts`.
    */
   dirtyWorktree?: DirtyWorktree;
+  /** Files the operator provides as the work's input. See `UserInputs` and `vcs/inputs.ts`. */
+  userInputs?: UserInputs;
+  /**
+   * Files the work produces as evidence — reports, ZIP archives — kept with the run's record and
+   * never committed. Read whether version control is on or off. See `vcs/artifacts.ts`.
+   */
+  artifacts?: { paths: string[] };
 };
+
+/**
+ * The operator's input files: schemas, fixtures, data a task works from.
+ *
+ * Named by repository-relative patterns, as a task's `scope` is. Before a session's first task they
+ * must be in the commit it starts from: new, changed or ignored ones go into the starting snapshot
+ * (with the operator's approval unless `requireApproval` is false), and a later session whose start
+ * lacks them has them committed on top of it, from where they were last captured — so every session
+ * of a run sees the same inputs whatever its `startFrom`. Their SHA-256 sums are recorded on the
+ * session's start.
+ *
+ * `readOnly` (absent means true): after every round of steps a changed, removed or added input file
+ * is put back and the chat told; a task that ends with one still not put back fails.
+ */
+export type UserInputs = {
+  paths: string[];
+  readOnly?: boolean;
+  requireApproval?: boolean;
+};
+
+/**
+ * One input file as the session's start has it: the SHA-256 and size of its committed content, and
+ * git's blob id, which is what the working tree is compared by — git's line-ending conversion makes
+ * the bytes on disk differ from the committed ones without the file having changed.
+ */
+export type InputFile = { path: string; sha256: string; size: number; blob: string };
 
 /**
  * Uncommitted changes in the repository before a session's first task.
@@ -652,6 +692,25 @@ export function isContinuable(t: Pick<Task, 'status' | 'limit'>): boolean {
   return t.status === 'limit-reached' || t.status === 'aborted' || (!!t.limit && (t.status === 'failed' || t.status === 'blocked'));
 }
 
+/**
+ * How many times the runner ran the task again in a fresh conversation, on its own, in the run that
+ * produced its latest attempt (`limits.retryBlockedInFreshChat`): the attempts at the end of its
+ * history that it marked `freshRetry`, counted back to the one the operator started. A row that says
+ * "retried in a fresh chat, then done" means the chat was the cause; "still blocked after 2" means
+ * it was not.
+ *
+ * Derived, never stored. It was a counter on the task that the runner added to and nothing reset,
+ * so every Run again or Continue of a task that blocked added the run's retries to the last run's:
+ * the register said 2, then 4, then 6, while each run had retried twice.
+ */
+export function freshRetriesOfLatestRun(task: Pick<Task, 'freshRetry' | 'attempts'>): number {
+  if (!task.freshRetry) return 0;
+  let n = 1;
+  const before = task.attempts ?? [];
+  for (let i = before.length - 1; i >= 0 && before[i]?.freshRetry; i -= 1) n += 1;
+  return n;
+}
+
 /** Where a session's first branch was cut from, recorded at its first run. See `startFrom`. */
 export type SessionStart = {
   kind: 'branch' | 'previous-session' | 'head' | 'existing-branch' | 'snapshot';
@@ -677,6 +736,12 @@ export type SessionStart = {
    * `branch` above is the snapshot's own branch.
    */
   snapshot?: { fromBranch?: string; fromCommit: string; included: string[]; leftOut: string[]; approved: boolean };
+  /**
+   * The operator's input files in the commit the session starts from, with their sums. `carried`:
+   * they were not in the start `startFrom` chose (`onto`), so the runner committed them on top of it,
+   * on `branch`, from `from` — the commit they were last captured in.
+   */
+  inputs?: { patterns: string[]; files: InputFile[]; readOnly: boolean; carried?: { onto: string; from: string; branch: string } };
 };
 
 /** What version control did for one task, recorded so a re-run can go back to where it began. */

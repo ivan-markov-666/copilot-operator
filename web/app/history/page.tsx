@@ -623,8 +623,13 @@ function Flow({
                 </span>
               )}
               {(e.autoRetries ?? 0) > 0 && (
-                <span className={`badge ${e.status === 'done' ? 'done' : 'blocked'}`} title={t('reg.retriedFreshWhy')}>
-                  {e.status === 'done' ? t('reg.retriedFreshDone', { n: e.autoRetries ?? 0 }) : t('reg.retriedFreshStill', { n: e.autoRetries ?? 0 })}
+                <span className={`badge ${e.status === 'done' ? 'done' : e.status === 'blocked' ? 'blocked' : ''}`} title={t('reg.retriedFreshWhy')}>
+                  {/* "Still blocked" only for a block: a fresh retry can also be stopped, interrupted or end at a limit. */}
+                  {e.status === 'done'
+                    ? t('reg.retriedFreshDone', { n: e.autoRetries ?? 0 })
+                    : e.status === 'blocked'
+                      ? t('reg.retriedFreshStill', { n: e.autoRetries ?? 0 })
+                      : t('reg.retriedFreshOther', { n: e.autoRetries ?? 0 })}
                 </span>
               )}
               {e.runGroup && (

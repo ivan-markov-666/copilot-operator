@@ -538,6 +538,19 @@ taken where the changes are, so use it with \`startFrom\` \`"branch"\` only when
 that branch, and never with \`"existing-branch"\`. Leaving it out keeps \`"reject"\`: version control stays out
 of a tree with uncommitted changes.
 
+**userInputs** — files the user provides for the work (schemas, test data):
+\`{ "paths": ["rules-engine/test-data/schemas/*.yaml"] }\`. They go into the commit every session starts from —
+new or ignored ones in the starting snapshot, approved by the user; a later session whose start lacks them
+gets them committed on top of it — and they are read-only while the tasks run (\`"readOnly": false\` only if
+the user wants the work to change them). Ask the user which files are inputs; never name a whole folder of
+work, and never \`.env\`. **artifacts** — evidence the work writes (reports, ZIP archives, test results):
+\`{ "paths": ["rules-engine/test-results/**"] }\`. Never committed, kept with the run; tell tasks to write
+evidence there instead of changing \`.gitignore\`.
+
+A session with \`"startFrom": "previous-session"\` continues the whole work of the one before it only when
+that one is \`"branchMode": "per-session"\`: per task, its work is on several branches and the next session
+refuses to start from part of it.
+
 Put the same \`startFrom\` on every session that works in one repository unless the user wants it
 mixed. Leaving it out keeps the old behaviour — whatever branch the repository is on — which is
 the one to avoid.
@@ -606,6 +619,19 @@ run“, на отделен клон, и сесията тръгва от нег
 Снимката се прави там, където са промените, затова с \`startFrom\` \`"branch"\` само ако хранилището вече е на
 този клон, и никога с \`"existing-branch"\`. Ако го пропуснеш, остава \`"reject"\`: контролът на версиите
 не влиза в дърво с некомитнати промени.
+
+**userInputs** — файлове, които потребителят дава за работата (схеми, тестови данни):
+\`{ "paths": ["rules-engine/test-data/schemas/*.yaml"] }\`. Влизат в комита, от който тръгва всяка сесия —
+новите или ignored в началната снимка, с одобрение от потребителя; следваща сесия, чието начало ги няма, ги
+получава комитнати върху него — и са само за четене, докато задачите работят (\`"readOnly": false\` само ако
+потребителят иска работата да ги променя). Питай кои файлове са вход; никога цяла папка с работа и никога
+\`.env\`. **artifacts** — доказателства, които работата пише (отчети, ZIP архиви, резултати от тестове):
+\`{ "paths": ["rules-engine/test-results/**"] }\`. Никога не се комитват, пазят се към пускането; кажи на
+задачите да пишат доказателствата там, вместо да променят \`.gitignore\`.
+
+Сесия с \`"startFrom": "previous-session"\` продължава цялата работа на предната само ако тя е
+\`"branchMode": "per-session"\`: при per-task работата ѝ е на няколко клона и следващата сесия отказва да
+тръгне от част от нея.
 
 Сложи един и същ \`startFrom\` на всички сесии в едно хранилище, освен ако потребителят не иска
 различни. Ако го пропуснеш, остава старото поведение — от който клон е хранилището в момента —

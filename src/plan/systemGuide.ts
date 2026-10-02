@@ -1384,6 +1384,50 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Под списъка с некомитнати файлове, всеки с „Включи в началната снимка“ или „Остави извън изпълнението“: комитва включените на клона на снимката; оставените извън отиват в .git/info/exclude на хранилището. Докато не е натиснат, пускане на сесията се отказва и нищо не се променя.',
           },
           {
+            key: 'vcs.inputs',
+            kind: 'note',
+            en: 'Input files',
+            bg: 'Входни файлове',
+            doesEn: 'The heading over the operator\'s input files and whether they are read-only.',
+            doesBg: 'Заглавието над входните файлове на оператора и дали са само за четене.',
+          },
+          {
+            key: 'vcs.inputsField',
+            kind: 'field',
+            en: 'Your input files, one pattern per line (repository-relative)',
+            bg: 'Твоите входни файлове, по един шаблон на ред (спрямо хранилището)',
+            doesEn:
+              'Files the operator provides — schemas, test data. They go into the commit every session of the run starts from (new or ignored ones in the starting snapshot, listed for approval); a later session whose start lacks them has them committed on top of it; their SHA-256 sums are recorded. In a plan: "userInputs": { "paths": [...] }.',
+            doesBg:
+              'Файлове, които операторът дава — схеми, тестови данни. Влизат в комита, от който тръгва всяка сесия на пускането (новите или ignored — в началната снимка, със списък за одобрение); следваща сесия, чието начало ги няма, ги получава комитнати върху него; SHA-256 сумите им се записват. В план: "userInputs": { "paths": [...] }.',
+          },
+          {
+            key: 'vcs.inputsReadOnly',
+            kind: 'checkbox',
+            en: 'Read-only while the tasks run',
+            bg: 'Само за четене, докато задачите работят',
+            doesEn: 'On by default. A changed, deleted or added input file is put back after every round and the chat told; one that cannot be put back fails the task.',
+            doesBg: 'Включено по подразбиране. Променен, изтрит или добавен входен файл се връща след всеки рунд и чатът научава; такъв, който не може да се върне, проваля задачата.',
+          },
+          {
+            key: 'vcs.artifacts',
+            kind: 'note',
+            en: 'Artifacts',
+            bg: 'Artifacts',
+            doesEn: 'The heading over the evidence files the work writes.',
+            doesBg: 'Заглавието над файловете с доказателства, които работата пише.',
+          },
+          {
+            key: 'vcs.artifactsField',
+            kind: 'field',
+            en: 'Evidence the work writes, one pattern per line (repository-relative)',
+            bg: 'Доказателства, които работата пише, по един шаблон на ред (спрямо хранилището)',
+            doesEn:
+              'Reports, ZIP archives, test results: never committed (kept out through .git/info/exclude, .gitignore untouched) and copied into each attempt\'s record with their sums. In a plan: "artifacts": { "paths": [...] }.',
+            doesBg:
+              'Отчети, ZIP архиви, резултати от тестове: никога не се комитват (стоят извън git чрез .git/info/exclude, .gitignore не се пипа) и се копират към записа на всеки опит със сумите си. В план: "artifacts": { "paths": [...] }.',
+          },
+          {
             key: 'vcs.ready',
             kind: 'note',
             en: 'Ready: {dir}, currently on {branch}.',

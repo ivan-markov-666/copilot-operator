@@ -22,7 +22,7 @@
  * Like the rest of `vcs/`: nothing is reset, stashed, deleted or rewritten. The snapshot adds a
  * branch and a commit.
  */
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -31,6 +31,9 @@ import type { DirtyWorktree, Session, SessionStart, VersionControl } from '../se
 import { looksGenerated } from './commitHygiene.js';
 import { branchNameFrom, freeBranchName, git, gitBytes, isValidBranchName, RUNNER_EMAIL } from './git.js';
 import { repoDirOf, sessionStart } from './taskVcs.js';
+import { inputFilesInTree, inputSettings } from './inputs.js';
+import { artifactPatterns } from './artifacts.js';
+import { inScope } from './scope.js';
 
 export type SnapshotChoice = 'include' | 'leave-out';
 
@@ -46,6 +49,10 @@ export type SnapshotEntry = {
   choice: SnapshotChoice | null;
   /** Why it is not taken by default, or why it cannot be taken at all. */
   reason?: string;
+  /** One of the operator's input files (`vcs.userInputs`): taken, or the snapshot is not. */
+  input?: boolean;
+  /** Its size in the working tree, in bytes; absent for a file that was deleted. */
+  size?: number;
 };
 
 /** What a snapshot would do now, for the page and for the runner. */
@@ -165,9 +172,10 @@ async function startProblem(session: Session, dir: string, branch: string | null
  */
 export async function planSnapshot(session: Session, allSessions: () => Promise<Session[]> = async () => []): Promise<SnapshotPlan> {
   const { policy, requireApproval } = dirtyPolicy(session.vcs);
+  const inputs = inputSettings(session.vcs);
   const repoDir = repoDirOf(session);
   const plan: SnapshotPlan = { needed: false, ok: false, policy, requireApproval, repoDir, branch: null, head: null, entries: [] };
-  if (!session.vcs?.enabled || policy === 'reject' || session.vcsBaseCommit) return plan;
+  if (!session.vcs?.enabled || (policy === 'reject' && !inputs) || session.vcsBaseCommit) return plan;
   const top = repoDir ? await topOf(repoDir) : null;
   if (!top) return { ...plan, problem: `${repoDir || 'The repository folder'} is not a git repository.` };
 
@@ -177,14 +185,43 @@ export async function planSnapshot(session: Session, allSessions: () => Promise<
   const headR = await git(top, ['rev-parse', '--verify', '--quiet', 'HEAD']);
   plan.branch = branchR.ok && branchR.stdout !== 'HEAD' ? branchR.stdout : null;
   plan.head = headR.ok && headR.stdout ? headR.stdout : null;
-  if (status.length === 0) return plan;
-  plan.needed = true;
 
   // The project folder, when it is a folder inside the repository: a change outside it is not this session's.
   const project = session.projectDir?.trim() ? relative(top, resolve(session.projectDir.trim())).replace(/\\/g, '/') : '';
   const inProject = (p: string): boolean => !project || project.startsWith('..') || isAbsolute(project) || p.toLowerCase() === project.toLowerCase() || p.toLowerCase().startsWith(`${project.toLowerCase()}/`);
+  const size = async (p: string): Promise<number | undefined> => (await stat(join(top, p)).catch(() => null))?.size;
 
-  for (const s of status) {
+  /*
+   * The operator's input files that are not committed as they are: new, changed, or ignored. They
+   * are taken whatever the dirty-tree policy, or the snapshot is not; the rest of the tree is the
+   * policy's. A secrets file or one outside the project is never an input.
+   */
+  const inputPaths = new Set<string>();
+  if (inputs) {
+    const dirtyNow = new Set(status.map((s) => s.path));
+    for (const f of await inputFilesInTree(top, inputs.patterns)) {
+      if (f.kind === 'tracked' && !dirtyNow.has(f.path)) continue;
+      inputPaths.add(f.path);
+      const blocked = looksGenerated(f.path)?.reason === 'a secrets file' ? 'a secrets file is never taken as an input' : !inProject(f.path) ? `outside the project folder ${project}` : undefined;
+      plan.entries.push({ path: f.path, kind: f.kind, input: true, size: await size(f.path), allowed: blocked ? [] : ['include'], choice: blocked ? null : 'include', reason: blocked ?? 'an input file: committed with the starting snapshot, then read-only' });
+    }
+  }
+  const others = status.filter((s) => !inputPaths.has(s.path));
+  if (policy === 'reject') {
+    if (plan.entries.length === 0) return plan;
+    plan.needed = true;
+    if (others.length > 0) {
+      plan.problem =
+        `besides the input files there are other uncommitted changes (${someOf(others.map((o) => o.path))}). ` +
+        'Commit them yourself, or choose "Take them as a starting snapshot" under "Uncommitted changes".';
+      return plan;
+    }
+  }
+  if (plan.entries.length === 0 && others.length === 0) return plan;
+  plan.needed = true;
+  plan.requireApproval = (others.length > 0 && requireApproval) || (plan.entries.some((e) => e.input) && !!inputs?.requireApproval);
+
+  for (const s of policy === 'reject' ? [] : others) {
     const generated = looksGenerated(s.path);
     const outside = !inProject(s.path);
     if (!s.untracked) {
@@ -194,15 +231,18 @@ export async function planSnapshot(session: Session, allSessions: () => Promise<
           : outside
             ? `outside the project folder ${project}; it is tracked, so it cannot be left out. Commit or undo that change yourself`
             : undefined;
-      plan.entries.push({ path: s.path, ...(s.from ? { from: s.from } : {}), kind: 'tracked', allowed: blocked ? [] : ['include'], choice: blocked ? null : 'include', ...(blocked ? { reason: blocked } : {}) });
+      plan.entries.push({ path: s.path, ...(s.from ? { from: s.from } : {}), kind: 'tracked', size: await size(s.path), allowed: blocked ? [] : ['include'], choice: blocked ? null : 'include', ...(blocked ? { reason: blocked } : {}) });
       continue;
     }
-    const why = generated ? generated.reason : outside ? `outside the project folder ${project}` : policy === 'tracked-only-snapshot' ? 'a new file, and this session takes tracked changes only' : undefined;
-    plan.entries.push({ path: s.path, kind: 'untracked', allowed: why ? ['leave-out'] : ['include', 'leave-out'], choice: why ? 'leave-out' : 'include', ...(why ? { reason: why } : {}) });
+    const artifact = artifactPatterns(session.vcs).length > 0 && inScope(s.path, artifactPatterns(session.vcs));
+    const why = artifact
+      ? 'an artifact: kept with the run, never committed'
+      : generated ? generated.reason : outside ? `outside the project folder ${project}` : policy === 'tracked-only-snapshot' ? 'a new file, and this session takes tracked changes only' : undefined;
+    plan.entries.push({ path: s.path, kind: 'untracked', size: await size(s.path), allowed: why ? ['leave-out'] : ['include', 'leave-out'], choice: why ? 'leave-out' : 'include', ...(why ? { reason: why } : {}) });
   }
   if (policy === 'snapshot') {
     for (const path of await scopedIgnored(top, scopedPatterns(session))) {
-      if (looksGenerated(path) || !inProject(path)) continue;
+      if (looksGenerated(path) || !inProject(path) || inputPaths.has(path)) continue;
       plan.entries.push({ path, kind: 'ignored', allowed: ['include', 'leave-out'], choice: 'leave-out', reason: "ignored by git, and a task's scope names it: taken only when you tick it" });
     }
   }
@@ -248,16 +288,20 @@ async function leaveOut(top: string, session: Session, paths: string[]): Promise
 }
 
 /** The commit message: what was taken, what was left out, from where, and on whose word. */
-function snapshotMessage(session: Session, plan: SnapshotPlan, included: string[], leftOut: string[], approved: boolean): string {
+function snapshotMessage(session: Session, plan: SnapshotPlan, taken: SnapshotEntry[], leftOut: string[], approved: boolean): string {
   const list = (paths: string[]): string => [...paths.slice(0, 200).map((p) => `- ${p}`), ...(paths.length > 200 ? [`- and ${paths.length - 200} more`] : [])].join('\n');
+  const inputs = taken.filter((e) => e.input);
+  const rest = taken.filter((e) => !e.input).map((e) => e.path);
+  const onlyInputs = rest.length === 0;
   return [
-    'Capture operator baseline before run',
+    onlyInputs ? 'Capture user-provided inputs' : 'Capture operator baseline before run',
     '',
-    `The uncommitted changes in the repository when session "${session.name}" was first run, committed so that`,
+    `The ${onlyInputs ? "operator's input files" : 'uncommitted changes in the repository'} when session "${session.name}" was first run, committed so that`,
     "the session starts from them and every task's commit shows only that task's work.",
-    '',
-    `Taken (${included.length}):`,
-    list(included),
+    ...(inputs.length > 0
+      ? ['', `Input files, read by the work and not changed by it (${inputs.length}):`, list(inputs.map((e) => `${e.path}${e.size !== undefined ? ` (${e.size} bytes, ${e.kind})` : ''}`))]
+      : []),
+    ...(rest.length > 0 ? ['', `Taken (${rest.length}):`, list(rest)] : []),
     ...(leftOut.length > 0 ? ['', `Left out, in .git/info/exclude (${leftOut.length}):`, list(leftOut)] : []),
     '',
     `Taken from ${plan.branch ?? 'a detached HEAD'} at ${(plan.head ?? '').slice(0, 8)}, ${approved ? "on the operator's approval of this list" : 'automatically (requireApproval: false)'}.`,
@@ -282,7 +326,7 @@ export async function takeSnapshot(
   saveSession: (mutate: (s: Session) => void) => Promise<void>,
   allSessions: () => Promise<Session[]> = async () => [],
 ): Promise<SnapshotResult> {
-  if (dirtyPolicy(session.vcs).policy === 'reject') {
+  if (dirtyPolicy(session.vcs).policy === 'reject' && !inputSettings(session.vcs)) {
     return { ok: false, problem: 'this session does not take uncommitted changes as a snapshot. Choose that under Version control → "Uncommitted changes" first.' };
   }
   if (session.vcsBaseCommit) return { ok: false, problem: 'this session has already started; a snapshot is taken only before its first task.' };
@@ -357,7 +401,7 @@ export async function takeSnapshot(
     await rm(list, { force: true });
   }
 
-  const message = snapshotMessage(session, plan, take.map((e) => e.path), leftOutAll, opts.approved);
+  const message = snapshotMessage(session, plan, take, leftOutAll, opts.approved);
   const commit = await git(top, ['-c', 'user.name=copilot-operator', '-c', `user.email=${RUNNER_EMAIL}`, 'commit', '--no-verify', '-q', '-m', message]);
   if (!commit.ok) return await back(`the snapshot could not be committed: ${commit.stderr || commit.stdout}.`);
   const sha = (await git(top, ['rev-parse', 'HEAD'])).stdout;

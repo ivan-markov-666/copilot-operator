@@ -26,7 +26,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { isContinuable, newId, tidyVcsPlan, type TaskPatch } from '../session/model.js';
+import { freshRetriesOfLatestRun, isContinuable, newId, tidyVcsPlan, type TaskPatch } from '../session/model.js';
 import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
@@ -66,6 +66,7 @@ import { createTransport, type ChatTransport } from '../transport/chatTransport.
 import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
+import { normalisePatterns } from '../vcs/inputs.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
@@ -277,7 +278,7 @@ export type RegistryEntry = {
   vcsProblem?: string;
   /** The session is set aside (`Session.active` false): its tasks are not offered to run. */
   sessionInactive?: boolean;
-  /** How many times the runner ran it again in a fresh chat after it blocked, on its own. */
+  /** How many times the runner ran it again in a fresh chat after it blocked, on its own, in the run of its latest attempt. */
   autoRetries?: number;
   /** Which attempt the row describes. 1 unless the task has been run again. */
   attempt?: number;
@@ -708,6 +709,23 @@ export class OperatorService {
         const dirty = dirtyPolicy(merged);
         if (dirty.policy === 'reject') delete merged.dirtyWorktree;
         else merged.dirtyWorktree = { policy: dirty.policy, ...(dirty.requireApproval ? {} : { requireApproval: false }) };
+        // Input files and artifacts: patterns as the matching reads them, absent when there are none.
+        const inputPaths = normalisePatterns(merged.userInputs?.paths ?? []);
+        if (inputPaths.length === 0) delete merged.userInputs;
+        else {
+          merged.userInputs = {
+            paths: inputPaths,
+            ...(merged.userInputs?.readOnly === false ? { readOnly: false } : {}),
+            ...(merged.userInputs?.requireApproval === false ? { requireApproval: false } : {}),
+          };
+        }
+        const artifactPaths = normalisePatterns(merged.artifacts?.paths ?? []);
+        if (artifactPaths.length === 0) delete merged.artifacts;
+        else merged.artifacts = { paths: artifactPaths };
+        // New inputs are settled again at the next task: the recorded ones are no longer the whole list.
+        if (JSON.stringify(merged.userInputs ?? null) !== JSON.stringify(s.vcs?.userInputs ?? null) && s.vcsStart?.inputs) {
+          s.vcsStart = { ...s.vcsStart, inputs: undefined };
+        }
         // Only the program marks a name as one of its own branches, and a name changed is not that one.
         const stillOwn = !!s.vcs?.branchNameExact && (merged.branchName ?? '').trim() === (s.vcs.branchName ?? '').trim();
         if (stillOwn) merged.branchNameExact = true;
@@ -3061,7 +3079,7 @@ export class OperatorService {
           commit: t.vcs?.commit,
           vcsProblem: t.vcs?.problem,
           sessionInactive: s.active === false || undefined,
-          autoRetries: t.autoRetries || undefined,
+          autoRetries: freshRetriesOfLatestRun(t) || undefined,
           attempt: t.attempt,
           changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,
           interrupted: t.status === 'aborted' && !!t.interruption ? true : undefined,

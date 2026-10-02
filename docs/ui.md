@@ -225,6 +225,25 @@ changes. With "Show me the list to approve first" unticked, it is taken when the
 starts, and refused if anything would have to be left out. Not available when carrying on an
 existing branch. Verified by `npm run check:snapshot`.
 
+**Input files and artifacts.** Version control → "Input files" names, one pattern per line, the
+files the operator provides for the work (in a plan, `"userInputs": { "paths": [...] }`). New,
+changed or ignored ones are listed with their size and git status in the snapshot list and go
+into the starting commit as "Capture user-provided inputs" once approved; a later session whose
+start lacks them — `startFrom: "branch"` after a session that captured them — has them committed
+on top of that start on `cop/input/<session id>`, from where they were last committed, without
+touching the working tree. Their SHA-256 sums go on the session's start and into the work export.
+"Read-only while the tasks run" (on by default) puts back a changed, deleted or added input after
+every round of steps and tells the chat; a task that ends with one that could not be put back
+fails. The comparison is by git's blob id, so `core.autocrlf` does not make untouched files look
+changed. "Artifacts" names the evidence the work writes (`"artifacts": { "paths": [...] }`): the
+patterns go into `.git/info/exclude`, so it is never committed and `.gitignore` is untouched, and
+when each task ends the files are copied to `runs/<run>/artifacts/project/` with their sums.
+
+**A chain needs one branch to continue.** `startFrom: "previous-session"` after a session that
+ran per task with several done tasks is refused at the start, naming the tasks whose work is not
+on the branch it would continue — each task's work is on its own branch — and the plan import
+warns about it. Verified by `npm run check:inputs` and `npm run check:e2e-inputs`.
+
 ## One chain, or independent tasks
 
 A queue can be either, and the runner cannot guess which. The choice sits above the tasks and

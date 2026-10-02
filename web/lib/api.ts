@@ -243,6 +243,10 @@ export type Task = {
   scope?: string[];
   /** What the runner put back because it was outside `scope`. */
   scopeReverted?: string[];
+  /** The operator's input files the runner put back because the task changed them. */
+  inputsRestored?: string[];
+  /** Evidence files kept with the attempt's record, never committed. */
+  artifactsKept?: Array<{ path: string; size: number; sha256: string }>;
   /** How the attempt ended, in one fixed shape the runner put together from its own records. */
   handoff?: Handoff;
   /** Why it stopped, when the status alone does not say. See `Task.stopCode` in src/session/model.ts. */
@@ -271,6 +275,10 @@ export type VersionControl = {
   updateFromRemote?: boolean;
   /** Uncommitted changes before the first task: kept out (absent), or taken as a starting snapshot. */
   dirtyWorktree?: { policy: 'reject' | 'snapshot' | 'tracked-only-snapshot'; requireApproval?: boolean };
+  /** The operator's input files: in every session's start, read-only unless `readOnly` is false. */
+  userInputs?: { paths: string[]; readOnly?: boolean; requireApproval?: boolean };
+  /** Evidence kept with the run and never committed. */
+  artifacts?: { paths: string[] };
 };
 
 /** Where a session's first branch was actually cut from, recorded at its first run. */
@@ -284,6 +292,13 @@ export type SessionStart = {
   note?: string;
   /** For `snapshot`: where the operator's changes were taken from, and what went in. */
   snapshot?: { fromBranch?: string; fromCommit: string; included: string[]; leftOut: string[]; approved: boolean };
+  /** The input files in the start, with their sums; `carried` when the runner committed them on top of it. */
+  inputs?: {
+    patterns: string[];
+    files: Array<{ path: string; sha256: string; size: number; blob: string }>;
+    readOnly: boolean;
+    carried?: { onto: string; from: string; branch: string };
+  };
 };
 
 /** One uncommitted file on the starting-snapshot list, and what may be done with it. */
@@ -294,6 +309,8 @@ export type SnapshotEntry = {
   allowed: Array<'include' | 'leave-out'>;
   choice: 'include' | 'leave-out' | null;
   reason?: string;
+  input?: boolean;
+  size?: number;
 };
 
 export type SnapshotPlan = {

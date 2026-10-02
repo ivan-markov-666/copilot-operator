@@ -11,6 +11,7 @@
  */
 import type { SessionStore } from '../session/store.js';
 import { DEFAULT_VCS, applyDefaultProject } from '../session/store.js';
+import { normalisePatterns } from '../vcs/inputs.js';
 import type { Session, VersionControl } from '../session/model.js';
 import { availableShells, detectShells, type Shell } from '../exec/shells.js';
 import type { Plan, PlanSession, PlanTask } from './schema.js';
@@ -211,6 +212,25 @@ export async function importPlan(
       ? (plan.plan.trim() || `plan-${new Date().toISOString().slice(0, 16).replace(/[:T-]/g, '')}`).slice(0, 60)
       : '';
 
+  /*
+   * A session that continues the one before it in the same repository, when that one ran per task
+   * with several tasks: its work is on several branches, and the continuation is refused at its start
+   * (see `sessionStart`). Said now, when the plan can still be changed.
+   */
+  const lastIn = new Map<string, { name: string; perTask: boolean; tasks: number }>();
+  for (const planned of plan.sessions) {
+    const repo = (planned.vcs?.repoDir || planned.projectDir || '').trim().replace(/[\\/]+$/, '').toLowerCase();
+    if (!planned.vcs?.enabled || !repo) continue;
+    const before = lastIn.get(repo);
+    if (planned.vcs.startFrom === 'previous-session' && before?.perTask && before.tasks > 1) {
+      warnings.push(
+        `Session "${planned.name}" continues "${before.name}", which runs a branch per task: its ${before.tasks} tasks' work will be on ${before.tasks} branches, ` +
+          `and "${planned.name}" will refuse to start from part of it. Give "${before.name}" "branchMode": "per-session" if the next session builds on all of it.`,
+      );
+    }
+    lastIn.set(repo, { name: planned.name, perTask: (planned.vcs.branchMode ?? 'per-task') === 'per-task', tasks: planned.tasks.length });
+  }
+
   for (const planned of plan.sessions) {
     // Attaching project files to the chat was removed; an old plan's root is still its project folder.
     if (planned.mirror?.enabled) {
@@ -220,8 +240,16 @@ export async function importPlan(
       );
     }
     const created = await store.createSession(planned.name, planned.projectDir || planned.mirror?.rootDir || '');
-    const { dirtyWorktree: plannedDirty, ...plannedVcs } = planned.vcs ?? ({} as NonNullable<typeof planned.vcs>);
+    const { dirtyWorktree: plannedDirty, userInputs: plannedInputs, artifacts: plannedArtifacts, ...plannedVcs } = planned.vcs ?? ({} as NonNullable<typeof planned.vcs>);
     const vcs: VersionControl = { ...DEFAULT_VCS, ...plannedVcs };
+    // Input files and artifacts in the one spelling the session has: see `UserInputs`.
+    const inputPaths = plannedInputs?.enabled === false ? [] : normalisePatterns(plannedInputs?.paths ?? []);
+    if (inputPaths.length > 0) {
+      const readOnly = plannedInputs?.readOnly ?? plannedInputs?.readOnlyAfterCapture;
+      vcs.userInputs = { paths: inputPaths, ...(readOnly === false ? { readOnly: false } : {}), ...(plannedInputs?.requireApproval === false ? { requireApproval: false } : {}) };
+    }
+    const artifactPaths = normalisePatterns(plannedArtifacts?.paths ?? []);
+    if (artifactPaths.length > 0) vcs.artifacts = { paths: artifactPaths };
     // Stored in the one spelling the session has: see `DirtyWorktree`.
     const policy = plannedDirty?.policy === 'snapshot' && plannedDirty.includeUntracked === false ? 'tracked-only-snapshot' : plannedDirty?.policy;
     if (policy && policy !== 'reject') vcs.dirtyWorktree = { policy, ...(plannedDirty?.requireApproval === false ? { requireApproval: false } : {}) };

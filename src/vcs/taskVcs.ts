@@ -20,6 +20,10 @@ import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../se
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
 import { dirtyPolicy, planSnapshot, someOf, takeSnapshot, type SnapshotPlan } from './snapshot.js';
+import { inputSettings, inputsNote, settleInputs } from './inputs.js';
+import { artifactPatterns, excludeArtifacts } from './artifacts.js';
+import { workingTreePaths } from './git.js';
+import { inScope } from './scope.js';
 import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type BranchUpdate, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
@@ -80,7 +84,25 @@ export async function prepareForTask(
     return { vcs: { problem }, note: '' };
   }
 
-  if (settings.startFrom === 'existing-branch') return await onExistingBranch(session, task, dir, state, bus, saveSession);
+  const refuse = (why: string): PrepareResult => {
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-refused', level: 'error', message: why });
+    return { vcs: { problem: why }, note: '', refuse: why };
+  };
+
+  /*
+   * The session's artifacts are never committed: their patterns go into the repository's own
+   * exclude file before anything looks at the tree, so they neither make it dirty nor go into a
+   * commit. See `artifacts.ts`.
+   */
+  const excluded = await excludeArtifacts(dir, session);
+  if (excluded.problem) return refuse(`the session's artifacts could not be kept out of git: ${excluded.problem}. Nothing was run.`);
+  if (excluded.tracked.length > 0) {
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-artifacts-tracked', level: 'warn',
+      message: `${excluded.tracked.length} artifact file(s) are already tracked by git, so a change to them is still committed: ${someOf(excluded.tracked)}. Take them out of git yourself (git rm --cached) if they should not be.` });
+  }
+  if (excluded.tracked.length > 0 || artifactPatterns(settings).length > 0) state = await repoState(dir);
+
+  if (settings.startFrom === 'existing-branch') return await onExistingBranch(session, task, dir, state, bus, saveSession, allSessions);
 
   // The session's base is fixed the first time it runs: every per-task branch is cut from it,
   // which is what makes the tasks independent of each other rather than of the calendar. Where
@@ -89,28 +111,30 @@ export async function prepareForTask(
   let start = session.vcsStart;
 
   /*
-   * The operator's own changes before the session's first task, under a snapshot policy: they
-   * become the commit the session starts from (see `snapshot.ts`). Asked for approval, the run is
-   * refused until the list has been approved on the session's page; running without version
-   * control instead would be the one outcome the operator chose against.
+   * The operator's own changes before the session's first task — under a snapshot policy, or its
+   * input files: they become the commit the session starts from (see `snapshot.ts`). Asked for
+   * approval, the run is refused until the list has been approved on the session's page; running
+   * without version control instead would be the one outcome the operator chose against.
    */
   const dirty = dirtyPolicy(settings);
-  if (state.dirty && !base && dirty.policy !== 'reject') {
-    const refuse = (why: string): PrepareResult => {
-      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-refused', level: 'error', message: why });
-      return { vcs: { problem: why }, note: '', refuse: why };
-    };
-    if (dirty.requireApproval) {
-      return refuse(
-        `the repository has uncommitted changes (${someOf(state.changed)}), and this session takes them as its starting snapshot ` +
-          'once you have approved the list: on the session\'s page, Version control → "Uncommitted changes", choose what goes in and take the snapshot. Nothing was run.',
-      );
+  const inputs = inputSettings(settings);
+  // Input files are looked for even in a clean tree: an ignored input does not make it dirty.
+  if ((state.dirty || inputs) && !base && (dirty.policy !== 'reject' || inputs)) {
+    const plan = await planSnapshot(session, allSessions);
+    if (plan.needed) {
+      if (!plan.ok) return refuse(`the starting snapshot cannot be taken: ${plan.problem} Nothing was run.`);
+      if (plan.requireApproval) {
+        return refuse(
+          `the repository has uncommitted changes (${someOf(plan.entries.map((e) => e.path))}), and this session takes them as its starting snapshot ` +
+            'once you have approved the list: on the session\'s page, Version control → "Uncommitted changes", choose what goes in and take the snapshot. Nothing was run.',
+        );
+      }
+      const taken = await takeSnapshot(session, { approved: false }, bus, saveSession, allSessions);
+      if (!taken.ok) return refuse(`the starting snapshot of the uncommitted changes was not taken: ${taken.problem} Nothing was run.`);
+      base = taken.start.commit;
+      start = taken.start;
+      state = await repoState(dir);
     }
-    const taken = await takeSnapshot(session, { approved: false }, bus, saveSession, allSessions);
-    if (!taken.ok) return refuse(`the starting snapshot of the uncommitted changes was not taken: ${taken.problem} Nothing was run.`);
-    base = taken.start.commit;
-    start = taken.start;
-    state = await repoState(dir);
   }
 
   // A dirty tree is the operator's own work in progress. Committing it under the bot's name
@@ -144,6 +168,24 @@ export async function prepareForTask(
       bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: chosen.note || updateWarns(chosen) ? 'warn' : 'info',
         message: describeStart(chosen), data: { ...chosen } });
     }
+  }
+
+  /*
+   * The operator's input files, in the commit the session starts from whatever its `startFrom`, with
+   * their sums on the record. Once per session: a start that has recorded them has them.
+   */
+  if (inputs && start && !start.inputs) {
+    const settled = await settleInputs(session, dir, start, allSessions);
+    if ('problem' in settled) return refuse(`${settled.problem} Nothing was run.`);
+    const chosen = settled.start;
+    start = chosen;
+    base = chosen.commit;
+    await saveSession((s) => {
+      s.vcsBaseCommit = chosen.commit;
+      s.vcsStart = chosen;
+    });
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-inputs', level: 'info',
+      message: describeInputs(chosen), data: { files: chosen.inputs?.files.length ?? 0, carried: chosen.inputs?.carried } });
   }
 
   const attempt = task.attempt ?? 1;
@@ -207,6 +249,7 @@ async function onExistingBranch(
   state: Awaited<ReturnType<typeof repoState>>,
   bus: EventBus,
   saveSession: (mutate: (s: Session) => void) => Promise<void>,
+  allSessions: () => Promise<Session[]>,
 ): Promise<PrepareResult> {
   const wanted = (session.vcs?.existingBranch ?? '').trim();
   const refuse = (why: string): PrepareResult => {
@@ -241,6 +284,25 @@ async function onExistingBranch(
       });
       bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-start', level: updateWarns(chosen) ? 'warn' : 'info', message: describeStart(chosen), data: { ...chosen } });
     }
+  }
+  /*
+   * The input files must already be on the branch, as they are: the runner commits nothing onto a
+   * branch the operator named, so one that lacks them, or has them otherwise, is refused.
+   */
+  if (inputSettings(session.vcs) && start && !start.inputs) {
+    const settled = await settleInputs(session, dir, start, allSessions);
+    if ('problem' in settled) return refuse(`${settled.problem} Nothing was run.`);
+    if (settled.start.commit !== start.commit) {
+      return refuse(
+        `the input files are not on "${wanted}" as they were last committed (${settled.start.inputs?.carried?.from ?? 'elsewhere'}), and the runner does not commit onto a branch you named. ` +
+          `Commit them on "${wanted}" yourself. Nothing was run.`,
+      );
+    }
+    const chosen = settled.start;
+    start = chosen;
+    await saveSession((s) => {
+      s.vcsStart = chosen;
+    });
   }
   const prepared = await switchTo(session, task, dir, wanted, undefined, bus, { reuseExisting: true, mustExist: true, start });
   return prepared.vcs.branch === wanted ? prepared : refuse(`the repository could not be put on "${wanted}": ${prepared.vcs.problem ?? 'unknown reason'}. Nothing was run.`);
@@ -295,6 +357,30 @@ export async function sessionStart(
       `the branch of the previous session "${best.session.name}" (${best.branch}) is no longer in the repository, so it starts from "${baseBranch}"`,
     );
   }
+  /*
+   * The whole of that session's done work, or nothing. In per-task mode every task has a branch of
+   * its own, all cut from one commit, so the branch of the task that finished last holds that task's
+   * work only — a chain that started there began without the files the earlier tasks had made,
+   * though they were in the repository on other branches. The runner does not merge them; it says
+   * which are missing and refuses, rather than start from part of the work as if it were all.
+   */
+  const missing: string[] = [];
+  for (const t of best.session.tasks) {
+    if (t.status !== 'done') continue;
+    const done = [{ vcs: t.vcs, at: t.finishedAt }, ...(t.attempts ?? []).map((a) => ({ vcs: a.vcs, at: a.finishedAt }))]
+      .filter((v) => !!v.vcs?.commit && !!v.vcs.branch)
+      .sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))[0];
+    if (done?.vcs?.commit && !(await isAncestor(dir, done.vcs.commit, tip))) missing.push(`"${t.title}" (on ${done.vcs.branch})`);
+  }
+  if (missing.length > 0) {
+    return {
+      problem:
+        `this session continues the previous session "${best.session.name}", whose done work is not on one branch: ${best.branch} does not have ` +
+        `${missing.slice(0, 8).join(', ')}${missing.length > 8 ? `, and ${missing.length - 8} more` : ''}. ` +
+        'That session ran per task, so each task\'s work is on its own branch. Merge them into one branch and continue it ("Carry on an existing branch"), ' +
+        'or run that session "One branch for the whole session" so the next one can carry on from it.',
+    };
+  }
   return { start: { kind: 'previous-session', commit: tip, branch: best.branch, fromSession: { id: best.session.id, name: best.session.name } } };
 }
 
@@ -339,6 +425,16 @@ export function describeStart(start: SessionStart): string {
         : `this session starts from where the repository was (${at})`;
   const updated = start.update ? ` (${describeUpdate(start.update as BranchUpdate)})` : '';
   return start.note ? `${said}${updated} — ${start.note}` : `${said}${updated}`;
+}
+
+/** One line for the log: the session's input files, and whether the runner had to commit them on its start. */
+export function describeInputs(start: SessionStart): string {
+  const n = start.inputs?.files.length ?? 0;
+  const carried = start.inputs?.carried;
+  return (
+    `${n} input file(s) in the session's start (${start.commit.slice(0, 8)})${start.inputs?.readOnly ? ', read-only' : ''}` +
+    (carried ? `: they were not in ${carried.onto.slice(0, 8)}, so they were committed on top of it as ${carried.branch}, from ${carried.from}` : '')
+  );
 }
 
 /** Whether the update before a session's start is worth a warning: it did not bring the branch up to date. */
@@ -438,6 +534,7 @@ async function switchTo(
     base: vcs.baseCommit ? { commit: vcs.baseCommit, subject } : undefined,
     earlier,
     start: opts.start,
+    artifacts: artifactPatterns(session.vcs),
   });
   return { vcs, note };
 }
@@ -451,6 +548,8 @@ export type NoteContext = {
   earlier: Array<{ title: string; branch: string }>;
   /** Where the session itself started, when it was chosen rather than taken from HEAD. */
   start?: SessionStart;
+  /** The session's artifact patterns: kept with the run, never committed. */
+  artifacts?: string[];
 };
 
 /**
@@ -513,6 +612,14 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
     'commit instead: `git merge-base --is-ancestor <commit> HEAD` exits 0 when it is.',
     '',
     ...(began ? [began, ''] : []),
+    ...(inputsNote(ctx.start?.inputs) ? [inputsNote(ctx.start?.inputs), ''] : []),
+    ...((ctx.artifacts?.length ?? 0) > 0
+      ? [
+          `Evidence goes under ${ctx.artifacts?.map((a) => `\`${a}\``).join(', ')}: those files are kept with the run's record and are never committed, ` +
+            'so write reports, archives and test results there rather than changing .gitignore for them.',
+          '',
+        ]
+      : []),
     standing,
     '',
     '- Do not create branches, switch branches, commit, stash, reset or revert. That is the',
@@ -869,27 +976,36 @@ export async function vcsPreflight(
   const repoDir = repoDirOf(session);
   const state = await repoState(repoDir);
   if (!state.isRepo) return { ok: false, repoDir, problem: state.problem };
-  // Before the first task, under a snapshot policy: the list to approve, file by file.
-  if (state.dirty && !session.vcsBaseCommit && dirtyPolicy(settings).policy !== 'reject' && settings.startFrom !== 'existing-branch') {
+  // Artifacts do not count: the run keeps them out of git before it looks (see `excludeArtifacts`).
+  const artifacts = artifactPatterns(settings);
+  const changed = state.dirty && artifacts.length > 0 ? (await workingTreePaths(repoDir)).filter((p) => !inScope(p, artifacts)) : state.changed;
+  const dirty = changed.length > 0;
+  /*
+   * Before the first task, under a snapshot policy or with input files: the list to approve, file by
+   * file. Input files are looked for even in a clean tree — an ignored input does not make it dirty.
+   */
+  const inputs = !!inputSettings(settings);
+  if ((dirty || inputs) && !session.vcsBaseCommit && (dirtyPolicy(settings).policy !== 'reject' || inputs) && settings.startFrom !== 'existing-branch') {
     const snapshot = await planSnapshot(session, allSessions);
     if (snapshot.needed) {
+      const listed = snapshot.entries.map((e) => e.path);
       return {
         ok: false,
         repoDir,
         branch: state.branch ?? undefined,
         problem: snapshot.ok
-          ? `There are uncommitted changes (${someOf(state.changed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once you approve the list below' : 'when its first task starts'}.`
+          ? `There are uncommitted changes (${someOf(listed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once you approve the list below' : 'when its first task starts'}.`
           : `There are uncommitted changes, and no starting snapshot can be taken: ${snapshot.problem}`,
         snapshot,
       };
     }
   }
-  if (state.dirty) {
+  if (dirty) {
     return {
       ok: false,
       repoDir,
       branch: state.branch ?? undefined,
-      problem: `There are uncommitted changes (${state.changed.slice(0, 3).join(', ')}${state.changed.length > 3 ? '…' : ''}). Commit or stash them first.`,
+      problem: `There are uncommitted changes (${changed.slice(0, 3).join(', ')}${changed.length > 3 ? '…' : ''}). Commit or stash them first.`,
     };
   }
   return { ok: true, repoDir, branch: state.branch ?? undefined };

@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task, TaskCheck } from './model.js';
+import { TASK_FIELD_ON_RERUN } from './store.js';
 import { withoutPersona } from '../plan/importPlan.js';
 
 export type ExportKind = 'plan' | 'domain' | 'bot';
@@ -166,6 +167,8 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           ...(s.vcs?.updateFromRemote === false ? { updateFromRemote: false } : {}),
           // Only when chosen: absent is reject, as it always was.
           ...(s.vcs?.dirtyWorktree && s.vcs.dirtyWorktree.policy !== 'reject' ? { dirtyWorktree: { ...s.vcs.dirtyWorktree } } : {}),
+          ...(s.vcs?.userInputs?.paths.length ? { userInputs: { ...s.vcs.userInputs } } : {}),
+          ...(s.vcs?.artifacts?.paths.length ? { artifacts: { ...s.vcs.artifacts } } : {}),
         },
         review: { enabled: s.review?.enabled !== false, model: s.review?.model ?? '' },
         ...(s.projectDir ? { projectDir: s.projectDir } : {}),
@@ -235,27 +238,30 @@ export function taskAtAttempt(task: Task, attempt: number): Task | null {
   if (!Number.isInteger(attempt) || attempt < 1 || attempt > current) return null;
   const a = task.attempts?.[attempt - 1];
   if (!a) return null;
+  /*
+   * By the same table `rerunTask` follows: what was archived is read from the attempt, what was
+   * cleared is absent. Field by field, by hand, an earlier attempt read back with the latest one's
+   * handoff, counts, limit and fresh-chat mark.
+   */
+  const asItWas: Record<string, unknown> = {};
+  for (const [key, what] of Object.entries(TASK_FIELD_ON_RERUN)) {
+    if (what === 'archived') asItWas[key] = (a as unknown as Record<string, unknown>)[key];
+    if (what === 'cleared') asItWas[key] = undefined;
+  }
   return {
     ...task,
+    ...(asItWas as Partial<Task>),
     attempt,
     status: a.status,
-    runId: a.runId,
-    runGroup: a.runGroup,
-    startedAt: a.startedAt,
-    finishedAt: a.finishedAt,
     iterations: a.iterations,
-    summary: a.summary,
-    reason: a.reason,
-    deviations: a.deviations,
-    disputes: a.disputes,
+    // The task's own text and definition as they were when that attempt ran, where it was kept.
     title: a.title,
     prompt: a.prompt,
     level2: a.level2,
     checks: a.checks ?? task.checks,
     vcsPlan: a.vcsPlan ?? task.vcsPlan,
-    checkResults: a.checkResults,
-    review: a.review,
-    vcs: a.vcs,
+    scope: a.scope ?? task.scope,
+    readOnly: a.readOnly ?? task.readOnly,
     attempts: task.attempts?.slice(0, attempt - 1),
     continuing: undefined,
     buildsOn: undefined,
@@ -462,7 +468,25 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
   const finished = task.finishedAt ? Date.parse(task.finishedAt) : NaN;
 
   const out: Record<string, unknown> = {
-    session: { id: session.id, name: session.name },
+    /*
+     * Where the session started — the baseline commit, a snapshot of the operator's changes, the
+     * input files with their SHA-256 sums — so a reader can check the work against its inputs.
+     */
+    session: {
+      id: session.id,
+      name: session.name,
+      ...(session.vcsStart
+        ? {
+            start: {
+              kind: session.vcsStart.kind,
+              commit: session.vcsStart.commit,
+              branch: session.vcsStart.branch,
+              ...(session.vcsStart.snapshot ? { snapshot: session.vcsStart.snapshot } : {}),
+              ...(session.vcsStart.inputs ? { inputs: session.vcsStart.inputs } : {}),
+            },
+          }
+        : {}),
+    },
     task: {
       id: task.id,
       title: task.title,
@@ -470,6 +494,8 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
       readOnly: task.readOnly ?? false,
       scope: task.scope ?? [],
       scopeReverted: task.scopeReverted ?? [],
+      inputsRestored: task.inputsRestored ?? [],
+      artifactsKept: task.artifactsKept ?? [],
       handoff: task.handoff ?? null,
       stopCode: task.stopCode ?? null,
       prompt: p.prompt,
@@ -554,7 +580,7 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
         whatTheChatTried: aRounds,
         whatWasActuallyDone: { repository: a.vcs, deviations: a.deviations, disputes: a.disputes },
         whyItFailed: aFailed
-          ? { status: a.status, reason: a.reason, failingChecks: (a.checkResults ?? []).filter((c) => !c.passed), lastRound: aRounds.at(-1) }
+          ? { status: a.status, reason: a.reason, failingChecks: (a.checkResults ?? []).filter((c) => !c.passed), lastRound: aRounds.at(-1), leftovers: a.leftovers }
           : undefined,
       });
     }
@@ -636,6 +662,9 @@ async function botTask(session: Session, task: Task, runsDir: string): Promise<R
           steps: stepsOf(aEvents).map((s) => ({ iteration: s.iteration, id: s.id, command: s.description, outcome: s.outcome, exitCode: s.exitCode, durationMs: s.durationMs, refused: s.refused })),
           problems: aEvents.filter((e) => e.level === 'error' || e.level === 'warn').map(trimmed),
           events: aEvents.map(trimmed),
+          // That attempt's own: what it left running and the machine it ran on.
+          processes: { leftovers: a.leftovers },
+          environment: a.environment,
         };
       }),
     ),

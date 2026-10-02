@@ -85,6 +85,67 @@ export function bySessionList(a: Session, b: Session): number {
   return b.id.localeCompare(a.id);
 }
 
+/**
+ * What `rerunTask` does with every field of a task when a new attempt begins — Run again, Continue,
+ * a new prompt, the runner's own fresh-chat retry.
+ *
+ *   archived  belongs to the attempt that ended: copied onto its `TaskAttempt`, cleared on the task
+ *   cleared   belongs to that attempt and is not kept on the record: cleared
+ *   reset     given the new attempt's starting value (status queued, iterations 0, attempt + 1, …)
+ *   kept      the task's own, across attempts: its definition, or something every attempt inherits
+ *
+ * A record over every key of `Task`, so a field added to the task without a decision here does not
+ * compile. Fields that were left out of `rerunTask` by default were counted on by the next attempt:
+ * the fresh-chat retry count said 2, then 4, then 6 while each run had retried twice, and what an
+ * attempt left running was listed under every attempt after it. `npm run check:attempts` holds
+ * `rerunTask` to this table.
+ */
+export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'reset' | 'kept'> = {
+  id: 'kept',
+  title: 'kept',
+  level2: 'kept',
+  prompt: 'kept',
+  createdAt: 'kept',
+  checks: 'kept',
+  vcsPlan: 'kept',
+  reviewEnabled: 'kept',
+  readOnly: 'kept',
+  scope: 'kept',
+  // What one review noticed is arithmetic for every attempt after it.
+  reviewChecks: 'kept',
+  attempts: 'kept',
+  status: 'reset',
+  iterations: 'reset',
+  attempt: 'reset',
+  continuing: 'reset',
+  buildsOn: 'reset',
+  runId: 'archived',
+  runGroup: 'archived',
+  startedAt: 'archived',
+  finishedAt: 'archived',
+  summary: 'archived',
+  reason: 'archived',
+  deviations: 'archived',
+  disputes: 'archived',
+  checkResults: 'archived',
+  review: 'archived',
+  stats: 'archived',
+  freshRetry: 'archived',
+  stopCode: 'archived',
+  limit: 'archived',
+  scopeReverted: 'archived',
+  inputsRestored: 'archived',
+  artifactsKept: 'archived',
+  vcs: 'archived',
+  leftovers: 'archived',
+  environment: 'archived',
+  handoff: 'archived',
+  interruption: 'cleared',
+  finalReply: 'cleared',
+  firstMessage: 'cleared',
+  logFile: 'cleared',
+};
+
 export const DEFAULT_VCS: VersionControl = {
   enabled: true,
   repoDir: '',
@@ -538,6 +599,9 @@ export class SessionStore {
     });
   }
 
+  /**
+   * What a new attempt does with each field of a task — see `TASK_FIELD_ON_RERUN`.
+   */
   async rerunTask(
     sessionId: string,
     taskId: string,
@@ -559,6 +623,8 @@ export class SessionStore {
         {
           runId: t.runId,
           runGroup: t.runGroup,
+          leftovers: t.leftovers,
+          environment: t.environment,
           status: t.status,
           startedAt: t.startedAt,
           finishedAt: t.finishedAt,
@@ -582,7 +648,11 @@ export class SessionStore {
           stopCode: t.stopCode,
           limit: t.limit,
           scope: t.scope,
+          readOnly: t.readOnly,
           scopeReverted: t.scopeReverted,
+          handoff: t.handoff,
+          inputsRestored: t.inputsRestored,
+          artifactsKept: t.artifactsKept,
           vcs: t.vcs,
         },
       ];
@@ -619,9 +689,15 @@ export class SessionStore {
       t.stats = undefined;
       t.handoff = undefined;
       t.scopeReverted = undefined;
+      t.inputsRestored = undefined;
+      t.artifactsKept = undefined;
       t.freshRetry = undefined;
       t.stopCode = undefined;
       t.limit = undefined;
+      // What this attempt left running and the machine it ran on are this attempt's, as the rest:
+      // left in place, the next attempt's list was added to this one's and read as its own.
+      t.leftovers = undefined;
+      t.environment = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.
       t.vcs = undefined;
@@ -687,6 +763,8 @@ export class SessionStore {
       // Sessions written before the queue could be told what to do on a failure behave the
       // way they always did: the chain stops.
       s.onFailure ??= 'stop';
+      // A counter that added up across runs, written before it was derived (`freshRetriesOfLatestRun`).
+      for (const t of s.tasks ?? []) delete (t as Task & { autoRetries?: number }).autoRetries;
       return s;
     } catch {
       return null;

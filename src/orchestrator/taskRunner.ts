@@ -52,8 +52,10 @@ import { treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import type { Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { prepareForTask, commitTaskResult, repoDirOf, trackedRepoOf } from '../vcs/taskVcs.js';
+import { protectInputs, inputsMessage, type InputsCheck } from '../vcs/inputs.js';
+import { artifactPatterns, keepArtifacts } from '../vcs/artifacts.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
 export type TaskOutcome = {
@@ -689,11 +691,64 @@ export async function runTask(
     return all.map((l) => ({ name: l.name, ports: l.ports }));
   };
 
+  /** The session's read-only input files and the commit they are put back from, once the task is on its own branch. */
+  let inputsGuard: { base: string; inputs: NonNullable<SessionStart['inputs']> } | null = null;
+  /** Puts back whatever a round did to the input files, and tells the chat and the record. */
+  const guardInputs = async (iteration?: number): Promise<InputsCheck | null> => {
+    if (!inputsGuard) return null;
+    const guard = inputsGuard;
+    const check = await protectInputs(repoDirOf(session), guard.base, guard.inputs).catch((e: unknown): InputsCheck => ({
+      changed: ['(the input files)'],
+      restored: [],
+      failed: [{ path: '(the input files)', why: (e as Error).message }],
+    }));
+    if (check.changed.length > 0) {
+      sink.event('inputs-restored', { iteration, restored: check.restored, failed: check.failed },
+        `the operator's input files are read-only; put back: ${check.restored.join(', ') || '(none)'}` +
+          (check.failed.length > 0 ? `; could not be put back: ${check.failed.map((f) => f.path).join(', ')}` : ''),
+        'warn');
+      runnerNotes.push(inputsMessage(check));
+      await setTask((t) => {
+        t.inputsRestored = [...new Set([...(t.inputsRestored ?? []), ...check.restored])];
+      });
+    }
+    return check;
+  };
+
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
 
     // The net under the plan's own checks: whatever the task left running is stopped and named.
     await reap(processesBefore, 'the task');
+
+    /*
+     * The operator's input files, once more before the commit: put back what the last round changed,
+     * so it is not committed as the task's work. One that cannot be put back fails a done task. See
+     * `vcs/inputs.ts`.
+     */
+    if (inputsGuard) {
+      const check = await guardInputs();
+      if (check && check.failed.length > 0 && status === 'done') {
+        status = 'failed';
+        reason = `the operator's input file(s) ${check.failed.map((f) => f.path).join(', ')} were changed and could not be put back as they were: ${check.failed.map((f) => f.why).join('; ')}.`;
+      }
+    }
+
+    /*
+     * The session's artifacts, whatever the outcome: copied into this attempt's record, so the
+     * evidence of each attempt is kept even after a later one overwrites it. See `vcs/artifacts.ts`.
+     */
+    const patterns = artifactPatterns(session.vcs);
+    const projectRoot = repoDirOf(session) || session.projectDir?.trim() || '';
+    if (patterns.length > 0 && projectRoot) {
+      const kept = await keepArtifacts(projectRoot, patterns, join(artifactsDir, 'project')).catch((e: unknown) => ({ kept: [], skipped: [`(all: ${(e as Error).message})`] }));
+      sink.event('artifacts-kept', { kept: kept.kept.length, skipped: kept.skipped },
+        `artifacts kept with the run: ${kept.kept.length} file(s)${kept.skipped.length > 0 ? `; not kept: ${kept.skipped.slice(0, 5).join('; ')}` : ''}`,
+        kept.skipped.length > 0 ? 'warn' : 'info');
+      await setTask((t) => {
+        t.artifactsKept = kept.kept.length > 0 ? kept.kept : undefined;
+      });
+    }
 
     /*
      * A read-only task that changed files has failed, whatever it reported.
@@ -1005,6 +1060,11 @@ export async function runTask(
      * findings described a tree that was not the one it had been asked to audit.
      */
     const scopeEnforced = (scope.length > 0 || !!task.readOnly) && onOwnBranch;
+    // The operator's input files, read-only on a branch of the task's own; see `vcs/inputs.ts`.
+    const startNow = (await store.getSession(session.id))?.vcsStart;
+    if (onOwnBranch && startNow?.inputs?.readOnly && startNow.inputs.files.length > 0) {
+      inputsGuard = { base: prepared.vcs.baseCommit as string, inputs: startNow.inputs };
+    }
     /** The working tree's fingerprint, when the task is on a branch of its own; null otherwise. */
     const treeNow = async (): Promise<string | null> =>
       prepared.vcs.branch && !prepared.vcs.problem && prepared.vcs.baseCommit ? await treeFingerprint(repoDirOf(session)).catch(() => null) : null;
@@ -2190,6 +2250,7 @@ export async function runTask(
           });
         }
       }
+      await guardInputs(iterations);
 
       // --- report back ---------------------------------------------------------------
       const report = await writeReport(results, {
@@ -2442,8 +2503,21 @@ export async function runSession(
         break;
       }
       session = (await store.getSession(sessionId)) as Session;
-      const task = session.tasks.find((t) => t.id === queuedTask.id);
+      let task = session.tasks.find((t) => t.id === queuedTask.id);
       if (!task || task.status !== 'queued') continue;
+      /*
+       * A task taken from the queue was started by the operator, never by the retry loop below, which
+       * runs its own. A fresh-retry mark on it is left from a retry that was queued and never ran —
+       * the new chat failed to open, the program was closed — and counted as this run's, it added the
+       * old run's retry to this one's (`freshRetriesOfLatestRun`).
+       */
+      if (task.freshRetry) {
+        session = await store.updateSession(sessionId, (s) => {
+          const t = s.tasks.find((x) => x.id === queuedTask.id);
+          if (t) t.freshRetry = undefined;
+        });
+        task = session.tasks.find((t) => t.id === queuedTask.id) as Task;
+      }
 
       let outcome = await runTask(chat, session, task, deps);
       ran += 1;
@@ -2477,11 +2551,10 @@ export async function runSession(
         session = await store.updateSession(sessionId, (s) => {
           s.chat = undefined;
           s.contractSent = false;
+          // Marked, not counted: how many retries this run made is read back from the marks
+          // (`freshRetriesOfLatestRun`), so a later run cannot add to an earlier one's count.
           const again = s.tasks.find((x) => x.id === task.id);
-          if (again) {
-            again.autoRetries = (again.autoRetries ?? 0) + 1;
-            again.freshRetry = true;
-          }
+          if (again) again.freshRetry = true;
         });
         await chat.newChat();
         /*

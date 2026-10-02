@@ -13,6 +13,7 @@
  * sending the user back to the chat; it is reported as a warning instead.
  */
 import { z } from 'zod';
+import { namesEverything } from '../vcs/inputs.js';
 
 export const PLAN_VERSION = 1;
 
@@ -83,6 +84,35 @@ const VcsInput = z
             .optional(),
         })
         .optional(),
+      /**
+       * The operator's input files. See `UserInputs`. Accepts the spelling a chat model may write:
+       * `capture` can only be "baseline-commit", `allowUntracked`/`allowIgnored` only true (an input
+       * may be either), `readOnlyAfterCapture` is `readOnly`.
+       */
+      userInputs: z
+        .object({
+          enabled: z.boolean().optional(),
+          paths: z.array(z.string().trim()).default([]),
+          capture: z.literal('baseline-commit', { error: 'userInputs.capture can only be "baseline-commit": input files go into the commit the session starts from. Leave the field out.' }).optional(),
+          allowUntracked: z.literal(true, { error: 'userInputs.allowUntracked can only be true: an input file may be untracked. Leave the field out.' }).optional(),
+          allowIgnored: z.literal(true, { error: 'userInputs.allowIgnored can only be true: an input file may be ignored by git. Leave the field out.' }).optional(),
+          readOnly: z.boolean().optional(),
+          readOnlyAfterCapture: z.boolean().optional(),
+          requireApproval: z.boolean().optional(),
+        })
+        .optional(),
+      /**
+       * Evidence kept with the run and never committed. See `VersionControl.artifacts`. `commit` can
+       * only be false and `attachToRun`/`allowIgnored` only true: that is what an artifact is.
+       */
+      artifacts: z
+        .object({
+          paths: z.array(z.string().trim()).default([]),
+          allowIgnored: z.literal(true, { error: 'artifacts.allowIgnored can only be true. Leave the field out.' }).optional(),
+          attachToRun: z.literal(true, { error: 'artifacts.attachToRun can only be true: artifacts are always kept with the run. Leave the field out.' }).optional(),
+          commit: z.literal(false, { error: 'artifacts.commit can only be false: an artifact is never committed. Files that should be committed are the work, not artifacts.' }).optional(),
+        })
+        .optional(),
     },
     {
       error:
@@ -110,6 +140,14 @@ const VcsInput = z
         path: ['dirtyWorktree', 'includeUntracked'],
         message: '"tracked-only-snapshot" takes tracked changes only, and includeUntracked true asks for new files too. Keep one: policy "snapshot", or leave includeUntracked out.',
       });
+    }
+    for (const [i, p] of (vcs.userInputs?.paths ?? []).entries()) {
+      if (namesEverything(p)) {
+        ctx.addIssue({ code: 'custom', path: ['userInputs', 'paths', i], message: `"${p}" names the whole repository; an input pattern names the operator's files, such as "rules-engine/test-data/schemas/*.yaml".` });
+      }
+    }
+    if (vcs.userInputs && vcs.userInputs.enabled !== false && (vcs.userInputs.paths ?? []).length > 0 && !vcs.enabled) {
+      ctx.addIssue({ code: 'custom', path: ['userInputs'], message: 'userInputs needs version control on: the input files go into the commit the session starts from. Turn vcs.enabled on, or leave userInputs out.' });
     }
     if (vcs.enabled && !vcs.repoDir.trim()) {
       ctx.addIssue({

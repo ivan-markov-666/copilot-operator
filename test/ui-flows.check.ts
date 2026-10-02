@@ -66,7 +66,7 @@ type Card = SessionView['tasks'][number] & {
   startedAt?: string;
   checks?: Array<{ name: string; expect: string; run?: string }>;
   scopeReverted?: string[];
-  autoRetries?: number;
+  freshRetry?: boolean;
   vcs?: { branch?: string; baseCommit?: string; commit?: string; files?: Array<{ path: string }>; foreignCommits?: string[]; suspicious?: Array<{ path: string; reason: string }> };
 };
 const cards = async (h: Harness, id: string): Promise<Card[]> => (await h.session(id)).tasks as Card[];
@@ -791,7 +791,10 @@ try {
     const sha = (foreign!.vcs?.foreignCommits?.[0] ?? '').split(' ')[0] ?? '';
     t.truthy('foreign-work: done, with the foreign commit recorded', foreign!.status === 'done' && sha.length >= 7 && foreign!.vcs!.foreignCommits![0]!.includes('sneaked in'), foreign!.vcs);
     t.truthy('build-state: done, its build state marked suspicious', build!.status === 'done' && build!.vcs?.suspicious?.[0]?.path === 'web/tsconfig.tsbuildinfo', build!.vcs);
-    t.check('retry-fresh: done after one retry in a fresh chat, the blocked attempt kept', [retry!.status, retry!.autoRetries, retry!.attempts?.length, retry!.attempt], ['done', 1, 1, 2]);
+    t.check('retry-fresh: done after one retry in a fresh chat, the blocked attempt kept', [retry!.status, retry!.freshRetry, retry!.attempts?.length, retry!.attempt], ['done', true, 1, 2]);
+    // The count is derived from the marks for the register, not stored on the task (it used to add up across runs).
+    const freshRow = (await h.call<Array<{ taskId: string; autoRetries?: number }>>('GET', '/tasks')).find((r) => r.taskId === retry!.id);
+    t.check('retry-fresh: the register counts one fresh chat', freshRow?.autoRetries, 1);
 
     await page.goto(url(`/sessions/view?id=${reviewed!.id}`));
     const scopedCard = page.locator('div.task', { hasText: 'scoped-work' });

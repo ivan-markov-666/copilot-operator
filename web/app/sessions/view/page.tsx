@@ -681,7 +681,10 @@ function SnapshotList({ session, plan, onDone }: { session: Session; plan: Snaps
       <ul style={{ margin: '4px 0', paddingLeft: 0, listStyle: 'none' }}>
         {plan.entries.map((e) => (
           <li key={e.path} style={{ marginBottom: 4, overflowWrap: 'anywhere' }}>
-            <code>{e.path}</code> <span className="muted small">({t(`vcs.snapshotKind.${e.kind}`)})</span>{' '}
+            <code>{e.path}</code>{' '}
+            <span className="muted small">
+              ({e.input ? `${t('vcs.snapshotInput')}, ` : ''}{t(`vcs.snapshotKind.${e.kind}`)}{e.size !== undefined ? `, ${fmtBytes(e.size)}` : ''})
+            </span>{' '}
             {e.allowed.length === 0 ? (
               <span className="err small">{t('vcs.snapshotBlocked')}</span>
             ) : (
@@ -724,6 +727,12 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
   useEffect(() => setBranchName((JSON.parse(saved) as VersionControl).branchName ?? ''), [saved]);
   const [baseBranch, setBaseBranch] = useState(vcs.baseBranch ?? '');
   useEffect(() => setBaseBranch((JSON.parse(saved) as VersionControl).baseBranch ?? ''), [saved]);
+  // One pattern per line, saved when the field is left.
+  const [inputsText, setInputsText] = useState((vcs.userInputs?.paths ?? []).join('\n'));
+  useEffect(() => setInputsText(((JSON.parse(saved) as VersionControl).userInputs?.paths ?? []).join('\n')), [saved]);
+  const [artifactsText, setArtifactsText] = useState((vcs.artifacts?.paths ?? []).join('\n'));
+  useEffect(() => setArtifactsText(((JSON.parse(saved) as VersionControl).artifacts?.paths ?? []).join('\n')), [saved]);
+  const lines = (text: string): string[] => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const [existingBranch, setExistingBranch] = useState(vcs.existingBranch ?? '');
   useEffect(() => setExistingBranch((JSON.parse(saved) as VersionControl).existingBranch ?? ''), [saved]);
   const startFrom = vcs.startFrom ?? 'head';
@@ -1116,6 +1125,60 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
               )}
             </>
           )}
+
+          {/*
+            The operator's input files: in the commit every session of the run starts from, with their
+            sums, and read-only while the tasks run. One repository-relative pattern per line.
+          */}
+          <h3>{t('vcs.inputs')}</h3>
+          <label htmlFor={`vcs-inputs-${session.id}`}>{t('vcs.inputsField')}</label>
+          <textarea
+            id={`vcs-inputs-${session.id}`}
+            rows={3}
+            value={inputsText}
+            onChange={(e) => setInputsText(e.target.value)}
+            onBlur={() => JSON.stringify(lines(inputsText)) !== JSON.stringify(vcs.userInputs?.paths ?? []) && void save({ userInputs: { ...vcs.userInputs, paths: lines(inputsText) } })}
+            disabled={session.running}
+            placeholder="rules-engine/test-data/schemas/*.yaml"
+            spellCheck={false}
+          />
+          <p className="why">{t('vcs.inputsWhy')}</p>
+          {(vcs.userInputs?.paths.length ?? 0) > 0 && (
+            <div className="option">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={vcs.userInputs?.readOnly !== false}
+                  onChange={(e) => void save({ userInputs: { paths: vcs.userInputs?.paths ?? [], requireApproval: vcs.userInputs?.requireApproval, readOnly: e.target.checked } })}
+                  disabled={session.running}
+                />
+                <span>{t('vcs.inputsReadOnly')}</span>
+              </label>
+              <p className="why">{t('vcs.inputsReadOnlyWhy')}</p>
+            </div>
+          )}
+          {session.vcsStart?.inputs && (
+            <p className="muted small">
+              {session.vcsStart.inputs.carried
+                ? t('vcs.inputsCarried', { n: session.vcsStart.inputs.files.length, branch: session.vcsStart.inputs.carried.branch, onto: session.vcsStart.inputs.carried.onto.slice(0, 8) })
+                : t('vcs.inputsRecorded', { n: session.vcsStart.inputs.files.length, commit: session.vcsStart.commit.slice(0, 8) })}
+            </p>
+          )}
+
+          {/* Evidence: kept with the run's record, never committed, .gitignore untouched. */}
+          <h3>{t('vcs.artifacts')}</h3>
+          <label htmlFor={`vcs-artifacts-${session.id}`}>{t('vcs.artifactsField')}</label>
+          <textarea
+            id={`vcs-artifacts-${session.id}`}
+            rows={2}
+            value={artifactsText}
+            onChange={(e) => setArtifactsText(e.target.value)}
+            onBlur={() => JSON.stringify(lines(artifactsText)) !== JSON.stringify(vcs.artifacts?.paths ?? []) && void save({ artifacts: { paths: lines(artifactsText) } })}
+            disabled={session.running}
+            placeholder="rules-engine/test-results/**"
+            spellCheck={false}
+          />
+          <p className="why">{t('vcs.artifactsWhy')}</p>
 
           {/* Whether it will actually work, checked against the real repository. */}
           {status && !status.ok && (
@@ -1826,6 +1889,18 @@ function TaskCard({
               {(task.scopeReverted?.length ?? 0) > 0 && (
                 <div className="small" style={{ marginTop: 4 }}>
                   {t('task.scopeReverted', { n: task.scopeReverted?.length ?? 0, paths: (task.scopeReverted ?? []).join(', ') })}
+                </div>
+              )}
+              {/* The operator's input files, read-only: the runner put these back. */}
+              {(task.inputsRestored?.length ?? 0) > 0 && (
+                <div className="small" style={{ marginTop: 4 }}>
+                  {t('task.inputsRestored', { n: task.inputsRestored?.length ?? 0, paths: (task.inputsRestored ?? []).join(', ') })}
+                </div>
+              )}
+              {/* Evidence kept with this attempt's record, never committed. */}
+              {(task.artifactsKept?.length ?? 0) > 0 && (
+                <div className="muted small" style={{ marginTop: 4, overflowWrap: 'anywhere' }}>
+                  {t('task.artifactsKept', { n: task.artifactsKept?.length ?? 0, paths: (task.artifactsKept ?? []).slice(0, 10).map((a) => a.path).join(', ') })}
                 </div>
               )}
               {/* Commits on the branch that the runner did not make, found before its own commit. */}
