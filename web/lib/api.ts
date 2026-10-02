@@ -119,7 +119,7 @@ export type ReviewSettings = { enabled: boolean; model: string };
 
 /** One thing an independent review found wrong, with what proves it. */
 export type ReviewFinding = {
-  /** Round and position, `r1f2`: what a dispute names. */
+  /** Round and position, `r1f2`, with the attempt from the second on, `a2r1f2`: what a dispute names. */
   id?: string;
   what: string;
   evidence: string;

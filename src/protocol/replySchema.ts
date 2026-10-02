@@ -94,7 +94,7 @@ export type Deviation = z.infer<typeof DeviationSchema>;
  * claim to test, and to the record. The finding is named by the id the runner gave it.
  */
 export const DisputeSchema = z.object({
-  /** The finding's id as it was given: `r1f2`. */
+  /** The finding's id as it was given: `r1f2`, or `a2r1f2` on a later attempt. */
   finding: z.string().trim().min(1),
   /** Why it is wrong. */
   why: z.string().trim().min(1),

@@ -130,7 +130,8 @@ with no `deviations` keeps what was declared earlier.
 
 ## When a review finding is wrong
 
-An independent review may send findings back, each with an id in front of it, like `[r1f2]`.
+An independent review may send findings back, each with an id in front of it, like `[r1f2]`
+(or `[a2r1f2]` on the task's second attempt); name it exactly as it was written.
 A reviewer can be wrong: it can search for something the task never specified, or blame the
 work for a process it left running itself. When a finding is wrong, do not change the work to
 make it go away. Say so in **`disputed`**: the finding's id, why it is wrong, and the evidence —

@@ -26,7 +26,25 @@ export function derivedCheckName(findingId: string, name: string): string {
 }
 
 export function isDerivedCheck(check: TaskCheck): boolean {
-  return /^review r\d+f\d+: /.test(check.name);
+  return /^review (?:a\d+)?r\d+f\d+: /.test(check.name);
+}
+
+/**
+ * Kept checks written before a finding's id carried its attempt, given the id it carries now.
+ *
+ * Those records hold `r1f1` for attempt 1's first finding and again for attempt 2's, under one check
+ * name, and a dispute, a deferral or a drop aimed at one acted on both. Renamed from the attempt each
+ * was made on (see `findingId`), check name included, so the gate and the implementer see the same
+ * name a dispute can then use. A check of the first attempt, and one already renamed, is left as it is.
+ */
+export function withAttemptIds(reviewChecks: TaskReviewCheck[]): TaskReviewCheck[] {
+  return reviewChecks.map((rc) => {
+    if ((rc.attempt ?? 1) <= 1 || !/^r\d+f\d+$/.test(rc.findingId)) return rc;
+    const id = `a${rc.attempt}${rc.findingId}`;
+    const before = derivedCheckName(rc.findingId, '');
+    const name = rc.check.name.startsWith(before) ? derivedCheckName(id, rc.check.name.slice(before.length)) : rc.check.name;
+    return { ...rc, findingId: id, check: { ...rc.check, name } };
+  });
 }
 
 export type DerivedValidation = {

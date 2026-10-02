@@ -79,7 +79,7 @@ export type TaskEnvironment = {
  */
 export type TaskReviewCheck = {
   check: TaskCheck;
-  /** The finding it came from, `r1f2`, and what that finding said. */
+  /** The finding it came from, `r1f2` (`a2r1f2` on the task's second attempt), and what that finding said. */
   findingId: string;
   what: string;
   where?: string;
@@ -377,7 +377,7 @@ export type TaskReview = {
   stepsRun: number;
   summary?: string;
   findings?: Array<{
-    /** Round and position, `r1f2`: what a dispute names. Absent on records older than this. */
+    /** Round and position, `r1f2`, with the attempt from the second on, `a2r1f2`: what a dispute names. Absent on records older than this. */
     id?: string;
     what: string;
     evidence: string;

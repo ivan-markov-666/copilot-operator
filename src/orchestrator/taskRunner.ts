@@ -24,7 +24,7 @@ import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell, type ShellProblem } from '../exec/shells.js';
 import { runChecks, failureMessage, failureRedactions, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
-import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck } from './derivedChecks.js';
+import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck, withAttemptIds } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { redactSecrets } from '../exec/redaction.js';
 import { snapshotProcesses, reapLeftovers, describeLeftovers, ProcessTracker, type ProcessSnapshot } from '../exec/processes.js';
@@ -650,9 +650,10 @@ export async function runTask(
   let runAfterCommit: ((checks: TaskCheck[]) => Promise<CheckOutcome[]>) | null = null;
   /**
    * Checks earlier reviews gave with their findings — carried over from every attempt before
-   * this one, and grown by this one. See `derivedChecks.ts` for the three rules.
+   * this one, and grown by this one. See `derivedChecks.ts` for the three rules. Ones written before
+   * a finding's id carried its attempt are renamed here, before anything finds one by id or name.
    */
-  let reviewChecks: TaskReviewCheck[] = task.reviewChecks ?? [];
+  let reviewChecks: TaskReviewCheck[] = withAttemptIds(task.reviewChecks ?? []);
   /** Derived checks that still failed when the rounds ran out; the reviewer is told. */
   let derivedStillFailing: Array<{ name: string; detail: string }> = [];
   /**
@@ -913,6 +914,8 @@ export async function runTask(
     t.runId = runId;
     t.runGroup = deps.runGroup;
     t.startedAt = new Date().toISOString();
+    // The kept checks under the ids this run uses (`withAttemptIds`), so the record names them as the gate does.
+    if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
   });
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\n`, 'utf8');
@@ -1665,7 +1668,7 @@ export async function runTask(
       // `repeated` still identifies them.
       const named = outcome.findings.map((f, i) => ({
         ...f,
-        id: (f as { id?: string }).id ?? findingId(reviewRounds, i),
+        id: (f as { id?: string }).id ?? findingId(reviewRounds, i, attempt),
         ...(repeated.includes(f) ? { repeated: true } : {}),
       }));
       outcome = { ...outcome, findings: named };

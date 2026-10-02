@@ -494,7 +494,7 @@ ${machineNote}` : contract);
           };
         }
 
-        const named = grounded.map((f, i) => ({ ...f, id: findingId(round, i) }));
+        const named = grounded.map((f, i) => ({ ...f, id: findingId(round, i, task.attempt ?? 1) }));
 
         /*
          * A read-only task's findings never become gate conditions.
@@ -807,7 +807,7 @@ export function findingsMessage(
     `Fix these, then verify as usual and close the task again. This is review round ${round} of ${maxRounds};`,
     'after that the task is closed as blocked with whatever is still outstanding.',
     '',
-    'If you believe a finding is wrong, say so in `disputed`: its id (the `[r1f2]` in front of it), why it',
+    'If you believe a finding is wrong, say so in `disputed`: its id as written (the `[r1f2]` in front of it), why it',
     'is wrong, and the evidence that shows it — the command you ran and what came back. A dispute goes to',
     'the next reviewer as a claim to test; a sentence in your summary goes nowhere. Do not change the',
     'thing the reviewer looked at in order to make the objection go away.',

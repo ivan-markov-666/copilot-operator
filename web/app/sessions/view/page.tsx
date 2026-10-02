@@ -2036,7 +2036,7 @@ function TaskCard({
                 {(task.reviewChecks ?? []).map((rc) => {
                   const result = (task.checkResults ?? []).find((r) => r.name === rc.check.name);
                   return (
-                    <li key={rc.check.name}>
+                    <li key={`${rc.attempt}:${rc.findingId}:${rc.check.name}`}>
                       <code>{rc.findingId}</code> <strong>{rc.check.name}</strong>
                       {rc.state !== 'active' && (
                         <span className="chip" style={{ marginLeft: 6 }}>

@@ -178,13 +178,18 @@ export function isGrounded(basis: string, sources: string[]): boolean {
 }
 
 /**
- * The name a finding is referred to by, once the runner has it: round and position.
+ * The name a finding is referred to by, once the runner has it: round and position, and from the
+ * task's second attempt on the attempt as well — `r1f2`, then `a2r1f2`.
  *
- * Given by the runner rather than the reviewer so that it is unique across rounds and cannot
- * be forgotten. It is what the implementer names in `disputed`, and what the record shows.
+ * Given by the runner rather than the reviewer so that it is unique and cannot be forgotten. It is
+ * what the implementer names in `disputed`, what a check given with the finding is named after, and
+ * what the record shows. Unique across the task's attempts, not only its rounds, because those checks
+ * are kept for every later attempt (`Task.reviewChecks`) and the rounds count from 1 on each: with
+ * round and position alone, attempt 2's first finding was `r1f1` beside attempt 1's kept `r1f1`, and
+ * a dispute of the one suspended the check of the other. The first attempt keeps the short form.
  */
-export function findingId(round: number, index: number): string {
-  return `r${round}f${index + 1}`;
+export function findingId(round: number, index: number, attempt = 1): string {
+  return `${attempt > 1 ? `a${attempt}` : ''}r${round}f${index + 1}`;
 }
 
 /** True when nothing the reviewer found is something the implementer could fix. */
