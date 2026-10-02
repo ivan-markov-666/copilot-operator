@@ -34,8 +34,8 @@ import { EventBus } from '../src/session/events.js';
 import { git, commitAll } from '../src/vcs/git.js';
 import { prepareForTask, commitTaskResult, vcsPreflight } from '../src/vcs/taskVcs.js';
 import { takeSnapshot, type SnapshotChoice } from '../src/vcs/snapshot.js';
-import { protectInputs } from '../src/vcs/inputs.js';
-import { keepArtifacts } from '../src/vcs/artifacts.js';
+import { protectInputs, untrackedInputs } from '../src/vcs/inputs.js';
+import { artifactState, coveredByArtifacts, keepArtifacts } from '../src/vcs/artifacts.js';
 import { checkPlan } from '../src/plan/schema.js';
 import { importPlan } from '../src/plan/importPlan.js';
 import { buildPlanExport, buildDomainExport } from '../src/session/exports.js';
@@ -170,6 +170,8 @@ console.log('\n--- a later session whose start lacks them ---');
   const c = await session('chain', r1, { userInputs: { paths: ['schemas/*.yaml'] }, startFrom: 'previous-session', branchMode: 'per-session' });
   await run(c, r1, 'work-c.ts');
   check('a chain whose start has them commits nothing more', (await fresh(c)).vcsStart?.inputs?.carried, undefined);
+  // Point 4 of the 2026-10-02 feedback: the chain inherits the same inputs, sum for sum.
+  check('and inherits the same inputs, sum for sum', (await fresh(c)).vcsStart?.inputs?.files.filter((f) => f.path.startsWith('schemas/')).map((f) => f.sha256), sa.vcsStart?.inputs?.files.filter((f) => f.path.startsWith('schemas/')).map((f) => f.sha256));
 
   const d = await session('wrong-pattern', r1, { userInputs: { paths: ['schemas/*.json'] }, startFrom: 'branch', updateFromRemote: false });
   const rd = await prepare(d);
@@ -286,6 +288,105 @@ console.log('\n--- a chain after a per-task session ---');
   check('with all of its work', ['three.ts', 'four.ts'].every((f) => tree.includes(f)), true);
 }
 
+console.log('\n--- the session before: finished, and what it produced is there (2026-10-02, point 8) ---');
+{
+  // Unfinished: one of its tasks failed. It used to be skipped for an older session that committed.
+  const r = await repo();
+  const done = await session('done-first', r, { startFrom: 'branch', branchMode: 'per-session', updateFromRemote: false });
+  await run(done, r, 'a.ts');
+  const broken = await session('broken', r, { startFrom: 'previous-session', branchMode: 'per-session', updateFromRemote: false });
+  await run(broken, r, 'b.ts');
+  await store.updateTask(broken.id, (await fresh(broken)).tasks[0]!.id, (x) => void (x.status = 'failed'));
+  const after = await session('after-broken', r, { startFrom: 'previous-session', updateFromRemote: false });
+  const pa = await prepare(after);
+  check('a predecessor that has not finished refuses', /"broken", which has not finished: "broken task 1" is failed/.test(pa.refuse ?? ''), true);
+  check('not continued from the older session that did', (await fresh(after)).vcsStart, undefined);
+
+  // Its final commit gone: refused, not started from the base branch as before.
+  await store.updateTask(broken.id, (await fresh(broken)).tasks[0]!.id, (x) => void (x.status = 'done'));
+  const branch = (await fresh(broken)).tasks[0]!.vcs!.branch!;
+  await git(r, ['checkout', '-q', 'main']);
+  await git(r, ['branch', '-D', branch]);
+  const pg = await prepare(after);
+  check('a predecessor whose branch is gone refuses', /no longer in the repository, so its final commit cannot be carried on/.test(pg.refuse ?? ''), true);
+
+  // Artifacts only: it committed nothing, and kept evidence. The next one starts where it started.
+  const r2 = await repo();
+  const ao = await session('evidence-only', r2, { startFrom: 'branch', branchMode: 'per-session', updateFromRemote: false });
+  const pao = await prepare(ao);
+  const aoTask = (await fresh(ao)).tasks[0]!;
+  await store.updateTask(ao.id, aoTask.id, (x) => void (x.vcs = pao.vcs));
+  const nothing = await commitTaskResult(await fresh(ao), (await fresh(ao)).tasks[0] as Task, { status: 'done', summary: 'report written' }, bus);
+  clock += 60_000;
+  await store.updateTask(ao.id, aoTask.id, (x) => {
+    x.vcs = nothing;
+    x.status = 'done';
+    x.finishedAt = new Date(clock).toISOString();
+    x.artifactsKept = [{ path: 'evidence/report.txt', size: 3, sha256: sha('ok\n') }];
+  });
+  const next = await session('after-evidence', r2, { startFrom: 'previous-session', updateFromRemote: false });
+  await prepare(next);
+  const sn = await fresh(next);
+  check('an artifact-only predecessor is continued from where it started', [sn.vcsStart?.kind, sn.vcsStart?.commit], ['previous-session', (await fresh(ao)).vcsBaseCommit]);
+  check('and the start says why', /its result is artifacts only/.test(sn.vcsStart?.note ?? ''), true);
+}
+
+console.log('\n--- found while reproducing the 2026-10-02 report ---');
+{
+  // A pattern that matches nothing was found only after the snapshot had been taken.
+  const r = await repo();
+  await mkdir(join(r, 'schemas', 'v2'), { recursive: true });
+  await writeFile(join(r, 'schemas', 'v2', 'x.yaml'), 'x\n');
+  const s = await session('only-v2', r, { userInputs: { paths: ['schemas/*.yaml'] }, dirtyWorktree: { policy: 'snapshot' } });
+  const pre = await vcsPreflight(await fresh(s), all);
+  check('a pattern that matches nothing refuses before anything is approved', /match no file in the project/.test(pre.snapshot?.problem ?? ''), true);
+  check('and says why the file was not matched', /"\*" stays inside one folder/.test(pre.snapshot?.problem ?? ''), true);
+  check('nothing was committed', await out(r, ['rev-parse', '--abbrev-ref', 'HEAD']), 'main');
+
+  // An input the operator added, ignored and in no commit, was deleted by the guard as "put back".
+  const r2 = await repo();
+  await mkdir(join(r2, 'secret-data'), { recursive: true });
+  await writeFile(join(r2, 'secret-data', 'a.yaml'), 'a\n');
+  await git(r2, ['add', '-f', 'secret-data/a.yaml']);
+  await commitAll(r2, 'tracked input');
+  const head2 = await out(r2, ['rev-parse', 'HEAD']);
+  await writeFile(join(r2, 'secret-data', 'mine.yaml'), 'the operator\'s\n');
+  const record = { patterns: ['secret-data/*.yaml'], files: [{ path: 'secret-data/a.yaml', sha256: sha('a\n'), size: 2, blob: await out(r2, ['rev-parse', 'HEAD:secret-data/a.yaml']) }], readOnly: true };
+  const keep = await untrackedInputs(r2, record.patterns);
+  await writeFile(join(r2, 'secret-data', 'task-made.yaml'), 'by the task\n');
+  const c = await protectInputs(r2, head2, record, keep);
+  check('a file the operator had there is kept', existsSync(join(r2, 'secret-data', 'mine.yaml')), true);
+  check('one the task added is removed', [existsSync(join(r2, 'secret-data', 'task-made.yaml')), c.restored], [false, ['secret-data/task-made.yaml']]);
+
+  // An artifacts pattern that covers the inputs keeps them out of git: refused at import and on save.
+  const plan = (vcs: Record<string, unknown>): string =>
+    JSON.stringify({ version: 1, plan: 'p', sessions: [{ name: 'one', goal: 'g', level2: '', vcs: { enabled: true, repoDir: r, ...vcs }, tasks: [{ title: 'task one', prompt: 'Do the first thing, properly and completely.', expected: 'done' }] }] });
+  check('artifacts covering the inputs are refused at import', checkPlan(plan({ userInputs: { paths: ['rules-engine/test-data/schemas/*.yaml'] }, artifacts: { paths: ['rules-engine/**'] } })).ok, false);
+  check('artifacts beside the inputs are fine', checkPlan(plan({ userInputs: { paths: ['rules-engine/test-data/schemas/*.yaml'] }, artifacts: { paths: ['rules-engine/test-results/**'] } })).ok, true);
+  check('the cover is found for folders and patterns alike', coveredByArtifacts(['data/in.yaml', 'schemas/', 'x/**/*.json'], ['data/**', 'schemas/', 'y/**']), ['data/in.yaml', 'schemas/']);
+}
+
+console.log('\n--- artifacts: only what the task made or changed (2026-10-02, point 7) ---');
+{
+  const r = await repo();
+  await mkdir(join(r, 'rules-engine', 'evidence'), { recursive: true });
+  await writeFile(join(r, 'rules-engine', 'evidence', 'old-session.zip'), 'PK old');
+  await writeFile(join(r, 'rules-engine', 'evidence', 'rewritten.txt'), 'before');
+  const before = await artifactState(r, ['rules-engine/**', 'out/report.md']);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await writeFile(join(r, 'rules-engine', 'evidence', 'rewritten.txt'), 'after, longer');
+  await writeFile(join(r, 'rules-engine', 'evidence', 'new.txt'), 'new');
+  await mkdir(join(r, 'rules-engine', 'other'), { recursive: true });
+  await writeFile(join(r, 'rules-engine', 'other', 'elsewhere.txt'), 'outside the scope');
+  await mkdir(join(r, 'out'), { recursive: true });
+  await writeFile(join(r, 'out', 'report.md'), '# declared output');
+  const dest = await mkdtemp(join(tmpdir(), 'cop-inputs-kept2-'));
+  const kept = await keepArtifacts(r, ['rules-engine/**'], dest, { before, scope: ['rules-engine/evidence/'], outputs: ['out/report.md'] });
+  check('kept: new and changed in scope, and the declared output', kept.kept.map((k) => k.path), ['out/report.md', 'rules-engine/evidence/new.txt', 'rules-engine/evidence/rewritten.txt']);
+  check('a file already there and untouched is not kept', kept.unchanged, 1);
+  check('a new file outside the task\'s scope is not kept', kept.outsideScope, ['rules-engine/other/elsewhere.txt']);
+}
+
 console.log('\n--- the plan format ---');
 {
   const r = await repo();
@@ -318,6 +419,8 @@ console.log('\n--- the plan format ---');
   check('the export writes both back', [exported.sessions[0]?.vcs.userInputs, exported.sessions[0]?.vcs.artifacts], [vcs?.userInputs, vcs?.artifacts]);
   const domain = (await buildDomainExport({ label: 'x', sessions: [await fresh(a)] }, data)) as { tasks: Array<{ session: { start?: { commit: string; inputs?: { files: unknown[] } } } }> };
   check('the work export records the baseline commit and the inputs with their sums', [domain.tasks[0]?.session.start?.commit, domain.tasks[0]?.session.start?.inputs?.files.length], [(await fresh(a)).vcsBaseCommit, 3]);
+  // A report sent from another machine says which version made it.
+  check('and which version of the bot made it', (domain as unknown as { botVersion?: string }).botVersion, JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')).version);
 }
 
 function readFileSyncLines(r: string): string[] {

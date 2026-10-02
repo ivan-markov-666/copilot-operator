@@ -23,6 +23,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Session, Task, TaskCheck } from './model.js';
 import { TASK_FIELD_ON_RERUN } from './store.js';
+import { botVersion } from '../config/version.js';
 import { withoutPersona } from '../plan/importPlan.js';
 
 export type ExportKind = 'plan' | 'domain' | 'bot';
@@ -183,6 +184,7 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           if (t.reviewEnabled === false) task.review = false;
           if (t.readOnly) task.readOnly = true;
           if (t.scope && t.scope.length > 0) task.scope = [...t.scope];
+          if (t.outputs && t.outputs.length > 0) task.outputs = [...t.outputs];
           const earlier = earlierPlans(t, level2);
           if (earlier.length > 0) task.earlierAttempts = earlier;
           return task;
@@ -601,6 +603,8 @@ export async function buildDomainExport(scope: ExportScope, runsDir: string): Pr
   }
   return {
     exportedAt: new Date().toISOString(),
+    // Which copilot-operator made this, so a report from another machine says it without being asked.
+    botVersion: botVersion(),
     about: `copilot-operator, the work: ${scope.label}. What each task asked, what the chat tried, what was done to the repository, and why a task did not end done. Nothing about the runner itself; that is the bot export.`,
     counts,
     tasks,
@@ -681,6 +685,8 @@ export async function buildBotExport(
   for (const { session, task } of pairs) tasks.push(await botTask(session, task, runsDir));
   return {
     exportedAt: new Date().toISOString(),
+    // Which copilot-operator made this, so a report from another machine says it without being asked.
+    botVersion: botVersion(),
     about: `copilot-operator, the runner: ${scope.label}. The environment, every transcript event, every step with its exit code, the transport's retries, what was reaped, what the review machinery did. Read the domain export for what the task was about.`,
     machine,
     tasks,
@@ -718,6 +724,8 @@ export async function buildBundleExport(
   const pairs = tasksOf(scope);
   return {
     exportedAt: new Date().toISOString(),
+    // Which copilot-operator made this, so a report from another machine says it without being asked.
+    botVersion: botVersion(),
     about:
       `copilot-operator, all three views of ${pairs.length} chosen task(s): ${scope.label}. ` +
       '`plan` is what was asked, in the format that imports again; `work` is what happened to it; ' +

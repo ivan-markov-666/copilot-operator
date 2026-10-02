@@ -25,6 +25,21 @@ import { git } from './git.js';
 import { normalisePatterns } from './inputs.js';
 import { inScope } from './scope.js';
 
+/**
+ * The patterns among `patterns` whose files an artifact pattern would cover, and so keep out of git.
+ * Judged by a path the pattern stands for (`**` and `*` filled in). Found in a run on 0.1.18: an
+ * artifact pattern of a whole project folder covered the input files and the task's own work, every
+ * file the task wrote was ignored, and "nothing to commit" ended it done.
+ */
+export function coveredByArtifacts(patterns: string[], artifacts: string[]): string[] {
+  const arts = normalisePatterns(artifacts);
+  if (arts.length === 0) return [];
+  return normalisePatterns(patterns).filter((p) => {
+    const sample = p.replace(/\/+$/, '/f').replace(/\*\*/g, 'a/b').replace(/[*?]/g, 'x');
+    return inScope(sample, arts);
+  });
+}
+
 /** The session's artifact patterns, without ones that name the whole project. */
 export function artifactPatterns(vcs: VersionControl | undefined): string[] {
   return normalisePatterns(vcs?.artifacts?.paths ?? []);
@@ -64,7 +79,25 @@ export async function excludeArtifacts(dir: string, session: Session): Promise<{
 
 export type KeptArtifact = { path: string; size: number; sha256: string };
 
-const LIMITS = { files: 1000, fileBytes: 100 * 1024 * 1024, totalBytes: 500 * 1024 * 1024 };
+const LIMITS = { files: 1000, fileBytes: 100 * 1024 * 1024, totalBytes: 500 * 1024 * 1024, listed: 20_000 };
+
+/** Each matching file's size and modification time, read when a task starts. */
+export type ArtifactState = Map<string, string>;
+
+/**
+ * The artifact files as they are before a task, so that what is kept afterwards is what the task
+ * made or changed. Found in a real run: a broad pattern kept every file already under it, evidence
+ * of earlier sessions included, as if this task had produced it.
+ */
+export async function artifactState(root: string, patterns: string[]): Promise<ArtifactState> {
+  const state: ArtifactState = new Map();
+  if (patterns.length === 0 || !root) return state;
+  for (const rel of await matching(root, patterns)) {
+    const info = await stat(join(root, rel)).catch(() => null);
+    if (info) state.set(rel, `${info.size}:${info.mtimeMs}`);
+  }
+  return state;
+}
 
 /** Files under `root` matching the patterns, found on disk: git's view does not matter for evidence. */
 async function matching(root: string, patterns: string[]): Promise<string[]> {
@@ -80,7 +113,7 @@ async function matching(root: string, patterns: string[]): Promise<string[]> {
     }),
   );
   const walk = async (rel: string): Promise<void> => {
-    if (out.length > LIMITS.files * 2) return;
+    if (out.length > LIMITS.listed) return;
     const abs = join(root, rel);
     const info = await stat(abs).catch(() => null);
     if (!info) return;
@@ -98,16 +131,29 @@ async function matching(root: string, patterns: string[]): Promise<string[]> {
 }
 
 /**
- * Copies the artifact files into the attempt's record, `<dest>/<path>`. Secrets are never copied;
- * past the limits the rest is skipped and said.
+ * Copies into the attempt's record, `<dest>/<path>`, the artifact files this task made or changed:
+ * under the session's artifact patterns or the task's own `outputs`, new or changed since `before`
+ * (`artifactState` at the task's start), and inside the task's scope when it has one (its outputs
+ * always count). A file already there and untouched is not this task's evidence and is not kept.
+ * Secrets are never copied; past the limits the rest is skipped and said.
  */
-export async function keepArtifacts(root: string, patterns: string[], dest: string): Promise<{ kept: KeptArtifact[]; skipped: string[] }> {
+export async function keepArtifacts(
+  root: string,
+  patterns: string[],
+  dest: string,
+  opts: { before?: ArtifactState; scope?: string[]; outputs?: string[] } = {},
+): Promise<{ kept: KeptArtifact[]; skipped: string[]; unchanged: number; outsideScope: string[] }> {
   const kept: KeptArtifact[] = [];
   const skipped: string[] = [];
-  if (patterns.length === 0 || !root) return { kept, skipped };
+  const outsideScope: string[] = [];
+  let unchanged = 0;
+  const outputs = normalisePatterns(opts.outputs ?? []);
+  const scope = opts.scope ?? [];
+  const all = [...new Set([...patterns, ...outputs])];
+  if (all.length === 0 || !root) return { kept, skipped, unchanged, outsideScope };
   let total = 0;
   const base = resolve(root);
-  for (const rel of await matching(root, patterns)) {
+  for (const rel of await matching(root, all)) {
     const from = resolve(join(root, rel));
     if (!from.startsWith(base + sep)) continue;
     if (looksGenerated(rel)?.reason === 'a secrets file') {
@@ -116,6 +162,14 @@ export async function keepArtifacts(root: string, patterns: string[], dest: stri
     }
     const info = await stat(from).catch(() => null);
     if (!info) continue;
+    if (opts.before && opts.before.get(rel) === `${info.size}:${info.mtimeMs}`) {
+      unchanged += 1;
+      continue;
+    }
+    if (scope.length > 0 && !inScope(rel, scope) && !(outputs.length > 0 && inScope(rel, outputs))) {
+      outsideScope.push(rel);
+      continue;
+    }
     if (kept.length >= LIMITS.files || info.size > LIMITS.fileBytes || total + info.size > LIMITS.totalBytes) {
       skipped.push(`${rel} (past the limit of ${LIMITS.files} files, ${LIMITS.fileBytes / 1048576} MB a file, ${LIMITS.totalBytes / 1048576} MB in all)`);
       continue;
@@ -131,5 +185,5 @@ export async function keepArtifacts(root: string, patterns: string[], dest: stri
       skipped.push(`${rel} (${(e as Error).message})`);
     }
   }
-  return { kept, skipped };
+  return { kept, skipped, unchanged, outsideScope };
 }

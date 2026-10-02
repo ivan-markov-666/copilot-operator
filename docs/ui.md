@@ -206,7 +206,7 @@ began with. There is no `reset --hard`, no forced checkout and no branch deletio
 this project.
 
 **Nothing is ever pushed.** That is the operator's decision, made by hand, after reading the
-branch. Two more refusals: a repository with uncommitted changes is left alone with an
+branch. Two more refusals: a repository with uncommitted changes refuses the task, with an
 explanation, because that work is the operator's, and a folder that is not a repository is
 reported rather than initialised.
 
@@ -243,6 +243,21 @@ when each task ends the files are copied to `runs/<run>/artifacts/project/` with
 ran per task with several done tasks is refused at the start, naming the tasks whose work is not
 on the branch it would continue — each task's work is on its own branch — and the plan import
 warns about it. Verified by `npm run check:inputs` and `npm run check:e2e-inputs`.
+
+**With version control on, a task is done only when its work is committed** (from the feedback
+on 0.1.18, 2026-10-02). A commit that fails — another git holding the index, the repository moved
+to another branch mid-task, files left uncommitted after it — ends the task failed with why, its
+work left in the working tree. Version control that is on but cannot work — a dirty tree, a starting
+branch that is not there, a predecessor that has not finished — refuses the task before anything is
+sent, instead of running it without branches. The session before a `previous-session` chain must
+have finished; it is continued from its final commit, or, when its result is artifacts only, from
+where it started. Input files changed or added after a session started are listed under "Uncommitted
+changes" and, once approved, committed on its line of work ("Capture user-provided inputs"); the guard
+holds each task to the inputs of its own starting commit and never removes a file that was there
+before the task. Artifacts kept with a run are only the files a task created or changed, inside its
+scope, or under its declared `outputs`; an artifacts pattern that covers the input files is refused.
+Every export and attempt record says which copilot-operator made it (`botVersion`), and the System page
+shows it. Verified by `npm run check:e2e-commit`, `check:inputs` and `check:e2e-inputs`.
 
 ## One chain, or independent tasks
 

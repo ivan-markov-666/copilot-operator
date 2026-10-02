@@ -3,7 +3,7 @@
  *
  * Until `dirtyWorktree` existed, a tree with uncommitted changes kept version control out of a
  * session altogether — input files a task needed, untracked, were enough. The questions here are
- * what the snapshot promises: absent keeps the old behaviour; asked for approval, a run is refused
+ * what the snapshot promises: absent refuses a dirty tree, nothing run; asked for approval, a run is refused
  * and nothing changes; the approved list becomes one commit on a branch of its own that the
  * session's branches are cut from, the operator's branch untouched; secrets and files outside the
  * project are never taken and are left out locally, so no task commits them; a tracked secret
@@ -71,14 +71,15 @@ const prepare = async (s: Session) => {
 const defaults = (entries: Array<{ path: string; choice: SnapshotChoice | null }>): Record<string, SnapshotChoice> =>
   Object.fromEntries(entries.filter((e) => e.choice).map((e) => [e.path, e.choice as SnapshotChoice]));
 
-console.log('--- absent keeps the old behaviour ---');
+console.log('--- absent: a dirty tree refuses the task ---');
 {
   const r = await repo();
   await writeFile(join(r, 'input.yaml'), 'a: 1\n');
   const s = await session('legacy', r, {});
   const p = await prepare(s);
-  check('a dirty tree leaves version control inactive', /uncommitted changes/.test(p.vcs.problem ?? ''), true);
-  check('and does not refuse the task', p.refuse, undefined);
+  // It used to run "on but inactive", commit nothing and end done with the work loose in the tree.
+  check('a dirty tree refuses the task, naming the files', /uncommitted changes \(input\.yaml\)/.test(p.refuse ?? ''), true);
+  check('and says nothing was run, and how to go on', /Nothing was run/.test(p.refuse ?? '') && /starting snapshot/.test(p.refuse ?? ''), true);
   check('no snapshot is offered', (await vcsPreflight(await fresh(s), all)).snapshot, undefined);
 }
 

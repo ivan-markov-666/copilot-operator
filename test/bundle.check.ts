@@ -79,7 +79,7 @@ const chosen = new Set([all[0].task.id, all[2].task.id]);
 const scope = { sessions, taskFilter: (_s: Session, t: Task) => chosen.has(t.id), label: '2-tasks-2-sessions' };
 const bundle = await buildBundleExport(scope, join(dir, 'runs'), machine);
 
-check('the parts are all there', Object.keys(bundle).sort(), ['about', 'chosen', 'exportedAt', 'plan', 'runner', 'work']);
+check('the parts are all there', Object.keys(bundle).sort(), ['about', 'botVersion', 'chosen', 'exportedAt', 'plan', 'runner', 'work']);
 const chosenNames = (bundle.chosen as Array<{ session: string; task: string }>).map((c) => `${c.session}/${c.task}`);
 check('it names what was chosen', chosenNames, ['alpha/one', 'beta/three']);
 

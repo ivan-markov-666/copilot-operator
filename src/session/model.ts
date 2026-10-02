@@ -200,6 +200,12 @@ export type Task = {
    * anywhere. The runner puts back changes outside it after every round of steps. See `vcs/scope.ts`.
    */
   scope?: string[];
+  /**
+   * Files the task is to produce as evidence, repository-relative patterns. Kept with the attempt's
+   * record when the task creates or changes them, as the session's artifacts are, even outside the
+   * artifact patterns. See `vcs/artifacts.ts`.
+   */
+  outputs?: string[];
   /** Changes the runner put back because they were outside `scope`, over the whole attempt. */
   scopeReverted?: string[];
   /** The operator's input files the runner put back because the task changed them; see `UserInputs`. */
@@ -741,7 +747,14 @@ export type SessionStart = {
    * they were not in the start `startFrom` chose (`onto`), so the runner committed them on top of it,
    * on `branch`, from `from` — the commit they were last captured in.
    */
-  inputs?: { patterns: string[]; files: InputFile[]; readOnly: boolean; carried?: { onto: string; from: string; branch: string } };
+  inputs?: {
+    patterns: string[];
+    files: InputFile[];
+    readOnly: boolean;
+    carried?: { onto: string; from: string; branch: string };
+    /** Input files changed or added after the session started, committed on its line of work. */
+    recaptured?: Array<{ commit: string; branch: string; paths: string[]; approved: boolean }>;
+  };
 };
 
 /** What version control did for one task, recorded so a re-run can go back to where it began. */

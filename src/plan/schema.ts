@@ -14,6 +14,7 @@
  */
 import { z } from 'zod';
 import { namesEverything } from '../vcs/inputs.js';
+import { coveredByArtifacts } from '../vcs/artifacts.js';
 
 export const PLAN_VERSION = 1;
 
@@ -148,6 +149,16 @@ const VcsInput = z
     }
     if (vcs.userInputs && vcs.userInputs.enabled !== false && (vcs.userInputs.paths ?? []).length > 0 && !vcs.enabled) {
       ctx.addIssue({ code: 'custom', path: ['userInputs'], message: 'userInputs needs version control on: the input files go into the commit the session starts from. Turn vcs.enabled on, or leave userInputs out.' });
+    }
+    const hidden = coveredByArtifacts(vcs.userInputs?.paths ?? [], vcs.artifacts?.paths ?? []);
+    if (hidden.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['artifacts', 'paths'],
+        message:
+          `An artifacts pattern covers the input files ${hidden.map((h) => `"${h}"`).join(', ')}: artifacts are kept out of git, so the inputs would be too. ` +
+          'Name only the folders the evidence is written to (for example "rules-engine/test-results/**"), not a whole project folder.',
+      });
     }
     if (vcs.enabled && !vcs.repoDir.trim()) {
       ctx.addIssue({
@@ -316,6 +327,11 @@ const TaskInput = z.object({
    * chat told — which a sentence in the prompt cannot be. See `vcs/scope.ts`.
    */
   scope: z.array(z.string().trim().min(1, 'A scope entry needs a path or a pattern.')).default([]),
+  /**
+   * Files the task is to produce as evidence (reports, archives), repository-relative patterns.
+   * Kept with the run's record when the task creates or changes them. See `Task.outputs`.
+   */
+  outputs: z.array(z.string().trim().min(1, 'An outputs entry needs a path or a pattern.')).default([]),
   /**
    * What earlier attempts of this task were asked, written by the plan export for a task that has
    * been run more than once (`earlierPlans` in `session/exports.ts`). History, not instruction:

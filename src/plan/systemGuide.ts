@@ -1369,9 +1369,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Uncommitted changes',
             bg: 'Некомитнати промени',
             doesEn:
-              'What the first task does when the repository has uncommitted changes: keep version control out (as until now), or take them — all, or tracked only — as a starting snapshot: one commit on a branch of its own that the session starts from. In a plan: "dirtyWorktree": { "policy": "snapshot" }. Not shown for "Carry on an existing branch".',
+              'What the first task does when the repository has uncommitted changes: refuse to start until they are committed, or take them — all, or tracked only — as a starting snapshot: one commit on a branch of its own that the session starts from. In a plan: "dirtyWorktree": { "policy": "snapshot" }. Not shown for "Carry on an existing branch".',
             doesBg:
-              'Какво прави първата задача, когато хранилището има некомитнати промени: без контрол на версиите (както досега) или ги взема — всички или само tracked — като начална снимка: един комит на отделен клон, от който сесията тръгва. В план: "dirtyWorktree": { "policy": "snapshot" }. Не се показва при „Продължи съществуващ клон“.',
+              'Какво прави първата задача, когато хранилището има некомитнати промени: отказва старта, докато не са комитнати, или ги взема — всички или само tracked — като начална снимка: един комит на отделен клон, от който сесията тръгва. В план: "dirtyWorktree": { "policy": "snapshot" }. Не се показва при „Продължи съществуващ клон“.',
           },
           {
             key: 'vcs.snapshotTake',
@@ -3713,6 +3713,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         en: 'This machine',
         bg: 'Тази машина',
         controls: [
+          {
+            key: 'sys.version',
+            kind: 'note',
+            en: 'copilot-operator version',
+            bg: 'Версия на copilot-operator',
+            doesEn: 'The first row: which version of the bot is running, as `cop --version` says. Name it when reporting a problem.',
+            doesBg: 'Първият ред: коя версия на бота работи, както я казва `cop --version`. Кажи я, когато съобщаваш за проблем.',
+          },
           {
             key: 'sys.signin',
             kind: 'note',

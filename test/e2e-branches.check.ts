@@ -12,9 +12,9 @@
  *
  * - per-task: one branch per task from one commit, the second task told the first one's work is not in its tree;
  * - a continuation stays on the attempt's branch; a re-run gets `-a2` from the same base; a new prompt builds on it;
- * - a dirty tree switches version control off for that task and touches nothing;
+ * - a dirty tree refuses the task and touches nothing (until 0.1.18 it switched version control off and ran);
  * - `commitOnFinish: false` commits nothing, and the next task then finds a dirty tree (a decision pin);
- * - a branch name git refuses, and the branch and commit subject a plan names;
+ * - a branch name git refuses (the task is refused), and the branch and commit subject a plan names;
  * - tool output left in the tree is pointed out once, then either ignored or committed and marked;
  * - a failed task's work is still committed;
  * - a session made the way the UI makes it (POST /sessions, PUT, POST tasks) branches and commits, and so
@@ -251,25 +251,25 @@ await scenario('per-task rerun starts from the same base on -a2; a new prompt th
  * to another branch would both be decisions that are not the runner's. So version control is off for that
  * task — said on the task — and the repository is left exactly as it was, uncommitted changes included.
  */
-await scenario('a dirty tree turns version control off for that task and touches nothing', {}, async (h) => {
+/*
+ * Until 0.1.18 a dirty tree switched version control off and the task ran: nothing was committed and it
+ * ended done, its work loose in the tree (reported 2026-10-02). With commits on, a task whose work could
+ * not be committed is not run: it is refused before anything is sent, and nothing is touched.
+ */
+await scenario('a dirty tree refuses the task and touches nothing', {}, async (h) => {
   writeFileSync(join(h.repo, 'README.md'), '# fixture\nan edit the operator has not committed\n');
   writeFileSync(join(h.repo, 'wip.txt'), 'work in progress\n');
   const mainBefore = h.git('rev-parse', 'main');
   const [s] = await h.importPlan(plan(h, 'dirty', [fileTask('write-a', 'a.txt', 'a')]));
-  let opening = '';
-  h.chat.script((m) => {
-    opening = m.text;
-    return write('a.txt', 'a');
-  }, reply.done());
   const task = (await run(h, s!.id)).tasks[0]!;
-  t.check('the task still ran', task.status, 'done');
-  t.truthy('the task says why version control was off, naming the files', /uncommitted changes \(README\.md, wip\.txt\)/.test(task.vcs?.problem ?? ''), task.vcs);
+  t.check('the task is refused, not run', task.status, 'failed');
+  t.truthy('the reason names the files and says nothing was run', /uncommitted changes \(README\.md, wip\.txt\)/.test(task.reason ?? '') && /Nothing was run/.test(task.reason ?? ''), task.reason);
+  t.check('no message went to the chat', h.chat.sent.length, 0);
   t.check('the repository is still on main', h.git('branch', '--show-current'), 'main');
   t.check('no cop/ branch was made', h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/'), '');
   t.check('main has no new commit', h.git('rev-parse', 'main'), mainBefore);
   const status = h.git('status', '--porcelain');
   t.truthy('README.md and wip.txt are still uncommitted, as the operator left them', /^\s?M README\.md$/m.test(status) && /^\?\? wip\.txt$/m.test(status), status);
-  t.check('the chat was not told about version control', opening.includes('## Version control'), false);
 });
 
 /*
@@ -295,11 +295,11 @@ await scenario('commitOnFinish false: branched, nothing committed, and the next 
  */
 await scenario('a branch name git refuses: said on the task, nothing made', {}, async (h) => {
   const [s] = await h.importPlan(plan(h, 'badname', [fileTask('write-a', 'a.txt', 'a')], { branchName: 'feature/work.lock' }));
-  h.chat.script(write('a.txt', 'a'), reply.done());
   const task = (await run(h, s!.id)).tasks[0]!;
   t.truthy('the task says the name is not one git accepts', /is not a name git accepts/.test(task.vcs?.problem ?? ''), task.vcs);
   t.check('the only local branch is main', h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads'), 'main');
-  t.check('the task\'s file is left uncommitted', h.git('status', '--porcelain'), '?? a.txt');
+  // Refused, not run without version control as until 0.1.18: nothing was written, so nothing is loose.
+  t.check('the task is refused and nothing was written', [task.status, h.git('status', '--porcelain'), h.chat.sent.length], ['failed', '', 0]);
 });
 
 /*
@@ -752,11 +752,13 @@ await scenario('Run again from here under a prefix without a "/", with long name
       bot(LONG_NAME, [fileTask('c-task', 'c.txt', 'c')], { startFrom: 'previous-session', branchName: '' }),
     ],
   });
-  h.chat.script(write('a.txt', 'a'), reply.done(), write('bad.txt', 'bad'), reply.done(), write('good.txt', 'nope'), reply.done(), write('c.txt', 'c'), reply.done());
+  // B is done the first time, with a stray file the operator then wants redone: since 2026-10-02 a later
+  // session does not start on a predecessor that failed, so the redo is of done work.
+  h.chat.script(write('a.txt', 'a'), reply.done(), write('bad.txt', 'bad'), write('good.txt', 'good'), reply.done(), write('c.txt', 'c'), reply.done());
   await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'continue' });
   await h.idle();
   const [a, b] = (await read(h, first!.id)).tasks;
-  t.check('A done, B failed, C ran after it', [a!.status, b!.status, (await read(h, second!.id)).tasks[0]!.status], ['done', 'failed', 'done']);
+  t.check('A done, B done, C ran after it', [a!.status, b!.status, (await read(h, second!.id)).tasks[0]!.status], ['done', 'done', 'done']);
 
   let aAtStart: boolean | undefined;
   h.chat.script(
@@ -810,13 +812,15 @@ await scenario('Run again from here: a later session in the same repository star
       chained('second-chain', [fileTask('c-task', 'c.txt', 'c')], { startFrom: 'previous-session' }),
     ],
   });
-  h.chat.script(write('a.txt', 'a'), reply.done(), write('bad.txt', 'bad'), reply.done(), write('good.txt', 'nope'), reply.done(), write('c.txt', 'c'), reply.done());
+  // B done the first time with a stray bad.txt, C on top of it; then the operator runs it all again from B.
+  // Until 0.1.18 B failed and C carried on from the failed work; since 2026-10-02 that is refused (below).
+  h.chat.script(write('a.txt', 'a'), reply.done(), write('bad.txt', 'bad'), write('good.txt', 'good'), reply.done(), write('c.txt', 'c'), reply.done());
   await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'continue' });
   await h.idle();
   const [a, b] = (await read(h, first!.id)).tasks;
   const c = (await read(h, second!.id)).tasks[0]!;
-  t.check('A done, B failed, and C ran after it', [a!.status, b!.status, c.status], ['done', 'failed', 'done']);
-  t.check('C carried on from B\'s failed commit, bad.txt and all', [c.vcs?.baseCommit, !!c.vcs?.commit && tree(h, c.vcs.commit).includes('bad.txt')], [b!.vcs?.commit, true]);
+  t.check('A done, B done, and C ran after it', [a!.status, b!.status, c.status], ['done', 'done', 'done']);
+  t.check('C carried on from B\'s commit, bad.txt and all', [c.vcs?.baseCommit, !!c.vcs?.commit && tree(h, c.vcs.commit).includes('bad.txt')], [b!.vcs?.commit, true]);
   const oldC = c.vcs?.commit;
 
   h.chat.script(write('good.txt', 'good'), reply.done(), write('c.txt', 'c'), reply.done());
@@ -832,6 +836,42 @@ await scenario('Run again from here: a later session in the same repository star
   t.check('its tree has good.txt and not bad.txt',
     c2.vcs?.commit ? [tree(h, c2.vcs.commit).includes('good.txt'), tree(h, c2.vcs.commit).includes('bad.txt')] : 'no commit', [true, false]);
   t.check('and its old branch still holds what it did the first time', c.vcs?.branch ? h.git('rev-parse', c.vcs.branch) : null, oldC);
+});
+
+/*
+ * Point 8 of the 2026-10-02 feedback: a later session does not carry on from a predecessor that has not
+ * finished. It used to start on B's failed commit, bad.txt and all; it is refused, and once B is done
+ * again it starts from that.
+ */
+await scenario('a later session does not start on a predecessor that failed', { limits: { maxCheckRounds: 1, retryBlockedInFreshChat: 0 } }, async (h) => {
+  const chained = (name: string, tasks: unknown[], vcs: Record<string, unknown> = {}): Record<string, unknown> =>
+    (plan(h, name, tasks, { startFrom: 'branch', baseBranch: 'main', updateFromRemote: false, ...vcs }).sessions as unknown[])[0] as Record<string, unknown>;
+  const [first, second] = await h.importPlan({
+    version: 1,
+    sessions: [
+      chained('first-fails', [{ title: 'b-task', prompt: 'Create good.txt in the repository root holding exactly the text good, and nothing else.', checks: [{ name: 'good.txt written', expect: 'file-contains', file: 'good.txt', value: 'good' }] }]),
+      chained('after-it', [fileTask('c-task', 'c.txt', 'c')], { startFrom: 'previous-session' }),
+    ],
+  });
+  // Done with the wrong text, told so once (maxCheckRounds 1), wrong again: B ends failed.
+  h.chat.script(write('good.txt', 'nope'), reply.done(), write('good.txt', 'still nope'), reply.done());
+  await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'continue' });
+  await h.idle();
+  const b = (await read(h, first!.id)).tasks[0]!;
+  const c = (await read(h, second!.id)).tasks[0]!;
+  t.check('B failed, and C was refused rather than run on it', [b.status, c.status], ['failed', 'failed']);
+  t.truthy('C says the session before has not finished', /"first-fails", which has not finished: "b-task" is failed/.test(c.reason ?? ''), c.reason);
+  t.check('C made no branch and committed nothing', [c.vcs?.branch ?? null, c.vcs?.commit ?? null], [null, null]);
+
+  h.chat.script(write('good.txt', 'good'), reply.done(), write('c.txt', 'c'), reply.done());
+  await h.call('POST', `/sessions/${first!.id}/tasks/${b.id}/rerun`, {});
+  await h.call('POST', `/sessions/${second!.id}/tasks/${c.id}/rerun`, {});
+  await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'stop' });
+  await h.idle();
+  const b2 = (await read(h, first!.id)).tasks[0]!;
+  const c2 = (await read(h, second!.id)).tasks[0]!;
+  t.check('once B is done, C runs', [b2.status, c2.status], ['done', 'done']);
+  t.check('from B\'s final commit', c2.vcs?.baseCommit, b2.vcs?.commit);
 });
 
 /*

@@ -393,6 +393,7 @@ const FIELD_ROWS_EN = [
   ['review', 'task', 'no', 'Set to `false` to skip the review for one task. Absent means the session decides.'],
   ['readOnly', 'task', 'no', '`true` for a task that must not change files — an audit, a smoke test, a report. The runner fails it if the tree changed, and still commits the change on its branch so nothing is lost.'],
   ['scope', 'task', 'no', 'The paths the task may change: files, folders (`tests/e2e/`) or `*`/`**` patterns. With version control on, the runner puts back any change outside them. Give it when the task is about one suite or module.'],
+  ['outputs', 'task', 'no', 'Evidence the task is to produce (a report, an archive): patterns. What it creates or changes there is kept with the run\'s record.'],
   ['tasks', 'session', 'yes', 'At least one, in the order they must run.'],
   ['title', 'task', 'yes', '3 to 120 characters. Short, latin, hyphenated.'],
   ['prompt', 'task', 'yes', 'The task itself, at least 30 characters. This is what Copilot reads.'],
@@ -464,6 +465,7 @@ const FIELD_ROWS_BG = [
   ['review', 'задача', 'не', 'Сложи `false`, за да се пропусне рецензията само за тази задача. Липсата значи каквото казва сесията.'],
   ['readOnly', 'задача', 'не', '`true` за задача, която не бива да променя файлове — одит, smoke тест, доклад. Runner-ът я проваля, ако дървото е променено, и пак комитва промяната на клона ѝ, за да не се губи нищо.'],
   ['scope', 'задача', 'не', 'Пътищата, които задачата може да променя: файлове, папки (`tests/e2e/`) или шаблони с `*`/`**`. При включен контрол на версиите runner-ът връща всяка промяна извън тях. Давай го, когато задачата е за един suite или модул.'],
+  ['outputs', 'задача', 'не', 'Доказателства, които задачата трябва да създаде (отчет, архив): шаблони. Каквото създаде или промени там, се пази към записа на пускането.'],
   ['tasks', 'сесия', 'да', 'Поне една, в реда, в който трябва да се изпълнят.'],
   ['title', 'задача', 'да', 'От 3 до 120 знака. Кратко, латиница, с тирета.'],
   ['prompt', 'задача', 'да', 'Самата задача, поне 30 знака. Това чете Copilot.'],
@@ -535,8 +537,8 @@ its own, and the session starts from it; the user approves the exact list on the
 \`"tracked-only-snapshot"\` takes tracked changes only. Secrets (\`.env\`), tool output and files outside
 the project are never taken, and an ignored file only when a task's \`scope\` names it. The snapshot is
 taken where the changes are, so use it with \`startFrom\` \`"branch"\` only when the repository is already on
-that branch, and never with \`"existing-branch"\`. Leaving it out keeps \`"reject"\`: version control stays out
-of a tree with uncommitted changes.
+that branch, and never with \`"existing-branch"\`. Leaving it out keeps \`"reject"\`: a tree with uncommitted
+changes refuses the task, and nothing runs.
 
 **userInputs** — files the user provides for the work (schemas, test data):
 \`{ "paths": ["rules-engine/test-data/schemas/*.yaml"] }\`. They go into the commit every session starts from —
@@ -545,11 +547,14 @@ gets them committed on top of it — and they are read-only while the tasks run 
 the user wants the work to change them). Ask the user which files are inputs; never name a whole folder of
 work, and never \`.env\`. **artifacts** — evidence the work writes (reports, ZIP archives, test results):
 \`{ "paths": ["rules-engine/test-results/**"] }\`. Never committed, kept with the run; tell tasks to write
-evidence there instead of changing \`.gitignore\`.
+evidence there instead of changing \`.gitignore\`. Only what a task creates or changes there is kept, and an
+artifacts pattern must never cover the input files or a task's work ("rules-engine/**" would hide both): name
+the evidence folders only.
 
 A session with \`"startFrom": "previous-session"\` continues the whole work of the one before it only when
 that one is \`"branchMode": "per-session"\`: per task, its work is on several branches and the next session
-refuses to start from part of it.
+refuses to start from part of it. It also refuses when the session before has not finished (a task failed or
+blocked): finish it first.
 
 Put the same \`startFrom\` on every session that works in one repository unless the user wants it
 mixed. Leaving it out keeps the old behaviour — whatever branch the repository is on — which is
@@ -617,8 +622,8 @@ run“, на отделен клон, и сесията тръгва от нег
 сесията. \`"tracked-only-snapshot"\` взема само tracked промени. Тайни (\`.env\`), изход от инструменти и
 файлове извън проекта никога не се вземат, а ignored файл — само когато \`scope\` на задача го посочва.
 Снимката се прави там, където са промените, затова с \`startFrom\` \`"branch"\` само ако хранилището вече е на
-този клон, и никога с \`"existing-branch"\`. Ако го пропуснеш, остава \`"reject"\`: контролът на версиите
-не влиза в дърво с некомитнати промени.
+този клон, и никога с \`"existing-branch"\`. Ако го пропуснеш, остава \`"reject"\`: дърво с некомитнати
+промени отказва задачата и нищо не се изпълнява.
 
 **userInputs** — файлове, които потребителят дава за работата (схеми, тестови данни):
 \`{ "paths": ["rules-engine/test-data/schemas/*.yaml"] }\`. Влизат в комита, от който тръгва всяка сесия —
@@ -627,11 +632,14 @@ run“, на отделен клон, и сесията тръгва от нег
 потребителят иска работата да ги променя). Питай кои файлове са вход; никога цяла папка с работа и никога
 \`.env\`. **artifacts** — доказателства, които работата пише (отчети, ZIP архиви, резултати от тестове):
 \`{ "paths": ["rules-engine/test-results/**"] }\`. Никога не се комитват, пазят се към пускането; кажи на
-задачите да пишат доказателствата там, вместо да променят \`.gitignore\`.
+задачите да пишат доказателствата там, вместо да променят \`.gitignore\`. Пази се само каквото задачата създаде
+или промени там, и шаблон за artifacts никога не покрива входните файлове или работата на задача
+("rules-engine/**" би скрил и двете): посочвай само папките с доказателства.
 
 Сесия с \`"startFrom": "previous-session"\` продължава цялата работа на предната само ако тя е
 \`"branchMode": "per-session"\`: при per-task работата ѝ е на няколко клона и следващата сесия отказва да
-тръгне от част от нея.
+тръгне от част от нея. Отказва и когато предната сесия не е завършила (задача е провалена или блокирана):
+първо я завърши.
 
 Сложи един и същ \`startFrom\` на всички сесии в едно хранилище, освен ако потребителят не иска
 различни. Ако го пропуснеш, остава старото поведение — от който клон е хранилището в момента —

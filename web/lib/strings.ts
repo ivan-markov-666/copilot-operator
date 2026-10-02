@@ -447,8 +447,8 @@ export const dict = {
     'vcs.commitWhy':
       'One local commit per task, whatever the outcome, with the summary in the message. Off leaves the changes in the working tree.',
     'vcs.dirty': 'Uncommitted changes',
-    'vcs.dirtyReject': 'Keep version control out (as until now)',
-    'vcs.dirtyRejectWhy': 'When the repository has uncommitted changes at the first task, the run goes on without branches or commits, and says so.',
+    'vcs.dirtyReject': 'Refuse to start until they are committed',
+    'vcs.dirtyRejectWhy': 'When the repository has uncommitted changes, the task is refused and nothing runs: a task whose work could not be committed is not run. Commit them yourself, or take them as a starting snapshot.',
     'vcs.dirtySnapshot': 'Take them as a starting snapshot',
     'vcs.dirtySnapshotWhy':
       'Before the first task your uncommitted changes become one commit, "Capture operator baseline before run", on a branch of their own, and the session starts from it. Your branch is not touched. Secrets (.env), tool output and files outside the project are never taken; an ignored file only when a task’s scope names it.',
@@ -822,6 +822,7 @@ export const dict = {
     // system page
     'sys.machine': 'This machine',
     'sys.loading': 'Loading…',
+    'sys.version': 'copilot-operator version',
     'sys.node': 'Node',
     'sys.edge': 'Edge',
     'sys.edgeMissing': 'not found',
@@ -1632,8 +1633,8 @@ export const dict = {
     'vcs.commitWhy':
       'По един локален комит на задача, независимо от изхода, с обяснението в съобщението. Изключено оставя промените в работното дърво.',
     'vcs.dirty': 'Некомитнати промени',
-    'vcs.dirtyReject': 'Без контрол на версиите при тях (както досега)',
-    'vcs.dirtyRejectWhy': 'Ако при първата задача хранилището има некомитнати промени, пускането продължава без клонове и комити и казва това.',
+    'vcs.dirtyReject': 'Откажи старта, докато не са комитнати',
+    'vcs.dirtyRejectWhy': 'Ако хранилището има некомитнати промени, задачата се отказва и нищо не се изпълнява: задача, чиято работа не може да се комитне, не се пуска. Комитни ги сам или ги вземи като начална снимка.',
     'vcs.dirtySnapshot': 'Запази ги като начална снимка',
     'vcs.dirtySnapshotWhy':
       'Преди първата задача некомитнатите ти промени стават един комит, „Capture operator baseline before run“, на отделен клон, и сесията тръгва от него. Твоят клон не се пипа. Тайни (.env), изход от инструменти и файлове извън проекта никога не се вземат; ignored файл — само когато scope на задача го посочва.',
@@ -1993,6 +1994,7 @@ export const dict = {
 
     'sys.machine': 'Тази машина',
     'sys.loading': 'Зареждане…',
+    'sys.version': 'Версия на copilot-operator',
     'sys.node': 'Node',
     'sys.edge': 'Edge',
     'sys.edgeMissing': 'не е намерен',

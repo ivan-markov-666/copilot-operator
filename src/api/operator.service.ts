@@ -67,6 +67,8 @@ import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
 import { normalisePatterns } from '../vcs/inputs.js';
+import { coveredByArtifacts } from '../vcs/artifacts.js';
+import { botVersion } from '../config/version.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
@@ -722,6 +724,14 @@ export class OperatorService {
         const artifactPaths = normalisePatterns(merged.artifacts?.paths ?? []);
         if (artifactPaths.length === 0) delete merged.artifacts;
         else merged.artifacts = { paths: artifactPaths };
+        // Artifacts are kept out of git; one that covers the input files would keep them out too.
+        const hidden = coveredByArtifacts(merged.userInputs?.paths ?? [], artifactPaths);
+        if (hidden.length > 0) {
+          throw new Error(
+            `An artifacts pattern covers the input files ${hidden.map((h) => `"${h}"`).join(', ')}: artifacts are kept out of git, so the inputs would be too. ` +
+              'Name only the folders the evidence is written to, not a whole project folder.',
+          );
+        }
         // New inputs are settled again at the next task: the recorded ones are no longer the whole list.
         if (JSON.stringify(merged.userInputs ?? null) !== JSON.stringify(s.vcs?.userInputs ?? null) && s.vcsStart?.inputs) {
           s.vcsStart = { ...s.vcsStart, inputs: undefined };
@@ -3118,6 +3128,8 @@ export class OperatorService {
     const edge = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find((p) => existsSync(p));
     const holders = findEdgeUsingProfile(cfg.resolved.profileDir);
     return {
+      // Which copilot-operator this is: `cop --version` without a terminal.
+      version: botVersion(),
       node: process.versions.node,
       edge: edge ?? null,
       profileDir: cfg.resolved.profileDir,

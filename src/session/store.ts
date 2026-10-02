@@ -111,6 +111,7 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   reviewEnabled: 'kept',
   readOnly: 'kept',
   scope: 'kept',
+  outputs: 'kept',
   // What one review noticed is arithmetic for every attempt after it.
   reviewChecks: 'kept',
   attempts: 'kept',
@@ -507,6 +508,7 @@ export class SessionStore {
       reviewEnabled?: boolean;
       readOnly?: boolean;
       scope?: string[];
+      outputs?: string[];
     },
   ): Promise<Task> {
     const vcsPlan = tidyVcsPlan(input.vcsPlan);
@@ -529,6 +531,7 @@ export class SessionStore {
       ...(input.readOnly === true ? { readOnly: true } : {}),
       // Stored only when it limits something: absent means anywhere, as before scopes existed.
       ...((input.scope ?? []).filter((p) => p.trim()).length > 0 ? { scope: (input.scope ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
+      ...((input.outputs ?? []).filter((p) => p.trim()).length > 0 ? { outputs: (input.outputs ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
     };
     await this.updateSession(sessionId, (s) => {
       s.tasks.push(task);

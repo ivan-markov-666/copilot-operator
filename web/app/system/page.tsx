@@ -27,6 +27,10 @@ export default function SystemPage() {
           <table>
             <tbody>
               <tr>
+                <th>{t('sys.version')}</th>
+                <td>{String(doctor.version ?? '—')}</td>
+              </tr>
+              <tr>
                 <th>{t('sys.node')}</th>
                 <td>{String(doctor.node)}</td>
               </tr>

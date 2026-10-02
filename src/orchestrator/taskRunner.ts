@@ -53,9 +53,9 @@ import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { prepareForTask, commitTaskResult, repoDirOf, trackedRepoOf } from '../vcs/taskVcs.js';
-import { protectInputs, inputsMessage, type InputsCheck } from '../vcs/inputs.js';
-import { artifactPatterns, keepArtifacts } from '../vcs/artifacts.js';
+import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf } from '../vcs/taskVcs.js';
+import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, type InputsCheck } from '../vcs/inputs.js';
+import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
 export type TaskOutcome = {
@@ -693,12 +693,14 @@ export async function runTask(
   };
 
   /** The session's read-only input files and the commit they are put back from, once the task is on its own branch. */
-  let inputsGuard: { base: string; inputs: NonNullable<SessionStart['inputs']> } | null = null;
+  let inputsGuard: { base: string; inputs: NonNullable<SessionStart['inputs']>; keep: Set<string> } | null = null;
+  /** The artifact files as they were when the task started; what is kept afterwards is what changed. */
+  let artifactsBefore: ArtifactState | undefined;
   /** Puts back whatever a round did to the input files, and tells the chat and the record. */
   const guardInputs = async (iteration?: number): Promise<InputsCheck | null> => {
     if (!inputsGuard) return null;
     const guard = inputsGuard;
-    const check = await protectInputs(repoDirOf(session), guard.base, guard.inputs).catch((e: unknown): InputsCheck => ({
+    const check = await protectInputs(repoDirOf(session), guard.base, guard.inputs, guard.keep).catch((e: unknown): InputsCheck => ({
       changed: ['(the input files)'],
       restored: [],
       failed: [{ path: '(the input files)', why: (e as Error).message }],
@@ -733,6 +735,11 @@ export async function runTask(
         status = 'failed';
         reason = `the operator's input file(s) ${check.failed.map((f) => f.path).join(', ')} were changed and could not be put back as they were: ${check.failed.map((f) => f.why).join('; ')}.`;
       }
+      // Said on the record either way: the inputs as the task leaves them, against their recorded sums.
+      if (check && check.failed.length === 0) {
+        sink.event('inputs-verified', { files: inputsGuard.inputs.files.length },
+          `${inputsGuard.inputs.files.length} input file(s) are as the session's start recorded them: same sums`);
+      }
     }
 
     /*
@@ -741,10 +748,15 @@ export async function runTask(
      */
     const patterns = artifactPatterns(session.vcs);
     const projectRoot = repoDirOf(session) || session.projectDir?.trim() || '';
-    if (patterns.length > 0 && projectRoot) {
-      const kept = await keepArtifacts(projectRoot, patterns, join(artifactsDir, 'project')).catch((e: unknown) => ({ kept: [], skipped: [`(all: ${(e as Error).message})`] }));
-      sink.event('artifacts-kept', { kept: kept.kept.length, skipped: kept.skipped },
-        `artifacts kept with the run: ${kept.kept.length} file(s)${kept.skipped.length > 0 ? `; not kept: ${kept.skipped.slice(0, 5).join('; ')}` : ''}`,
+    if ((patterns.length > 0 || (task.outputs?.length ?? 0) > 0) && projectRoot) {
+      // Only what this task made or changed, inside its scope, or declared as its outputs.
+      const kept = await keepArtifacts(projectRoot, patterns, join(artifactsDir, 'project'), { before: artifactsBefore, scope: task.scope, outputs: task.outputs })
+        .catch((e: unknown) => ({ kept: [], skipped: [`(all: ${(e as Error).message})`], unchanged: 0, outsideScope: [] as string[] }));
+      sink.event('artifacts-kept', { kept: kept.kept.length, skipped: kept.skipped, unchanged: kept.unchanged, outsideScope: kept.outsideScope.slice(0, 20) },
+        `artifacts kept with the run: ${kept.kept.length} file(s) this task made or changed` +
+          `${kept.unchanged > 0 ? `; ${kept.unchanged} already there and untouched, not kept` : ''}` +
+          `${kept.outsideScope.length > 0 ? `; ${kept.outsideScope.length} outside the task's scope, not kept` : ''}` +
+          `${kept.skipped.length > 0 ? `; not kept: ${kept.skipped.slice(0, 5).join('; ')}` : ''}`,
         kept.skipped.length > 0 ? 'warn' : 'info');
       await setTask((t) => {
         t.artifactsKept = kept.kept.length > 0 ? kept.kept : undefined;
@@ -775,12 +787,28 @@ export async function runTask(
     // The task is re-read first, because the branch was recorded on it after this closure
     // was created.
     const fresh = (await store.getSession(session.id))?.tasks.find((x) => x.id === task.id);
+    let vcsError: string | undefined;
     const vcsAfter = await commitTaskResult(session, { ...task, vcs: fresh?.vcs }, { status, summary, reason, deviations }, bus).catch(
       (e: unknown) => {
+        vcsError = (e as Error).message;
         sink.event('vcs-error', { error: String(e) }, `version control failed after the task: ${(e as Error).message}`, 'warn');
         return undefined;
       },
     );
+    /*
+     * With version control on, a task is done only when its work is committed. The commit used to
+     * fail — on the branch it was moved off, on a git error, on uncommitted files left behind — and
+     * the task still ended done, its work loose in the tree and the next task refusing to start over
+     * it. Now it ends failed with why; the work stays in the working tree, nothing is lost.
+     */
+    if (status === 'done') {
+      const uncommitted = await commitShortfall(session, fresh?.vcs ?? task.vcs, vcsAfter, vcsError);
+      if (uncommitted) {
+        status = 'failed';
+        reason = uncommitted;
+        sink.event('commit-failed', { problem: vcsAfter?.problem ?? vcsError, uncommitted: vcsAfter?.afterCommit?.changed?.slice(0, 20) }, uncommitted, 'error');
+      }
+    }
     /*
      * The checks about a clean tree, now that the runner has committed. A done task whose tree is
      * still not clean after the commit has failed; any other ending keeps its own reason, and the
@@ -1066,8 +1094,22 @@ export async function runTask(
     // The operator's input files, read-only on a branch of the task's own; see `vcs/inputs.ts`.
     const startNow = (await store.getSession(session.id))?.vcsStart;
     if (onOwnBranch && startNow?.inputs?.readOnly && startNow.inputs.files.length > 0) {
-      inputsGuard = { base: prepared.vcs.baseCommit as string, inputs: startNow.inputs };
+      /*
+       * Held to the inputs as this task's own starting commit has them, not the session's record: a
+       * re-run is cut from where the task first started, before any inputs changed since. And what is
+       * under the patterns untracked now is the operator's, never removed by the guard.
+       */
+      const baseCommit = prepared.vcs.baseCommit as string;
+      inputsGuard = {
+        base: baseCommit,
+        inputs: await inputsAtCommit(repoDirOf(session), baseCommit, startNow.inputs),
+        keep: await untrackedInputs(repoDirOf(session), startNow.inputs.patterns),
+      };
     }
+    // Before the first step: what is under the artifact patterns now is not this task's evidence.
+    const artifactRoot = repoDirOf(session) || session.projectDir?.trim() || '';
+    const artifactPatternsNow = [...artifactPatterns(session.vcs), ...(task.outputs ?? [])];
+    if (artifactRoot && artifactPatternsNow.length > 0) artifactsBefore = await artifactState(artifactRoot, artifactPatternsNow).catch(() => undefined);
     /** The working tree's fingerprint, when the task is on a branch of its own; null otherwise. */
     const treeNow = async (): Promise<string | null> =>
       prepared.vcs.branch && !prepared.vcs.problem && prepared.vcs.baseCommit ? await treeFingerprint(repoDirOf(session)).catch(() => null) : null;
@@ -1167,7 +1209,12 @@ export async function runTask(
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
       readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
-      scopeNote: scopeNote(scope, scopeEnforced),
+      scopeNote: [
+        scopeNote(scope, scopeEnforced),
+        (task.outputs?.length ?? 0) > 0
+          ? `## Outputs\n\nThis task is to produce: ${(task.outputs ?? []).map((o) => `\`${o}\``).join(', ')}. What it creates or changes there is kept with the run's record as its evidence.`
+          : '',
+      ].filter(Boolean).join('\n\n'),
       approachesNote:
         minApproaches > MIN_TRIED_APPROACHES
           ? `## Giving up\n\nThis task may end with status "blocked" only after at least ${minApproaches} genuinely different approaches, ` +

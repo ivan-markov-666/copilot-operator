@@ -12,6 +12,7 @@
 import type { SessionStore } from '../session/store.js';
 import { DEFAULT_VCS, applyDefaultProject } from '../session/store.js';
 import { normalisePatterns } from '../vcs/inputs.js';
+import { coveredByArtifacts } from '../vcs/artifacts.js';
 import type { Session, VersionControl } from '../session/model.js';
 import { availableShells, detectShells, type Shell } from '../exec/shells.js';
 import type { Plan, PlanSession, PlanTask } from './schema.js';
@@ -231,6 +232,20 @@ export async function importPlan(
     lastIn.set(repo, { name: planned.name, perTask: (planned.vcs.branchMode ?? 'per-task') === 'per-task', tasks: planned.tasks.length });
   }
 
+  // A task whose whole scope is under the artifact patterns would have its work kept out of git.
+  for (const planned of plan.sessions) {
+    const arts = planned.vcs?.artifacts?.paths ?? [];
+    if (!planned.vcs?.enabled || arts.length === 0) continue;
+    for (const task of planned.tasks) {
+      if (task.scope.length > 0 && coveredByArtifacts(task.scope, arts).length === task.scope.length) {
+        warnings.push(
+          `Task "${task.title}" in session "${planned.name}" may change only ${task.scope.join(', ')}, and the session's artifacts patterns cover all of it: ` +
+            'whatever it writes is kept with the run and never committed. If that work is meant to be committed, narrow "artifacts".',
+        );
+      }
+    }
+  }
+
   for (const planned of plan.sessions) {
     // Attaching project files to the chat was removed; an old plan's root is still its project folder.
     if (planned.mirror?.enabled) {
@@ -287,6 +302,7 @@ export async function importPlan(
         reviewEnabled: task.review,
         readOnly: task.readOnly || undefined,
         scope: task.scope.length > 0 ? task.scope : undefined,
+        outputs: task.outputs.length > 0 ? task.outputs : undefined,
       });
       titles.push(added.title);
     }

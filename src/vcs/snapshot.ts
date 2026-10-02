@@ -30,8 +30,8 @@ import type { EventBus } from '../session/events.js';
 import type { DirtyWorktree, Session, SessionStart, VersionControl } from '../session/model.js';
 import { looksGenerated } from './commitHygiene.js';
 import { branchNameFrom, freeBranchName, git, gitBytes, isValidBranchName, RUNNER_EMAIL } from './git.js';
-import { repoDirOf, sessionStart } from './taskVcs.js';
-import { inputFilesInTree, inputSettings } from './inputs.js';
+import { repoDirOf, sessionBranchName, sessionStart } from './taskVcs.js';
+import { inputChanges, inputFilesInTree, inputSettings, inputSumsAt, missingInputPatterns, recaptureInputs } from './inputs.js';
 import { artifactPatterns } from './artifacts.js';
 import { inScope } from './scope.js';
 
@@ -70,6 +70,11 @@ export type SnapshotPlan = {
   /** The branch the snapshot would be committed on. */
   baselineBranch?: string;
   entries: SnapshotEntry[];
+  /**
+   * The session has already started and these are input files changed or added since: they are
+   * committed on its line of work (`recaptureInputs`), not as a starting snapshot.
+   */
+  recapture?: { parent: string; ffBranch?: string; newBranch?: string };
 };
 
 /** The session's dirty-tree policy, absent fields filled in: reject, and asking first. */
@@ -175,9 +180,11 @@ export async function planSnapshot(session: Session, allSessions: () => Promise<
   const inputs = inputSettings(session.vcs);
   const repoDir = repoDirOf(session);
   const plan: SnapshotPlan = { needed: false, ok: false, policy, requireApproval, repoDir, branch: null, head: null, entries: [] };
-  if (!session.vcs?.enabled || (policy === 'reject' && !inputs) || session.vcsBaseCommit) return plan;
+  if (!session.vcs?.enabled || (policy === 'reject' && !inputs)) return plan;
+  if (session.vcsBaseCommit && (!inputs || session.vcs.startFrom === 'existing-branch')) return plan;
   const top = repoDir ? await topOf(repoDir) : null;
   if (!top) return { ...plan, problem: `${repoDir || 'The repository folder'} is not a git repository.` };
+  if (session.vcsBaseCommit) return await planRecapture(session, top, plan);
 
   const status = await statusEntries(top);
   if (!status) return { ...plan, problem: 'git status could not be read.' };
@@ -248,7 +255,13 @@ export async function planSnapshot(session: Session, allSessions: () => Promise<
   }
 
   const blocked = plan.entries.filter((e) => e.allowed.length === 0);
-  if (!plan.head) plan.problem = 'the repository has no commit yet, so there is nothing for a snapshot to sit on. Make the first commit yourself.';
+  // A pattern that matches nothing anywhere is said now, before anything is committed for approval.
+  const missing = inputs ? await missingInputPatterns(session, repoDir, top, allSessions) : [];
+  if (missing.length > 0) {
+    plan.problem =
+      `the input file pattern(s) ${missing.map((m) => `"${m}"`).join(', ')} match no file in the project, and nothing earlier captured them. ` +
+      'Correct "Input files" (a "*" stays inside one folder; "**" crosses folders), or put the files in the project.';
+  } else if (!plan.head) plan.problem = 'the repository has no commit yet, so there is nothing for a snapshot to sit on. Make the first commit yourself.';
   else if (blocked.length > 0) plan.problem = `${blocked.length} change(s) can be neither taken nor left out: ${blocked.map((e) => `${e.path} (${e.reason})`).join('; ')}.`;
   // The session's own spelling of the folder, which is what other sessions are matched by.
   else plan.problem = await startProblem(session, repoDir, plan.branch, plan.head, allSessions);
@@ -256,6 +269,61 @@ export async function planSnapshot(session: Session, allSessions: () => Promise<
     const prefix = session.vcs.branchPrefix || 'cop/';
     plan.baselineBranch = await freeBranchName(top, branchNameFrom(['baseline'], prefix) + `/${session.id}`);
     if (!(await isValidBranchName(top, plan.baselineBranch))) plan.problem = `"${plan.baselineBranch}" is not a name git accepts.`;
+  }
+  plan.ok = !plan.problem;
+  return plan;
+}
+
+/**
+ * After the session's start: the input files changed or added since it was recorded, to be taken
+ * onto its line of work (see `recaptureInputs`). Anything else uncommitted is in the way, as it is
+ * before a task, and refuses.
+ */
+async function planRecapture(session: Session, top: string, plan: SnapshotPlan): Promise<SnapshotPlan> {
+  const inputs = inputSettings(session.vcs);
+  if (!inputs || !session.vcsBaseCommit) return plan;
+  const branchR = await git(top, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const headR = await git(top, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  plan.branch = branchR.ok && branchR.stdout !== 'HEAD' ? branchR.stdout : null;
+  plan.head = headR.ok && headR.stdout ? headR.stdout : null;
+  const changes = await inputChanges(top, inputs.patterns, session.vcsStart?.inputs?.files);
+  if (changes.length === 0) return plan;
+  plan.needed = true;
+  plan.requireApproval = inputs.requireApproval;
+
+  const project = session.projectDir?.trim() ? relative(top, resolve(session.projectDir.trim())).replace(/\\/g, '/') : '';
+  const inProject = (p: string): boolean => !project || project.startsWith('..') || isAbsolute(project) || p.toLowerCase() === project.toLowerCase() || p.toLowerCase().startsWith(`${project.toLowerCase()}/`);
+  for (const c of changes) {
+    const blocked = looksGenerated(c.path)?.reason === 'a secrets file' ? 'a secrets file is never taken as an input' : !inProject(c.path) ? `outside the project folder ${project}` : undefined;
+    plan.entries.push({
+      path: c.path,
+      kind: c.kind,
+      input: true,
+      size: (await stat(join(top, c.path)).catch(() => null))?.size,
+      allowed: blocked ? [] : ['include'],
+      choice: blocked ? null : 'include',
+      reason: blocked ?? 'an input file changed or added after the session started: committed on its line of work, then read-only',
+    });
+  }
+  const changed = new Set(changes.map((c) => c.path));
+  const others = ((await statusEntries(top)) ?? []).filter((s) => !changed.has(s.path)).map((s) => s.path);
+  const blocked = plan.entries.filter((e) => e.allowed.length === 0);
+  if (others.length > 0) {
+    plan.problem = `besides the input files there are other uncommitted changes (${someOf(others)}). Commit or stash them yourself first.`;
+  } else if (blocked.length > 0) {
+    plan.problem = `${blocked.length} file(s) cannot be taken as inputs: ${blocked.map((e) => `${e.path} (${e.reason})`).join('; ')}.`;
+  }
+
+  // Where they go: on the session's one branch when it has it, else on the commit tasks are cut from.
+  const sessionBranch = sessionBranchName(session);
+  const tip = session.vcs?.branchMode === 'per-session' ? (await git(top, ['rev-parse', '--verify', '--quiet', `refs/heads/${sessionBranch}^{commit}`])).stdout : '';
+  if (tip) {
+    plan.recapture = { parent: tip, ffBranch: sessionBranch };
+    plan.baselineBranch = sessionBranch;
+  } else {
+    const newBranch = await freeBranchName(top, `${branchNameFrom(['input'], session.vcs?.branchPrefix || 'cop/')}/${session.id}`);
+    plan.recapture = { parent: session.vcsBaseCommit, newBranch };
+    plan.baselineBranch = newBranch;
   }
   plan.ok = !plan.problem;
   return plan;
@@ -329,7 +397,49 @@ export async function takeSnapshot(
   if (dirtyPolicy(session.vcs).policy === 'reject' && !inputSettings(session.vcs)) {
     return { ok: false, problem: 'this session does not take uncommitted changes as a snapshot. Choose that under Version control → "Uncommitted changes" first.' };
   }
-  if (session.vcsBaseCommit) return { ok: false, problem: 'this session has already started; a snapshot is taken only before its first task.' };
+  if (session.vcsBaseCommit) {
+    // Started already: only input files changed or added since can be taken, onto its line of work.
+    const plan = await planSnapshot(session, allSessions);
+    if (!plan.needed || !plan.recapture) {
+      return { ok: false, problem: 'this session has already started, and no input file has changed since: a snapshot is taken only before its first task.' };
+    }
+    if (!plan.ok) return { ok: false, problem: plan.problem ?? 'the input files cannot be taken.' };
+    const paths = plan.entries.map((e) => e.path);
+    if (opts.approved) {
+      const shown = Object.keys(opts.choices ?? {}).sort();
+      if (JSON.stringify(shown) !== JSON.stringify([...paths].sort()) || paths.some((p) => opts.choices?.[p] !== 'include')) {
+        return { ok: false, problem: 'the input files changed since the list was shown. Look at the list again; nothing was done.' };
+      }
+    }
+    const made = await recaptureInputs(session, plan.repoDir, paths, plan.recapture);
+    if ('problem' in made) return { ok: false, problem: made.problem };
+    const settings = inputSettings(session.vcs);
+    const top = (await topOf(plan.repoDir)) as string;
+    const before = session.vcsStart as SessionStart;
+    const start: SessionStart = {
+      ...before,
+      inputs: {
+        patterns: settings?.patterns ?? [],
+        files: await inputSumsAt(top, made.commit, settings?.patterns ?? []),
+        readOnly: settings?.readOnly ?? true,
+        ...(before.inputs?.carried ? { carried: before.inputs.carried } : {}),
+        recaptured: [...(before.inputs?.recaptured ?? []), { commit: made.commit, branch: made.branch, paths: paths.slice(0, 200), approved: opts.approved }],
+      },
+    };
+    await saveSession((s) => {
+      s.vcsStart = start;
+      // A commit tasks are cut from moves to the inputs' commit; a session branch moved forward itself.
+      if (plan.recapture?.newBranch) s.vcsBaseCommit = made.commit;
+    });
+    bus.publish({
+      sessionId: session.id,
+      type: 'vcs-inputs-recaptured',
+      level: 'info',
+      message: `${paths.length} input file(s) changed or added since the session started are now the commit ${made.commit.slice(0, 8)} on ${made.branch}; the next task starts from it`,
+      data: { commit: made.commit, branch: made.branch, paths: paths.slice(0, 50) },
+    });
+    return { ok: true, start };
+  }
   const plan = await planSnapshot(session, allSessions);
   if (!plan.needed) return { ok: false, problem: 'there is nothing uncommitted to take.' };
   if (!plan.ok || !plan.baselineBranch || !plan.head) return { ok: false, problem: plan.problem ?? 'the snapshot cannot be taken.' };

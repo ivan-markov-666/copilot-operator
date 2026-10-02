@@ -154,7 +154,7 @@ const norm = (dir: string): string => dir.trim().replace(/[\\/]+$/, '').replace(
  * tree or the index: a temporary index is read from `parent`, the files are set in it, and the
  * tree is committed with `commit-tree`.
  */
-async function commitOnto(top: string, parent: string, files: Array<{ path: string; mode: string; blob: string }>, message: string, branch: string): Promise<{ commit: string } | { problem: string }> {
+async function commitOnto(top: string, parent: string, files: Array<{ path: string; mode: string; blob: string }>, message: string, branch?: string): Promise<{ commit: string } | { problem: string }> {
   const index = join(tmpdir(), `cop-inputs-index-${process.pid}-${Date.now()}`);
   const env = { ...process.env, GIT_INDEX_FILE: index };
   try {
@@ -168,12 +168,70 @@ async function commitOnto(top: string, parent: string, files: Array<{ path: stri
     if (!tree.ok || !tree.stdout) return { problem: tree.stderr || 'git write-tree failed' };
     const commit = await git(top, ['-c', 'user.name=copilot-operator', '-c', `user.email=${RUNNER_EMAIL}`, 'commit-tree', tree.stdout, '-p', parent, '-m', message]);
     if (!commit.ok || !commit.stdout) return { problem: commit.stderr || 'git commit-tree failed' };
-    const made = await git(top, ['branch', branch, commit.stdout]);
-    if (!made.ok) return { problem: made.stderr || `the branch ${branch} could not be made` };
+    if (branch) {
+      const made = await git(top, ['branch', branch, commit.stdout]);
+      if (!made.ok) return { problem: made.stderr || `the branch ${branch} could not be made` };
+    }
     return { commit: commit.stdout };
   } finally {
     await rm(index, { force: true });
   }
+}
+
+/**
+ * Where each input pattern's files are committed: the repository's HEAD first, then `start` (a
+ * snapshot approved on the page has them, wherever HEAD has moved since), then the latest earlier
+ * session in this repository that recorded them. A pattern found nowhere is `missing`.
+ */
+async function inputSources(
+  session: Session,
+  dir: string,
+  top: string,
+  patterns: string[],
+  start: string | undefined,
+  allSessions: () => Promise<Session[]>,
+): Promise<{ wanted: Array<{ path: string; mode: string; blob: string }>; sources: Set<string>; missing: string[] }> {
+  const head = (await git(top, ['rev-parse', '--verify', '--quiet', 'HEAD'])).stdout;
+  const wanted: Array<{ path: string; mode: string; blob: string }> = [];
+  const sources = new Set<string>();
+  const missing: string[] = [];
+  const atHead = head ? await inputsAt(top, head, patterns) : [];
+  const earlier = (await allSessions())
+    .filter((s) => s.id !== session.id && s.vcsStart?.inputs && norm(s.vcs?.repoDir || s.projectDir || '') === norm(dir))
+    // The newest first: a later capture is the operator's later word on the inputs.
+    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+    .map((s) => s.vcsStart as SessionStart);
+  for (const pattern of patterns) {
+    let found = atHead.filter((f) => inScope(f.path, [pattern]));
+    let from = head;
+    if (found.length === 0 && start) {
+      found = (await inputsAt(top, start, [pattern])).filter((f) => inScope(f.path, [pattern]));
+      from = start;
+    }
+    for (const s of earlier) {
+      if (found.length > 0) break;
+      found = (await inputsAt(top, s.commit, [pattern])).filter((f) => inScope(f.path, [pattern]));
+      from = s.commit;
+    }
+    if (found.length === 0) missing.push(pattern);
+    else sources.add(from);
+    for (const f of found) if (!wanted.some((w) => w.path === f.path)) wanted.push(f);
+  }
+  return { wanted, sources, missing };
+}
+
+/**
+ * The input patterns that match no file anywhere — not in the working tree, not committed, not
+ * captured by an earlier session. Asked before a snapshot is approved: found only afterwards, the
+ * snapshot was already taken when the session was refused for it.
+ */
+export async function missingInputPatterns(session: Session, dir: string, top: string, allSessions: () => Promise<Session[]>): Promise<string[]> {
+  const settings = inputSettings(session.vcs);
+  if (!settings) return [];
+  const inTree = await inputFilesInTree(top, settings.patterns);
+  const notInTree = settings.patterns.filter((p) => !inTree.some((f) => inScope(f.path, [p])));
+  if (notInTree.length === 0) return [];
+  return (await inputSources(session, dir, top, notInTree, session.vcsStart?.commit, allSessions)).missing;
 }
 
 /**
@@ -197,35 +255,7 @@ export async function settleInputs(
   const topR = await git(dir, ['rev-parse', '--show-toplevel']);
   if (!topR.ok || !topR.stdout) return { problem: `${dir} is not a git repository.` };
   const top = resolve(topR.stdout);
-  const head = (await git(top, ['rev-parse', '--verify', '--quiet', 'HEAD'])).stdout;
-
-  // Where each pattern's files are: HEAD first, then the latest earlier capture in this repository.
-  const wanted: Array<{ path: string; mode: string; blob: string }> = [];
-  const sources = new Set<string>();
-  const missing: string[] = [];
-  const atHead = head ? await inputsAt(top, head, settings.patterns) : [];
-  const earlier = (await allSessions())
-    .filter((s) => s.id !== session.id && s.vcsStart?.inputs && norm(s.vcs?.repoDir || s.projectDir || '') === norm(dir))
-    // The newest first: a later capture is the operator's later word on the inputs.
-    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
-    .map((s) => s.vcsStart as SessionStart);
-  for (const pattern of settings.patterns) {
-    let found = atHead.filter((f) => inScope(f.path, [pattern]));
-    let from = head;
-    // The start itself next: a snapshot approved on the page has them, wherever HEAD has moved since.
-    if (found.length === 0) {
-      found = (await inputsAt(top, start.commit, [pattern])).filter((f) => inScope(f.path, [pattern]));
-      from = start.commit;
-    }
-    for (const s of earlier) {
-      if (found.length > 0) break;
-      found = (await inputsAt(top, s.commit, [pattern])).filter((f) => inScope(f.path, [pattern]));
-      from = s.commit;
-    }
-    if (found.length === 0) missing.push(pattern);
-    else sources.add(from);
-    for (const f of found) if (!wanted.some((w) => w.path === f.path)) wanted.push(f);
-  }
+  const { wanted, sources, missing } = await inputSources(session, dir, top, settings.patterns, start.commit, allSessions);
   if (missing.length > 0) {
     return {
       problem:
@@ -263,6 +293,92 @@ export async function settleInputs(
   return { start: { ...start, commit, inputs: { patterns: settings.patterns, files, readOnly: settings.readOnly, ...(carried ? { carried } : {}) } } };
 }
 
+/**
+ * The input files in the working tree that the session's record does not have as they are: new
+ * since it was taken, changed since, or never recorded and not committed. Committed and unchanged
+ * ones are not changes.
+ */
+export async function inputChanges(top: string, patterns: string[], recorded: InputFile[] | undefined): Promise<Array<{ path: string; kind: 'tracked' | 'untracked' | 'ignored' }>> {
+  const known = new Map((recorded ?? []).map((f) => [f.path, f.blob]));
+  const out: Array<{ path: string; kind: 'tracked' | 'untracked' | 'ignored' }> = [];
+  for (const f of await inputFilesInTree(top, patterns)) {
+    const now = await blobOfFile(top, f.path);
+    if (!now || known.get(f.path) === now) continue;
+    if (!known.has(f.path) && f.kind === 'tracked' && (await git(top, ['rev-parse', '--verify', '--quiet', `HEAD:${f.path}`])).stdout === now) continue;
+    out.push(f);
+  }
+  return out;
+}
+
+/**
+ * Commits input files that changed after the session started, on its line of work, and moves the
+ * working tree onto that commit without losing a byte: per session, on top of the session's branch;
+ * per task, on top of the commit every task branch is cut from, on a branch of its own that becomes
+ * that commit. The files' bytes go in as git would store them (`hash-object -w --path`), the commit
+ * is made with a temporary index, and the files are then staged as they are, so the switch onto the
+ * commit keeps them. Asked for by the operator's approval, or without it when `requireApproval` is
+ * false. Found in a run on 0.1.18: inputs edited or added once the session had started were "a dirty
+ * tree to commit or stash", version control went off, and the task ran without it.
+ */
+export async function recaptureInputs(
+  session: Session,
+  dir: string,
+  paths: string[],
+  target: { parent: string; ffBranch?: string; newBranch?: string },
+): Promise<{ commit: string; branch: string } | { problem: string }> {
+  const topR = await git(dir, ['rev-parse', '--show-toplevel']);
+  if (!topR.ok || !topR.stdout) return { problem: `${dir} is not a git repository.` };
+  const top = resolve(topR.stdout);
+  const files: Array<{ path: string; mode: string; blob: string }> = [];
+  for (const path of paths) {
+    const blob = await git(top, ['hash-object', '-w', `--path=${path}`, '--', join(top, path)]);
+    if (!blob.ok || !blob.stdout) return { problem: `${path} could not be read into git: ${blob.stderr}` };
+    const mode = (await git(top, ['ls-tree', target.parent, '--', path])).stdout.split(' ')[0] || '100644';
+    files.push({ path, mode, blob: blob.stdout });
+  }
+  const message = [
+    'Capture user-provided inputs',
+    '',
+    `The operator's input files for session "${session.name}" as they are now, changed or added after the session started.`,
+    'They are inputs: the work reads them and does not change them.',
+    '',
+    ...paths.slice(0, 200).map((p) => `- ${p}`),
+    '',
+    'Committed by copilot-operator. Not pushed.',
+    '',
+  ].join('\n');
+  const made = await commitOnto(top, target.parent, files, message, target.newBranch);
+  if ('problem' in made) return { problem: `the input files could not be committed: ${made.problem}` };
+  const branch = target.ffBranch ?? (target.newBranch as string);
+  if (target.ffBranch) {
+    // Forward only, from the tip it was read at: nothing on the branch is lost or rewritten.
+    const moved = await git(top, ['update-ref', `refs/heads/${target.ffBranch}`, made.commit, target.parent]);
+    if (!moved.ok) return { problem: `${target.ffBranch} could not be moved onto the inputs' commit: ${moved.stderr}` };
+  }
+  const staged = await git(top, ['--literal-pathspecs', 'add', '-f', '--', ...paths]);
+  if (!staged.ok) return { problem: `the input files could not be staged: ${staged.stderr}` };
+  const on = (await git(top, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout;
+  if (on !== branch) {
+    const moved = await git(top, ['checkout', '-q', branch]);
+    if (!moved.ok) return { problem: `the repository could not be put on ${branch}: ${moved.stderr}` };
+  }
+  return { commit: made.commit, branch };
+}
+
+/** The input files as one commit has them, for the guard of a task cut from it. */
+export async function inputsAtCommit(dir: string, commit: string, inputs: NonNullable<SessionStart['inputs']>): Promise<NonNullable<SessionStart['inputs']>> {
+  const topR = await git(dir, ['rev-parse', '--show-toplevel']);
+  if (!topR.ok || !topR.stdout) return inputs;
+  return { ...inputs, files: await inputSumsAt(resolve(topR.stdout), commit, inputs.patterns) };
+}
+
+/** The files under the input patterns that git does not track, when a task starts: not the task's to remove. */
+export async function untrackedInputs(dir: string, patterns: string[]): Promise<Set<string>> {
+  const topR = await git(dir, ['rev-parse', '--show-toplevel']);
+  if (!topR.ok || !topR.stdout) return new Set();
+  return new Set((await inputFilesInTree(resolve(topR.stdout), patterns)).filter((f) => f.kind !== 'tracked').map((f) => f.path));
+}
+
 /** What one check of the input files found and did. */
 export type InputsCheck = { changed: string[]; restored: string[]; failed: Array<{ path: string; why: string }> };
 
@@ -271,7 +387,17 @@ export type InputsCheck = { changed: string[]; restored: string[]; failed: Array
  * that commit, a new one matching an input pattern removed. Only on the task's own branch, whose
  * starting commit has the inputs (see `settleInputs`).
  */
-export async function protectInputs(dir: string, base: string, inputs: NonNullable<SessionStart['inputs']>): Promise<InputsCheck> {
+export async function protectInputs(
+  dir: string,
+  base: string,
+  inputs: NonNullable<SessionStart['inputs']>,
+  /**
+   * Untracked files under the patterns that were there when the task started: the operator's, not
+   * the task's, and never removed. Found in a run on 0.1.18: an input the operator added, ignored by
+   * .gitignore and so in no commit, was "put back" by deleting it.
+   */
+  keep: Set<string> = new Set(),
+): Promise<InputsCheck> {
   const out: InputsCheck = { changed: [], restored: [], failed: [] };
   const topR = await git(dir, ['rev-parse', '--show-toplevel']);
   if (!topR.ok || !topR.stdout) return out;
@@ -286,7 +412,7 @@ export async function protectInputs(dir: string, base: string, inputs: NonNullab
   }
   // A file the task added under an input pattern: inputs are the operator's, so it goes.
   for (const { path, kind } of await inputFilesInTree(top, inputs.patterns)) {
-    if (known.has(path) || kind === 'tracked') continue;
+    if (known.has(path) || kind === 'tracked' || keep.has(path)) continue;
     out.changed.push(path);
     const abs = resolve(join(top, path));
     if (!abs.startsWith(resolve(top) + sep)) {

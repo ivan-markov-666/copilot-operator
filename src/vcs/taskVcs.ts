@@ -71,6 +71,30 @@ export async function prepareForTask(
   /** Every session on record, for `startFrom: previous-session` to find the one before this. */
   allSessions: () => Promise<Session[]> = async () => [],
 ): Promise<PrepareResult> {
+  const prepared = await prepare(session, task, bus, saveSession, allSessions);
+  /*
+   * Version control that is on but cannot do its part refuses the task, whatever the cause — a dirty
+   * tree, a starting branch that is not there, a branch git would not make. It used to be "on but
+   * inactive": the task ran, nothing was committed, and the task still ended done with its work
+   * loose in the tree. A task that cannot be committed is not run.
+   */
+  // Not when the operator chose no commits (`commitOnFinish` false): earlier tasks' files are then
+  // meant to stay in the tree, and refusing would stop every task after the first.
+  if (session.vcs?.enabled && session.vcs.commitOnFinish !== false && !prepared.refuse && !prepared.vcs.branch && prepared.vcs.problem) {
+    const why = `version control is on and cannot work for this task: ${prepared.vcs.problem.replace(/\.?\s*$/, '.')} Nothing was run.`;
+    bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-refused', level: 'error', message: why });
+    return { ...prepared, refuse: why };
+  }
+  return prepared;
+}
+
+async function prepare(
+  session: Session,
+  task: Task,
+  bus: EventBus,
+  saveSession: (mutate: (s: Session) => void) => Promise<void>,
+  allSessions: () => Promise<Session[]>,
+): Promise<PrepareResult> {
   const settings = session.vcs;
   if (!settings?.enabled) return { vcs: {}, note: '' };
 
@@ -137,6 +161,29 @@ export async function prepareForTask(
     }
   }
 
+  /*
+   * Started already, and input files changed or were added since: taken onto the session's line of
+   * work (see `recaptureInputs`), with the operator's approval unless they said otherwise. They used
+   * to be "a dirty tree to commit or stash": version control went off and the task ran without it.
+   */
+  if (base && inputs) {
+    const plan = await planSnapshot(session, allSessions);
+    if (plan.needed && plan.recapture) {
+      if (!plan.ok) return refuse(`the input files changed since the session started cannot be taken: ${plan.problem} Nothing was run.`);
+      if (plan.requireApproval) {
+        return refuse(
+          `input files changed or were added since the session started (${someOf(plan.entries.map((e) => e.path))}). Approve them on the session's page, ` +
+            'Version control → "Uncommitted changes", and they are committed on its line of work before the next task. Nothing was run.',
+        );
+      }
+      const taken = await takeSnapshot(session, { approved: false }, bus, saveSession, allSessions);
+      if (!taken.ok) return refuse(`the changed input files were not taken: ${taken.problem} Nothing was run.`);
+      start = taken.start;
+      if (plan.recapture.newBranch) base = taken.start.inputs?.recaptured?.at(-1)?.commit ?? base;
+      state = await repoState(dir);
+    }
+  }
+
   // A dirty tree is the operator's own work in progress. Committing it under the bot's name
   // or moving it to another branch would both be decisions that are not ours to make — unless
   // the operator made it, with a snapshot policy, above.
@@ -144,9 +191,11 @@ export async function prepareForTask(
     const problem =
       `the repository has uncommitted changes (${state.changed.slice(0, 5).join(', ')}` +
       `${state.changed.length > 5 ? `, and ${state.changed.length - 5} more` : ''}). ` +
-      'Commit or stash them, so the task starts from a known state.';
+      (base
+        ? 'Commit or stash them, so the task starts from a known state.'
+        : 'Commit or stash them, or choose "Take them as a starting snapshot" under Version control → "Uncommitted changes" (input files: "Input files").');
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-dirty', level: 'warn',
-      message: `version control is on but inactive: ${problem}` });
+      message: `version control cannot start: ${problem}` });
     return { vcs: { problem }, note: '' };
   }
 
@@ -343,19 +392,63 @@ export async function sessionStart(
   };
   if (how === 'branch') return await fromBranch();
 
+  /*
+   * The session before this one: the one that ran last in this repository, however it ended — not the
+   * last one that happened to commit, which skipped a predecessor that had failed or committed
+   * nothing and continued from older work as if it were the latest. A session set aside does not count.
+   */
   const here = normalise(dir);
-  let best: { session: Session; branch: string; at: string } | null = null;
+  let pred: { session: Session; at: string } | null = null;
   for (const other of await allSessions()) {
-    if (other.id === session.id || !other.vcs?.enabled || normalise(repoDirOf(other)) !== here) continue;
-    const last = lastWorkOf(other);
-    if (last && (!best || last.at > best.at)) best = { session: other, ...last };
+    if (other.id === session.id || !other.vcs?.enabled || other.active === false || normalise(repoDirOf(other)) !== here) continue;
+    const at = lastActivityOf(other);
+    if (at && (!pred || at > pred.at)) pred = { session: other, at };
   }
-  if (!best) return await fromBranch(`no earlier session has committed work in this repository, so it starts from "${baseBranch}"`);
+  if (!pred) return await fromBranch(`no earlier session has run in this repository, so it starts from "${baseBranch}"`);
+  const before = pred.session;
+
+  /*
+   * Checked before anything is carried on: the previous session finished, and what it produced is
+   * there — a final commit on a branch that still exists, or a result that is artifacts only (or no
+   * change at all), which ends where it started. Anything else is refused with what is wrong; it used
+   * to fall back to the base branch with a note, and the chain went on without the work it needed.
+   */
+  const unfinished = before.tasks.filter((t) => t.status !== 'done');
+  if (unfinished.length > 0) {
+    return {
+      problem:
+        `this session continues the previous session in this repository, "${before.name}", which has not finished: ` +
+        `${unfinished.slice(0, 6).map((t) => `"${t.title}" is ${t.status}`).join(', ')}${unfinished.length > 6 ? `, and ${unfinished.length - 6} more` : ''}. ` +
+        'Finish it first (Continue or Run again), or choose another "Start from".',
+    };
+  }
+  const work = lastWorkOf(before);
+  if (!work) {
+    const startedAt = before.vcsBaseCommit;
+    if (!startedAt || !(await git(dir, ['cat-file', '-e', `${startedAt}^{commit}`])).ok) {
+      return { problem: `the previous session "${before.name}" committed nothing, and the commit it started from is not in the repository, so there is nothing to carry on from.` };
+    }
+    const artifactsOnly = before.tasks.some((t) => (t.artifactsKept?.length ?? 0) > 0);
+    return {
+      start: {
+        kind: 'previous-session',
+        commit: startedAt,
+        ...(before.vcsStart?.branch ? { branch: before.vcsStart.branch } : {}),
+        fromSession: { id: before.id, name: before.name },
+        note: artifactsOnly
+          ? `"${before.name}" committed nothing — its result is artifacts only — so this session starts where it started (${startedAt.slice(0, 8)})`
+          : `"${before.name}" changed nothing, so this session starts where it started (${startedAt.slice(0, 8)})`,
+      },
+    };
+  }
+  const best = { session: before, ...work };
   const tip = await branchTip(dir, best.branch);
   if (!tip) {
-    return await fromBranch(
-      `the branch of the previous session "${best.session.name}" (${best.branch}) is no longer in the repository, so it starts from "${baseBranch}"`,
-    );
+    return {
+      problem:
+        `the branch of the previous session "${best.session.name}" (${best.branch}) is no longer in the repository, so its final commit cannot be carried on. ` +
+        'Restore the branch, or choose another "Start from".',
+    };
   }
   /*
    * The whole of that session's done work, or nothing. In per-task mode every task has a branch of
@@ -398,6 +491,17 @@ function lastWorkOf(session: Session): { branch: string; at: string } | null {
     }
   }
   return best;
+}
+
+/** When a session last did anything: the latest start or end of any of its tasks' attempts. */
+function lastActivityOf(session: Session): string | null {
+  let at: string | null = null;
+  for (const t of session.tasks) {
+    for (const v of [t.finishedAt, t.startedAt, ...(t.attempts ?? []).flatMap((a) => [a.finishedAt, a.startedAt])]) {
+      if (v && (!at || v > at)) at = v;
+    }
+  }
+  return at;
 }
 
 async function branchTip(dir: string, branch: string): Promise<string | null> {
@@ -746,6 +850,28 @@ export async function commitTaskResult(
 }
 
 /**
+ * Why a task's work is not committed although version control is on and commits it, or undefined
+ * when it is (or there was nothing to commit). Read after `commitTaskResult`; a task that would end
+ * done ends failed with this instead. See `finish` in the runner.
+ */
+export async function commitShortfall(session: Session, before: TaskVcs | undefined, after: TaskVcs | undefined, error?: string): Promise<string | undefined> {
+  if (!session.vcs?.enabled || !session.vcs.commitOnFinish) return undefined;
+  if (error) return `version control failed after the task, so its work was not committed: ${error}. The changes are left in the working tree.`;
+  if (!after?.branch) {
+    // Never on a branch of its own. The start refuses that now; whatever got through, it is said.
+    const state = await repoState(repoDirOf(session));
+    return state.isRepo && state.dirty
+      ? `version control is on but was not active for this task (${after?.problem ?? before?.problem ?? 'no branch was made'}), so its changes were not committed: ${someOf(state.changed)}. They are left in the working tree.`
+      : undefined;
+  }
+  if (after.problem) return `the runner could not commit the task's work: ${after.problem}`;
+  if (after.afterCommit && !after.afterCommit.clean) {
+    return `after the runner's commit the working tree still has uncommitted changes (${someOf(after.afterCommit.changed)}), so not all of the task's work is on ${after.branch}.`;
+  }
+  return undefined;
+}
+
+/**
  * Commits what a task left behind when the process running it ended before it could.
  *
  * `commitTaskResult` runs when a task finishes, whatever the outcome, which covers every failure
@@ -985,7 +1111,7 @@ export async function vcsPreflight(
    * file. Input files are looked for even in a clean tree — an ignored input does not make it dirty.
    */
   const inputs = !!inputSettings(settings);
-  if ((dirty || inputs) && !session.vcsBaseCommit && (dirtyPolicy(settings).policy !== 'reject' || inputs) && settings.startFrom !== 'existing-branch') {
+  if ((dirty || inputs) && (!session.vcsBaseCommit || inputs) && (dirtyPolicy(settings).policy !== 'reject' || inputs) && settings.startFrom !== 'existing-branch') {
     const snapshot = await planSnapshot(session, allSessions);
     if (snapshot.needed) {
       const listed = snapshot.entries.map((e) => e.path);
@@ -993,9 +1119,13 @@ export async function vcsPreflight(
         ok: false,
         repoDir,
         branch: state.branch ?? undefined,
-        problem: snapshot.ok
-          ? `There are uncommitted changes (${someOf(listed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once you approve the list below' : 'when its first task starts'}.`
-          : `There are uncommitted changes, and no starting snapshot can be taken: ${snapshot.problem}`,
+        problem: snapshot.recapture
+          ? snapshot.ok
+            ? `Input files changed or were added since the session started (${someOf(listed, 3)}). They are committed on its line of work ${snapshot.requireApproval ? 'once you approve the list below' : 'when its next task starts'}.`
+            : `Input files changed since the session started, and they cannot be taken: ${snapshot.problem}`
+          : snapshot.ok
+            ? `There are uncommitted changes (${someOf(listed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once you approve the list below' : 'when its first task starts'}.`
+            : `There are uncommitted changes, and no starting snapshot can be taken: ${snapshot.problem}`,
         snapshot,
       };
     }
