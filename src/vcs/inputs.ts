@@ -27,7 +27,7 @@ import { join, resolve, sep } from 'node:path';
 
 import type { InputFile, Session, SessionStart, UserInputs, VersionControl } from '../session/model.js';
 import { looksGenerated } from './commitHygiene.js';
-import { branchNameFrom, freeBranchName, git, gitBytes, isValidBranchName, RUNNER_EMAIL } from './git.js';
+import { branchNameFrom, freeBranchName, git, gitBytes, isValidBranchName, RUNNER_EMAIL, workingTreePaths } from './git.js';
 import { inScope } from './scope.js';
 
 /** The session's input settings with defaults filled in, or null when it names no inputs. */
@@ -154,7 +154,7 @@ const norm = (dir: string): string => dir.trim().replace(/[\\/]+$/, '').replace(
  * tree or the index: a temporary index is read from `parent`, the files are set in it, and the
  * tree is committed with `commit-tree`.
  */
-async function commitOnto(top: string, parent: string, files: Array<{ path: string; mode: string; blob: string }>, message: string, branch?: string): Promise<{ commit: string } | { problem: string }> {
+export async function commitOnto(top: string, parent: string, files: Array<{ path: string; mode: string; blob: string }>, message: string, branch?: string): Promise<{ commit: string } | { problem: string }> {
   const index = join(tmpdir(), `cop-inputs-index-${process.pid}-${Date.now()}`);
   const env = { ...process.env, GIT_INDEX_FILE: index };
   try {
@@ -377,6 +377,28 @@ export async function untrackedInputs(dir: string, patterns: string[]): Promise<
   const topR = await git(dir, ['rev-parse', '--show-toplevel']);
   if (!topR.ok || !topR.stdout) return new Set();
   return new Set((await inputFilesInTree(resolve(topR.stdout), patterns)).filter((f) => f.kind !== 'tracked').map((f) => f.path));
+}
+
+/**
+ * What is uncommitted in the working tree besides the session's recorded input files as they were
+ * approved. An input taken into a starting snapshot on the base branch stays untracked where it is —
+ * the operator's checkout is not touched — and is not "a dirty tree" while its content is the one
+ * recorded: `inputs` lists those, to be staged before the task's branch is checked out, so the switch
+ * keeps them.
+ */
+export async function dirtyBesidesInputs(dir: string, start: SessionStart | undefined): Promise<{ other: string[]; inputs: string[] }> {
+  const topR = await git(dir, ['rev-parse', '--show-toplevel']);
+  if (!topR.ok || !topR.stdout) return { other: [], inputs: [] };
+  const top = resolve(topR.stdout);
+  const recorded = new Map((start?.inputs?.files ?? []).map((f) => [f.path, f.blob]));
+  const other: string[] = [];
+  const inputs: string[] = [];
+  for (const p of await workingTreePaths(top)) {
+    const want = recorded.get(p);
+    if (want && (await blobOfFile(top, p)) === want) inputs.push(p);
+    else other.push(p);
+  }
+  return { other, inputs };
 }
 
 /** What one check of the input files found and did. */

@@ -202,18 +202,20 @@ await scenario('a branch that is not there: refused at import, naming the branch
   t.truthy('existingBranch with another startFrom is refused as contradictory', plain.ok === false, plain);
 });
 
-await scenario('at the run: a branch gone, or uncommitted changes, refuse the task before anything is sent', {}, async (h) => {
+await scenario('before the browser opens: a branch gone, or uncommitted changes, refuse the run', {}, async (h) => {
+  // Since 2026-10-02 these are found before anything opens the browser: the start itself is refused.
+  const start = async (id: string): Promise<{ started: boolean; reason?: string }> => await h.call('POST', `/sessions/${id}/start`, { mode: 'unattended' });
   h.git('branch', 'feature/soon-gone');
   const [s] = await h.importPlan(onExisting(h, 'gone', 'feature/soon-gone', [fileTask('never', 'x.txt', 'x')]));
   h.git('branch', '-D', 'feature/soon-gone');
-  const gone = (await h.run(s!.id)).tasks[0]! as unknown as { status: string; reason?: string };
-  t.truthy('failed, saying the branch is missing, nothing sent', gone.status === 'failed' && /no such local branch/.test(gone.reason ?? '') && h.chat.sent.length === 0, gone);
+  const gone = await start(s!.id);
+  t.truthy('refused, saying the branch is missing, no browser opened', !gone.started && /no such branch/.test(gone.reason ?? '') && h.chat.opened === 0, gone);
 
   h.git('branch', 'feature/dirty');
   const [d] = await h.importPlan(onExisting(h, 'dirty', 'feature/dirty', [fileTask('never-either', 'y.txt', 'y')]));
-  writeFileSync(join(h.repo, 'operator-work.txt'), 'the operator\'s own change\n');
-  const dirty = (await h.run(d!.id)).tasks[0]! as unknown as { status: string; reason?: string };
-  t.truthy('failed, saying the tree has uncommitted changes, nothing sent', dirty.status === 'failed' && /uncommitted changes/.test(dirty.reason ?? '') && h.chat.sent.length === 0, dirty);
+  writeFileSync(join(h.repo, 'operator-work.txt'), "the operator's own change\n");
+  const dirty = await start(d!.id);
+  t.truthy('refused, saying the tree has uncommitted changes, no browser opened', !dirty.started && /uncommitted changes/.test(dirty.reason ?? '') && h.chat.opened === 0, dirty);
   t.check('and the repository was left on main, the change untouched', [h.git('branch', '--show-current'), h.git('status', '--porcelain')], ['main', '?? operator-work.txt']);
 });
 

@@ -479,6 +479,31 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
       name: session.name,
       // The commit the session's tasks are cut from, by the name a report looks for.
       ...(session.vcsBaseCommit ? { baselineCommit: session.vcsBaseCommit } : {}),
+      /*
+       * The starting snapshot, in the terms a report asks for: the base it was made on, the approved
+       * inputs with their sums, the approval, the sessions that start from it, and whether this one
+       * made it or inherited it through its chain.
+       */
+      ...(session.vcsStart?.kind === 'snapshot' || session.vcsStart?.baseline
+        ? {
+            baseline: {
+              commit: session.vcsStart.kind === 'snapshot' ? session.vcsStart.commit : session.vcsStart.baseline?.commit,
+              branch: session.vcsStart.kind === 'snapshot' ? session.vcsStart.branch : session.vcsStart.baseline?.branch,
+              inherited: session.vcsStart.kind !== 'snapshot',
+              ...(session.vcsStart.baseline?.fromSession ? { inheritedFrom: session.vcsStart.baseline.fromSession } : {}),
+              ...(session.vcsStart.snapshot
+                ? {
+                    targetBaseCommit: session.vcsStart.snapshot.fromCommit,
+                    targetBaseBranch: session.vcsStart.snapshot.fromBranch,
+                    onBaseBranch: !!session.vcsStart.snapshot.onBase,
+                    approval: { approved: session.vcsStart.snapshot.approved, at: session.vcsStart.snapshot.approvedAt },
+                    sessions: session.vcsStart.snapshot.sharedWith ?? [{ id: session.id, name: session.name }],
+                  }
+                : {}),
+              approvedInputs: (session.vcsStart.inputs?.files ?? []).map((f) => ({ path: f.path, sha256: f.sha256 })),
+            },
+          }
+        : {}),
       ...(session.vcsStart
         ? {
             start: {

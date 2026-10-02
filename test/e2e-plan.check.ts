@@ -1043,9 +1043,9 @@ await scenario('the exports and the live events', { limits: { maxFormatRetries: 
   t.check('a session with only queued tasks has nothing to export', (await h.raw('GET', `/sessions/${queuedOnly!.id}/export?variant=full`)).status, 400);
 
   // A failure, then "run again": the export of the run it failed in must still say why it failed.
-  h.git('branch', 'feature/soon-gone');
-  const [f] = await h.importPlan(planOf({ ...onBranch(h, 'will-fail', [fileTask('fail-task', 'f.txt', 'f')]), vcs: { enabled: true, repoDir: h.repo, existingBranch: 'feature/soon-gone', updateFromRemote: false } }));
-  h.git('branch', '-D', 'feature/soon-gone');
+  // A branch name git will not take: refused at the task, inside the run (a missing branch is now refused
+  // before the run starts, so it leaves no run to export).
+  const [f] = await h.importPlan(planOf({ ...onBranch(h, 'will-fail', [fileTask('fail-task', 'f.txt', 'f')]), vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'feature/work.lock', updateFromRemote: false } }));
   await h.run(f!.id);
   const failedSession = await full(h, f!.id);
   const failed = failedSession.tasks[0]!;

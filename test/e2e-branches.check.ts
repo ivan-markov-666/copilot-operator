@@ -256,15 +256,16 @@ await scenario('per-task rerun starts from the same base on -a2; a new prompt th
  * ended done, its work loose in the tree (reported 2026-10-02). With commits on, a task whose work could
  * not be committed is not run: it is refused before anything is sent, and nothing is touched.
  */
-await scenario('a dirty tree refuses the task and touches nothing', {}, async (h) => {
+await scenario('a dirty tree refuses the run before the browser opens, and touches nothing', {}, async (h) => {
   writeFileSync(join(h.repo, 'README.md'), '# fixture\nan edit the operator has not committed\n');
   writeFileSync(join(h.repo, 'wip.txt'), 'work in progress\n');
   const mainBefore = h.git('rev-parse', 'main');
   const [s] = await h.importPlan(plan(h, 'dirty', [fileTask('write-a', 'a.txt', 'a')]));
-  const task = (await run(h, s!.id)).tasks[0]!;
-  t.check('the task is refused, not run', task.status, 'failed');
-  t.truthy('the reason names the files and says nothing was run', /uncommitted changes \(README\.md, wip\.txt\)/.test(task.reason ?? '') && /Nothing was run/.test(task.reason ?? ''), task.reason);
-  t.check('no message went to the chat', h.chat.sent.length, 0);
+  // Since 2026-10-02 version control is checked before the browser opens: the start itself is refused.
+  const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  t.check('the run does not start', r.started, false);
+  t.truthy('the reason names the files', /uncommitted changes \(README\.md, wip\.txt\)/.test(r.reason ?? ''), r.reason);
+  t.check('no browser opened, no message went to the chat', [h.chat.opened, h.chat.sent.length], [0, 0]);
   t.check('the repository is still on main', h.git('branch', '--show-current'), 'main');
   t.check('no cop/ branch was made', h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/'), '');
   t.check('main has no new commit', h.git('rev-parse', 'main'), mainBefore);

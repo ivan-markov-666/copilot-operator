@@ -20,7 +20,7 @@ import type { Session, SessionStart, Task, TaskVcs, VersionControl } from '../se
 import type { Deviation } from '../protocol/replySchema.js';
 import { findSuspicious } from './commitHygiene.js';
 import { dirtyPolicy, planSnapshot, someOf, takeSnapshot, type SnapshotPlan } from './snapshot.js';
-import { inputSettings, inputsNote, settleInputs } from './inputs.js';
+import { dirtyBesidesInputs, inputSettings, inputsNote, settleInputs } from './inputs.js';
 import { artifactPatterns, excludeArtifacts } from './artifacts.js';
 import { workingTreePaths } from './git.js';
 import { inScope } from './scope.js';
@@ -184,6 +184,20 @@ async function prepare(
     }
   }
 
+  /*
+   * Input files taken into a starting snapshot on the base branch stay untracked where they are, as
+   * they were approved: not "a dirty tree" while their content is the recorded one. They are staged
+   * when the task's branch is checked out, so the switch keeps them (see `switchTo`).
+   */
+  let carryInputs: string[] = [];
+  if (state.dirty && start?.inputs) {
+    const split = await dirtyBesidesInputs(dir, start);
+    if (split.other.length === 0 && split.inputs.length > 0) {
+      carryInputs = split.inputs;
+      state = { ...state, dirty: false };
+    }
+  }
+
   // A dirty tree is the operator's own work in progress. Committing it under the bot's name
   // or moving it to another branch would both be decisions that are not ours to make — unless
   // the operator made it, with a snapshot policy, above.
@@ -245,7 +259,7 @@ async function prepare(
   const prefix = settings.branchPrefix || 'cop/';
 
   if (settings.branchMode === 'per-session') {
-    return await switchTo(session, task, dir, sessionBranchName(session), base, bus, { reuseExisting: true, start });
+    return await switchTo(session, task, dir, sessionBranchName(session), base, bus, { reuseExisting: true, start, stage: carryInputs });
   }
 
   // A name the task carries wins over one derived from its title: whoever wrote the plan knew
@@ -258,11 +272,11 @@ async function prepare(
   // its work is what is being continued. See `continueTask` in the store.
   // The same for a new prompt given to a finished task: it builds on that attempt's work.
   const previousBranch = task.continuing || task.buildsOn ? task.attempts?.at(-1)?.vcs?.branch : undefined;
-  if (previousBranch) return await switchTo(session, task, dir, previousBranch, base, bus, { reuseExisting: true, start });
+  if (previousBranch) return await switchTo(session, task, dir, previousBranch, base, bus, { reuseExisting: true, start, stage: carryInputs });
   // A re-run starts from where that task started the first time, not from where the previous
   // attempt ended. That is the whole point of recording the base commit.
   const from = firstAttemptBase(task) ?? base;
-  return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false, start });
+  return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false, start, stage: carryInputs });
 }
 
 /**
@@ -439,6 +453,7 @@ export async function sessionStart(
         commit: startedAt,
         ...(before.vcsStart?.branch ? { branch: before.vcsStart.branch } : {}),
         fromSession: { id: before.id, name: before.name },
+        ...inheritedBaseline(before),
         note: artifactsOnly
           ? `"${before.name}" committed nothing — its result is artifacts only — so this session starts where it started (${startedAt.slice(0, 8)})`
           : `"${before.name}" changed nothing, so this session starts where it started (${startedAt.slice(0, 8)})`,
@@ -478,7 +493,7 @@ export async function sessionStart(
         'or run that session "One branch for the whole session" so the next one can carry on from it.',
     };
   }
-  return { start: { kind: 'previous-session', commit: tip, branch: best.branch, fromSession: { id: best.session.id, name: best.session.name } } };
+  return { start: { kind: 'previous-session', commit: tip, branch: best.branch, fromSession: { id: best.session.id, name: best.session.name }, ...inheritedBaseline(best.session) } };
 }
 
 /**
@@ -495,6 +510,16 @@ function lastWorkOf(session: Session): { branch: string; at: string } | null {
     }
   }
   return best;
+}
+
+/**
+ * The starting snapshot a session carries on, for the one that continues it: its own when it made
+ * one, else the one it inherited. Recorded so the export can say each session of a chain shares it.
+ */
+function inheritedBaseline(before: Session): { baseline?: SessionStart['baseline'] } {
+  const own = before.vcsStart?.kind === 'snapshot' ? { commit: before.vcsStart.commit, branch: before.vcsStart.branch, fromSession: { id: before.id, name: before.name } } : undefined;
+  const baseline = own ?? before.vcsStart?.baseline;
+  return baseline ? { baseline } : {};
 }
 
 /** When a session last did anything: the latest start or end of any of its tasks' attempts. */
@@ -591,7 +616,7 @@ async function switchTo(
   from: string | undefined,
   bus: EventBus,
   /** `mustExist`: carry on this branch or nothing; never create it. */
-  opts: { reuseExisting: boolean; mustExist?: boolean; start?: SessionStart },
+  opts: { reuseExisting: boolean; mustExist?: boolean; start?: SessionStart; stage?: string[] },
 ): Promise<PrepareResult> {
   if (!(await isValidBranchName(dir, wantedName))) {
     const problem = `"${wantedName}" is not a name git accepts.`;
@@ -599,6 +624,9 @@ async function switchTo(
     return { vcs: { problem }, note: '' };
   }
 
+  // Approved inputs left untracked where they are: staged first, so the switch keeps them.
+  const stage = opts.stage ?? [];
+  if (stage.length > 0) await git(dir, ['--literal-pathspecs', 'add', '-f', '--', ...stage]);
   const state = await repoState(dir);
   let name = wantedName;
   let result;
@@ -614,6 +642,8 @@ async function switchTo(
   }
 
   if (!result.ok) {
+    // The operator's checkout as it was: the staged inputs go back to untracked.
+    if (stage.length > 0) await git(dir, ['--literal-pathspecs', 'restore', '--staged', '--', ...stage]);
     const problem = result.stderr || result.stdout || 'the branch could not be created';
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-problem', level: 'warn',
       message: `version control is on but inactive: ${problem}` });
@@ -1108,7 +1138,13 @@ export async function vcsPreflight(
   if (!state.isRepo) return { ok: false, repoDir, problem: state.problem };
   // Artifacts do not count: the run keeps them out of git before it looks (see `excludeArtifacts`).
   const artifacts = artifactPatterns(settings);
-  const changed = state.dirty && artifacts.length > 0 ? (await workingTreePaths(repoDir)).filter((p) => !inScope(p, artifacts)) : state.changed;
+  // File by file when anything is to be told apart: plain status folds a new folder into one line.
+  let changed = state.dirty && (artifacts.length > 0 || !!session.vcsStart?.inputs) ? (await workingTreePaths(repoDir)).filter((p) => !artifacts.length || !inScope(p, artifacts)) : state.changed;
+  // Approved inputs left untracked as they were (a snapshot on the base branch) are not dirt either.
+  if (changed.length > 0 && session.vcsStart?.inputs) {
+    const split = await dirtyBesidesInputs(repoDir, session.vcsStart);
+    changed = changed.filter((p) => !split.inputs.includes(p));
+  }
   const dirty = changed.length > 0;
   /*
    * Before the first task, under a snapshot policy or with input files: the list to approve, file by

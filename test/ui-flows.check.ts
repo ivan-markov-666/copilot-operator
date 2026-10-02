@@ -285,6 +285,9 @@ try {
     await dialog.getByRole('button', { name: 'OK' }).click();
     const left = await waitFor('the task to leave limit-reached', async () => (await cards(h, id))[0]!.status !== 'limit-reached', 15_000).then(() => true, () => false);
     t.truthy('OK: the task leaves limit-reached', left);
+    // Queued first, then started once version control is checked (before the browser opens): wait for
+    // the run, not for "nothing running", which is also true in the moment between the two.
+    await waitFor('the task to be carried on to done', async () => (await cards(h, id))[0]!.status === 'done', 30_000).catch(() => undefined);
     await h.idle();
     t.check('and is carried on to done', (await cards(h, id))[0]!.status, 'done');
     t.check('with one "continue" and one "start" in all, both from OK', startRequests().map((p) => p.replace(/^.*\//, '')), ['continue', 'start']);

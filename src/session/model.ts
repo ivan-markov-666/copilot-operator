@@ -741,7 +741,28 @@ export type SessionStart = {
    * branch and commit the snapshot sits on — and which files went in and which were left out.
    * `branch` above is the snapshot's own branch.
    */
-  snapshot?: { fromBranch?: string; fromCommit: string; included: string[]; leftOut: string[]; approved: boolean };
+  snapshot?: {
+    fromBranch?: string;
+    fromCommit: string;
+    included: string[];
+    leftOut: string[];
+    approved: boolean;
+    /**
+     * Made on the base branch from the run screen: `fromCommit` is the base branch's tip (the target
+     * base), the snapshot is that tree plus the approved inputs only, and the operator's checkout was
+     * not touched. See `vcs/runPreflight.ts`.
+     */
+    onBase?: boolean;
+    /** When the operator approved it. */
+    approvedAt?: string;
+    /** The sessions of the run in this repository that start from it, as approved. */
+    sharedWith?: Array<{ id: string; name: string }>;
+  };
+  /**
+   * The starting snapshot this session carries on, inherited through its chain (`previous-session`):
+   * absent on the session that made it, which has it as `commit` with `kind: 'snapshot'`.
+   */
+  baseline?: { commit: string; branch?: string; fromSession?: { id: string; name: string } };
   /**
    * The operator's input files in the commit the session starts from, with their sums. `carried`:
    * they were not in the start `startFrom` chose (`onto`), so the runner committed them on top of it,

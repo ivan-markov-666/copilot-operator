@@ -313,6 +313,25 @@ export type SnapshotEntry = {
   size?: number;
 };
 
+export type RunVcsActionId = 'review-inputs' | 'snapshot-on-base' | 'snapshot-here' | 'use-current-branch' | 'allow-snapshot';
+
+/** Version control for a run, per repository; see src/vcs/runPreflight.ts. */
+export type RunVcsGroup = {
+  repoDir: string;
+  ready: boolean;
+  problem?: string;
+  branch: string | null;
+  head: string | null;
+  baseBranch?: string;
+  baseHead?: string | null;
+  sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
+  inputPatterns: string[];
+  inputs: SnapshotEntry[];
+  unrelated: Array<{ path: string; reason?: string }>;
+  entries: SnapshotEntry[];
+  actions: Array<{ id: RunVcsActionId; available: boolean; recommended?: boolean; result: string; why?: string }>;
+};
+
 export type SnapshotPlan = {
   needed: boolean;
   ok: boolean;
@@ -1086,6 +1105,11 @@ export const api = {
 
   /** Can version control do its job in this session right now? */
   vcsStatus: (id: string) => call<VcsStatus>(`/sessions/${id}/vcs`),
+  /** "Prepare version control for this run": one group per repository of these sessions. */
+  runVcs: (ids: string[]) => call<RunVcsGroup[]>(`/batch/vcs?ids=${encodeURIComponent(ids.join(','))}`),
+  /** One action of that panel, for one repository. */
+  runVcsPrepare: (sessionIds: string[], repoDir: string, action: RunVcsActionId, choices: Record<string, 'include' | 'leave-out'> = {}) =>
+    call<{ ok: boolean; problem?: string; result?: string }>('/batch/vcs/prepare', { method: 'POST', body: JSON.stringify({ sessionIds, repoDir, action, choices }) }),
   /** Takes the starting snapshot, one choice per file of the list that was shown. */
   vcsSnapshot: (id: string, choices: Record<string, 'include' | 'leave-out'>) =>
     call<{ ok: boolean; problem?: string; branch?: string; commit?: string }>(`/sessions/${id}/vcs/snapshot`, { method: 'POST', body: JSON.stringify({ choices }) }),

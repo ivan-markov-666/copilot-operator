@@ -711,6 +711,21 @@ export class OperatorController {
     return this.ops.vcsStatus(id).catch(fail);
   }
 
+  /** "Prepare version control for this run": one group per repository of the sessions given. */
+  @Get('batch/vcs')
+  runVcs(@Query('ids') ids?: string, @Query('tasks') tasks?: string): Promise<unknown> {
+    const only = (tasks ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+    return this.ops.runVcs((ids ?? '').split(',').map((s) => s.trim()).filter(Boolean), only.length > 0 ? new Set(only) : undefined).catch(fail);
+  }
+
+  /** One action of that panel, for one repository. */
+  @Post('batch/vcs/prepare')
+  runVcsPrepare(@Body() body: { sessionIds?: string[]; repoDir?: string; action?: string; choices?: Record<string, 'include' | 'leave-out'> }): Promise<unknown> {
+    const actions = ['review-inputs', 'snapshot-on-base', 'snapshot-here', 'use-current-branch', 'allow-snapshot'];
+    if (!actions.includes(body?.action ?? '')) return Promise.resolve({ ok: false, problem: 'unknown action' });
+    return this.ops.runVcsPrepare(body?.sessionIds ?? [], body?.repoDir ?? '', body.action as 'review-inputs', body?.choices ?? {}).catch(fail);
+  }
+
   /** The operator's approval of the starting snapshot: one choice per file of the list they saw. */
   @Post('sessions/:id/vcs/snapshot')
   vcsSnapshot(@Param('id') id: string, @Body() body: { choices?: Record<string, 'include' | 'leave-out'> }): Promise<unknown> {

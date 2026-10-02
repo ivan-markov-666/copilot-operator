@@ -66,6 +66,7 @@ import { createTransport, type ChatTransport } from '../transport/chatTransport.
 import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
+import { runVcsPreflight, runVcsPrepare, type RunVcsActionId, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { normalisePatterns } from '../vcs/inputs.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
@@ -1253,6 +1254,12 @@ export class OperatorService {
       // A run of one is still a run, and it records the same thing a batch does, so that going
       // back and starting again from a task works the same whether one session was started or six.
       // Recorded by `beginRun` once the start is accepted, not here: see `recordOnSession`.
+      // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
+      const notReady = await this.vcsNotReady([sessionId]);
+      if (notReady) {
+        this.releaseBrowser(claim.holder);
+        return { started: false, reason: notReady };
+      }
       const begun = await this.beginRun(sessionId, mode, undefined, runGroup, undefined, { recordOnSession: true });
       if (!begun.started) {
         this.releaseBrowser(claim.holder);
@@ -1459,8 +1466,13 @@ export class OperatorService {
    * answer a question this one answers from two fields already in memory. A poll that costs a
    * directory walk every few seconds, on every page, to light up a dot would be a bad trade.
    */
-  activity(): { running: boolean; sessions: number; batch: boolean } {
-    return { running: this.running.size > 0, sessions: this.running.size, batch: this.batch?.running === true };
+  activity(): { running: boolean; sessions: number; batch: boolean; starting: boolean } {
+    /*
+     * A run being started — its version control checked before the browser opens — is not running yet
+     * and not idle either: `starting` says so, so "nothing is happening" is not read in that moment.
+     */
+    const starting = this.running.size === 0 && !this.batch?.running && (this.browser?.kind === 'run' || this.browser?.kind === 'batch');
+    return { running: this.running.size > 0, sessions: this.running.size, batch: this.batch?.running === true, starting };
   }
 
   /** The batch in progress, or the last one that ran, or null if none ever has. */
@@ -1535,6 +1547,9 @@ export class OperatorService {
     try {
       await this.init();
       if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
+      // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
+      const notReady = await this.vcsNotReady(wanted, onlyTasks);
+      if (notReady) return { started: false, reason: notReady };
       const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name);
       if (!begun.batch) return { started: false, reason: begun.reason };
       this.batch = begun.batch;
@@ -2283,6 +2298,54 @@ export class OperatorService {
   }
 
   // --- version control ----------------------------------------------------------------------
+
+  /**
+   * Version control for the sessions of a run, one group per repository, with what can be done about
+   * it from the run screen. See `vcs/runPreflight.ts`. Only sessions that have something queued count.
+   */
+  async runVcs(sessionIds: string[], onlyTasks?: ReadonlySet<string>): Promise<RunVcsGroup[]> {
+    await this.init();
+    const sessions: Session[] = [];
+    for (const id of sessionIds) {
+      const s = await this.store.getSession(id);
+      if (s && queuedToRun(s, onlyTasks).length > 0) sessions.push(s);
+    }
+    return await runVcsPreflight(sessions, () => this.store.listSessions());
+  }
+
+  /** Why a run may not start for version control, said before the browser opens; null when it may. */
+  private async vcsNotReady(sessionIds: string[], onlyTasks?: ReadonlySet<string>): Promise<string | null> {
+    const groups = (await this.runVcs(sessionIds, onlyTasks)).filter((g) => !g.ready);
+    if (groups.length === 0) return null;
+    return (
+      'Version control is not ready for this run, so nothing was opened or sent. ' +
+      groups.map((g) => `${g.repoDir}: ${g.problem ?? 'it needs your approval'}`).join(' ') +
+      ' Fix it under "Prepare version control for this run" on the Sessions page.'
+    );
+  }
+
+  /** One action of "Prepare version control for this run". Refused while anything runs in that repository. */
+  async runVcsPrepare(sessionIds: string[], repoDir: string, action: RunVcsActionId, choices: Record<string, SnapshotChoice>): Promise<{ ok: boolean; problem?: string; result?: string }> {
+    await this.init();
+    if (this.batch?.running) return { ok: false, problem: 'A run is going. Stop it before preparing version control.' };
+    const other = await this.runningIn(repoDir);
+    if (other) return { ok: false, problem: `Session "${other.name}" is running in this repository. Stop it first.` };
+    const sessions: Session[] = [];
+    for (const id of sessionIds) {
+      const s = await this.store.getSession(id);
+      if (s && queuedToRun(s).length > 0) sessions.push(s);
+    }
+    const done = await runVcsPrepare(
+      sessions,
+      repoDir,
+      action,
+      choices && typeof choices === 'object' ? choices : {},
+      this.bus,
+      async (id, mutate) => void (await this.store.updateSession(id, mutate)),
+      () => this.store.listSessions(),
+    );
+    return done.ok ? { ok: true, result: done.result } : { ok: false, problem: done.problem };
+  }
 
   /** Whether version control can do its job in this session, asked before a run. */
   async vcsStatus(

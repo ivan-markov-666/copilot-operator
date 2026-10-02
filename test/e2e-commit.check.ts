@@ -9,11 +9,11 @@
  *     ended done anyway, its work loose in the tree; now it ends failed, saying why, the work left
  *     in the working tree;
  *   - the tree was dirty when the task started, version control went "on but inactive", the task
- *     ran, nothing was committed, and it ended done; now the task is refused before anything is sent.
+ *     ran, nothing was committed, and it ended done; now the run is refused before the browser opens.
  *
  *   npm run check:e2e-commit
  */
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startHarness, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
@@ -65,14 +65,40 @@ await scenario('a commit that fails after the task fails the task', async (h) =>
   t.truthy('the work is left in the working tree', existsSync(join(h.repo, 'result.txt')), h.git('status', '--porcelain'));
 });
 
-await scenario('a dirty tree refuses the task before anything is sent', async (h) => {
-  writeFileSync(join(h.repo, 'mine.txt'), 'the operator\'s work in progress\n');
+await scenario('a dirty tree refuses the run before the browser opens', async (h) => {
+  writeFileSync(join(h.repo, 'mine.txt'), "the operator's work in progress\n");
   const [s] = await h.importPlan(plan(h, 'dirty'));
-  const ended = (await h.run(s!.id)).tasks[0]! as unknown as Ended;
-  t.check('the task is failed', ended.status, 'failed');
-  t.truthy('the reason names the file and says nothing was run', /uncommitted changes \(mine\.txt\)/.test(ended.reason ?? '') && /Nothing was run/.test(ended.reason ?? ''), ended.reason);
-  t.check('no message went to the chat', h.chat.sent.length, 0);
+  // Since 2026-10-02 version control is checked before anything opens the browser: the start itself is refused.
+  const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  t.check('the run does not start', r.started, false);
+  t.truthy('the reason names the file and where to fix it', /uncommitted changes \(mine\.txt\)/.test(r.reason ?? '') && /Prepare version control for this run/.test(r.reason ?? ''), r.reason);
+  t.check('no browser was opened and nothing sent', [h.chat.opened, h.chat.sent.length], [0, 0]);
+  t.check('the task is still queued', (await h.session(s!.id)).tasks[0]!.status, 'queued');
   t.check("the operator's file is untouched and still uncommitted", h.git('status', '--porcelain'), '?? mine.txt');
+});
+
+/*
+ * From the feedback of 2026-10-02: a task that failed before it ran reported an artifact that was
+ * already there, untouched, as kept. Nothing ran, so nothing is its evidence.
+ */
+await scenario('a task refused before it runs keeps no artifacts', async (h) => {
+  mkdirSync(join(h.repo, 'evidence'), { recursive: true });
+  writeFileSync(join(h.repo, 'evidence', 'earlier.txt'), 'from an earlier session\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'earlier evidence');
+  const [s] = await h.importPlan({
+    version: 1,
+    sessions: [{
+      name: 'badname',
+      onFailure: 'stop',
+      vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', branchName: 'feature/work.lock', artifacts: { paths: ['evidence/**'] } },
+      review: { enabled: false },
+      tasks: [{ title: 'never', prompt: 'Create result.txt in the repository root holding exactly the word done, and nothing else.' }],
+    }],
+  });
+  const ended = (await h.run(s!.id)).tasks[0]! as unknown as Ended & { artifactsKept?: unknown[] };
+  t.check('the task is refused before it runs', [ended.status, h.chat.sent.length], ['failed', 0]);
+  t.check('and keeps nothing as its evidence', ended.artifactsKept ?? null, null);
 });
 
 t.finish();

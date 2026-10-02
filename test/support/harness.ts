@@ -177,8 +177,8 @@ export async function startHarness(opts: { settings?: Record<string, unknown>; d
   const session = (id: string): Promise<SessionView> => call<SessionView>('GET', `/sessions/${id}`);
   const idle = async (): Promise<void> => {
     await waitFor('the run to end', async () => {
-      const a = await call<{ running: boolean; batch: boolean }>('GET', '/activity');
-      return !a.running && !a.batch;
+      const a = await call<{ running: boolean; batch: boolean; starting?: boolean }>('GET', '/activity');
+      return !a.running && !a.batch && !a.starting;
     });
   };
 

@@ -262,6 +262,22 @@ a task refused before that (input files not there yet) leaves nothing behind, so
 afresh, with the starting snapshot offered for approval (reported on 0.1.18, run 20261002-175647).
 Verified by `npm run check:e2e-commit`, `check:e2e-retry-inputs`, `check:inputs` and `check:e2e-inputs`.
 
+**Prepare version control for this run** (feedback of 2026-10-02: version control should be light,
+offer its fixes in the UI, and be settled before the browser opens). On the Sessions page the ticked
+sessions are grouped by repository; a repository that is not ready shows one box: the repository,
+its current branch and HEAD, the base branch the plan asked for and its HEAD, the sessions and how
+each starts, the input patterns, the matched input files with status and size, and any other
+uncommitted files apart. Each fix says exactly what it does before it is pressed: "Review input
+files"; "Create starting snapshot on <baseBranch>" (recommended when the plan names a base branch the
+repository is not on) — the base branch's tree plus the approved inputs only, made with a temporary
+index, no branch switched and the checkout untouched, shared by every session of the run starting
+from that branch and carried on by the chained ones; "Create starting snapshot on <current>"; "Use the
+current branch instead"; "Take uncommitted changes as a starting snapshot"; "Cancel". The run buttons
+stay off while a box is open, and a start — of one session or of several — is refused before the
+browser opens, with nothing sent. The work export's `baseline` names the commit, the target base, the
+approved inputs with their sums, the approval, the sessions, and whether a session inherited it. A
+task refused before it ran keeps no artifacts. Verified by `npm run check:e2e-run-vcs`.
+
 ## One chain, or independent tasks
 
 A queue can be either, and the runner cannot guess which. The choice sits above the tasks and

@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type Session, type VcsStatus, sessionHref } from '../lib/api';
+import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type RunVcsGroup, type Session, sessionHref } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { useUnattendedWithoutAsking } from '../lib/useUnattendedWithoutAsking';
 import { ModelHint } from './defaultHints';
+import { RunVcsPanel } from './runVcs';
 
 export default function SessionsPage() {
   const { t } = useT();
@@ -558,7 +559,8 @@ function BatchPanel({
   /** What to call the run. Empty means the plan's name of the first selected session, if any. */
   const [runName, setRunName] = useState('');
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
-  const [vcsProblems, setVcsProblems] = useState<Array<{ name: string; problem: string }>>([]);
+  const [vcsGroups, setVcsGroups] = useState<RunVcsGroup[]>([]);
+  const [vcsTick, setVcsTick] = useState(0);
 
   useEffect(() => {
     api
@@ -586,25 +588,13 @@ function BatchPanel({
     let cancelled = false;
     const ids = selectedKey.split(',').filter(Boolean);
     if (ids.length === 0) {
-      setVcsProblems([]);
+      setVcsGroups([]);
       return;
     }
+    // One group per repository, not one line per session: see "Prepare version control for this run".
     const check = async () => {
-      const results = await Promise.all(
-        ids.map(async (id) => {
-          const status = await api.vcsStatus(id).catch(() => null as VcsStatus | null);
-          return { id, status };
-        }),
-      );
-      if (cancelled) return;
-      setVcsProblems(
-        results
-          .filter((r) => r.status && !r.status.ok && r.status.problem !== 'off')
-          .map((r) => ({
-            name: sessions.find((x) => x.id === r.id)?.name ?? r.id,
-            problem: r.status?.problem ?? '',
-          })),
-      );
+      const groups = await api.runVcs(ids).catch(() => [] as RunVcsGroup[]);
+      if (!cancelled) setVcsGroups(groups);
     };
     void check();
     /*
@@ -625,7 +615,7 @@ function BatchPanel({
     // `sessions` is only read for a name here; re-running on every poll would ask the API a
     // question about the file system three times a second.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey]);
+  }, [selectedKey, vcsTick]);
 
   const byId = new Map(sessions.map((s) => [s.id, s]));
   const queuedIn = (s: Session) => s.tasks.filter((x) => x.status === 'queued').length;
@@ -638,7 +628,9 @@ function BatchPanel({
   const queuedTotal = runnable.reduce((n, s) => n + queuedIn(s), 0);
   const running = batch?.running === true;
   const oneAlreadyRunning = sessions.some((s) => s.running);
-  const blocked = running || runnable.length === 0 || oneAlreadyRunning;
+  // Not until version control is ready in every repository of the run: the start would be refused.
+  const vcsNotReady = vcsGroups.some((g) => !g.ready);
+  const blocked = running || runnable.length === 0 || oneAlreadyRunning || vcsNotReady;
 
   /** The one thing standing in the way, said in the order the operator would meet it. */
   const blockedReason: { title: Key; why: Key } | null = oneAlreadyRunning
@@ -879,17 +871,7 @@ function BatchPanel({
             </div>
           )}
 
-          {vcsProblems.length > 0 && (
-            <div className="notice caution">
-              <strong>{t('batch.vcsProblem')}</strong>
-              <ul>
-                {vcsProblems.map((p) => (
-                  <li key={p.name}>{t('batch.vcsProblemRow', { name: p.name, problem: p.problem })}</li>
-                ))}
-              </ul>
-              <div className="muted small">{t('batch.vcsProblemWhy')}</div>
-            </div>
-          )}
+          <RunVcsPanel groups={vcsGroups} sessionIds={runnable.map((s) => s.id)} onChange={() => setVcsTick((n) => n + 1)} />
 
           {refusal && (
             <div className="notice caution" role="alert">

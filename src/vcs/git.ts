@@ -83,7 +83,17 @@ export async function repoState(dir: string): Promise<RepoState> {
   if (!dir?.trim()) return { ...empty, problem: 'No repository folder is set.' };
   if (!existsSync(dir)) return { ...empty, problem: `The folder ${dir} does not exist.` };
 
-  const inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
+  let inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
+  /*
+   * A folder with a .git that git calls "not a repository" is, on Windows, a moment when another git is
+   * replacing HEAD or the index (a rename there is not atomic while the file is open): asked again, it is
+   * one. Found 2026-10-02 when a run was refused before it started for "not a git repository" while its
+   * branch and HEAD read fine. Asked up to three more times before the answer stands.
+   */
+  for (let i = 0; i < 3 && (!inside.ok || inside.stdout !== 'true') && existsSync(join(dir, '.git')); i += 1) {
+    await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+    inside = await git(dir, ['rev-parse', '--is-inside-work-tree']);
+  }
   if (!inside.ok || inside.stdout !== 'true') {
     return { ...empty, problem: `${dir} is not a git repository. Run "git init" there, or point version control at one.` };
   }

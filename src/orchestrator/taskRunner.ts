@@ -748,7 +748,8 @@ export async function runTask(
      */
     const patterns = artifactPatterns(session.vcs);
     const projectRoot = repoDirOf(session) || session.projectDir?.trim() || '';
-    if ((patterns.length > 0 || (task.outputs?.length ?? 0) > 0) && projectRoot) {
+    // Only after the task started: one refused before it ran made nothing, and what is there is not its own.
+    if ((patterns.length > 0 || (task.outputs?.length ?? 0) > 0) && projectRoot && artifactsBefore) {
       // Only what this task made or changed, inside its scope, or declared as its outputs.
       const kept = await keepArtifacts(projectRoot, patterns, join(artifactsDir, 'project'), { before: artifactsBefore, scope: task.scope, outputs: task.outputs })
         .catch((e: unknown) => ({ kept: [], skipped: [`(all: ${(e as Error).message})`], unchanged: 0, outsideScope: [] as string[] }));

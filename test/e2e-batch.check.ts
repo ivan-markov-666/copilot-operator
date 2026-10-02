@@ -1005,7 +1005,7 @@ await scenario('the entrance: what a start or a batch is refused for, and how', 
   t.check('taskIds that is not a list: 400', (await h.raw('POST', '/batch/start', { sessionIds: [s1!.id], taskIds: 't' })).status, 400);
   const empty = await h.call<Started>('POST', '/batch/start', { sessionIds: [] });
   t.check('an empty selection is refused with the reason', [empty.started, empty.reason], [false, 'no sessions were selected']);
-  t.check('none of these began anything', await h.call('GET', '/activity'), { running: false, sessions: 0, batch: false });
+  t.check('none of these began anything', await h.call('GET', '/activity'), { running: false, sessions: 0, batch: false, starting: false });
 
   // A single run waiting on its first approval: a batch including that session is refused.
   h.chat.script(write('g1.txt', 'one'));
