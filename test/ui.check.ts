@@ -8,17 +8,18 @@
  * build a package serves (`dist/web`, made by `npm run build:package`), on the same origin as the
  * API, exactly as `npx cop start` runs it.
  *
- * What it covers is what can only be seen in a page: the text size steps and that they survive a
- * reload and a bad stored value; that no page scrolls sideways on a phone at the largest size; the
- * import page turning pasted JSON into sessions; a supervised run answered from the banner on
- * another page; the changes view; the register's "Continue in the same chat"; Settings writing what
- * was typed. Everything behind the page is covered, faster, by the e2e-*.check.ts files.
+ * What it covers is what can only be seen in a page: every page hydrating against its own HTML (read
+ * from the built files, and tried with the layout's script held back); the text size steps and that
+ * they survive a reload and a bad stored value; that no page scrolls sideways on a phone at the
+ * largest size; the import page turning pasted JSON into sessions; a supervised run answered from
+ * the banner on another page; the changes view; the register's "Continue in the same chat"; Settings
+ * writing what was typed. Everything behind the page is covered, faster, by the e2e-*.check.ts files.
  *
  *   npm run check:ui          (builds the interface first)
  *
  * Set COP_UI_SHOTS to a folder to keep a screenshot of every scenario that fails.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -53,6 +54,73 @@ const planFor = (h: Harness, name: string, tasks: unknown[] = [greeting]): Recor
   ],
 });
 
+// ---------------------------------------------------------------------------------------------
+// What each built page hands React to hydrate, read from the files. A page's HTML carries the
+// server's render twice: as markup, and as the data React rebuilds the same tree from in the
+// browser. Anything in that data the browser must first fetch is a place where hydration can stop
+// and wait. In <head> that is not harmless: React 19 keeps its place in the document in one
+// variable while it is inside <head>, overwrites it each time it resumes there, and then compares
+// the first element of <body> with the first one of <head>. The hydration fails (React error #418)
+// and the whole page is thrown away and drawn again, on whichever load the chunk came late. That is
+// how the theme script, imported by the server layout from a 'use client' module, failed
+// test/ui-flows.check.ts on 2026-10-02 twice in three runs. This part is exact: no browser, no timing.
+// ---------------------------------------------------------------------------------------------
+
+/** The rows of the data React hydrates a built page from (`self.__next_f.push([1, "…"])`), by id. */
+const payloadRows = (html: string): Map<string, string> => {
+  let text = '';
+  for (const m of html.matchAll(/self\.__next_f\.push\((\[.*?\])\)<\/script>/gs)) {
+    const part = JSON.parse(m[1]!) as [number, string?];
+    if (part[0] === 1 && typeof part[1] === 'string') text += part[1];
+  }
+  const rows = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const m = /^([0-9a-f]+):(.*)$/s.exec(line);
+    if (m) rows.set(m[1]!, m[2]!);
+  }
+  return rows;
+};
+/** A value the browser must resolve before it has it: a lazy part, a promise, another row or a module. */
+const waitsFor = (v: unknown): v is string => typeof v === 'string' && /^\$(L|@)?[0-9a-f]+$/.test(v);
+
+console.log('\n--- every built page hydrates <head> from what is in the page ---');
+{
+  const pages = (readdirSync(webDir, { recursive: true }) as string[])
+    .map((p) => p.replace(/\\/g, '/'))
+    .filter((p) => p.endsWith('.html') && !p.startsWith('_next/'));
+  const noHead: string[] = [];
+  const inHead: string[] = [];
+  const inlineCode: string[] = [];
+  for (const p of pages) {
+    let heads = 0;
+    for (const [id, row] of payloadRows(readFileSync(join(webDir, p), 'utf8'))) {
+      if (!row.startsWith('{') && !row.startsWith('[')) continue;
+      const walk = (v: unknown, at: string, insideHead: boolean): void => {
+        if (Array.isArray(v)) {
+          const isHead = v[0] === '$' && v[1] === 'head';
+          if (isHead) heads++;
+          v.forEach((x, i) => walk(x, `${at}[${i}]`, insideHead || isHead));
+        } else if (v && typeof v === 'object') {
+          for (const [k, x] of Object.entries(v)) {
+            if (k === 'dangerouslySetInnerHTML' && x && typeof x === 'object' && typeof (x as { __html?: unknown }).__html !== 'undefined') {
+              const code = (x as { __html: unknown }).__html;
+              if (typeof code !== 'string' || waitsFor(code)) inlineCode.push(`${p}: ${at}.${k}.__html = ${String(code)}`);
+            }
+            walk(x, `${at}.${k}`, insideHead);
+          }
+        } else if (insideHead && waitsFor(v)) inHead.push(`${p}: ${at} = ${v}`);
+      };
+      walk(JSON.parse(row), `row ${id}`, false);
+    }
+    if (heads === 0) noHead.push(p);
+  }
+  t.truthy('the build has its pages', pages.length >= 9 && pages.includes('index.html'), pages);
+  // Without this the two checks below would pass on a page whose data they could not read at all.
+  t.check('pages whose data has no <head> to look at', noHead, []);
+  t.check('parts of <head> the browser must fetch before it can hydrate it', inHead, []);
+  t.check('inline scripts whose text is a reference rather than the text', inlineCode, []);
+}
+
 let browser: Browser | null = null;
 
 async function scenario(title: string, settings: Record<string, unknown>, body: (h: Harness, page: Page, url: (p: string) => string) => Promise<void>): Promise<void> {
@@ -80,6 +148,49 @@ async function scenario(title: string, settings: Record<string, unknown>, body: 
 
 try {
   browser = await chromium.launch({ headless: true });
+
+  /*
+   * The same in a browser, where it was seen: every page loaded with the layout's own chunk held back,
+   * so that React reaches <head> before the chunk is there. With the theme script still a reference,
+   * one load in three or four of these was thrown away and drawn again (which ones, React decides), so
+   * two rounds of every page find it nearly always; the check of the built pages above finds it every
+   * time. Judged by the markup, not only by the error: a page drawn again has lost the frame the HTML
+   * gave it, whatever React reports about it.
+   */
+  await scenario("every page keeps the markup of its HTML when the layout's script comes late", {}, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'late'));
+    // Held on the network every time: while a route is set, Playwright fetches past the cache.
+    await page.route('**/_next/static/chunks/app/layout-*.js', async (r) => {
+      await new Promise((res) => setTimeout(res, 500));
+      await r.continue();
+    });
+    // The frame the parser put in, marked as it arrives. A failed hydration replaces it with a new one.
+    await page.addInitScript(() => {
+      new MutationObserver((records, observer) => {
+        for (const r of records) {
+          for (const n of r.addedNodes) {
+            if (n instanceof HTMLElement && n.classList.contains('wrap')) {
+              (n as HTMLElement & { fromHtml?: boolean }).fromHtml = true;
+              observer.disconnect();
+              return;
+            }
+          }
+        }
+      }).observe(document, { childList: true, subtree: true });
+    });
+    const pages = ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const redrawn: string[] = [];
+    for (let round = 1; round <= 2; round++) {
+      for (const p of pages) {
+        await page.goto(url(p));
+        // The router mounts it once the hydration has committed, as it was or drawn again.
+        await page.locator('next-route-announcer').waitFor({ state: 'attached' });
+        const kept = await page.evaluate(() => (document.querySelector('div.wrap') as (HTMLElement & { fromHtml?: boolean }) | null)?.fromHtml === true);
+        if (!kept) redrawn.push(`round ${round}: ${p}`);
+      }
+    }
+    t.check('loads whose markup was thrown away and drawn again', redrawn, []);
+  });
 
   await scenario('text size: five steps, remembered, and a bad stored value falls back', {}, async (_h, page, url) => {
     await page.goto(url('/appearance'));

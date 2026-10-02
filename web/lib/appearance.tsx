@@ -6,26 +6,19 @@
  *
  * Everything is expressed as a `data-` attribute on `<html>` and read back by the stylesheet.
  * That keeps the components free of theme logic and means the whole setting can be applied by
- * a five-line script before the first paint, which is what `themeScript` below is for: without
- * it a dark-theme user sees a white flash on every navigation.
+ * a five-line script before the first paint, which is what `themeScript` in ./themeScript is for:
+ * without it a dark-theme user sees a white flash on every navigation. The script is kept out of
+ * this module because the layout, a server component, needs its text; see that file for why.
  *
  * The settings live in this browser's localStorage. They are personal, they are worthless to
  * anyone else, and the API has no business storing them.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { APPEARANCE_STORAGE_KEY as STORAGE_KEY, TEXT_SIZES, type TextSize } from './themeScript';
+
+export { TEXT_SIZES, type TextSize } from './themeScript';
 
 export type Theme = 'light' | 'dark';
-
-/**
- * The text sizes, smallest first: one step below normal and three above it.
- *
- * The names are what is stored, so they never change meaning: `large` and `huge` were the only two
- * steps above normal until 2026-09-29 and a browser that saved one of them must still land on the
- * same size. New steps got new names (`small`, `giant`) rather than renumbering the old ones. The
- * factor for each lives in globals.css, beside the rest of the scale.
- */
-export const TEXT_SIZES = ['small', 'normal', 'large', 'huge', 'giant'] as const;
-export type TextSize = (typeof TEXT_SIZES)[number];
 
 export type Appearance = {
   theme: Theme;
@@ -49,8 +42,6 @@ export const DEFAULT_APPEARANCE: Appearance = {
   strongFocus: false,
 };
 
-const STORAGE_KEY = 'cop.appearance';
-
 /**
  * Whatever is in storage, turned into settings this page can show.
  *
@@ -72,27 +63,6 @@ export function sanitiseAppearance(raw: unknown): Appearance {
     strongFocus: flag(a.strongFocus, DEFAULT_APPEARANCE.strongFocus),
   };
 }
-
-/**
- * Runs before React, inline in the document head. Anything it cannot do — bad json, no
- * storage — leaves the defaults in the markup, which are already correct.
- */
-export const themeScript = `
-(function () {
-  try {
-    var d = document.documentElement;
-    var raw = localStorage.getItem('${STORAGE_KEY}');
-    var a = raw ? JSON.parse(raw) : {};
-    if (!a || typeof a !== 'object') a = {};
-    d.dataset.theme = a.theme === 'dark' ? 'dark' : 'light';
-    d.dataset.textsize = ${JSON.stringify(TEXT_SIZES)}.indexOf(a.textSize) >= 0 ? a.textSize : 'normal';
-    d.dataset.contrast = a.highContrast ? 'high' : 'normal';
-    d.dataset.motion = a.reduceMotion ? 'reduced' : 'normal';
-    d.dataset.links = a.underlineLinks ? 'underline' : 'plain';
-    d.dataset.focus = a.strongFocus ? 'strong' : 'normal';
-  } catch (e) {}
-})();
-`;
 
 function apply(a: Appearance): void {
   const d = document.documentElement;

@@ -2,7 +2,10 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import './globals.css';
 import { LanguageProvider } from '../lib/i18n';
-import { AppearanceProvider, themeScript } from '../lib/appearance';
+import { AppearanceProvider } from '../lib/appearance';
+// From a module without 'use client', so the page carries the script's text and not a reference to
+// a chunk that may load after React has begun hydrating <head>. See lib/themeScript.ts.
+import { themeScript } from '../lib/themeScript';
 import { Nav, SkipLink } from './nav';
 import { DialogHost } from './dialog';
 import { GlobalApprovals } from './approvals';
