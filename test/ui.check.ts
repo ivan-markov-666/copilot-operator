@@ -565,23 +565,28 @@ try {
     t.check('queued read-only, with no old checks and the new prompt', [queued.readOnly, queued.checks ?? [], queued.prompt.startsWith('Audit hello.txt')], [true, [], true]);
   });
 
-  await scenario('a project in Settings offers the command that brings it back to the remote main, and runs nothing', {}, async (h, page, url) => {
+  await scenario('a project in Settings is prepared from the remote main, keeping everything on a saved branch', {}, async (h, page, url) => {
     const git = (...args: string[]): string => execFileSync('git', ['-C', h.repo, ...args], { encoding: 'utf8' }).trim();
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', join(h.base, 'remote.git')]);
     git('remote', 'add', 'origin', join(h.base, 'remote.git'));
     git('push', '-q', 'origin', 'main');
-    git('fetch', '-q', 'origin');
+    const mainAt = git('rev-parse', 'HEAD');
     git('checkout', '-q', '-b', 'cop/work');
     writeFileSync(join(h.repo, 'stray.txt'), 'stray\n');
 
     await page.goto(url('/defaults'));
-    await page.getByRole('button', { name: 'Command to bring this project back to the remote main branch' }).first().click();
-    await page.getByText('This would be lost:').waitFor();
-    const box = page.locator('.sync-command').first();
-    t.truthy('it names the new file that would go', (await box.textContent())?.includes('stray.txt'), (await box.textContent())?.slice(0, 400));
-    const commands = await box.locator('pre.sync-cmd').allTextContents();
-    t.truthy('a preview that only reads, and the command', commands.length === 2 && commands[0]!.includes('clean -nd') && commands[1]!.includes("reset --hard 'origin/main'") && commands[1]!.includes('clean -fd'), commands);
-    t.check('and nothing was run', [existsSync(join(h.repo, 'stray.txt')), git('rev-parse', '--abbrev-ref', 'HEAD')], [true, 'cop/work']);
+    await page.getByRole('button', { name: 'Prepare the folder from the remote main branch' }).first().click();
+    await page.getByText('On "Confirm":').waitFor();
+    const box = page.locator('.prepare-folder').first();
+    t.truthy('it names the new file and where it is kept', /stray\.txt/.test((await box.textContent()) ?? '') && /cop\/saved\//.test((await box.textContent()) ?? ''), (await box.textContent())?.slice(0, 400));
+    t.check('the preview changed nothing', [existsSync(join(h.repo, 'stray.txt')), git('rev-parse', '--abbrev-ref', 'HEAD')], [true, 'cop/work']);
+
+    await box.getByRole('button', { name: 'Confirm' }).click();
+    await box.getByRole('status').waitFor();
+    const saved = git('branch', '--list', 'cop/saved/*', '--format=%(refname:short)');
+    t.check('the folder is on main at the remote, clean', [git('rev-parse', '--abbrev-ref', 'HEAD'), git('rev-parse', 'HEAD'), git('status', '--porcelain'), existsSync(join(h.repo, 'stray.txt'))], ['main', mainAt, '', false]);
+    t.truthy('and the new file is kept on the saved branch', !!saved && git('show', `${saved}:stray.txt`) === 'stray', saved);
+    t.truthy('the branch it was on is still there', git('branch', '--list', 'cop/work') !== '');
   });
 
   await scenario('the Sessions page manages the list while a session runs', {}, async (h, page, url) => {

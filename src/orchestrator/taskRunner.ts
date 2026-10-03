@@ -105,6 +105,16 @@ export type RunDeps = {
    * person had approved each step. The service that holds the switch answers this.
    */
   currentMode?: () => 'confirm' | 'unattended';
+  /**
+   * Version control for a session that has not started yet, asked before its browser or conversation
+   * is touched and before any task is marked started: why it may not start, or null. The run as a
+   * whole is checked before it begins (see the service's `runPreflight`); this holds the same rule for
+   * a session reached later in a batch, whose repository the sessions before it may have changed. A
+   * refusal leaves every task queued — no attempt, no `task-started`.
+   */
+  vcsGate?: (session: Session) => Promise<string | null>;
+  /** Said just before this run opens a browser of its own (not a borrowed one): see `runLog.ts`. */
+  beforeBrowser?: () => Promise<void>;
 };
 
 /** Why a task that was reported as done is being closed as failed. */
@@ -753,7 +763,11 @@ export async function runTask(
       // Only what this task made or changed, inside its scope, or declared as its outputs.
       const kept = await keepArtifacts(projectRoot, patterns, join(artifactsDir, 'project'), { before: artifactsBefore, scope: task.scope, outputs: task.outputs })
         .catch((e: unknown) => ({ kept: [], skipped: [`(all: ${(e as Error).message})`], unchanged: 0, outsideScope: [] as string[] }));
-      sink.event('artifacts-kept', { kept: kept.kept.length, skipped: kept.skipped, unchanged: kept.unchanged, outsideScope: kept.outsideScope.slice(0, 20) },
+      /*
+       * `artifacts-kept` only when something was: files that were there before and untouched are not this
+       * task's evidence, and an event of that name with nothing in it read as if they had been collected.
+       */
+      sink.event(kept.kept.length > 0 || kept.skipped.length > 0 ? 'artifacts-kept' : 'artifacts-none', { kept: kept.kept.length, skipped: kept.skipped, unchanged: kept.unchanged, outsideScope: kept.outsideScope.slice(0, 20) },
         `artifacts kept with the run: ${kept.kept.length} file(s) this task made or changed` +
           `${kept.unchanged > 0 ? `; ${kept.unchanged} already there and untouched, not kept` : ''}` +
           `${kept.outsideScope.length > 0 ? `; ${kept.outsideScope.length} outside the task's scope, not kept` : ''}` +
@@ -2499,7 +2513,7 @@ export async function runSession(
      */
     transport?: ChatTransport;
   },
-): Promise<{ ran: number; lastStatus?: TaskOutcome['status']; paused: boolean }> {
+): Promise<{ ran: number; lastStatus?: TaskOutcome['status']; paused: boolean; refused?: string }> {
   const { cfg, store, bus } = deps;
   let session = await store.getSession(sessionId);
   if (!session) throw new Error(`Session ${sessionId} does not exist.`);
@@ -2508,6 +2522,13 @@ export async function runSession(
   if (queued.length === 0) {
     bus.publish({ sessionId, type: 'session-idle', level: 'info', message: 'no queued tasks' });
     return { ran: 0, paused: false };
+  }
+
+  // Version control before anything else: a session that may not start is refused with its tasks queued.
+  const refused = deps.vcsGate ? await deps.vcsGate(session) : null;
+  if (refused) {
+    bus.publish({ sessionId, type: 'run-preflight-refused', level: 'warn', message: refused, data: { queued: queued.length } });
+    return { ran: 0, paused: false, refused };
   }
 
   await store.updateSession(sessionId, (s) => {
@@ -2532,6 +2553,7 @@ export async function runSession(
       bus.publish({ sessionId, type: 'browser-reused', level: 'info', message: 'using the browser window that is already open' });
       await enterSessionConversation(borrowed, session, { closeOnFailure: false });
     } else {
+      await deps.beforeBrowser?.();
       transport = await openSessionTransport(cfg, session, bus, sessionRunsDir);
     }
     const chat = transport as ChatTransport;

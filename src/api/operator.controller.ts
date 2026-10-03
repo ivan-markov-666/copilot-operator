@@ -699,6 +699,18 @@ export class OperatorController {
     return this.ops.syncPlan(dir ?? '').catch(fail);
   }
 
+  /** "Prepare the folder from the remote main branch": what it would do (fetches, changes nothing else). */
+  @Post('repo/prepare/preview')
+  repoPreparePreview(@Body() body: { dir?: string }): Promise<unknown> {
+    return this.ops.preparePreview(body?.dir ?? '').catch(fail);
+  }
+
+  /** …and doing it, if the folder is still what the preview showed. */
+  @Post('repo/prepare')
+  repoPrepare(@Body() body: { dir?: string; fingerprint?: string }): Promise<unknown> {
+    return this.ops.prepareProject(body?.dir ?? '', body?.fingerprint ?? '').catch(fail);
+  }
+
   @Get('repo')
   repo(@Query('dir') dir?: string): { ok: boolean; problem?: string } {
     const problem = this.ops.repoProblem(dir ?? '');

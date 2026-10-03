@@ -21,6 +21,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { browserAfterPreflight, readRunLog } from './runLog.js';
 import type { Session, Task, TaskCheck } from './model.js';
 import { TASK_FIELD_ON_RERUN } from './store.js';
 import { botVersion } from '../config/version.js';
@@ -334,7 +335,12 @@ export function exportMachine(cfg: {
     node: process.versions.node,
     platform: process.platform,
     cwd: cfg.resolved.cwd,
-    limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, mode: cfg.execution.mode } },
+    /*
+     * The mode in Settings is only what a run is offered first; each run chooses its own, recorded per
+     * task as `policy.mode`. Named `defaultModeInSettings` because a report of 2026-10-03 read this field
+     * as the run's mode — "unattended" for a run started step by step.
+     */
+    limits: { ...cfg.limits, execution: { commandTimeoutSec: cfg.execution.commandTimeoutSec, idleTimeoutSec: cfg.execution.idleTimeoutSec, defaultModeInSettings: cfg.execution.mode } },
   };
 }
 
@@ -644,6 +650,27 @@ export async function buildDomainExport(scope: ExportScope, runsDir: string): Pr
 
 const TRANSPORT_TYPES = new Set(['message-sent', 'format-error', 'report-written', 'report-redacted', 'report-send-failed', 'attachment-missing', 'chat-registered', 'download']);
 
+/**
+ * The mode the attempt actually ran in, in the words of the run buttons: from its own policy.json
+ * (written when the task began, from the mode of the run as it was then), else the run's record on the
+ * session. "Run the rest without asking" can turn a step-by-step run unattended mid-way; a later task
+ * says so in its own policy.json.
+ */
+async function policyOf(session: Session, task: Task, runsDir: string): Promise<{ mode: 'step-by-step' | 'unattended'; from: 'policy.json' | 'run record' } | undefined> {
+  const named = (m: unknown): 'step-by-step' | 'unattended' | undefined => (m === 'confirm' ? 'step-by-step' : m === 'unattended' ? 'unattended' : undefined);
+  if (task.runId) {
+    const raw = await readFile(join(runsDir, task.runId, 'policy.json'), 'utf8').catch(() => null);
+    try {
+      const mode = raw ? named((JSON.parse(raw) as { mode?: unknown }).mode) : undefined;
+      if (mode) return { mode, from: 'policy.json' };
+    } catch {
+      /* a damaged file: fall back to the run record */
+    }
+  }
+  const mode = session.runGroup && task.runGroup?.id === session.runGroup.id ? named(session.runGroup.mode) : undefined;
+  return mode ? { mode, from: 'run record' } : undefined;
+}
+
 async function botTask(session: Session, task: Task, runsDir: string): Promise<Record<string, unknown>> {
   const events = await readEvents(runsDir, task.runId);
   const steps = stepsOf(events);
@@ -655,6 +682,9 @@ async function botTask(session: Session, task: Task, runsDir: string): Promise<R
   return {
     session: { id: session.id, name: session.name, model: session.model, modelInUse: session.modelInUse, reviewModel: session.review?.model },
     task: { id: task.id, title: task.title, attempt: task.attempt ?? 1, status: task.status, runId: task.runId, runFolder: task.runId ? join(runsDir, task.runId) : undefined, logFile: task.logFile },
+    // Which press of a run button this attempt belongs to: its preflight is under `runs` by this id.
+    run: task.runGroup ? { id: task.runGroup.id, name: task.runGroup.name } : undefined,
+    policy: await policyOf(session, task, runsDir),
     timing: { startedAt: task.startedAt, finishedAt: task.finishedAt, iterations: task.iterations },
     environment: task.environment,
     transport: {
@@ -710,12 +740,24 @@ export async function buildBotExport(
   const pairs = tasksOf(scope);
   const tasks = [];
   for (const { session, task } of pairs) tasks.push(await botTask(session, task, runsDir));
+  /*
+   * What each run did before its tasks: the version control preflight and the moment the browser was
+   * asked for, in the order they happened (`session/runLog.ts`), with the order checked rather than claimed.
+   */
+  const runs: Record<string, unknown> = {};
+  for (const { task } of pairs) {
+    const id = task.runGroup?.id;
+    if (!id || id in runs) continue;
+    const preflight = await readRunLog(runsDir, id);
+    runs[id] = { name: task.runGroup?.name, preflight, order: browserAfterPreflight(preflight) };
+  }
   return {
     exportedAt: new Date().toISOString(),
     // Which copilot-operator made this, so a report from another machine says it without being asked.
     botVersion: botVersion(),
     about: `copilot-operator, the runner: ${scope.label}. The environment, every transcript event, every step with its exit code, the transport's retries, what was reaped, what the review machinery did. Read the domain export for what the task was about.`,
     machine,
+    runs,
     tasks,
   };
 }

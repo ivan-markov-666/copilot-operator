@@ -886,6 +886,11 @@ function BatchPanel({
             </div>
           )}
 
+          {/*
+            While version control is not ready the decision panel above takes the run buttons' place: the
+            only things to press are its fixes, and the buttons come back once every repository is ready.
+          */}
+          {!vcsNotReady && (
           <div className="run-choice">
             <div>
               <button className="primary" onClick={() => void start('unattended')} disabled={acting || blocked}>
@@ -900,6 +905,7 @@ function BatchPanel({
               <p className="why">{t('batch.runStepWhy')}</p>
             </div>
           </div>
+          )}
         </>
       )}
 

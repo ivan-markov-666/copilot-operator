@@ -20,7 +20,7 @@ import { useUnattendedWithoutAsking } from '../../../lib/useUnattendedWithoutAsk
 import { useTaskActions } from '../../taskActions';
 import { usePoll } from '../../../lib/usePoll';
 import { ContractFields, scopeLines } from '../../contractFields';
-import { SyncCommand } from '../../syncCommand';
+import { PrepareFolder } from '../../prepareFolder';
 
 // ---------------------------------------------------------------------------------------
 // The page
@@ -876,7 +876,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
           <div className="muted small" style={{ marginTop: 4 }}>
             {effectiveRepo ? t('vcs.repoIs', { dir: effectiveRepo }) : t('vcs.repoNone')}
           </div>
-          {effectiveRepo && !repoProblem && <SyncCommand dir={effectiveRepo} />}
+          {effectiveRepo && !repoProblem && <PrepareFolder dir={effectiveRepo} />}
 
           <h3>{t('vcs.branches')}</h3>
           {startFrom === 'existing-branch' && <p className="muted small">{t('vcs.branchesExisting', { branch: vcs.existingBranch || '…' })}</p>}

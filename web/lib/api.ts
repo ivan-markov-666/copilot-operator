@@ -735,18 +735,26 @@ export type SavedLog = {
 export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
 
-/** See `src/vcs/syncCommand.ts`: what bringing a branch back to the remote's main would lose, and the command. */
-export type SyncPlan = {
+/** See `src/vcs/prepareFromRemote.ts`: what preparing the folder from the remote's main would keep where. */
+export type PreparePlan = {
   ok: boolean;
   problem?: string;
   repoDir: string;
-  branch?: string;
+  branch?: string | null;
+  head?: string;
   remote?: string;
   target?: string;
-  lastFetched?: string;
-  willLose: { commits: string[]; changed: string[]; untracked: string[] };
-  preview: string;
-  command: string;
+  targetCommit?: string;
+  localBranch?: string;
+  localHead?: string | null;
+  changed: string[];
+  untracked: string[];
+  mainOnlyCommits: string[];
+  branchOnlyCommits: string[];
+  savedBranch?: string;
+  savedMainBranch?: string;
+  alreadyThere?: boolean;
+  fingerprint?: string;
 };
 
 export type StopCode = 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
@@ -884,7 +892,11 @@ export const api = {
   /** The sessions list in this order: every session id, top to bottom. Returns the list as stored. */
   reorderSessions: (ids: string[]) => call<Session[]>('/sessions-order', { method: 'PUT', body: JSON.stringify({ ids }) }),
   metrics: () => call<Metrics>('/metrics'),
-  syncPlan: (dir: string) => call<SyncPlan>(`/repo/sync?dir=${encodeURIComponent(dir)}`),
+  /** "Prepare the folder from the remote main branch": fetches and says what it would do. */
+  preparePreview: (dir: string) => call<PreparePlan>('/repo/prepare/preview', { method: 'POST', body: JSON.stringify({ dir }) }),
+  /** …and does it, if the folder is still what the preview showed. */
+  prepareProject: (dir: string, fingerprint: string) =>
+    call<{ ok: boolean; problem?: string; result?: string }>('/repo/prepare', { method: 'POST', body: JSON.stringify({ dir, fingerprint }) }),
   session: (id: string) => call<Session>(`/sessions/${id}`),
   createSession: (name: string, projectDir?: string) =>
     call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, projectDir }) }),

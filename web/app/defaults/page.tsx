@@ -15,7 +15,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
-import { SyncCommand } from '../syncCommand';
+import { PrepareFolder } from '../prepareFolder';
 import Link from 'next/link';
 import { api, type ModelCatalogue, type ProjectDefault } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
@@ -495,7 +495,7 @@ function ProjectEntry({
         {dir && !repoOk && <span className="muted">{repoProblem || t('proj.notRepoWhy')}</span>}
       </div>
 
-      {dir && repoOk && <SyncCommand dir={dir} />}
+      {dir && repoOk && <PrepareFolder dir={dir} />}
     </div>
   );
 }

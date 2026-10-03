@@ -65,6 +65,8 @@ import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
+import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } from '../vcs/prepareFromRemote.js';
+import { appendRunLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
 import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
 import { runVcsPreflight, runVcsPrepare, type RunVcsActionId, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { normalisePatterns } from '../vcs/inputs.js';
@@ -1255,7 +1257,7 @@ export class OperatorService {
       // back and starting again from a task works the same whether one session was started or six.
       // Recorded by `beginRun` once the start is accepted, not here: see `recordOnSession`.
       // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
-      const notReady = await this.vcsNotReady([sessionId]);
+      const notReady = await this.runPreflight(runGroup.id, [sessionId]);
       if (notReady) {
         this.releaseBrowser(claim.holder);
         return { started: false, reason: notReady };
@@ -1393,8 +1395,10 @@ export class OperatorService {
       transport,
       runGroup,
       onlyTasks,
+      vcsGate: (s) => this.sessionVcsGate(s, onlyTasks),
+      ...(transport || !runGroup ? {} : { beforeBrowser: () => this.browserRequested(runGroup.id, [sessionId]) }),
     })
-      .then(async (outcome) => ({ ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused }))
+      .then(async (outcome) => ({ ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused, ...(outcome.refused ? { error: outcome.refused } : {}) }))
       .catch(async (e: unknown) => {
         this.bus.publish({ sessionId, type: 'run-failed', level: 'error', message: (e as Error).message });
         return { ...(await this.tally(sessionId, queuedIds)), error: (e as Error).message };
@@ -1548,9 +1552,11 @@ export class OperatorService {
       await this.init();
       if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
       // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
-      const notReady = await this.vcsNotReady(wanted, onlyTasks);
+      // The batch's id first, so the preflight is recorded under the run it decides about.
+      const batchId = newId('b-');
+      const notReady = await this.runPreflight(batchId, wanted, onlyTasks);
       if (notReady) return { started: false, reason: notReady };
-      const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name);
+      const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name, batchId);
       if (!begun.batch) return { started: false, reason: begun.reason };
       this.batch = begun.batch;
       handedOn = true;
@@ -1589,6 +1595,8 @@ export class OperatorService {
     model: string | undefined,
     reviewModel: string | undefined,
     name: string | undefined,
+    /** The id its preflight was recorded under; a new one when there was none. */
+    id: string = newId('b-'),
   ): Promise<{ batch: BatchState; reason?: undefined } | { batch?: undefined; reason: string }> {
     // Worked out here rather than asked of the operator again: every way into this — the run
     // panel, continuing after a failure, "Run again from here" — either has a field they may
@@ -1657,7 +1665,7 @@ export class OperatorService {
 
     return {
       batch: {
-        id: newId('b-'),
+        id,
         startedAt: new Date().toISOString(),
         name: chosenName,
         ...(onlyTasks ? { onlyTasks: [...onlyTasks] } : {}),
@@ -1760,6 +1768,7 @@ export class OperatorService {
     let browser: ChatTransport | null = null;
     try {
       const cfg = await this.settings.load();
+      await this.browserRequested(batch.id, batch.sessions.filter((x) => x.state === 'waiting').map((x) => x.sessionId));
       browser = await openBrowser(cfg, this.bus, join(cfg.resolved.runsDir, '_browser'), batch.id);
       this.bus.publish({
         sessionId: batch.sessions[0]?.sessionId ?? batch.id,
@@ -2313,15 +2322,87 @@ export class OperatorService {
     return await runVcsPreflight(sessions, () => this.store.listSessions());
   }
 
-  /** Why a run may not start for version control, said before the browser opens; null when it may. */
-  private async vcsNotReady(sessionIds: string[], onlyTasks?: ReadonlySet<string>): Promise<string | null> {
-    const groups = (await this.runVcs(sessionIds, onlyTasks)).filter((g) => !g.ready);
-    if (groups.length === 0) return null;
-    return (
-      'Version control is not ready for this run, so nothing was opened or sent. ' +
-      groups.map((g) => `${g.repoDir}: ${g.problem ?? 'it needs your approval'}`).join(' ') +
-      ' Fix it under "Prepare version control for this run" on the Sessions page.'
-    );
+  /**
+   * The run's version control preflight: why the run may not start, said before anything opens the
+   * browser, creates a task attempt or emits `task-started`; null when it may.
+   *
+   * Recorded as it happens, in the run's own log (`session/runLog.ts`) and on each session's event
+   * stream: `run-preflight-started`, one `repository-preflight` per repository, `baseline-created` for
+   * a starting snapshot taken on the run screen, `snapshot-approval-required` where the operator has a
+   * fix to press, then `run-preflight-passed` or `run-preflight-refused`. The browser is asked for
+   * only after a pass (`browser-launch-requested`), so the export can show the order.
+   */
+  private async runPreflight(runId: string, sessionIds: string[], onlyTasks?: ReadonlySet<string>): Promise<string | null> {
+    const cfg = await this.settings.load();
+    const log: RunLogEntry[] = [];
+    const note = (type: RunLogType, message: string, data: Record<string, unknown>, ids: string[], level: 'info' | 'warn' = 'info'): void => {
+      log.push({ at: new Date().toISOString(), type, message, data });
+      for (const id of ids) this.bus.publish({ sessionId: id, type, level, message, data: { runId, ...data } });
+    };
+    note('run-preflight-started', `version control preflight for ${sessionIds.length} session(s), before the browser opens`, { sessions: sessionIds }, sessionIds);
+    const groups = await this.runVcs(sessionIds, onlyTasks);
+    for (const g of groups) {
+      const ids = g.sessions.map((x) => x.id);
+      const first = ids[0] ? await this.store.getSession(ids[0]) : null;
+      const start = first?.vcsStart;
+      const untouched = !!first && !first.tasks.some((t) => t.startedAt);
+      if (start?.kind === 'snapshot' && start.snapshot?.approved && untouched) {
+        note('baseline-created', `starting snapshot ${start.commit.slice(0, 8)} on ${start.branch ?? '?'}, approved ${start.snapshot.approvedAt ?? ''}${start.snapshot.onBase ? ` on top of "${start.snapshot.fromBranch}"` : ''}`, {
+          repoDir: g.repoDir,
+          commit: start.commit,
+          branch: start.branch,
+          approvedAt: start.snapshot.approvedAt,
+          onBase: !!start.snapshot.onBase,
+          included: start.snapshot.included.length,
+        }, ids);
+      }
+      note('repository-preflight', `${g.repoDir}: ${g.ready ? 'ready' : g.problem ?? 'needs your approval'}`, {
+        repoDir: g.repoDir,
+        ready: g.ready,
+        branch: g.branch,
+        head: g.head,
+        ...(g.baseBranch ? { baseBranch: g.baseBranch, baseHead: g.baseHead } : {}),
+        sessions: g.sessions.map((x) => ({ id: x.id, name: x.name, startFrom: x.startFrom, role: x.role })),
+        inputPatterns: g.inputPatterns,
+        inputs: g.inputs.map((e) => e.path),
+        unrelated: g.unrelated.map((u) => u.path),
+        ...(g.problem ? { problem: g.problem } : {}),
+      }, ids, g.ready ? 'info' : 'warn');
+      const fixes = g.actions.filter((a) => a.available && a.id !== 'review-inputs').map((a) => a.id);
+      if (!g.ready && fixes.length > 0) {
+        note('snapshot-approval-required', `${g.repoDir}: nothing runs until one of these is pressed on the run screen: ${fixes.join(', ')}`, { repoDir: g.repoDir, actions: fixes }, ids, 'warn');
+      }
+    }
+    const open = groups.filter((g) => !g.ready);
+    const reason = open.length === 0
+      ? null
+      : 'Version control is not ready for this run, so nothing was opened or sent. ' +
+        open.map((g) => `${g.repoDir}: ${g.problem ?? 'it needs your approval'}`).join(' ') +
+        ' Fix it under "Prepare version control for this run" on the Sessions page.';
+    if (reason) note('run-preflight-refused', reason, { repositories: open.map((g) => g.repoDir) }, sessionIds, 'warn');
+    else note('run-preflight-passed', `version control is ready in ${groups.length} repositor${groups.length === 1 ? 'y' : 'ies'}; the browser may open`, { repositories: groups.map((g) => g.repoDir) }, sessionIds);
+    await appendRunLog(cfg.resolved.runsDir, runId, log).catch(() => undefined);
+    return reason;
+  }
+
+  /**
+   * The same rule for one session that has not started, when its turn comes: see `RunDeps.vcsGate`.
+   * A session that has started is past its first preparation; its tasks are prepared as they come.
+   */
+  private async sessionVcsGate(session: Session, onlyTasks?: ReadonlySet<string>): Promise<string | null> {
+    if (!session.vcs?.enabled || session.vcsBaseCommit) return null;
+    if (queuedToRun(session, onlyTasks).length === 0) return null;
+    const [group] = await runVcsPreflight([session], () => this.store.listSessions());
+    if (!group || group.ready) return null;
+    return `Version control is not ready for "${session.name}", so it did not start and its tasks stay queued: ${group.problem ?? 'it needs your approval'} Fix it under "Prepare version control for this run" on the Sessions page.`;
+  }
+
+  /** Recorded in the run's log just before the browser is opened for it: see `runPreflight`. */
+  private async browserRequested(runId: string, sessionIds: string[]): Promise<void> {
+    const cfg = await this.settings.load();
+    const entry: RunLogEntry = { at: new Date().toISOString(), type: 'browser-launch-requested', message: 'the version control preflight passed; opening the browser', data: { sessions: sessionIds } };
+    for (const id of sessionIds) this.bus.publish({ sessionId: id, type: entry.type, level: 'info', message: entry.message, data: { runId, ...entry.data } });
+    await appendRunLog(cfg.resolved.runsDir, runId, [entry]).catch(() => undefined);
   }
 
   /** One action of "Prepare version control for this run". Refused while anything runs in that repository. */
@@ -2835,6 +2916,12 @@ export class OperatorService {
    */
   async syncPlan(dir: string): Promise<SyncPlan> {
     await this.init();
+    await this.knownProjectFolder(dir, 'no command is offered for it');
+    return await planSync(resolve(dir.trim()));
+  }
+
+  /** Throws unless the folder is a project in Settings or the repository of a session. */
+  private async knownProjectFolder(dir: string, otherwise: string): Promise<void> {
     const wanted = normaliseDir(dir);
     const cfg = await this.settings.load();
     const known = new Set(
@@ -2843,9 +2930,32 @@ export class OperatorService {
         .map(normaliseDir),
     );
     if (!wanted || !known.has(wanted)) {
-      throw new Error('That folder is not one of the projects in Settings or the repository of a session, so no command is offered for it.');
+      throw new Error(`That folder is not one of the projects in Settings or the repository of a session, so ${otherwise}.`);
     }
-    return await planSync(resolve(dir.trim()));
+  }
+
+  /**
+   * "Prepare the folder from the remote main branch", first half: fetches and says what would be
+   * kept where and what the folder would be. See `vcs/prepareFromRemote.ts`.
+   */
+  async preparePreview(dir: string): Promise<PreparePlan> {
+    await this.init();
+    await this.knownProjectFolder(dir, 'it is not prepared from here');
+    return await planPrepare(resolve(dir.trim()), { fetch: true });
+  }
+
+  /**
+   * The second half: does it, if the folder is still what the preview showed. Refused while anything
+   * runs, or is being started, in that folder or one around it: it moves the checkout.
+   */
+  async prepareProject(dir: string, fingerprint: string): Promise<PrepareResult> {
+    await this.init();
+    await this.knownProjectFolder(dir, 'it is not prepared from here');
+    if (this.batch?.running) return { ok: false, problem: 'A run is going. Stop it before preparing the folder; nothing was changed.' };
+    if (this.browser?.kind === 'run' || this.browser?.kind === 'batch') return { ok: false, problem: 'A run is being started. Wait for it, or stop it, before preparing the folder; nothing was changed.' };
+    const other = await this.runningIn(dir);
+    if (other) return { ok: false, problem: `Session "${other.name}" is running in this folder. Stop it before preparing the folder; nothing was changed.` };
+    return await prepareFromRemote(resolve(dir.trim()), String(fingerprint ?? ''));
   }
 
   // --- the project being worked on ---------------------------------------------------------
