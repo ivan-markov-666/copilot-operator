@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startHarness, Tally, waitFor, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { planPrepare } from '../src/vcs/prepareFromRemote.js';
 
 const t = new Tally();
 
@@ -243,6 +244,58 @@ console.log('\n--- "Prepare the folder from the remote main branch" ---');
     const [s] = await h.importPlan(plan(h, { artifacts: undefined }));
     const g = (await h.call<Group[]>('GET', `/batch/vcs?ids=${s!.id}`))[0]!;
     t.truthy('the run screen offers a starting snapshot for the new file', !g.ready && g.actions.some((a) => (a.id === 'allow-snapshot' || a.id === 'snapshot-here') && a.available), g.actions);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- a remote that asks for the key\'s passphrase ---');
+{
+  /*
+   * A stand-in for ssh: it asks for the passphrase the way ssh does — by running $SSH_ASKPASS — and lets
+   * the fetch through only with the right answer, by running the upload-pack git asked for against the
+   * bare repository. The stand-in for Git's password window answers from a file, as the operator would.
+   */
+  const h = await startHarness({});
+  try {
+    const sh = (p: string): string => p.replace(/\\/g, '/');
+    const remote = join(h.base, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    h.git('push', '-q', remote, 'main');
+    const fakeSsh = join(h.base, 'fake-ssh.sh');
+    writeFileSync(fakeSsh, [
+      '#!/bin/sh',
+      'answer=$("$SSH_ASKPASS" "Enter passphrase for key \'id_ed25519\':" 2>/dev/null)',
+      'if [ "$answer" != "pa ss!" ]; then echo "git@fake: Permission denied (publickey)." >&2; exit 255; fi',
+      'for last; do :; done',
+      'exec sh -c "git ${last#git-}"',
+      '',
+    ].join('\n'));
+    const askpass = (answer: string, name: string): string => {
+      const path = join(h.base, name);
+      writeFileSync(path, `#!/bin/sh\necho "$1" >> '${sh(join(h.base, 'asked.txt'))}'\necho '${answer}'\n`);
+      return path;
+    };
+    h.git('config', 'core.sshCommand', sh(fakeSsh));
+    h.git('remote', 'add', 'origin', `ssh://git@fake/${sh(remote).replace(/^([A-Za-z]):/, (_m, d: string) => d.toLowerCase())}`);
+
+    const right = await planPrepare(h.repo, { fetch: true, askpass: askpass('pa ss!', 'right.sh') });
+    t.check('with the window answering, the fetch goes through', [right.ok, right.fetched?.ok, right.fetched?.asked, right.target], [true, true, true, 'origin/main']);
+    t.truthy('and the passphrase was asked for through the window', readFileSync(join(h.base, 'asked.txt'), 'utf8').includes('Enter passphrase'));
+    t.truthy('and the passphrase is in nothing the bot got back', !JSON.stringify(right).includes('pa ss!'));
+
+    const wrong = await planPrepare(h.repo, { fetch: true, askpass: askpass('nope', 'wrong.sh') });
+    t.check('a wrong passphrase: refused, said to be about the key, nothing changed', [wrong.ok, wrong.fetched?.ok, wrong.fetched?.auth], [false, false, true]);
+    t.truthy('with the command for the operator\'s own PowerShell', /^git -C '.+' fetch --prune 'origin'$/.test(wrong.fetchCommand ?? ''), wrong.fetchCommand);
+    t.truthy('and when it was last fetched', !!wrong.lastFetched, wrong.lastFetched);
+
+    const quiet = await planPrepare(h.repo, { fetch: true });
+    t.check('without the window nothing is asked, and it says so', [quiet.ok, quiet.fetched?.asked, quiet.fetched?.auth], [false, false, true]);
+
+    const fetched = await h.call<{ ok: boolean; fetched?: unknown; lastFetched?: string; target?: string }>('POST', '/repo/prepare/preview', { dir: h.repo, fetch: false });
+    t.check('"Continue with what was last fetched" previews without fetching', [fetched.ok, fetched.fetched ?? null, fetched.target, !!fetched.lastFetched], [true, null, 'origin/main', true]);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

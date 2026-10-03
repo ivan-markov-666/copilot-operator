@@ -66,6 +66,7 @@ import { createTransport, type ChatTransport } from '../transport/chatTransport.
 import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } from '../vcs/prepareFromRemote.js';
+import { askpassProgram } from '../vcs/remoteAuth.js';
 import { appendRunLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
 import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
 import { runVcsPreflight, runVcsPrepare, type RunVcsActionId, type RunVcsGroup } from '../vcs/runPreflight.js';
@@ -2938,10 +2939,11 @@ export class OperatorService {
    * "Prepare the folder from the remote main branch", first half: fetches and says what would be
    * kept where and what the folder would be. See `vcs/prepareFromRemote.ts`.
    */
-  async preparePreview(dir: string): Promise<PreparePlan> {
+  async preparePreview(dir: string, fetch = true): Promise<PreparePlan> {
     await this.init();
     await this.knownProjectFolder(dir, 'it is not prepared from here');
-    return await planPrepare(resolve(dir.trim()), { fetch: true });
+    // The operator pressed the button and is looking: the remote may ask for a password through Git's own window.
+    return await planPrepare(resolve(dir.trim()), { fetch, askpass: fetch ? await askpassProgram() : null });
   }
 
   /**

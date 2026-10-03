@@ -24,12 +24,13 @@
  * The preview fetches (so what it shows is against the remote as it is now) and changes nothing else;
  * the preparation itself refuses when the folder is no longer what the preview showed.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { branchNameFrom, freeBranchName, git, porcelainPaths, RUNNER_EMAIL } from './git.js';
+import { describeFetchFailure, fetchCommandFor, operatorFetchEnv, QUIET_FETCH_ENV } from './remoteAuth.js';
 
 export type PreparePlan = {
   ok: boolean;
@@ -47,7 +48,15 @@ export type PreparePlan = {
   localBranch?: string;
   /** Whether that local branch exists already, and where. */
   localHead?: string | null;
-  fetched?: { ok: boolean; detail?: string };
+  /**
+   * How the fetch went: `asked` when the remote could ask for a password through Git's own window,
+   * `auth` when it failed on a password or key.
+   */
+  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked?: boolean };
+  /** When the remote was last fetched here, by anyone: what a preview without fetching is measured against. */
+  lastFetched?: string;
+  /** The fetch for the operator's own PowerShell, when the bot's could not get through. */
+  fetchCommand?: string;
   /** Tracked files with uncommitted changes, and new files git does not ignore: kept on `savedBranch`. */
   changed: string[];
   untracked: string[];
@@ -76,7 +85,6 @@ export type PrepareResult =
     }
   | { ok: false; problem: string };
 
-const QUIET = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS: '' };
 const short = (c?: string | null): string => (c ?? '').slice(0, 8);
 const lines = (s: string): string[] => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
@@ -111,9 +119,11 @@ const empty = (repoDir: string, problem: string): PreparePlan => ({
 
 /**
  * What preparing the folder would do. Fetches the remote when `fetch` is true (the preview); reads
- * only when it is false (the preparation, which must compare against what the preview fetched).
+ * only when it is false (the preparation, which must compare against what the preview fetched, or a
+ * preview after the operator fetched in their own terminal). With `askpass`, the fetch may ask for a
+ * password through that program (see `remoteAuth.ts`); without it, it may not ask at all.
  */
-export async function planPrepare(folder: string, opts: { fetch: boolean; prefix?: string }): Promise<PreparePlan> {
+export async function planPrepare(folder: string, opts: { fetch: boolean; prefix?: string; askpass?: string | null }): Promise<PreparePlan> {
   const inside = await git(folder, ['rev-parse', '--is-inside-work-tree']);
   if (!inside.ok || inside.stdout !== 'true') return empty(folder, `${folder} is not a git repository.`);
   // The whole repository, not the folder under it the project may name: a checkout moves all of it.
@@ -131,12 +141,30 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
   if (remotes.length === 0) return empty(repoDir, 'The repository has no remote, so there is no remote main branch to prepare it from.');
   const remote = remotes.includes('origin') ? 'origin' : (remotes[0] as string);
 
+  const lastFetchedAt = (): string | undefined => {
+    try {
+      return gitDir ? statSync(join(gitDir, 'FETCH_HEAD')).mtime.toISOString() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const fetchCommand = fetchCommandFor(repoDir, remote);
   let fetched: PreparePlan['fetched'];
   if (opts.fetch) {
-    const f = await git(repoDir, ['-c', 'credential.interactive=false', 'fetch', '--quiet', '--no-tags', '--prune', remote], 120_000, QUIET);
-    fetched = f.ok ? { ok: true } : { ok: false, detail: (f.stderr || f.stdout || 'git fetch failed').split(/\r?\n/)[0] };
-    // The remote's own idea of its main branch, asked of it now; a remote that will not say keeps the old answer.
-    if (f.ok) await git(repoDir, ['remote', 'set-head', remote, '--auto'], 60_000, QUIET);
+    /*
+     * With the password window: five minutes for the operator to type, and the window not hidden. One
+     * connection only — `remote set-head --auto` would open a second and ask for the password again —
+     * so the remote's main is read from what was fetched, below.
+     */
+    const asked = !!opts.askpass;
+    const env = asked ? operatorFetchEnv(opts.askpass as string) : QUIET_FETCH_ENV;
+    const args = [...(asked ? [] : ['-c', 'credential.interactive=false']), 'fetch', '--quiet', '--no-tags', '--prune', remote];
+    const f = await git(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked });
+    if (f.ok) fetched = { ok: true, asked };
+    else {
+      const why = describeFetchFailure(f.stderr || f.stdout);
+      fetched = { ok: false, detail: why.detail, auth: why.auth, asked };
+    }
   }
 
   let target = '';
@@ -146,14 +174,21 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
     if (target) break;
     if ((await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${name}`])).ok) target = `${remote}/${name}`;
   }
+  const last = lastFetchedAt();
   if (!target) {
     return {
       ...empty(repoDir, fetched && !fetched.ok ? `The remote could not be fetched (${fetched.detail}), and no main branch of ${remote} is known here.` : `No main branch of ${remote} is known here.`),
       ...(fetched ? { fetched } : {}),
+      fetchCommand,
     };
   }
   if (fetched && !fetched.ok) {
-    return { ...empty(repoDir, `The remote could not be fetched, so the folder would be set to an old copy of ${target}: ${fetched.detail}. Nothing was changed.`), fetched };
+    return {
+      ...empty(repoDir, `The remote could not be fetched, so the folder would be set to an old copy of ${target}: ${fetched.detail}. Nothing was changed.`),
+      fetched,
+      fetchCommand,
+      ...(last ? { lastFetched: last } : {}),
+    };
   }
   const targetCommit = (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${target}^{commit}`])).stdout;
   if (!targetCommit) return empty(repoDir, `${target} could not be read.`);
@@ -191,6 +226,8 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
     localBranch,
     localHead,
     ...(fetched ? { fetched } : {}),
+    ...(last ? { lastFetched: last } : {}),
+    fetchCommand,
     changed,
     untracked,
     mainOnlyCommits,

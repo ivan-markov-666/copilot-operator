@@ -701,8 +701,8 @@ export class OperatorController {
 
   /** "Prepare the folder from the remote main branch": what it would do (fetches, changes nothing else). */
   @Post('repo/prepare/preview')
-  repoPreparePreview(@Body() body: { dir?: string }): Promise<unknown> {
-    return this.ops.preparePreview(body?.dir ?? '').catch(fail);
+  repoPreparePreview(@Body() body: { dir?: string; fetch?: boolean }): Promise<unknown> {
+    return this.ops.preparePreview(body?.dir ?? '', body?.fetch !== false).catch(fail);
   }
 
   /** …and doing it, if the folder is still what the preview showed. */

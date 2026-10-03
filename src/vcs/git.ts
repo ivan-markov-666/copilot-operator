@@ -49,9 +49,16 @@ function noHooksDir(): string {
 }
 
 /** Runs one git command in a directory. Never throws: the caller decides what a failure means. */
-export function git(cwd: string, args: string[], timeoutMs = 60_000, env?: NodeJS.ProcessEnv): Promise<GitResult> {
+export function git(
+  cwd: string,
+  args: string[],
+  timeoutMs = 60_000,
+  env?: NodeJS.ProcessEnv,
+  /** `windowsHide: false` only for a fetch the operator is sitting at, whose password window must be seen. */
+  opts: { windowsHide?: boolean } = {},
+): Promise<GitResult> {
   return new Promise((resolve) => {
-    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(env ? { env } : {}) }, (error, stdout, stderr) => {
+    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: opts.windowsHide ?? true, maxBuffer: 8 * 1024 * 1024, ...(env ? { env } : {}) }, (error, stdout, stderr) => {
       const code = (error as NodeJS.ErrnoException & { code?: number })?.code;
       resolve({
         ok: !error,

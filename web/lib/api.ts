@@ -755,6 +755,9 @@ export type PreparePlan = {
   savedMainBranch?: string;
   alreadyThere?: boolean;
   fingerprint?: string;
+  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked?: boolean };
+  lastFetched?: string;
+  fetchCommand?: string;
 };
 
 export type StopCode = 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
@@ -893,7 +896,7 @@ export const api = {
   reorderSessions: (ids: string[]) => call<Session[]>('/sessions-order', { method: 'PUT', body: JSON.stringify({ ids }) }),
   metrics: () => call<Metrics>('/metrics'),
   /** "Prepare the folder from the remote main branch": fetches and says what it would do. */
-  preparePreview: (dir: string) => call<PreparePlan>('/repo/prepare/preview', { method: 'POST', body: JSON.stringify({ dir }) }),
+  preparePreview: (dir: string, fetch = true) => call<PreparePlan>('/repo/prepare/preview', { method: 'POST', body: JSON.stringify({ dir, fetch }) }),
   /** …and does it, if the folder is still what the preview showed. */
   prepareProject: (dir: string, fingerprint: string) =>
     call<{ ok: boolean; problem?: string; result?: string }>('/repo/prepare', { method: 'POST', body: JSON.stringify({ dir, fingerprint }) }),
