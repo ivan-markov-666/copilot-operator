@@ -692,7 +692,8 @@ async function botTask(session: Session, task: Task, runsDir: string): Promise<R
   const steps = stepsOf(events);
   const byType = new Map<string, number>();
   for (const e of events) byType.set(String(e.type), (byType.get(String(e.type)) ?? 0) + 1);
-  const problems = events.filter((e) => e.level === 'error' || e.level === 'warn').map(trimmed);
+  // A step waiting for the operator's answer is routine in a step-by-step run, not a problem (live run 2026-10-04).
+  const problems = events.filter((e) => (e.level === 'error' || e.level === 'warn') && e.type !== 'approval-requested').map(trimmed);
   const reviewEvents = events.filter((e) => String(e.type).startsWith('review-') || String(e.type).startsWith('finding-'));
 
   return {
@@ -774,7 +775,9 @@ export async function buildBotExport(
     if (!id || id in runs) return;
     const preflight = await readRunLog(runsDir, id);
     const refused = preflight.some((e) => e.type === 'run-preflight-refused') && !preflight.some((e) => e.type === 'browser-launch-requested');
-    runs[id] = { name, ...(refused ? { refused: true } : {}), preflight, order: browserAfterPreflight(preflight) };
+    // Sessions refused at their turn in a run that went ahead (see `refusedRunsOf`).
+    const atTurn = preflight.filter((e) => e.type === 'run-preflight-refused' && e.data?.atTurn).flatMap((e) => (Array.isArray(e.data?.sessions) ? (e.data!.sessions as string[]) : []));
+    runs[id] = { name, ...(refused ? { refused: true } : {}), ...(atTurn.length > 0 ? { refusedAtTurn: atTurn } : {}), preflight, order: browserAfterPreflight(preflight) };
   };
   /** What the operator did to each session's repository or start outside a run: see `appendSessionLog`. */
   const operatorActions: Record<string, unknown[]> = {};

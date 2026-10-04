@@ -300,5 +300,11 @@ console.log('\n--- a refusal is not a failed command ---');
   await rm(dir, { recursive: true, force: true });
 }
 
+console.log('\n--- a here-string with text on its header line is told what to change (live run 2026-10-04) ---');
+{
+  const r = programRefusal("Set-Content -Path src\\math.js -Value @'function sum(xs) {\n  return 1;\n}\n'@", ALLOWED) ?? '';
+  check('refused, saying the text starts on the next line', JSON.stringify([/here-string header must end its line/.test(r), /the text starts on the next line/.test(r), /through a variable/.test(r)]), JSON.stringify([true, true, false]));
+}
+
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;

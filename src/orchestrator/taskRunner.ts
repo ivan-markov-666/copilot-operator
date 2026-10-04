@@ -15,7 +15,7 @@ import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
-import type { ReplyCapture } from '../transport/copilotTransport.js';
+import type { ModelChoice, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
 import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
@@ -125,7 +125,47 @@ export type RunDeps = {
   vcsGate?: (session: Session) => Promise<string | null>;
   /** Said just before this run opens a browser of its own (not a borrowed one): see `runLog.ts`. */
   beforeBrowser?: () => Promise<void>;
+  /** What the picker on the page says about the models: see `ModelHooks`. */
+  models?: ModelHooks;
 };
+
+/**
+ * The page is the source of the model names (see `transport/modelMatch.ts`). `renamedDefault`: a model
+ * from Settings is offered under a new name, so Settings follows the page. `seen`: the line-up was read
+ * on the way, so the saved catalogue follows it too.
+ */
+export type ModelHooks = {
+  renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
+  seen?: (options: ModelOption[], current: string | null) => Promise<void>;
+};
+
+/**
+ * Records a model the page offers under a new name where it was chosen — the session, or Settings — and
+ * the line-up read on the way. Returns the sentence that says so, or ''.
+ */
+async function followPageModels(
+  which: 'model' | 'review',
+  wanted: string,
+  result: ModelChoice,
+  session: Session,
+  store: SessionStore | undefined,
+  hooks: ModelHooks | undefined,
+): Promise<string> {
+  if (result.options?.length) await hooks?.seen?.(result.options, result.current).catch(() => undefined);
+  if (!result.ok || !result.matched) return '';
+  const own = which === 'model' ? session.model?.trim() : session.review?.model?.trim();
+  if (own) {
+    await store
+      ?.updateSession(session.id, (s) => {
+        if (which === 'model') s.model = result.matched;
+        else s.review = { ...(s.review ?? {}), model: result.matched } as typeof s.review;
+      })
+      .catch(() => undefined);
+  } else {
+    await hooks?.renamedDefault?.(which, wanted, result.matched!).catch(() => undefined);
+  }
+  return `"${wanted}" is no longer offered under that name; the page offers it as "${result.matched}", which was chosen, and ${own ? "the session's" : 'Settings\''} ${which === 'model' ? 'model' : 'review model'} now says so`;
+}
 
 /** Why a task that was reported as done is being closed as failed. */
 function checksFailedReason(outcomes: CheckOutcome[]): string {
@@ -279,8 +319,9 @@ function blockedReason(tried: string[], needed?: string): string {
  * hear who declined it: the runner (`refused`: a rule, so rewrite the step) or the operator
  * (`aborted`: a person stopped or skipped it).
  */
-function refusedResult(step: Step, reason: string, by: 'runner' | 'operator' = 'runner'): RunResult {
+function refusedResult(step: Step, reason: string, by: 'runner' | 'operator' = 'runner', skippedAfter?: number): RunResult {
   return {
+    ...(skippedAfter !== undefined ? { skippedAfter } : {}),
     id: step.id,
     shell: effectiveShell(step.shell),
     command: describeStep(step),
@@ -356,12 +397,25 @@ class Sink {
  * those launches another chance to hit the failure where a leftover Edge process is still
  * holding the profile.
  */
+/**
+ * Who a shared window speaks for: the session using it now. A window opened for a batch said everything
+ * under the batch's id, so the browser's events of a session in a batch were in no transcript of its own
+ * (live run 2026-10-04). `speakFor` moves it; the id it was opened under still hears every event.
+ */
+const speakers = new WeakMap<ChatTransport, { id: string }>();
+
+export function speakFor(transport: ChatTransport, sessionId: string): void {
+  const speaker = speakers.get(transport);
+  if (speaker) speaker.id = sessionId;
+}
+
 export async function openBrowser(
   cfg: ResolvedConfig,
   bus: EventBus,
   transportDir: string,
   sessionId: string,
 ): Promise<ChatTransport> {
+  const speaker = { id: sessionId };
   const transport = createTransport({
     profileDir: cfg.resolved.profileDir,
     transportDir,
@@ -385,16 +439,19 @@ export async function openBrowser(
         'model-menu-stuck':
           'The model menu would not close — Escape, the menu button and a click outside all left it open. Close it in the Edge window; the run goes on.',
       };
-      bus.publish({
-        sessionId,
-        type: `browser:${event}`,
-        level: event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' ? 'warn' : 'info',
-        // An event with no sentence of its own is named, not said as "undefined".
-        message: spoken[event] ?? event.replace(/-/g, ' '),
-        data: detail,
-      });
+      for (const id of new Set([speaker.id, sessionId])) {
+        bus.publish({
+          sessionId: id,
+          type: `browser:${event}`,
+          level: event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' ? 'warn' : 'info',
+          // An event with no sentence of its own is named, not said as "undefined".
+          message: spoken[event] ?? event.replace(/-/g, ' '),
+          data: detail,
+        });
+      }
     },
   });
+  speakers.set(transport, speaker);
 
   /*
    * A window that opened and then failed to reach the chat — sign-in not done in time, a
@@ -591,15 +648,19 @@ async function applySessionModel(
   session: Session,
   bus: EventBus,
   cfg: Pick<ResolvedConfig, 'copilot'>,
+  store?: SessionStore,
+  hooks?: ModelHooks,
 ): Promise<string | undefined> {
   const wanted = effectiveModels(session, cfg).model;
   if (!wanted) return undefined;
 
-  const result = await transport.selectModel(wanted).catch((e: unknown) => ({
+  const result: ModelChoice = await transport.selectModel(wanted).catch((e: unknown) => ({
     ok: false as const,
     current: null,
     reason: (e as Error).message,
   }));
+  const renamed = await followPageModels('model', wanted, result, session, store, hooks);
+  if (renamed) bus.publish({ sessionId: session.id, type: 'model-renamed', level: 'warn', message: renamed, data: { asked: wanted, chosen: result.matched } });
 
   bus.publish({
     sessionId: session.id,
@@ -610,6 +671,20 @@ async function applySessionModel(
       : `could not switch to "${wanted}"${session.model?.trim() ? '' : ' (the default model in Settings — change it there)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Continuing on ${result.current ?? 'the chat default'}.`,
     data: { asked: wanted, fromSettings: !session.model?.trim(), current: result.current, ok: result.ok },
   });
+  // Kept on the session, so each task's record says which model it ran on and why (see `runTask`).
+  await store
+    ?.updateSession(session.id, (s) => {
+      s.modelSelection = {
+        asked: wanted,
+        current: result.current ?? null,
+        ok: result.ok,
+        fromSettings: !session.model?.trim(),
+        ...(result.matched ? { renamedTo: result.matched } : {}),
+        ...(result.ok ? {} : { reason: (result.reason ?? 'unknown reason').replace(/[.\s]+$/, '') }),
+        at: new Date().toISOString(),
+      };
+    })
+    .catch(() => undefined);
 
   return result.current ?? undefined;
 }
@@ -653,7 +728,8 @@ export async function runTask(
         await mkdir(log.path('messages'), { recursive: true }).catch(() => undefined);
         await writeFile(log.path('messages', `${String(sentCount).padStart(2, '0')}.md`), text, 'utf8').catch(() => undefined);
         if (!inOpening) {
-          sink.event('message-sent', { n: sentCount, chars: text.length, attachments: (attachments ?? []).map((a) => a.replace(/^.*[\\/]/, '')), chatId: session.chat?.chatId ?? null });
+          sink.event('message-sent', { n: sentCount, chars: text.length, attachments: (attachments ?? []).map((a) => a.replace(/^.*[\\/]/, '')), chatId: session.chat?.chatId ?? null },
+            `message ${sentCount} sent (${text.length} chars${attachments?.length ? `, ${attachments.length} file(s) attached` : ''})`);
         }
         return before;
       };
@@ -733,9 +809,15 @@ export async function runTask(
   let noProgressReason: string | null = null;
   /** The scope as enforced on the task's own branch, once known; `finish` holds the commit to it too. */
   let enforcement: { scope: string[]; readOnly: boolean } | null = null;
-  /** The tree when a read-only task started, and just before its checks last ran: see `treeState`. */
+  /**
+   * The tree when the task started, and just before its checks last ran: see `treeState`. Taken for a
+   * read-only task, and for one whose work no commit will record, so its changed files are on record.
+   */
   let startState: Map<string, string> | null = null;
   let preGateState: Map<string, string> | null = null;
+  /** Whether the runner commits this task's work; when it does not, `treeChanged` records what changed. */
+  const commitsWork = !!(session.vcs?.enabled && session.vcs.commitOnFinish !== false && trackedRepoOf(session));
+  const watchesTree = !!repoDirOf(session) && (!!task.readOnly || !commitsWork);
   /**
    * Why the attempt stopped, when the status alone does not say: a format the chat could not keep,
    * a task contract that contradicts itself, a loop, a check that could never run, a machine that
@@ -881,7 +963,7 @@ export async function runTask(
      * claims `done` is overturned; one that already ended badly keeps its own reason.
      */
     // What the task did, judged before what the checks and the review wrote after its last round.
-    const taskEndState = task.readOnly && repoDirOf(session) ? (preGateState ?? (await treeState(repoDirOf(session)))) : null;
+    const taskEndState = watchesTree ? (preGateState ?? (await treeState(repoDirOf(session)))) : null;
     /*
      * The scope holds for the commit too. Put back each round, it still let through what the checks and
      * the independent review wrote after the last one (live run 2026-10-03: a docs build run by a check
@@ -907,6 +989,16 @@ export async function runTask(
           (commits ? " The change is committed on the task's branch; nothing is lost." : ' Nothing is committed: the change is in the working tree.');
         sink.event('readonly-violated', { files: changed.slice(0, 20) }, reason, 'error');
       }
+    }
+    /*
+     * With no commit to read them from, the files the task changed are recorded from the tree, so the
+     * record does not say "no files changed" beside a verdict that names them (live run 2026-10-04).
+     */
+    if (!commitsWork && startState && taskEndState) {
+      const changed = changedBetween(startState, taskEndState);
+      await setTask((t) => {
+        t.treeChanged = changed.length > 0 ? changed : undefined;
+      });
     }
 
     // Whatever the outcome, what the task changed goes onto its branch. A failed task that
@@ -1076,6 +1168,16 @@ export async function runTask(
     if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
   });
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
+  {
+    const sel = (await store.getSession(session.id))?.modelSelection;
+    if (sel) {
+      sink.event('model-in-use', sel,
+        sel.ok
+          ? `the chat is on ${sel.current ?? sel.asked}${sel.fromSettings ? ' (from Settings)' : ''}`
+          : `the chat is on ${sel.current ?? 'its default'}, not "${sel.asked}"${sel.fromSettings ? ' (the default model in Settings)' : ''}: ${sel.reason ?? 'the picker refused it'}`,
+        sel.ok ? 'info' : 'warn');
+    }
+  }
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\n`, 'utf8');
 
   /*
@@ -1222,7 +1324,7 @@ export async function runTask(
      */
     const scopeEnforced = (scope.length > 0 || !!task.readOnly) && onOwnBranch;
     if (scopeEnforced) enforcement = { scope, readOnly: !!task.readOnly };
-    if (task.readOnly && repoDirOf(session)) startState = await treeState(repoDirOf(session));
+    if (watchesTree) startState = await treeState(repoDirOf(session));
     // The operator's input files, read-only on a branch of the task's own; see `vcs/inputs.ts`.
     const startNow = (await store.getSession(session.id))?.vcsStart;
     if (onOwnBranch && startNow?.inputs?.readOnly && startNow.inputs.files.length > 0) {
@@ -1330,7 +1432,7 @@ export async function runTask(
          * record would go on naming the model the session asked for. Applied again here, as the
          * fresh-chat retry in `runSession` does for the same reason.
          */
-        const modelNow = await applySessionModel(transport, session, bus, cfg);
+        const modelNow = await applySessionModel(transport, session, bus, cfg, store, deps.models);
         if (effectiveModels(session, cfg).model) {
           await store.updateSession(session.id, (s) => {
             s.modelInUse = modelNow;
@@ -1365,7 +1467,8 @@ export async function runTask(
           why: !session.vcs?.enabled
             ? 'Version control is off for this session'
             : prepared.vcs.problem
-              ? 'This task has no branch of its own (see "Version control" in the results)'
+              // Said here in full: the chat is never shown the results' "Version control" section (live run 2026-10-04).
+              ? `This task has no branch of its own: version control could not prepare one (${prepared.vcs.problem.replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '')})`
               : 'This task has no branch of its own',
         }),
         (task.outputs?.length ?? 0) > 0
@@ -1417,7 +1520,8 @@ export async function runTask(
         const chatId = await transport.currentChatId();
         if (chatId) {
           // A fresh-chat retry, or any later attempt, says so in the name: the abandoned chat had the same one (live run 2026-10-03).
-          const name = buildChatName(`${chatCode(session.id)}${attempt > 1 ? `/a${attempt}` : ''}`, session.name);
+          // Only a retry in a fresh chat is named apart; a first conversation is not, whatever the attempt number.
+          const name = buildChatName(`${chatCode(session.id)}${task.freshRetry ? `/a${attempt}` : ''}`, session.name);
           const named = await transport.nameChat(chatId, name).catch(() => false);
           const chat: ChatPointer = {
             chatId,
@@ -1504,7 +1608,7 @@ export async function runTask(
       // Counted only once the round turns out to have been a real attempt. A round that died of
       // a missing interpreter asked nothing of the work and must not cost the task one.
       const round = checkRounds + 1;
-      if (task.readOnly && repoDirOf(session)) preGateState = await treeState(repoDirOf(session));
+      if (watchesTree) preGateState = await treeState(repoDirOf(session));
       sink.event('checks-started', { round, count: checks.length },
         `checking the task against ${checks.length} condition(s)`);
 
@@ -1821,7 +1925,9 @@ export async function runTask(
       try {
         await transport.newChat();
         if (model) {
-          const picked = await transport.selectModel(model).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+          const picked: ModelChoice = await transport.selectModel(model).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+          const renamed = await followPageModels('review', model, picked, session, store, deps.models);
+          if (renamed) sink.event('model-renamed', { asked: model, chosen: picked.matched, review: true }, renamed, 'warn');
           sink.event(picked.ok ? 'review-model-selected' : 'review-model-not-selected', { asked: model, current: picked.current },
             picked.ok ? `the review runs on ${picked.current ?? model}` : `the review could not switch to "${model}": ${picked.reason ?? 'unknown reason'}`,
             picked.ok ? 'info' : 'warn');
@@ -2278,11 +2384,19 @@ export async function runTask(
         stats.blockedTooEarly = (stats.blockedTooEarly ?? 0) + 1;
         sink.event('blocked-before-any-step', { tried: reply.tried.length, time: earlyBlocks },
           '"blocked" before any step ran in this task, so the chat is told how the runner works and asked for a first step', 'warn');
-        const message =
-          'Not yet: nothing has been run in this task. You do not need to operate anything yourself — this runner executes ' +
-          'the commands you send in "steps", on the operator\'s machine in the project folder, and sends you back what they printed. ' +
-          'Send your first step now with status "continue", for example a command that lists the project\'s files ' +
-          '(Get-ChildItem -Recurse -File | Select-Object -First 50 FullName). A task may end "blocked" only after steps that ran.';
+        /*
+         * A continued task has run steps before, in its earlier attempt, and a chat that blocks there has
+         * usually lost the assignment, said "above": it is given again rather than told nothing ran (live run 2026-10-04).
+         */
+        const message = task.continuing
+          ? 'Not yet: this task is being continued, and nothing has run since. The assignment is this one, unchanged:\n\n' +
+            `${task.prompt.length > 6000 ? `${task.prompt.slice(0, 6000)}…` : task.prompt}\n\n` +
+            'Carry on from where it stopped: send your next step now with status "continue", for example a command that shows ' +
+            'the state of the files the task works on. A task may end "blocked" only after steps that ran.'
+          : 'Not yet: nothing has been run in this task. You do not need to operate anything yourself — this runner executes ' +
+            'the commands you send in "steps", on the operator\'s machine in the project folder, and sends you back what they printed. ' +
+            'Send your first step now with status "continue", for example a command that lists the project\'s files ' +
+            '(Get-ChildItem -Recurse -File | Select-Object -First 50 FullName). A task may end "blocked" only after steps that ran.';
         await record('BLOCKED BEFORE ANY STEP — MESSAGE SENT', message);
         await pacer.throttleSend();
         const before = await transport.sendAndConfirm(message);
@@ -2354,7 +2468,7 @@ export async function runTask(
         }
         if (refusedAt !== null) {
           sink.event('step-skipped', { id: step.id, reason: `step ${refusedAt} was refused`, by: 'runner', after: refusedAt }, `step ${step.id} not run: step ${refusedAt} was refused`, 'info');
-          results.push(refusedResult(step, `not run, because step ${refusedAt} of this reply was refused: it would have run on a tree your plan did not produce. Send it again after step ${refusedAt} is replaced.`));
+          results.push(refusedResult(step, `not run, because step ${refusedAt} of this reply was refused: it would have run on a tree your plan did not produce. Send it again after step ${refusedAt} is replaced.`, 'runner', refusedAt));
           continue;
         }
 
@@ -2568,7 +2682,8 @@ export async function runTask(
           `redacted before upload: ${report.redactions.map((r) => `${r.count}× ${r.name}`).join(', ')}`, 'warn');
       }
 
-      if (aborted) return await finish('aborted', 'the operator aborted the task', undefined, lastMarkdown);
+      // A Stop said as one, apart from "abort" given to a step: the record could not tell them apart (live run 2026-10-04).
+      if (aborted) return await finish('aborted', signal?.aborted ? 'stopped by the operator' : 'the operator aborted the task', undefined, lastMarkdown);
 
       // A loop in which every round looks new: see `progress.ts`. After the report is written, so
       // the evidence the diagnosis points at is on disk.
@@ -2781,6 +2896,7 @@ export async function runSession(
     session = await joinGroupConversation(store, session, bus);
 
     if (borrowed) {
+      speakFor(borrowed, session.id);
       bus.publish({ sessionId, type: 'browser-reused', level: 'info', message: 'using the browser window that is already open' });
       await enterSessionConversation(borrowed, session, { closeOnFailure: false });
     } else {
@@ -2791,7 +2907,7 @@ export async function runSession(
 
     // The picker belongs to the conversation, so the session's choice is applied once, here,
     // before the first task goes out. What the chat ended up on is recorded either way.
-    const modelInUse = await applySessionModel(chat, session, bus, cfg);
+    const modelInUse = await applySessionModel(chat, session, bus, cfg, store, deps.models);
     if (effectiveModels(session, cfg).model) {
       await store.updateSession(sessionId, (s) => {
         s.modelInUse = modelInUse;
@@ -2871,7 +2987,7 @@ export async function runSession(
          * it was the model the session asked for. The review has always done this for its own
          * fresh conversations a few hundred lines up; this path simply never did.
          */
-        const freshModel = await applySessionModel(chat, session, bus, cfg);
+        const freshModel = await applySessionModel(chat, session, bus, cfg, store, deps.models);
         if (effectiveModels(session, cfg).model) {
           session = await store.updateSession(sessionId, (s) => {
             s.modelInUse = freshModel;

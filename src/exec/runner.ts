@@ -72,6 +72,11 @@ export type RunResult = {
    */
   outcome: 'completed' | 'hard-timeout' | 'idle-timeout' | 'aborted' | 'refused' | 'spawn-error';
   /**
+   * For a `refused` step that was itself fine: not run because an earlier step of the same reply was
+   * refused. Said as that, not as a refusal of its own (live run 2026-10-04: headed "REFUSED by the runner").
+   */
+  skippedAfter?: number;
+  /**
    * Set when the step never ran, or died at birth, because of the machine rather than the work.
    *
    * A caller that sees this must not treat it as a failed attempt at the task: there is nothing

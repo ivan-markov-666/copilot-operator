@@ -130,8 +130,17 @@ const CLIMBS = /(?:^|[\\/])\.\.(?:$|[\\/])/;
  */
 const HERE_STRING = /@(['"])[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*\1@/g;
 
-/** The text after `-Value`/`-InputObject`, or the content argument of `WriteAllText`/`AppendAllText`. */
-const CONTENT_ARGUMENT = /(-(?:Value|InputObject)\s+|::(?:Write|Append)All(?:Text|Lines)\s*\([^,]*,\s*)(["'])(?:(?!\2)[^\r\n]|\2\2|`.)*\2/gi;
+/**
+ * A quoted PowerShell string, single- or double-quoted, over several lines too: a script's text kept in a
+ * variable over many lines was still read as paths when only one-line strings were matched (live run 2026-10-04).
+ */
+const STRING = String.raw`(?:'(?:[^']|'')*'|"(?:[^"` + '`' + String.raw`]|""|` + '`' + String.raw`[\s\S])*")`;
+/** Text: a quoted string, or an array of them `@('a', "b")` or `('a', "b")`, which may be joined `-join "…"`. */
+const TEXT_VALUE = String.raw`(?:${STRING}|@?\(\s*(?:${STRING}\s*,?\s*)*\)(?:\s*-join\s*${STRING})?)`;
+/** Where what follows is the text written: `-Value`, `-InputObject`, `WriteAllText(path, …`, or Set-Content's second positional argument. */
+const CONTENT_LEAD = String.raw`-(?:Value|InputObject)\s+|::(?:Write|Append)All(?:Text|Lines)\s*\([^,]*,\s*|\b(?:Set|Add)-Content\s+(?:-(?:Path|LiteralPath)\s+)?(?:${STRING}|[^\s;|&()"'$-][^\s;|&()"'$]*)\s+`;
+/** The text after `-Value`/`-InputObject`, the content argument of `WriteAllText`/`AppendAllText`, or Set-Content's positional text. */
+const CONTENT_ARGUMENT = new RegExp(`(${CONTENT_LEAD})${TEXT_VALUE}`, 'gi');
 
 /** A command that runs text as code: then the text is the command, and is read as one. */
 const RUNS_TEXT = /\b(?:Invoke-Expression|iex|Invoke-Command|ScriptBlock\]?::Create|Start-Job)\b|\|\s*&?\s*(?:pwsh|powershell|cmd|node|python3?|py|bash|sh|wsl|ruby|perl|php)(?:\.exe)?\b/i;
@@ -149,7 +158,32 @@ const RUNS_TEXT = /\b(?:Invoke-Expression|iex|Invoke-Command|ScriptBlock\]?::Cre
  */
 function withoutWrittenText(command: string): string {
   if (RUNS_TEXT.test(command)) return command;
-  return command.replace(HERE_STRING, ' ').replace(CONTENT_ARGUMENT, (_m, lead: string) => `${lead}''`);
+  let line = command.replace(HERE_STRING, ' ').replace(CONTENT_ARGUMENT, (_m, lead: string) => `${lead}''`);
+  /*
+   * The same text put in a variable first and then written: `$t = "…'../config/x'…"; $f::WriteAllText('a.mjs', $t, $e)`.
+   * Taken out only when every use of the variable is as what is written — never when it is used as a path —
+   * so `$p = '..\..\x'; Set-Content -Path $p` is still read (live run 2026-10-04, a second form of 2026-10-03's).
+   */
+  // An array of lines `$c = @("…", "…")` too, and Set-Content's positional text `Set-Content a.js $c` (live run 2026-10-04).
+  // And lines joined into another variable first, `$t = ($lines -join "`n")`: content when that one is.
+  const joined = new Map<string, string>();
+  for (const j of line.matchAll(new RegExp(String.raw`\$(\w+)\s*=\s*\(?\s*\$(\w+)\s+-join\s*${STRING}\s*\)?`, 'gi'))) joined.set(j[1]!.toLowerCase(), j[2]!.toLowerCase());
+  const contentOnly = (name: string, depth = 0): boolean => {
+    if (depth > 3) return false;
+    const uses = [...line.matchAll(new RegExp(`\\$${name}\\b`, 'gi'))].length - 1;
+    if (uses <= 0) return false;
+    const direct = [
+      new RegExp(`(?:${CONTENT_LEAD})\\$${name}\\b`, 'gi'),
+      new RegExp(`\\$${name}\\s*\\|\\s*(?:Set-Content|Add-Content|Out-File)\\b`, 'gi'),
+    ].reduce((n, re) => n + [...line.matchAll(re)].length, 0);
+    const viaJoin = [...joined].filter(([into, from]) => from === name.toLowerCase() && contentOnly(into, depth + 1)).length;
+    return direct + viaJoin === uses;
+  };
+  for (const m of [...line.matchAll(new RegExp(String.raw`\$(\w+)\s*=\s*${TEXT_VALUE}`, 'g'))]) {
+    const name = m[1]!;
+    if (contentOnly(name)) line = line.replace(m[0], () => `$${name} = ''`);
+  }
+  return line;
 }
 
 /** Every whitespace- or separator-delimited token, quoted content split the same way. */

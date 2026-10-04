@@ -77,24 +77,32 @@ function findJsonCandidates(markdown: string): string[] {
   return out;
 }
 
-/** Removes Copilot's 【n-hash】 citation markers and the whitespace they leave behind. */
-/** The stop word taken out of a text wherever it stands as a word of its own, and the spacing tidied. */
+/**
+ * The stop word taken out of a text wherever it stands as a word of its own, and the spacing tidied
+ * only where it stood: a text without it comes back untouched, and a command such as "Get-Content .\src"
+ * keeps its space (live run 2026-10-04).
+ */
 export function withoutMarker(text: string | undefined, marker: string): string | undefined {
   if (text === undefined || !marker) return text;
   const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const edge = String.raw`\s.,;:!?"'«»„“”()\[\]-`;
   const word = new RegExp(`(^|[${edge}])${escaped}(?=$|[${edge}])`, 'gu');
+  if (!word.test(text)) return text;
+  word.lastIndex = 0;
+  const HOLE = '\u0000';
   const out = text
-    .replace(word, '$1')
-    .replace(/\(\s*\)|\[\s*\]/g, '')
-    .replace(/([.!?])[ \t]*\.+/g, '$1')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/[ \t]+([.,;:!?])/g, '$1')
+    .replace(word, `$1${HOLE}`)
+    .replace(/\([ \t]*\u0000[ \t]*\)|\[[ \t]*\u0000[ \t]*\]/g, HOLE)
+    .replace(/([.!?])[ \t]*\u0000[ \t]*\.+(?=\s|$)/g, '$1')
+    .replace(/[ \t]*\u0000[ \t]*([.,;:!?])(?=\s|$)/g, '$1')
+    .replace(/[ \t]+\u0000[ \t]+/g, ' ')
+    .replace(/\u0000/g, '')
     .trim();
   // Nothing but the stop word: kept as it was rather than leaving a done reply with no summary.
   return out === '' ? text : out;
 }
 
+/** Removes Copilot's 【n-hash】 citation markers and the whitespace they leave behind. */
 export function stripCitations(text: string | undefined): string | undefined {
   if (text === undefined) return undefined;
   return text.replace(/\s*【[^】]*】/g, '').replace(/[ 	]+$/gm, '').trim();

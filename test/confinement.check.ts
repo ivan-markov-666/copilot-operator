@@ -198,5 +198,35 @@ console.log('\n--- the registered projects are reachable only from a session in 
   check('so a step there cannot write into a registered project', confinementRefusal(String.raw`Set-Content -Path C:\Projects\calculator-test\x.txt -Value 1`, { roots: elsewhere, cwd: elsewhere[0]! }) !== null, true);
 }
 
+console.log('\n--- the same text put in a variable first, then written (live run 2026-10-04) ---');
+{
+  check('runs: file text in a variable, written with WriteAllText', confinementRefusal(String.raw`$t = "import x from '../config/limits.json';"; $f = [IO.File]; $f::WriteAllText('src/cart.mjs', $t, $e)`, c), null);
+  check('runs: file text in a variable, written with -Value', confinementRefusal(String.raw`$t = "import x from '../lib/x.mjs';"; Set-Content -Path src/a.mjs -Value $t`, c), null);
+  check('runs: file text in a variable, piped to Set-Content', confinementRefusal(String.raw`$t = "require('../lib/x')"; $t | Set-Content src/a.js`, c), null);
+  check('refused: a variable used as the path is still a path', confinementRefusal(String.raw`$p = '..\..\..\outside.txt'; Set-Content -Path $p -Value 'x'`, c) !== null, true);
+  check('refused: a variable used both as text and as a path is read', confinementRefusal(String.raw`$p = '..\..\..\outside.txt'; Set-Content -Path $p -Value $p`, c) !== null, true);
+}
+
+console.log('\n--- arrays of lines, and Set-Content\'s positional text (live run 2026-10-04) ---');
+{
+  check('runs: an array of lines in a variable, written by -Value', confinementRefusal(String.raw`$c = @("const { padLeft } = require('../src/padLeft');", "const assert = require('node:assert');"); Set-Content -Path test\padLeft.test.js -Value $c`, c), null);
+  check('runs: the same array written positionally', confinementRefusal(String.raw`$c = @("const p = require('../src/padLeft');", 'x'); Set-Content test\padLeft.test.js $c`, c), null);
+  check('runs: a joined array', confinementRefusal(String.raw`$c = @("require('../src/a')", "y") -join "` + '`' + String.raw`n"; Set-Content -Path test\a.test.js -Value $c -NoNewline`, c), null);
+  check('runs: an array written inline', confinementRefusal(String.raw`Set-Content -Path test\a.test.js -Value @("const a = require('../src/a');", "a()")`, c), null);
+  check('runs: a string written positionally', confinementRefusal(String.raw`Set-Content test\a.test.js "const a = require('../src/a');"`, c), null);
+  check('runs: an array spread over lines', confinementRefusal("$c = @(\n  \"const a = require('../src/a');\",\n  'a()'\n)\nSet-Content -Path test\\a.test.js -Value $c", c), null);
+  check('refused: the positional path is still read', confinementRefusal(String.raw`Set-Content ..\..\..\outside.txt "hi"`, c) !== null, true);
+  check('refused: an array used as paths is read', confinementRefusal(String.raw`$p = @('..\..\..\a.txt'); Remove-Item $p`, c) !== null, true);
+  check('refused: a variable path with positional text is read', confinementRefusal(String.raw`$p = '..\..\..\a.txt'; Set-Content $p 'x'`, c) !== null, true);
+  // The form of the second live run: a plain (...) array, joined into another variable, written by WriteAllText.
+  check('runs: lines joined into another variable, then written', confinementRefusal(String.raw`$lines=('const assert = require(''node:assert'');','const { toCelsius } = require(''../src/units.js'');');$t=($lines -join "` + '`' + String.raw`n");$f=[IO.File];$f::WriteAllText($p,$t,$enc)`, c), null);
+  // The form of the chain-stop run: the text over several lines, in a variable, written by WriteAllText.
+  check('runs: a multi-line double-quoted text in a variable', confinementRefusal("$test=\"import { createStock } from '../src/stock.mjs';\nimport test from 'node:test';\n\"\n$f=[IO.File]\n$f::WriteAllText('.\\test\\stock.test.mjs',$test,$enc)", c), null);
+  check('runs: a multi-line single-quoted text in a variable', confinementRefusal("$test='import { createStock } from ''../src/stock.mjs'';\nconst a = 1;\n'\n[IO.File]::WriteAllText('test\\a.mjs', $test)", c), null);
+  check('refused: a multi-line string used as a path is still read', confinementRefusal("$p='..\\..\\..\n'\nRemove-Item $p", c) !== null, true);
+  check('refused: a path after a multi-line written text is still read', confinementRefusal("Set-Content -Path a.txt -Value 'one\ntwo'\nRemove-Item ..\\..\\..\\x.txt", c) !== null, true);
+  check('refused: joined into a variable used as a path',confinementRefusal(String.raw`$parts=('..','..','..','a.txt');$p=($parts -join '\');Remove-Item $p`, c) !== null, true);
+}
+
 console.log('\nwrong:', wrong, '(expect 0)');
 if (wrong > 0) process.exitCode = 1;

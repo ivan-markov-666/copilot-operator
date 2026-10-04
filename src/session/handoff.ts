@@ -13,7 +13,10 @@ import { isContinuable, type Task, type TaskStatus } from './model.js';
 
 export type Handoff = {
   outcome: { status: TaskStatus; reason?: string; stopCode?: string };
+  /** The files in the task's commit. */
   changedFiles: Array<{ path: string; added: number; removed: number }>;
+  /** The files the task changed that no commit records (version control or commits off); see `Task.treeChanged`. */
+  uncommittedFiles?: string[];
   validation: Array<{ name: string; passed: boolean }>;
   review?: { verdict: string; open: number; skippedBecause?: string };
   /**
@@ -69,6 +72,8 @@ export function composeHandoff(task: Task, notRun: NotRun[] = []): Handoff {
   return {
     outcome: { status: task.status, ...(task.reason ? { reason: task.reason } : {}), ...(task.stopCode ? { stopCode: task.stopCode } : {}) },
     changedFiles: (vcs.files ?? []).map((f) => ({ path: f.path, added: f.added, removed: f.removed })),
+    // With no commit, what changed is read from the tree: the paths, without line counts.
+    ...(task.treeChanged?.length ? { uncommittedFiles: task.treeChanged } : {}),
     validation: (task.checkResults ?? []).map((c) => ({ name: c.name, passed: c.passed })),
     ...(task.review
       ? { review: { verdict: task.review.verdict, open: openFindings.length, ...(task.review.skippedBecause ? { skippedBecause: task.review.skippedBecause } : {}) } }

@@ -9,7 +9,7 @@
  * chat could never have met. This names the contradiction instead, before the first message.
  *
  * Only what can be known without running anything is judged: the flags against each other, and
- * the file checks against the tree as it is now. A file check that already passes needs no change;
+ * the file checks against the tree the task starts from (see `ContractTree`). A file check that already passes needs no change;
  * one that fails needs its file changed, which a read-only task, or a scope that leaves the file
  * out, forbids. Command checks are not judged: whether a command will pass depends on work the
  * task is allowed to do elsewhere.
@@ -18,14 +18,34 @@ import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { Task, TaskCheck } from '../session/model.js';
 import { inScope } from '../vcs/scope.js';
+import { gitBytes } from '../vcs/git.js';
 
-async function fileCheckPassesNow(check: TaskCheck, cwd: string): Promise<{ passes: boolean; path: string }> {
+/**
+ * Where the task's file checks are judged: the working tree as it is ('tree'), the commit the task will
+ * start from ({ ref }), or nowhere yet ('unknown'), when that commit is decided only as the session starts —
+ * an update from the remote still to come, an earlier session of the batch still to run. Before the run the
+ * tree in the folder is often not the task's: the live run of 2026-10-04 refused a task for a file its start,
+ * main brought up to the remote, would have had, judging the branch the folder happened to be on.
+ */
+export type ContractTree = 'tree' | 'unknown' | { ref: string };
+
+async function fileCheckPassesNow(check: TaskCheck, cwd: string, repoDir: string, at: Exclude<ContractTree, 'unknown'>): Promise<{ passes: boolean; path: string }> {
   const path = resolve(cwd, (check.cwd ?? '').trim() || '.', (check.file ?? '').trim());
-  const info = await stat(path).catch(() => null);
-  const exists = !!info?.isFile();
+  const rel = relative(resolve(repoDir), path).replace(/\\/g, '/');
+  const inRepo = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  let exists: boolean;
+  let text = '';
+  if (at !== 'tree' && inRepo) {
+    const shown = await gitBytes(repoDir, ['show', `${at.ref}:${rel}`]).catch(() => null);
+    exists = !!shown?.ok;
+    text = exists ? shown!.stdout.toString('utf8') : '';
+  } else {
+    const info = await stat(path).catch(() => null);
+    exists = !!info?.isFile();
+    text = exists && check.expect === 'file-contains' ? await readFile(path, 'utf8').catch(() => '') : '';
+  }
   if (check.expect === 'file-exists') return { passes: exists, path };
   if (check.expect === 'file-missing') return { passes: !exists, path };
-  const text = exists ? await readFile(path, 'utf8').catch(() => '') : '';
   return { passes: exists && text.includes(check.value ?? ''), path };
 }
 
@@ -72,8 +92,8 @@ export async function contractConflicts(
   task: Pick<Task, 'readOnly' | 'scope' | 'checks' | 'reviewChecks'>,
   cwd: string,
   repoDir: string,
-  /** The branch version control put the task on, when it is on. */
-  vcs: { branch?: string } = {},
+  /** The branch version control put the task on, when it is on; where its file checks are judged (see `ContractTree`). */
+  vcs: { branch?: string; files?: ContractTree; carried?: string[] } = {},
 ): Promise<string[]> {
   const out: string[] = [];
   const scope = task.scope ?? [];
@@ -102,11 +122,19 @@ export async function contractConflicts(
     ...(task.checks ?? []),
     ...(task.reviewChecks ?? []).filter((rc) => rc.state === 'active').map((rc) => rc.check),
   ].filter((c) => c.expect === 'file-exists' || c.expect === 'file-missing' || c.expect === 'file-contains');
+  const at = vcs.files ?? 'tree';
+  // Judged when the task starts, on its own tree, once that is known.
+  if (at === 'unknown') return out;
   for (const check of checks) {
-    const { passes, path } = await fileCheckPassesNow(check, cwd);
+    const { passes, path } = await fileCheckPassesNow(check, cwd, repoDir, at);
     if (passes) continue;
     const rel = relative(resolve(repoDir), path).replace(/\\/g, '/');
     const inside = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+    /*
+     * An input file the runner carries onto the task's start from its last capture is not in the tree
+     * judged here, and needs no change to be there: judged at the task's start (live run 2026-10-04).
+     */
+    if (inside && (vcs.carried?.length ?? 0) > 0 && inScope(rel, vcs.carried!)) continue;
     if (task.readOnly) {
       out.push(`The check "${check.name}" fails now and can only pass if ${rel || path} changes, but the task is read-only.`);
     } else if (inside && !inScope(rel, scope)) {

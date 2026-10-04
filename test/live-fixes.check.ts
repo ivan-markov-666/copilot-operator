@@ -13,6 +13,7 @@ import { reply } from './support/fakeChat.js';
 import { noteFor } from '../src/vcs/taskVcs.js';
 import { parseReply } from '../src/protocol/parser.js';
 import { readOnlyNote } from '../src/session/compose.js';
+import { versionControlLines } from '../src/session/exportRecord.js';
 
 const t = new Tally();
 
@@ -54,7 +55,7 @@ console.log('--- C4: a task that contradicts itself is refused before the browse
   }
 }
 
-console.log('\n--- C3: a contradiction decided at the start is not retried in fresh chats ---');
+console.log('\n--- C3 (and 2026-10-04): a check expecting another branch is refused before the start, when the branch is known ---');
 {
   const h = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 2 } } });
   try {
@@ -67,14 +68,10 @@ console.log('\n--- C3: a contradiction decided at the start is not retried in fr
       }],
     });
     const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
-    t.check('started (the branch is only known at the start)', r.started, true);
-    await h.idle();
+    t.check('refused before the browser opened', [r.started, h.chat.opened], [false, 0]);
+    t.truthy('naming the branch the task will be on', /expects another branch, but version control put this task on cop\//.test(r.reason ?? ''), r.reason);
     const v = await h.session(s!.id) as unknown as View;
-    const task = v.tasks[0]!;
-    t.check('blocked on the contract', [task.status, task.stopCode], ['blocked', 'contract-conflict']);
-    t.check('and not retried in a fresh chat', [task.autoRetries ?? 0, (task.attempts ?? []).length], [0, 0]);
-    t.check('no empty -a2/-a3 branches', h.git('branch', '--list', 'cop/*a[0-9]*'), '');
-    t.check('nothing was sent to the chat', h.chat.sent.length, 0);
+    t.check('no attempt, no retry, no branch', [v.tasks[0]!.status, v.tasks[0]!.autoRetries ?? 0, h.git('branch', '--list', 'cop/*')], ['queued', 0, '']);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
@@ -179,6 +176,8 @@ console.log('\n--- C8: input files next to other changes are no dead end on the 
     g = (await groups())[0]!;
     const here = g.actions.find((a) => a.id === 'snapshot-here');
     t.check('then the snapshot here is offered, with every file listed', [here?.available, g.entries.map((e) => e.path).sort()], [true, ['README.md', 'scratch.txt', 'specs/rates.json']]);
+    const scratch = g.entries.find((e) => e.path === 'scratch.txt') as { allowed: string[]; choice?: string } | undefined;
+    t.check("a file named like a scratch copy is the operator's to include, left out unless ticked (2026-10-04)", [scratch?.allowed, scratch?.choice], [['include', 'leave-out'], 'leave-out']);
     const choices = Object.fromEntries(g.entries.map((e) => [e.path, e.path === 'scratch.txt' ? 'leave-out' : (e.choice ?? 'include')]));
     const took = await press('snapshot-here', choices);
     t.check('taken, with scratch.txt left out', [took.ok, took.problem ?? null], [true, null]);
@@ -330,11 +329,28 @@ console.log('\n--- C13: a read-only task that does change a file still fails, an
     const v = await h.session(s!.id) as unknown as View;
     t.check('failed, naming the file', [v.tasks[0]!.status, /notes\.md/.test(v.tasks[0]!.reason ?? '')], ['failed', true]);
     t.truthy('and saying nothing is committed', /Nothing is committed/.test(v.tasks[0]!.reason ?? '') && !/committed on the task's branch/.test(v.tasks[0]!.reason ?? ''), v.tasks[0]!.reason);
+    // 2026-10-04: the record named no changed file beside a verdict that named one.
+    const done = v.tasks[0] as unknown as { treeChanged?: string[]; handoff?: { changedFiles: unknown[]; uncommittedFiles?: string[] } };
+    t.check('the changed file is on record without a commit', [done.treeChanged, done.handoff?.uncommittedFiles], [['notes.md'], ['notes.md']]);
+    const lines = versionControlLines(v.tasks[0] as never, { vcs: { enabled: false } } as never);
+    t.truthy('and in the record', lines.some((l) => /changed, not committed: 1 file\(s\) — notes\.md/.test(l)), lines);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
     await h.stop();
   }
+}
+
+console.log('\n--- 2026-10-04: with commits off the record says so, not "the task changed no files" ---');
+{
+  const task = { id: 't', title: 't', prompt: '', status: 'done', treeChanged: ['src/a.js'],
+    vcs: { branch: 'cop/t', baseCommit: 'abcdef1234', afterCommit: { branch: 'cop/t', head: 'abcdef1234', clean: false, changed: ['src/a.js'] } } };
+  const lines = versionControlLines(task as never, { vcs: { enabled: true, commitOnFinish: false } } as never);
+  const commit = lines.find((l) => l.startsWith('commit ')) ?? '';
+  t.truthy('commits off, not "changed no files"', /commits are off for this session, so the changes stay in the working tree/.test(commit) && !/changed no files/.test(commit), commit);
+  t.truthy('and the changed file is named', lines.some((l) => /changed, not committed: 1 file\(s\) — src\/a\.js/.test(l)), lines);
+  const on = versionControlLines({ ...task, treeChanged: undefined, vcs: { branch: 'cop/t', baseCommit: 'abcdef1234' } } as never, { vcs: { enabled: true } } as never);
+  t.truthy('with commits on and nothing changed it still says so', on.some((l) => /none — the task changed no files/.test(l)), on);
 }
 
 console.log('\n--- C16/C38: nothing promises a commit that will not happen, and a read-only task is not told to change files ---');
@@ -375,6 +391,9 @@ console.log('\n--- C20: a starting snapshot on the base branch brings the branch
         tasks: [{ title: 'rates', prompt: 'Write src/rates.js that exports the EUR rate read from specs/rates.json, with a node:test test named "eur rate".', checks: testChecks }] }],
     });
     const g = (await h.call<Group[]>('GET', `/batch/vcs?ids=${s!.id}`))[0]!;
+    // 2026-10-04: the button said the checkout stays exactly as it is, and the update then moved main under it.
+    const said = (g.actions.find((a) => a.id === 'snapshot-on-base') as { result?: string } | undefined)?.result ?? '';
+    t.truthy('the button says main is brought up to its remote first, moving the checkout', /First brings "main" up to its remote, fast-forward only, which moves your checkout with it/.test(said) && !/stay exactly as they are/.test(said), said);
     const took = await h.call<{ ok: boolean; result?: string; problem?: string }>('POST', '/batch/vcs/prepare', {
       sessionIds: [s!.id], repoDir: h.repo, action: 'snapshot-on-base', choices: Object.fromEntries(g.inputs.map((e) => [e.path, 'include'])),
     });
@@ -383,6 +402,145 @@ console.log('\n--- C20: a starting snapshot on the base branch brings the branch
     const v = await h.session(s!.id) as unknown as { vcsBaseCommit: string; vcsStart?: { update?: { outcome: string } } };
     t.check('the snapshot sits on the remote\'s main', h.git('rev-parse', `${v.vcsBaseCommit}^`), remoteMain);
     t.check('and the start records the update', v.vcsStart?.update?.outcome, 'updated');
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-04: a file check is judged on the tree the task starts from, not the folder as it is ---');
+{
+  type BatchView = { sessions: Array<{ sessionId: string; state: string; reason?: string }> };
+  const h = await startHarness({});
+  try {
+    const remote = join(h.base, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    h.git('remote', 'add', 'origin', remote);
+    h.git('push', '-q', '-u', 'origin', 'main');
+    // main on the remote gains src/units.js; the local main does not have it yet.
+    const other = join(h.base, 'other');
+    execFileSync('git', ['clone', '-q', remote, other]);
+    const og = (...a: string[]): string => execFileSync('git', ['-C', other, ...a], { encoding: 'utf8' }).trim();
+    og('config', 'user.email', 'o@example.invalid');
+    og('config', 'user.name', 'o');
+    mkdirSync(join(other, 'src'), { recursive: true });
+    writeFileSync(join(other, 'src', 'units.js'), 'exports.toCelsius = (f) => (f - 32) * 5 / 9;\n');
+    og('add', '-A');
+    og('commit', '-q', '-m', 'units');
+    og('push', '-q', 'origin', 'main');
+    // A local branch with a notes file of its own, checked out now.
+    h.git('checkout', '-q', '-b', 'feature/notes');
+    mkdirSync(join(h.repo, 'notes'), { recursive: true });
+    writeFileSync(join(h.repo, 'notes', 'TODO.md'), '- local only note\n');
+    h.git('add', '-A');
+    h.git('commit', '-q', '-m', 'notes');
+    const plans = await session(h, {
+      version: 1,
+      sessions: [
+        { name: 'remote-update', onFailure: 'stop', vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', startFrom: 'branch', baseBranch: 'main', updateFromRemote: true }, review: { enabled: false },
+          tasks: [{ title: 'units test', prompt: 'Add test/units.test.js with a node:test test for toCelsius from src/units.js, and run it.', scope: ['test/**'],
+            checks: [{ name: 'units from the remote main', expect: 'file-contains', file: 'src/units.js', value: 'toCelsius' }] }] },
+        { name: 'notes-existing', onFailure: 'stop', vcs: { enabled: true, repoDir: h.repo, startFrom: 'existing-branch', existingBranch: 'feature/notes', updateFromRemote: false }, review: { enabled: false },
+          tasks: [{ title: 'count notes', prompt: 'Add src/count.js that counts the lines starting with a dash in notes/TODO.md.', scope: ['src/**'],
+            checks: [{ name: 'the local note', expect: 'file-contains', file: 'notes/TODO.md', value: 'local only note' }] }] },
+      ],
+    });
+    const [u, e] = plans;
+    h.chat.script(
+      reply.steps("New-Item -ItemType Directory -Force test | Out-Null; Set-Content -Path test/units.test.js -Value 'ok'"), reply.done('I wrote test/units.test.js with a node:test test for toCelsius from src/units.js, and it passes.'),
+      reply.steps("Set-Content -Path src/count.js -Value 'ok'"), reply.done('I wrote src/count.js, which counts the dashed lines of notes/TODO.md, and checked it by hand.'),
+    );
+    const r = await h.call<{ started: boolean; reason?: string }>('POST', '/batch/start', { sessionIds: [u!.id, e!.id], mode: 'unattended' });
+    t.check('the batch is not refused for a file the folder lacks now', [r.started, r.reason ?? null], [true, null]);
+    await h.idle();
+    const su = await h.session(u!.id) as unknown as View;
+    const se = await h.session(e!.id) as unknown as View;
+    t.check('the first, started from main brought up to the remote, ran', [su.tasks[0]!.status, su.tasks[0]!.reason ?? null], ['done', null]);
+    t.check('the second, on its existing branch, was not refused for the first one\'s tree', [se.tasks[0]!.status, se.tasks[0]!.reason ?? null], ['done', null]);
+    // Still refused where the start is known and the file is not there: the local main with no remote update.
+    h.git('checkout', '-q', 'feature/notes');
+    const [w] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'local-main', onFailure: 'stop', vcs: { enabled: true, repoDir: h.repo, branchMode: 'per-session', startFrom: 'branch', baseBranch: 'main', updateFromRemote: false }, review: { enabled: false },
+        tasks: [{ title: 'needs notes', prompt: 'Add test/x.test.js with a node:test test that reads notes/TODO.md and checks it is not empty.', scope: ['test/**'],
+          checks: [{ name: 'notes on main', expect: 'file-contains', file: 'notes/TODO.md', value: 'local only note' }] }] }],
+    });
+    const refused = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${w!.id}/start`, { mode: 'unattended' });
+    t.truthy('a check that fails on the known start (main) is still refused, though the folder has the file', !refused.started && /notes on main/.test(refused.reason ?? ''), refused);
+    const batch = await h.call<BatchView>('GET', '/batch');
+    t.truthy('the batch record has no refusal', batch.sessions.every((x) => x.state === 'done'), batch);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-04: where the contract\'s file checks are read, and the input files carried onto a start ---');
+{
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { contractConflicts } = await import('../src/orchestrator/contract.js');
+  const dir = mkdtempSync(join(tmpdir(), 'cop-contract-'));
+  try {
+    const g = (...a: string[]): string => execFileSync('git', ['-C', dir, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', ...a], { encoding: 'utf8' }).trim();
+    g('init', '-q', '-b', 'main');
+    writeFileSync(join(dir, 'README.md'), 'x\n');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'base');
+    g('checkout', '-q', '-b', 'other');
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'units.js'), 'toCelsius\n');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'units on other');
+    const task = { scope: ['test/**'], checks: [{ name: 'units there', expect: 'file-contains' as const, file: 'src/units.js', value: 'toCelsius' }] };
+    t.check('on the tree as it is (on other): it passes', (await contractConflicts(task as never, dir, dir, { files: 'tree' })).length, 0);
+    t.check('on main, where the task starts: a contradiction', (await contractConflicts(task as never, dir, dir, { files: { ref: 'main' } })).length, 1);
+    t.check('not judged when the start is not known yet', (await contractConflicts(task as never, dir, dir, { files: 'unknown' })).length, 0);
+    const inputs = { scope: ['docs/**'], checks: [{ name: 'the rate spec', expect: 'file-contains' as const, file: 'specs/rates.json', value: '"GBP": null' }] };
+    t.check('an input file missing from the start, without carry: a contradiction', (await contractConflicts(inputs as never, dir, dir, { files: { ref: 'main' } })).length, 1);
+    t.check('one the runner carries onto the start is left to the start', (await contractConflicts(inputs as never, dir, dir, { files: { ref: 'main' }, carried: ['specs/**'] })).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log('\n--- 2026-10-04: a session refused at its turn in a batch is on the run\'s record, and not "failed" ---');
+{
+  type BatchView = { sessions: Array<{ sessionId: string; state: string; reason?: string }> };
+  const h = await startHarness({});
+  try {
+    const plans = await session(h, {
+      version: 1,
+      sessions: [
+        { name: 'first', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+          tasks: [{ title: 'write a', prompt: 'Write the word one into a.txt in the project folder, and nothing else.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] },
+        // Judged at its turn, on the tree the first session leaves: a file nobody made, outside its scope.
+        { name: 'second', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+          tasks: [{ title: 'write b', prompt: 'Write the word two into src/b.txt in the project folder, and nothing else.', scope: ['src/**'], checks: [{ name: 'never there', expect: 'file-contains', file: 'nowhere.txt', value: 'two' }] }] },
+      ],
+    });
+    const [a, b] = plans;
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done('I wrote the word one into a.txt and read the file back to check it.'));
+    const r = await h.call<{ started: boolean; reason?: string }>('POST', '/batch/start', { sessionIds: [a!.id, b!.id], mode: 'unattended' });
+    // Head-started sessions after another in the same repository are judged at their turn, not up front.
+    t.check('the batch starts', r.started, true);
+    await h.idle();
+    const batch = await h.call<BatchView>('GET', '/batch');
+    const eb = batch.sessions.find((x) => x.sessionId === b!.id);
+    t.truthy('the second is skipped with why, not failed', eb?.state === 'skipped' && /contradicts itself/.test(eb.reason ?? ''), eb);
+    const sb = await h.session(b!.id) as unknown as View;
+    t.check('its task stays queued', sb.tasks[0]!.status, 'queued');
+    const exp = await h.call<{ runs?: Record<string, { refusedAtTurn?: string[]; preflight?: Array<{ type: string; data?: { sessions?: string[] } }> }> }>('GET', `/export/bot?session=${b!.id}`).catch(() => null);
+    // A queued task edited after the import is on record with the operator's actions, with what it was.
+    await h.call('PUT', `/sessions/${b!.id}/tasks/${sb.tasks[0]!.id}`, { checks: [{ name: 'b says two', expect: 'file-contains', file: 'src/b.txt', value: 'two' }] });
+    const bot = await h.call<{ operatorActions: Record<string, Array<{ type: string; data?: { changed?: string[]; before?: { checks?: Array<{ name: string }> } } }>> }>('GET', `/export/bot?session=${b!.id}`);
+    const edit = bot.operatorActions[b!.id]?.find((x) => x.type === 'task-edited');
+    t.check('the edit of the queued task is on record, with the old check', [edit?.data?.changed, edit?.data?.before?.checks?.[0]?.name], [['checks'], 'never there']);
+    const run = Object.values(exp?.runs ?? {})[0];
+    t.truthy('and the run it was refused in names it in its export, with the refusal in the run log',
+      !!run?.refusedAtTurn?.includes(b!.id) && !!run.preflight?.some((e) => e.type === 'run-preflight-refused' && e.data?.sessions?.includes(b!.id)), exp?.runs);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
@@ -456,18 +614,151 @@ console.log('\n--- C21: a Restore holds in per-session mode: the next run of tha
   }
 }
 
+console.log('\n--- 2026-10-04: a Restore after "Run again from here" measures what it leaves on the session\'s branch as it is now ---');
+{
+  type T = Task & { vcs?: { branch?: string; baseCommit?: string; commit?: string } };
+  type Preview = { ok: boolean; leftBehind: string[]; keptOn?: string; currentBranch?: string };
+  const h = await startHarness({});
+  try {
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'restart-restore', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+        tasks: [
+          { title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] },
+          { title: 'write b', prompt: 'Write b.txt in the project folder holding exactly the word two.', checks: [{ name: 'b says two', expect: 'file-contains', file: 'b.txt', value: 'two' }] },
+        ] }],
+    });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done(), reply.steps("Set-Content -Path b.txt -Value 'two'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    let v = await h.session(s!.id) as unknown as { tasks: T[] };
+    const oldBranch = v.tasks[1]!.vcs!.branch!;
+    const oldB = v.tasks[1]!.vcs!.commit!;
+    const restart = await h.call<{ restored?: string[] }>('POST', `/sessions/${s!.id}/tasks/${v.tasks[1]!.id}/restart`, { start: false });
+    t.truthy('the restart moved the session to a restore branch', (restart.restored?.length ?? 0) === 1, restart);
+    h.chat.script(reply.steps("Set-Content -Path b.txt -Value 'two'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    v = await h.session(s!.id) as unknown as { tasks: T[] };
+    const newBranch = v.tasks[1]!.vcs!.branch!;
+    const newB = v.tasks[1]!.vcs!.commit!;
+    t.truthy('the second b is on the restore branch', newBranch !== oldBranch && h.git('branch', '--show-current') === newBranch, [newBranch, oldBranch]);
+    const p = await h.call<Preview>('GET', `/sessions/${s!.id}/tasks/${v.tasks[0]!.id}/restore`);
+    const listed = p.leftBehind.map((l) => l.split(' ')[0]!);
+    t.check('it is kept on the branch checked out now', [p.ok, p.keptOn], [true, newBranch]);
+    t.truthy('listing the commit made since, not the abandoned one', listed.some((c) => newB.startsWith(c)) && !listed.some((c) => oldB.startsWith(c)), { listed, newB, oldB });
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-04: in a batch, the shared window\'s events are in the transcript of the session using it ---');
+{
+  const h = await startHarness({});
+  try {
+    h.chat.emitEvents = true;
+    const mk = (name: string, file: string) => ({ name, onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+      tasks: [{ title: `write ${file}`, prompt: `Write ${file} in the project folder holding exactly the word one.`, checks: [{ name: `${file} says one`, expect: 'file-contains', file, value: 'one' }] }] });
+    const [a, b] = await session(h, { version: 1, sessions: [mk('first', 'a.txt'), mk('second', 'b.txt')] });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done(), reply.steps("Set-Content -Path b.txt -Value 'one'"), reply.done());
+    const r = await h.call<{ started: boolean }>('POST', '/batch/start', { sessionIds: [a!.id, b!.id], mode: 'unattended' });
+    t.check('the batch started', r.started, true);
+    await h.idle();
+    for (const s of [a!, b!]) {
+      const task = (await h.session(s.id)).tasks[0] as unknown as { runId: string };
+      const lines = readFileSync(join(h.runsDir, task.runId, 'transcript.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"browser:reply-arrived"'));
+      t.truthy(`"${s.name}": the window's events are in its own transcript`, lines.length >= 2, lines.length);
+    }
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-04: the model the chat ran on, and why not the one asked for, is in the task\'s record ---');
+{
+  const h = await startHarness({ settings: { copilot: { defaultModel: 'GPT 9 Imaginary' } } });
+  try {
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'model-record', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+        tasks: [{ title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] }],
+    });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    const task = (await h.session(s!.id)).tasks[0] as unknown as { runId: string; status: string };
+    const line = readFileSync(join(h.runsDir, task.runId, 'transcript.jsonl'), 'utf8').split('\n').find((l) => l.includes('"model-in-use"')) ?? '';
+    t.truthy('the transcript says the chat is not on the model asked for, and why', /"ok":false/.test(line) && /GPT 9 Imaginary/.test(line), line);
+    const bot = await h.call<{ tasks: Array<{ eventCounts: Record<string, number> }> }>('GET', `/export/bot?session=${s!.id}`);
+    t.truthy('and the export counts it', (bot.tasks[0]!.eventCounts['model-in-use'] ?? 0) === 1, bot.tasks[0]!.eventCounts);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-04: a model the page offers under a new name is found there ---');
+{
+  const { pageModelFor } = await import('../src/transport/modelMatch.js');
+  const o = (name: string, disabled = false) => ({ name, raw: name, selected: false, disabled, role: 'menuitemradio' });
+  const live = [o('Auto'), o('Quick response'), o('Think deeper'), o('GPT 5.6 Sol Quick response'), o('GPT 5.6 Sol Think deeper')];
+  t.check('the name as it is, when offered', pageModelFor('Think deeper', live)?.name, 'Think deeper');
+  t.check('"GPT 5.6 Think deeper" is now "GPT 5.6 Sol Think deeper" (as seen live)', pageModelFor('GPT 5.6 Think deeper', live)?.name, 'GPT 5.6 Sol Think deeper');
+  t.check('and the quick one likewise', pageModelFor('GPT 5.6 Quick response', live)?.name, 'GPT 5.6 Sol Quick response');
+  t.check('a new version of the same name', pageModelFor('GPT 5.6 Think deeper', [o('GPT 5.7 Think deeper'), o('GPT 5.7 Quick response')])?.name, 'GPT 5.7 Think deeper');
+  t.check('the newest of several versions', pageModelFor('GPT 5.6 Think deeper', [o('GPT 5.7 Think deeper'), o('GPT 5.8 Think deeper')])?.name, 'GPT 5.8 Think deeper');
+  t.check('a family name never turns into a vendor\'s model', pageModelFor('Think deeper', [o('Auto'), o('GPT 5.6 Sol Think deeper')]), null);
+  t.check('two that fit as well are not guessed between', pageModelFor('GPT Think deeper', [o('GPT A Think deeper'), o('GPT B Think deeper')]), null);
+  t.check('a disabled row is not chosen', pageModelFor('GPT 5.6 Think deeper', [o('GPT 5.6 Sol Think deeper', true)]), null);
+  t.check('nothing like it: nothing', pageModelFor('Claude Opus', live), null);
+}
+
+console.log('\n--- 2026-10-04: a run follows the page when the Settings model was renamed, and Settings follows too ---');
+{
+  const h = await startHarness({ settings: { copilot: { defaultModel: 'GPT 5.6 Think deeper', defaultReviewModel: 'GPT 5.6 Quick response' } } });
+  try {
+    const o = (name: string) => ({ name, raw: name, selected: name === 'Auto', disabled: false, role: 'menuitemradio' });
+    h.chat.models = [o('Auto'), o('Quick response'), o('Think deeper'), o('GPT 5.6 Sol Quick response'), o('GPT 5.6 Sol Think deeper')];
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'renamed-model', onFailure: 'stop', vcs: vcs(h), review: { enabled: true },
+        tasks: [{ title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] }],
+    });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string }> };
+    t.check('the chat ran on the page\'s name for it', v.modelInUse, 'GPT 5.6 Sol Think deeper');
+    t.truthy('both the session model and the review model were asked under the page\'s names', h.chat.modelRequests.includes('GPT 5.6 Sol Think deeper') && h.chat.modelRequests.includes('GPT 5.6 Sol Quick response'), h.chat.modelRequests);
+    const models = await h.call<{ defaultModel: string; defaultReviewModel: string; options: Array<{ name: string }>; readAt: string | null }>('GET', '/models');
+    t.check('Settings now say what the page offers', [models.defaultModel, models.defaultReviewModel], ['GPT 5.6 Sol Think deeper', 'GPT 5.6 Sol Quick response']);
+    t.truthy('and the saved list is the page\'s', models.options.some((m) => m.name === 'GPT 5.6 Sol Think deeper') && !models.options.some((m) => m.name === 'GPT 5.6 Think deeper') && !!models.readAt, models);
+    const events = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${s!.id}/events`);
+    t.truthy('and the run says so', events.some((e) => e.type === 'model-renamed' && /"GPT 5\.6 Think deeper" is no longer offered under that name; the page offers it as "GPT 5\.6 Sol Think deeper"/.test(e.message)), events.filter((e) => /model/.test(e.type)));
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
 console.log('\n--- C24: a plan check the runner refuses for its command line stops the run before the browser opens ---');
 {
   const h = await startHarness({});
   try {
-    const [s] = await session(h, {
+    const plan = {
       version: 1,
       sessions: [{ name: 'net-check', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
         tasks: [{ title: 'docs page', prompt: 'Write docs/index.html in the project folder with a heading that says Hello.', checks: [
           { name: 'the page has the heading', expect: 'file-contains', file: 'docs/index.html', value: 'Hello' },
           { name: 'the published page is reachable', expect: 'exit-zero', run: 'curl -fsS https://example.com/ -o page.html' },
         ] }] }],
-    });
+    };
+    // 2026-10-04: "Check" said ok, and only the start said the check could never run.
+    const checked = await h.call<{ ok: boolean; warnings: string[] }>('POST', '/plan/check', { text: JSON.stringify(plan) });
+    t.truthy('the plan check already says it', checked.ok && checked.warnings.some((w) => /"the published page is reachable" is refused by the runner for its own command line/.test(w)), checked);
+    const [s] = await session(h, plan);
     const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
     t.check('refused before the browser opened', [r.started, h.chat.opened], [false, 0]);
     t.truthy('naming the check that can never run', /"the published page is reachable" is refused by the runner/.test(r.reason ?? ''), r.reason);
@@ -488,6 +779,20 @@ console.log('\n--- C31: the stop word is not kept in the summary, so it never re
   t.check('and the reply still ends the task', r.ok ? r.done : null, true);
   const word = parseReply(fence({ status: 'done', summary: 'Крайният резултат е готов: калкулаторът е написан, а шестте му теста минават при node --test.' }), { stopMarker: 'Край', defaultShell: 'pwsh' });
   t.check('a word that only starts with it is left alone', word.ok ? word.reply.summary : null, 'Крайният резултат е готов: калкулаторът е написан, а шестте му теста минават при node --test.');
+}
+
+console.log('\n--- 2026-10-04: taking the stop word out never touches commands and paths in the text ---');
+{
+  const opts = { stopMarker: 'Край', defaultShell: 'pwsh' as const };
+  const fence = (o: unknown): string => '```json\n' + JSON.stringify(o) + '\n```\nКрай';
+  const plain = String.raw`I ran Get-Content .\src\pad.js and wrote the draft in .cop-tmp , then checked it .`;
+  const p = parseReply(fence({ status: 'done', summary: plain, notes: String.raw`See Get-Content .\notes.md` }), opts);
+  t.check('a summary without the stop word comes back untouched', p.ok ? p.reply.summary : null, plain);
+  t.check('and so do the notes', p.ok ? p.reply.notes : null, String.raw`See Get-Content .\notes.md`);
+  const mixed = parseReply(fence({ status: 'done', summary: String.raw`Read it with Get-Content .\src\pad.js and kept the draft in .cop-tmp. Край.` }), opts);
+  t.check('with the stop word: only where it stood is tidied', mixed.ok ? mixed.reply.summary : null, String.raw`Read it with Get-Content .\src\pad.js and kept the draft in .cop-tmp.`);
+  const inside = parseReply(fence({ status: 'done', summary: 'Tests pass (Край) and the file is saved Край .' }), opts);
+  t.check('in brackets or before a full stop', inside.ok ? inside.reply.summary : null, 'Tests pass and the file is saved.');
 }
 
 console.log('\n--- C31: and the commit message has no stop word ---');
@@ -531,6 +836,10 @@ console.log('\n--- C27: a session the operator stops inside a batch is "stopped"
     const first = batch.sessions.find((x) => x.sessionId === a!.id);
     const second = batch.sessions.find((x) => x.sessionId === b!.id);
     t.check('the stopped session is "stopped"', [first?.state, /stopped by the operator/.test(first?.reason ?? '')], ['stopped', true]);
+    // 2026-10-04: "after 0 task(s)" beside ran 1, and the task's reason the one of an "abort" answer.
+    t.truthy('the batch says a task was cut short', /stopped by the operator: 1 task\(s\) cut short/.test(first?.reason ?? ''), first?.reason);
+    const stoppedTask = (await h.session(a!.id)).tasks[0]!;
+    t.check('and the task says it was stopped, not aborted', [stoppedTask.status, stoppedTask.reason], ['aborted', 'stopped by the operator']);
     t.check('and the next session still ran', second?.state, 'done');
     const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${a!.id}/events`);
     t.check('no "batch stopped early"', events.some((e) => e.type === 'batch-stopped-early'), false);
@@ -557,6 +866,16 @@ console.log('\n--- C28: a chained session whose predecessor has not finished is 
     t.truthy('saying the session before it has not finished', /has not finished/.test(r.reason ?? ''), r.reason);
     const v = (await h.session(b!.id)) as unknown as View;
     t.check('its task stays queued, no attempt', [v.tasks[0]!.status, v.tasks[0]!.runId ?? null, v.tasks[0]!.attempt ?? 1], ['queued', null, 1]);
+
+    // 2026-10-04: refused at its turn inside a batch, the reason pointed at the preparation panel, which has nothing for it.
+    const [c, d] = await session(h, { version: 1, sessions: [mk('third', 'c.txt', 'branch'), mk('fourth', 'd.txt', 'previous-session')] });
+    h.chat.script(reply.steps('Get-ChildItem'), reply.blocked());
+    const bs = await h.call<{ started: boolean; reason?: string }>('POST', '/batch/start', { sessionIds: [c!.id, d!.id], mode: 'unattended', onFailure: 'continue' });
+    t.check('the batch of the two starts', [bs.started, bs.reason ?? null], [true, null]);
+    await h.idle();
+    const ed = (await h.call<{ sessions: Array<{ sessionId: string; state: string; reason?: string }> }>('GET', '/batch')).sessions.find((x) => x.sessionId === d!.id);
+    t.truthy('the chained one is skipped at its turn, saying why, with no pointer to the panel',
+      ed?.state === 'skipped' && /has not finished/.test(ed.reason ?? '') && !/Prepare version control for this run/.test(ed.reason ?? ''), ed);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
@@ -583,8 +902,11 @@ console.log('\n--- C26: "Continue" after a Stop tells the chat which steps ran a
     t.check('stopped', stopped.tasks[0]!.status, 'aborted');
     await h.call('POST', `/sessions/${s!.id}/tasks/${stopped.tasks[0]!.id}/continue`);
     let told = '';
-    h.chat.script((m) => { told = m.text; return reply.steps("Set-Content -Path c.txt -Value 'done'"); }, reply.done());
+    let nudge = '';
+    // The chat that answers "blocked" there is given the assignment again (live run 2026-10-04).
+    h.chat.script((m) => { told = m.text; return reply.blocked(); }, (m) => { nudge = m.text; return reply.steps("Set-Content -Path c.txt -Value 'done'"); }, reply.done());
     await h.run(s!.id, 'unattended');
+    t.truthy('a "blocked" at once is answered with the assignment, not "nothing has been run"', /this task is being continued/.test(nudge) && /Write c\.txt in the project folder/.test(nudge) && !/nothing has been run in this task/.test(nudge), nudge.slice(0, 600));
     t.truthy('the continuation names step 1 as run, with its output', /step 1 ran to the end/.test(told) && /inspection-finished-marker/.test(told), told.slice(0, 900));
     t.truthy('and step 2 as cut off by the stop', /step 2 was running when it was stopped/.test(told), told.slice(0, 900));
     t.check('and the task finishes', ((await h.session(s!.id)) as unknown as View).tasks[0]!.status, 'done');
@@ -713,13 +1035,17 @@ console.log('\n--- C61: the steps after a refused step of the same reply are not
         tasks: [{ title: 'write after', prompt: 'Write after.txt in the project folder holding exactly the word hello.', checks: [{ name: 'after says hello', expect: 'file-contains', file: 'after.txt', value: 'hello' }] }] }],
     });
     let report = '';
+    let told = '';
     h.chat.script(
       reply.steps(String.raw`Get-Content C:\Windows\win.ini`, "Set-Content -Path after.txt -Value 'too early'"),
-      (m) => { report = Object.values(m.attached).join('\n'); return reply.steps("Set-Content -Path after.txt -Value 'hello'"); },
+      (m) => { report = Object.values(m.attached).join('\n'); told = m.text; return reply.steps("Set-Content -Path after.txt -Value 'hello'"); },
       reply.done(),
     );
     await h.run(s!.id, 'unattended');
     t.truthy('the second step was not run, and the chat is told why', /not run, because step 1 of this reply was refused/.test(report), report.slice(0, 1500));
+    // 2026-10-04: headed and announced as "REFUSED by the runner" like the step that was.
+    t.truthy('headed as not run because of step 1, not as refused', /--- step 2 \(pwsh, NOT RUN because step 1 was refused/.test(report) && /--- step 1 \(pwsh, REFUSED by the runner/.test(report), report.slice(0, 1500));
+    t.truthy('and the message says so too', /step 2 was not run, because step 1 was refused/.test(told) && !/step 2 was refused by the runner/.test(told), told.slice(0, 1200));
     const events = await h.call<Array<{ type: string; data?: { after?: number } }>>('GET', `/sessions/${s!.id}/events`);
     t.truthy('and it is on record', events.some((e) => e.type === 'step-skipped' && e.data?.after === 1));
     t.check('the task still finishes', ((await h.session(s!.id)) as unknown as View).tasks[0]!.status, 'done');

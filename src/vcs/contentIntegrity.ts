@@ -132,7 +132,13 @@ export function traitsOf(path: string, bytes: Buffer): Traits {
   if (control > 0) t['control-chars'] = `${control} control character(s)${text.includes('\u001B[') ? ', including terminal colour codes' : ''}`;
   const crlf = (text.match(/\r\n/g) ?? []).length;
   const lf = (text.match(/(?<!\r)\n/g) ?? []).length;
-  if (crlf > 0 && lf > 0) t['mixed-line-endings'] = `${crlf} CRLF and ${lf} LF line ending(s) in one file`;
+  if (crlf > 0 && lf > 0) {
+    // The usual cause, said where it is the case: a here-string written with Set-Content/Out-File, which add a CRLF of their own at the end (live run 2026-10-04).
+    const lastOnly = crlf === 1 && text.endsWith('\r\n');
+    t['mixed-line-endings'] =
+      `${crlf} CRLF and ${lf} LF line ending(s) in one file` +
+      (lastOnly ? ' — only the last line ends in CRLF, as Set-Content and Out-File add one: write with -NoNewline and end the text with its own newline' : '');
+  }
   for (const [re, what] of SECRETS) {
     if (re.test(text)) {
       t.secret = `what looks like ${what}`;

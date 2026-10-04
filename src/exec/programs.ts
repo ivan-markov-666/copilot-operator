@@ -231,8 +231,11 @@ export function programRefusal(command: string, allowedPrograms: string[], shell
   if (scan.uncertain) {
     return (
       `refused: the runner could not tell which programs this line starts (${scan.uncertain}). ` +
-      'Write it so every program is named literally — close each quote and bracket, and call a program by its ' +
-      'name or a literal path rather than through a variable or an expression.'
+      // The advice for the case at hand: a here-string with text on its header line got the general one, which does not say what to change (live run 2026-10-04).
+      (/here-string/.test(scan.uncertain)
+        ? "PowerShell itself rejects it too: nothing may follow @' or @\" on its line — the text starts on the next line, and '@ or \"@ closes it at the very start of a line of its own."
+        : 'Write it so every program is named literally — close each quote and bracket, and call a program by its ' +
+          'name or a literal path rather than through a variable or an expression.')
     );
   }
   // What `Start-Process` is asked to start is a program this line starts, as much as a head is.

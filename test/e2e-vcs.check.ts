@@ -102,7 +102,7 @@ await scenario('a recovery branch named in the plan is carried on, as written', 
     [ended.vcs?.commit, true, 'recovery/apz-migration', ended.vcs?.commit]);
 });
 
-await scenario('a check expecting a branch the runner did not choose stops the task before it starts', {}, async (h) => {
+await scenario('a check expecting a branch the runner did not choose is refused before the run starts', {}, async (h) => {
   const [s] = await h.importPlan({
     version: 1,
     sessions: [{
@@ -117,9 +117,11 @@ await scenario('a check expecting a branch the runner did not choose stops the t
       }],
     }],
   });
-  const ended = (await h.run(s!.id)).tasks[0]! as unknown as Ended;
-  t.check('blocked before anything was sent', [ended.status, h.chat.sent.length], ['blocked', 0]);
-  t.truthy('naming the branch it is on and the check to use instead', /cop\/session-work/.test(ended.reason ?? '') && /merge-base --is-ancestor/.test(ended.reason ?? ''), ended.reason);
+  // Since 2026-10-04 the branch is known before the run, so it is refused there: no branch cut, no attempt.
+  const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  const ended = (await h.session(s!.id)).tasks[0]! as unknown as Ended;
+  t.check('refused before anything was sent, the task still queued', [r.started, ended.status, h.chat.sent.length], [false, 'queued', 0]);
+  t.truthy('naming the branch it would be on and the check to use instead', /cop\/session-work/.test(r.reason ?? '') && /merge-base --is-ancestor/.test(r.reason ?? ''), r.reason);
 });
 
 await scenario('a task that ends blocked says the runner committed afterwards, and why no review ran', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {

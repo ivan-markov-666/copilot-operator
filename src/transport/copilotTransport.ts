@@ -10,6 +10,7 @@
  *   2. Enter does not submit the composer. The Send button has to be clicked.
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
+import { pageModelFor } from './modelMatch.js';
 import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -84,6 +85,12 @@ const ORIGIN = 'https://m365.cloud.microsoft';
  * which is where the description and any quota notice live. Nothing is normalised, because the
  * list belongs to Microsoft and differs per tenant and per day.
  */
+/**
+ * What choosing a model came to. `matched`: the name was no longer offered and this one, the same model under
+ * its new name, was chosen instead (see `modelMatch.ts`). `options`: the line-up read from the page on the way.
+ */
+export type ModelChoice = { ok: boolean; current: string | null; reason?: string; matched?: string; options?: ModelOption[] };
+
 export type ModelOption = {
   name: string;
   raw: string;
@@ -967,7 +974,7 @@ Current URL: ${url}`);
    * item that is out of quota can look clicked and change nothing. When it did not take, the
    * caller is told what the chat is actually on, which is the honest answer.
    */
-  async selectModel(name: string): Promise<{ ok: boolean; current: string | null; reason?: string }> {
+  async selectModel(name: string): Promise<ModelChoice> {
     const button = await this.resolveModelButton();
     if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
 
@@ -1004,7 +1011,26 @@ Current URL: ${url}`);
 
     if (!target) {
       await this.closeMenu();
-      return { ok: false, current: before, reason: `The picker does not offer "${name}" any more.` };
+      /*
+       * Not under that name: the line-up is read from the page, and the same model under its new name is
+       * chosen when exactly one fits (see `modelMatch.ts`). The list read goes back to the caller as well,
+       * so the saved catalogue follows the page (live run 2026-10-04: "GPT 5.6 Think deeper" had become
+       * "GPT 5.6 Sol Think deeper", and every run went on the default).
+       */
+      const read = await this.listModels().catch(() => null);
+      const options = read?.options ?? [];
+      const match = pageModelFor(name, options);
+      if (match && match.name.toLowerCase() !== name.toLowerCase()) {
+        const again = await this.selectModel(match.name);
+        return { ...again, matched: match.name, options };
+      }
+      const offered = options.filter((o) => !o.disabled).map((o) => o.name);
+      return {
+        ok: false,
+        current: before,
+        reason: `The picker does not offer "${name}" any more${offered.length > 0 ? `; it offers ${offered.map((o) => `"${o}"`).join(', ')}` : ''}.`,
+        ...(options.length > 0 ? { options } : {}),
+      };
     }
     /*
      * Already the one in force: close the menu and say so, without clicking.

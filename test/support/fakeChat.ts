@@ -23,7 +23,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatTransport, TransportFactory } from '../../src/transport/chatTransport.js';
-import type { ModelOption, ReplyCapture, TransportOptions } from '../../src/transport/copilotTransport.js';
+import type { ModelChoice, ModelOption, ReplyCapture, TransportOptions } from '../../src/transport/copilotTransport.js';
+import { pageModelFor } from '../../src/transport/modelMatch.js';
 
 /** One message the runner sent, with the text of every file it attached. */
 export type Sent = {
@@ -59,6 +60,8 @@ export class FakeCopilot {
   /** How many chat windows were opened and closed, to show a run cleans up after itself. */
   opened = 0;
   closed = 0;
+  /** Whether the window reports each reply as a browser event, as the real one reports what it sees. */
+  emitEvents = false;
   models: ModelOption[] = [
     { name: 'Auto', raw: 'Auto', selected: true, disabled: false, role: 'menuitemradio' },
     { name: 'Think deeper', raw: 'Think deeper', selected: false, disabled: false, role: 'menuitemradio' },
@@ -210,10 +213,16 @@ class FakeChat implements ChatTransport {
     return true;
   }
 
-  async selectModel(name: string): Promise<{ ok: boolean; current: string | null; reason?: string }> {
+  async selectModel(name: string): Promise<ModelChoice> {
     this.world.modelRequests.push(name);
     const found = this.world.models.find((m) => m.name === name);
-    if (!found) return { ok: false, current: this.world.currentModel, reason: `"${name}" is not in the list` };
+    if (!found) {
+      // As the real picker does: the line-up read, and the same model under its new name chosen (see modelMatch.ts).
+      const options = this.world.models.map((m) => ({ ...m }));
+      const match = pageModelFor(name, options);
+      if (match && match.name !== name) return { ...(await this.selectModel(match.name)), matched: match.name, options };
+      return { ok: false, current: this.world.currentModel, reason: `"${name}" is not in the list`, options };
+    }
     this.world.currentModel = found.name;
     for (const m of this.world.models) m.selected = m.name === found.name;
     return { ok: true, current: found.name };
@@ -241,6 +250,7 @@ class FakeChat implements ChatTransport {
   }
 
   async waitForReply(): Promise<ReplyCapture> {
+    if (this.world.emitEvents) this.opts.onEvent?.('reply-arrived', { chatId: this.current?.id ?? null });
     if (!this.waiting) throw new Error('waitForReply with nothing sent');
     const pending = this.waiting;
     this.waiting = null;

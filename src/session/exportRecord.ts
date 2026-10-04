@@ -100,9 +100,10 @@ async function conversationOf(task: Task, runsDir: string): Promise<string[]> {
  * list the runner read back from the repository after committing, so the count is what is
  * actually on that branch since it was cut, not what anybody assumed.
  */
-function versionControlLines(task: Task, session: Session): string[] {
+export function versionControlLines(task: Task, session: Session): string[] {
   const vcs = task.vcs;
-  if (!session.vcs?.enabled) return ['version control : off for this session'];
+  const loose = task.treeChanged?.length ? [`changed, not committed: ${task.treeChanged.length} file(s) — ${task.treeChanged.slice(0, 10).join(', ')}${task.treeChanged.length > 10 ? ', …' : ''}`] : [];
+  if (!session.vcs?.enabled) return ['version control : off for this session', ...loose];
   if (!vcs || (!vcs.branch && !vcs.problem)) return ['version control : nothing was recorded for this task'];
   if (!vcs.branch) return [`version control : did not run — ${vcs.problem}`];
 
@@ -114,13 +115,22 @@ function versionControlLines(task: Task, session: Session): string[] {
     `branch     : ${vcs.branch}`,
     `started at : ${vcs.baseCommit ? vcs.baseCommit.slice(0, 8) : '—'} (the commit this task branched from)`,
     ...(before ? [`before commit: ${before.changed.length} path(s) changed or new in the working tree${before.changed.length ? ` — ${before.changed.slice(0, 10).join(', ')}` : ''}`] : []),
-    `commit     : ${vcs.commit ? vcs.commit.slice(0, 8) : vcs.problem ? 'none — see the note below' : 'none — the task changed no files'}`,
+    `commit     : ${
+      vcs.commit
+        ? vcs.commit.slice(0, 8)
+        : vcs.problem
+          ? 'none — see the note below'
+          : session.vcs?.commitOnFinish === false
+            ? `none — commits are off for this session${after && !after.clean ? ', so the changes stay in the working tree' : ''}`
+            : 'none — the task changed no files'
+    }`,
     ...(after
       ? [`after commit: on ${after.branch ?? '?'} at ${after.head ? after.head.slice(0, 8) : '?'}, ${after.clean ? 'working tree clean' : `still uncommitted: ${after.changed.slice(0, 10).join(', ')}`}`]
       : []),
     `commits    : ${commits.length} on this branch since it was cut`,
   ];
   for (const line of commits) lines.push(`             ${line}`);
+  if (!vcs.commit) lines.push(...loose);
 
   const files = vcs.files ?? [];
   if (files.length > 0) {

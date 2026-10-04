@@ -825,7 +825,9 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
       : ctx.earlier.length > 0
         ? `Every task of this session gets its own branch from that same commit, so the work of the earlier tasks is NOT in your working tree: ` +
           `${ctx.earlier.map((e) => `"${e.title}" is on \`${e.branch}\``).join(', ')}. If this task depends on what one of them produced, say so in the summary rather than looking for files that are not here.`
-        : 'Every task of this session gets its own branch from that same commit.';
+        : ctx.created === false
+          ? 'This branch is carried on, not new: the other tasks of this session get branches of their own from where the session started.'
+          : 'Every task of this session gets its own branch from that same commit.';
   /*
    * Where the session began, said when it was chosen. A session that continues another has that
    * session's files in its tree, and a model not told so reads them as something to redo or
@@ -1194,7 +1196,23 @@ export async function restorePreview(session: Session, task: Task): Promise<Rest
    * checked out: measured from HEAD it listed the operator's own unrelated commits and left out the
    * task's own work (live run 2026-10-03). Only commits that descend from the starting point count.
    */
-  const workBranch = task.vcs?.branch && (await branchExists(repoDir, task.vcs.branch)) ? task.vcs.branch : undefined;
+  /*
+   * In per-session mode the line is the session's branch as it is now, which `restorePoint` already
+   * follows: after a "Run again from here" moved the session, the task's last attempt is on the branch it
+   * left, and measured there the preview named that branch as keeping the work, listed its commits and
+   * left out the ones made since on the new one (live run 2026-10-04).
+   */
+  const candidates = [
+    ...(session.vcs.branchMode === 'per-session' && session.vcs.startFrom !== 'existing-branch' ? [sessionBranchName(session)] : []),
+    ...(task.vcs?.branch ? [task.vcs.branch] : []),
+  ];
+  let workBranch: string | undefined;
+  for (const b of candidates) {
+    if ((await branchExists(repoDir, b)) && (await isAncestor(repoDir, base, b))) {
+      workBranch = b;
+      break;
+    }
+  }
   const line = workBranch ?? 'HEAD';
   const descends = await isAncestor(repoDir, base, line);
   return {

@@ -19,6 +19,7 @@ export type RunLogType =
   | 'baseline-created'
   | 'run-preflight-passed'
   | 'run-preflight-refused'
+  | 'task-contract-refused'
   | 'browser-launch-requested';
 
 export type RunLogEntry = { at: string; type: RunLogType; message: string; data?: Record<string, unknown> };
@@ -87,7 +88,9 @@ export async function refusedRunsOf(runsDir: string, sessionId: string): Promise
     const refused = entries.some((e) => e.type === 'run-preflight-refused');
     const browser = entries.some((e) => e.type === 'browser-launch-requested');
     const mine = entries.some((e) => e.type === 'run-preflight-started' && Array.isArray(e.data?.sessions) && (e.data!.sessions as unknown[]).includes(sessionId));
-    if (refused && !browser && mine) out.push(id);
+    // And a run that went ahead without this session, refused at its turn (`atTurn`).
+    const refusedMe = entries.some((e) => e.type === 'run-preflight-refused' && Array.isArray(e.data?.sessions) && (e.data!.sessions as unknown[]).includes(sessionId));
+    if ((refused && !browser && mine) || refusedMe) out.push(id);
   }
   return out.sort();
 }

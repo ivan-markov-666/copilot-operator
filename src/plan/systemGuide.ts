@@ -856,8 +856,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Create starting snapshot on {branch}',
             bg: 'Създай начална снимка върху {branch}',
-            doesEn: 'Commits the approved input files on top of the base branch, on a new cop/baseline/ branch, without switching branches or touching the checkout; every session of the run starting from that branch starts from it, chained ones carry it on. Recommended when the plan names that branch. Not offered while other files are uncommitted.',
-            doesBg: 'Комитва одобрените входни файлове върху базовия клон, на нов клон cop/baseline/, без да сменя клона и без да пипа работното копие; всяка сесия от пускането, тръгваща от този клон, тръгва от снимката, а свързаните във верига я продължават. Препоръчано, когато планът посочва този клон. Не се предлага, докато има други некомитнати файлове.',
+            doesEn: 'Commits the approved input files on top of the base branch, on a new cop/baseline/ branch, without switching branches; when the session updates from the remote, the base branch is first fast-forwarded to it, which moves the checkout too if that branch is checked out. Every session of the run starting from that branch starts from it, chained ones carry it on. Recommended when the plan names that branch. Not offered while other files are uncommitted.',
+            doesBg: 'Комитва одобрените входни файлове върху базовия клон, на нов клон cop/baseline/, без да сменя клона; когато сесията се обновява от remote, базовият клон първо се придвижва напред до него, което мести и работното копие, ако този клон е изтеглен. Всяка сесия от пускането, тръгваща от този клон, тръгва от снимката, а свързаните във верига я продължават. Препоръчано, когато планът посочва този клон. Не се предлага, докато има други некомитнати файлове.',
           },
           {
             key: 'runvcs.snapshotHere',

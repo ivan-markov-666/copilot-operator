@@ -75,7 +75,9 @@ function sectionFor(r: RunResult, maxOutputChars: number): string {
   // A refused step never ran, so it is not given an exit code or a duration that could be read as
   // a command that ran and failed; the header says what happened instead.
   const head =
-    r.outcome === 'refused'
+    r.outcome === 'refused' && r.skippedAfter !== undefined
+      ? `--- step ${r.id} (${r.shell}, NOT RUN because step ${r.skippedAfter} was refused, no exit code)\n$ ${r.command}\n`
+      : r.outcome === 'refused'
       ? `--- step ${r.id} (${r.shell}, REFUSED by the runner, never executed, no exit code)\n$ ${r.command}\n`
       : `--- step ${r.id} (${r.shell}, ${r.outcome}, exit ${r.exitCode}, ` + `${(r.durationMs / 1000).toFixed(1)}s)\n$ ${r.command}\n`;
   const out = clip(r.stdout, maxOutputChars);

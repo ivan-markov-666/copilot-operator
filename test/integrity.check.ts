@@ -55,6 +55,11 @@ console.log('\n--- line endings against the file before and the repository (live
   t.check('a new file where the repository has no clear style', ends('new.mjs', b('x\r\n'), null, { normalized: false }), []);
   // What Set-Content does to a here-string: LF lines, then a CRLF it adds after the last one.
   t.check('Set-Content after a here-string: mixed, where git does not convert', ends('cart.mjs', b('a\nb\r\n'), null, lf), ['mixed-line-endings']);
+  // 2026-10-04: said with its cause, which cost a round in every task of the live run.
+  const said = newProblems('cart.mjs', b('a\nb\r\n'), null, lf).map((f) => f.detail).join(' ');
+  t.truthy('naming Set-Content and -NoNewline when only the last line is CRLF', /Set-Content and Out-File add one: write with -NoNewline/.test(said), said);
+  const other = newProblems('a.ts', b('one\r\ntwo\nthree\r\n'), null, lf).map((f) => f.detail).join(' ');
+  t.truthy('and not when the CRLFs are elsewhere', !/-NoNewline/.test(other), other);
   t.check('nothing about line endings where git converts them on commit', ends('cart.mjs', b('a\nb\r\n'), b('a\n'), { normalized: true }), []);
   t.check('nor a flip there', ends('a.txt', b('a\r\nb\r\n'), b('a\nb\n'), { normalized: true }), []);
 

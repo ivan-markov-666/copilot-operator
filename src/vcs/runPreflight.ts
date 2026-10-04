@@ -157,7 +157,7 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
       blocking = true;
       // Added to what was already in the way, not instead of it: the dirty tree was hidden (live run 2026-10-03).
       const absent = `the input file pattern(s) ${missing.map((m) => `"${m}"`).join(', ')} match no file in the project: put the files in yourself (nothing here can make them), or correct "Input files" on the session's page.`;
-      problem = problem ? `${absent} Also: ${problem}` : absent;
+      problem = problem ? `${absent} And besides that: ${problem.charAt(0).toLowerCase()}${problem.slice(1)}` : absent;
     }
   }
   /*
@@ -191,7 +191,7 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
     const why = !baseHead
       ? `there is no local branch "${baseBranch}"`
       : unrelated.length > 0
-        ? `besides the input files there are other uncommitted changes (${unrelated.slice(0, 5).map((u) => u.path).join(', ')}${unrelated.length > 5 ? '…' : ''}): commit or stash them first, or use the current branch instead`
+        ? `besides the input files there are other uncommitted changes (${unrelated.slice(0, 5).map((u) => u.path).join(', ')}${unrelated.length > 5 ? '…' : ''}): commit or stash them first${branch !== baseBranch ? ', or use the current branch instead' : ', or take them as a starting snapshot'}`
         : blockedInputs.length > 0
           ? `${blockedInputs.map((b) => b.path).join(', ')} cannot be taken as input files`
           : problem && /match no file/.test(problem)
@@ -203,9 +203,13 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
       // The fix that leaves the checkout alone: recommended whenever it can be pressed (live run 2026-10-03: not marked on the base branch).
       recommended: !why,
       ...(why ? { why } : {}),
+      // The update from the remote said first: it moves the base branch, and the checkout with it when that is the branch checked out (live run 2026-10-04).
       result:
-        `Commits the ${inputs.length} input file(s) on top of "${baseBranch}" (${short(baseHead)}) as "Capture user-provided inputs", on the new branch ${baselineName}, ` +
-        `without switching branches: your checkout${branch ? ` of "${branch}"` : ''} and the files stay exactly as they are. ` +
+        (first.vcs?.updateFromRemote !== false
+          ? `First brings "${baseBranch}" up to its remote, fast-forward only${branch === baseBranch ? ', which moves your checkout with it' : ''}; then commits`
+          : 'Commits') +
+        ` the ${inputs.length} input file(s) on top of "${baseBranch}" (${short(baseHead)}${first.vcs?.updateFromRemote !== false ? ' now, or where the update takes it' : ''}) as "Capture user-provided inputs", on the new branch ${baselineName}, ` +
+        `without switching branches: your checkout${branch ? ` of "${branch}"` : ''} and the files stay as they are${first.vcs?.updateFromRemote !== false && branch === baseBranch ? ', apart from that update' : ''}. ` +
         `${names(sharing)} ${verb(sharing, 'starts', 'start')} from it${inheriting.length > 0 ? `; ${names(inheriting)} ${verb(inheriting, 'carries', 'carry')} it on through the chain` : ''}.`,
     });
   }
@@ -402,7 +406,11 @@ export async function runVcsPrepare(
       sessionId: s.id,
       type: 'vcs-snapshot',
       level: 'info',
-      message: `starting snapshot approved on the run screen: ${paths.length} input file(s) on top of ${group.baseBranch} (${short(baseHead)}) as ${short(made.commit)} on ${branch}; the checkout was not touched`,
+      message:
+        `starting snapshot approved on the run screen: ${paths.length} input file(s) on top of ${group.baseBranch} (${short(baseHead)}) as ${short(made.commit)} on ${branch}; ` +
+        (update?.outcome === 'updated' && group.branch === group.baseBranch
+          ? `the checked-out ${group.baseBranch} was fast-forwarded to ${update.remote ?? 'its remote'} first, and nothing else in the checkout was touched`
+          : 'the checkout was not touched'),
       data: { commit: made.commit, branch, base: baseHead, baseBranch: group.baseBranch, inputs: paths, approvedAt, sessions: sharing.map((x) => x.id) },
     });
   }

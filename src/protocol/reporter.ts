@@ -66,6 +66,7 @@ function outcomeSummary(r: RunResult): string {
       // not here — and it never reached a process, so it has no exit code to report. Said as a
       // refusal, apart from a step that ran and exited non-zero: the move after one is to write
       // the step differently, after the other it is to read the output and fix the work.
+      if (r.skippedAfter !== undefined) return `step ${r.id} was not run, because step ${r.skippedAfter} was refused; send it again after that one is replaced`;
       return `step ${r.id} was refused by the runner and never ran (no exit code); the reason is under it`;
     case 'aborted':
       // A person stopped or skipped it — a reason to carry on without it, not to rewrite it.

@@ -208,6 +208,11 @@ export type Task = {
   outputs?: string[];
   /** Changes the runner put back because they were outside `scope`, over the whole attempt. */
   scopeReverted?: string[];
+  /**
+   * The files the attempt changed, read from the working tree, when no commit records them: version
+   * control off, or commits off. With a commit, `vcs.files` says it.
+   */
+  treeChanged?: string[];
   /** The operator's input files the runner put back because the task changed them; see `UserInputs`. */
   inputsRestored?: string[];
   /** Files kept with the attempt's record under `artifacts/project/`; see `VersionControl.artifacts`. */
@@ -505,6 +510,7 @@ export type TaskAttempt = {
   /** Whether the task was read-only when this attempt ran; it can be changed between attempts. */
   readOnly?: boolean;
   scopeReverted?: string[];
+  treeChanged?: string[];
   inputsRestored?: string[];
   artifactsKept?: Task['artifactsKept'];
   /** How this attempt ended, in the runner's fixed shape. */
@@ -863,6 +869,11 @@ export type Session = {
   model?: string;
   /** What the picker actually reported after the last run applied the choice. */
   modelInUse?: string;
+  /**
+   * The last time the model was applied: what was asked, what the chat ended on, and why not when it
+   * was refused. Said once per conversation at session level, it was in no task's record (live run 2026-10-04).
+   */
+  modelSelection?: { asked: string; current: string | null; ok: boolean; fromSettings: boolean; renamedTo?: string; reason?: string; at: string };
   /**
    * What the queue does when a task does not end with a summary.
    *

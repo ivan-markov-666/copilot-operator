@@ -324,7 +324,7 @@ export async function updateFromRemote(dir: string, branch: string): Promise<Bra
   const current = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const moved = current.ok && current.stdout === branch
     ? await git(dir, ['merge', '--ff-only', '--quiet', to])
-    : await git(dir, ['update-ref', `refs/heads/${branch}`, to, from]);
+    : await git(dir, ['update-ref', '-m', `copilot-operator: brought up to date with ${tracking}`, `refs/heads/${branch}`, to, from]);
   if (!moved.ok) return { branch, remote: tracking, outcome: 'failed', from, to, detail: (moved.stderr || moved.stdout).split(/\r?\n/)[0] };
   return { branch, remote: tracking, outcome: 'updated', from, to };
 }

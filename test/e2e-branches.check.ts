@@ -1053,10 +1053,15 @@ await scenario('Run again from here on a session that carries on an existing bra
   const planned = await h.call<RestartPlan>('GET', `/sessions/${s!.id}/tasks/${failed.id}/restart`);
   t.truthy('the preview refuses to take the repository back, saying why',
     planned.restores.length === 1 && planned.restores[0]!.ok === false && /existing branch develop/.test(planned.restores[0]!.problem ?? ''), planned.restores);
+  // 2026-10-04: the plan as a whole said ok beside its only restore refused.
+  t.truthy('and the plan as a whole is not ok, with the restore\'s reason', (planned as unknown as { ok: boolean; problem?: string }).ok === false && /existing branch develop/.test((planned as unknown as { problem?: string }).problem ?? ''), planned);
   const r = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: true, start: false });
   t.check('and so does the restart: nothing moved, nothing queued',
     [r.requeued, r.restored, h.git('branch', '--show-current'), (await read(h, s!.id)).tasks[0]!.status], [0, [], 'develop', 'failed']);
   t.truthy('no restore branch was made', !h.git('branch', '--list', 'cop/restore-*').trim(), h.git('branch', '--list'));
+  // Without the restore it can still be queued: the refused restore stops only a restart that asks for it.
+  const queuedOnly = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: false, start: false });
+  t.check('"restore: false" queues the task, moving nothing', [queuedOnly.requeued, queuedOnly.restored, h.git('branch', '--show-current'), (await read(h, s!.id)).tasks[0]!.status], [1, [], 'develop', 'queued']);
 
   // The second half: the session that decides where the repository goes back to starts from main, and a
   // later session of the same repository, reached in the same run, carries on a branch. Its tasks would

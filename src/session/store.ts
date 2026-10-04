@@ -136,6 +136,7 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   stopCode: 'archived',
   limit: 'archived',
   scopeReverted: 'archived',
+  treeChanged: 'archived',
   inputsRestored: 'archived',
   artifactsKept: 'archived',
   vcs: 'archived',
@@ -659,6 +660,7 @@ export class SessionStore {
           scope: t.scope,
           readOnly: t.readOnly,
           scopeReverted: t.scopeReverted,
+          treeChanged: t.treeChanged,
           handoff: t.handoff,
           inputsRestored: t.inputsRestored,
           artifactsKept: t.artifactsKept,
@@ -698,6 +700,7 @@ export class SessionStore {
       t.stats = undefined;
       t.handoff = undefined;
       t.scopeReverted = undefined;
+      t.treeChanged = undefined;
       t.inputsRestored = undefined;
       t.artifactsKept = undefined;
       t.freshRetry = undefined;

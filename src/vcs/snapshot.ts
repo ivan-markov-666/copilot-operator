@@ -242,6 +242,15 @@ export async function planSnapshot(session: Session, allSessions: () => Promise<
       continue;
     }
     const artifact = artifactPatterns(session.vcs).length > 0 && inScope(s.path, artifactPatterns(session.vcs));
+    /*
+     * A name that looks temporary (scratch.txt, tmp-x, a .bak) is the operator's to decide: left out unless
+     * ticked, not forced out. The rule was written for the chat's own scratch copies, and it took the choice
+     * away from an operator's own note (live run 2026-10-04).
+     */
+    if (!artifact && !outside && /^a (temporary copy|scratch folder)/.test(generated?.reason ?? '')) {
+      plan.entries.push({ path: s.path, kind: 'untracked', size: await size(s.path), allowed: ['include', 'leave-out'], choice: 'leave-out', reason: 'looks like a temporary or scratch file: left out unless you include it' });
+      continue;
+    }
     const why = artifact
       ? 'an artifact: kept with the run, never committed'
       : generated ? generated.reason : outside ? `outside the project folder ${project}` : policy === 'tracked-only-snapshot' ? 'a new file, and this session takes tracked changes only' : undefined;
