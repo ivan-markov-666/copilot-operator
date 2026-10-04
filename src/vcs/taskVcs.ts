@@ -124,7 +124,8 @@ async function prepare(
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-artifacts-tracked', level: 'warn',
       message: `${excluded.tracked.length} artifact file(s) are already tracked by git, so a change to them is still committed: ${someOf(excluded.tracked)}. Take them out of git yourself (git rm --cached) if they should not be.` });
   }
-  if (excluded.tracked.length > 0 || artifactPatterns(settings).length > 0) state = await repoState(dir);
+  // Read again: the exclude file may just have taken the scratch folder or artifacts out of what makes the tree dirty.
+  state = await repoState(dir);
 
   if (settings.startFrom === 'existing-branch') return await onExistingBranch(session, task, dir, state, bus, saveSession, allSessions);
 
@@ -202,12 +203,22 @@ async function prepare(
   // or moving it to another branch would both be decisions that are not ours to make — unless
   // the operator made it, with a snapshot policy, above.
   if (state.dirty) {
-    const problem =
-      `the repository has uncommitted changes (${state.changed.slice(0, 5).join(', ')}` +
-      `${state.changed.length > 5 ? `, and ${state.changed.length - 5} more` : ''}). ` +
-      (base
-        ? 'Commit or stash them, so the task starts from a known state.'
-        : 'Commit or stash them, or choose "Take them as a starting snapshot" under Version control → "Uncommitted changes" (input files: "Input files").');
+    /*
+     * With commits off, what an earlier task of this session wrote is still in the tree: that is how the
+     * session is set, not the operator's work to commit or stash (live run 2026-10-03). Said as it is: this
+     * task runs on top of it, without a branch of its own.
+     */
+    const earlierRan = session.tasks.some((t) => t.id !== task.id && t.status !== 'queued' && !!t.startedAt);
+    const commitsOff = settings.commitOnFinish === false;
+    const problem = commitsOff && earlierRan
+      ? `commits are off for this session, so the files the earlier task(s) left are still in the working tree (${state.changed.slice(0, 5).join(', ')}` +
+        `${state.changed.length > 5 ? `, and ${state.changed.length - 5} more` : ''}). This task runs on top of them, on ${state.branch ?? 'the current branch'}, without a branch of its own, and its scope is not enforced. ` +
+        'For a branch per task, turn "Commit when a task finishes" on, or use one branch for the whole session.'
+      : `the repository has uncommitted changes (${state.changed.slice(0, 5).join(', ')}` +
+        `${state.changed.length > 5 ? `, and ${state.changed.length - 5} more` : ''}). ` +
+        (base
+          ? 'Commit or stash them, so the task starts from a known state.'
+          : 'Commit or stash them, or choose "Take them as a starting snapshot" under Version control → "Uncommitted changes" (input files: "Input files").');
     bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-dirty', level: 'warn',
       message: `version control cannot start: ${problem}` });
     return { vcs: { problem }, note: '' };
@@ -259,6 +270,38 @@ async function prepare(
   const prefix = settings.branchPrefix || 'cop/';
 
   if (settings.branchMode === 'per-session') {
+    /*
+     * "Run again" of a task whose last attempt did not end done starts again from where the task first
+     * started, as the button promises, and not on top of the failed attempt's commit (live run
+     * 2026-10-03: the re-run found the failed attempt's files, "already satisfied" them and committed
+     * nothing). Only when no other task of the session ran after this one: then the session's line moves
+     * to a new branch at that point, and the old one keeps the failed attempt. Otherwise the later work
+     * sits on top, and "Run again from here" is the way to take the whole chain back.
+     */
+    const previous = task.attempts?.at(-1);
+    const startedFirst = task.attempts?.[0]?.startedAt;
+    const laterRan = !!startedFirst && session.tasks.some((t) => t.id !== task.id && t.startedAt && t.startedAt > startedFirst);
+    const restartAt = !task.continuing && !task.buildsOn && previous && previous.status !== 'done' ? firstAttemptBase(task) : undefined;
+    // Already there — "Run again from here" or a Restore moved the session onto a branch at that point — then nothing to move.
+    const tipNow = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${sessionBranchName(session)}^{commit}`])).stdout;
+    if (restartAt && !laterRan && tipNow && tipNow !== restartAt) {
+      const left = sessionBranchName(session);
+      const fresh = await freeBranchName(dir, `${left}-a${attempt}`);
+      await saveSession((s) => {
+        if (s.vcs) {
+          s.vcs.branchName = fresh;
+          s.vcs.branchNameExact = true;
+        }
+      });
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-session-branch', level: 'info',
+        message: `"${task.title}" runs again from where it first started (${restartAt.slice(0, 8)}), on ${fresh}; ${left} keeps the failed attempt`,
+        data: { branch: fresh, left, from: restartAt } });
+      return await switchTo(session, task, dir, fresh, restartAt, bus, { reuseExisting: false, start, stage: carryInputs });
+    }
+    if (restartAt && laterRan) {
+      bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-builds-on-failed', level: 'warn',
+        message: `"${task.title}" runs again on ${sessionBranchName(session)}, on top of its failed attempt, because later tasks of this session ran after it; use "Run again from here" to take the chain back to before it` });
+    }
     return await switchTo(session, task, dir, sessionBranchName(session), base, bus, { reuseExisting: true, start, stage: carryInputs });
   }
 
@@ -273,6 +316,19 @@ async function prepare(
   // The same for a new prompt given to a finished task: it builds on that attempt's work.
   const previousBranch = task.continuing || task.buildsOn ? task.attempts?.at(-1)?.vcs?.branch : undefined;
   if (previousBranch) return await switchTo(session, task, dir, previousBranch, base, bus, { reuseExisting: true, start, stage: carryInputs });
+  /*
+   * The previous attempt committed nothing and its branch is still where it was cut: that branch is
+   * taken again rather than leaving it empty beside a new "-a2" that holds the work (live run 2026-10-03,
+   * a fresh-chat retry). The branch the task first started from is the same commit, so nothing changes
+   * about where the attempt stands.
+   */
+  const prev = task.attempts?.at(-1);
+  if (prev?.vcs?.branch && prev.vcs.baseCommit && !prev.vcs.commit && prev.vcs.baseCommit === firstAttemptBase(task)) {
+    const tip = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${prev.vcs.branch}^{commit}`])).stdout;
+    if (tip && tip === prev.vcs.baseCommit) {
+      return await switchTo(session, task, dir, prev.vcs.branch, prev.vcs.baseCommit, bus, { reuseExisting: true, start, stage: carryInputs });
+    }
+  }
   // A re-run starts from where that task started the first time, not from where the previous
   // attempt ended. That is the whole point of recording the base commit.
   const from = firstAttemptBase(task) ?? base;
@@ -390,6 +446,8 @@ export async function sessionStart(
   dir: string,
   head: string | null,
   allSessions: () => Promise<Session[]>,
+  /** `dry`: only whether it can start — nothing fetched or moved. For the checks before the browser opens. */
+  opts: { dry?: boolean } = {},
 ): Promise<{ start?: SessionStart } | { problem: string }> {
   const how = session.vcs?.startFrom ?? 'head';
   const baseBranch = session.vcs?.baseBranch?.trim() || 'main';
@@ -397,7 +455,7 @@ export async function sessionStart(
 
   const fromBranch = async (note?: string): Promise<{ start?: SessionStart } | { problem: string }> => {
     // The code as it is on the server, not as this checkout last pulled it: see `updateFromRemote`.
-    const update = session.vcs?.updateFromRemote !== false && (await branchTip(dir, baseBranch)) ? await updateFromRemote(dir, baseBranch) : undefined;
+    const update = !opts.dry && session.vcs?.updateFromRemote !== false && (await branchTip(dir, baseBranch)) ? await updateFromRemote(dir, baseBranch) : undefined;
     const tip = await branchTip(dir, baseBranch);
     if (!tip) {
       return {
@@ -545,7 +603,9 @@ function normalise(dir: string): string {
 
 /** One line for the log and the event stream: where this session starts, and why. */
 export function describeStart(start: SessionStart): string {
-  const at = start.commit.slice(0, 8);
+  // With input files carried in, the start is a commit on top of the branch, not its tip: said apart (live run 2026-10-03).
+  const carried = start.inputs?.carried;
+  const at = carried ? carried.onto.slice(0, 8) : start.commit.slice(0, 8);
   const said =
     start.kind === 'snapshot'
       ? `this session starts from a snapshot of your uncommitted changes: ${start.branch} (${at}), taken on ${start.snapshot?.fromBranch ?? 'a detached HEAD'} at ${(start.snapshot?.fromCommit ?? '').slice(0, 8)}`
@@ -557,7 +617,31 @@ export function describeStart(start: SessionStart): string {
         ? `this session starts from the local branch ${start.branch} (${at})`
         : `this session starts from where the repository was (${at})`;
   const updated = start.update ? ` (${describeUpdate(start.update as BranchUpdate)})` : '';
-  return start.note ? `${said}${updated} — ${start.note}` : `${said}${updated}`;
+  const plus = carried ? `, plus the operator's input files carried from ${carried.from} as ${start.commit.slice(0, 8)} on ${carried.branch}` : '';
+  return start.note ? `${said}${plus}${updated} — ${start.note}` : `${said}${plus}${updated}`;
+}
+
+/**
+ * Where a session leaves the repository, when its input files exist only on the runner's branches: the
+ * operator's base branch does not have them, and checking it out takes them out of the folder (live run
+ * 2026-10-03: specs/ gone after `git checkout main`, an ignored local file with it). Null when there is
+ * nothing to say.
+ */
+export async function whereLeft(session: Session): Promise<string | null> {
+  const files = session.vcsStart?.inputs?.files ?? [];
+  const dir = repoDirOf(session);
+  if (!session.vcs?.enabled || files.length === 0 || !dir) return null;
+  const base = session.vcs.baseBranch?.trim() || 'main';
+  const state = await repoState(dir).catch(() => null);
+  if (!state?.isRepo || !state.branch || state.branch === base) return null;
+  const onBase = await git(dir, ['cat-file', '-e', `refs/heads/${base}:${files[0]!.path}`]);
+  if (onBase.ok) return null;
+  const paths = files.map((f) => f.path);
+  const list = paths.slice(0, 5).join(', ') + (paths.length > 5 ? ` and ${paths.length - 5} more` : '');
+  return (
+    `the repository is left on ${state.branch}. The input files (${list}) are committed only on the runner's branches, not on ${base}: ` +
+    `checking out ${base} takes them out of the folder. To have them back there: git restore --source ${state.branch} -- ${paths.slice(0, 5).join(' ')}`
+  );
 }
 
 /** One line for the log: the session's input files, and whether the runner had to commit them on its start. */
@@ -630,15 +714,22 @@ async function switchTo(
   const state = await repoState(dir);
   let name = wantedName;
   let result;
+  /** Whether the branch was made now, or an existing one carried on: said differently, since they are different. */
+  let created = false;
 
   if (opts.reuseExisting && state.branch === wantedName) {
     result = { ok: true, stdout: '', stderr: '', code: 0 };
   } else if (opts.reuseExisting) {
     const existing = await checkoutExisting(dir, wantedName);
-    result = existing.ok || opts.mustExist ? existing : await createBranch(dir, wantedName, from);
+    if (existing.ok || opts.mustExist) result = existing;
+    else {
+      result = await createBranch(dir, wantedName, from);
+      created = result.ok;
+    }
   } else {
     name = await freeBranchName(dir, wantedName);
     result = await createBranch(dir, name, from);
+    created = result.ok;
   }
 
   if (!result.ok) {
@@ -653,8 +744,15 @@ async function switchTo(
   const after = await repoState(dir);
   const vcs: TaskVcs = { branch: after.branch ?? name, baseCommit: after.head ?? from };
 
+  /*
+   * "(from X)" only for a branch made now: a branch carried on was not made from the session's base, and
+   * saying so sent the reader to the wrong commit (live run 2026-10-03).
+   */
   bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-branch', level: 'info',
-    message: `working on branch ${vcs.branch}${from ? ` (from ${from.slice(0, 8)})` : ''}`, data: { ...vcs, repoDir: dir } });
+    message: created
+      ? `working on branch ${vcs.branch}${from ? ` (made from ${from.slice(0, 8)})` : ''}`
+      : `carrying on the existing branch ${vcs.branch} at ${(vcs.baseCommit ?? '').slice(0, 8)}`,
+    data: { ...vcs, repoDir: dir, created } });
 
   // What the task stands on, and what it does not: the base commit by name, and the other
   // tasks of this session that already ran, with the branch each of them worked on.
@@ -673,6 +771,9 @@ async function switchTo(
     earlier,
     start: opts.start,
     artifacts: artifactPatterns(session.vcs),
+    commits: session.vcs?.commitOnFinish !== false,
+    readOnly: !!task.readOnly,
+    created,
   });
   return { vcs, note };
 }
@@ -688,6 +789,12 @@ export type NoteContext = {
   start?: SessionStart;
   /** The session's artifact patterns: kept with the run, never committed. */
   artifacts?: string[];
+  /** Whether the runner commits when the task ends (`commitOnFinish`); absent means it does. */
+  commits?: boolean;
+  /** A read-only task: it is not told to change files. */
+  readOnly?: boolean;
+  /** Whether the branch was made for this task now; false when an existing one is carried on. Absent means made. */
+  created?: boolean;
 };
 
 /**
@@ -737,8 +844,12 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
   return [
     '## Version control',
     '',
-    `The runner has already put ${repoDir} on the branch \`${vcs.branch}\`, created for this task from ${base},`,
-    'and it will commit whatever you change when the task finishes.',
+    ctx.created === false
+      ? `The runner has already put ${repoDir} on the existing branch \`${vcs.branch}\`, carried on at ${base} with the work already on it,`
+      : `The runner has already put ${repoDir} on the branch \`${vcs.branch}\`, created for this task from ${base},`,
+    ctx.commits === false
+      ? 'and it commits nothing when the task finishes: commits are off for this session, so your changes stay in the working tree, where the next task sees them.'
+      : 'and it will commit whatever you change when the task finishes.',
     '',
     /*
      * Said outright because a plan's text may still name the branch the work came from: a task that
@@ -765,8 +876,14 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
     '  expects.',
     '- Do not push anything. Pushing is the operator\'s decision, made by hand, afterwards.',
     '- Read-only git is fine: `git status`, `git diff`, `git log` tell you where you are.',
-    '- Change files as the task requires. You do not need to preserve the old ones by copying',
-    '  them aside: the previous state is already a commit, and it can be returned to.',
+    ...(ctx.readOnly
+      ? ['- This task is read-only: change no file in the project (see "Read-only task").']
+      : ctx.commits === false
+        ? ['- Change files as the task requires. Nothing is committed for you, so think before you overwrite: the previous state is the commit above.']
+        : [
+            '- Change files as the task requires. You do not need to preserve the old ones by copying',
+            '  them aside: the previous state is already a commit, and it can be returned to.',
+          ]),
   ].join('\n');
 }
 
@@ -807,13 +924,14 @@ export async function commitTaskResult(
    * ("nothing committed, the tree is dirty") were written before this runs; without both states
    * the export read as contradicting itself. See `TaskVcs.beforeCommit`.
    */
-  const beforeCommit = { changed: state.changed.slice(0, 200) };
+  // File by file (`git status -uall`), not the folded folders `repoState` keeps, capped at 40 (live run 2026-10-03).
+  const beforeCommit = { changed: (await workingTreePaths(dir)).slice(0, 200) };
   const withStates = async (v: TaskVcs): Promise<TaskVcs> => {
     const after = await repoState(dir).catch(() => null);
     return {
       ...v,
       beforeCommit,
-      ...(after ? { afterCommit: { branch: after.branch ?? undefined, head: after.head ?? undefined, clean: !after.dirty, changed: after.changed.slice(0, 200) } } : {}),
+      ...(after ? { afterCommit: { branch: after.branch ?? undefined, head: after.head ?? undefined, clean: !after.dirty, changed: (after.dirty ? await workingTreePaths(dir) : []).slice(0, 200) } } : {}),
     };
   };
   if (state.branch !== current.branch) {
@@ -1071,13 +1189,21 @@ export async function restorePreview(session: Session, task: Task): Promise<Rest
   }
 
   const prefix = session.vcs.branchPrefix || 'cop/';
+  /*
+   * What the restore leaves behind is measured on the line of work the task is on, not on whatever is
+   * checked out: measured from HEAD it listed the operator's own unrelated commits and left out the
+   * task's own work (live run 2026-10-03). Only commits that descend from the starting point count.
+   */
+  const workBranch = task.vcs?.branch && (await branchExists(repoDir, task.vcs.branch)) ? task.vcs.branch : undefined;
+  const line = workBranch ?? 'HEAD';
+  const descends = await isAncestor(repoDir, base, line);
   return {
     ok: true,
     repoDir,
     baseCommit: base,
     currentBranch: state.branch ?? undefined,
-    leftBehind: await commitsBetween(repoDir, base, 'HEAD'),
-    keptOn: state.branch ?? undefined,
+    leftBehind: descends ? await commitsBetween(repoDir, base, line) : [],
+    keptOn: workBranch ?? state.branch ?? undefined,
     /*
      * Derived from the title, so built the way every derived name is. A title is a label for the
      * list, not a branch name anybody chose: put through `plannedBranchName`, a "/" in it ("Add
@@ -1161,10 +1287,10 @@ export async function vcsPreflight(
         branch: state.branch ?? undefined,
         problem: snapshot.recapture
           ? snapshot.ok
-            ? `Input files changed or were added since the session started (${someOf(listed, 3)}). They are committed on its line of work ${snapshot.requireApproval ? 'once you approve the list below' : 'when its next task starts'}.`
+            ? `Input files changed or were added since the session started (${someOf(listed, 3)}). They are committed on its line of work ${snapshot.requireApproval ? 'once the list is approved under "Prepare version control for this run" or on the session\'s page' : 'when its next task starts'}.`
             : `Input files changed since the session started, and they cannot be taken: ${snapshot.problem}`
           : snapshot.ok
-            ? `There are uncommitted changes (${someOf(listed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once you approve the list below' : 'when its first task starts'}.`
+            ? `There are uncommitted changes (${someOf(listed, 3)}). They become the session's starting snapshot ${snapshot.requireApproval ? 'once the list is approved under "Prepare version control for this run" or on the session\'s page' : 'when its first task starts'}.`
             : `There are uncommitted changes, and no starting snapshot can be taken: ${snapshot.problem}`,
         snapshot,
       };
@@ -1177,6 +1303,15 @@ export async function vcsPreflight(
       branch: state.branch ?? undefined,
       problem: `There are uncommitted changes (${changed.slice(0, 3).join(', ')}${changed.length > 3 ? '…' : ''}). Commit or stash them first.`,
     };
+  }
+  /*
+   * A session that continues the one before it: whether that one finished and its work is there, asked
+   * here too, without fetching or moving anything. Found only when the first task was prepared, the
+   * refusal came after `task-started` and the model picker and used up an attempt (live run 2026-10-03).
+   */
+  if (!session.vcsBaseCommit && settings.startFrom === 'previous-session') {
+    const planned = await sessionStart(session, repoDir, state.head, allSessions, { dry: true });
+    if ('problem' in planned) return { ok: false, repoDir, branch: state.branch ?? undefined, problem: planned.problem };
   }
   return { ok: true, repoDir, branch: state.branch ?? undefined };
 }

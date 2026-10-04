@@ -46,8 +46,10 @@ export function suggestRunName(all: Session[], sessionIds: string[], about?: str
 
   theirs.sort((a, b) => b.at.localeCompare(a.at));
   const chosen = all.filter((s) => wanted.has(s.id));
+  // A name that only counted sessions is not carried on: "3 sessions #2" for a run of two (live run 2026-10-03).
+  const carried = stripNumber(theirs[0]?.name ?? '');
   const base =
-    stripNumber(theirs[0]?.name ?? '') ||
+    (/^\d+ sessions$/.test(carried) ? '' : carried) ||
     (chosen.length === 1 ? chosen[0].name.trim() : '') ||
     (about ?? '').trim() ||
     // Nothing to go on: say what it is rather than leave it blank again.

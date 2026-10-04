@@ -335,13 +335,43 @@ function excludePattern(path: string): string {
 }
 
 /** Adds the files to the repository's own exclude list, under a line that says who and why. */
-async function leaveOut(top: string, session: Session, paths: string[]): Promise<string | undefined> {
-  if (paths.length === 0) return undefined;
+/**
+ * Why an approval does not match the list it answers, said as what is wrong, or null when it matches.
+ * Every mismatch used to read "the files changed since the list was shown", also when the approval only
+ * left a file without a choice and nothing had changed (live run 2026-10-03).
+ */
+export function approvalMismatch(listed: string[], choices: Record<string, unknown>, opts: { allMustBeIncluded?: boolean } = {}): string | null {
+  const given = Object.keys(choices);
+  const missing = listed.filter((p) => !(p in choices));
+  const unknown = given.filter((p) => !listed.includes(p));
+  const leftOut = opts.allMustBeIncluded ? listed.filter((p) => p in choices && choices[p] !== 'include') : [];
+  const some = (paths: string[]): string => paths.slice(0, 5).join(', ') + (paths.length > 5 ? ` and ${paths.length - 5} more` : '');
+  const parts = [
+    ...(unknown.length > 0 ? [`${some(unknown)} ${unknown.length === 1 ? 'is' : 'are'} not on the list any more — the files changed since it was shown`] : []),
+    ...(missing.length > 0 ? [`the approval has no choice for ${some(missing)}`] : []),
+    ...(leftOut.length > 0 ? [`every input file is taken into this snapshot, and ${some(leftOut)} ${leftOut.length === 1 ? 'was' : 'were'} left out`] : []),
+  ];
+  return parts.length === 0 ? null : `${parts.join('; ')}. Look at the list again; nothing was done.`;
+}
+
+/**
+ * Writes the left-out files into `.git/info/exclude`. `undo` puts the file back as it was, for every way
+ * the snapshot can still fail afterwards: the failure says the repository is back as it was, and a
+ * left-out file silently gone from `git status` would make that untrue.
+ */
+async function leaveOut(top: string, session: Session, paths: string[]): Promise<{ problem?: string; undo: () => Promise<void> }> {
+  const nothing = { undo: async () => undefined };
+  if (paths.length === 0) return nothing;
   const where = await git(top, ['rev-parse', '--git-path', 'info/exclude']);
-  if (!where.ok || !where.stdout) return 'the repository\'s exclude file could not be found';
+  if (!where.ok || !where.stdout) return { ...nothing, problem: 'the repository\'s exclude file could not be found' };
   const file = resolve(top, where.stdout);
   await mkdir(dirname(file), { recursive: true });
+  const existed = await readFile(file, 'utf8').then(() => true, () => false);
   const before = await readFile(file, 'utf8').catch(() => '');
+  const undo = async (): Promise<void> => {
+    if (existed) await writeFile(file, before, 'utf8').catch(() => undefined);
+    else await rm(file, { force: true }).catch(() => undefined);
+  };
   const block = [
     `# copilot-operator: left out of the starting snapshot of session "${session.name.replace(/[\r\n]+/g, ' ')}" (${session.id}), ${new Date().toISOString()}`,
     ...paths.map(excludePattern),
@@ -350,9 +380,10 @@ async function leaveOut(top: string, session: Session, paths: string[]): Promise
   try {
     await writeFile(file, `${before}${before && !before.endsWith('\n') ? '\n' : ''}${block}`, 'utf8');
   } catch (err) {
-    return `the exclude file could not be written: ${(err as Error).message}`;
+    await undo();
+    return { ...nothing, problem: `the exclude file could not be written: ${(err as Error).message}` };
   }
-  return undefined;
+  return { undo };
 }
 
 /** The commit message: what was taken, what was left out, from where, and on whose word. */
@@ -364,7 +395,7 @@ function snapshotMessage(session: Session, plan: SnapshotPlan, taken: SnapshotEn
   return [
     onlyInputs ? 'Capture user-provided inputs' : 'Capture operator baseline before run',
     '',
-    `The ${onlyInputs ? "operator's input files" : 'uncommitted changes in the repository'} when session "${session.name}" was first run, committed so that`,
+    `The ${onlyInputs ? "operator's input files" : 'uncommitted changes in the repository'} of session "${session.name}", ${approved ? 'approved by the operator and ' : ''}committed before its first task so that`,
     "the session starts from them and every task's commit shows only that task's work.",
     ...(inputs.length > 0
       ? ['', `Input files, read by the work and not changed by it (${inputs.length}):`, list(inputs.map((e) => `${e.path}${e.size !== undefined ? ` (${e.size} bytes, ${e.kind})` : ''}`))]
@@ -406,9 +437,9 @@ export async function takeSnapshot(
     if (!plan.ok) return { ok: false, problem: plan.problem ?? 'the input files cannot be taken.' };
     const paths = plan.entries.map((e) => e.path);
     if (opts.approved) {
-      const shown = Object.keys(opts.choices ?? {}).sort();
-      if (JSON.stringify(shown) !== JSON.stringify([...paths].sort()) || paths.some((p) => opts.choices?.[p] !== 'include')) {
-        return { ok: false, problem: 'the input files changed since the list was shown. Look at the list again; nothing was done.' };
+      const wrong = approvalMismatch(paths, opts.choices ?? {}, { allMustBeIncluded: true });
+      if (wrong) {
+        return { ok: false, problem: wrong };
       }
     }
     const made = await recaptureInputs(session, plan.repoDir, paths, plan.recapture);
@@ -447,11 +478,8 @@ export async function takeSnapshot(
   const chosen = new Map<string, SnapshotChoice>();
   if (opts.approved) {
     const choices = opts.choices ?? {};
-    const shown = Object.keys(choices).sort();
-    const now = plan.entries.map((e) => e.path).sort();
-    if (JSON.stringify(shown) !== JSON.stringify(now)) {
-      return { ok: false, problem: 'the uncommitted files changed since the list was shown. Look at the list again; nothing was done.' };
-    }
+    const wrong = approvalMismatch(plan.entries.map((e) => e.path), choices);
+    if (wrong) return { ok: false, problem: wrong };
     for (const e of plan.entries) {
       const c = choices[e.path];
       if (!c || !e.allowed.includes(c)) return { ok: false, problem: `${e.path} cannot be "${c ?? 'nothing'}": ${e.reason ?? 'not allowed'}. Nothing was done.` };
@@ -477,22 +505,27 @@ export async function takeSnapshot(
   if (take.length === 0) return { ok: false, problem: 'nothing would be taken: every file is left out. Leave them out yourself, or take at least one.' };
 
   const excluded = await leaveOut(top, session, leaveOutPaths);
-  if (excluded) return { ok: false, problem: excluded };
+  if (excluded.problem) return { ok: false, problem: excluded.problem };
 
   // With the left-out files gone from git's view, what is uncommitted must be exactly what is taken.
   const after = await statusEntries(top);
   const wanted = new Set(take.filter((e) => e.kind !== 'ignored').map((e) => e.path));
   const stray = (after ?? []).filter((s) => !wanted.has(s.path)).map((s) => s.path);
   if (!after || stray.length > 0) {
+    await excluded.undo();
     return { ok: false, problem: `the repository changed while the snapshot was being taken (${someOf(stray)}). Nothing was committed; look at the list again.` };
   }
 
   const branch = plan.baselineBranch;
   const cut = await git(top, ['checkout', '-b', branch]);
-  if (!cut.ok) return { ok: false, problem: `the branch ${branch} could not be made: ${cut.stderr || cut.stdout}` };
+  if (!cut.ok) {
+    await excluded.undo();
+    return { ok: false, problem: `the branch ${branch} could not be made: ${cut.stderr || cut.stdout}` };
+  }
 
   const back = async (why: string): Promise<SnapshotResult> => {
     if (plan.branch) await git(top, ['checkout', plan.branch]);
+    await excluded.undo();
     return { ok: false, problem: `${why} Nothing was committed; the repository is back on ${plan.branch ?? 'where it was'} with your changes as they were.` };
   };
   // Literal paths from a file: no glob in a name is read as a pattern, and no command line gets too long.
@@ -526,6 +559,8 @@ export async function takeSnapshot(
       included: take.map((e) => e.path).slice(0, 500),
       leftOut: leftOutAll.slice(0, 500),
       approved: opts.approved,
+      // When, so the record and the run log say it (live run 2026-10-03: never timestamped).
+      ...(opts.approved ? { approvedAt: new Date().toISOString() } : {}),
     },
   };
   await saveSession((s) => {

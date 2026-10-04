@@ -17,6 +17,7 @@
  * Only for a fetch the operator just pressed a button for: a run's own fetches stay silent, since a
  * window nobody answers would hold the run until it times out.
  */
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { git } from './git.js';
@@ -57,6 +58,36 @@ export function describeFetchFailure(stderr: string): { detail: string; auth: bo
   const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const auth = /permission denied|publickey|passphrase|authentication failed|could not read (username|password)|host key verification failed|terminal prompts disabled/i.test(stderr);
   return { detail: lines.slice(0, 3).join(' ') || 'git fetch failed', auth };
+}
+
+/**
+ * Closes the password windows of a fetch that was given up on: every process of exactly this program
+ * started since `since`.
+ *
+ * Needed because stopping git and its process tree does not reach them. Git for Windows starts ssh, and
+ * ssh the window, the way its POSIX layer does, and the Windows parent of the window is a process that
+ * is already gone — so `taskkill /T` stops git and leaves the window on screen (seen live on
+ * 2026-10-03, and in a process listing: the window's parent id named no running process). Once the
+ * window is closed the ssh waiting on it ends by itself: git, at the other end of its pipe, is gone.
+ * Matched by the program's full path and its start time, so nothing else is touched; a second
+ * password window of the operator's own, opened in the same minutes, would at worst be cancelled.
+ */
+export function closePasswordWindows(program: string, since: Date): Promise<number> {
+  if (process.platform !== 'win32') return Promise.resolve(0);
+  const script = [
+    `$path = '${program.replace(/'/g, "''")}'`,
+    `$since = [datetime]::Parse('${since.toISOString()}').ToUniversalTime()`,
+    '$n = 0',
+    "Get-CimInstance Win32_Process -Filter \"Name='git-askpass.exe' OR Name='$([IO.Path]::GetFileName($path))'\" |",
+    '  Where-Object { $_.ExecutablePath -and $_.ExecutablePath -ieq $path -and $_.CreationDate.ToUniversalTime() -ge $since } |',
+    '  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }',
+    '$n',
+  ].join('\n');
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 30_000 }, (_e, stdout) => {
+      resolve(Number.parseInt(String(stdout).trim(), 10) || 0);
+    });
+  });
 }
 
 /** The fetch for the operator to run in their own PowerShell, where ssh can ask them directly. */

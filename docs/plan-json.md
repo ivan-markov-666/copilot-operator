@@ -92,7 +92,14 @@ The brief is served in the language the UI is in.
         "branchMode": "per-task",         // or "per-session"
         "commitOnFinish": true,
         "branchPrefix": "cop/",
-        "branchName": ""                  // per-session mode only: the one branch
+        "branchName": "",                 // per-session mode only: the one branch
+        "startFrom": "branch",            // "branch" | "previous-session" | "existing-branch"; absent: wherever HEAD is
+        "baseBranch": "main",             // for "branch" (and where a chain with no earlier session begins)
+        "existingBranch": "",             // for "existing-branch": the local branch to carry on
+        "updateFromRemote": true,         // absent = on: fetch, then fast-forward the start branch
+        "userInputs": { "paths": ["specs/**"], "readOnly": true },
+        "dirtyWorktree": { "policy": "reject" },  // "reject" | "snapshot" | "tracked-only-snapshot"
+        "artifacts": { "paths": ["reports/**"] }  // kept with the run, never committed
       },
       "projectDir": "C:\\Projects\\billing",  // optional: where its commands run; the default project when left out
       "tasks": [
@@ -101,6 +108,10 @@ The brief is served in the language the UI is in.
           "prompt": "what Copilot is asked to do",
           "expected": "what must be true when it is done",
           "level2": "",                   // overrides the session's, "" inherits
+          "scope": ["src/**", "test/**"], // the paths the task may change; others are put back
+          "readOnly": false,              // true: the task may change no file
+          "outputs": ["reports/summary.md"], // files the task is to produce: kept, never put back
+          "checks": [{ "name": "the tests pass", "expect": "output-contains", "run": "node --test", "value": "fail 0" }],
           "vcs": {
             "branch": "invoice-csv-writer",
             "commitMessage": "Add a CSV writer for invoices"
@@ -111,6 +122,36 @@ The brief is served in the language the UI is in.
   ]
 }
 ```
+
+### Where a session starts, and what it carries
+
+- `startFrom` — `"branch"`: from the local branch `baseBranch` (`main` when empty). `"previous-session"`:
+  from the end of the branch of the session that ran before it in the same repository, which must have
+  finished with its work on one branch. `"existing-branch"`: every task on `existingBranch`, which must
+  exist. Absent: from wherever the repository is when the first task starts.
+- `updateFromRemote` (absent = on) — before the first branch is cut, `git fetch` and a fast-forward of the
+  start branch (`baseBranch`, or the existing branch carried on). Never a merge or a reset; a branch that
+  is ahead or has diverged is left as it is and the start says so. It also applies to a starting snapshot
+  made on the run screen ("Create starting snapshot on main"), which is cut from the updated branch.
+- `userInputs` — the operator's own files (`paths` are glob patterns), committed into the session's start
+  and, with `readOnly` (the default), put back if a task changes them. A pattern that matches no file
+  anywhere refuses the run before the browser opens.
+- `dirtyWorktree.policy` — what uncommitted changes do at the start: `"reject"` refuses the run (the run
+  screen offers to take them as a starting snapshot), `"snapshot"` makes them the start after the operator
+  approves the list, `"tracked-only-snapshot"` the same for tracked files only.
+- `artifacts.paths` — evidence kept with each attempt's record and never committed (written into
+  `.git/info/exclude`). So is `.cop-tmp/`, the runner's scratch folder for helper scripts.
+
+### What a task may change
+
+- `scope` — the only paths the task may change. What it changes outside is put back after every round,
+  after the checks and before the commit; the chat is told when it was its own doing.
+- `readOnly` — no file may change; the task fails if it changed one.
+- `outputs` — files the task is to produce: not put back, kept with the run. Under a `scope`, a file under
+  the `artifacts` patterns is kept only if it is inside the scope or among the outputs.
+- `checks` — conditions the runner decides itself. A task whose every check is `file-exists`,
+  `file-missing` or `exit-zero` is refused at import, and a check the runner refuses for its own command
+  line (a download, a program not on the allowlist) refuses the run before the browser opens.
 
 `onFailure` appears twice, at two levels, and they are different questions. On a **session**
 it decides what happens to the rest of its **tasks** when one of them fails. At the **top of

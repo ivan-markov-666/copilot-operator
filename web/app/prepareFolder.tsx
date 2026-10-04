@@ -42,7 +42,7 @@ export function PrepareFolder({ dir, onDone }: { dir: string; onDone?: () => voi
     setErr('');
     setBusy('prepare');
     try {
-      const r = await api.prepareProject(dir, plan.fingerprint);
+      const r = await api.prepareProject(dir, plan.fingerprint, { savedBranch: plan.savedBranch, savedMainBranch: plan.savedMainBranch });
       if (r.ok) {
         setResult(r.result ?? '');
         setPlan(null);
@@ -127,7 +127,7 @@ export function PrepareFolder({ dir, onDone }: { dir: string; onDone?: () => voi
           </p>
           {!plan.fetched && (
             <p className="muted">
-              {t('prep.notFetched')} {plan.lastFetched ? t('prep.lastFetched', { when: fmtTime(plan.lastFetched) }) : ''}
+              {t('prep.notFetched')} {plan.lastFetched ? t('prep.lastFetched', { when: fmtTime(plan.lastFetched) }) : t('prep.lastFetchedUnknown')}
             </p>
           )}
           {plan.alreadyThere ? (

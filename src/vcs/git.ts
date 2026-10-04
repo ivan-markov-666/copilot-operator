@@ -16,7 +16,7 @@
  *     commit message cannot turn into another command.
  */
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -54,20 +54,57 @@ export function git(
   args: string[],
   timeoutMs = 60_000,
   env?: NodeJS.ProcessEnv,
-  /** `windowsHide: false` only for a fetch the operator is sitting at, whose password window must be seen. */
-  opts: { windowsHide?: boolean } = {},
+  /**
+   * `windowsHide: false` only for a fetch the operator is sitting at, whose password window must be seen.
+   * `killTree`: on the timeout, stop git and everything it started. The plain timeout stops git.exe
+   * alone, and a fetch's ssh and its password window outlived it (found 2026-10-03: the window stayed
+   * on screen after the fetch had been given up).
+   */
+  opts: { windowsHide?: boolean; killTree?: boolean } = {},
 ): Promise<GitResult> {
   return new Promise((resolve) => {
-    execFile('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: opts.windowsHide ?? true, maxBuffer: 8 * 1024 * 1024, ...(env ? { env } : {}) }, (error, stdout, stderr) => {
-      const code = (error as NodeJS.ErrnoException & { code?: number })?.code;
-      resolve({
-        ok: !error,
-        stdout: (stdout ?? '').trim(),
-        stderr: (stderr ?? '').trim(),
-        code: typeof code === 'number' ? code : error ? 1 : 0,
-      });
-    });
+    let timedOut = false;
+    let timer: NodeJS.Timeout | undefined;
+    const child = execFile(
+      'git',
+      [...SAFE_GIT, ...args],
+      { cwd, timeout: opts.killTree ? 0 : timeoutMs, windowsHide: opts.windowsHide ?? true, maxBuffer: 8 * 1024 * 1024, ...(env ? { env } : {}) },
+      (error, stdout, stderr) => {
+        if (timer) clearTimeout(timer);
+        const code = (error as NodeJS.ErrnoException & { code?: number })?.code;
+        resolve({
+          ok: !error && !timedOut,
+          stdout: (stdout ?? '').trim(),
+          stderr: `${(stderr ?? '').trim()}${timedOut ? `${stderr ? '\n' : ''}git gave up after ${Math.round(timeoutMs / 1000)} s` : ''}`.trim(),
+          code: typeof code === 'number' ? code : error || timedOut ? 1 : 0,
+        });
+      },
+    );
+    if (opts.killTree && child.pid) {
+      const pid = child.pid;
+      timer = setTimeout(() => {
+        timedOut = true;
+        if (process.platform === 'win32') execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => undefined);
+        else child.kill('SIGKILL');
+      }, timeoutMs);
+    }
   });
+}
+
+/**
+ * When this repository last fetched successfully, or undefined when that cannot be told.
+ *
+ * Read from FETCH_HEAD, but only when it holds something: git empties it at the start of every fetch,
+ * so a fetch that failed — a passphrase not typed, a network down — leaves an empty file with a fresh
+ * time, and that time read as "last fetched a minute ago" (seen live on 2026-10-03).
+ */
+export function lastFetchedAt(gitDir: string): string | undefined {
+  try {
+    const s = statSync(join(gitDir, 'FETCH_HEAD'));
+    return s.size > 0 ? s.mtime.toISOString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export type RepoState = {

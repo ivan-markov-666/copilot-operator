@@ -24,13 +24,13 @@
  * The preview fetches (so what it shows is against the remote as it is now) and changes nothing else;
  * the preparation itself refuses when the folder is no longer what the preview showed.
  */
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { branchNameFrom, freeBranchName, git, porcelainPaths, RUNNER_EMAIL } from './git.js';
-import { describeFetchFailure, fetchCommandFor, operatorFetchEnv, QUIET_FETCH_ENV } from './remoteAuth.js';
+import { branchNameFrom, freeBranchName, git, lastFetchedAt, porcelainPaths, RUNNER_EMAIL } from './git.js';
+import { closePasswordWindows, describeFetchFailure, fetchCommandFor, operatorFetchEnv, QUIET_FETCH_ENV } from './remoteAuth.js';
 
 export type PreparePlan = {
   ok: boolean;
@@ -141,14 +141,9 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
   if (remotes.length === 0) return empty(repoDir, 'The repository has no remote, so there is no remote main branch to prepare it from.');
   const remote = remotes.includes('origin') ? 'origin' : (remotes[0] as string);
 
-  const lastFetchedAt = (): string | undefined => {
-    try {
-      return gitDir ? statSync(join(gitDir, 'FETCH_HEAD')).mtime.toISOString() : undefined;
-    } catch {
-      return undefined;
-    }
-  };
   const fetchCommand = fetchCommandFor(repoDir, remote);
+  // Read before fetching: a fetch that fails empties FETCH_HEAD, and with it the time of the last one that worked.
+  const lastBefore = gitDir ? lastFetchedAt(gitDir) : undefined;
   let fetched: PreparePlan['fetched'];
   if (opts.fetch) {
     /*
@@ -159,7 +154,10 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
     const asked = !!opts.askpass;
     const env = asked ? operatorFetchEnv(opts.askpass as string) : QUIET_FETCH_ENV;
     const args = [...(asked ? [] : ['-c', 'credential.interactive=false']), 'fetch', '--quiet', '--no-tags', '--prune', remote];
-    const f = await git(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked });
+    const started = new Date(Date.now() - 1000);
+    const f = await git(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked, killTree: true });
+    // Given up on with the window still open: closed, so it is not left on screen asking for nothing.
+    if (!f.ok && asked && /gave up after/.test(f.stderr)) await closePasswordWindows(opts.askpass as string, started);
     if (f.ok) fetched = { ok: true, asked };
     else {
       const why = describeFetchFailure(f.stderr || f.stdout);
@@ -174,7 +172,7 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
     if (target) break;
     if ((await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${name}`])).ok) target = `${remote}/${name}`;
   }
-  const last = lastFetchedAt();
+  const last = fetched && !fetched.ok ? lastBefore : gitDir ? lastFetchedAt(gitDir) : undefined;
   if (!target) {
     return {
       ...empty(repoDir, fetched && !fetched.ok ? `The remote could not be fetched (${fetched.detail}), and no main branch of ${remote} is known here.` : `No main branch of ${remote} is known here.`),
@@ -271,8 +269,19 @@ async function keepUncommitted(dir: string, head: string, branch: string, messag
 }
 
 /** Does it, after checking the folder is still what the preview showed. */
-export async function prepareFromRemote(folder: string, fingerprint: string, opts: { prefix?: string } = {}): Promise<PrepareResult> {
+export async function prepareFromRemote(
+  folder: string,
+  fingerprint: string,
+  /** `names`: the saved-branch names the preview showed, used when still free, so Confirm makes what was shown. */
+  opts: { prefix?: string; names?: { savedBranch?: string; savedMainBranch?: string } } = {},
+): Promise<PrepareResult> {
   const plan = await planPrepare(folder, { fetch: false, prefix: opts.prefix });
+  // The names the operator saw, not ones stamped a minute later (live run 2026-10-03).
+  const prefix = opts.prefix || 'cop/';
+  const free = async (name: string | undefined): Promise<boolean> =>
+    !!name && name.startsWith(`${prefix}saved/`) && !(await git(plan.repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).ok;
+  if (plan.savedBranch && (await free(opts.names?.savedBranch))) plan.savedBranch = opts.names!.savedBranch;
+  if (plan.savedMainBranch && (await free(opts.names?.savedMainBranch))) plan.savedMainBranch = opts.names!.savedMainBranch;
   if (!plan.ok) return { ok: false, problem: plan.problem ?? 'the folder could not be read.' };
   const repoDir = plan.repoDir;
   if (!fingerprint || plan.fingerprint !== fingerprint) {

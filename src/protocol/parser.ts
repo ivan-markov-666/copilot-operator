@@ -78,6 +78,23 @@ function findJsonCandidates(markdown: string): string[] {
 }
 
 /** Removes Copilot's 【n-hash】 citation markers and the whitespace they leave behind. */
+/** The stop word taken out of a text wherever it stands as a word of its own, and the spacing tidied. */
+export function withoutMarker(text: string | undefined, marker: string): string | undefined {
+  if (text === undefined || !marker) return text;
+  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const edge = String.raw`\s.,;:!?"'«»„“”()\[\]-`;
+  const word = new RegExp(`(^|[${edge}])${escaped}(?=$|[${edge}])`, 'gu');
+  const out = text
+    .replace(word, '$1')
+    .replace(/\(\s*\)|\[\s*\]/g, '')
+    .replace(/([.!?])[ \t]*\.+/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.,;:!?])/g, '$1')
+    .trim();
+  // Nothing but the stop word: kept as it was rather than leaving a done reply with no summary.
+  return out === '' ? text : out;
+}
+
 export function stripCitations(text: string | undefined): string | undefined {
   if (text === undefined) return undefined;
   return text.replace(/\s*【[^】]*】/g, '').replace(/[ 	]+$/gm, '').trim();
@@ -194,15 +211,17 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       }
 
       const reply = result.data;
-      // Copilot appends citation markers such as 【1-8313d0】 to prose it grounded in a file.
-      // They mean nothing outside the chat and would otherwise end up in the UI and the log.
-      reply.notes = stripCitations(reply.notes);
-      reply.summary = stripCitations(reply.summary);
-      const steps = reply.steps.map<Step>((s) => ({ ...s, shell: s.shell ?? opts.defaultShell }));
       // A blank stop word is no stop word. The setting is free text, and every reply contains the
       // empty string and nearly every one a space, so searching for either would read each
       // `continue` that carries a summary as done and close the task after one round.
       const marker = opts.stopMarker.trim();
+      // Copilot appends citation markers such as 【1-8313d0】 to prose it grounded in a file.
+      // They mean nothing outside the chat and would otherwise end up in the UI and the log.
+      // The stop word too, which the contract asks for "somewhere in the reply": it is a signal to the
+      // runner, and written into the summary it ended up in commit messages and exports (live run 2026-10-03).
+      reply.notes = withoutMarker(stripCitations(reply.notes), marker);
+      reply.summary = withoutMarker(stripCitations(reply.summary), marker);
+      const steps = reply.steps.map<Step>((s) => ({ ...s, shell: s.shell ?? opts.defaultShell }));
       const markerHit = marker !== '' && markdown.includes(marker);
       const hasSummary = (reply.summary ?? '').trim().length > 0;
 

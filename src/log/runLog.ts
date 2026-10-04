@@ -28,7 +28,14 @@ export class RunLog {
 
   /** Structured record for the transcript; nothing is printed unless `human` is given. */
   event(type: string, data: Record<string, unknown> = {}, human?: string, level: LogLevel = 'info'): void {
-    this.stream.write(JSON.stringify({ at: new Date().toISOString(), type, ...data }) + '\n');
+    /*
+     * The level and the sentence go into the transcript too. Without them the runner export's list of
+     * problems was always empty — it looks for warn and error — and an event read back said only its type
+     * (live run 2026-10-03).
+     */
+    this.stream.write(
+      JSON.stringify({ at: new Date().toISOString(), type, ...data, ...(human && data.message === undefined ? { message: human } : {}), ...(level !== 'info' ? { level } : {}) }) + '\n',
+    );
     if (human && !this.quiet) {
       const prefix = level === 'error' ? '  !! ' : level === 'warn' ? '  ! ' : '  ';
       process.stdout.write(prefix + human + '\n');

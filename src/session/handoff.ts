@@ -52,7 +52,7 @@ export function composeHandoff(task: Task, notRun: NotRun[] = []): Handoff {
       .map((c) => `committed with a finding left in place: ${c.name}`),
     ...(vcs.suspicious ?? []).map((s) => `committed although it looks like ${s.reason}: ${s.path}`),
     ...(vcs.foreignCommits ?? []).map((c) => `a commit on the branch the runner did not make: ${c}`),
-    ...(task.scopeReverted?.length ? [`put back because outside the task's scope: ${task.scopeReverted.join(', ')}`] : []),
+    ...(task.scopeReverted?.length ? [`put back because ${task.readOnly ? 'the task is read-only' : "outside the task's scope"}: ${task.scopeReverted.join(', ')}`] : []),
     ...(task.deviations ?? []).map((d) => `did not follow "${d.instruction}" as written: ${d.did}`),
   ];
 
@@ -61,7 +61,8 @@ export function composeHandoff(task: Task, notRun: NotRun[] = []): Handoff {
   if (vcs.commit && vcs.branch) manual.push(`push ${vcs.branch} when you are ready — the runner never pushes`);
   if (isContinuable(task)) manual.push('continue it in the same chat from the register, or run it again');
   if (task.status === 'blocked') manual.push(`unblock it: ${task.reason ?? 'see the reason'}`);
-  if (task.status === 'failed') manual.push('read why it failed, fix the prompt or the checks, and queue it again');
+  // A refusal of version control's own is fixed there, not in the prompt (live run 2026-10-03).
+  if (task.status === 'failed' && !vcs.problem) manual.push('read why it failed, fix the prompt or the checks, and queue it again');
   if (openFindings.length > 0) manual.push(`${openFindings.length} review finding(s) are open`);
   if ((vcs.suspicious?.length ?? 0) > 0 || (vcs.foreignCommits?.length ?? 0) > 0) manual.push('look at the committed files and commits listed above');
 

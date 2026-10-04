@@ -287,7 +287,7 @@ await scenario('commitOnFinish false: branched, nothing committed, and the next 
   t.check('task 1 done, on the session branch, with no commit', [one!.status, one!.vcs?.branch, one!.vcs?.commit ?? null], ['done', 'cop/nocommit', null]);
   t.check('the branch has nothing main has not', h.git('rev-list', '--count', 'main..cop/nocommit'), '0');
   t.truthy('task 1\'s file is left uncommitted in the tree', /^\?\? one\.txt$/m.test(h.git('status', '--porcelain')), h.git('status', '--porcelain'));
-  t.truthy('task 2 ran with version control off, because of task 1\'s file', two!.status === 'done' && /uncommitted changes/.test(two!.vcs?.problem ?? ''), two);
+  t.truthy('task 2 ran with version control off, because of task 1\'s file', two!.status === 'done' && /commits are off for this session, so the files the earlier task\(s\) left are still in the working tree/.test(two!.vcs?.problem ?? ''), two);
 });
 
 /*
@@ -345,7 +345,7 @@ await scenario('tool output left in the tree: pointed out once, then ignored —
   );
   const task = (await run(h, s!.id)).tasks[0]!;
   t.truthy('the message after "done" names both paths and says to ignore them',
-    pointedOut.includes('node_modules/') && pointedOut.includes('.env') && /Add them to \.gitignore/.test(pointedOut), pointedOut.slice(0, 1200));
+    pointedOut.includes('node_modules/') && pointedOut.includes('.env') && /to \.gitignore/.test(pointedOut), pointedOut.slice(0, 1200));
   t.check('done', task.status, 'done');
   const files = tree(h, 'cop/hygiene');
   t.truthy('the commit has the .gitignore and neither node_modules nor .env',
@@ -860,13 +860,14 @@ await scenario('a later session does not start on a predecessor that failed', { 
   await h.idle();
   const b = (await read(h, first!.id)).tasks[0]!;
   const c = (await read(h, second!.id)).tasks[0]!;
-  t.check('B failed, and C was refused rather than run on it', [b.status, c.status], ['failed', 'failed']);
-  t.truthy('C says the session before has not finished', /"first-fails", which has not finished: "b-task" is failed/.test(c.reason ?? ''), c.reason);
+  // Refused before its conversation, with its task left queued and no attempt (live-fixes C28).
+  t.check('B failed, and C was refused rather than run on it: still queued', [b.status, c.status, (c as unknown as { runId?: string }).runId ?? null], ['failed', 'queued', null]);
+  const cEvents = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${second!.id}/events`);
+  t.truthy('C says the session before has not finished', cEvents.some((e) => e.type === 'run-preflight-refused' && /"first-fails", which has not finished: "b-task" is failed/.test(e.message)), cEvents.filter((e) => /refused/.test(e.type)).map((e) => e.message));
   t.check('C made no branch and committed nothing', [c.vcs?.branch ?? null, c.vcs?.commit ?? null], [null, null]);
 
   h.chat.script(write('good.txt', 'good'), reply.done(), write('c.txt', 'c'), reply.done());
   await h.call('POST', `/sessions/${first!.id}/tasks/${b.id}/rerun`, {});
-  await h.call('POST', `/sessions/${second!.id}/tasks/${c.id}/rerun`, {});
   await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'stop' });
   await h.idle();
   const b2 = (await read(h, first!.id)).tasks[0]!;
@@ -984,6 +985,17 @@ await scenario('Run again from here when the machine no longer allows the run un
  * record — is run again step by step: taken for unattended, it was refused the same way on every
  * machine that refuses unattended runs, the default among them.
  */
+/** Waits for the run to end, approving every step it asks about, as an operator running step by step would. */
+async function idleApproving(h: Harness): Promise<void> {
+  for (let i = 0; i < 400; i += 1) {
+    for (const a of await h.call<Array<{ id: string }>>('GET', '/approvals')) await h.call('POST', `/approvals/${a.id}`, { action: 'run' });
+    const act = await h.call<{ running: boolean; batch: boolean; starting?: boolean }>('GET', '/activity');
+    if (!act.running && !act.batch && !act.starting) return;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error('the run did not end');
+}
+
 await scenario('Run again from here when the run cannot go unattended here: offered, and started, step by step', { limits: { maxCheckRounds: 1, retryBlockedInFreshChat: 0 } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'stepwise', [{ title: 'never-good', prompt: 'Create never.txt in the repository root, whatever it takes, and nothing else.', checks: [neverPasses] }]));
   h.chat.script(...failTwice('a.txt', 'b.txt'));
@@ -997,10 +1009,10 @@ await scenario('Run again from here when the run cannot go unattended here: offe
   const planned = await h.call<RestartPlan>('GET', `/sessions/${s!.id}/tasks/${failed.id}/restart`);
   t.truthy('the plan says the run went on its own, and why this machine will not run it so now',
     planned.mode === 'unattended' && /execution\.isolation/.test(planned.unattendedRefused ?? ''), planned);
-  h.chat.script(reply.blocked());
+  h.chat.script(...reply.triedThenBlocked());
   const r = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: true, mode: 'confirm' });
   t.check('asked step by step, as the dialog then asks: started, the repository taken back and the task queued', [r.started, r.restored.length, r.requeued], [true, 1, 1]);
-  await h.idle();
+  await idleApproving(h);
   t.check('and it ran, step by step', [(await read(h, s!.id)).tasks[0]!.status, await runMode()], ['blocked', 'confirm']);
 
   // No record of the run, as `cop run` leaves none.
@@ -1014,10 +1026,10 @@ await scenario('Run again from here when the run cannot go unattended here: offe
   writeFileSync(file, JSON.stringify(record, null, 2), 'utf8');
   const unrecorded = await h.call<RestartPlan>('GET', `/sessions/${s!.id}/tasks/${failed.id}/restart`);
   t.check('a run with no record of its own is run again step by step, nothing refused', [unrecorded.mode, unrecorded.unattendedRefused ?? null], ['confirm', null]);
-  h.chat.script(reply.blocked());
+  h.chat.script(...reply.triedThenBlocked());
   const again = await h.call<Restarted>('POST', `/sessions/${s!.id}/tasks/${failed.id}/restart`, { restore: true });
   t.check('asked as the dialog asks it, with no mode: started', [again.started, again.reason ?? null], [true, null]);
-  await h.idle();
+  await idleApproving(h);
   t.check('step by step', [(await read(h, s!.id)).tasks[0]!.status, await runMode()], ['blocked', 'confirm']);
 });
 

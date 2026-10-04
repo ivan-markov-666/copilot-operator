@@ -21,7 +21,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { browserAfterPreflight, readRunLog } from './runLog.js';
+import { browserAfterPreflight, readRunLog, readSessionLog, refusedRunsOf } from './runLog.js';
 import type { Session, Task, TaskCheck } from './model.js';
 import { TASK_FIELD_ON_RERUN } from './store.js';
 import { botVersion } from '../config/version.js';
@@ -468,7 +468,7 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
       iteration: e.iteration,
       status: e.status,
       notes: typeof e.notes === 'string' ? clip(e.notes, 1000) : undefined,
-      steps: steps.filter((s) => s.iteration === e.iteration).map((s) => ({ id: s.id, ran: s.description, outcome: s.refused ? `refused: ${s.refused}` : s.outcome, exitCode: s.exitCode })),
+      steps: steps.filter((s) => s.iteration === e.iteration).map((s) => ({ id: s.id, ran: s.description, outcome: s.refused ? (/^refused\b/i.test(s.refused) ? s.refused : `refused: ${s.refused}`) : s.outcome, exitCode: s.exitCode })),
     }));
   const p = splitPrompt(task.prompt);
   const failed = task.status !== 'done' && task.status !== 'queued' && task.status !== 'running' && task.status !== 'waiting-approval';
@@ -516,6 +516,10 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
               kind: session.vcsStart.kind,
               commit: session.vcsStart.commit,
               branch: session.vcsStart.branch,
+              // What bringing the branch up to its remote did, why it started where it did, whose work it carries on.
+              ...(session.vcsStart.update ? { update: session.vcsStart.update } : {}),
+              ...(session.vcsStart.note ? { note: session.vcsStart.note } : {}),
+              ...(session.vcsStart.fromSession ? { fromSession: session.vcsStart.fromSession } : {}),
               ...(session.vcsStart.snapshot ? { snapshot: session.vcsStart.snapshot } : {}),
               ...(session.vcsStart.inputs ? { inputs: session.vcsStart.inputs } : {}),
             },
@@ -599,7 +603,7 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
           iteration: e.iteration,
           status: e.status,
           notes: typeof e.notes === 'string' ? clip(e.notes, 1000) : undefined,
-          steps: aSteps.filter((s) => s.iteration === e.iteration).map((s) => ({ id: s.id, ran: s.description, outcome: s.refused ? `refused: ${s.refused}` : s.outcome, exitCode: s.exitCode })),
+          steps: aSteps.filter((s) => s.iteration === e.iteration).map((s) => ({ id: s.id, ran: s.description, outcome: s.refused ? (/^refused\b/i.test(s.refused) ? s.refused : `refused: ${s.refused}`) : s.outcome, exitCode: s.exitCode })),
         }));
       const aFailed = a.status !== 'done';
       earlier.push({
@@ -611,7 +615,15 @@ async function domainTask(session: Session, task: Task, runsDir: string): Promis
         iterations: a.iterations,
         startedAt: a.startedAt,
         finishedAt: a.finishedAt,
-        prompt: a.prompt !== task.prompt ? splitPrompt(a.prompt).prompt : undefined,
+        // The whole text it ran with, when it differs: a correction added under the expected result was cut off.
+        prompt: a.prompt !== task.prompt ? a.prompt : undefined,
+        ...(a.stopCode ? { stopCode: a.stopCode } : {}),
+        ...(a.freshRetry ? { freshRetry: true } : {}),
+        ...(a.vcs?.commit ? { commit: a.vcs.commit } : {}),
+        ...(JSON.stringify(a.scope ?? []) !== JSON.stringify(task.scope ?? []) ? { scope: a.scope ?? [] } : {}),
+        ...((a.readOnly ?? false) !== (task.readOnly ?? false) ? { readOnly: a.readOnly ?? false } : {}),
+        ...(a.checks && JSON.stringify(a.checks) !== JSON.stringify(task.checks ?? []) ? { checks: a.checks } : {}),
+        run: a.runGroup ? { id: a.runGroup.id, name: a.runGroup.name } : undefined,
         whatTheChatTried: aRounds,
         whatWasActuallyDone: { repository: a.vcs, deviations: a.deviations, disputes: a.disputes },
         whyItFailed: aFailed
@@ -656,7 +668,11 @@ const TRANSPORT_TYPES = new Set(['message-sent', 'format-error', 'report-written
  * session. "Run the rest without asking" can turn a step-by-step run unattended mid-way; a later task
  * says so in its own policy.json.
  */
-async function policyOf(session: Session, task: Task, runsDir: string): Promise<{ mode: 'step-by-step' | 'unattended'; from: 'policy.json' | 'run record' } | undefined> {
+async function policyOf(
+  session: Session,
+  task: Pick<Task, 'runId' | 'runGroup'>,
+  runsDir: string,
+): Promise<{ mode: 'step-by-step' | 'unattended'; from: 'policy.json' | 'run record' } | undefined> {
   const named = (m: unknown): 'step-by-step' | 'unattended' | undefined => (m === 'confirm' ? 'step-by-step' : m === 'unattended' ? 'unattended' : undefined);
   if (task.runId) {
     const raw = await readFile(join(runsDir, task.runId, 'policy.json'), 'utf8').catch(() => null);
@@ -719,6 +735,10 @@ async function botTask(session: Session, task: Task, runsDir: string): Promise<R
           attempt: i + 1,
           runId: a.runId,
           runFolder: a.runId ? join(runsDir, a.runId) : undefined,
+          run: a.runGroup ? { id: a.runGroup.id, name: a.runGroup.name } : undefined,
+          policy: await policyOf(session, a, runsDir),
+          ...(a.stopCode ? { stopCode: a.stopCode } : {}),
+          ...(a.freshRetry ? { freshRetry: true } : {}),
           status: a.status,
           steps: stepsOf(aEvents).map((s) => ({ iteration: s.iteration, id: s.id, command: s.description, outcome: s.outcome, exitCode: s.exitCode, durationMs: s.durationMs, refused: s.refused })),
           problems: aEvents.filter((e) => e.level === 'error' || e.level === 'warn').map(trimmed),
@@ -744,12 +764,26 @@ export async function buildBotExport(
    * What each run did before its tasks: the version control preflight and the moment the browser was
    * asked for, in the order they happened (`session/runLog.ts`), with the order checked rather than claimed.
    */
+  /*
+   * Every run the exported tasks took part in — the current attempt's and every earlier attempt's — and
+   * the runs of their sessions that were refused before a task began. Only the current attempt's run was
+   * listed, so a re-run made the first run's record disappear from the export (live run 2026-10-03).
+   */
   const runs: Record<string, unknown> = {};
-  for (const { task } of pairs) {
-    const id = task.runGroup?.id;
-    if (!id || id in runs) continue;
+  const add = async (id: string | undefined, name?: string): Promise<void> => {
+    if (!id || id in runs) return;
     const preflight = await readRunLog(runsDir, id);
-    runs[id] = { name: task.runGroup?.name, preflight, order: browserAfterPreflight(preflight) };
+    const refused = preflight.some((e) => e.type === 'run-preflight-refused') && !preflight.some((e) => e.type === 'browser-launch-requested');
+    runs[id] = { name, ...(refused ? { refused: true } : {}), preflight, order: browserAfterPreflight(preflight) };
+  };
+  /** What the operator did to each session's repository or start outside a run: see `appendSessionLog`. */
+  const operatorActions: Record<string, unknown[]> = {};
+  for (const { session, task } of pairs) {
+    if (!(session.id in operatorActions)) operatorActions[session.id] = await readSessionLog(runsDir, session.id);
+    await add(task.runGroup?.id, task.runGroup?.name);
+    for (const a of task.attempts ?? []) await add(a.runGroup?.id, a.runGroup?.name);
+    await add(session.runGroup?.id, session.runGroup?.name);
+    for (const id of await refusedRunsOf(runsDir, session.id)) await add(id);
   }
   return {
     exportedAt: new Date().toISOString(),
@@ -758,6 +792,7 @@ export async function buildBotExport(
     about: `copilot-operator, the runner: ${scope.label}. The environment, every transcript event, every step with its exit code, the transport's retries, what was reaped, what the review machinery did. Read the domain export for what the task was about.`,
     machine,
     runs,
+    operatorActions,
     tasks,
   };
 }

@@ -12,7 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ReplyCapture } from '../transport/copilotTransport.js';
@@ -37,12 +37,12 @@ import { describeStep, checkCommandRefusal, commandRefusal, type PolicyConfig } 
 import { networkFetchReason } from '../exec/network.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
-import { confinementRefusal, projectRoots, type Confinement } from '../exec/confinement.js';
+import { confinementRefusal, projectRoots, sessionRoots, type Confinement } from '../exec/confinement.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
-import { composeOpening, READ_ONLY_NOTE } from '../session/compose.js';
+import { composeOpening, readOnlyNote } from '../session/compose.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
@@ -53,8 +53,8 @@ import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf } from '../vcs/taskVcs.js';
-import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, type InputsCheck } from '../vcs/inputs.js';
+import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf, whereLeft } from '../vcs/taskVcs.js';
+import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 
@@ -63,7 +63,17 @@ export type TaskOutcome = {
   iterations: number;
   summary?: string;
   reason?: string;
+  /** Why the runner itself stopped the task, when it did. See `Task.stopCode`. */
+  stopCode?: Task['stopCode'];
 };
+
+/**
+ * Causes no conversation can change: the task contradicts itself, the machine lacks what a step needs,
+ * a check can never run. A fresh chat is no cure for these, and retrying them in one only repeats the
+ * verdict with empty branches and conversations behind it (seen live on 2026-10-03: a contract
+ * conflict decided before any message was retried twice in fresh chats).
+ */
+export const NOT_THE_CHATS: ReadonlyArray<NonNullable<Task['stopCode']>> = ['contract-conflict', 'environment', 'invalid-check'];
 
 export type RunDeps = {
   cfg: ResolvedConfig;
@@ -142,7 +152,21 @@ const PACKAGE_RUNNER = /\b(?:npx|pnpx|bunx)(?:\.cmd|\.exe)?\s|\b(?:pnpm|yarn)(?:
  * left to them whatever else it fetches: ending a task on a check the work could still have made
  * run is the worse mistake of the two.
  */
-function lineRefusal(command: string, shell: Shell, cwd: string, cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms'>, roots: string[]): string | null {
+/**
+ * A check's refusal in the operator's words. The gate's reasons are written for the chat about a step —
+ * "this step waits for the operator to allow it" — which is untrue of a check: checks run with nobody
+ * asked, so a refused one can never run (live run 2026-10-03, copied into records and a commit body).
+ */
+export function checkRefusalForOperator(why: string): string {
+  const text = why.replace(/^refused: /, '');
+  if (/fetches from the network/i.test(text)) {
+    const what = /\(([^)]+)\)/.exec(text)?.[1];
+    return `it fetches from the network${what ? ` (${what})` : ''}; checks run without anyone being asked, so the runner never runs it — change or remove the check`;
+  }
+  return text;
+}
+
+export function lineRefusal(command: string, shell: Shell, cwd: string, cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms'>, roots: string[]): string | null {
   return (
     commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms) ??
     confinementRefusal(command, { roots, cwd }) ??
@@ -171,13 +195,33 @@ function shellProblemReason(problem: ShellProblem | null): string {
  */
 function repeatRefusal(count: number, limit: number): string {
   return (
-    `this exact command has already run ${count} time(s) in a row in this task and returned the same ` +
-    `result each time, which is the limit (maxCommandRepeats ${limit}). Running it again cannot ` +
-    'tell you anything new, so it was not run. Do something different in kind: a different ' +
+    `this exact command has already run ${count} time(s) in this task, each time with the same result, and ` +
+    `nothing in the working tree has changed since it last ran, which is the limit (maxCommandRepeats ${limit}). ` +
+    'Running it again cannot tell you anything new, so it was not run. Do something different in kind: a different ' +
     'command, a different tool, a different way round the problem, or read something you have ' +
     'not read yet. If you have genuinely run out of approaches, end the task with status ' +
     '"blocked" and list in "tried" the different things you attempted.'
   );
+}
+
+/**
+ * The working tree's uncommitted paths and what each holds, as git would hash it ('-' for a deleted file).
+ *
+ * The read-only verdict and the scope used to judge the tree as it is at the end, which is wrong both
+ * ways (live run 2026-10-03): it blamed a read-only task for files another session had left before it
+ * started, and for a report a plan's own check wrote at the gate. What a task changed is the difference
+ * between two of these: at its start and just before its checks.
+ */
+async function treeState(dir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const path of await workingTreePaths(dir).catch(() => [] as string[])) out.set(path, (await blobOfFile(dir, path)) ?? '-');
+  return out;
+}
+
+/** The paths whose content differs between two tree states. */
+function changedBetween(before: Map<string, string>, after: Map<string, string>): string[] {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].filter((p) => (before.get(p) ?? 'committed') !== (after.get(p) ?? 'committed')).sort();
 }
 
 /**
@@ -284,9 +328,17 @@ class Sink {
     private readonly taskId: string,
   ) {}
 
+  /** True while this sink is publishing, so the mirror below does not write its own events twice. */
+  publishing = false;
+
   event(type: string, data: Record<string, unknown> = {}, human?: string, level: 'info' | 'warn' | 'error' = 'info'): void {
     this.log.event(type, data, human, level);
-    this.bus.publish({ sessionId: this.sessionId, taskId: this.taskId, type, level, message: human, data });
+    this.publishing = true;
+    try {
+      this.bus.publish({ sessionId: this.sessionId, taskId: this.taskId, type, level, message: human, data });
+    } finally {
+      this.publishing = false;
+    }
   }
 
   say(text: string): void {
@@ -337,7 +389,8 @@ export async function openBrowser(
         sessionId,
         type: `browser:${event}`,
         level: event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' ? 'warn' : 'info',
-        message: spoken[event],
+        // An event with no sentence of its own is named, not said as "undefined".
+        message: spoken[event] ?? event.replace(/-/g, ' '),
         data: detail,
       });
     },
@@ -554,7 +607,7 @@ async function applySessionModel(
     level: result.ok ? 'info' : 'warn',
     message: result.ok
       ? `model: ${result.current ?? wanted}${session.model?.trim() ? '' : ' (from Settings)'}`
-      : `could not switch to "${wanted}": ${result.reason ?? 'unknown reason'}. Continuing on ${result.current ?? 'the chat default'}.`,
+      : `could not switch to "${wanted}"${session.model?.trim() ? '' : ' (the default model in Settings — change it there)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Continuing on ${result.current ?? 'the chat default'}.`,
     data: { asked: wanted, fromSettings: !session.model?.trim(), current: result.current, ok: result.ok },
   });
 
@@ -575,6 +628,41 @@ export async function runTask(
   const runId = task.runId ?? `${session.id}-${task.id}${attempt > 1 ? `-a${attempt}` : ''}`;
   const log = new RunLog(runId, cfg.resolved.runsDir);
   const sink = new Sink(log, bus, session.id, task.id);
+  /*
+   * What other parts publish about this task while it runs — version control, the browser and the
+   * model picker, approvals, Stop, retries — written into its transcript too. They went to the live
+   * event stream only, which keeps the last 500 events in memory, so the exports and the run folder
+   * never had them (live run 2026-10-03: no vcs-*, model-* or approval events in any transcript).
+   */
+  /*
+   * Every message this task sends, kept: its text in `messages/NN.md` and a `message-sent` event. Only the
+   * opening was recorded, so the results of each round with the runner's notes, the checks' and the
+   * review's feedback were in no file, and the export counted 2 messages where 15 went out (live run
+   * 2026-10-03). The opening keeps its own event, with its index; the rest are said here.
+   */
+  let sentCount = 0;
+  let inOpening = false;
+  const chatOf = transport;
+  transport = new Proxy(chatOf, {
+    get(target, key) {
+      if (key !== 'sendAndConfirm') return Reflect.get(target, key);
+      return async (...args: Parameters<ChatTransport['sendAndConfirm']>) => {
+        const before = await target.sendAndConfirm(...args);
+        sentCount += 1;
+        const [text, attachments] = args;
+        await mkdir(log.path('messages'), { recursive: true }).catch(() => undefined);
+        await writeFile(log.path('messages', `${String(sentCount).padStart(2, '0')}.md`), text, 'utf8').catch(() => undefined);
+        if (!inOpening) {
+          sink.event('message-sent', { n: sentCount, chars: text.length, attachments: (attachments ?? []).map((a) => a.replace(/^.*[\\/]/, '')), chatId: session.chat?.chatId ?? null });
+        }
+        return before;
+      };
+    },
+  });
+  const unmirror = bus.subscribe(session.id, (e) => {
+    if (sink.publishing || e.type === 'console' || (e.taskId && e.taskId !== task.id)) return;
+    log.event(e.type, { ...(e.data ?? {}), ...(e.message ? { message: e.message } : {}), mirrored: true }, undefined, e.level);
+  });
   const pacer = new Pacer({
     enabled: cfg.pacing.enabled,
     settleMs: cfg.pacing.settleMs,
@@ -643,6 +731,11 @@ export async function runTask(
   const progress = new ProgressWatch({ noProgress: Math.max(2, cfg.limits.maxNoProgressRounds ?? 3), oscillations: 2 });
   /** Set when a check round shows no progress; the give-up then ends the task blocked with it. */
   let noProgressReason: string | null = null;
+  /** The scope as enforced on the task's own branch, once known; `finish` holds the commit to it too. */
+  let enforcement: { scope: string[]; readOnly: boolean } | null = null;
+  /** The tree when a read-only task started, and just before its checks last ran: see `treeState`. */
+  let startState: Map<string, string> | null = null;
+  let preGateState: Map<string, string> | null = null;
   /**
    * Why the attempt stopped, when the status alone does not say: a format the chat could not keep,
    * a task contract that contradicts itself, a loop, a check that could never run, a machine that
@@ -729,7 +822,8 @@ export async function runTask(
   };
 
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
-    await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
+    // How it ended as reported; the runner's own checks below can still change it, and the final word is written at the end.
+    await record(`ENDING: ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
 
     // The net under the plan's own checks: whatever the task left running is stopped and named.
     await reap(processesBefore, 'the task');
@@ -786,13 +880,31 @@ export async function runTask(
      * from a clean tree — but the task ends `failed` with the files named. Only a task that
      * claims `done` is overturned; one that already ended badly keeps its own reason.
      */
-    if (task.readOnly && status === 'done' && repoDirOf(session)) {
-      const changed = await workingTreePaths(repoDirOf(session)).catch(() => [] as string[]);
+    // What the task did, judged before what the checks and the review wrote after its last round.
+    const taskEndState = task.readOnly && repoDirOf(session) ? (preGateState ?? (await treeState(repoDirOf(session)))) : null;
+    /*
+     * The scope holds for the commit too. Put back each round, it still let through what the checks and
+     * the independent review wrote after the last one (live run 2026-10-03: a docs build run by a check
+     * and by the reviewer was committed with a scoped task's work).
+     */
+    if (enforcement && repoDirOf(session)) {
+      const last = await enforceScope(repoDirOf(session), enforcement.scope, enforcement.readOnly).catch(() => null);
+      if (last && last.reverted.length + last.failed.length > 0) {
+        sink.event('scope-reverted', { phase: 'finish', reverted: last.reverted, failed: last.failed },
+          `outside the task's ${enforcement.readOnly ? 'read-only rule' : 'scope'}, put back before the commit (written after the last round, by the checks or the review): ${last.reverted.join(', ') || '(none)'}` +
+            (last.failed.length > 0 ? `; could not be put back: ${last.failed.map((f) => f.path).join(', ')}` : ''),
+          'warn');
+      }
+    }
+    if (task.readOnly && status === 'done' && repoDirOf(session) && startState && taskEndState) {
+      const changed = changedBetween(startState, taskEndState);
       if (changed.length > 0) {
+        const commits = !!(session.vcs?.enabled && session.vcs.commitOnFinish !== false && trackedRepoOf(session));
         status = 'failed';
         reason =
           `this task is read-only and it changed ${changed.length} file(s): ${changed.slice(0, 8).join(', ')}` +
-          `${changed.length > 8 ? `, and ${changed.length - 8} more` : ''}. The change is committed on the task's branch; nothing is lost.`;
+          `${changed.length > 8 ? `, and ${changed.length - 8} more` : ''}.` +
+          (commits ? " The change is committed on the task's branch; nothing is lost." : ' Nothing is committed: the change is in the working tree.');
         sink.event('readonly-violated', { files: changed.slice(0, 20) }, reason, 'error');
       }
     }
@@ -925,7 +1037,10 @@ export async function runTask(
     await setTask((t) => {
       t.handoff = composeHandoff(t, notRun);
     });
+    // The final status, after the read-only, commit and clean-tree checks (an unverified finding of 2026-10-03: "TASK DONE" for a failed task).
+    await record(`TASK ${status.toUpperCase()}`, reason ? `Reason: ${reason}` : '(no reason: it ended as reported)');
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
+    unmirror();
     await log.close();
     /*
      * An attempt that did not end done leaves its plan, work and runner views in its own folder,
@@ -949,7 +1064,7 @@ export async function runTask(
           );
       }
     }
-    return { status, iterations, summary, reason };
+    return { status, iterations, summary, reason, ...(stopCode ? { stopCode } : {}) };
   };
 
   await setTask((t) => {
@@ -1031,7 +1146,7 @@ export async function runTask(
    * different idea of where the project ends. See `confinement.ts`.
    */
   const confinement: Confinement = {
-    roots: projectRoots([work.cwd, cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)]),
+    roots: sessionRoots(work.cwd, [cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)]),
     cwd: work.cwd,
   };
   sink.event('confinement', { roots: confinement.roots }, `commands are confined to ${confinement.roots.join(', ')}`);
@@ -1106,6 +1221,8 @@ export async function runTask(
      * findings described a tree that was not the one it had been asked to audit.
      */
     const scopeEnforced = (scope.length > 0 || !!task.readOnly) && onOwnBranch;
+    if (scopeEnforced) enforcement = { scope, readOnly: !!task.readOnly };
+    if (task.readOnly && repoDirOf(session)) startState = await treeState(repoDirOf(session));
     // The operator's input files, read-only on a branch of the task's own; see `vcs/inputs.ts`.
     const startNow = (await store.getSession(session.id))?.vcsStart;
     if (onOwnBranch && startNow?.inputs?.readOnly && startNow.inputs.files.length > 0) {
@@ -1145,6 +1262,21 @@ export async function runTask(
       stopCode = 'contract-conflict';
       sink.event('contract-conflict', { conflicts }, `the task contradicts itself: ${conflicts.join(' | ')}`, 'error');
       return await finish('blocked', `the task contradicts itself, so it was not started: ${conflicts.join(' ')} Change the prompt, the checks, the scope or read-only, and queue it again.`);
+    }
+    /*
+     * A plan check the runner refuses for its own command line can never run, so the task can never
+     * pass: said now, before a message is sent, and not at the first "done" (live run 2026-10-03: eight
+     * iterations and two and a half minutes for a curl to the internet the checks may not make).
+     */
+    const neverRun = (task.checks ?? [])
+      .filter((c) => !!c.run?.trim())
+      .map((c) => ({ c, why: lineRefusal((c.run ?? '').trim(), c.shell ?? defaultShell, c.cwd ? resolve(work.cwd, c.cwd) : work.cwd, cfg.execution, confinement.roots) }))
+      .filter((x): x is { c: TaskCheck; why: string } => !!x.why);
+    if (neverRun.length > 0) {
+      stopCode = 'invalid-check';
+      const said = neverRun.map((x) => `"${x.c.name}": ${checkRefusalForOperator(x.why)}`).join(' ');
+      sink.event('checks-invalid', { round: 0, checks: neverRun.map((x) => x.c.name) }, `the runner refuses ${neverRun.length} of the task's checks for their command line, so it was not started: ${said}`, 'error');
+      return await finish('failed', `the runner refuses ${neverRun.length} of this task's checks for their own command line, so the task could never pass and was not started: ${said} Change those checks and queue it again.`);
     }
 
     /*
@@ -1223,9 +1355,19 @@ export async function runTask(
       buildsOn,
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
-      readOnlyNote: task.readOnly ? READ_ONLY_NOTE : undefined,
+      // What is said about a commit is true only where one happens (live run 2026-10-03: promised with commits off).
+      readOnlyNote: task.readOnly ? readOnlyNote(!!(session.vcs?.enabled && session.vcs.commitOnFinish !== false && trackedRepoOf(session)), artifactPatterns(session.vcs)) : undefined,
       scopeNote: [
-        scopeNote(scope, scopeEnforced),
+        scopeNote(scope, scopeEnforced, {
+          artifacts: artifactPatterns(session.vcs),
+          outputs: task.outputs ?? [],
+          // The real reason it is not enforced, not always "version control is off" (live run 2026-10-03).
+          why: !session.vcs?.enabled
+            ? 'Version control is off for this session'
+            : prepared.vcs.problem
+              ? 'This task has no branch of its own (see "Version control" in the results)'
+              : 'This task has no branch of its own',
+        }),
         (task.outputs?.length ?? 0) > 0
           ? `## Outputs\n\nThis task is to produce: ${(task.outputs ?? []).map((o) => `\`${o}\``).join(', ')}. What it creates or changes there is kept with the run's record as its evidence.`
           : '',
@@ -1247,6 +1389,7 @@ export async function runTask(
     const taskIndex = opening.messages.length - 1;
     /** Whether this opening's contract has been answered, to be recorded once the conversation is. */
     let contractAnswered = false;
+    inOpening = true;
     for (const [index, message] of opening.messages.entries()) {
       if (signal?.aborted) return await finish('aborted', 'stopped before the task was sent');
       await pacer.throttleSend();
@@ -1273,12 +1416,14 @@ export async function runTask(
       if (!session.chat) {
         const chatId = await transport.currentChatId();
         if (chatId) {
-          const name = buildChatName(chatCode(session.id), session.name);
-          await transport.nameChat(chatId, name).catch(() => false);
+          // A fresh-chat retry, or any later attempt, says so in the name: the abandoned chat had the same one (live run 2026-10-03).
+          const name = buildChatName(`${chatCode(session.id)}${attempt > 1 ? `/a${attempt}` : ''}`, session.name);
+          const named = await transport.nameChat(chatId, name).catch(() => false);
           const chat: ChatPointer = {
             chatId,
             url: `${cfg.copilot.url.replace(/\/chat.*$/, '')}/chat/conversation/${chatId}?es=SSR`,
             name,
+            ...(named ? {} : { named: false }),
             runId,
             createdAt: new Date().toISOString(),
           };
@@ -1287,7 +1432,7 @@ export async function runTask(
             s.chat = chat;
           });
           if (carriesTask) await savePointer(log.path('chat.json'), chat);
-          sink.event('chat-registered', { ...chat }, `chat: ${name}`);
+          sink.event('chat-registered', { ...chat }, `chat: ${name}${named ? '' : " (not renamed in Copilot's sidebar: it keeps Copilot's own title)"}`, named ? 'info' : 'warn');
         }
       }
       /*
@@ -1310,6 +1455,7 @@ export async function runTask(
         });
       }
     }
+    inOpening = false;
 
     // --- the loop ---------------------------------------------------------------------
     // How many times the checks have been run for this task, and how many times they may be.
@@ -1329,7 +1475,8 @@ export async function runTask(
      */
     const willCommit = !!(session.vcs?.commitOnFinish && trackedRepoOf(session));
     /** The runner's own checks that have been pointed out to the chat once already. */
-    const pointedOut = new Set<string>();
+    /** Per runner check, the findings the chat has been shown: "path<TAB>kind", the first two columns of its output. */
+    const pointedOut = new Map<string, Set<string>>();
 
     /**
      * Whether "done" is accepted, decided by the operator's checks rather than by the reply.
@@ -1357,6 +1504,7 @@ export async function runTask(
       // Counted only once the round turns out to have been a real attempt. A round that died of
       // a missing interpreter asked nothing of the work and must not cost the task one.
       const round = checkRounds + 1;
+      if (task.readOnly && repoDirOf(session)) preGateState = await treeState(repoDirOf(session));
       sink.event('checks-started', { round, count: checks.length },
         `checking the task against ${checks.length} condition(s)`);
 
@@ -1440,13 +1588,23 @@ export async function runTask(
        * tree dirty and the next task unable to start. Each check is pointed out once on its own, so a
        * content problem found after the paths were settled still gets its one mention.
        */
+      /*
+       * Once per finding, not once per kind of check: keyed by kind, a problem in a file the chat wrote
+       * after the only mention passed as "still there after being pointed out once" without ever being
+       * shown (live run 2026-10-03, helper scripts with mixed line endings committed unseen).
+       */
       for (const o of outcomes) {
         if (!RUNNER_CHECK_KINDS.has(o.check.expect) || o.passed) continue;
-        if (pointedOut.has(o.check.expect)) {
+        const keys = (o.output ?? o.detail).split('\n').map((l) => l.split('\t').slice(0, 2).join('\t').trim()).filter(Boolean);
+        const shown = pointedOut.get(o.check.expect) ?? new Set<string>();
+        const fresh = keys.filter((k) => !shown.has(k));
+        if (fresh.length === 0) {
+          const files = [...new Set(keys.map((k) => k.split('\t')[0]))].join(', ');
           o.passed = true;
-          o.detail = `still there after being pointed out once; committed and kept on the task — ${o.detail}`;
+          o.detail = `still there after being pointed out once (${files}); committed and kept on the task — ${o.detail}`;
         } else {
-          pointedOut.add(o.check.expect);
+          for (const k of keys) shown.add(k);
+          pointedOut.set(o.check.expect, shown);
         }
       }
 
@@ -1486,13 +1644,19 @@ export async function runTask(
        * work can change (see `lineRefusal`).
        */
       const failed = outcomes.filter((o) => !o.passed);
-      if (failed.length > 0 && failed.every(refusedForGood)) {
+      /*
+       * One check that can never run is enough: the task can never pass it, whatever else the chat fixes.
+       * Waiting until it was the only failure sent it to the chat as work, with advice to end blocked, and
+       * spent a round on it (live run 2026-10-03).
+       */
+      const never = failed.filter(refusedForGood);
+      if (never.length > 0) {
         stopCode = 'invalid-check';
         for (const o of failed) {
           sink.event('check-failed', { name: o.check.name, detail: o.detail }, `FAILED: ${o.check.name} — ${o.detail}`, 'warn');
         }
-        sink.event('checks-invalid', { round, checks: failed.map((o) => o.check.name) },
-          `${failed.length} check(s) were refused before they ran, and nothing the chat does can change that; the task ends on the checks, not on the work`, 'error');
+        sink.event('checks-invalid', { round, checks: never.map((o) => o.check.name) },
+          `${never.length} check(s) were refused before they ran (${never.map((o) => `"${o.check.name}"`).join(', ')}), and nothing the chat does can change that; the task ends on the checks, not on the work`, 'error');
         return 'invalid';
       }
       checkRounds = round;
@@ -1500,6 +1664,18 @@ export async function runTask(
       for (const o of outcomes) {
         sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail },
           `${o.passed ? 'passed' : 'FAILED'}: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
+      }
+      /*
+       * What the checks themselves wrote outside the scope is put back now, before anything is sent: the
+       * next round then starts clean, and the chat is never told it broke the scope for a file a check
+       * wrote (live run 2026-10-03).
+       */
+      if (scopeEnforced) {
+        const after = await enforceScope(repoDirOf(session), scope, !!task.readOnly).catch(() => null);
+        if (after && after.reverted.length + after.failed.length > 0) {
+          sink.event('scope-reverted', { phase: 'checks', round, reverted: after.reverted, failed: after.failed },
+            `written by the checks outside the task's ${task.readOnly ? 'read-only rule' : 'scope'}, put back: ${after.reverted.join(', ') || '(none)'}`, 'info');
+        }
       }
 
       if (failed.length === 0) {
@@ -1944,7 +2120,14 @@ export async function runTask(
      * into inventing ways around its own type-checker. Counting identical results refuses only
      * what it was meant to: the same command, returning the same answer, again.
      */
-    const seen = new Map<string, { sameInARow: number; signature: string }>();
+    /*
+     * With each command, the working tree as it was after it ran and how many steps had run by then. A
+     * repeat is refused only when nothing has changed since: found live on 2026-10-03, a read-back right
+     * after a step had rewritten the file was refused as "the same result", judged from history alone.
+     */
+    const seen = new Map<string, { sameInARow: number; signature: string; tree: string | null; stepNo: number }>();
+    /** Steps that ran in this attempt, of any kind; a "blocked" before the first one is not an approach. */
+    let stepsRunThisAttempt = 0;
     const fingerprint = (step: Step): string => step.cmd.replace(/\s+/g, ' ').trim();
     /** What "the same answer" means: the exit code and the output, hashed. */
     const resultSignature = (r: RunResult): string =>
@@ -2084,6 +2267,31 @@ export async function runTask(
        * approaches that were tried, and that is what the register shows.
        */
       if (!blocked && reply.steps.length > 0) earlyBlocks = 0;
+      /*
+       * "Blocked" before a single step ran in this attempt: what it lists as tried was thinking, not
+       * trying. Seen live on 2026-10-03, twice: a chat that said it cannot "operate under an external
+       * runner" blocked on its first reply with two free-text entries in `tried`, which passed the
+       * two-approaches floor, and the task went to a fresh chat. It is told what the runner is first.
+       */
+      if (blocked && stepsRunThisAttempt === 0 && earlyBlocks < MAX_EARLY_BLOCKS) {
+        earlyBlocks += 1;
+        stats.blockedTooEarly = (stats.blockedTooEarly ?? 0) + 1;
+        sink.event('blocked-before-any-step', { tried: reply.tried.length, time: earlyBlocks },
+          '"blocked" before any step ran in this task, so the chat is told how the runner works and asked for a first step', 'warn');
+        const message =
+          'Not yet: nothing has been run in this task. You do not need to operate anything yourself — this runner executes ' +
+          'the commands you send in "steps", on the operator\'s machine in the project folder, and sends you back what they printed. ' +
+          'Send your first step now with status "continue", for example a command that lists the project\'s files ' +
+          '(Get-ChildItem -Recurse -File | Select-Object -First 50 FullName). A task may end "blocked" only after steps that ran.';
+        await record('BLOCKED BEFORE ANY STEP — MESSAGE SENT', message);
+        await pacer.throttleSend();
+        const before = await transport.sendAndConfirm(message);
+        const next = await transport.waitForReply(before);
+        await saveReply(`blocked-before-any-step-${earlyBlocks}`, next);
+        lastMarkdown = next.markdown;
+        await pacer.settle();
+        continue;
+      }
       if (blocked && reply.tried.length < minApproaches && earlyBlocks < MAX_EARLY_BLOCKS) {
         /*
          * Too early to give up, by the operator's own measure (Settings → Execution). Sent back as a
@@ -2132,11 +2340,22 @@ export async function runTask(
       /** Steps refused because they named a shell this machine has not got. */
       let shellRefused = 0;
 
+      /*
+       * The step of this reply that was refused, once one was: the steps after it are not run. They were,
+       * and the chat got test results from a tree its own plan had not produced — a write refused, the
+       * tests run on the old code (live run 2026-10-03).
+       */
+      let refusedAt: number | null = null;
       for (const step of reply.steps) {
         if (signal?.aborted) {
           results.push(refusedResult(step, 'stopped by the operator', 'operator'));
           aborted = true;
           break;
+        }
+        if (refusedAt !== null) {
+          sink.event('step-skipped', { id: step.id, reason: `step ${refusedAt} was refused`, by: 'runner', after: refusedAt }, `step ${step.id} not run: step ${refusedAt} was refused`, 'info');
+          results.push(refusedResult(step, `not run, because step ${refusedAt} of this reply was refused: it would have run on a tree your plan did not produce. Send it again after step ${refusedAt} is replaced.`));
+          continue;
         }
 
         {
@@ -2144,6 +2363,7 @@ export async function runTask(
           if (damage) {
             sink.event('step-damaged', { id: step.id, cmd: step.cmd, damage }, `step ${step.id} arrived damaged: ${damage}`, 'warn');
             results.push(refusedResult(step, `${damage}. ${damageGuidance()}`));
+            refusedAt = step.id;
             continue;
           }
         }
@@ -2174,11 +2394,21 @@ export async function runTask(
         // Refused before the operator is asked to approve it, because a step that cannot teach
         // anyone anything is not worth a person's attention either.
         const key = fingerprint(step);
-        const ran = seen.get(key)?.sameInARow ?? 0;
+        const last = seen.get(key);
+        let ran = last?.sameInARow ?? 0;
+        if (ran >= maxCommandRepeats && last) {
+          // Something changed since it last ran — the tree, or (without a tree to compare) another step ran: not a repeat.
+          const nowTree = await treeNow();
+          const changed = last.tree !== null && nowTree !== null ? last.tree !== nowTree : stepsRunThisAttempt > last.stepNo;
+          if (changed) {
+            seen.set(key, { ...last, sameInARow: 0 });
+            ran = 0;
+          }
+        }
         if (ran >= maxCommandRepeats) {
           repeatsRefused += 1;
           stats.repeatsRefused += 1;
-          sink.event('step-repeated', { id: step.id, count: ran, limit: maxCommandRepeats },
+          sink.event('step-repeated', { id: step.id, count: ran, limit: maxCommandRepeats, command: describeStep(step) },
             `step ${step.id} refused: already run ${ran} time(s) in this task with the same result`, 'warn');
           results.push(refusedResult(step, repeatRefusal(ran, maxCommandRepeats)));
           continue;
@@ -2206,6 +2436,7 @@ export async function runTask(
         if (decision.action === 'skip') {
           sink.event('step-skipped', { id: step.id, reason: decision.reason, by: decision.by ?? 'runner' }, `step ${step.id} skipped: ${decision.reason}`, 'warn');
           results.push(refusedResult(step, decision.reason, decision.by === 'operator' ? 'operator' : 'runner'));
+          refusedAt = step.id;
           continue;
         }
 
@@ -2236,13 +2467,13 @@ export async function runTask(
         );
 
         results.push(result);
+        stepsRunThisAttempt += 1;
         // The run counts toward the limit only if it changed nothing about the answer.
         const signature = resultSignature(result);
         const previous = seen.get(key);
-        seen.set(key, {
-          signature,
-          sameInARow: previous && previous.signature === signature ? previous.sameInARow + 1 : 1,
-        });
+        const sameInARow = previous && previous.signature === signature ? previous.sameInARow + 1 : 1;
+        // The tree is read only for a command at the limit, the one case it is asked about.
+        seen.set(key, { signature, sameInARow, tree: sameInARow >= maxCommandRepeats ? await treeNow() : null, stepNo: stepsRunThisAttempt });
         sink.event('step-finished', { id: step.id, outcome: result.outcome, exitCode: result.exitCode, durationMs: result.durationMs, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
 
@@ -2305,7 +2536,7 @@ export async function runTask(
         }));
         if (check.outside.length > 0 || check.failed.length > 0) {
           sink.event('scope-reverted', { iteration: iterations, reverted: check.reverted, failed: check.failed },
-            `outside the task's scope, put back: ${check.reverted.join(', ') || '(none)'}` +
+            `${task.readOnly ? 'changed by a read-only task' : "outside the task's scope"}, put back: ${check.reverted.join(', ') || '(none)'}` +
               (check.failed.length > 0 ? `; could not be put back: ${check.failed.map((f) => f.path).join(', ')}` : ''),
             'warn');
           runnerNotes.push(scopeMessage(check, scope, !!task.readOnly));
@@ -2608,7 +2839,7 @@ export async function runSession(
        */
       const retriesAllowed = cfg.limits.retryBlockedInFreshChat ?? 0;
       let retried = 0;
-      while (outcome.status === 'blocked' && retried < retriesAllowed && !deps.signal?.aborted) {
+      while (outcome.status === 'blocked' && retried < retriesAllowed && !deps.signal?.aborted && !(outcome.stopCode && NOT_THE_CHATS.includes(outcome.stopCode))) {
         retried += 1;
         bus.publish({
           sessionId,
@@ -2655,12 +2886,15 @@ export async function runSession(
         bus.publish({
           sessionId,
           taskId: task.id,
-          type: outcome.status === 'blocked' ? 'task-retry-exhausted' : 'task-retry-recovered',
-          level: outcome.status === 'blocked' ? 'error' : 'info',
+          // "recovered" only when it ended done: a failure after a retry is not a recovery.
+          type: outcome.status === 'blocked' ? 'task-retry-exhausted' : outcome.status === 'done' ? 'task-retry-recovered' : 'task-retry-ended',
+          level: outcome.status === 'blocked' ? 'error' : outcome.status === 'done' ? 'info' : 'warn',
           message:
             outcome.status === 'blocked'
               ? `"${task.title}" blocked again after ${retried} fresh conversation(s): the cause is not the chat — read the task text, the checks and the machine`
-              : `"${task.title}" ended ${outcome.status} in a fresh conversation after blocking ${retried} time(s): the earlier block was the chat's`,
+              : outcome.status === 'done'
+                ? `"${task.title}" ended done in a fresh conversation after blocking ${retried} time(s): the earlier block was the chat's`
+                : `"${task.title}" ended ${outcome.status} in a fresh conversation after blocking ${retried} time(s)`,
           data: { retried, status: outcome.status },
         });
       }
@@ -2668,7 +2902,12 @@ export async function runSession(
       if (outcome.status !== 'done') {
         if (!deps.continueOnFailure) {
           bus.publish({ sessionId, type: 'session-stopped-early', level: 'warn',
-            message: `task "${task.title}" ended ${outcome.status}; the remaining tasks stay queued` });
+            message: (() => {
+              const left = queued.length - queued.findIndex((q) => q.id === queuedTask.id) - 1;
+              return left > 0
+                ? `task "${task.title}" ended ${outcome.status}; the ${left} task(s) after it stay queued`
+                : `task "${task.title}" ended ${outcome.status}; it was the session's last queued task`;
+            })() });
           break;
         }
         // Saying this out loud matters: carrying on past a failure is a choice the operator
@@ -2686,7 +2925,10 @@ export async function runSession(
     await store.updateSession(sessionId, (s) => {
       s.status = 'idle';
     });
-    bus.publish({ sessionId, type: 'session-finished', level: 'info', message: `${ran} task(s) ran` });
+    const distinct = new Set(queued.map((q) => q.id)).size;
+    bus.publish({ sessionId, type: 'session-finished', level: 'info', message: `${Math.min(ran, distinct)} task(s) ran${ran > distinct ? ` (${ran} attempts, with retries)` : ''}`, data: { attempts: ran } });
+    const left = await whereLeft((await store.getSession(sessionId)) ?? session).catch(() => null);
+    if (left) bus.publish({ sessionId, type: 'vcs-left-on', level: 'warn', message: left });
   }
   return { ran, lastStatus, paused };
 }

@@ -137,13 +137,32 @@ export function scopeMessage(check: ScopeCheck, scope: readonly string[], readOn
 }
 
 /** The line the opening message carries, so the chat knows the rule before its first step. */
-export function scopeNote(scope: readonly string[], enforced: boolean): string {
+export function scopeNote(
+  scope: readonly string[],
+  enforced: boolean,
+  /** The session's artifact patterns and the task's declared outputs: not put back, and kept only as said here. */
+  evidence: { artifacts?: readonly string[]; outputs?: readonly string[]; why?: string } = {},
+): string {
   if (scope.length === 0) return '';
+  const artifacts = evidence.artifacts ?? [];
+  const outputs = evidence.outputs ?? [];
+  /*
+   * One account of what is put back and what is kept. The message said "anything outside is put back",
+   * then "this task is to produce" a file outside, then "evidence goes under reports/**" — and a report
+   * there outside the scope was neither put back nor kept (live run 2026-10-03).
+   */
+  const exempt = [
+    ...(outputs.length > 0 ? [`the files this task is to produce (${outputs.join(', ')}) are not put back and are kept with the run`] : []),
+    ...(artifacts.length > 0
+      ? [`files under ${artifacts.join(', ')} are never committed and are not put back; of those, only the ones inside the paths above${outputs.length > 0 ? ' or among the files to produce' : ''} are kept with the run`]
+      : []),
+  ];
   return (
     `## Scope\n\nThis task may change only these paths (repository-relative): ${scope.join(', ')}. ` +
     (enforced
       ? 'After every round of steps the runner puts back any change outside them and tells you which.'
-      : 'Version control is off for this session, so this is not enforced: keep to it.') +
+      : `${evidence.why ?? 'Version control is off for this session'}, so this is not enforced: keep to it.`) +
+    (exempt.length > 0 ? ` Except: ${exempt.join('; ')}.` : '') +
     ' Reading any file in the project is fine.'
   );
 }

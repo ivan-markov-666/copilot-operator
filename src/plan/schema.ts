@@ -631,7 +631,7 @@ function readPlan(text: string): PlanCheck {
   return {
     ok: true,
     plan: parsed.data,
-    warnings: [...warnings, ...duplicateNameWarnings(parsed.data), ...indexCheckWarnings(parsed.data)],
+    warnings: [...warnings, ...duplicateNameWarnings(parsed.data), ...indexCheckWarnings(parsed.data), ...commitsOffWarnings(parsed.data)],
     summary: summarise(parsed.data),
   };
 }
@@ -646,6 +646,19 @@ function readPlan(text: string): PlanCheck {
  * that was meant; the negative form (`output-omits` on `ls-files`, "node_modules is not
  * tracked") is fine and stays silent.
  */
+/**
+ * A branch per task with commits off isolates only the first task: nothing is committed, so the next
+ * task finds the first one's files in the tree and runs on top of them without a branch of its own
+ * (live run 2026-10-03). Said at import, where it can still be changed.
+ */
+function commitsOffWarnings(plan: Plan): string[] {
+  return plan.sessions.flatMap((s, i) =>
+    s.vcs?.enabled !== false && s.vcs?.commitOnFinish === false && (s.vcs?.branchMode ?? 'per-task') === 'per-task' && s.tasks.length > 1
+      ? [`sessions[${i}] ("${s.name}"): a branch per task with commits off gives only the first task a branch of its own — the others run on top of its uncommitted files. Use "per-session", or let the runner commit.`]
+      : [],
+  );
+}
+
 function indexCheckWarnings(plan: Plan): string[] {
   const out: string[] = [];
   plan.sessions.forEach((s, i) => {

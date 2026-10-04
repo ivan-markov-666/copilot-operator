@@ -265,17 +265,14 @@ await scenario('invalid-check: a check refused before it ran ends the task as th
   const [s] = await h.importPlan(
     plan(h, 'invalid', [task('network-check', { checks: [{ name: 'the page downloads', expect: 'exit-zero', run: 'curl https://example.com -o x.html' }, readmeIntact] })]),
   );
-  // Enough "done" for any number of rounds the runner might spend on it; what is left is discarded.
-  h.chat.script(reply.steps('Write-Output working'), reply.done(), reply.done(), reply.done(), reply.done());
-  const ended = (await h.run(s!.id)).tasks[0] as Ended;
-  h.chat.discard();
-  const detail = ended.checkResults?.[0]?.detail ?? '';
-  t.truthy('the check was refused before it ran, for fetching from the network', detail.includes('refused before it ran') && detail.includes('fetches from the network'), detail);
-  // Nothing the chat does can make a check run that its own command line keeps from running, so the
-  // first "done" ends the task on the checks — before the unchanged tree could read as no progress.
-  t.check('failed, stopCode invalid-check', [ended.status, ended.stopCode ?? null], ['failed', 'invalid-check']);
-  // And the chat is not sent it as work to fix.
-  t.check('the chat was never asked to fix a check that could not run', h.chat.sent.filter((m) => m.text.includes('not finished yet')).length, 0);
+  /*
+   * Nothing the chat does can make a check run that its own command line keeps from running, so the
+   * task could never pass: the run is refused before the browser opens, the task left queued with no
+   * attempt (live-fixes C24). It used to run the whole task first and end at the first "done".
+   */
+  const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  t.truthy('refused before starting, for the check that fetches from the network', !r.started && /"the page downloads" is refused by the runner/.test(r.reason ?? '') && /fetches from the network/.test(r.reason ?? ''), r);
+  t.check('the task stays queued, and nothing was sent', [(await h.session(s!.id)).tasks[0]!.status, h.chat.sent.length], ['queued', 0]);
 });
 
 /*
@@ -304,10 +301,10 @@ await scenario('a check refused for its script goes back to the chat; one refuse
     plan(h, 'script-line', [task('runs-it-by-path', { checks: [{ name: 'verify.ps1 by path', expect: 'exit-zero', run: '.\\verify.ps1' }, readmeIntact] })]),
   );
   const sent = h.chat.sent.length;
-  h.chat.script(reply.done());
-  const byPath = (await h.run(p!.id)).tasks[0] as Ended;
-  t.check('refused for the line itself: failed, stopCode invalid-check', [byPath.status, byPath.stopCode ?? null], ['failed', 'invalid-check']);
-  t.check('with nothing sent back about it', h.chat.sent.slice(sent).filter((m) => m.text.includes('not finished yet')).length, 0);
+  // Refused for the line itself: the run does not start, and the task stays queued (live-fixes C24).
+  const byPath = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${p!.id}/start`, { mode: 'unattended' });
+  t.truthy('refused for the line itself, before starting', !byPath.started && /"verify\.ps1 by path" is refused by the runner/.test(byPath.reason ?? ''), byPath);
+  t.check('with nothing sent', [(await h.session(p!.id)).tasks[0]!.status, h.chat.sent.length - sent], ['queued', 0]);
 });
 
 /*
@@ -513,7 +510,7 @@ await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"
   });
   for (let i = 2; i <= 6; i++) h.chat.script(reply.steps(`Write-Output 'round ${i}'`));
   // The second task gives up in the first chat, and again in the fresh one it is retried in.
-  h.chat.script(reply.blocked(), reply.blocked());
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   const after = await h.run(s!.id);
   const [t1, t2] = after.tasks as Ended[];
   t.check('the first stopped at the limit, the second blocked twice', [t1!.status, t2!.status], ['limit-reached', 'blocked']);
@@ -541,7 +538,7 @@ await scenario('a fresh-chat retry must not strand an earlier task\'s "Continue"
   // A retry of another task in a fresh conversation moves the session again; then the third's
   // conversation is deleted outright.
   await h.call('POST', `/sessions/${s!.id}/tasks`, { title: 'blocks-again', prompt: 'A fourth task that gives up, twice, the second time in a fresh conversation.' });
-  h.chat.script(reply.blocked(), reply.blocked());
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   const moved = await h.run(s!.id);
   t.truthy('the session moved on from the conversation of the third', !!moved.chat && moved.chat.chatId !== chatA, [moved.chat, chatA]);
   h.chat.conversations.delete(chatA);
@@ -683,8 +680,8 @@ await scenario('a Stop between the contract and the task: "Continue" sends the t
   await h.call('POST', `/sessions/${s!.id}/tasks`, { title: 'blocks-twice', prompt: 'A second task that gives up, twice, the second time in a fresh conversation.' });
   h.chat.script((m) => {
     t.truthy('the next task goes into that conversation without the contract again', m.chatId === chatA && !m.text.includes(TASK_CONTRACT), { chatId: m.chatId, chatA, text: m.text.slice(0, 300) });
-    return reply.blocked();
-  }, reply.blocked());
+    return reply.steps('Get-ChildItem');
+  }, reply.blocked(), ...reply.triedThenBlocked());
   const moved = await h.run(s!.id);
   t.truthy('a retry in a fresh conversation moved the session', !!moved.chat && moved.chat.chatId !== chatA, moved.chat);
 
@@ -755,15 +752,16 @@ await scenario('a Stop after the contract, before its conversation is known: the
  * registered by a later task's retry after the attempt started, so it cannot hold it: the task goes
  * out in full in a fresh conversation.
  */
-await scenario('an attempt with no record of its conversation is placed by the session\'s own', { limits: { maxIterations: 1, retryBlockedInFreshChat: 1 } }, async (h) => {
+await scenario('an attempt with no record of its conversation is placed by the session\'s own', { limits: { maxIterations: 2, retryBlockedInFreshChat: 1 } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'unrecorded', [task('stops-at-limit'), task('blocks-twice')], { vcs: false, onFailure: 'continue' }));
   let chatA = '';
-  // Two replies for a limit of one: the answer to the first report is read before the count is.
+  // Three replies for a limit of two: the answer to the last report is read before the count is. Two
+  // messages, so the second task can try a step before it gives up (a "blocked" with none is sent back).
   h.chat.script((m) => {
     chatA = m.chatId;
     return reply.steps("Write-Output 'one'");
-  }, reply.steps("Write-Output 'two'"));
-  h.chat.script(reply.blocked(), reply.blocked());
+  }, reply.steps("Write-Output 'two'"), reply.steps("Write-Output 'three'"));
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   const after = await h.run(s!.id);
   const [t1, t2] = after.tasks as Ended[];
   t.check('the first stopped at the limit, the second blocked twice', [t1!.status, t2!.status], ['limit-reached', 'blocked']);

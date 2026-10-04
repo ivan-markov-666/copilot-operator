@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "sessions": [
+    {
+      "name": "calculator from spec",
+      "onFailure": "stop",
+      "vcs": {
+        "enabled": true,
+        "repoDir": "C:\\Projects\\calculator-test",
+        "branchMode": "per-session",
+        "startFrom": "branch",
+        "baseBranch": "main",
+        "updateFromRemote": false,
+        "userInputs": { "paths": ["specs/**"] }
+      },
+      "review": { "enabled": false },
+      "tasks": [
+        {
+          "title": "calculator-from-spec",
+          "prompt": "In C:\\Projects\\calculator-test, implement a small calculator in plain JavaScript for Node.js, with no dependencies and no npm install. First read specs/README.md and specs/operations.json: they are the operator's input files — read them, never change them. Create src/calculator.js (CommonJS, module.exports) exporting add, subtract, multiply and divide. divide must throw an Error whose message is exactly the one given under errors in the specification when the divisor is 0. Create test/calculator.test.js using node:test and node:assert with one test per example in the specification, each named \"<operation> <a> <b> = <result>\" (for example \"add 2 3 = 5\"), plus one test named \"divide by zero throws\" that checks the exact message. Run the tests with node --test and fix anything until every test passes. Do not create package.json.",
+          "checks": [
+            { "name": "the tests run and pass", "expect": "output-contains", "run": "node --test", "value": "fail 0" },
+            { "name": "every example of the specification is a test", "expect": "output-matches", "run": "node --test", "value": "pass ([6-9]|\\d{2,})" },
+            { "name": "division by zero is tested", "expect": "output-contains", "run": "node --test", "value": "divide by zero throws" },
+            { "name": "the first example is a test", "expect": "output-contains", "run": "node --test", "value": "add 2 3 = 5" }
+          ]
+        }
+      ]
+    }
+  ]
+}

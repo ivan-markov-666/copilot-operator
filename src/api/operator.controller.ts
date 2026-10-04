@@ -707,8 +707,8 @@ export class OperatorController {
 
   /** …and doing it, if the folder is still what the preview showed. */
   @Post('repo/prepare')
-  repoPrepare(@Body() body: { dir?: string; fingerprint?: string }): Promise<unknown> {
-    return this.ops.prepareProject(body?.dir ?? '', body?.fingerprint ?? '').catch(fail);
+  repoPrepare(@Body() body: { dir?: string; fingerprint?: string; savedBranch?: string; savedMainBranch?: string }): Promise<unknown> {
+    return this.ops.prepareProject(body?.dir ?? '', body?.fingerprint ?? '', { savedBranch: body?.savedBranch, savedMainBranch: body?.savedMainBranch }).catch(fail);
   }
 
   @Get('repo')

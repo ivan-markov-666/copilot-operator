@@ -28,7 +28,7 @@ import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import {
+import { PWSH_UTF8,
   availableShells,
   detectShells,
   effectiveShell,
@@ -119,7 +119,7 @@ check('and does not rename what was asked for', effectiveShell('pwsh', withoutPw
 console.log('\n--- how each shell is invoked ---');
 const psCall = invocationFor({ requested: 'pwsh', shell: 'pwsh', path: 'P:\\pwsh.exe' }, 'Get-Date');
 // RemoteSigned, not Bypass: nothing is downloaded, and a script marked as from the web must not run.
-check('pwsh takes -Command', psCall.args.join(' '), '-NoProfile -NonInteractive -Command Get-Date');
+check('pwsh takes -Command, with the console in UTF-8 first', psCall.args.join(' '), `-NoProfile -NonInteractive -Command ${PWSH_UTF8}Get-Date`);
 check('at the executable that was resolved', psCall.file, 'P:\\pwsh.exe');
 check('and Node quotes its arguments, as before', psCall.windowsVerbatimArguments, false);
 /*
@@ -128,7 +128,7 @@ check('and Node quotes its arguments, as before', psCall.windowsVerbatimArgument
  * the commands that broke.
  */
 const cmdCall = invocationFor({ requested: null, shell: 'cmd', path: 'C:\\cmd.exe' }, 'echo "hi"');
-check('cmd takes /d /s /c and the line in quotes', cmdCall.args.join(' '), '/d /s /c "echo "hi""');
+check('cmd takes /d /s /c and the line in quotes, the code page set to UTF-8 first', cmdCall.args.join(' '), '/d /s /c "chcp 65001 >nul & echo "hi""');
 check('given verbatim, so nothing quotes it again', cmdCall.windowsVerbatimArguments, true);
 const scriptCall = invocationFor({ requested: 'powershell', shell: 'powershell', path: 'W:\\powershell.exe' }, 'C:\\a.ps1', ['--one']);
 check('a script is run with -File', scriptCall.args.slice(-3).join(' '), '-File C:\\a.ps1 --one');
@@ -137,7 +137,7 @@ const cmdScript = invocationFor({ requested: 'cmd', shell: 'cmd', path: 'C:\\cmd
 check(
   'a cmd script: path quoted, arguments quoted for cmd',
   cmdScript.args.join(' '),
-  '/d /s /c ""C:\\a b\\x.cmd" --one "two words" "a&b" "" C:\\dir\\ "x""y""',
+  '/d /s /c "chcp 65001 >nul & "C:\\a b\\x.cmd" --one "two words" "a&b" "" C:\\dir\\ "x""y""',
 );
 check('and given verbatim as well', cmdScript.windowsVerbatimArguments, true);
 

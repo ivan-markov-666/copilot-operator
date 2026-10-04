@@ -51,12 +51,20 @@ function excludeLine(pattern: string): string {
 }
 
 /**
- * Writes the session's artifact patterns into `.git/info/exclude`, once each. Returns the files
- * matching them that git already tracks, which an exclude does not stop from being committed.
+ * The runner's scratch folder in the project: helper scripts and temporary copies the chat needs while
+ * it works, never committed. Found live on 2026-10-03: the write-then-run pattern the contract teaches
+ * left `rewrite-report.ps1` and `tmp-report.txt` in the project root, and the task's commit swept them
+ * in with the work. The contract now sends such files here, and the folder is excluded from git.
+ */
+export const SCRATCH_DIR = '.cop-tmp';
+
+/**
+ * Writes the session's artifact patterns, and the runner's scratch folder, into `.git/info/exclude`,
+ * once each. Returns the files matching the patterns that git already tracks, which an exclude does
+ * not stop from being committed.
  */
 export async function excludeArtifacts(dir: string, session: Session): Promise<{ problem?: string; tracked: string[] }> {
   const patterns = artifactPatterns(session.vcs);
-  if (patterns.length === 0) return { tracked: [] };
   const where = await git(dir, ['rev-parse', '--git-path', 'info/exclude']);
   if (!where.ok || !where.stdout) return { problem: "the repository's exclude file could not be found", tracked: [] };
   const top = (await git(dir, ['rev-parse', '--show-toplevel'])).stdout || dir;
@@ -64,15 +72,19 @@ export async function excludeArtifacts(dir: string, session: Session): Promise<{
   const before = await readFile(file, 'utf8').catch(() => '');
   const have = new Set(before.split(/\r?\n/).map((l) => l.trim()));
   const add = patterns.map(excludeLine).filter((l) => !have.has(l));
-  if (add.length > 0) {
+  const scratch = `/${SCRATCH_DIR}/`;
+  const blocks: string[] = [];
+  if (!have.has(scratch)) blocks.push(`# copilot-operator: the runner's scratch folder — helper scripts and temporary files, never committed`, scratch);
+  if (add.length > 0) blocks.push(`# copilot-operator: artifacts of session "${session.name.replace(/[\r\n]+/g, ' ')}" (${session.id}) — kept with the run, never committed`, ...add);
+  if (blocks.length > 0) {
     try {
       await mkdir(dirname(file), { recursive: true });
-      const block = [`# copilot-operator: artifacts of session "${session.name.replace(/[\r\n]+/g, ' ')}" (${session.id}) — kept with the run, never committed`, ...add, ''].join('\n');
-      await writeFile(file, `${before}${before && !before.endsWith('\n') ? '\n' : ''}${block}`, 'utf8');
+      await writeFile(file, `${before}${before && !before.endsWith('\n') ? '\n' : ''}${[...blocks, ''].join('\n')}`, 'utf8');
     } catch (e) {
       return { problem: `the exclude file could not be written: ${(e as Error).message}`, tracked: [] };
     }
   }
+  if (patterns.length === 0) return { tracked: [] };
   const tracked = (await git(resolve(top), ['ls-files'])).stdout.split('\n').filter((p) => p && inScope(p, patterns));
   return { tracked };
 }

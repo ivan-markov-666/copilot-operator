@@ -560,7 +560,14 @@ Current URL: ${url}`);
    */
   async nameChat(chatId: string, name: string): Promise<boolean> {
     const row = this.p.locator(`${Sidebar.conversationLink}[href*="${chatId}"]`).first();
-    if ((await row.count()) === 0) return false;
+    // Waited for, like everything below: a new chat's row appears in the sidebar a moment after the
+    // reply, and `count()` read it as missing and returned without a word (live run 2026-10-03).
+    try {
+      await row.waitFor({ state: 'attached', timeout: 15_000 });
+    } catch {
+      this.emit('chat-name-failed', { chatId, name, error: 'the conversation did not appear in the sidebar within 15 s' });
+      return false;
+    }
 
     /*
      * Every step here waits for what it is about to click.

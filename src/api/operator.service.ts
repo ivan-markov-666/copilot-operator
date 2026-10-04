@@ -67,7 +67,12 @@ import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } from '../vcs/prepareFromRemote.js';
 import { askpassProgram } from '../vcs/remoteAuth.js';
-import { appendRunLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
+import { appendRunLog, appendSessionLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
+import { workingDirFor, isWorkingDirProblem } from '../exec/workDir.js';
+import { contractConflicts } from '../orchestrator/contract.js';
+import { checkRefusalForOperator, lineRefusal } from '../orchestrator/taskRunner.js';
+import { preferredShell } from '../exec/shells.js';
+import { sessionRoots } from '../exec/confinement.js';
 import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
 import { runVcsPreflight, runVcsPrepare, type RunVcsActionId, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { normalisePatterns } from '../vcs/inputs.js';
@@ -105,6 +110,11 @@ type BrowserAsk = { kind: 'run'; sessionId: string } | { kind: 'batch'; sessionI
 export type RunTally = {
   ran: number;
   failed: number;
+  /**
+   * Tasks the operator stopped (`aborted`): not failures. Counted with the failures, a session stopped in a
+   * batch was recorded "failed" and could stop the batch as a broken chain (live run 2026-10-03).
+   */
+  stopped?: number;
   /** Tasks that never started, because the chain stopped or the operator did. */
   leftQueued: number;
   failedTitles: string[];
@@ -810,7 +820,15 @@ export class OperatorService {
   /** "Continue" on a task that stopped before it finished — a limit from the settings, the bot stopping, the operator: same chat, same branch, fresh count. */
   async continueTask(sessionId: string, taskId: string): Promise<Task> {
     await this.init();
-    const task = await this.store.continueTask(sessionId, taskId);
+    /*
+     * An attempt the operator stopped: which of its last steps ran, and what they printed, read from its
+     * run folder, so "Continue" can tell the chat. Without it the chat was told only that it had been
+     * stopped, and ran its inspection steps again (live run 2026-10-03).
+     */
+    const before = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
+    const cfg = await this.settings.load();
+    const stoppedAt = before?.status === 'aborted' && !before.interruption && before.runId ? await readInterruption(join(cfg.resolved.runsDir, before.runId)).catch(() => null) : null;
+    const task = await this.store.continueTask(sessionId, taskId, stoppedAt);
     this.bus.publish({
       sessionId,
       taskId,
@@ -836,6 +854,13 @@ export class OperatorService {
     await this.init();
     const before = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
     const buildsOn = opts.buildOnFinished && before?.status === 'done' ? { fromAttempt: before.attempt ?? 1 } : undefined;
+    /*
+     * A new prompt is a new change: the plan's commit subject was written for the old one, and two
+     * different commits went out under it (live run 2026-10-03). Dropped unless the edit names one.
+     */
+    if (patch.prompt?.trim() && before && patch.prompt.trim() !== before.prompt.trim() && before.vcsPlan?.commitMessage && !patch.vcsPlan?.commitMessage) {
+      patch = { ...patch, vcsPlan: { ...before.vcsPlan, ...(patch.vcsPlan ?? {}), commitMessage: undefined } };
+    }
     const task = await this.store.rerunTask(sessionId, taskId, patch, undefined, buildsOn);
     this.bus.publish({
       sessionId,
@@ -1373,9 +1398,10 @@ export class OperatorService {
       type: 'upload-notice',
       level: 'info',
       message:
-        "every report of this run — each step's terminal output, the check results, the reviewer's transcripts — and any " +
-        "mirrored project files are uploaded into the Copilot chat and stored in the signed-in account's OneDrive and " +
-        'Copilot history, inside the tenant; secret-shaped strings are redacted first',
+        // Project files are no longer mirrored to the chat (removed in 0.1.14): only the reports go (live run 2026-10-03).
+        "every report of this run — each step's terminal output, the check results, the reviewer's transcripts — is " +
+        "uploaded into the Copilot chat and stored in the signed-in account's OneDrive and Copilot history, inside the " +
+        'tenant; secret-shaped strings are redacted first',
     });
 
     const done = runSession(sessionId, {
@@ -1435,6 +1461,10 @@ export class OperatorService {
         continue;
       }
       tally.ran += 1;
+      if (task.status === 'aborted') {
+        tally.stopped = (tally.stopped ?? 0) + 1;
+        continue;
+      }
       if (task.status !== 'done') {
         tally.failed += 1;
         tally.failedTitles.push(task.title);
@@ -1457,7 +1487,8 @@ export class OperatorService {
     await this.store.updateSession(sessionId, (s) => {
       s.status = 'stopping';
     });
-    this.bus.publish({ sessionId, type: 'stop-requested', level: 'warn', message: 'stopping after the current step' });
+    // The running step is cut off, not waited for: said as it is (live run 2026-10-03).
+    this.bus.publish({ sessionId, type: 'stop-requested', level: 'warn', message: 'stopping now: the step that is running is cut off, and nothing more is sent' });
     return { stopping: true };
   }
 
@@ -1885,6 +1916,9 @@ export class OperatorService {
         } else if (tally.failed > 0) {
           entry.state = 'failed';
           entry.reason = `${tally.failed} task(s) did not finish: ${tally.failedTitles.join(', ')}`;
+        } else if ((tally.stopped ?? 0) > 0) {
+          entry.state = 'stopped';
+          entry.reason = `stopped by the operator after ${tally.ran - (tally.stopped ?? 0)} task(s); ${tally.leftQueued} still queued`;
         } else if (tally.paused) {
           entry.state = 'stopped';
           entry.reason = `paused after ${tally.ran} task(s); ${tally.leftQueued} still queued`;
@@ -2043,7 +2077,12 @@ export class OperatorService {
      */
     const repoIssues: PlanIssue[] = [];
     check.plan.sessions.forEach((session, i) => {
-      if (session.vcs?.enabled === false) return;
+      if (session.vcs?.enabled === false) {
+        // Without version control the project folder must still be there (live run 2026-10-03: not looked at).
+        const folder = (session.projectDir ?? '').trim();
+        if (folder && !existsSync(folder)) repoIssues.push({ path: `sessions[${i}].projectDir`, message: `${folder} does not exist. Name the session's project folder, or create it.` });
+        return;
+      }
       const dir = plannedRepoDir(session);
       const reason = repoUnusableReason(dir);
       if (reason) repoIssues.push({ path: `sessions[${i}].vcs.repoDir`, message: reason });
@@ -2346,7 +2385,8 @@ export class OperatorService {
       const ids = g.sessions.map((x) => x.id);
       const first = ids[0] ? await this.store.getSession(ids[0]) : null;
       const start = first?.vcsStart;
-      const untouched = !!first && !first.tasks.some((t) => t.startedAt);
+      // Said once, in the first run after the snapshot: a re-run clears `startedAt`, so earlier attempts count too.
+      const untouched = !!first && !first.tasks.some((t) => t.startedAt || (t.attempts ?? []).some((a) => a.startedAt));
       if (start?.kind === 'snapshot' && start.snapshot?.approved && untouched) {
         note('baseline-created', `starting snapshot ${start.commit.slice(0, 8)} on ${start.branch ?? '?'}, approved ${start.snapshot.approvedAt ?? ''}${start.snapshot.onBase ? ` on top of "${start.snapshot.fromBranch}"` : ''}`, {
           repoDir: g.repoDir,
@@ -2363,7 +2403,9 @@ export class OperatorService {
         branch: g.branch,
         head: g.head,
         ...(g.baseBranch ? { baseBranch: g.baseBranch, baseHead: g.baseHead } : {}),
-        sessions: g.sessions.map((x) => ({ id: x.id, name: x.name, startFrom: x.startFrom, role: x.role })),
+        ...(g.workBranch ? { workBranch: g.workBranch } : {}),
+        ...(g.carry ? { carry: g.carry } : {}),
+        sessions: g.sessions.map((x) => ({ id: x.id, name: x.name, startFrom: x.startFrom, role: x.role, started: x.started })),
         inputPatterns: g.inputPatterns,
         inputs: g.inputs.map((e) => e.path),
         unrelated: g.unrelated.map((u) => u.path),
@@ -2371,15 +2413,37 @@ export class OperatorService {
       }, ids, g.ready ? 'info' : 'warn');
       const fixes = g.actions.filter((a) => a.available && a.id !== 'review-inputs').map((a) => a.id);
       if (!g.ready && fixes.length > 0) {
-        note('snapshot-approval-required', `${g.repoDir}: nothing runs until one of these is pressed on the run screen: ${fixes.join(', ')}`, { repoDir: g.repoDir, actions: fixes }, ids, 'warn');
+        const label: Record<string, string> = {
+          'snapshot-on-base': `Create starting snapshot on ${g.baseBranch ?? 'the base branch'}`,
+          'snapshot-here': `Create starting snapshot on ${g.branch ?? 'HEAD'}`,
+          'use-current-branch': `Use the current branch instead of ${g.baseBranch ?? 'the base branch'}`,
+          'allow-snapshot': 'Take uncommitted changes as a starting snapshot',
+        };
+        note('snapshot-approval-required', `${g.repoDir}: nothing runs until one of these is pressed under "Prepare version control for this run" on the Sessions page: ${fixes.map((f) => `"${label[f] ?? f}"`).join(', ')}`, { repoDir: g.repoDir, actions: fixes }, ids, 'warn');
       }
     }
     const open = groups.filter((g) => !g.ready);
-    const reason = open.length === 0
-      ? null
-      : 'Version control is not ready for this run, so nothing was opened or sent. ' +
-        open.map((g) => `${g.repoDir}: ${g.problem ?? 'it needs your approval'}`).join(' ') +
-        ' Fix it under "Prepare version control for this run" on the Sessions page.';
+    // A task that contradicts itself, said here too: found at its start, it had already cut a branch and used an attempt.
+    const contradictions: string[] = [];
+    for (const id of sessionIds) {
+      const s = await this.store.getSession(id);
+      const said = s ? await this.contractRefusal(s, onlyTasks) : null;
+      if (said) {
+        contradictions.push(said);
+        note('run-preflight-refused', said, { session: id, contract: true }, [id], 'warn');
+      }
+    }
+    const parts = [
+      ...(open.length > 0
+        ? [
+            'Version control is not ready for this run, so nothing was opened or sent. ' +
+              open.map((g) => `${g.repoDir}: ${g.problem ?? 'it needs your approval'}`).join(' ') +
+              ' Fix it under "Prepare version control for this run" on the Sessions page.',
+          ]
+        : []),
+      ...(contradictions.length > 0 ? [`${open.length > 0 ? '' : 'Nothing was opened or sent. '}${contradictions.join(' ')}`] : []),
+    ];
+    const reason = parts.length === 0 ? null : parts.join(' ');
     if (reason) note('run-preflight-refused', reason, { repositories: open.map((g) => g.repoDir) }, sessionIds, 'warn');
     else note('run-preflight-passed', `version control is ready in ${groups.length} repositor${groups.length === 1 ? 'y' : 'ies'}; the browser may open`, { repositories: groups.map((g) => g.repoDir) }, sessionIds);
     await appendRunLog(cfg.resolved.runsDir, runId, log).catch(() => undefined);
@@ -2387,10 +2451,38 @@ export class OperatorService {
   }
 
   /**
+   * Why the session's next task cannot start because it contradicts itself — read-only and scoped, or
+   * a file check that needs a change the task may not make — or null. The part of the contract that
+   * depends on the branch the runner will choose is checked at the task's start, once that is known.
+   */
+  private async contractRefusal(session: Session, onlyTasks?: ReadonlySet<string>): Promise<string | null> {
+    const next = queuedToRun(session, onlyTasks)[0];
+    if (!next) return null;
+    const cfg = await this.settings.load();
+    const work = workingDirFor(session, cfg.resolved.cwd);
+    if (isWorkingDirProblem(work)) return null;
+    const conflicts = await contractConflicts(next, work.cwd, repoDirOf(session) || work.cwd).catch(() => [] as string[]);
+    // A plan check the runner refuses for its own command line can never run: the task could never pass.
+    const roots = sessionRoots(work.cwd, [cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)]);
+    const shell = preferredShell(cfg.execution.defaultShell);
+    for (const c of next.checks ?? []) {
+      const run = c.run?.trim();
+      if (!run) continue;
+      const why = lineRefusal(run, c.shell ?? shell, c.cwd ? resolve(work.cwd, c.cwd) : work.cwd, cfg.execution, roots);
+      if (why) conflicts.push(`The check "${c.name}" is refused by the runner for its own command line, so it can never run and the task could never pass: ${checkRefusalForOperator(why)}.`);
+    }
+    return conflicts.length === 0
+      ? null
+      : `The task "${next.title}" of "${session.name}" contradicts itself, so it was not started and stays queued: ${conflicts.join(' ')} Change the prompt, the checks, the scope or read-only on the session's page, and start again.`;
+  }
+
+  /**
    * The same rule for one session that has not started, when its turn comes: see `RunDeps.vcsGate`.
    * A session that has started is past its first preparation; its tasks are prepared as they come.
    */
   private async sessionVcsGate(session: Session, onlyTasks?: ReadonlySet<string>): Promise<string | null> {
+    const contradiction = await this.contractRefusal(session, onlyTasks);
+    if (contradiction) return contradiction;
     if (!session.vcs?.enabled || session.vcsBaseCommit) return null;
     if (queuedToRun(session, onlyTasks).length === 0) return null;
     const [group] = await runVcsPreflight([session], () => this.store.listSessions());
@@ -2426,6 +2518,15 @@ export class OperatorService {
       async (id, mutate) => void (await this.store.updateSession(id, mutate)),
       () => this.store.listSessions(),
     );
+    // Kept on every session the action was for, with what it did: see `appendSessionLog`.
+    if (done.ok && action !== 'review-inputs') {
+      const cfg = await this.settings.load();
+      for (const s of sessions.filter((x) => normaliseDir(repoDirOf(x)) === normaliseDir(repoDir))) {
+        const message = `run screen: "${action}" in ${repoDir}: ${done.result}`;
+        await appendSessionLog(cfg.resolved.runsDir, s.id, { type: 'run-screen-action', message, data: { action, repoDir, before: { startFrom: s.vcs?.startFrom, baseBranch: s.vcs?.baseBranch } } }).catch(() => undefined);
+        this.bus.publish({ sessionId: s.id, type: 'run-screen-action', level: 'info', message, data: { action, repoDir } });
+      }
+    }
     return done.ok ? { ok: true, result: done.result } : { ok: false, problem: done.problem };
   }
 
@@ -2497,7 +2598,25 @@ export class OperatorService {
     if (!task) throw new Error('No such task.');
     const refused = await this.restoreRefusal(session);
     if (refused) return { ok: false, problem: refused };
-    return await restoreToBase(session, task, this.bus);
+    const done = await restoreToBase(session, task, this.bus);
+    /*
+     * In per-session mode the session's one branch is where its next task goes, so a Restore moves the
+     * session onto the restore branch, as "Run again from here" does. Without that the next run checked
+     * the old session branch out again and the restore did not hold (live run 2026-10-03).
+     */
+    if (done.ok && done.branch && session.vcs?.branchMode === 'per-session' && session.vcs.startFrom !== 'existing-branch') {
+      const left = sessionBranchName(session);
+      await this.store.updateSession(session.id, (s) => {
+        if (s.vcs) {
+          s.vcs.branchName = done.branch;
+          s.vcs.branchNameExact = true;
+        }
+      });
+      this.bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-session-branch', level: 'info',
+        message: `the session carries on from ${done.branch}, the code as it was before "${task.title}"; ${left} keeps the work that came after`,
+        data: { branch: done.branch, left } });
+    }
+    return done;
   }
 
   /**
@@ -2799,8 +2918,9 @@ export class OperatorService {
       type: 'run-restarted',
       level: 'info',
       message:
-        `starting again from "${plan.from.title}": ${plan.tasks.length} task(s) in ${plan.sessions.length} session(s)` +
-        (restored.length > 0 ? `, after taking ${restored.length} repository(ies) back` : ''),
+        `${opts.start === false ? 'prepared to start again' : 'starting again'} from "${plan.from.title}": ${plan.tasks.length} task(s) in ${plan.sessions.length} session(s)` +
+        (restored.length > 0 ? `, after taking ${restored.length} repository(ies) back` : '') +
+        (opts.start === false ? '; press a run button to start' : ''),
       data: { requeued, restored },
     });
 
@@ -2950,14 +3070,25 @@ export class OperatorService {
    * The second half: does it, if the folder is still what the preview showed. Refused while anything
    * runs, or is being started, in that folder or one around it: it moves the checkout.
    */
-  async prepareProject(dir: string, fingerprint: string): Promise<PrepareResult> {
+  async prepareProject(dir: string, fingerprint: string, names: { savedBranch?: string; savedMainBranch?: string } = {}): Promise<PrepareResult> {
     await this.init();
     await this.knownProjectFolder(dir, 'it is not prepared from here');
     if (this.batch?.running) return { ok: false, problem: 'A run is going. Stop it before preparing the folder; nothing was changed.' };
     if (this.browser?.kind === 'run' || this.browser?.kind === 'batch') return { ok: false, problem: 'A run is being started. Wait for it, or stop it, before preparing the folder; nothing was changed.' };
     const other = await this.runningIn(dir);
     if (other) return { ok: false, problem: `Session "${other.name}" is running in this folder. Stop it before preparing the folder; nothing was changed.` };
-    return await prepareFromRemote(resolve(dir.trim()), String(fingerprint ?? ''));
+    const done = await prepareFromRemote(resolve(dir.trim()), String(fingerprint ?? ''), { names });
+    // Kept on every session working in that folder: it moved the checkout and made saved branches.
+    if (done.ok) {
+      const cfg = await this.settings.load();
+      const here = normaliseDir(dir);
+      for (const s of (await this.store.listSessions()).filter((x) => normaliseDir(repoDirOf(x)) === here)) {
+        const message = `the folder was prepared from ${done.target}: ${done.result}`;
+        await appendSessionLog(cfg.resolved.runsDir, s.id, { type: 'folder-prepared', message, data: { target: done.target, commit: done.commit, branch: done.branch, saved: done.saved, removedFromFolder: done.removedFromFolder } }).catch(() => undefined);
+        this.bus.publish({ sessionId: s.id, type: 'folder-prepared', level: 'info', message, data: { target: done.target, commit: done.commit, saved: done.saved } });
+      }
+    }
+    return done;
   }
 
   // --- the project being worked on ---------------------------------------------------------
@@ -3282,6 +3413,10 @@ export class OperatorService {
               reason: a.reason,
               runId: a.runId,
               branch: a.vcs?.branch,
+              // Why the runner stopped this attempt, whether it was a fresh-chat retry, and its commit (live run 2026-10-03).
+              stopCode: a.stopCode,
+              freshRetry: a.freshRetry,
+              commit: a.vcs?.commit,
               changedFiles: a.vcs?.commit && a.vcs.baseCommit ? (a.vcs.files?.length ?? 0) : undefined,
             };
           }),

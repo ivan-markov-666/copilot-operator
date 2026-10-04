@@ -82,14 +82,23 @@ function runnerBlock(input: ComposeInput): string {
  * What a read-only task is told. The rule is enforced by the runner from the working tree,
  * so the note is a warning about a fact, not a request.
  */
-export const READ_ONLY_NOTE = [
-  '## Read-only task',
-  '',
-  'This task must not change any file: it reads, runs and reports. The runner fails it if the',
-  'working tree has changed when it ends, whatever the summary says, and commits the change on',
-  "the task's branch so it is not lost. If a review finding asks you to change something, that",
-  'is a finding about the task, not about the work: dispute it rather than comply.',
-].join('\n');
+export function readOnlyNote(commits: boolean, artifacts: readonly string[] = []): string {
+  return [
+    '## Read-only task',
+    '',
+    'This task must not change any file: it reads, runs and reports. The runner fails it if it',
+    'changed the working tree, whatever the summary says' +
+      (commits ? ", and commits the change on the task's branch so it is not lost." : '. Nothing is committed in this session, so a change would stay in the working tree.'),
+    'Helper scripts may go in `.cop-tmp`, which is not part of the project.' +
+      (artifacts.length > 0 ? ` A report or other evidence goes under ${artifacts.join(', ')}: kept with the run, never committed, and the one place this task may write.` : ''),
+    "This rule wins over any instruction above — the project's or the persona's — to change code. If a review",
+    'finding asks you to change something, that is a finding about the task, not about the work: dispute it',
+    'rather than comply.',
+  ].join('\n');
+}
+
+/** The note for a session that commits: see `readOnlyNote`. */
+export const READ_ONLY_NOTE = readOnlyNote(true);
 
 function level2Block(level2: string): string {
   const body = level2.trim();
@@ -119,7 +128,8 @@ function whyItStopped(c: TaskContinuation): string {
     );
   }
   if (c.how === 'stopped') {
-    return 'It was stopped by the operator before it finished — not because anything failed. The files are as you left them.';
+    const where = c.interruption ? `\n\n${describeInterruption(c.interruption).replace(/when the runner stopped/g, 'when it was stopped')}\n\n` : ' ';
+    return `It was stopped by the operator before it finished — not because anything failed. The files are as you left them.${where}`.trimEnd();
   }
   const why = c.stoppedBecause ? ` (${c.stoppedBecause})` : '';
   // Out of rounds of fixing: something did say no, and the chat needs to hear it was not waved through.

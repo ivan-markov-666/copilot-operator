@@ -11,6 +11,7 @@ import { mkdir, readFile, writeFile, readdir, rename, rm } from 'node:fs/promise
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
+import type { Interruption } from './interruption.js';
 import type {
   Session,
   Task,
@@ -586,7 +587,12 @@ export class SessionStore {
    * on with it; those are run again — unless what ended them was a limit from the settings (out of
    * rounds of fixing checks or review findings), which is a counter, not the verdict. See `TaskLimit`.
    */
-  async continueTask(sessionId: string, taskId: string): Promise<Task> {
+  async continueTask(
+    sessionId: string,
+    taskId: string,
+    /** Where an attempt the operator stopped had got to, read from its run folder by the caller. */
+    stoppedAt?: Interruption | null,
+  ): Promise<Task> {
     const current = (await this.getSession(sessionId))?.tasks.find((x) => x.id === taskId);
     if (!current) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
     if (!isContinuable(current)) {
@@ -598,7 +604,7 @@ export class SessionStore {
       stoppedBecause: current.reason,
       how,
       ...(current.limit ? { limit: current.limit } : {}),
-      ...(current.interruption ? { interruption: current.interruption } : {}),
+      ...(current.interruption ? { interruption: current.interruption } : how === 'stopped' && stoppedAt ? { interruption: stoppedAt } : {}),
     });
   }
 

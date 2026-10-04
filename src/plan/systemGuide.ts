@@ -820,6 +820,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Клонът, от който планът иска сесиите да тръгнат, и върхът му.',
           },
           {
+            key: 'runvcs.workBranch',
+            kind: 'note',
+            en: 'Branch the run works on',
+            bg: 'Клон, на който ще се работи',
+            doesEn: 'Shown when it is not the branch the repository is on: the session’s own branch (after a Restore, the restore branch) or the existing branch it carries on, and its tip.',
+            doesBg: 'Показва се, когато не е клонът, на който е хранилището: собственият клон на сесията (след Restore — клонът от възстановяването) или съществуващият клон, който продължава, и върхът му.',
+          },
+          {
             key: 'runvcs.sessions',
             kind: 'note',
             en: 'Sessions',
@@ -864,8 +872,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Use the current branch instead of {branch}',
             bg: 'Използвай текущия branch вместо {branch}',
-            doesEn: 'The sessions start from the branch the repository is on instead of the base branch: their "Start from" becomes "From wherever the repository is". Nothing is committed.',
-            doesBg: 'Сесиите тръгват от клона, на който е хранилището, вместо от базовия: „Откъде тръгва“ им става „Откъдето е хранилището“. Нищо не се комитва.',
+            doesEn: 'The sessions start from the branch the repository is on instead of the base branch: that branch becomes their base branch, so each starts from it even after HEAD has moved. Nothing is committed.',
+            doesBg: 'Сесиите тръгват от клона, на който е хранилището, вместо от базовия: той им става базов клон, така че всяка тръгва от него, дори HEAD да се е преместил. Нищо не се комитва.',
           },
           {
             key: 'runvcs.allowSnapshot',

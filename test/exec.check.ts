@@ -829,4 +829,30 @@ setTimeout(() => process.exit(0), 45_000);
   await rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }).catch(() => undefined);
 }
 
+console.log('\n--- what a step prints and saves is UTF-8 (live run 2026-10-03: code page 866) ---');
+{
+  const dir = await mkdtemp(join(tmpdir(), 'cop-utf8-'));
+  try {
+    const logPath = join(dir, 'step.log');
+    const saved = await runStep(
+      { id: 1, shell: 'pwsh', command: "$o = node -e \"process.stdout.write('\\u2714 \\u041a\\u0440\\u0430\\u0439')\"; Set-Content -NoNewline -Encoding utf8NoBOM -Path out.txt -Value $o", cwd: dir, logPath, idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
+      { tracker: new ProcessTracker() },
+    );
+    const bytes = await readFile(join(dir, 'out.txt'));
+    t.check('node output captured in a variable is saved as written', [saved.exitCode, bytes.toString('utf8')], [0, '✔ Край']);
+    const printed = await runStep(
+      { id: 2, shell: 'pwsh', command: "Write-Output 'Край ✔'", cwd: dir, logPath: join(dir, 'step2.log'), idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
+      { tracker: new ProcessTracker() },
+    );
+    t.check('Cyrillic printed by a cmdlet reaches the runner intact', printed.stdout.trim(), 'Край ✔');
+    const ps51 = await runStep(
+      { id: 3, shell: 'powershell', command: "Write-Output 'Край'", cwd: dir, logPath: join(dir, 'step3.log'), idleTimeoutMs: 60_000, hardTimeoutMs: 60_000 },
+      { tracker: new ProcessTracker() },
+    );
+    t.check('and from Windows PowerShell 5.1', ps51.stdout.trim(), 'Край');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 t.finish();

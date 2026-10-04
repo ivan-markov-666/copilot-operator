@@ -324,7 +324,8 @@ export type RunVcsGroup = {
   head: string | null;
   baseBranch?: string;
   baseHead?: string | null;
-  sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
+  sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; hasStart: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
+  workBranch?: { name: string; head: string | null };
   inputPatterns: string[];
   inputs: SnapshotEntry[];
   unrelated: Array<{ path: string; reason?: string }>;
@@ -896,10 +897,12 @@ export const api = {
   reorderSessions: (ids: string[]) => call<Session[]>('/sessions-order', { method: 'PUT', body: JSON.stringify({ ids }) }),
   metrics: () => call<Metrics>('/metrics'),
   /** "Prepare the folder from the remote main branch": fetches and says what it would do. */
-  preparePreview: (dir: string, fetch = true) => call<PreparePlan>('/repo/prepare/preview', { method: 'POST', body: JSON.stringify({ dir, fetch }) }),
+  // The fetch may wait up to five minutes for the operator to type a password in Git's window (src/vcs/remoteAuth.ts).
+  preparePreview: (dir: string, fetch = true) =>
+    call<PreparePlan>('/repo/prepare/preview', { method: 'POST', body: JSON.stringify({ dir, fetch }) }, { timeoutMs: 330_000 }),
   /** …and does it, if the folder is still what the preview showed. */
-  prepareProject: (dir: string, fingerprint: string) =>
-    call<{ ok: boolean; problem?: string; result?: string }>('/repo/prepare', { method: 'POST', body: JSON.stringify({ dir, fingerprint }) }),
+  prepareProject: (dir: string, fingerprint: string, names: { savedBranch?: string; savedMainBranch?: string } = {}) =>
+    call<{ ok: boolean; problem?: string; result?: string }>('/repo/prepare', { method: 'POST', body: JSON.stringify({ dir, fingerprint, ...names }) }),
   session: (id: string) => call<Session>(`/sessions/${id}`),
   createSession: (name: string, projectDir?: string) =>
     call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, projectDir }) }),

@@ -18,7 +18,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { confinementRefusal, isWithin, projectRoots } from '../src/exec/confinement.js';
+import { confinementRefusal, isWithin, projectRoots, sessionRoots } from '../src/exec/confinement.js';
 import { staticCheck } from '../src/exec/policy.js';
 import { runCheck } from '../src/exec/checks.js';
 import { validateDerivedChecks } from '../src/orchestrator/derivedChecks.js';
@@ -161,6 +161,41 @@ try {
   check('it is blocked', v.blocked.length, 1);
 } finally {
   await rm(dir, { recursive: true, force: true });
+}
+
+console.log('\n--- what a step writes into a file is data, not a path (live run 2026-10-03) ---');
+{
+  const NL = String.fromCharCode(10);
+  const here = (body: string): string => String.raw`Set-Content -Path .\src\cart.mjs -Value @'${NL}${body}${NL}'@`;
+  for (const [what, cmd] of [
+    ['a module-relative URL in a here-string', here("const cfg = new URL('../config/limits.json', import.meta.url);")],
+    ['a relative import in a here-string', here("import { x } from '../lib/x.mjs';")],
+    ['a Windows path mentioned in a here-string', here('// logs go to C:\\Windows\\Temp on the server')],
+    ['a profile location mentioned in a here-string', here('# set %APPDATA% on the build agent')],
+    ['a relative import in a double-quoted -Value', String.raw`Set-Content -Path .\src\a.mjs -Value "import x from '../lib/x.mjs';"`],
+    ['WriteAllText content', String.raw`[System.IO.File]::WriteAllText('.\src\a.mjs', "import x from '../lib/x.mjs';")`],
+  ] as const) {
+    check(`runs: ${what}`, confinementRefusal(cmd, c), null);
+  }
+  for (const [what, cmd] of [
+    ['the path written to is still read', String.raw`Set-Content -Path ..\..\outside.txt -Value @'${NL}hello${NL}'@`],
+    ['a here-string run with iex is the command', String.raw`@'${NL}Get-Content ..\..\..\Users\x\.ssh\id_rsa${NL}'@ | Invoke-Expression`],
+    ['a here-string piped into pwsh is the command', String.raw`@'${NL}Get-Content ..\..\..\x.txt${NL}'@ | pwsh -Command -`],
+    ['a climb inside nested quotes is a climb', String.raw`pwsh -c "Get-Content '..\..\..\outside.txt'"`],
+    ['a climb glued to a call is a climb', String.raw`pwsh -c "Get-Content('..\..\..\outside.txt')"`],
+  ] as const) {
+    check(`refused: ${what}`, confinementRefusal(cmd, c) !== null, true);
+  }
+}
+
+console.log('\n--- the registered projects are reachable only from a session in one of them (live run 2026-10-03) ---');
+{
+  const registered = [String.raw`C:\Projects\rules-tests`, String.raw`C:\Projects\rules-api`, String.raw`C:\Projects\calculator-test`];
+  check('a session in a registered project reaches all of them', sessionRoots(String.raw`C:\Projects\rules-tests`, registered).length, 3);
+  check('a session in a folder inside one, too', sessionRoots(String.raw`C:\Projects\rules-api\web`, registered).length, 4);
+  const elsewhere = sessionRoots(String.raw`C:\Projects\cop-live\scenario\repo`, registered);
+  check('a session elsewhere is confined to its own folder', elsewhere.join('|'), String.raw`C:\Projects\cop-live\scenario\repo`);
+  check('so a step there cannot write into a registered project', confinementRefusal(String.raw`Set-Content -Path C:\Projects\calculator-test\x.txt -Value 1`, { roots: elsewhere, cwd: elsewhere[0]! }) !== null, true);
 }
 
 console.log('\nwrong:', wrong, '(expect 0)');

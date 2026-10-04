@@ -29,6 +29,8 @@ export type ChatPointer = {
   url: string;
   /** The name the bot gave the chat. */
   name: string;
+  /** False when the rename in Copilot's sidebar did not happen: the chat keeps Copilot's own title. */
+  named?: boolean;
   runId: string;
   createdAt: string;
 };

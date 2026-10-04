@@ -214,7 +214,8 @@ await scenario('stopping a run in the middle of a step ends the task as aborted'
 
 await scenario('the changes of a finished task, file by file', {}, async (h) => {
   const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'diffed', [task('greeting', 'hello.txt', 'hi')])] });
-  h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8", "Set-Content -Path README.md -Value '# changed' -Encoding utf8"), reply.done());
+  // README.md is committed with LF: written so it keeps them (a whole-file flip to CRLF is pointed out, see live-fixes C7).
+  h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8", 'Set-Content -NoNewline -Path README.md -Value "# changed`n" -Encoding utf8'), reply.done());
   const done = (await h.run(s!.id)).tasks[0]!;
   type Changes = { ok: boolean; files: Array<{ path: string; status: string }> };
   const changes = await h.call<Changes>('GET', `/sessions/${s!.id}/tasks/${done.id}/changes`);
@@ -331,9 +332,11 @@ await scenario('a task that contradicts itself is stopped before anything is sen
     version: 1,
     sessions: [session(h, 'contradiction', [{ title: 'audit-only', prompt: 'Audit the project and report; change nothing at all in the repository.', readOnly: true, checks: [{ name: 'fix applied', expect: 'file-contains', file: 'README.md', value: 'fixed' }] }])],
   });
-  const after = (await h.run(s!.id)).tasks[0]!;
-  t.check('blocked before starting', [after.status, (after as unknown as { stopCode?: string }).stopCode], ['blocked', 'contract-conflict']);
-  t.truthy('the reason names the contradiction', /"fix applied" fails now and can only pass if README\.md changes, but the task is read-only/.test(after.reason ?? ''), after.reason);
+  // Refused before the browser opens now, the task left queued with no attempt (live-fixes C4).
+  const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  t.check('refused before starting', r.started, false);
+  t.truthy('the reason names the contradiction', /"fix applied" fails now and can only pass if README\.md changes, but the task is read-only/.test(r.reason ?? ''), r.reason);
+  t.check('the task stays queued', (await h.session(s!.id)).tasks[0]!.status, 'queued');
   t.check('nothing was sent to the chat', h.chat.sent.length, 0);
 });
 

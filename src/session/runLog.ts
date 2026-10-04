@@ -9,7 +9,7 @@
  * browser opens and read back by the runner export, which can then show that `browser-launch-requested`
  * came after `run-preflight-passed` — or that a refused run never asked for a browser at all.
  */
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type RunLogType =
@@ -73,4 +73,47 @@ export function browserAfterPreflight(entries: RunLogEntry[]): {
     // No browser asked for: nothing to prove. A browser with no passed preflight before it: false.
     browserOnlyAfterPreflight: browser < 0 ? null : passed >= 0 && passed < browser,
   };
+}
+
+/**
+ * The runs refused for a session before any task of it began: their logs are the only record of them,
+ * since a refused run is written on no task. Found by reading the run logs under `_runs`.
+ */
+export async function refusedRunsOf(runsDir: string, sessionId: string): Promise<string[]> {
+  const out: string[] = [];
+  const ids = await readdir(join(runsDir, '_runs')).catch(() => [] as string[]);
+  for (const id of ids) {
+    const entries = await readRunLog(runsDir, id);
+    const refused = entries.some((e) => e.type === 'run-preflight-refused');
+    const browser = entries.some((e) => e.type === 'browser-launch-requested');
+    const mine = entries.some((e) => e.type === 'run-preflight-started' && Array.isArray(e.data?.sessions) && (e.data!.sessions as unknown[]).includes(sessionId));
+    if (refused && !browser && mine) out.push(id);
+  }
+  return out.sort();
+}
+
+/** Something the operator did to a session's repository or start outside a run: see `appendSessionLog`. */
+export type OperatorAction = { at: string; type: string; message: string; data?: Record<string, unknown> };
+
+/**
+ * A durable record of what the operator did to a session outside any run — a fix pressed on the run
+ * screen, the folder prepared from the remote. These change the repository or where the session starts,
+ * and were in nothing but the live event stream and git's reflog (live run 2026-10-03). One file per
+ * session, `<runs>/_sessions/<session id>/actions.jsonl`, read back by the runner export.
+ */
+export async function appendSessionLog(runsDir: string, sessionId: string, entry: Omit<OperatorAction, 'at'>): Promise<void> {
+  const dir = join(runsDir, '_sessions', safe(sessionId));
+  await mkdir(dir, { recursive: true });
+  await appendFile(join(dir, 'actions.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8');
+}
+
+export async function readSessionLog(runsDir: string, sessionId: string): Promise<OperatorAction[]> {
+  const text = await readFile(join(runsDir, '_sessions', safe(sessionId), 'actions.jsonl'), 'utf8').catch(() => '');
+  return text.split('\n').filter((l) => l.trim()).flatMap((l) => {
+    try {
+      return [JSON.parse(l) as OperatorAction];
+    } catch {
+      return [];
+    }
+  });
 }

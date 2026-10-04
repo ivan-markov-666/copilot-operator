@@ -31,7 +31,7 @@ const t = new Tally();
 type Action = { id: string; available: boolean; recommended?: boolean; result: string; why?: string };
 type Group = { repoDir: string; ready: boolean; problem?: string; branch: string | null; head: string | null; baseBranch?: string; baseHead?: string | null;
   sessions: Array<{ name: string; role: string }>; inputs: Array<{ path: string; kind: string; size?: number }>; unrelated: Array<{ path: string }>; actions: Action[] };
-type View = { id: string; vcs?: { startFrom?: string }; vcsBaseCommit?: string; vcsStart?: { kind: string; commit: string; baseline?: { commit: string } };
+type View = { id: string; vcs?: { startFrom?: string; baseBranch?: string }; vcsBaseCommit?: string; vcsStart?: { kind: string; commit: string; baseline?: { commit: string } };
   tasks: Array<{ id: string; status: string; reason?: string; vcs?: { baseCommit?: string; commit?: string; files?: Array<{ path: string }> } }> };
 
 function setUp(h: Harness): void {
@@ -139,7 +139,9 @@ console.log('\n--- another uncommitted file in the tree ---');
     const onBase = g.actions.find((a) => a.id === 'snapshot-on-base');
     t.truthy('the snapshot on main is not offered, and says why', onBase?.available === false && /other uncommitted changes \(notes\.md\)/.test(onBase.why ?? ''), onBase);
     const used = await h.call<{ ok: boolean; result?: string }>('POST', '/batch/vcs/prepare', { sessionIds: ids, repoDir: g.repoDir, action: 'use-current-branch', choices: {} });
-    t.check('"Use the current branch instead" changes where they start', [used.ok, (await h.call<View>('GET', `/sessions/${first!.id}`)).vcs?.startFrom], [true, 'head']);
+    const moved = (await h.call<View>('GET', `/sessions/${first!.id}`)).vcs;
+    // Pinned to the branch that was shown, not "wherever HEAD is" (live-fixes C29).
+    t.check('"Use the current branch instead" changes where they start', [used.ok, moved?.startFrom, moved?.baseBranch], [true, 'branch', 'feature/operator-work']);
     t.check('and nothing else: no commit, no branch, the files as they were', [h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/'), existsSync(join(h.repo, 'notes.md'))], ['', true]);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));

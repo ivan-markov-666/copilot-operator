@@ -38,6 +38,8 @@ const GENERATED_DIRS: Record<string, string> = {
   '.mypy_cache': 'a type-checker cache',
   '.venv': 'a Python virtual environment',
   venv: 'a Python virtual environment',
+  tmp: 'a scratch folder (temporary files go in .cop-tmp, which is never committed)',
+  temp: 'a scratch folder (temporary files go in .cop-tmp, which is never committed)',
 };
 
 /** File names, or endings, that a tool writes and nobody reads. */
@@ -46,6 +48,8 @@ const GENERATED_FILES: Array<[test: (name: string) => boolean, reason: string]> 
   [(n) => n.endsWith('.log'), 'a log file'],
   [(n) => n === '.DS_Store' || n === 'Thumbs.db' || n === 'desktop.ini', "the operating system's folder metadata"],
   [(n) => n.endsWith('.pyc'), 'compiled Python'],
+  // The chat's own scratch copies, seen committed in a live run: tmp-report.txt, a .bak of a file it edited.
+  [(n) => /^(?:tmp|temp|scratch)(?:[-_.]|$)/i.test(n) || /\.(?:tmp|bak|orig|swp)$/i.test(n), 'a temporary copy (temporary files go in .cop-tmp, which is never committed)'],
 ];
 
 /** `.env` and its variants, except the ones that exist to be committed. */
@@ -95,8 +99,9 @@ export function suspiciousDetail(found: Suspicious[]): string {
   const list = found.map((s) => `${s.path} (${s.reason})`).join('; ');
   return (
     `${found.length} file(s) that look like tool output or secrets are in the working tree and would be committed ` +
-    `with this task: ${list}. Add them to .gitignore — they are installed, built or generated, not written — and ` +
-    'take them out of the index if git already tracks them. If one of them truly belongs in the repository, leave ' +
+    `with this task: ${list}. Add what is installed, built or generated to .gitignore, and take it out of the index if git ` +
+    'already tracks it; delete a temporary copy or scratch folder, or move it into .cop-tmp, which is never committed. ' +
+    'If one of them truly belongs in the repository, leave ' +
     'it and say why in your summary: it will be committed and marked.'
   );
 }

@@ -64,6 +64,20 @@ export function isWithin(path: string, roots: string[]): boolean {
   });
 }
 
+/**
+ * The folders a session's commands may reach: its own, and the projects registered in Settings when its
+ * own folder is one of them (or inside one) — a front end, a back end and their tests are one piece of
+ * work and a test suite starts the application next door. A session working anywhere else is confined to
+ * its own folder: found live on 2026-10-03, a fixture session elsewhere on the disk could write into every
+ * registered project, whose paths were also sent to the chat in each refusal, and nothing there would have
+ * been put back or committed.
+ */
+export function sessionRoots(cwd: string, registered: Array<string | undefined>): string[] {
+  const projects = projectRoots(registered);
+  const inProject = projects.some((p) => isWithin(cwd, [p]));
+  return projectRoots([cwd, ...(inProject ? projects : [])]);
+}
+
 /** Roots as a set: resolved, de-duplicated, empty ones dropped. */
 export function projectRoots(folders: Array<string | undefined>): string[] {
   const seen = new Map<string, string>();
@@ -111,11 +125,39 @@ const CD_TO_ROOT = /(?:^|[\s;|&({])(?:Set-Location|Push-Location|cd|chdir|sl|pus
 /** A path segment that climbs: `..` on its own, or between separators. */
 const CLIMBS = /(?:^|[\\/])\.\.(?:$|[\\/])/;
 
+/**
+ * A here-string, `@'…'@` or `@"…"@`: its lines are text, not part of the command line.
+ */
+const HERE_STRING = /@(['"])[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*\1@/g;
+
+/** The text after `-Value`/`-InputObject`, or the content argument of `WriteAllText`/`AppendAllText`. */
+const CONTENT_ARGUMENT = /(-(?:Value|InputObject)\s+|::(?:Write|Append)All(?:Text|Lines)\s*\([^,]*,\s*)(["'])(?:(?!\2)[^\r\n]|\2\2|`.)*\2/gi;
+
+/** A command that runs text as code: then the text is the command, and is read as one. */
+const RUNS_TEXT = /\b(?:Invoke-Expression|iex|Invoke-Command|ScriptBlock\]?::Create|Start-Job)\b|\|\s*&?\s*(?:pwsh|powershell|cmd|node|python3?|py|bash|sh|wsl|ruby|perl|php)(?:\.exe)?\b/i;
+
+/**
+ * The command without the text it writes into a file.
+ *
+ * Found in a live run on 2026-10-03: a step writing `src/cart.mjs` with a here-string, as the contract
+ * recommends, was refused because the file's own `new URL('../config/limits.json', import.meta.url)`
+ * was read as a path, resolved against the working folder — where it climbs out — instead of against
+ * the file it belongs to, where it does not. The same text in double quotes passed, by an accident of
+ * splitting. What a step writes into a file is data; the path it writes to is still read, and so is
+ * the text of a command that runs it (`iex`, a pipe into an interpreter). A script written now and run
+ * later is read when it is run (see `scriptFiles.ts`).
+ */
+function withoutWrittenText(command: string): string {
+  if (RUNS_TEXT.test(command)) return command;
+  return command.replace(HERE_STRING, ' ').replace(CONTENT_ARGUMENT, (_m, lead: string) => `${lead}''`);
+}
+
 /** Every whitespace- or separator-delimited token, quoted content split the same way. */
 function tokens(command: string): string[] {
   const out: string[] = [];
   const rest = command.replace(QUOTED, (_whole, _q, inner: string) => {
-    out.push(...inner.split(/\s+/));
+    // Split like the rest of the line: `URL('../x'` inside a double-quoted string is the token `../x`.
+    out.push(...inner.split(/[\s;|&<>(){},'"]+/));
     return ' ';
   });
   out.push(...rest.split(/[\s;|&<>(){},]+/));
@@ -222,18 +264,20 @@ export function confinementRefusal(command: string, c: Confinement): string | nu
   const pip = pipRefusal(command);
   if (pip) return pip;
 
-  const env = ENV_LOCATION.exec(command);
+  // Paths are read from the command line without the text it writes into a file: see `withoutWrittenText`.
+  const line = withoutWrittenText(command);
+  const env = ENV_LOCATION.exec(line);
   if (env) return outside(`\`${env[0]}\` is a location on the machine — the operator's profile or the system — not in the project`, c);
-  if (HOME_VAR.test(command) || TILDE.test(command)) {
+  if (HOME_VAR.test(line) || TILDE.test(line)) {
     return outside('`~` and `$HOME` are the operator\'s profile, not the project', c);
   }
-  if (UNC.test(command)) return outside('a network share is not the project', c);
-  if (CD_TO_ROOT.test(command)) return outside('this changes to the root of the drive', c);
+  if (UNC.test(line)) return outside('a network share is not the project', c);
+  if (CD_TO_ROOT.test(line)) return outside('this changes to the root of the drive', c);
 
-  for (const p of drivePaths(command)) {
+  for (const p of drivePaths(line)) {
     if (!isWithin(p, c.roots)) return outside(`\`${p}\` is outside the project`, c);
   }
-  for (const t of tokens(command)) {
+  for (const t of tokens(line)) {
     if (!CLIMBS.test(t)) continue;
     const resolved = win32.resolve(c.cwd, t);
     if (!isWithin(resolved, c.roots)) return outside(`\`${t}\` climbs out of the project to ${resolved}`, c);

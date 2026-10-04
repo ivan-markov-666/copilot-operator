@@ -1888,7 +1888,7 @@ function TaskCard({
               {/* The runner put these back: they were outside the paths the task may change. */}
               {(task.scopeReverted?.length ?? 0) > 0 && (
                 <div className="small" style={{ marginTop: 4 }}>
-                  {t('task.scopeReverted', { n: task.scopeReverted?.length ?? 0, paths: (task.scopeReverted ?? []).join(', ') })}
+                  {t(task.readOnly ? 'task.readOnlyReverted' : 'task.scopeReverted', { n: task.scopeReverted?.length ?? 0, paths: (task.scopeReverted ?? []).join(', ') })}
                 </div>
               )}
               {/* The operator's input files, read-only: the runner put these back. */}

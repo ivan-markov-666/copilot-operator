@@ -129,7 +129,13 @@ export function externalProgram(head: string): string | null {
  * anywhere on the line refused honest work, which is the error this gate can least afford.
  */
 const INLINE_CODE: Array<{ what: string; pattern: RegExp }> = [
-  { what: 'node -e', pattern: /\bnode(\.exe)?\s+(-\S+\s+)*?-(e|-eval)\b/i },
+  { what: 'node -e', pattern: /\bnode(\.exe)?\s+(-\S+\s+)*?-(e|-eval|p|-print)\b/i },
+  /*
+   * Code piped into an interpreter that has no script to run: the same thing as `-e`, spelled through
+   * stdin. Seen live on 2026-10-03: refused `node -e`, the chat sent `'…' | node` in its next step and
+   * it ran. An interpreter given a script file after the pipe (`| node tools/format.js`) is not this.
+   */
+  { what: 'code piped into an interpreter', pattern: /\|\s*&?\s*(node|deno|bun|python3?|py|ruby|perl|php)(\.exe)?(\s+-)?\s*($|[;|)&])/im },
   { what: 'deno eval', pattern: /\bdeno(\.exe)?\s+eval\b/i },
   { what: 'bun -e', pattern: /\bbun(\.exe)?\s+(-\S+\s+)*?-e\b/i },
   { what: 'python -c', pattern: /\b(python3?|py)(\.exe)?\s+(-\S+\s+)*?-c\b/i },

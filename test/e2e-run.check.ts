@@ -272,10 +272,12 @@ await scenario('a task the chat calls blocked is tried once more in a fresh conv
   const [s] = await h.importPlan(plan(h, 'blocked', [greeting]));
   const chats: string[] = [];
   h.chat.script(
+    // A step first: a "blocked" before any step ran is sent back rather than accepted (see live-fixes C5).
     (m) => {
       chats.push(m.chatId);
-      return reply.blocked();
+      return reply.steps('Get-ChildItem');
     },
+    () => reply.blocked(),
     (m) => {
       chats.push(m.chatId);
       return reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8");

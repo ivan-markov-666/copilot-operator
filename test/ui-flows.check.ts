@@ -698,7 +698,7 @@ try {
     const plan = planFor(h, 'edits', [task('done-task', 'done.txt'), task('blocked-task', 'blocked.txt')]);
     plan.sessions[0]!.onFailure = 'continue';
     const [s] = await h.importPlan(plan);
-    h.chat.script(reply.steps(write('done.txt', 'done')), reply.done(), reply.blocked());
+    h.chat.script(reply.steps(write('done.txt', 'done')), reply.done(), ...reply.triedThenBlocked());
     const ran = await h.run(s!.id);
     t.check('one done, one blocked', ran.tasks.map((x) => x.status), ['done', 'blocked']);
     await h.call('POST', `/sessions/${s!.id}/tasks`, { title: 'queued-task', prompt: 'Create queued.txt in the repository root holding exactly the word queued.' });
@@ -786,7 +786,7 @@ try {
       reply.steps("New-Item -ItemType Directory -Force -Path web | Out-Null; Set-Content -Path web/tsconfig.tsbuildinfo -Value 'incremental' -Encoding utf8"),
       reply.done(),
       reply.done(),
-      reply.blocked(),
+      ...reply.triedThenBlocked(),
       reply.steps(write('retry.txt', 'again')),
       reply.done(),
     );

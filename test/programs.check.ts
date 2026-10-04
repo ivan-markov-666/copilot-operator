@@ -93,8 +93,16 @@ for (const cmd of [
   'cmd /c "echo hello"',
   'cmd /s /c "echo hello"',
   'deno eval "1+1"',
+  // Live run 2026-10-03: refused `node -e`, the chat piped the same code into node's stdin.
+  `'const x = require("./src/total.js"); console.log(x)' | node`,
+  `Get-Content .\probe.js | node -`,
+  `'print(1)' | python -`,
+  'node -p "1+1"',
 ]) {
   check(`evaluates inline: ${cmd}`, inlineCodeRefusal(cmd) !== null, true);
+}
+for (const cmd of ['npm test | node tools/format-report.js', 'Get-Content a.txt | node scripts/count.mjs --lines']) {
+  check(`a script after the pipe is not inline code: ${cmd}`, inlineCodeRefusal(cmd), null);
 }
 for (const cmd of [
   'node server.js -p 3000',

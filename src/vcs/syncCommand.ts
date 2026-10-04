@@ -14,9 +14,7 @@
  * Nothing here writes to the repository or the network. `git fetch` is in the command, not here:
  * what "would be lost" is computed against the remote branch as last fetched, and the page says so.
  */
-import { statSync } from 'node:fs';
-import { join } from 'node:path';
-import { git, porcelainPaths } from './git.js';
+import { git, lastFetchedAt, porcelainPaths } from './git.js';
 
 export type SyncPlan = {
   ok: boolean;
@@ -108,13 +106,8 @@ export async function planSync(repoDir: string): Promise<SyncPlan> {
   const commits = await git(repoDir, ['log', '--format=%h %s', `${target}..HEAD`]);
   const status = await git(repoDir, ['status', '--porcelain', '--untracked-files=no']);
   const clean = await git(repoDir, ['clean', '-nd']);
-  let lastFetched: string | undefined;
-  try {
-    const gitDir = (await git(repoDir, ['rev-parse', '--absolute-git-dir'])).stdout;
-    lastFetched = statSync(join(gitDir, 'FETCH_HEAD')).mtime.toISOString();
-  } catch {
-    /* never fetched: the page says so */
-  }
+  const gitDir = (await git(repoDir, ['rev-parse', '--absolute-git-dir'])).stdout;
+  const lastFetched = gitDir ? lastFetchedAt(gitDir) : undefined;
 
   return {
     ok: true,

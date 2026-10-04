@@ -303,12 +303,19 @@ So everything you want done arrives as a `command`. For something too long for o
 the file **from a command step** and run it in the next:
 
 ```
-Set-Content -Path .\count-tests.ps1 -Value @'
+New-Item -ItemType Directory -Force .\.cop-tmp | Out-Null
+Set-Content -NoNewline -Path .\.cop-tmp\count-tests.ps1 -Value @'
 Get-ChildItem .\test -Recurse -Filter *.test.ts | Measure-Object | Select-Object Count
+
 '@
 ```
 
-then `pwsh -File .\count-tests.ps1`. The difference is not cosmetic: what the file contains
+then `pwsh -File .\.cop-tmp\count-tests.ps1`. Helper scripts, scratch copies and anything else
+that is not the work go in `.cop-tmp`: the runner never commits that folder. Every other file you
+leave in the project is committed as the work. Keep `-NoNewline` and the empty line before `'@`: without
+them `Set-Content` adds a Windows line ending after the last line while the lines of the
+here-string end in LF, and a file with two kinds of line ending is sent back to you. When you
+change an existing file, keep the line endings it already has. The difference is not cosmetic: what the file contains
 passed through a step that was read and screened, and it is in the project where it can be read
 afterwards, rather than arriving from the chat as something nobody saw.
 
@@ -439,7 +446,7 @@ Refused, whatever the task says:
 | Refused | Do this instead |
 |---|---|
 | a path outside the project: `C:\Windows\…`, `C:\Users\…`, `\\server\share`, `..` that climbs out | a path inside the project |
-| the operator's profile or the system by name: `~`, `$HOME`, `$env:USERPROFILE`, `$env:APPDATA`, `$env:TEMP`, `%TEMP%`… | a folder inside the project, e.g. `.\tmp` |
+| the operator's profile or the system by name: `~`, `$HOME`, `$env:USERPROFILE`, `$env:APPDATA`, `$env:TEMP`, `%TEMP%`… | the runner's scratch folder in the project, `.\.cop-tmp` |
 | the registry, and the other non-file drives (`HKLM:`, `HKCU:`, `Cert:`) | nothing: the project does not live there |
 | managing the computer: services, the network and firewall, local users, the clock, Windows features, disks, machine-wide modules | nothing: say in `notes` what the machine would need |
 | installing outside the project: `npm install -g`, `dotnet tool install -g`, `cargo install`, `go install`, `pip install` into the machine's Python | install into the project: `npm install -D <pkg>` and `npx`; a local tool manifest; a `.venv` (`python -m venv .venv`, then `.venv\Scripts\python -m pip install <pkg>`) |

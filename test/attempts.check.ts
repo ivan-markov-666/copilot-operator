@@ -126,13 +126,13 @@ try {
   const sid = s!.id;
   const tid = (await h.session(sid)).tasks[0]!.id;
 
-  h.chat.script(reply.blocked(), reply.blocked(), reply.blocked());
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   await h.run(sid);
   t.check('run 1: blocked, retried twice in a fresh chat: 2', [(await register(h, tid))?.status, (await register(h, tid))?.autoRetries], ['blocked', 2]);
 
   await h.call('POST', `/sessions/${sid}/tasks/${tid}/rerun`, {});
   t.check('Run again: the queued task carries no count from the run before', (await register(h, tid))?.autoRetries, undefined);
-  h.chat.script(reply.blocked(), reply.blocked(), reply.blocked());
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   await h.run(sid);
   t.check('run 2: retried twice again: still 2, not 4', (await register(h, tid))?.autoRetries, 2);
 
@@ -142,7 +142,7 @@ try {
   t.check('run 3: stopped at the message limit, no retry: no count', [(await register(h, tid))?.status, (await register(h, tid))?.autoRetries], ['limit-reached', undefined]);
 
   await h.call('POST', `/sessions/${sid}/tasks/${tid}/continue`);
-  h.chat.script(reply.blocked(), reply.blocked(), reply.blocked());
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   await h.run(sid);
   t.check('run 4, Continue: blocked, retried twice: 2, not 6', (await register(h, tid))?.autoRetries, 2);
 
@@ -159,7 +159,7 @@ try {
   await h.call('POST', `/sessions/${sid}/tasks/${tid}/rerun`, {});
   const disk = new SessionStore(h.dataDir, join(process.cwd(), 'prompts', 'level1.md'));
   await disk.updateTask(sid, tid, (x) => void (x.freshRetry = true));
-  h.chat.script(reply.blocked(), reply.blocked(), reply.blocked());
+  h.chat.script(...reply.triedThenBlocked(), ...reply.triedThenBlocked(), ...reply.triedThenBlocked());
   await h.run(sid);
   t.check('run 6: a mark left on the queued task is not counted: 2, not 3', (await register(h, tid))?.autoRetries, 2);
   t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);

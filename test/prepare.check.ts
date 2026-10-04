@@ -26,12 +26,14 @@
  *
  *   npm run check:prepare
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { startHarness, Tally, waitFor, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 import { planPrepare } from '../src/vcs/prepareFromRemote.js';
+import { git as runGit } from '../src/vcs/git.js';
+import { closePasswordWindows } from '../src/vcs/remoteAuth.js';
 
 const t = new Tally();
 
@@ -222,7 +224,9 @@ console.log('\n--- "Prepare the folder from the remote main branch" ---');
     t.check('and nothing was done', [h.git('branch', '--show-current'), h.git('branch', '--list', 'cop/saved/*')], ['feature/mine', '']);
 
     const p2 = await h.call<Plan>('POST', '/repo/prepare/preview', { dir: h.repo });
-    const done = await h.call<Done>('POST', '/repo/prepare', { dir: h.repo, fingerprint: p2.fingerprint });
+    await new Promise((r) => setTimeout(r, 1500)); // a later second: a name stamped now would differ
+    const done = await h.call<Done>('POST', '/repo/prepare', { dir: h.repo, fingerprint: p2.fingerprint, savedBranch: p2.savedBranch, savedMainBranch: p2.savedMainBranch });
+    t.check('Confirm makes the branches the preview named (live-fixes C46)', (done.saved ?? []).map((x) => x.branch).sort(), [p2.savedBranch, p2.savedMainBranch].sort());
     t.check('prepared', [done.ok, done.problem ?? null], [true, null]);
     t.check('the folder is on main at the remote main, nothing uncommitted', [h.git('branch', '--show-current'), h.git('rev-parse', 'HEAD'), h.git('status', '--porcelain')], ['main', remoteMain, '']);
     t.check('main follows the remote', h.git('rev-parse', '--abbrev-ref', 'main@{upstream}'), 'origin/main');
@@ -286,16 +290,71 @@ console.log('\n--- a remote that asks for the key\'s passphrase ---');
     t.truthy('and the passphrase was asked for through the window', readFileSync(join(h.base, 'asked.txt'), 'utf8').includes('Enter passphrase'));
     t.truthy('and the passphrase is in nothing the bot got back', !JSON.stringify(right).includes('pa ss!'));
 
+    await new Promise((r) => setTimeout(r, 1100));
+    const beforeWrong = new Date().toISOString();
     const wrong = await planPrepare(h.repo, { fetch: true, askpass: askpass('nope', 'wrong.sh') });
     t.check('a wrong passphrase: refused, said to be about the key, nothing changed', [wrong.ok, wrong.fetched?.ok, wrong.fetched?.auth], [false, false, true]);
     t.truthy('with the command for the operator\'s own PowerShell', /^git -C '.+' fetch --prune 'origin'$/.test(wrong.fetchCommand ?? ''), wrong.fetchCommand);
-    t.truthy('and when it was last fetched', !!wrong.lastFetched, wrong.lastFetched);
+    t.truthy('and when it last fetched successfully — not the time of the failed attempt', !!wrong.lastFetched && wrong.lastFetched < beforeWrong, [wrong.lastFetched, beforeWrong]);
 
     const quiet = await planPrepare(h.repo, { fetch: true });
     t.check('without the window nothing is asked, and it says so', [quiet.ok, quiet.fetched?.asked, quiet.fetched?.auth], [false, false, true]);
 
-    const fetched = await h.call<{ ok: boolean; fetched?: unknown; lastFetched?: string; target?: string }>('POST', '/repo/prepare/preview', { dir: h.repo, fetch: false });
-    t.check('"Continue with what was last fetched" previews without fetching', [fetched.ok, fetched.fetched ?? null, fetched.target, !!fetched.lastFetched], [true, null, 'origin/main', true]);
+    /*
+     * A fetch given up on fails and says so, and its password window does not stay on screen. Found live:
+     * the timeout stopped git.exe alone; ssh and Git's window outlived it, and `taskkill /T` cannot reach
+     * the window (its Windows parent is already gone). The window is closed by its program and start time:
+     * here a copy of node stands in for git-askpass.exe, one started before the fetch and one after.
+     */
+    const slow = join(h.base, 'slow.sh');
+    writeFileSync(slow, '#!/bin/sh' + String.fromCharCode(10) + 'sleep 5' + String.fromCharCode(10) + "echo 'pa ss!'" + String.fromCharCode(10));
+    const gaveUp = await runGit(h.repo, ['fetch', '--quiet', 'origin'], 1500, { ...process.env, SSH_ASKPASS: slow, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: 'x' }, { killTree: true });
+    t.check('a fetch given up on fails, saying so', [gaveUp.ok, /gave up after 2 s/.test(gaveUp.stderr)], [false, true]);
+    const fakeWindow = join(h.base, 'fake-askpass.exe');
+    copyFileSync(process.execPath, fakeWindow);
+    const wait = ['-e', 'setTimeout(() => {}, 120000)'];
+    const before = spawn(fakeWindow, wait, { stdio: 'ignore', windowsHide: true });
+    await new Promise((r) => setTimeout(r, 1500));
+    const since = new Date();
+    const after = spawn(fakeWindow, wait, { stdio: 'ignore', windowsHide: true });
+    await new Promise((r) => setTimeout(r, 1500));
+    const closed = await closePasswordWindows(fakeWindow, since);
+    await new Promise((r) => setTimeout(r, 1000));
+    const alive = (pid?: number): boolean => {
+      try {
+        process.kill(pid as number, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    t.check('the window opened for the fetch is closed, the older one is not', [closed, alive(after.pid), alive(before.pid)], [1, false, true]);
+    before.kill();
+
+    type Preview = { ok: boolean; fetched?: unknown; lastFetched?: string; target?: string };
+    const unknown = await h.call<Preview>('POST', '/repo/prepare/preview', { dir: h.repo, fetch: false });
+    t.check('after failed fetches, a preview without fetching says when it last fetched is not known, rather than a wrong time', [unknown.ok, unknown.fetched ?? null, unknown.target, unknown.lastFetched ?? null], [true, null, 'origin/main', null]);
+    await planPrepare(h.repo, { fetch: true, askpass: askpass('pa ss!', 'right-again.sh') });
+    const known = await h.call<Preview>('POST', '/repo/prepare/preview', { dir: h.repo, fetch: false });
+    t.check('after one that worked, it gives its time', [known.ok, known.fetched ?? null, !!known.lastFetched], [true, null, true]);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- on main already, with only the input files new ---');
+{
+  // Seen live: two buttons both reading "Create starting snapshot on main". Only the one that leaves the checkout alone is offered.
+  const h = await startHarness({});
+  try {
+    mkdirSync(join(h.repo, 'specs'), { recursive: true });
+    writeFileSync(join(h.repo, 'specs', 'operations.json'), '{}\n');
+    const [s] = await h.importPlan(plan(h, { artifacts: undefined, userInputs: { paths: ['specs/**'] } }));
+    const g = (await h.call<Group[]>('GET', `/batch/vcs?ids=${s!.id}`))[0]!;
+    const offered = g.actions.filter((a) => a.available).map((a) => a.id);
+    t.check('one snapshot button, the one on the base branch', [offered.includes('snapshot-on-base'), offered.includes('snapshot-here')], [true, false]);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

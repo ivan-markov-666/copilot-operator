@@ -109,7 +109,8 @@ check('an ignored file no scope names is not offered', entry('local/other.txt'),
 check('the snapshot branch is named for the session', plan.baselineBranch, `cop/baseline/${a.id}`);
 
 const stale = await takeSnapshot(await fresh(a), { approved: true, choices: { 'app.ts': 'include' } }, bus, save(a), all);
-check('a list that does not match the repository is refused', !stale.ok && /changed since the list was shown/.test(stale.problem), true);
+// It says what is wrong: here, files with no choice at all (live-fixes C58), not that the files changed.
+check('a list that does not match the repository is refused, saying which files have no choice', !stale.ok && /the approval has no choice for/.test(stale.problem) && !/changed since/.test(stale.problem), true);
 const bad = await takeSnapshot(await fresh(a), { approved: true, choices: { ...defaults(plan.entries), '.env': 'include' } }, bus, save(a), all);
 check('a secrets file cannot be taken', !bad.ok && bad.problem.startsWith('.env'), true);
 check('and nothing was written to the exclude file', (await readFile(join(r1, '.git', 'info', 'exclude'), 'utf8').catch(() => '')).includes('.env'), false);

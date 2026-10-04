@@ -27,12 +27,13 @@ import { join, resolve } from 'node:path';
 
 import type { EventBus } from '../session/events.js';
 import type { Session, SessionStart } from '../session/model.js';
-import { branchNameFrom, freeBranchName, git } from './git.js';
+import { branchNameFrom, describeUpdate, freeBranchName, git, updateFromRemote } from './git.js';
 import { commitOnto, dirtyBesidesInputs, inputSettings, inputSumsAt, missingInputPatterns } from './inputs.js';
-import { dirtyPolicy, takeSnapshot, type SnapshotChoice, type SnapshotEntry } from './snapshot.js';
-import { repoDirOf, vcsPreflight } from './taskVcs.js';
+import { approvalMismatch, dirtyPolicy, takeSnapshot, type SnapshotChoice, type SnapshotEntry } from './snapshot.js';
+import { repoDirOf, sessionBranchName, vcsPreflight } from './taskVcs.js';
 import { artifactPatterns } from './artifacts.js';
 import { inScope } from './scope.js';
+import { findSuspicious } from './commitHygiene.js';
 
 export type RunVcsActionId = 'review-inputs' | 'snapshot-on-base' | 'snapshot-here' | 'use-current-branch' | 'allow-snapshot';
 
@@ -54,8 +55,19 @@ export type RunVcsGroup = {
   head: string | null;
   baseBranch?: string;
   baseHead?: string | null;
+  /**
+   * The branch the first session's work goes on when it is known before the run — one branch for the
+   * session, or an existing branch carried on — and where it is now. The panel showed only the branch
+   * the repository was on, and the run then worked on another (live run 2026-10-03).
+   */
+  workBranch?: { name: string; head: string | null };
+  /**
+   * The input files are not in the tree and will be carried in from an earlier capture when the first
+   * task starts: said before the browser opens (live run 2026-10-03: made afterwards, announced nowhere).
+   */
+  carry?: string;
   /** The run's sessions in this repository, in run order, and how each will start. */
-  sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
+  sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; hasStart: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
   inputPatterns: string[];
   /** The input files a snapshot would take, with status and size. */
   inputs: SnapshotEntry[];
@@ -69,6 +81,8 @@ export type RunVcsGroup = {
 const norm = (dir: string): string => dir.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
 const short = (c?: string | null): string => (c ?? '').slice(0, 8);
 const names = (list: Array<{ name: string }>): string => list.map((s) => `"${s.name}"`).join(', ');
+/** "starts" for one session, "start" for several (live run 2026-10-03: '"x" start from it', in a commit message too). */
+const verb = (list: unknown[], one: string, many: string): string => (list.length === 1 ? one : many);
 
 /** The groups, one per repository, for the sessions of a run in run order. */
 export async function runVcsPreflight(sessions: Session[], allSessions: () => Promise<Session[]>): Promise<RunVcsGroup[]> {
@@ -94,12 +108,21 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
   const baseBranch = startFrom === 'branch' || startFrom === 'previous-session' ? first.vcs?.baseBranch?.trim() || 'main' : undefined;
   const baseHead = baseBranch ? (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}^{commit}`])).stdout || null : undefined;
   const settings = inputSettings(first.vcs);
+  const workName =
+    first.vcs?.startFrom === 'existing-branch'
+      ? first.vcs.existingBranch?.trim()
+      : first.vcs?.branchMode === 'per-session' && first.vcsBaseCommit
+        ? sessionBranchName(first)
+        : undefined;
+  const workBranch = workName ? { name: workName, head: (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${workName}^{commit}`])).stdout || null } : undefined;
 
   const sessions = list.map((s, i) => {
     const sf = s.vcs?.startFrom ?? 'head';
     const role: RunVcsGroup['sessions'][number]['role'] =
       i === 0 ? 'first' : sf === 'previous-session' ? 'inherits' : sf === 'branch' && (s.vcs?.baseBranch?.trim() || 'main') === baseBranch && !s.vcsBaseCommit ? 'shares' : 'own';
-    return { id: s.id, name: s.name, startFrom: sf, started: !!s.vcsBaseCommit, role };
+    // Started means a task of it ran; a start recorded by the panel (a snapshot) is not that (live run 2026-10-03).
+    const started = s.tasks.some((t) => !!t.startedAt || (t.attempts ?? []).some((a) => !!a.startedAt));
+    return { id: s.id, name: s.name, startFrom: sf, started, hasStart: !!s.vcsBaseCommit, role };
   });
 
   const pre = await vcsPreflight(first, allSessions);
@@ -117,7 +140,11 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
       ? []
       : (await dirtyBesidesInputs(repoDir, first.vcsStart)).other
           .filter((path) => !inputPaths.has(path) && !(artifacts.length > 0 && inScope(path, artifacts)))
-          .map((path) => ({ path, ...(reasons.has(path) ? { reason: reasons.get(path) } : {}) }));
+          .map((path) => {
+            // Said under every policy, not only once a snapshot is asked for (live run 2026-10-03: ".env" with no reason).
+            const reason = reasons.get(path) ?? findSuspicious([path])[0]?.reason;
+            return { path, ...(reason ? { reason } : {}) };
+          });
 
   // Before anything is approved: a pattern that matches nothing is said here, not after the browser opens.
   let problem = pre.ok ? undefined : pre.problem;
@@ -128,7 +155,9 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
     const missing = topR.ok ? await missingInputPatterns(first, repoDir, resolve(topR.stdout), allSessions) : [];
     if (missing.length > 0) {
       blocking = true;
-      problem = `the input file pattern(s) ${missing.map((m) => `"${m}"`).join(', ')} match no file in the project: put the files in, or correct "Input files" on the session's page.`;
+      // Added to what was already in the way, not instead of it: the dirty tree was hidden (live run 2026-10-03).
+      const absent = `the input file pattern(s) ${missing.map((m) => `"${m}"`).join(', ')} match no file in the project: put the files in yourself (nothing here can make them), or correct "Input files" on the session's page.`;
+      problem = problem ? `${absent} Also: ${problem}` : absent;
     }
   }
   /*
@@ -171,15 +200,22 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
     actions.push({
       id: 'snapshot-on-base',
       available: !why,
-      recommended: !why && branch !== baseBranch,
+      // The fix that leaves the checkout alone: recommended whenever it can be pressed (live run 2026-10-03: not marked on the base branch).
+      recommended: !why,
       ...(why ? { why } : {}),
       result:
         `Commits the ${inputs.length} input file(s) on top of "${baseBranch}" (${short(baseHead)}) as "Capture user-provided inputs", on the new branch ${baselineName}, ` +
         `without switching branches: your checkout${branch ? ` of "${branch}"` : ''} and the files stay exactly as they are. ` +
-        `${names(sharing)} start from it${inheriting.length > 0 ? `; ${names(inheriting)} carry it on through the chain` : ''}.`,
+        `${names(sharing)} ${verb(sharing, 'starts', 'start')} from it${inheriting.length > 0 ? `; ${names(inheriting)} ${verb(inheriting, 'carries', 'carry')} it on through the chain` : ''}.`,
     });
   }
-  if (plan?.needed && plan.ok && plan.requireApproval) {
+  /*
+   * On the base branch already, with only the inputs uncommitted, the snapshot "where the repository is"
+   * is the snapshot on the base branch under a second button with the same label (seen live on
+   * 2026-10-03: two "Create starting snapshot on main"). The one that leaves the checkout alone stays.
+   */
+  const onBaseOffered = actions.some((a) => a.id === 'snapshot-on-base' && a.available);
+  if (plan?.needed && plan.ok && plan.requireApproval && !(onBaseOffered && branch === baseBranch)) {
     actions.push({
       id: 'snapshot-here',
       available: true,
@@ -194,16 +230,36 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
       id: 'use-current-branch',
       available: true,
       result:
-        `${names(sharing)} start from "${branch}" (${short(head)}) instead of "${baseBranch}": their "Start from" becomes "From wherever the repository is". ` +
+        `${names(sharing)} ${verb(sharing, 'starts', 'start')} from the local branch "${branch}" (${short(head)} now) instead of "${baseBranch}": ${verb(sharing, 'its', 'their')} base branch becomes "${branch}". ` +
         'Nothing is committed yet; a snapshot on that branch is offered next if one is needed.',
     });
   }
-  if (!plan?.needed && unrelated.length > 0 && dirtyPolicy(first.vcs).policy === 'reject' && !first.vcsBaseCommit && !noCommits) {
+  /*
+   * Offered whenever other uncommitted files are in the way under "refuse", inputs or not. It used to need
+   * `!plan.needed`, and input files make a snapshot needed — so exactly when inputs sat next to other
+   * changes it never appeared, "use the current branch" left only "review", and the panel could not become
+   * ready (live run 2026-10-03).
+   */
+  if (unrelated.length > 0 && dirtyPolicy(first.vcs).policy === 'reject' && !first.vcsBaseCommit && !noCommits) {
     actions.push({
       id: 'allow-snapshot',
       available: true,
       result: `"Uncommitted changes" for "${first.name}" becomes "Take them as a starting snapshot": the files are listed here for you to approve. Nothing is committed yet.`,
     });
+  }
+
+  /*
+   * While something only the operator can fix is in the way — an input that is not there, a branch that
+   * does not exist — no fix here can make the run ready: each says so instead of being offered as one
+   * (live run 2026-10-03: "fixes" offered that could never clear the refusal).
+   */
+  if (blocking) {
+    for (const a of actions) {
+      if (a.id === 'review-inputs' || !a.available) continue;
+      a.available = false;
+      a.recommended = false;
+      a.why = 'first the problem above has to be fixed outside the bot; this cannot make the run ready until then.';
+    }
   }
 
   return {
@@ -213,6 +269,10 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
     branch,
     head,
     ...(baseBranch ? { baseBranch, baseHead } : {}),
+    ...(workBranch && workBranch.name !== branch ? { workBranch } : {}),
+    ...(settings && inputs.length === 0 && !first.vcsBaseCommit && !blocking
+      ? { carry: `the input files (${settings.patterns.join(', ')}) are not in the working tree: when the first task starts they are committed on top of its start as ${prefix}input/${first.id}, from the latest earlier capture of them` }
+      : {}),
     sessions,
     inputPatterns: settings?.patterns ?? [],
     inputs,
@@ -246,15 +306,23 @@ export async function runVcsPrepare(
   if (action === 'review-inputs') return { ok: true, result: offered.result };
 
   if (action === 'use-current-branch') {
-    const moved = group.sessions.filter((s) => (s.role === 'first' || s.role === 'shares') && !s.started);
+    const moved = group.sessions.filter((s) => (s.role === 'first' || s.role === 'shares') && !s.hasStart);
     for (const s of moved) {
       await saveSession(s.id, (x) => {
-        if (x.vcs) x.vcs.startFrom = 'head';
+        /*
+         * The branch the operator was shown, pinned as the base branch. "From wherever the repository is"
+         * read HEAD when each session's first task began, and HEAD moves between sessions — the next one
+         * would have started from the branch of the one before (live run 2026-10-03).
+         */
+        if (x.vcs) {
+          x.vcs.startFrom = 'branch';
+          x.vcs.baseBranch = group.branch ?? undefined;
+        }
         x.vcsBaseCommit = undefined;
         x.vcsStart = undefined;
       });
     }
-    return { ok: true, result: `${names(moved)} now start from "${group.branch}".` };
+    return { ok: true, result: `${names(moved)} now ${verb(moved, 'starts', 'start')} from "${group.branch}".` };
   }
 
   if (action === 'allow-snapshot') {
@@ -271,34 +339,39 @@ export async function runVcsPrepare(
 
   // snapshot-on-base: the base branch's tree plus the approved inputs only, with a temporary index.
   const paths = group.inputs.map((e) => e.path);
-  const shown = Object.keys(choices).sort();
-  if (JSON.stringify(shown) !== JSON.stringify([...paths].sort()) || paths.some((p) => choices[p] !== 'include')) {
-    return { ok: false, problem: 'the input files changed since the list was shown. Look at the list again; nothing was done.' };
-  }
+  const wrong = approvalMismatch(paths, choices, { allMustBeIncluded: true });
+  if (wrong) return { ok: false, problem: wrong };
   const topR = await git(repoDir, ['rev-parse', '--show-toplevel']);
   if (!topR.ok || !topR.stdout || !group.baseHead || !group.baseBranch) return { ok: false, problem: 'the base branch could not be read.' };
   const top = resolve(topR.stdout);
+  /*
+   * The base branch brought up to its remote first, when the session asks for that, as a start from the
+   * branch does: the snapshot is the commit every session here starts from, and it skipped the update
+   * without a word, so a run cut its work from a main the team had already moved past (live run 2026-10-03).
+   */
+  const update = first.vcs?.updateFromRemote !== false ? await updateFromRemote(top, group.baseBranch) : undefined;
+  const baseHead = (await git(top, ['rev-parse', '--verify', '--quiet', `refs/heads/${group.baseBranch}^{commit}`])).stdout || group.baseHead;
   const files: Array<{ path: string; mode: string; blob: string }> = [];
   for (const path of paths) {
     const blob = await git(top, ['hash-object', '-w', `--path=${path}`, '--', join(top, path)]);
     if (!blob.ok || !blob.stdout) return { ok: false, problem: `${path} could not be read into git: ${blob.stderr}` };
-    const mode = (await git(top, ['ls-tree', group.baseHead, '--', path])).stdout.split(' ')[0] || '100644';
+    const mode = (await git(top, ['ls-tree', baseHead, '--', path])).stdout.split(' ')[0] || '100644';
     files.push({ path, mode, blob: blob.stdout });
   }
   const branch = await freeBranchName(top, `${branchNameFrom(['baseline'], first.vcs?.branchPrefix || 'cop/')}/${first.id}`);
-  const sharing = group.sessions.filter((s) => (s.role === 'first' || s.role === 'shares') && !s.started);
+  const sharing = group.sessions.filter((s) => (s.role === 'first' || s.role === 'shares') && !s.hasStart);
   const message = [
     'Capture user-provided inputs',
     '',
-    `The operator's input files, approved on the run screen, on top of "${group.baseBranch}" (${short(group.baseHead)}).`,
-    `Made without switching branches; the sessions ${names(sharing)} start from it. The work reads them and does not change them.`,
+    `The operator's input files, approved on the run screen, on top of "${group.baseBranch}" (${short(baseHead)}).`,
+    `Made without switching branches; ${verb(sharing, 'the session', 'the sessions')} ${names(sharing)} ${verb(sharing, 'starts', 'start')} from it. The work reads them and does not change them.`,
     '',
     ...paths.slice(0, 200).map((p) => `- ${p}`),
     '',
     'Committed by copilot-operator. Not pushed.',
     '',
   ].join('\n');
-  const made = await commitOnto(top, group.baseHead, files, message, branch);
+  const made = await commitOnto(top, baseHead, files, message, branch);
   if ('problem' in made) return { ok: false, problem: made.problem };
   const settings = inputSettings(first.vcs);
   const sums = await inputSumsAt(top, made.commit, settings?.patterns ?? []);
@@ -308,9 +381,10 @@ export async function runVcsPrepare(
       kind: 'snapshot',
       commit: made.commit,
       branch,
+      ...(update ? { update } : {}),
       snapshot: {
         fromBranch: group.baseBranch,
-        fromCommit: group.baseHead,
+        fromCommit: baseHead,
         included: paths.slice(0, 500),
         leftOut: [],
         approved: true,
@@ -328,9 +402,9 @@ export async function runVcsPrepare(
       sessionId: s.id,
       type: 'vcs-snapshot',
       level: 'info',
-      message: `starting snapshot approved on the run screen: ${paths.length} input file(s) on top of ${group.baseBranch} (${short(group.baseHead)}) as ${short(made.commit)} on ${branch}; the checkout was not touched`,
-      data: { commit: made.commit, branch, base: group.baseHead, baseBranch: group.baseBranch, inputs: paths, approvedAt, sessions: sharing.map((x) => x.id) },
+      message: `starting snapshot approved on the run screen: ${paths.length} input file(s) on top of ${group.baseBranch} (${short(baseHead)}) as ${short(made.commit)} on ${branch}; the checkout was not touched`,
+      data: { commit: made.commit, branch, base: baseHead, baseBranch: group.baseBranch, inputs: paths, approvedAt, sessions: sharing.map((x) => x.id) },
     });
   }
-  return { ok: true, result: `taken: ${short(made.commit)} on ${branch}, on top of "${group.baseBranch}"; ${names(sharing)} start from it.` };
+  return { ok: true, result: `${update ? `${describeUpdate(update)}. ` : ''}taken: ${short(made.commit)} on ${branch}, on top of "${group.baseBranch}" (${short(baseHead)}); ${names(sharing)} ${verb(sharing, 'starts', 'start')} from it.` };
 }

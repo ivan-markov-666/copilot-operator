@@ -466,7 +466,7 @@ try {
    */
   await scenario('the register: one failed task run again alone, the lists in order, the queue folding', { limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
     const [s] = await h.importPlan(planFor(h, 'alone', [greeting, { ...greeting, title: 'second-greeting' }]));
-    h.chat.script(reply.blocked());
+    h.chat.script(...reply.triedThenBlocked());
     const ran = await h.run(s!.id);
     t.check('the first task blocked, the second is still queued', ran.tasks.map((x) => x.status), ['blocked', 'queued']);
 

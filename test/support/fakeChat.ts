@@ -283,6 +283,13 @@ export const reply = {
   pass(summary = 'I read the changed files and ran the checks: the file exists and holds exactly the text the task asked for.'): string {
     return fenced({ status: 'pass', summary });
   },
+  /**
+   * One step, then "blocked": a chat that tried and gave up. A "blocked" before any step ran is sent back
+   * by the runner (live-fixes C5), so a script that means "this attempt gives up" uses these two.
+   */
+  triedThenBlocked(): string[] {
+    return [reply.steps('Get-ChildItem'), reply.blocked()];
+  },
   /** Not JSON at all: what a chat that forgot the format sends. */
   prose(text = 'Sure! I will get right on that.'): string {
     return text;

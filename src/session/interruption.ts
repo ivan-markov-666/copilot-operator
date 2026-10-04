@@ -75,7 +75,9 @@ export async function readInterruption(runDir: string): Promise<Interruption | n
     const skipped = after.find((e) => e.type === 'step-skipped' && e.id === id);
     const started = after.some((e) => e.type === 'step-started' && e.id === id);
     const proposed = after.find((e) => e.type === 'step-proposed' && e.id === id);
-    const state: InterruptedStep['state'] = finished ? 'finished' : skipped ? 'skipped' : started ? 'cut' : 'not-run';
+    // A step killed by a Stop is recorded as finished with outcome "aborted": it was cut off, not run to the end.
+    const cutShort = finished?.outcome === 'aborted';
+    const state: InterruptedStep['state'] = finished && !cutShort ? 'finished' : skipped ? 'skipped' : started || cutShort ? 'cut' : 'not-run';
     const step: InterruptedStep = { id, state };
     if (typeof proposed?.description === 'string') step.command = proposed.description;
     if (finished) {

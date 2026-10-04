@@ -23,7 +23,32 @@ import { join } from 'node:path';
 import { gitBytes } from './git.js';
 import { looksGenerated } from './commitHygiene.js';
 
-export type IntegrityKind = 'bom' | 'replacement-char' | 'mojibake' | 'control-chars' | 'mixed-line-endings' | 'binary-in-text' | 'oversized' | 'secret';
+export type IntegrityKind =
+  | 'bom'
+  | 'replacement-char'
+  | 'mojibake'
+  | 'control-chars'
+  | 'mixed-line-endings'
+  | 'line-endings-changed'
+  | 'binary-in-text'
+  | 'oversized'
+  | 'secret';
+
+/**
+ * How line endings are handled where the file is committed.
+ *
+ * `normalized`: git converts them on commit (`core.autocrlf` true or input, or a `text` attribute), so
+ * what the working tree holds is not what is committed and line endings are not this check's business
+ * — on this machine `core.autocrlf` is true globally, which made every here-string write a "problem".
+ * `style`: the ending most of the repository's text files are committed with, when one clearly is.
+ */
+export type LineEndingRule = { normalized: boolean; style?: 'lf' | 'crlf' };
+
+const endingsOf = (bytes: Buffer): { crlf: number; lf: number } => {
+  const text = bytes.toString('latin1');
+  const crlf = (text.match(/\r\n/g) ?? []).length;
+  return { crlf, lf: (text.match(/\n/g) ?? []).length - crlf };
+};
 
 export type IntegrityFinding = { path: string; kind: IntegrityKind; detail: string };
 
@@ -123,7 +148,7 @@ export function traitsOf(path: string, bytes: Buffer): Traits {
  * A BOM in a new file counts only for formats it breaks; in a changed file, whenever the file had
  * none. Size counts only when the file crossed the line in this task.
  */
-export function newProblems(path: string, now: Buffer, before: Buffer | null): IntegrityFinding[] {
+export function newProblems(path: string, now: Buffer, before: Buffer | null, endings: LineEndingRule = { normalized: false }): IntegrityFinding[] {
   const ext = extensionOf(path);
   if (BINARY_EXTENSIONS.has(ext)) return [];
   const had = before ? traitsOf(path, before) : {};
@@ -132,14 +157,56 @@ export function newProblems(path: string, now: Buffer, before: Buffer | null): I
   for (const [kind, detail] of Object.entries(has) as Array<[IntegrityKind, string]>) {
     if (had[kind]) continue;
     if (kind === 'bom' && !before && !BOM_BREAKS.has(ext)) continue;
+    if (kind === 'mixed-line-endings' && endings.normalized) continue;
     out.push({ path, kind, detail });
   }
+  /*
+   * A whole file turned from one ending to the other is a change on every line, and a mixed-endings
+   * test cannot see it: each version is consistent on its own. Found live on 2026-10-03, a task told to
+   * keep a JSON file's formatting rewrote it from LF to CRLF and it was committed that way. Not where git
+   * converts endings on commit.
+   */
+  if (!endings.normalized && !has['mixed-line-endings']) {
+    const n = endingsOf(now);
+    const only = n.crlf > 0 && n.lf === 0 ? 'crlf' : n.lf > 0 && n.crlf === 0 ? 'lf' : null;
+    if (only && before) {
+      const b = endingsOf(before);
+      const was = b.crlf > 0 && b.lf === 0 ? 'crlf' : b.lf > 0 && b.crlf === 0 ? 'lf' : null;
+      if (was && was !== only) out.push({ path, kind: 'line-endings-changed', detail: `every line ending changed from ${was.toUpperCase()} to ${only.toUpperCase()}` });
+    }
+    /*
+     * A new file is not held to the repository's style: every file PowerShell's Set-Content writes ends
+     * its lines in CRLF, so on a repository without line-ending conversion that cost nearly every task a
+     * round. A file changed from one ending to the other is the change that misleads a diff.
+     */
+  }
   return out;
+}
+
+/** Whether git converts line endings in this repository on commit, and the style its files have. */
+export async function lineEndingRule(dir: string): Promise<LineEndingRule> {
+  const auto = (await gitBytes(dir, ['config', '--get', 'core.autocrlf'])).stdout.toString('utf8').trim().toLowerCase();
+  if (auto === 'true' || auto === 'input') return { normalized: true };
+  const eol = await gitBytes(dir, ['ls-files', '--eol']);
+  let lf = 0;
+  let crlf = 0;
+  for (const line of eol.stdout.toString('utf8').split('\n')) {
+    // i/lf    w/lf    attr/text=auto   path
+    const m = /^i\/(\S*)\s+w\/\S*\s+attr\/(\S*)/.exec(line);
+    if (!m) continue;
+    if (/(^|\s)(text|eol=)/.test(m[2] ?? '') && !/-text/.test(m[2] ?? '')) return { normalized: true };
+    if (m[1] === 'lf') lf += 1;
+    else if (m[1] === 'crlf') crlf += 1;
+  }
+  const total = lf + crlf;
+  const style = total >= 3 && lf / total >= 0.8 ? 'lf' : total >= 3 && crlf / total >= 0.8 ? 'crlf' : undefined;
+  return { normalized: false, ...(style ? { style } : {}) };
 }
 
 /** The problems the task added to these working-tree paths, compared with `baseCommit`. */
 export async function scanChanges(dir: string, paths: string[], baseCommit: string | undefined, limit = 400): Promise<IntegrityFinding[]> {
   const found: IntegrityFinding[] = [];
+  const endings = await lineEndingRule(dir);
   for (const rel of paths.slice(0, limit)) {
     if (rel.endsWith('/') || looksGenerated(rel)) continue;
     const abs = join(dir, rel);
@@ -162,7 +229,7 @@ export async function scanChanges(dir: string, paths: string[], baseCommit: stri
       const shown = await gitBytes(dir, ['show', `${baseCommit}:${rel.replace(/\\/g, '/')}`]);
       before = shown.ok ? shown.stdout : null;
     }
-    found.push(...newProblems(rel, now, before));
+    found.push(...newProblems(rel, now, before, endings));
   }
   return found;
 }
@@ -173,8 +240,9 @@ export function integrityDetail(found: IntegrityFinding[]): string {
   return (
     `${found.length} problem(s) in the text of files this task changed, none of them there before it: ${list}` +
     `${found.length > 20 ? `; and ${found.length - 20} more` : ''}. Write the files again as UTF-8 without a byte-order mark ` +
-    '(in PowerShell 5.1 use [IO.File]::WriteAllText with New-Object Text.UTF8Encoding($false), not Set-Content -Encoding utf8), ' +
-    'one kind of line ending per file, no terminal colour codes, and no credentials — load those from the environment. ' +
+    '(in PowerShell 5.1: $f = [IO.File]; $f::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($false))) — not Set-Content -Encoding utf8), ' +
+    'the line endings the file and the repository already use (Set-Content adds a Windows line ending after the last line: use -NoNewline and end the here-string with an empty line), ' +
+    'no terminal colour codes, and no credentials — load those from the environment. ' +
     'If one of these is intended, leave it and say why in your summary: it will be committed and the finding kept on the task.'
   );
 }

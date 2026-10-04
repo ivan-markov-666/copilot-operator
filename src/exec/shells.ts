@@ -332,6 +332,18 @@ export function shellNote(inventory: ShellInventory = detectShells(), fallback?:
  * `cmdArgument`, because nothing else quotes them any more. PowerShell is not touched: it reads its
  * arguments by the C runtime's rules, and Node's quoting is the right quoting for it.
  */
+/**
+ * Put in front of every PowerShell command: the console in UTF-8 both ways, and `$OutputEncoding` with it.
+ *
+ * Without it a step ran with the console's OEM code page (866 on this machine): what a native program
+ * printed and the step captured in a variable was decoded as 866 and written back mangled — node's "✔"
+ * saved as "тЬФ" in a kept artifact — and Cyrillic printed by a cmdlet reached the runner, which reads
+ * UTF-8, as "�" (live run 2026-10-03). Through a variable, because the line is a command line and the
+ * chat's own `[Type]::` restriction is about what survives the chat, not about what the runner runs.
+ */
+export const PWSH_UTF8 =
+  'try { $__u = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $__u; [Console]::InputEncoding = $__u; $OutputEncoding = $__u; Remove-Variable __u } catch { }; ';
+
 export function invocationFor(
   resolved: ResolvedShell,
   command: string,
@@ -344,10 +356,11 @@ export function invocationFor(
       const base = ['-NoProfile', '-NonInteractive'];
       return isScript
         ? { file: resolved.path, args: [...base, '-File', command, ...(scriptArgs ?? [])], windowsVerbatimArguments: false }
-        : { file: resolved.path, args: [...base, '-Command', command], windowsVerbatimArguments: false };
+        : { file: resolved.path, args: [...base, '-Command', `${PWSH_UTF8}${command}`], windowsVerbatimArguments: false };
     }
     case 'cmd': {
-      const line = isScript ? [`"${command}"`, ...(scriptArgs ?? []).map(cmdArgument)].join(' ') : command;
+      // The code page to UTF-8 first, for the same reason as PowerShell's (see `PWSH_UTF8`).
+      const line = `chcp 65001 >nul & ${isScript ? [`"${command}"`, ...(scriptArgs ?? []).map(cmdArgument)].join(' ') : command}`;
       return { file: resolved.path, args: ['/d', '/s', '/c', `"${line}"`], windowsVerbatimArguments: true };
     }
   }

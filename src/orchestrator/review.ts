@@ -38,6 +38,7 @@ import { trackedRepoOf } from '../vcs/taskVcs.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { Pacer } from '../util/pacing.js';
 import type { Session, Task, TaskCheck } from '../session/model.js';
+import { inScope } from '../vcs/scope.js';
 
 /** How a review ended. `error` is the review itself failing, which is not the work's fault. */
 export type ReviewOutcome = {
@@ -192,7 +193,19 @@ export function reviewBrief(
 ): string {
   // The same repository the runner branched and read the changed files from, however it is named.
   const repo = trackedRepoOf(session);
-  const files = changedFiles.length > 0 ? changedFiles.map((f) => `- ${f}`).join('\n') : '(version control recorded no file changes for this task)';
+  // Each file marked against the task's scope, and the scope said: the reviewer was shown side effects as
+  // the task's changes, with no scope to judge them by (live run 2026-10-03).
+  const scope = task.scope ?? [];
+  const outside = (f: string): boolean => !!task.readOnly || (scope.length > 0 && !inScope(f, scope));
+  const files =
+    changedFiles.length > 0
+      ? changedFiles.map((f) => `- ${f}${outside(f) ? " (outside what this task may change — a violation if it is the task's)" : ''}`).join('\n')
+      : '(version control recorded no file changes for this task)';
+  const rule = task.readOnly
+    ? 'This task is read-only: it may change no file in the project.'
+    : scope.length > 0
+      ? `This task may change only: ${scope.join(', ')}. The runner puts back what it changes outside that.`
+      : '';
 
   return [
     '## The task that was given',
@@ -220,6 +233,7 @@ export function reviewBrief(
     `Working directory for your commands: ${cwd}`,
     repo ? `Repository: ${repo}` : 'There is no repository for this work.',
     '',
+    ...(rule ? [rule, ''] : []),
     'Files this task changed:',
     files,
     ...(deliverable
