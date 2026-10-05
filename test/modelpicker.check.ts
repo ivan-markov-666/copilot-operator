@@ -188,6 +188,7 @@ try {
 <div id="menu" role="menu" aria-labelledby="gptModeSwitcher" style="display:none">
   <div role="menuitemradio" data-name="Auto">Auto<br>Decides how long to think</div>
   <div role="menuitemradio" data-name="Think deeper">Think deeper<br>Takes longer</div>
+  <div role="menuitemradio" data-name="Advanced reasoning (Experimental)"><div>Advanced reasoning <span>(Experimental)</span></div><div>Slow and careful</div></div>
   <div role="menuitem" id="claude" data-test-id="claudeSubMenuModelTrigger-Anthropic" aria-haspopup="menu">Claude<br>Anthropic</div>
   <div role="menuitem" id="gpt" data-test-id="gptSubMenuModelTrigger-OpenAI" aria-haspopup="menu">GPT<br>OpenAI</div>
 </div>
@@ -237,7 +238,7 @@ try {
 
     const list = await transport.listModels();
     t.check('each group lists its own models', list.options.map((o) => `${o.group ? `${o.group} > ` : ''}${o.name}`), [
-      'Auto', 'Think deeper',
+      'Auto', 'Think deeper', 'Advanced reasoning (Experimental)',
       'Claude > Claude Opus 4.7 Think deeper', 'Claude > Claude Sonnet 4.6 Quick response',
       'GPT > GPT-5.6 Sol Quick response', 'GPT > GPT-5.6 Sol Think deeper',
     ]);
@@ -248,6 +249,9 @@ try {
     t.check('then a Claude one', [r.ok, r.by, r.current], [true, 'locator', 'Claude Opus 4.7 Think deeper']);
     r = await transport.selectModel('GPT-5.6 Sol Quick response', { locator: at('GPT-5.6 Sol Quick response') });
     t.check('and back to GPT, the Claude row now reading the Claude model', [r.ok, r.by, r.current], [true, 'locator', 'GPT-5.6 Sol Quick response']);
+    // A name the page splits over two elements: text() sees "Advanced reasoning " only.
+    r = await transport.selectModel('Advanced reasoning (Experimental)', { locator: at('Advanced reasoning (Experimental)') });
+    t.check('a model whose name is split over two elements', [r.ok, r.by, r.current], [true, 'locator', 'Advanced reasoning (Experimental)']);
     // With no saved place, as a run with an old list: found by name across both groups.
     r = await transport.selectModel('Claude Sonnet 4.6 Quick response');
     t.check('with no saved place: found by name', [r.ok, r.current], [true, 'Claude Sonnet 4.6 Quick response']);

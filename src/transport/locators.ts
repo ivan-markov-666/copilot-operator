@@ -117,7 +117,27 @@ export const Model = {
    * this project is asked to pick actually live.
    */
   submenuAttributes: ['aria-haspopup', 'aria-expanded'],
+  /**
+   * The operator's locators (2026-10-05), with the text taken from the list read in Settings: a model
+   * (in a group's submenu or not) and a group row that opens a submenu ("Claude", "GPT"). The menu is
+   * too dynamic for anything else that was tried; change these when the page changes.
+   */
+  modelRowXPath: (text: string): string => `//div[contains(text(), ${xpathText(text)})]/ancestor-or-self::div[@role="menuitemradio"]`,
+  groupRowXPath: (text: string): string => `//div[contains(text(), ${xpathText(text)})]/ancestor-or-self::div[@role="menuitem"]`,
+  /**
+   * The same rows by all their text, for a name the page splits over two elements ("Advanced reasoning"
+   * and "(Experimental)"), which `text()` sees only the first part of. Asked together with the ones above.
+   */
+  modelRowByAllText: (text: string): string => `//div[@role="menuitemradio"][contains(normalize-space(.), ${xpathText(text)})]`,
+  groupRowByAllText: (text: string): string => `//div[@role="menuitem"][contains(normalize-space(.), ${xpathText(text)})]`,
 } as const;
+
+/** A text as an XPath string literal, whatever quotes it holds. */
+export function xpathText(text: string): string {
+  if (!text.includes("'")) return `'${text}'`;
+  if (!text.includes('"')) return `"${text}"`;
+  return `concat('${text.split("'").join(`', "'", '`)}')`;
+}
 
 /** CSS selectors for things that have neither a test id nor an accessible name. */
 export const Css = {

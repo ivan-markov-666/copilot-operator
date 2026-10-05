@@ -97,6 +97,8 @@ export type ModelChoice = {
   options?: ModelOption[];
   /** How it was found: at the saved locator, at a fresh one after the saved one missed, or by name with no saved one. */
   by?: 'locator' | 'reread' | 'name';
+  /** When the saved locator missed and a fresh reading found the model: why it missed. */
+  locatorMiss?: string;
 };
 
 /**
@@ -979,75 +981,91 @@ Current URL: ${url}`);
   }
 
   /**
-   * The row a locator points at, in a picker this opens (the group included); the menu is left open.
-   * The row must still carry the name: a place that now holds another model is not taken, and a model
-   * that moved within its menu is found there by name.
+   * The visible row an XPath of `Model` finds for a text, waited for: the one whose own first line is
+   * the text when several contain it ("Think deeper" is in "GPT-5.6 Sol Think deeper" too), else the first.
    */
-  private async openAtLocator(name: string, locator: ModelLocator): Promise<{ row: MenuRow } | { problem: string }> {
+  private async rowByXPath(xpath: string, text: string, waitMs: number): Promise<Locator | null> {
+    const all = this.p.locator(`xpath=${xpath}`);
+    const deadline = Date.now() + waitMs;
+    do {
+      let first: Locator | null = null;
+      const n = await all.count().catch(() => 0);
+      for (let i = 0; i < n; i += 1) {
+        const el = all.nth(i);
+        if (!(await el.isVisible().catch(() => false))) continue;
+        const line = ((await el.innerText().catch(() => '')) ?? '').split('\n')[0]?.trim() ?? '';
+        if (sameModel(line, text)) return el;
+        first ??= el;
+      }
+      if (first) return first;
+      await this.p.waitForTimeout(200);
+    } while (Date.now() < deadline);
+    return null;
+  }
+
+  /**
+   * Opens the picker, and the group when the model is in one, and finds the model's row by its text
+   * (`Model.modelRowXPath`, `Model.groupRowXPath`). The menu is left open.
+   */
+  private async openToModel(name: string, group: string | undefined): Promise<{ row: Locator } | { problem: string }> {
     const button = await this.resolveModelButton();
     if (!button) return { problem: 'This chat does not show a model picker.' };
     await button.click();
     if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
-    let rows: MenuRow[];
-    if (locator.group) {
-      const key = await this.openGroup(locator.group);
-      if (!key) return { problem: `the group "${locator.group.name}" of the picker did not open.` };
-      rows = (await this.readMenuRows()).filter((r) => r.menuOf === key);
-    } else {
-      rows = this.topRows(await this.readMenuRows());
+    if (group) {
+      const trigger = await this.rowByXPath(`${Model.groupRowXPath(group)} | ${Model.groupRowByAllText(group)}`, group, 4_000);
+      if (!trigger) return { problem: `the picker has no "${group}" group.` };
+      // Hover is how these open; a click on it is the fallback.
+      await trigger.hover({ timeout: 3_000 }).catch(() => undefined);
+      let row = await this.rowByXPath(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
+      if (!row) {
+        await this.press(trigger).catch(() => undefined);
+        row = await this.rowByXPath(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
+      }
+      return row ? { row } : { problem: `"${name}" is not in the "${group}" group.` };
     }
-    const choices = rows.filter((r) => !r.opensSubmenu);
-    // At its place when it is still there; else wherever its menu has it, by its name or a row containing it.
-    const row =
-      choices.find((r) => r.index === locator.index && sameModel(r.name, name)) ??
-      choices.find((r) => sameModel(r.name, name)) ??
-      choices.find((r) => containsModel(r.raw, name));
-    return row ? { row } : { problem: `"${name}" is not where the list was read${locator.group ? ` (in "${locator.group.name}")` : ''}.` };
-  }
-
-  /** Clicks one row of the open picker, on the element itself: a mouse moving across the menu re-renders the submenus under it. */
-  private async clickRow(row: MenuRow): Promise<boolean> {
-    return await this.p
-      .evaluate((mark) => {
-        const el = document.querySelector(`[data-cop-row="${mark}"]`) as HTMLElement | null;
-        if (!el || el.getClientRects().length === 0) return false;
-        el.click();
-        return true;
-      }, `${row.menuOf}#${row.index}`)
-      .catch(() => false);
+    const row = await this.rowByXPath(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
+    return row ? { row } : { problem: `"${name}" is not in the picker.` };
   }
 
   /**
-   * Chooses a model at its locator and reads its row again from a fresh menu: chosen only when the
-   * row itself is marked (`aria-checked`). The button's text is no proof — it is shortened, and it is
-   * the same for a model and its group.
+   * Chooses a model by its text and reads its row again from a fresh menu: chosen only when the row
+   * itself is marked (`aria-checked`). The button's text is no proof — it is shortened, and it is the
+   * same for a model and its group.
    */
   private async chooseAt(name: string, locator: ModelLocator): Promise<ModelChoice> {
+    const group = locator.group?.name;
     const before = await this.currentModel();
-    const found = await this.openAtLocator(name, locator);
+    const found = await this.openToModel(name, group);
     if ('problem' in found) {
       await this.closeMenu();
       return { ok: false, current: before, reason: found.problem };
     }
-    if (found.row.disabled) {
+    const mark = async (row: Locator): Promise<{ checked: boolean; disabled: boolean }> => ({
+      checked: (await row.getAttribute('aria-checked').catch(() => null)) === 'true',
+      disabled: (await row.getAttribute('aria-disabled').catch(() => null)) === 'true',
+    });
+    const now = await mark(found.row);
+    if (now.disabled) {
       await this.closeMenu();
-      return { ok: false, current: before, reason: `"${found.row.name}" is shown but not available right now.` };
+      return { ok: false, current: before, reason: `"${name}" is shown but not available right now.` };
     }
-    if (found.row.selected) {
+    if (now.checked) {
       await this.closeMenu();
-      this.emit('model-already-selected', { model: found.row.name, buttonShows: before, by: 'locator' });
-      return { ok: true, current: found.row.name, by: 'locator' };
+      this.emit('model-already-selected', { model: name, buttonShows: before, by: 'locator' });
+      return { ok: true, current: name, by: 'locator' };
     }
-    const clicked = await this.clickRow(found.row);
+    await this.press(found.row).catch(() => undefined);
     await this.p.waitForTimeout(800);
     // Whatever the click did, the menu is not left open over the chat.
     await this.closeMenu();
-    const again = clicked ? await this.openAtLocator(found.row.name, locator) : { problem: 'the row could not be clicked.' };
+    const again = await this.openToModel(name, group);
+    const checked = 'row' in again ? (await mark(again.row)).checked : false;
     await this.closeMenu();
     const after = await this.currentModel();
-    if ('row' in again && again.row.selected) {
-      this.emit('model-selected', { model: again.row.name, buttonShows: after, by: 'locator' });
-      return { ok: true, current: again.row.name, by: 'locator' };
+    if (checked) {
+      this.emit('model-selected', { model: name, buttonShows: after, by: 'locator' });
+      return { ok: true, current: name, by: 'locator' };
     }
     return {
       ok: false,
@@ -1180,6 +1198,8 @@ Current URL: ${url}`);
       ...chosen,
       ...(chosen.ok && !sameModel(match.name, name) ? { matched: match.name } : {}),
       ...(chosen.ok ? { by: opts.locator ? 'reread' : 'name' } : {}),
+      // Why the saved locator missed, kept: what to look at when the page has changed.
+      ...(first && !first.ok && first.reason ? { locatorMiss: first.reason } : {}),
       options,
     };
   }

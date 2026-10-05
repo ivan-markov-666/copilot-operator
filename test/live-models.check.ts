@@ -15,7 +15,7 @@
 import { join } from 'node:path';
 import { CopilotTransport, type ModelOption } from '../src/transport/copilotTransport.js';
 import { installLayout } from '../src/config/layout.js';
-import { Url } from '../src/transport/locators.js';
+import { Model, Url } from '../src/transport/locators.js';
 import { sameModel } from '../src/transport/modelMatch.js';
 import { Tally } from './support/harness.js';
 
@@ -54,6 +54,46 @@ let list: ModelOption[] = [];
   t.check('no model listed twice', new Set(list.map((o) => o.name.toLowerCase())).size, list.length);
 }
 
+console.log('\n--- 1b. the operator\'s XPath locators, with the texts just read, find every group and every model ---');
+{
+  const x = transport();
+  try {
+    await x.open();
+    await x.ensureSignedIn();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const page = (x as any).p as import('playwright').Page;
+    const visible = async (xpath: string): Promise<number> => {
+      const all = page.locator(`xpath=${xpath}`);
+      let n = 0;
+      for (let i = 0; i < (await all.count()); i += 1) if (await all.nth(i).isVisible()) n += 1;
+      return n;
+    };
+    for (const o of list.filter((m) => !m.group)) {
+      await page.locator('#gptModeSwitcher').click();
+      await page.waitForTimeout(800);
+      t.truthy(`"${o.name}": found by ${Model.modelRowXPath(o.name)}`, (await visible(Model.modelRowXPath(o.name))) >= 1, '');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(400);
+    }
+    for (const g of [...new Set(list.filter((m) => m.group).map((m) => m.group!))]) {
+      await page.locator('#gptModeSwitcher').click();
+      await page.waitForTimeout(800);
+      const triggers = page.locator(`xpath=${Model.groupRowXPath(g)}`);
+      t.truthy(`group "${g}": found by ${Model.groupRowXPath(g)}`, (await visible(Model.groupRowXPath(g))) >= 1, '');
+      await triggers.first().hover();
+      await page.waitForTimeout(1_200);
+      for (const o of list.filter((m) => m.group === g)) {
+        t.truthy(`  "${o.name}": found in it by ${Model.modelRowXPath(o.name)}`, (await visible(Model.modelRowXPath(o.name))) >= 1, '');
+      }
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(400);
+    }
+  } finally {
+    await x.close();
+  }
+}
+
 console.log('\n--- 2. a later browser, as a run: each model chosen at its place, and checked ---');
 {
   const grouped = list.filter((o) => o.group && !o.disabled);
@@ -70,7 +110,7 @@ console.log('\n--- 2. a later browser, as a run: each model chosen at its place,
       const r = await b.selectModel(o.name, { locator: o.locator });
       const marked = await ticked(b);
       t.check(`"${o.name}": chosen at its saved place, and the picker marks it alone`, [r.ok, r.by, marked.length === 1 && sameModel(marked[0], o.name)], [true, 'locator', true]);
-      if (!r.ok || !(marked.length === 1 && sameModel(marked[0], o.name))) console.log('      ', JSON.stringify({ reason: r.reason, current: r.current, marked }));
+      if (!r.ok || r.by !== 'locator' || !(marked.length === 1 && sameModel(marked[0], o.name))) console.log('      ', JSON.stringify({ reason: r.reason, locatorMiss: r.locatorMiss, current: r.current, marked }));
     }
 
     console.log('\n--- 3. the model holds through a message and its reply ---');
