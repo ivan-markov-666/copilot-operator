@@ -713,6 +713,16 @@ console.log('\n--- 2026-10-04: a model the page offers under a new name is found
   t.check('two that fit as well are not guessed between', pageModelFor('GPT Think deeper', [o('GPT A Think deeper'), o('GPT B Think deeper')]), null);
   t.check('a disabled row is not chosen', pageModelFor('GPT 5.6 Think deeper', [o('GPT 5.6 Sol Think deeper', true)]), null);
   t.check('nothing like it: nothing', pageModelFor('Claude Opus', live), null);
+
+  // 2026-10-05: the page wrote "GPT-5.6 Sol Think deeper", the day after "GPT 5.6 Sol Think deeper".
+  const { sameModel, buttonShows } = await import('../src/transport/modelMatch.js');
+  const dashed = [o('Auto'), o('Think deeper'), o('GPT-5.6 Sol Quick response'), o('GPT-5.6 Sol Think deeper')];
+  t.check('a dash or a space is the same model', [sameModel('GPT 5.6 Sol Think deeper', 'GPT-5.6 Sol Think deeper'), sameModel('gpt-5.6 sol  think deeper', 'GPT 5.6 Sol Think deeper')], [true, true]);
+  t.check('the saved spelling finds the page\'s', pageModelFor('GPT 5.6 Sol Think deeper', dashed)?.name, 'GPT-5.6 Sol Think deeper');
+  t.check('and an older name finds it through the dash too', pageModelFor('GPT 5.6 Think deeper', dashed)?.name, 'GPT-5.6 Sol Think deeper');
+  t.check('the button\'s shortened name agrees (words dropped from the end)', [buttonShows('GPT-5.6 Sol Think', 'GPT-5.6 Sol Think deeper'), buttonShows('GPT 5.6 Quick', 'GPT 5.6 Quick response'), buttonShows('Think deeper', 'Think deeper')], [true, true, true]);
+  t.check('a piece from elsewhere does not: "Think deeper" is not "GPT-5.6 Sol Think deeper"', [buttonShows('Think deeper', 'GPT-5.6 Sol Think deeper'), buttonShows('Quick response', 'GPT-5.6 Sol Quick response'), buttonShows('GPT-5.6 Sol Quick', 'GPT-5.6 Sol Think deeper'), buttonShows('Auto', 'GPT-5.6 Sol Think deeper')], [false, false, false, false]);
+  t.check('nor half a word', buttonShows('GPT-5.6 Sol Thi', 'GPT-5.6 Sol Think deeper'), false);
 }
 
 console.log('\n--- 2026-10-04: a run follows the page when the Settings model was renamed, and Settings follows too ---');
@@ -736,6 +746,37 @@ console.log('\n--- 2026-10-04: a run follows the page when the Settings model wa
     t.truthy('and the saved list is the page\'s', models.options.some((m) => m.name === 'GPT 5.6 Sol Think deeper') && !models.options.some((m) => m.name === 'GPT 5.6 Think deeper') && !!models.readAt, models);
     const events = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${s!.id}/events`);
     t.truthy('and the run says so', events.some((e) => e.type === 'model-renamed' && /"GPT 5\.6 Think deeper" is no longer offered under that name; the page offers it as "GPT 5\.6 Sol Think deeper"/.test(e.message)), events.filter((e) => /model/.test(e.type)));
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-05: the model chosen from the list is the one the chat runs on, however the page spells it today ---');
+{
+  const h = await startHarness({ settings: { copilot: { defaultModel: 'GPT 5.6 Sol Think deeper' } } });
+  try {
+    const o = (name: string) => ({ name, raw: name, selected: name === 'Auto', disabled: false, role: 'menuitemradio' });
+    h.chat.models = [o('Auto'), o('Quick response'), o('Think deeper'), o('GPT-5.6 Sol Quick response'), o('GPT-5.6 Sol Think deeper')];
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'dashed-model', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+        tasks: [{ title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] }],
+    });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    const v = await h.session(s!.id) as unknown as { modelInUse?: string };
+    t.check('the chat is on the chosen model, as the page names it', [v.modelInUse, h.chat.currentModel], ['GPT-5.6 Sol Think deeper', 'GPT-5.6 Sol Think deeper']);
+    const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${s!.id}/events`);
+    t.check('found as it is, not as a rename, and not refused', [events.some((e) => e.type === 'model-renamed'), events.some((e) => e.type === 'model-not-selected')], [false, false]);
+
+    // Reading the list from Settings follows a rename too, without waiting for a run.
+    await h.call('PUT', '/models/default', { model: 'GPT 5.6 Think deeper' });
+    await h.call('PUT', '/models/review-default', { model: 'GPT 5.6 Quick response' });
+    await h.call('POST', '/models/refresh');
+    const after = await h.call<{ defaultModel: string; defaultReviewModel: string }>('GET', '/models');
+    t.check('"Refresh" makes Settings say what the page offers', [after.defaultModel, after.defaultReviewModel], ['GPT-5.6 Sol Think deeper', 'GPT-5.6 Sol Quick response']);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

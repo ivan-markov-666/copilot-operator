@@ -6,6 +6,7 @@
  * the UI resolves), where events go (the bus, streamed as SSE), and how a run is stopped
  * (an AbortController per session).
  */
+import { pageModelFor, sameModel } from '../transport/modelMatch.js';
 import { Injectable } from '@nestjs/common';
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -3475,6 +3476,14 @@ export class OperatorService {
       const { options, current, note } = await transport.listModels();
       const catalogue: ModelCatalogue = { options, current: current ?? undefined, readAt: new Date().toISOString(), note };
       await this.store.saveModels(catalogue);
+      // A saved choice the page now offers under another name follows it here, as a run does (see `modelMatch.ts`).
+      const saved = cfg.copilot;
+      const work = (saved.defaultModel ?? '').trim();
+      const review = (saved.defaultReviewModel ?? '').trim();
+      const workNow = work ? pageModelFor(work, options) : null;
+      const reviewNow = review ? pageModelFor(review, options) : null;
+      if (workNow && !sameModel(workNow.name, work)) await this.setDefaultModel(workNow.name);
+      if (reviewNow && !sameModel(reviewNow.name, review)) await this.setDefaultReviewModel(reviewNow.name);
       return catalogue;
     } finally {
       await transport?.close().catch(() => undefined);

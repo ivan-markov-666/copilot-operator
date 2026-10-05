@@ -24,7 +24,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatTransport, TransportFactory } from '../../src/transport/chatTransport.js';
 import type { ModelChoice, ModelOption, ReplyCapture, TransportOptions } from '../../src/transport/copilotTransport.js';
-import { pageModelFor } from '../../src/transport/modelMatch.js';
+import { pageModelFor, sameModel } from '../../src/transport/modelMatch.js';
 
 /** One message the runner sent, with the text of every file it attached. */
 export type Sent = {
@@ -215,12 +215,12 @@ class FakeChat implements ChatTransport {
 
   async selectModel(name: string): Promise<ModelChoice> {
     this.world.modelRequests.push(name);
-    const found = this.world.models.find((m) => m.name === name);
+    const found = this.world.models.find((m) => sameModel(m.name, name));
     if (!found) {
       // As the real picker does: the line-up read, and the same model under its new name chosen (see modelMatch.ts).
       const options = this.world.models.map((m) => ({ ...m }));
       const match = pageModelFor(name, options);
-      if (match && match.name !== name) return { ...(await this.selectModel(match.name)), matched: match.name, options };
+      if (match && !sameModel(match.name, name)) return { ...(await this.selectModel(match.name)), matched: match.name, options };
       return { ok: false, current: this.world.currentModel, reason: `"${name}" is not in the list`, options };
     }
     this.world.currentModel = found.name;

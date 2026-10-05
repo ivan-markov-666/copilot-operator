@@ -11,7 +11,32 @@
  */
 import type { ModelOption } from './copilotTransport.js';
 
-const words = (name: string): string[] => name.toLowerCase().split(/\s+/).filter(Boolean);
+/**
+ * A model name as compared: the page writes the same model "GPT 5.6 Sol Think deeper" one day and
+ * "GPT-5.6 Sol Think deeper" the next (both read live, 2026-10-04 and -05), so case, dashes and spacing
+ * do not make a different model.
+ */
+export function normModel(name: string): string {
+  return name.toLowerCase().replace(/[-‐‑‒–—_]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export function sameModel(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && normModel(a) === normModel(b);
+}
+
+/**
+ * Whether the picker button, which shortens a name by dropping words from its end ("GPT-5.6 Sol Think
+ * deeper" shows "GPT-5.6 Sol Think"), shows this model. Whole words from the start only: any piece of the
+ * name counted before, so "Think deeper" on the button was taken for "GPT-5.6 Sol Think deeper" chosen.
+ */
+export function buttonShows(shown: string | null | undefined, asked: string): boolean {
+  if (!shown) return false;
+  const s = normModel(shown);
+  const a = normModel(asked);
+  return s.length > 0 && (s === a || a.startsWith(`${s} `));
+}
+
+const words = (name: string): string[] => normModel(name).split(' ').filter(Boolean);
 const isVersion = (w: string): boolean => /^v?\d+(?:\.\d+)*$/.test(w);
 const versionOf = (ws: string[]): number[] => (ws.find(isVersion) ?? '').replace(/^v/, '').split('.').map(Number).filter((n) => !Number.isNaN(n));
 
@@ -25,7 +50,7 @@ function newer(a: number[], b: number[]): number {
 
 export function pageModelFor(wanted: string, options: readonly ModelOption[]): ModelOption | null {
   const offered = options.filter((o) => !o.disabled && o.name.trim());
-  const exact = offered.find((o) => o.name.trim().toLowerCase() === wanted.trim().toLowerCase());
+  const exact = offered.find((o) => sameModel(o.name, wanted));
   if (exact) return exact;
   const want = words(wanted);
   if (want.length === 0) return null;

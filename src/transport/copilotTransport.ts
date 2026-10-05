@@ -10,7 +10,7 @@
  *   2. Enter does not submit the composer. The Send button has to be clicked.
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
-import { pageModelFor } from './modelMatch.js';
+import { buttonShows, pageModelFor, sameModel } from './modelMatch.js';
 import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -979,7 +979,7 @@ Current URL: ${url}`);
     if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
 
     const before = await this.currentModel();
-    if (before && before.toLowerCase() === name.toLowerCase()) return { ok: true, current: before };
+    if (sameModel(before, name)) return { ok: true, current: before };
 
     await button.click();
     if (!(await this.waitForPopup())) return { ok: false, current: before, reason: 'The model picker did not open.' };
@@ -987,7 +987,8 @@ Current URL: ${url}`);
     // The menu is walked rather than replayed from a saved path. A cached path goes stale the
     // moment Microsoft moves a model between groups, and a name is what the user chose.
     const top = await this.readMenuRows();
-    const wanted = (r: MenuRow): boolean => r.name.toLowerCase() === name.toLowerCase();
+    // As the page writes it today: "GPT-5.6" and "GPT 5.6" are one model (see `modelMatch.ts`).
+    const wanted = (r: MenuRow): boolean => sameModel(r.name, name);
 
     let target = top.find((r) => wanted(r) && !r.opensSubmenu);
     const inSubmenu = !target;
@@ -1020,7 +1021,7 @@ Current URL: ${url}`);
       const read = await this.listModels().catch(() => null);
       const options = read?.options ?? [];
       const match = pageModelFor(name, options);
-      if (match && match.name.toLowerCase() !== name.toLowerCase()) {
+      if (match && !sameModel(match.name, name)) {
         const again = await this.selectModel(match.name);
         return { ...again, matched: match.name, options };
       }
@@ -1059,16 +1060,14 @@ Current URL: ${url}`);
     const after = await this.currentModel();
 
     // The button shows the choice, so it is the check. It also **shortens** it: picking
-    // "GPT 5.6 Quick response" leaves the button reading "GPT 5.6 Quick". So a shown value
-    // that is a piece of the asked one counts as agreement, and the full name is what gets
-    // reported back, because that is what was actually chosen and what will be asked for
-    // again next time.
-    const asked = name.toLowerCase();
-    const shown = (after ?? '').toLowerCase();
-    if (shown && (shown === asked || shown.includes(asked) || asked.includes(shown))) {
-      const settled = asked.includes(shown) ? name : (after as string);
-      this.emit('model-selected', { model: settled, buttonShows: after });
-      return { ok: true, current: settled };
+    // "GPT 5.6 Quick response" leaves the button reading "GPT 5.6 Quick". So the shown value
+    // agrees when it is the row's name with words dropped from its end, and the row's full name
+    // is what gets reported back, because that is what was chosen and what will be asked for
+    // next time. A piece from anywhere used to count: "Think deeper" on the button passed for
+    // "GPT-5.6 Sol Think deeper" (2026-10-05), and the run said it was on a model it was not.
+    if (buttonShows(after, target.name)) {
+      this.emit('model-selected', { model: target.name, buttonShows: after });
+      return { ok: true, current: target.name };
     }
     return {
       ok: false,

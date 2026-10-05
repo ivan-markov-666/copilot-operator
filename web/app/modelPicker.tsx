@@ -54,7 +54,15 @@ export function ModelPicker({
   const { t } = useT();
   const list = useModelCatalogue(catalogue);
   const all = list?.options ?? [];
-  const known = all.some((o) => o.name === chosen);
+  /*
+   * The page spells one model "GPT 5.6 Sol Think deeper" one day and "GPT-5.6 Sol Think deeper" the next, so
+   * the saved name is matched as the bot matches it (src/transport/modelMatch.ts), not letter for letter:
+   * otherwise a model chosen from this very list showed as "not in the list" after the next read.
+   */
+  const norm = (n: string): string => n.toLowerCase().replace(/[-‐‑‒–—_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const listed = chosen ? all.find((o) => norm(o.name) === norm(chosen)) : undefined;
+  const value = listed?.name ?? chosen;
+  const known = !!listed;
   const ungrouped = all.filter((o) => !o.group);
   const grouped = new Map<string, typeof all>();
   for (const o of all) {
@@ -62,7 +70,7 @@ export function ModelPicker({
     grouped.set(o.group, [...(grouped.get(o.group) ?? []), o]);
   }
   return (
-    <select id={id} value={chosen} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ width: 'auto', minWidth: 280, ...style }}>
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ width: 'auto', minWidth: 280, ...style }}>
       <option value="">{none}</option>
       {chosen && !known && <option value={chosen}>{t('model.notInList', { name: chosen })}</option>}
       {ungrouped.map((o) => (
