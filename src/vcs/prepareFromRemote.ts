@@ -29,7 +29,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { branchNameFrom, freeBranchName, git, lastFetchedAt, porcelainPaths, RUNNER_EMAIL } from './git.js';
+import { branchNameFrom, freeBranchName, git, gitFetch, lastFetchedAt, porcelainPaths, RUNNER_EMAIL } from './git.js';
 import { closePasswordWindows, describeFetchFailure, fetchCommandFor, operatorFetchEnv, QUIET_FETCH_ENV } from './remoteAuth.js';
 
 export type PreparePlan = {
@@ -52,7 +52,7 @@ export type PreparePlan = {
    * How the fetch went: `asked` when the remote could ask for a password through Git's own window,
    * `auth` when it failed on a password or key.
    */
-  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked?: boolean };
+  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked?: boolean; retried?: boolean; firstError?: string };
   /** When the remote was last fetched here, by anyone: what a preview without fetching is measured against. */
   lastFetched?: string;
   /** The fetch for the operator's own PowerShell, when the bot's could not get through. */
@@ -155,10 +155,11 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
     const env = asked ? operatorFetchEnv(opts.askpass as string) : QUIET_FETCH_ENV;
     const args = [...(asked ? [] : ['-c', 'credential.interactive=false']), 'fetch', '--quiet', '--no-tags', '--prune', remote];
     const started = new Date(Date.now() - 1000);
-    const f = await git(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked, killTree: true });
+    // Once more when the first try fails: see `gitFetch` (2026-10-05, every first press failed at work).
+    const f = await gitFetch(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked, killTree: true });
     // Given up on with the window still open: closed, so it is not left on screen asking for nothing.
     if (!f.ok && asked && /gave up after/.test(f.stderr)) await closePasswordWindows(opts.askpass as string, started);
-    if (f.ok) fetched = { ok: true, asked };
+    if (f.ok) fetched = { ok: true, asked, ...(f.retried ? { retried: true, ...(f.firstError ? { firstError: f.firstError } : {}) } : {}) };
     else {
       const why = describeFetchFailure(f.stderr || f.stdout);
       fetched = { ok: false, detail: why.detail, auth: why.auth, asked };

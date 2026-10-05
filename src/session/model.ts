@@ -925,7 +925,7 @@ export type ModelCatalogue = {
     group?: string;
     groupRaw?: string;
     /** Where it sits in the picker, read with the list: see `ModelLocator` in transport/copilotTransport.ts. */
-    locator?: { role: string; index: number; group?: { testId?: string; index: number; name: string } };
+    locator?: { role: string; index: number; group?: { testId?: string; index: number; name: string; vendor?: string } };
   }>;
   /** What the picker was set to when the list was read. */
   current?: string;

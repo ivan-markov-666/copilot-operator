@@ -10,7 +10,7 @@
  *   2. Enter does not submit the composer. The Send button has to be clicked.
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
-import { pageModelFor, sameModel } from './modelMatch.js';
+import { normModel, pageModelFor, sameModel } from './modelMatch.js';
 import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -107,7 +107,8 @@ export type ModelChoice = {
 export type ModelLocator = {
   role: string;
   index: number;
-  group?: { testId?: string; index: number; name: string };
+  /** `vendor`: the second line of the group's row ("OpenAI"), which stays when a choice renames the first. */
+  group?: { testId?: string; index: number; name: string; vendor?: string };
 };
 
 export type ModelOption = {
@@ -148,10 +149,24 @@ type MenuRow = {
  * A group's name for the list. Its row reads the group ("GPT") until a model in it is chosen, and then
  * that model's name; then the name comes from its test id (`gptSubMenuModelTrigger-OpenAI` → "GPT").
  */
+/** The second line of a group's row: its vendor ("OpenAI", "Anthropic"). */
+function vendorOf(row: { raw: string }): string {
+  return row.raw.split('\n')[1]?.trim() ?? '';
+}
+
+/** Whether a row's text holds the model's name as whole words, however the page spells it. */
+function containsModel(text: string, name: string): boolean {
+  const t = ` ${normModel(text)} `;
+  const n = normModel(name);
+  return n.length > 0 && t.includes(` ${n} `);
+}
+
 function groupLabel(group: MenuRow, children: MenuRow[]): string {
   if (!children.some((c) => sameModel(c.name, group.name))) return group.name;
   const fromId = /^([a-z0-9]+?)SubMenu/i.exec(group.testId)?.[1];
-  return fromId ? fromId.toUpperCase() : group.raw.split('\n')[1]?.trim() || 'Models';
+  // "gpt" reads GPT, "claude" reads Claude: short ids are acronyms.
+  if (fromId) return fromId.length <= 3 ? fromId.toUpperCase() : fromId.charAt(0).toUpperCase() + fromId.slice(1);
+  return vendorOf(group) || 'Models';
 }
 
 /**
@@ -779,8 +794,10 @@ Current URL: ${url}`);
       return { options: [], current, note: 'The model picker opened nothing that could be read.' };
     }
 
-    const top = await this.readMenuRows();
-    await this.captureMenu('top', top);
+    // The top menu only: a group's submenu can be on screen with it (2026-10-05, Claude's above GPT's).
+    const shown = await this.readMenuRows();
+    const top = this.topRows(shown);
+    await this.captureMenu('top', shown);
     await this.closeMenu();
 
     const strip = (r: MenuRow): ModelOption => ({ name: r.name, raw: r.raw, selected: r.selected, disabled: r.disabled, role: r.role });
@@ -791,7 +808,7 @@ Current URL: ${url}`);
     // submenus in one pass works until one of them closes the one above it, and then the
     // reader silently returns half a list; re-opening costs a second and cannot go wrong.
     for (const group of groups) {
-      const where = { testId: group.testId || undefined, index: group.index, name: group.name };
+      const where = { testId: group.testId || undefined, index: group.index, name: group.name, ...(vendorOf(group) ? { vendor: vendorOf(group) } : {}) };
       const children = await this.readSubmenu(button, where);
       const name = groupLabel(group, children);
       for (const child of children) {
@@ -914,34 +931,44 @@ Current URL: ${url}`);
    * submenu is the menu labelled by that row, or, in a build that does not label it, the menu that
    * appeared when the row was hovered.
    */
-  private async openGroup(group: { testId?: string; index: number; name: string }): Promise<string | null> {
-    const top = this.topRows(await this.readMenuRows());
+  private async openGroup(group: { testId?: string; index: number; name: string; vendor?: string }): Promise<string | null> {
+    const shown = await this.readMenuRows();
+    const groups = this.topRows(shown).filter((r) => r.opensSubmenu);
+    // By its test id; else by the vendor its row names ("OpenAI"), which a choice does not change; else by
+    // its text, as it reads or contains; else by its place.
     const row =
-      (group.testId ? top.find((r) => r.opensSubmenu && r.testId === group.testId) : undefined) ??
-      top.find((r) => r.opensSubmenu && r.index === group.index) ??
-      top.find((r) => r.opensSubmenu && sameModel(r.name, group.name));
+      (group.testId ? groups.find((r) => r.testId === group.testId) : undefined) ??
+      (group.vendor ? groups.find((r) => vendorOf(r) && sameModel(vendorOf(r), group.vendor)) : undefined) ??
+      groups.find((r) => sameModel(r.name, group.name)) ??
+      groups.find((r) => containsModel(r.raw, group.name)) ??
+      groups.find((r) => r.index === group.index);
     if (!row) return null;
     const trigger = this.p.locator(`[data-cop-row="${row.menuOf}#${row.index}"]`).first();
+    // Submenus already on screen are not this group's, whatever opened them.
+    const before = new Set(shown.filter((r) => r.menuOf !== row.menuOf).map((r) => r.menuOf));
     const opened = async (ms: number): Promise<string | null> => {
-      const deadline = Date.now() + ms;
+      const started = Date.now();
       do {
         const rows = (await this.readMenuRows()).filter((r) => r.menuOf !== row.menuOf);
-        const own = rows.find((r) => row.elId && r.menuOf === row.elId) ?? rows[0];
-        if (own) return own.menuOf;
+        // The menu labelled by this group's row is its own; a build that labels none gets the one that
+        // appeared, never one that was already there (2026-10-05: Claude's was taken for GPT's).
+        if (row.elId && rows.some((r) => r.menuOf === row.elId)) return row.elId;
+        const fresh = rows.find((r) => !before.has(r.menuOf) && r.menuOf !== row.elId);
+        if (fresh && (!row.elId || Date.now() - started > 1_500)) return fresh.menuOf;
         await this.p.waitForTimeout(200);
-      } while (Date.now() < deadline);
+      } while (Date.now() - started < ms);
       return null;
     };
     // Hover is how these open; a click is the fallback for a build that wants one.
-    await trigger.hover().catch(() => undefined);
+    await trigger.hover({ timeout: 3_000 }).catch(() => undefined);
     const hovered = await opened(4_000);
     if (hovered) return hovered;
-    await trigger.click().catch(() => undefined);
+    await trigger.click({ timeout: 3_000 }).catch(() => undefined);
     return await opened(4_000);
   }
 
   /** Opens a fresh menu, then the group, and reads what is in it. */
-  private async readSubmenu(button: Locator, group: { testId?: string; index: number; name: string }): Promise<MenuRow[]> {
+  private async readSubmenu(button: Locator, group: { testId?: string; index: number; name: string; vendor?: string }): Promise<MenuRow[]> {
     await button.click();
     if (!(await this.waitForPopup())) return [];
     const key = await this.openGroup(group);
@@ -970,7 +997,11 @@ Current URL: ${url}`);
       rows = this.topRows(await this.readMenuRows());
     }
     const choices = rows.filter((r) => !r.opensSubmenu);
-    const row = choices.find((r) => r.index === locator.index && sameModel(r.name, name)) ?? choices.find((r) => sameModel(r.name, name));
+    // At its place when it is still there; else wherever its menu has it, by its name or a row containing it.
+    const row =
+      choices.find((r) => r.index === locator.index && sameModel(r.name, name)) ??
+      choices.find((r) => sameModel(r.name, name)) ??
+      choices.find((r) => containsModel(r.raw, name));
     return row ? { row } : { problem: `"${name}" is not where the list was read${locator.group ? ` (in "${locator.group.name}")` : ''}.` };
   }
 

@@ -285,6 +285,32 @@ export type BranchUpdate = {
  * and a sign-in window on a machine nobody is watching is worse — so a remote that needs a password
  * git does not already have fails the fetch, which is reported, not fatal.
  */
+/**
+ * `git fetch`, tried once more after a short pause when the first try fails.
+ *
+ * On the operator's work machine every first fetch failed and the second, from the same button, went
+ * through (2026-10-05): the remote's credential helper getting a token on the first request, or an editor
+ * fetching in the background and holding a lock for a moment. The second try is what pressing the button
+ * again did. Not after a fetch that ran out of time — a password window left unanswered — nor after the
+ * operator cancelled the password window: that is an answer, not a hiccup.
+ */
+export async function gitFetch(
+  cwd: string,
+  args: string[],
+  timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
+  opts: { windowsHide?: boolean; killTree?: boolean } = {},
+): Promise<GitResult & { retried?: boolean; firstError?: string }> {
+  const first = await git(cwd, args, timeoutMs, env, opts);
+  if (first.ok) return first;
+  const said = `${first.stderr}\n${first.stdout}`;
+  if (/gave up after/.test(said) || /cancel|canceled|cancelled|aborted by user|user abort/i.test(said)) return first;
+  await new Promise((r) => setTimeout(r, 2_000));
+  const second = await git(cwd, args, timeoutMs, env, opts);
+  const firstError = (first.stderr || first.stdout || '').split(/\r?\n/)[0] ?? '';
+  return { ...second, retried: true, ...(firstError ? { firstError } : {}) };
+}
+
 export async function updateFromRemote(dir: string, branch: string): Promise<BranchUpdate> {
   const local = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
   if (!local.ok || !local.stdout) return { branch, outcome: 'failed', detail: `there is no local branch ${branch}` };
@@ -304,7 +330,7 @@ export async function updateFromRemote(dir: string, branch: string): Promise<Bra
   const tracking = `${remote}/${remoteBranch}`;
 
   const quiet = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS: '' };
-  const fetched = await git(dir, ['-c', 'credential.interactive=false', 'fetch', '--quiet', '--no-tags', remote, `+refs/heads/${remoteBranch}:refs/remotes/${tracking}`], 90_000, quiet);
+  const fetched = await gitFetch(dir, ['-c', 'credential.interactive=false', 'fetch', '--quiet', '--no-tags', remote, `+refs/heads/${remoteBranch}:refs/remotes/${tracking}`], 90_000, quiet);
   if (!fetched.ok) {
     return { branch, remote: tracking, outcome: 'fetch-failed', detail: (fetched.stderr || fetched.stdout || 'git fetch failed').split(/\r?\n/)[0] };
   }

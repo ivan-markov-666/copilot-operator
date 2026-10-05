@@ -26,7 +26,7 @@
  *
  *   npm run check:prepare
  */
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { startHarness, Tally, waitFor, type Harness } from './support/harness.js';
@@ -355,6 +355,37 @@ console.log('\n--- on main already, with only the input files new ---');
     const g = (await h.call<Group[]>('GET', `/batch/vcs?ids=${s!.id}`))[0]!;
     const offered = g.actions.filter((a) => a.available).map((a) => a.id);
     t.check('one snapshot button, the one on the base branch', [offered.includes('snapshot-on-base'), offered.includes('snapshot-here')], [true, false]);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- a fetch that fails once goes through on its own second try (2026-10-05: every first press failed) ---');
+{
+  const h = await startHarness({});
+  try {
+    const remote = join(h.base, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    h.git('remote', 'add', 'origin', remote);
+    h.git('push', '-q', '-u', 'origin', 'main');
+    // The remote moves on, and something else holds the lock on the ref the fetch writes — an editor
+    // fetching in the background — for a moment.
+    const other = join(h.base, 'other');
+    execFileSync('git', ['clone', '-q', remote, other]);
+    writeFileSync(join(other, 'team.txt'), 'team\n');
+    execFileSync('git', ['-C', other, '-c', 'user.email=o@example.invalid', '-c', 'user.name=o', 'add', '-A']);
+    execFileSync('git', ['-C', other, '-c', 'user.email=o@example.invalid', '-c', 'user.name=o', 'commit', '-q', '-m', 'team']);
+    execFileSync('git', ['-C', other, 'push', '-q', 'origin', 'main']);
+    const lock = join(h.repo, '.git', 'refs', 'remotes', 'origin', 'main.lock');
+    writeFileSync(lock, '');
+    const freed = setTimeout(() => { try { rmSync(lock); } catch { /* gone */ } }, 1_000);
+    const plan = await planPrepare(h.repo, { fetch: true });
+    clearTimeout(freed);
+    t.check('the preview went through, on the second try', [plan.ok, plan.fetched?.ok, plan.fetched?.retried], [true, true, true]);
+    t.truthy('saying what the first try met', (plan.fetched?.firstError ?? '').length > 0, plan.fetched);
+    t.check('and it shows the remote as it is now', plan.targetCommit, execFileSync('git', ['-C', other, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
