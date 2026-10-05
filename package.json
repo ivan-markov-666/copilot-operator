@@ -74,6 +74,8 @@
     "check:sync": "tsx test/sync.check.ts",
     "check:prepare": "tsx test/prepare.check.ts",
     "check:live-fixes": "tsx test/live-fixes.check.ts",
+    "check:live-models": "tsx test/live-models.check.ts",
+    "check:live-chat": "tsx test/live-chatname.check.ts",
     "check:e2e-run": "tsx test/e2e-run.check.ts",
     "check:e2e-continue": "tsx test/e2e-continue.check.ts",
     "check:e2e-interrupt": "tsx test/e2e-interrupt.check.ts",

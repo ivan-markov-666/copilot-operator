@@ -916,7 +916,17 @@ export type Session = {
  * page load. The cache is what the UI shows; refreshing it is an explicit act by the user.
  */
 export type ModelCatalogue = {
-  options: Array<{ name: string; raw: string; selected: boolean; disabled: boolean; role: string }>;
+  options: Array<{
+    name: string;
+    raw: string;
+    selected: boolean;
+    disabled: boolean;
+    role: string;
+    group?: string;
+    groupRaw?: string;
+    /** Where it sits in the picker, read with the list: see `ModelLocator` in transport/copilotTransport.ts. */
+    locator?: { role: string; index: number; group?: { testId?: string; index: number; name: string } };
+  }>;
   /** What the picker was set to when the list was read. */
   current?: string;
   readAt: string;

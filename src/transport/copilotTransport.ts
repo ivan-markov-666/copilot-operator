@@ -10,7 +10,7 @@
  *   2. Enter does not submit the composer. The Send button has to be clicked.
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
-import { buttonShows, pageModelFor, sameModel } from './modelMatch.js';
+import { pageModelFor, sameModel } from './modelMatch.js';
 import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -89,7 +89,26 @@ const ORIGIN = 'https://m365.cloud.microsoft';
  * What choosing a model came to. `matched`: the name was no longer offered and this one, the same model under
  * its new name, was chosen instead (see `modelMatch.ts`). `options`: the line-up read from the page on the way.
  */
-export type ModelChoice = { ok: boolean; current: string | null; reason?: string; matched?: string; options?: ModelOption[] };
+export type ModelChoice = {
+  ok: boolean;
+  current: string | null;
+  reason?: string;
+  matched?: string;
+  options?: ModelOption[];
+  /** How it was found: at the saved locator, at a fresh one after the saved one missed, or by name with no saved one. */
+  by?: 'locator' | 'reread' | 'name';
+};
+
+/**
+ * Where a model sits in the picker: read with the list (`listModels`) and kept with it, so a run goes
+ * straight to the row the operator chose from (`selectModel`). The group is held by its test id, which
+ * is stable, then by its place; the row by its place in its menu, with its name as the check.
+ */
+export type ModelLocator = {
+  role: string;
+  index: number;
+  group?: { testId?: string; index: number; name: string };
+};
 
 export type ModelOption = {
   name: string;
@@ -102,6 +121,8 @@ export type ModelOption = {
   group?: string;
   /** The group row's whole text, which carries the vendor: `GPT\nOpenAI`. */
   groupRaw?: string;
+  /** Where it sits in the picker, to choose it again; see `ModelLocator`. */
+  locator?: ModelLocator;
 };
 
 /** One row of the open menu, before it is decided whether it is a choice or a group. */
@@ -113,11 +134,24 @@ type MenuRow = {
   role: string;
   /** True when the row opens a submenu rather than choosing a model. */
   opensSubmenu: boolean;
+  /** Its place among the rows of its own menu. */
+  index: number;
+  /** The `aria-labelledby` of its menu: a submenu is labelled by the id of the row that opens it. */
+  menuOf: string;
+  /** `data-test-id` (or `data-testid`), which the group rows carry: `gptSubMenuModelTrigger-OpenAI`. */
+  testId: string;
+  /** The element's id, which the group rows carry; it changes from page to page. */
+  elId: string;
 };
 
-/** Escapes a model name so it can be matched literally inside a regular expression. */
-function escapeForRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * A group's name for the list. Its row reads the group ("GPT") until a model in it is chosen, and then
+ * that model's name; then the name comes from its test id (`gptSubMenuModelTrigger-OpenAI` → "GPT").
+ */
+function groupLabel(group: MenuRow, children: MenuRow[]): string {
+  if (!children.some((c) => sameModel(c.name, group.name))) return group.name;
+  const fromId = /^([a-z0-9]+?)SubMenu/i.exec(group.testId)?.[1];
+  return fromId ? fromId.toUpperCase() : group.raw.split('\n')[1]?.trim() || 'Models';
 }
 
 /**
@@ -565,14 +599,16 @@ Current URL: ${url}`);
    * Renames the current conversation. The sidebar row's overflow menu holds "Rename", the
    * dialog holds an input and a Save button, and Enter does not submit it.
    */
-  async nameChat(chatId: string, name: string): Promise<boolean> {
+  async nameChat(chatId: string, name: string, opts: { waitMs?: number } = {}): Promise<boolean> {
     const row = this.p.locator(`${Sidebar.conversationLink}[href*="${chatId}"]`).first();
-    // Waited for, like everything below: a new chat's row appears in the sidebar a moment after the
-    // reply, and `count()` read it as missing and returned without a word (live run 2026-10-03).
+    // Waited for, like everything below: a new chat's row appears in the sidebar some seconds after the
+    // reply, and `count()` read it as missing and returned without a word (live run 2026-10-03). The run
+    // tries again later when it is still not there (see `nameIfStillUnnamed` in taskRunner.ts).
+    const waitMs = opts.waitMs ?? 15_000;
     try {
-      await row.waitFor({ state: 'attached', timeout: 15_000 });
+      await row.waitFor({ state: 'attached', timeout: waitMs });
     } catch {
-      this.emit('chat-name-failed', { chatId, name, error: 'the conversation did not appear in the sidebar within 15 s' });
+      this.emit('chat-name-failed', { chatId, name, error: `the conversation did not appear in the sidebar within ${Math.round(waitMs / 1000)} s` });
       return false;
     }
 
@@ -587,26 +623,43 @@ Current URL: ${url}`);
      */
     let opened = false;
     try {
-      await row.hover();
-      const more = row
-        .locator('xpath=ancestor-or-self::*[self::li or self::div][1]')
-        .getByRole('button', { name: Rename.moreButtonLabel, exact: true })
-        .first();
-      await more.waitFor({ state: 'visible', timeout: 5_000 });
-      await more.click();
+      await row.scrollIntoViewIfNeeded().catch(() => undefined);
+      // Briefly: a hover the sidebar takes waits out the page's whole timeout otherwise.
+      await row.hover({ timeout: 2_000 }).catch(() => undefined);
+      /*
+       * The chat's own overflow button, by the chat id it carries; through the row only in a build without
+       * that attribute. A mouse click on it was taken by the sidebar over it — the chat's link, the sticky
+       * section header — and Playwright retried for the whole minute (live 2026-10-05), so `press` clicks
+       * the element itself when the mouse cannot reach it.
+       */
+      const byChat = this.p.locator(Rename.moreButtonForChat(chatId)).first();
+      const more = (await byChat.count()) > 0
+        ? byChat
+        : row.locator('xpath=ancestor-or-self::*[self::li or self::div][1]').getByRole('button', { name: Rename.moreButtonLabel, exact: true }).first();
+      await more.waitFor({ state: 'attached', timeout: 5_000 });
+      await this.press(more);
       opened = true;
 
       const item = this.p.getByRole('menuitem', { name: Rename.menuItem, exact: true }).first();
       await item.waitFor({ state: 'visible', timeout: 5_000 });
-      await item.click();
+      await this.press(item);
       opened = false;
 
       const input = this.p.locator(Rename.input);
       await input.waitFor({ state: 'visible', timeout: 10_000 });
-      await input.fill(name.slice(0, Rename.maxLength));
-      await this.p.getByRole('button', { name: Rename.saveText, exact: true }).first().click();
+      const wanted = name.slice(0, Rename.maxLength);
+      await input.fill(wanted);
+      await this.press(this.p.getByRole('button', { name: Rename.saveText, exact: true }).first());
       await input.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
 
+      // Named only when the sidebar says so: its row's label is the chat's name.
+      const shows = async (): Promise<string> => ((await row.getAttribute('aria-label').catch(() => null)) ?? '').trim();
+      const deadline = Date.now() + 8_000;
+      while ((await shows()) !== wanted && Date.now() < deadline) await this.p.waitForTimeout(250);
+      if ((await shows()) !== wanted) {
+        this.emit('chat-name-failed', { chatId, name, error: `the sidebar still shows "${await shows()}"` });
+        return false;
+      }
       this.emit('chat-named', { chatId, name });
       return true;
     } catch (e) {
@@ -616,6 +669,19 @@ Current URL: ${url}`);
       // Whatever happened, the sidebar is left as it was found. A menu left hanging over the
       // chat list is not only untidy: it covers the rows and swallows the next click.
       if (opened) await this.dismissOpenMenu();
+    }
+  }
+
+  /**
+   * Clicks an element: with the mouse when it can reach it, else on the element itself. A short wait
+   * for the mouse, not the page's minute: in the sidebar another element lies over the target and
+   * takes the click, which no amount of retrying changes.
+   */
+  private async press(target: Locator): Promise<void> {
+    try {
+      await target.click({ timeout: 3_000 });
+    } catch {
+      await target.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 5_000 });
     }
   }
 
@@ -691,9 +757,14 @@ Current URL: ${url}`);
    * Opens the picker and reads what it offers, then closes it again without choosing.
    *
    * The list is whatever this tenant shows today. Nothing is filtered and nothing is
-   * translated: a name shown here is the name the chat uses, so clicking it later is an exact
-   * match rather than a guess. `raw` keeps the option's whole text, which is where Microsoft
-   * puts the one-line description and any "limit reached" notice.
+   * translated: a name shown here is the name the chat uses. `raw` keeps the option's whole text,
+   * which is where Microsoft puts the one-line description and any "limit reached" notice.
+   *
+   * Each option comes with its `locator`: where it sits in the picker, read here and used to choose
+   * it again at the start of a run (see `selectModel`). A group is known by its test id and its place,
+   * not by its text: once a model of a group is chosen, Copilot writes that model's name on the
+   * group's row ("GPT" reads "GPT-5.6 Sol Think deeper"), and read by text the group lost that very
+   * model, so the run could not choose it and went on Auto (2026-10-05).
    */
   async listModels(): Promise<{ options: ModelOption[]; current: string | null; note?: string }> {
     const button = await this.resolveModelButton();
@@ -712,17 +783,19 @@ Current URL: ${url}`);
     await this.captureMenu('top', top);
     await this.closeMenu();
 
-    const options: ModelOption[] = top.filter((r) => !r.opensSubmenu).map(({ opensSubmenu, ...o }) => o);
+    const strip = (r: MenuRow): ModelOption => ({ name: r.name, raw: r.raw, selected: r.selected, disabled: r.disabled, role: r.role });
+    const options: ModelOption[] = top.filter((r) => !r.opensSubmenu).map((r) => ({ ...strip(r), locator: { role: r.role, index: r.index } }));
     const groups = top.filter((r) => r.opensSubmenu);
-    const topNames = new Set(top.map((r) => r.name.toLowerCase()));
 
     // Each group is opened in its own pass, from a freshly opened menu. Walking several
     // submenus in one pass works until one of them closes the one above it, and then the
     // reader silently returns half a list; re-opening costs a second and cannot go wrong.
     for (const group of groups) {
-      const children = await this.readSubmenu(button, group.name, topNames);
+      const where = { testId: group.testId || undefined, index: group.index, name: group.name };
+      const children = await this.readSubmenu(button, where);
+      const name = groupLabel(group, children);
       for (const child of children) {
-        options.push({ ...child, group: group.name, groupRaw: group.raw });
+        options.push({ ...strip(child), group: name, groupRaw: group.raw, locator: { role: child.role, index: child.index, group: { ...where, name } } });
       }
     }
 
@@ -765,38 +838,59 @@ Current URL: ${url}`);
     }
   }
 
-  /** Every visible menu row right now, across the menu and whatever submenu is open. */
+  /**
+   * Every visible menu row right now, across the menu and whatever submenu is open, in page order.
+   *
+   * Each row says which menu it is in (`menuOf`, the menu's `aria-labelledby`: a submenu is labelled by
+   * the row that opens it) and its place there (`index`), so the same row can be found again without
+   * going by its text. Rows are not merged by name: the group row and the model chosen in it carry the
+   * same name once that model is in force.
+   */
   private async readMenuRows(): Promise<MenuRow[]> {
     return await this.p.evaluate(
       ({ roles, selectedAttrs, submenuAttrs }) => {
-        const seen = new Set<string>();
-        const out: Array<{ name: string; raw: string; selected: boolean; disabled: boolean; role: string; opensSubmenu: boolean }> = [];
-
-        for (const role of roles) {
-          for (const el of Array.from(document.querySelectorAll(`[role="${role}"]`))) {
-            // A menu that is closed is still in the DOM, so visibility is what separates
-            // what is on screen from what was on screen a moment ago.
-            if ((el as HTMLElement).getClientRects().length === 0) continue;
-
-            const raw = ((el as HTMLElement).innerText || '').trim();
-            const label = el.getAttribute('aria-label')?.trim() ?? '';
-            // The first line is the name; the description sits underneath it.
-            const name = (raw.split('\n')[0] || label || '').trim();
-            if (!name || seen.has(name.toLowerCase())) continue;
-            seen.add(name.toLowerCase());
-
-            out.push({
-              name,
-              raw,
-              selected: selectedAttrs.some((a) => el.getAttribute(a) === 'true'),
-              disabled: el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled'),
-              role,
-              opensSubmenu: submenuAttrs.some((a) => {
-                const v = el.getAttribute(a);
-                return a === 'aria-haspopup' ? v === 'menu' || v === 'true' : v !== null;
-              }),
-            });
+        const out: Array<{ name: string; raw: string; selected: boolean; disabled: boolean; role: string; opensSubmenu: boolean; index: number; menuOf: string; testId: string; elId: string }> = [];
+        const selector = roles.map((r) => `[role="${r}"]`).join(',');
+        const counted = new Map<Element | null, number>();
+        // A menu's key: what labels it (a submenu is labelled by the row that opens it), else a mark put
+        // on it here, so a menu with no label is told apart from the others all the same.
+        // (Written inline: a named function in here is wrapped by the bundler in a helper the page does not have.)
+        const w = window as unknown as { __copMenus?: number };
+        for (const el of Array.from(document.querySelectorAll(selector))) {
+          // A menu that is closed is still in the DOM, so visibility is what separates
+          // what is on screen from what was on screen a moment ago.
+          if ((el as HTMLElement).getClientRects().length === 0) continue;
+          const menu = el.closest('[role="menu"],[role="listbox"]');
+          const index = counted.get(menu) ?? 0;
+          counted.set(menu, index + 1);
+          if (menu && !menu.getAttribute('aria-labelledby') && !menu.getAttribute('data-cop-menu')) {
+            w.__copMenus = (w.__copMenus ?? 0) + 1;
+            menu.setAttribute('data-cop-menu', `cop-menu-${w.__copMenus}`);
           }
+          const menuOf = menu ? (menu.getAttribute('aria-labelledby') || menu.getAttribute('data-cop-menu') || '') : '';
+          // Marked, so the row can be pointed at in this page without its text.
+          el.setAttribute('data-cop-row', `${menuOf}#${index}`);
+
+          const raw = ((el as HTMLElement).innerText || '').trim();
+          const label = el.getAttribute('aria-label')?.trim() ?? '';
+          // The first line is the name; the description sits underneath it.
+          const name = (raw.split('\n')[0] || label || '').trim();
+          if (!name) continue;
+          out.push({
+            name,
+            raw,
+            selected: selectedAttrs.some((a) => el.getAttribute(a) === 'true'),
+            disabled: el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled'),
+            role: el.getAttribute('role') ?? '',
+            opensSubmenu: submenuAttrs.some((a) => {
+              const v = el.getAttribute(a);
+              return a === 'aria-haspopup' ? v === 'menu' || v === 'true' : v !== null;
+            }),
+            index,
+            menuOf,
+            testId: el.getAttribute('data-test-id') ?? el.getAttribute('data-testid') ?? '',
+            elId: el.id ?? '',
+          });
         }
         return out;
       },
@@ -808,79 +902,127 @@ Current URL: ${url}`);
     );
   }
 
+  /** The rows of the top menu, read while only it is open: the menu its first row is in. */
+  private topRows(rows: MenuRow[]): MenuRow[] {
+    const key = rows[0]?.menuOf;
+    return key === undefined ? [] : rows.filter((r) => r.menuOf === key);
+  }
+
   /**
-   * Opens one group and reads what is inside it.
-   *
-   * The children are found by difference: whatever is on screen that was not on the top
-   * level belongs to the submenu that was just opened. That avoids having to identify which
-   * popup container is which, which is Fluent's business and changes with its internals.
+   * Opens one group of the open picker and returns the key of its submenu (see `readMenuRows`), or null.
+   * The group's row is found by its test id, else by its place among the top rows, else by its text. Its
+   * submenu is the menu labelled by that row, or, in a build that does not label it, the menu that
+   * appeared when the row was hovered.
    */
-  private async readSubmenu(button: Locator, groupName: string, topNames: Set<string>): Promise<MenuRow[]> {
-    await button.click();
-    if (!(await this.waitForPopup())) return [];
-
-    const trigger = this.menuRow(groupName);
-    if ((await trigger.count()) === 0) {
-      await this.closeMenu();
-      return [];
-    }
-
+  private async openGroup(group: { testId?: string; index: number; name: string }): Promise<string | null> {
+    const top = this.topRows(await this.readMenuRows());
+    const row =
+      (group.testId ? top.find((r) => r.opensSubmenu && r.testId === group.testId) : undefined) ??
+      top.find((r) => r.opensSubmenu && r.index === group.index) ??
+      top.find((r) => r.opensSubmenu && sameModel(r.name, group.name));
+    if (!row) return null;
+    const trigger = this.p.locator(`[data-cop-row="${row.menuOf}#${row.index}"]`).first();
+    const opened = async (ms: number): Promise<string | null> => {
+      const deadline = Date.now() + ms;
+      do {
+        const rows = (await this.readMenuRows()).filter((r) => r.menuOf !== row.menuOf);
+        const own = rows.find((r) => row.elId && r.menuOf === row.elId) ?? rows[0];
+        if (own) return own.menuOf;
+        await this.p.waitForTimeout(200);
+      } while (Date.now() < deadline);
+      return null;
+    };
     // Hover is how these open; a click is the fallback for a build that wants one.
     await trigger.hover().catch(() => undefined);
-    let children = await this.waitForNewRows(topNames);
-    if (children.length === 0) {
-      await trigger.click().catch(() => undefined);
-      children = await this.waitForNewRows(topNames);
-    }
-    await this.captureMenu(`group-${groupName.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)}`, children);
+    const hovered = await opened(4_000);
+    if (hovered) return hovered;
+    await trigger.click().catch(() => undefined);
+    return await opened(4_000);
+  }
 
+  /** Opens a fresh menu, then the group, and reads what is in it. */
+  private async readSubmenu(button: Locator, group: { testId?: string; index: number; name: string }): Promise<MenuRow[]> {
+    await button.click();
+    if (!(await this.waitForPopup())) return [];
+    const key = await this.openGroup(group);
+    const children = key ? (await this.readMenuRows()).filter((r) => r.menuOf === key) : [];
+    await this.captureMenu(`group-${group.name.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)}`, children);
     await this.closeMenu();
     return children;
   }
 
-  /** Waits for rows to appear that were not on the top level, and returns them. */
-  private async waitForNewRows(known: Set<string>, timeoutMs = 4_000): Promise<MenuRow[]> {
-    const deadline = Date.now() + timeoutMs;
-    do {
-      const rows = (await this.readMenuRows()).filter((r) => !known.has(r.name.toLowerCase()));
-      if (rows.length > 0) return rows;
-      await this.p.waitForTimeout(250);
-    } while (Date.now() < deadline);
-    return [];
+  /**
+   * The row a locator points at, in a picker this opens (the group included); the menu is left open.
+   * The row must still carry the name: a place that now holds another model is not taken, and a model
+   * that moved within its menu is found there by name.
+   */
+  private async openAtLocator(name: string, locator: ModelLocator): Promise<{ row: MenuRow } | { problem: string }> {
+    const button = await this.resolveModelButton();
+    if (!button) return { problem: 'This chat does not show a model picker.' };
+    await button.click();
+    if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
+    let rows: MenuRow[];
+    if (locator.group) {
+      const key = await this.openGroup(locator.group);
+      if (!key) return { problem: `the group "${locator.group.name}" of the picker did not open.` };
+      rows = (await this.readMenuRows()).filter((r) => r.menuOf === key);
+    } else {
+      rows = this.topRows(await this.readMenuRows());
+    }
+    const choices = rows.filter((r) => !r.opensSubmenu);
+    const row = choices.find((r) => r.index === locator.index && sameModel(r.name, name)) ?? choices.find((r) => sameModel(r.name, name));
+    return row ? { row } : { problem: `"${name}" is not where the list was read${locator.group ? ` (in "${locator.group.name}")` : ''}.` };
   }
 
-  /** One visible menu row, matched on the first line of its text. */
-  private menuRow(name: string): Locator {
-    const selector = Model.optionRoles.map((r) => `[role="${r}"]:visible`).join(', ');
-    return this.p.locator(selector).filter({ hasText: new RegExp(`^${escapeForRegExp(name)}`, 'i') }).first();
+  /** Clicks one row of the open picker, on the element itself: a mouse moving across the menu re-renders the submenus under it. */
+  private async clickRow(row: MenuRow): Promise<boolean> {
+    return await this.p
+      .evaluate((mark) => {
+        const el = document.querySelector(`[data-cop-row="${mark}"]`) as HTMLElement | null;
+        if (!el || el.getClientRects().length === 0) return false;
+        el.click();
+        return true;
+      }, `${row.menuOf}#${row.index}`)
+      .catch(() => false);
   }
 
   /**
-   * Chooses one row of the open picker.
-   *
-   * A row inside a submenu is clicked on the element itself, in the page, and not with the mouse.
-   * A mouse click first travels to the row, and on the way it crosses the other rows of the menu
-   * above; Fluent opens or re-renders their submenus as the pointer passes, the row being aimed at
-   * is replaced, and Playwright starts again — "element is not stable", "element was detached from
-   * the DOM, retrying" — for as long as the page's default timeout allows. Live, that was 38
-   * seconds of a window stuck on the model menu with "GPT 5.6 Think deeper" in plain sight, until
-   * the window was closed and the task failed with "Target page, context or browser has been
-   * closed". A click dispatched on the element does not move the pointer, so nothing closes under
-   * it.
-   *
-   * Either way the attempt is short: the caller reads the model button back to decide whether the
-   * choice took, so a click that did not land costs seconds and says so, rather than a minute.
+   * Chooses a model at its locator and reads its row again from a fresh menu: chosen only when the
+   * row itself is marked (`aria-checked`). The button's text is no proof — it is shortened, and it is
+   * the same for a model and its group.
    */
-  private async clickMenuRow(name: string, inSubmenu: boolean): Promise<void> {
-    const row = this.menuRow(name);
-    if (inSubmenu) {
-      const dispatched = await row
-        .evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 5_000 })
-        .then(() => true)
-        .catch(() => false);
-      if (dispatched) return;
+  private async chooseAt(name: string, locator: ModelLocator): Promise<ModelChoice> {
+    const before = await this.currentModel();
+    const found = await this.openAtLocator(name, locator);
+    if ('problem' in found) {
+      await this.closeMenu();
+      return { ok: false, current: before, reason: found.problem };
     }
-    await row.click({ timeout: 8_000 }).catch(() => undefined);
+    if (found.row.disabled) {
+      await this.closeMenu();
+      return { ok: false, current: before, reason: `"${found.row.name}" is shown but not available right now.` };
+    }
+    if (found.row.selected) {
+      await this.closeMenu();
+      this.emit('model-already-selected', { model: found.row.name, buttonShows: before, by: 'locator' });
+      return { ok: true, current: found.row.name, by: 'locator' };
+    }
+    const clicked = await this.clickRow(found.row);
+    await this.p.waitForTimeout(800);
+    // Whatever the click did, the menu is not left open over the chat.
+    await this.closeMenu();
+    const again = clicked ? await this.openAtLocator(found.row.name, locator) : { problem: 'the row could not be clicked.' };
+    await this.closeMenu();
+    const after = await this.currentModel();
+    if ('row' in again && again.row.selected) {
+      this.emit('model-selected', { model: again.row.name, buttonShows: after, by: 'locator' });
+      return { ok: true, current: again.row.name, by: 'locator' };
+    }
+    return {
+      ok: false,
+      current: after,
+      reason: 'problem' in again ? `after choosing "${name}", ${again.problem}` : `"${name}" was clicked, but the picker does not mark it as chosen (the button shows "${after ?? 'nothing'}").`,
+    };
   }
 
   /**
@@ -968,111 +1110,46 @@ Current URL: ${url}`);
   }
 
   /**
-   * Sets the chat to a model by the exact name the picker showed.
+   * Sets the chat to a model.
    *
-   * Verified by reading the button back rather than by trusting the click, because a menu
-   * item that is out of quota can look clicked and change nothing. When it did not take, the
-   * caller is told what the chat is actually on, which is the honest answer.
+   * With a `locator` from the list the operator read (see `listModels`), the row is gone to directly.
+   * Without one, or when the page moved it, the line-up is read again with fresh locators and the model
+   * is found there by name — or under its new name when the page renamed it (see `modelMatch.ts`). The
+   * choice counts only when the picker marks the row as chosen, read again from a fresh menu, because a
+   * menu item that is out of quota can look clicked and change nothing; when it did not take, the
+   * caller is told what the chat is actually on.
    */
-  async selectModel(name: string): Promise<ModelChoice> {
+  async selectModel(name: string, opts: { locator?: ModelLocator } = {}): Promise<ModelChoice> {
     const button = await this.resolveModelButton();
     if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
 
-    const before = await this.currentModel();
-    if (sameModel(before, name)) return { ok: true, current: before };
-
-    await button.click();
-    if (!(await this.waitForPopup())) return { ok: false, current: before, reason: 'The model picker did not open.' };
-
-    // The menu is walked rather than replayed from a saved path. A cached path goes stale the
-    // moment Microsoft moves a model between groups, and a name is what the user chose.
-    const top = await this.readMenuRows();
-    // As the page writes it today: "GPT-5.6" and "GPT 5.6" are one model (see `modelMatch.ts`).
-    const wanted = (r: MenuRow): boolean => sameModel(r.name, name);
-
-    let target = top.find((r) => wanted(r) && !r.opensSubmenu);
-    const inSubmenu = !target;
-    if (!target) {
-      const topNames = new Set(top.map((r) => r.name.toLowerCase()));
-      for (const group of top.filter((r) => r.opensSubmenu)) {
-        const trigger = this.menuRow(group.name);
-        await trigger.hover().catch(() => undefined);
-        let children = await this.waitForNewRows(topNames);
-        if (children.length === 0) {
-          await trigger.click().catch(() => undefined);
-          children = await this.waitForNewRows(topNames);
-        }
-        const found = children.find(wanted);
-        if (found) {
-          target = found;
-          break;
-        }
-      }
+    let first: ModelChoice | null = null;
+    if (opts.locator) {
+      first = await this.chooseAt(name, opts.locator);
+      if (first.ok) return first;
     }
 
-    if (!target) {
-      await this.closeMenu();
-      /*
-       * Not under that name: the line-up is read from the page, and the same model under its new name is
-       * chosen when exactly one fits (see `modelMatch.ts`). The list read goes back to the caller as well,
-       * so the saved catalogue follows the page (live run 2026-10-04: "GPT 5.6 Think deeper" had become
-       * "GPT 5.6 Sol Think deeper", and every run went on the default).
-       */
-      const read = await this.listModels().catch(() => null);
-      const options = read?.options ?? [];
-      const match = pageModelFor(name, options);
-      if (match && !sameModel(match.name, name)) {
-        const again = await this.selectModel(match.name);
-        return { ...again, matched: match.name, options };
-      }
+    // The line-up as the page shows it now, each model with its place in it.
+    const read = await this.listModels().catch(() => null);
+    const options = read?.options ?? [];
+    const match = options.find((o) => sameModel(o.name, name)) ?? pageModelFor(name, options);
+    if (!match?.locator) {
       const offered = options.filter((o) => !o.disabled).map((o) => o.name);
       return {
         ok: false,
-        current: before,
-        reason: `The picker does not offer "${name}" any more${offered.length > 0 ? `; it offers ${offered.map((o) => `"${o}"`).join(', ')}` : ''}.`,
+        current: await this.currentModel(),
+        reason:
+          `The picker does not offer "${name}" any more${offered.length > 0 ? `; it offers ${offered.map((o) => `"${o}"`).join(', ')}` : ''}.` +
+          (first?.reason ? ` (At the place the list was read: ${first.reason})` : ''),
         ...(options.length > 0 ? { options } : {}),
       };
     }
-    /*
-     * Already the one in force: close the menu and say so, without clicking.
-     *
-     * The button cannot answer this on its own, because it shortens names — "GPT 5.6 Think deeper"
-     * reads "GPT 5.6 Think" — so the exact comparison above lets a chat that is already on the
-     * model through to here. The row's own mark (`aria-checked` and its kin) is the answer. The
-     * click it used to get did nothing in Copilot: the row already in force ignores it, the menu
-     * stayed open over the composer, and the run went on with the model list hanging on screen.
-     */
-    if (target.selected) {
-      await this.closeMenu();
-      this.emit('model-already-selected', { model: target.name, buttonShows: before });
-      return { ok: true, current: target.name };
-    }
-    if (target.disabled) {
-      await this.closeMenu();
-      return { ok: false, current: before, reason: `"${name}" is shown but not available right now.` };
-    }
-
-    await this.clickMenuRow(target.name, inSubmenu);
-    await this.p.waitForTimeout(1_000);
-    // Whatever the click did, the menu is not left open over the chat: a build that keeps it open
-    // after a choice, or a click that did not land, would otherwise leave it for the next message.
-    await this.closeMenu();
-    const after = await this.currentModel();
-
-    // The button shows the choice, so it is the check. It also **shortens** it: picking
-    // "GPT 5.6 Quick response" leaves the button reading "GPT 5.6 Quick". So the shown value
-    // agrees when it is the row's name with words dropped from its end, and the row's full name
-    // is what gets reported back, because that is what was chosen and what will be asked for
-    // next time. A piece from anywhere used to count: "Think deeper" on the button passed for
-    // "GPT-5.6 Sol Think deeper" (2026-10-05), and the run said it was on a model it was not.
-    if (buttonShows(after, target.name)) {
-      this.emit('model-selected', { model: target.name, buttonShows: after });
-      return { ok: true, current: target.name };
-    }
+    const chosen = await this.chooseAt(match.name, match.locator);
     return {
-      ok: false,
-      current: after,
-      reason: `The chat reports "${after ?? 'unknown'}" after choosing "${name}".`,
+      ...chosen,
+      ...(chosen.ok && !sameModel(match.name, name) ? { matched: match.name } : {}),
+      ...(chosen.ok ? { by: opts.locator ? 'reread' : 'name' } : {}),
+      options,
     };
   }
 

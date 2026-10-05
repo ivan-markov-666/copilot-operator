@@ -23,7 +23,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatTransport, TransportFactory } from '../../src/transport/chatTransport.js';
-import type { ModelChoice, ModelOption, ReplyCapture, TransportOptions } from '../../src/transport/copilotTransport.js';
+import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions } from '../../src/transport/copilotTransport.js';
 import { pageModelFor, sameModel } from '../../src/transport/modelMatch.js';
 
 /** One message the runner sent, with the text of every file it attached. */
@@ -62,6 +62,10 @@ export class FakeCopilot {
   closed = 0;
   /** Whether the window reports each reply as a browser event, as the real one reports what it sees. */
   emitEvents = false;
+  /** How many naming tries find the conversation not yet in the sidebar (as live, 2026-10-05). */
+  sidebarLate = 0;
+  /** How many times a conversation was asked to be named. */
+  nameTries = 0;
   models: ModelOption[] = [
     { name: 'Auto', raw: 'Auto', selected: true, disabled: false, role: 'menuitemradio' },
     { name: 'Think deeper', raw: 'Think deeper', selected: false, disabled: false, role: 'menuitemradio' },
@@ -70,6 +74,8 @@ export class FakeCopilot {
   currentModel = 'Auto';
   /** Every model the runner asked for, in order. */
   readonly modelRequests: string[] = [];
+  /** Every model chosen, and how it was found: at the saved locator, at a fresh one, or by name. */
+  readonly modelPicks: Array<{ name: string; by: 'locator' | 'reread' | 'name' }> = [];
   /** The accounts the page shows once signed in, for "Sign in" from Settings. */
   accounts: string[] = [];
   /** How often the sign-in was waited for and the profile signed out, and which accounts were asked for. */
@@ -208,28 +214,52 @@ class FakeChat implements ChatTransport {
 
   async nameChat(chatId: string, name: string): Promise<boolean> {
     const c = this.world.conversations.get(chatId);
+    this.world.nameTries += 1;
     if (!c) return false;
+    // As the live sidebar: a new conversation's row comes some seconds late, so the first tries find nothing.
+    if (this.world.sidebarLate > 0) {
+      this.world.sidebarLate -= 1;
+      return false;
+    }
     c.name = name;
     return true;
   }
 
-  async selectModel(name: string): Promise<ModelChoice> {
+  /** The line-up as the real picker reads it: each model with its place (see `ModelLocator`). */
+  private lineUp(): ModelOption[] {
+    const groups = [...new Set(this.world.models.filter((m) => m.group).map((m) => m.group!))];
+    const top = this.world.models.filter((m) => !m.group);
+    return this.world.models.map((m) => {
+      if (!m.group) return { ...m, locator: { role: m.role, index: top.indexOf(m) } };
+      const inGroup = this.world.models.filter((x) => x.group === m.group);
+      const g = groups.indexOf(m.group);
+      return { ...m, locator: { role: m.role, index: inGroup.indexOf(m), group: { testId: `${m.group.toLowerCase()}SubMenuModelTrigger`, index: top.length + g, name: m.group } } };
+    });
+  }
+
+  async selectModel(name: string, opts: { locator?: ModelLocator } = {}): Promise<ModelChoice> {
     this.world.modelRequests.push(name);
-    const found = this.world.models.find((m) => sameModel(m.name, name));
-    if (!found) {
-      // As the real picker does: the line-up read, and the same model under its new name chosen (see modelMatch.ts).
-      const options = this.world.models.map((m) => ({ ...m }));
-      const match = pageModelFor(name, options);
-      if (match && !sameModel(match.name, name)) return { ...(await this.selectModel(match.name)), matched: match.name, options };
-      return { ok: false, current: this.world.currentModel, reason: `"${name}" is not in the list`, options };
+    const line = this.lineUp();
+    const at = (l: ModelLocator): ModelOption | undefined =>
+      line.find((o) => o.locator && o.locator.index === l.index && (o.locator.group?.testId ?? '') === (l.group?.testId ?? '') && sameModel(o.name, name));
+    const choose = (o: ModelOption, by: 'locator' | 'reread' | 'name'): ModelChoice => {
+      this.world.currentModel = o.name;
+      for (const m of this.world.models) m.selected = m.name === o.name;
+      this.world.modelPicks.push({ name: o.name, by });
+      return { ok: true, current: o.name, by };
+    };
+    if (opts.locator) {
+      const hit = at(opts.locator);
+      if (hit) return choose(hit, 'locator');
     }
-    this.world.currentModel = found.name;
-    for (const m of this.world.models) m.selected = m.name === found.name;
-    return { ok: true, current: found.name };
+    // As the real picker does: the line-up read again, and the model found by name, or under its new name.
+    const match = line.find((o) => sameModel(o.name, name)) ?? pageModelFor(name, line);
+    if (!match) return { ok: false, current: this.world.currentModel, reason: `The picker does not offer "${name}" any more; it offers ${line.filter((o) => !o.disabled).map((o) => `"${o.name}"`).join(', ')}.`, options: line };
+    return { ...choose(match, opts.locator ? 'reread' : 'name'), ...(sameModel(match.name, name) ? {} : { matched: match.name }), options: line };
   }
 
   async listModels(): Promise<{ options: ModelOption[]; current: string | null; note?: string }> {
-    return { options: this.world.models.map((m) => ({ ...m })), current: this.world.currentModel };
+    return { options: this.lineUp(), current: this.world.currentModel };
   }
 
   async sendAndConfirm(text: string, attachments: string[] = []): Promise<number> {

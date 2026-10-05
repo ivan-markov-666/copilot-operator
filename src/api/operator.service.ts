@@ -1462,6 +1462,7 @@ export class OperatorService {
       ...(transport || !runGroup ? {} : { beforeBrowser: () => this.browserRequested(runGroup.id, [sessionId]) }),
       // The page is the source of the model names: Settings and the saved list follow it (see `ModelHooks`).
       models: {
+        locate: async (name) => (await this.store.getModels())?.options.find((o) => sameModel(o.name, name))?.locator,
         renamedDefault: async (which, from, to) => {
           const now = (await this.settings.load()).copilot;
           if (which === 'model' && (now.defaultModel ?? '').trim() === from) await this.setDefaultModel(to);

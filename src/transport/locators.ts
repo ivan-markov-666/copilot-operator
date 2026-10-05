@@ -251,6 +251,8 @@ export const Url = {
 export const Rename = {
   /** Per-chat overflow button in the sidebar. There is one per chat, so scope it to the row. */
   moreButtonLabel: 'More',
+  /** The same button by the chat it belongs to (seen live 2026-10-05): found without going through the row. */
+  moreButtonForChat: (chatId: string): string => `button[data-chat-history-more-button-conversation-id="${chatId}"]`,
   menuItem: 'Rename',
   /** The dialog's text input. */
   input: '#new-session-name',

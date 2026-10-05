@@ -444,14 +444,17 @@ await scenario('an unexpected chat error fails the task, and names an Edge crash
   t.truthy('the reason names the crashed browser process, then the error', /^Edge's browser process crashed .*Target page/.test(crashed.reason ?? ''), crashed.reason);
 });
 
-await scenario('a model that cannot be selected: the run goes on, on what the chat has', { copilot: { defaultModel: 'No Such Model' } }, async (h) => {
+// Changed on 2026-10-05, at the operator's word: a chosen model the chat cannot be put on stops the run;
+// it used to go on, on Auto, with a warning, and its work was taken for the chosen model's.
+await scenario('a model that cannot be selected: nothing is sent, and the run says why', { copilot: { defaultModel: 'No Such Model' } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'model', [task('any-model')], { vcs: false }));
-  h.chat.script(reply.done());
-  const after = await h.run(s!.id);
-  t.check('done', after.tasks[0]!.status, 'done');
-  t.check('on Auto', after.modelInUse, 'Auto');
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  await h.idle();
+  const after = await h.session(s!.id);
+  t.check('the task stays queued, nothing sent', [after.tasks[0]!.status, h.chat.sent.length], ['queued', 0]);
   t.check('the model from Settings was asked for, once', h.chat.modelRequests, ['No Such Model']);
-  t.truthy('and the miss is an event', (await eventsOf(h, s!.id)).some((e) => e.type === 'model-not-selected'), '');
+  const events = await eventsOf(h, s!.id);
+  t.truthy('and the miss is an event, and the run stopped on it', events.some((e) => e.type === 'model-not-selected') && events.some((e) => e.type === 'run-failed'), '');
 });
 
 await scenario('conversation re-entry: found again by name when moved, and a clear stop when gone', {}, async (h) => {

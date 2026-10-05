@@ -119,6 +119,61 @@ try {
     rmSync(transportDir, { recursive: true, force: true });
     await page.close();
   }
+
+  /*
+   * The menu as the live page had it on 2026-10-05: the GPT row carries a test id, its submenu is labelled
+   * by it, and once a model of the group is chosen the group's row reads that model's name. Read by text,
+   * the group then lost that model, and a run asked for it went on Auto.
+   */
+  console.log('\n=== the live menu of 2026-10-05: a labelled submenu, and a group row renamed by the choice ===');
+  {
+    const live = PAGE.replace('__MODE__', 'any')
+      .replace('<div role="menuitem" id="gpt" aria-haspopup="menu">GPT<br>OpenAI</div>', '<div role="menuitem" id="gpt" data-test-id="gptSubMenuModelTrigger-OpenAI" aria-haspopup="menu">GPT<br>OpenAI</div>')
+      .replace('<div id="sub" role="menu" style="display:none">', '<div id="sub" role="menu" aria-labelledby="gpt" style="display:none">')
+      .replace(
+        "document.getElementById('shown').textContent = row ? shortOf(row) : current;",
+        "document.getElementById('shown').textContent = row ? shortOf(row) : current;\n    const inGroup = row && document.getElementById('sub').contains(row);\n    document.getElementById('gpt').innerHTML = (inGroup ? current : 'GPT') + '<br>OpenAI';",
+      );
+    const page = await browser.newPage();
+    const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000 });
+    (transport as unknown as { page: Page }).page = page;
+    await page.setContent(live);
+    const setModel = async (name: string): Promise<void> => await page.evaluate((n) => (window as unknown as { setModel: (x: string) => void }).setModel(n), name);
+    const menuOpen = async (): Promise<boolean> => await page.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
+
+    const first = await transport.listModels();
+    const quick = first.options.find((o) => o.name === 'GPT 5.6 Quick response');
+    const deep = first.options.find((o) => o.name === 'GPT 5.6 Think deeper');
+    t.check('the list, each model with its place; the group known by its test id',
+      [first.options.map((o) => o.name), deep?.locator, quick?.locator?.index],
+      [['Auto', 'Think deeper', 'GPT 5.6 Think deeper', 'GPT 5.6 Quick response'], { role: 'menuitemradio', index: 0, group: { testId: 'gptSubMenuModelTrigger-OpenAI', index: 2, name: 'GPT' } }, 1]);
+
+    await setModel('GPT 5.6 Think deeper');
+    const renamed = await transport.listModels();
+    t.check('with a model of the group in force (its row reads that name): the group still lists both, under "GPT"',
+      [renamed.options.filter((o) => o.group).map((o) => `${o.group} > ${o.name}${o.selected ? ' *' : ''}`), await menuOpen()],
+      [['GPT > GPT 5.6 Think deeper *', 'GPT > GPT 5.6 Quick response'], false]);
+
+    let r = await transport.selectModel('GPT 5.6 Quick response', { locator: quick?.locator });
+    t.check('the other model of the group chosen at its saved place, while the group row carries the first one\'s name', [r.ok, r.by, r.current, await menuOpen()], [true, 'locator', 'GPT 5.6 Quick response', false]);
+    r = await transport.selectModel('GPT 5.6 Think deeper', { locator: deep?.locator });
+    t.check('and back again', [r.ok, r.by, r.current], [true, 'locator', 'GPT 5.6 Think deeper']);
+    r = await transport.selectModel('Auto', { locator: first.options.find((o) => o.name === 'Auto')?.locator });
+    t.check('and a model of the top menu', [r.ok, r.by, r.current, await menuOpen()], [true, 'locator', 'Auto', false]);
+
+    // The page moved the models since the list was read: the saved place now holds the other one.
+    await page.evaluate(() => {
+      const sub = document.getElementById('sub')!;
+      sub.appendChild(sub.firstElementChild!);
+    });
+    r = await transport.selectModel('GPT 5.6 Think deeper', { locator: deep?.locator });
+    t.check('a model moved within its group is still the one chosen, not the one now at its old place', [r.ok, r.current], [true, 'GPT 5.6 Think deeper']);
+    r = await transport.selectModel('Claude Opus', { locator: { role: 'menuitemradio', index: 0 } });
+    t.check('a model gone from the page is refused, and the chat stays where it was', [r.ok, r.current, await menuOpen()], [false, 'GPT 5.6 Think', false]);
+    rmSync(transportDir, { recursive: true, force: true });
+    await page.close();
+  }
 } finally {
   await browser.close();
 }

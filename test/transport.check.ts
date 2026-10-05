@@ -697,6 +697,29 @@ try {
     }
   });
 
+  await section('nameChat: the sidebar over the "More" button takes the mouse (live 2026-10-05)', async () => {
+    /*
+     * As the live page had it: the chat's overflow button carries the chat's id, and another part of the
+     * sidebar (the chat's link, a sticky header) lies over it and takes every mouse click. Playwright
+     * retried for its whole minute and the chat kept Copilot's own title. Now the button is found by the
+     * chat id and clicked on the element itself, and a rename counts only when the sidebar shows it.
+     */
+    const covered = SIDEBAR(true, 'escape')
+      .replace('data-count="More ID-42"', 'data-count="More ID-42" data-chat-history-more-button-conversation-id="ID-42"')
+      .replace('<nav><ul>', '<div id="cover" style="position:fixed;inset:0;z-index:10;background:transparent"></div><nav><ul>')
+      // The cover takes the mouse; the menu and the dialog it opens stay above it, as the live page's do.
+      .replace("document.body.appendChild(menu);", "menu.style.cssText = 'position:relative;z-index:20'; document.body.appendChild(menu);")
+      .replace("document.body.appendChild(d);", "d.style.cssText = 'position:relative;z-index:20'; document.body.appendChild(d);");
+    const f = await fixture('name-covered', covered);
+    const started = Date.now();
+    const ok = await f.transport.nameChat('ID-42', 'op/ab/covered');
+    const took = Date.now() - started;
+    t.check('renamed, though the mouse cannot reach the button', [ok, await f.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label')], [true, 'op/ab/covered']);
+    t.truthy('in seconds, not the minute of retries', took < 20_000, `${took} ms`);
+    const c = await clicks(f.page);
+    t.check('that chat\'s More only, then Rename and Save', [c['More ID-42'] ?? 0, c['More OTHER-1'] ?? 0, c['Rename'] ?? 0, c['Save'] ?? 0], [1, 0, 1, 1]);
+  });
+
   await section('openConversationByName matches the whole name', async () => {
     /*
      * Chat names share prefixes: "op/ab/x" and "op/ab/x-2" are two tasks' chats. The one that comes

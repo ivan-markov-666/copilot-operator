@@ -15,7 +15,7 @@ import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
-import type { ModelChoice, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
+import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
 import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
@@ -135,6 +135,8 @@ export type RunDeps = {
  * on the way, so the saved catalogue follows it too.
  */
 export type ModelHooks = {
+  /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
+  locate?: (name: string) => Promise<ModelLocator | undefined>;
   renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
   seen?: (options: ModelOption[], current: string | null) => Promise<void>;
 };
@@ -650,11 +652,12 @@ async function applySessionModel(
   cfg: Pick<ResolvedConfig, 'copilot'>,
   store?: SessionStore,
   hooks?: ModelHooks,
-): Promise<string | undefined> {
+): Promise<{ current?: string; refused?: string }> {
   const wanted = effectiveModels(session, cfg).model;
-  if (!wanted) return undefined;
+  if (!wanted) return {};
 
-  const result: ModelChoice = await transport.selectModel(wanted).catch((e: unknown) => ({
+  const locator = await hooks?.locate?.(wanted).catch(() => undefined);
+  const result: ModelChoice = await transport.selectModel(wanted, { locator }).catch((e: unknown) => ({
     ok: false as const,
     current: null,
     reason: (e as Error).message,
@@ -668,8 +671,8 @@ async function applySessionModel(
     level: result.ok ? 'info' : 'warn',
     message: result.ok
       ? `model: ${result.current ?? wanted}${session.model?.trim() ? '' : ' (from Settings)'}`
-      : `could not switch to "${wanted}"${session.model?.trim() ? '' : ' (the default model in Settings — change it there)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Continuing on ${result.current ?? 'the chat default'}.`,
-    data: { asked: wanted, fromSettings: !session.model?.trim(), current: result.current, ok: result.ok },
+      : `could not switch to "${wanted}"${session.model?.trim() ? '' : ' (the default model in Settings)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Nothing is sent on ${result.current ?? 'the chat default'} instead.`,
+    data: { asked: wanted, fromSettings: !session.model?.trim(), current: result.current, ok: result.ok, by: result.by ?? null, savedLocator: !!locator },
   });
   // Kept on the session, so each task's record says which model it ran on and why (see `runTask`).
   await store
@@ -686,7 +689,19 @@ async function applySessionModel(
     })
     .catch(() => undefined);
 
-  return result.current ?? undefined;
+  /*
+   * A model the operator chose and the chat is not on is not worked around: the run went on Auto with a
+   * warning nobody saw, and its work was then taken for the chosen model's (2026-10-05). Nothing goes out.
+   */
+  if (!result.ok) {
+    return {
+      current: result.current ?? undefined,
+      refused:
+        `The chat could not be put on the chosen model "${wanted}"${session.model?.trim() ? '' : ' (Settings)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. ` +
+        'Nothing was sent. Read the list again under Settings → Model, choose the model there, and start again.',
+    };
+  }
+  return { current: result.current ?? undefined };
 }
 
 /** Runs one task to completion inside an already-open transport. */
@@ -717,11 +732,34 @@ export async function runTask(
    */
   let sentCount = 0;
   let inOpening = false;
+  /*
+   * A conversation Copilot had not yet put in its sidebar when it was registered is named before a later
+   * message goes out in it: the row comes some seconds after the first reply, and fifteen were not always
+   * enough (live run 2026-10-05), which left the chat under Copilot's own title, where a later run looking
+   * for it by name could not find it. A few tries, only while the page is on that conversation.
+   */
+  let nameTries = 0;
+  const nameIfStillUnnamed = async (target: ChatTransport): Promise<void> => {
+    const chat = session.chat;
+    if (!chat || chat.named !== false || nameTries >= 3) return;
+    if ((await target.currentChatId().catch(() => null)) !== chat.chatId) return;
+    nameTries += 1;
+    const named = await target.nameChat(chat.chatId, chat.name, { waitMs: 5_000 }).catch(() => false);
+    if (!named) return;
+    const { named: _was, ...done } = chat;
+    session.chat = done;
+    await store.updateSession(session.id, (s) => {
+      if (s.chat?.chatId === chat.chatId) s.chat = { ...s.chat, named: undefined };
+    }).catch(() => undefined);
+    await savePointer(log.path('chat.json'), done).catch(() => undefined);
+    sink.event('chat-named-later', { chatId: chat.chatId, name: chat.name, tries: nameTries }, `chat named "${chat.name}" in Copilot's sidebar, now that it is there`);
+  };
   const chatOf = transport;
   transport = new Proxy(chatOf, {
     get(target, key) {
       if (key !== 'sendAndConfirm') return Reflect.get(target, key);
       return async (...args: Parameters<ChatTransport['sendAndConfirm']>) => {
+        await nameIfStillUnnamed(target);
         const before = await target.sendAndConfirm(...args);
         sentCount += 1;
         const [text, attachments] = args;
@@ -1435,8 +1473,12 @@ export async function runTask(
         const modelNow = await applySessionModel(transport, session, bus, cfg, store, deps.models);
         if (effectiveModels(session, cfg).model) {
           await store.updateSession(session.id, (s) => {
-            s.modelInUse = modelNow;
+            s.modelInUse = modelNow.current;
           });
+        }
+        if (modelNow.refused) {
+          stopCode = 'environment';
+          return await finish('blocked', modelNow.refused);
         }
       }
     }
@@ -1925,7 +1967,8 @@ export async function runTask(
       try {
         await transport.newChat();
         if (model) {
-          const picked: ModelChoice = await transport.selectModel(model).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+          const reviewLocator = await deps.models?.locate?.(model).catch(() => undefined);
+          const picked: ModelChoice = await transport.selectModel(model, { locator: reviewLocator }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
           const renamed = await followPageModels('review', model, picked, session, store, deps.models);
           if (renamed) sink.event('model-renamed', { asked: model, chosen: picked.matched, review: true }, renamed, 'warn');
           sink.event(picked.ok ? 'review-model-selected' : 'review-model-not-selected', { asked: model, current: picked.current },
@@ -2910,9 +2953,11 @@ export async function runSession(
     const modelInUse = await applySessionModel(chat, session, bus, cfg, store, deps.models);
     if (effectiveModels(session, cfg).model) {
       await store.updateSession(sessionId, (s) => {
-        s.modelInUse = modelInUse;
+        s.modelInUse = modelInUse.current;
       });
     }
+    // Refused before a task is marked started: its tasks stay queued, and the run says why.
+    if (modelInUse.refused) throw new Error(modelInUse.refused);
 
     for (const queuedTask of queued) {
       if (deps.signal?.aborted) break;
@@ -2990,9 +3035,10 @@ export async function runSession(
         const freshModel = await applySessionModel(chat, session, bus, cfg, store, deps.models);
         if (effectiveModels(session, cfg).model) {
           session = await store.updateSession(sessionId, (s) => {
-            s.modelInUse = freshModel;
+            s.modelInUse = freshModel.current;
           });
         }
+        if (freshModel.refused) throw new Error(freshModel.refused);
         const fresh = session.tasks.find((x) => x.id === task.id);
         if (!fresh) break;
         outcome = await runTask(chat, session, fresh, deps);

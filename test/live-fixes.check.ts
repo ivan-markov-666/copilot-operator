@@ -676,7 +676,7 @@ console.log('\n--- 2026-10-04: in a batch, the shared window\'s events are in th
   }
 }
 
-console.log('\n--- 2026-10-04: the model the chat ran on, and why not the one asked for, is in the task\'s record ---');
+console.log('\n--- 2026-10-05: a model chosen and not offered stops the run before anything is sent; never Auto instead ---');
 {
   const h = await startHarness({ settings: { copilot: { defaultModel: 'GPT 9 Imaginary' } } });
   try {
@@ -685,13 +685,52 @@ console.log('\n--- 2026-10-04: the model the chat ran on, and why not the one as
       sessions: [{ name: 'model-record', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
         tasks: [{ title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] }],
     });
+    const r = await h.call<{ started: boolean }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    t.check('the run starts (the model is known only in the chat)', r.started, true);
+    await h.idle();
+    const v = await h.session(s!.id) as unknown as { tasks: Array<{ status: string; runId?: string }> };
+    t.check('nothing was sent, the task stays queued', [h.chat.sent.length, v.tasks[0]!.status, v.tasks[0]!.runId ?? null], [0, 'queued', null]);
+    const events = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${s!.id}/events`);
+    t.truthy('and the run says why, naming the model and what the page offers',
+      events.some((e) => e.type === 'run-failed' && /could not be put on the chosen model "GPT 9 Imaginary"/.test(e.message) && /Nothing was sent/.test(e.message) && /it offers/.test(e.message)),
+      events.filter((e) => /model|run-failed/.test(e.type)));
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-05: the list read in Settings keeps where each model sits, and a run chooses it there ---');
+{
+  const h = await startHarness({});
+  try {
+    const o = (name: string, group?: string) => ({ name, raw: name, selected: name === 'Auto', disabled: false, role: 'menuitemradio', ...(group ? { group } : {}) });
+    h.chat.models = [o('Auto'), o('Quick response'), o('Think deeper'), o('GPT-5.6 Sol Quick response', 'GPT'), o('GPT-5.6 Sol Think deeper', 'GPT')];
+    await h.call('POST', '/models/refresh');
+    const list = await h.call<{ options: Array<{ name: string; locator?: { index: number; group?: { testId?: string; name: string } } }> }>('GET', '/models');
+    const gpt = list.options.find((x) => x.name === 'GPT-5.6 Sol Think deeper');
+    t.check('the saved list has the model with its place: second in the GPT group', [gpt?.locator?.index, gpt?.locator?.group?.name, !!gpt?.locator?.group?.testId], [1, 'GPT', true]);
+    await h.call('PUT', '/models/default', { model: 'GPT-5.6 Sol Think deeper' });
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'by-locator', onFailure: 'stop', vcs: vcs(h), review: { enabled: true, model: 'Think deeper' },
+        tasks: [{ title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] }],
+    });
     h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
     await h.run(s!.id, 'unattended');
-    const task = (await h.session(s!.id)).tasks[0] as unknown as { runId: string; status: string };
-    const line = readFileSync(join(h.runsDir, task.runId, 'transcript.jsonl'), 'utf8').split('\n').find((l) => l.includes('"model-in-use"')) ?? '';
-    t.truthy('the transcript says the chat is not on the model asked for, and why', /"ok":false/.test(line) && /GPT 9 Imaginary/.test(line), line);
-    const bot = await h.call<{ tasks: Array<{ eventCounts: Record<string, number> }> }>('GET', `/export/bot?session=${s!.id}`);
-    t.truthy('and the export counts it', (bot.tasks[0]!.eventCounts['model-in-use'] ?? 0) === 1, bot.tasks[0]!.eventCounts);
+    t.check('the run chose the work model and the review model at their saved places', h.chat.modelPicks, [{ name: 'GPT-5.6 Sol Think deeper', by: 'locator' }, { name: 'Think deeper', by: 'locator' }]);
+    const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string; runId: string }> };
+    t.check('the task ran on it', [v.tasks[0]!.status, v.modelInUse], ['done', 'GPT-5.6 Sol Think deeper']);
+    const line = readFileSync(join(h.runsDir, v.tasks[0]!.runId, 'transcript.jsonl'), 'utf8').split('\n').find((l) => l.includes('"model-in-use"')) ?? '';
+    t.truthy('and its record says so', /"ok":true/.test(line) && /GPT-5\.6 Sol Think deeper/.test(line), line);
+
+    // The page moved the model since the list was read: found again on a fresh reading, by name.
+    h.chat.models = [o('Auto'), o('Think deeper'), o('Quick response'), o('GPT-5.6 Sol Think deeper', 'GPT'), o('GPT-5.6 Sol Quick response', 'GPT')];
+    await h.call('POST', `/sessions/${s!.id}/tasks/${v.tasks[0]!.id ?? (await h.session(s!.id)).tasks[0]!.id}/rerun`, {});
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    t.check('moved within its group: chosen at its new place', h.chat.modelPicks.slice(-2)[0], { name: 'GPT-5.6 Sol Think deeper', by: 'reread' });
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
@@ -740,7 +779,7 @@ console.log('\n--- 2026-10-04: a run follows the page when the Settings model wa
     await h.run(s!.id, 'unattended');
     const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string }> };
     t.check('the chat ran on the page\'s name for it', v.modelInUse, 'GPT 5.6 Sol Think deeper');
-    t.truthy('both the session model and the review model were asked under the page\'s names', h.chat.modelRequests.includes('GPT 5.6 Sol Think deeper') && h.chat.modelRequests.includes('GPT 5.6 Sol Quick response'), h.chat.modelRequests);
+    t.truthy('both the session model and the review model were chosen under the page\'s names', h.chat.modelPicks.some((p) => p.name === 'GPT 5.6 Sol Think deeper') && h.chat.modelPicks.some((p) => p.name === 'GPT 5.6 Sol Quick response'), h.chat.modelPicks);
     const models = await h.call<{ defaultModel: string; defaultReviewModel: string; options: Array<{ name: string }>; readAt: string | null }>('GET', '/models');
     t.check('Settings now say what the page offers', [models.defaultModel, models.defaultReviewModel], ['GPT 5.6 Sol Think deeper', 'GPT 5.6 Sol Quick response']);
     t.truthy('and the saved list is the page\'s', models.options.some((m) => m.name === 'GPT 5.6 Sol Think deeper') && !models.options.some((m) => m.name === 'GPT 5.6 Think deeper') && !!models.readAt, models);
@@ -777,6 +816,31 @@ console.log('\n--- 2026-10-05: the model chosen from the list is the one the cha
     await h.call('POST', '/models/refresh');
     const after = await h.call<{ defaultModel: string; defaultReviewModel: string }>('GET', '/models');
     t.check('"Refresh" makes Settings say what the page offers', [after.defaultModel, after.defaultReviewModel], ['GPT-5.6 Sol Think deeper', 'GPT-5.6 Sol Quick response']);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log('\n--- 2026-10-05: a conversation not yet in the sidebar when registered is named before the next message ---');
+{
+  const h = await startHarness({});
+  try {
+    h.chat.sidebarLate = 1;
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'late-sidebar', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+        tasks: [{ title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [{ name: 'a says one', expect: 'file-contains', file: 'a.txt', value: 'one' }] }] }],
+    });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    const v = await h.session(s!.id) as unknown as { chat?: { chatId: string; name: string; named?: boolean }; tasks: Array<{ status: string }> };
+    const conv = v.chat ? h.chat.conversations.get(v.chat.chatId) : undefined;
+    t.check('the task is done, and the chat is named after all', [v.tasks[0]!.status, conv?.name === v.chat?.name, v.chat?.named ?? null], ['done', true, null]);
+    t.check('a second try, not more', h.chat.nameTries, 2);
+    const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${s!.id}/events`);
+    t.truthy('and the late naming is on record', events.some((e) => e.type === 'chat-named-later'), events.map((e) => e.type).filter((x) => /chat/.test(x)));
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
