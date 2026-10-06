@@ -975,6 +975,13 @@ export type PendingApproval = {
    * is asked about even in an unattended run, and "run the rest without asking" does not answer it.
    */
   network?: string;
+  /**
+   * Set when this is not a step but a request for the operator's hand: the chat could not be put on the
+   * chosen model, and the operator is asked to choose it in the Copilot window (operator's request,
+   * 2026-10-06). Answers: run = "I chose it, check and go on"; skip = "go on with the model it is on";
+   * abort = stop. Asked in every mode, like a fetch.
+   */
+  model?: { asked: string; shown: string | null; why: string; tries: number };
 };
 
 export function newId(prefix = ''): string {

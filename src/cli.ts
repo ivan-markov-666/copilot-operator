@@ -415,7 +415,8 @@ program
   .option('--url <url>', 'chat url', Url.chat)
   .option('--json', 'print the raw list, for pasting into an issue')
   .option('--set <name>', 'also switch the chat to this model, by its exact name')
-  .action(async (opts: { profile: string; url: string; json?: boolean; set?: string }) => {
+  .option('--steps', 'with --set: print each step of the choice with its time, and keep a picture of each in runs/_models')
+  .action(async (opts: { profile: string; url: string; json?: boolean; set?: string; steps?: boolean }) => {
     const transport = new CopilotTransport({
       profileDir: opts.profile,
       transportDir: join(installLayout().runsDir, '_models'),
@@ -424,7 +425,9 @@ program
       headless: false,
       replyTimeoutMs: 60_000,
       signInTimeoutMs: 900_000,
-      onEvent: (e, d) => console.log(`  [${e}]${d ? ' ' + JSON.stringify(d) : ''}`),
+      // The time of each step, to the millisecond: the pauses between them are what is being looked at.
+      onEvent: (e, d) => console.log(`  ${new Date().toISOString().slice(11, 23)} [${e}]${d ? ' ' + JSON.stringify(d) : ''}`),
+      ...(opts.steps ? { modelStepShots: true } : {}),
     });
 
     try {

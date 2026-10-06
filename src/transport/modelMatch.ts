@@ -33,7 +33,16 @@ export function buttonShows(shown: string | null | undefined, asked: string): bo
   if (!shown) return false;
   const s = normModel(shown);
   const a = normModel(asked);
-  return s.length > 0 && (s === a || a.startsWith(`${s} `));
+  if (s.length === 0) return false;
+  if (s === a) return true;
+  /*
+   * The button drops the last word ("GPT-5.6 Sol Think deeper" reads "GPT-5.6 Sol Think"), no more: a
+   * shorter start — "GPT" alone — would agree with every model of the group, and a run would take the
+   * chat for set and choose nothing (2026-10-06).
+   */
+  const sw = s.split(' ');
+  const aw = a.split(' ');
+  return sw.length >= aw.length - 1 && aw.length > 1 && a.startsWith(`${s} `);
 }
 
 const words = (name: string): string[] => normModel(name).split(' ').filter(Boolean);

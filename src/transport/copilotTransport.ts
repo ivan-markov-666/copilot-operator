@@ -57,6 +57,9 @@ export type TransportOptions = {
   /** For checks only: shorter pauses, waits and fewer attempts when choosing a model than `ModelPicking`. */
   modelSettleMs?: number;
   modelBeforePressMs?: number;
+  modelPollMs?: number;
+  /** A numbered picture and the menu's HTML at each step of choosing a model (the diagnosis command sets it). */
+  modelStepShots?: boolean;
   modelAppearMs?: number;
   modelAttempts?: number;
   /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
@@ -101,7 +104,7 @@ export type ModelChoice = {
   matched?: string;
   options?: ModelOption[];
   /** How it was found: at the saved locator, at a fresh one after the saved one missed, or by name with no saved one. */
-  by?: 'already' | 'operator' | 'locator' | 'reread' | 'name';
+  by?: 'already' | 'operator' | 'locator' | 'reread' | 'name' | 'hand';
   /** When the saved locator missed and a fresh reading found the model: why it missed. */
   locatorMiss?: string;
 };
@@ -1110,28 +1113,56 @@ Current URL: ${url}`);
     const textOf = async (el: Locator): Promise<string> => (((await el.innerText().catch(() => '')) ?? '').split('\n')[0] ?? '').trim();
     // A fixed pause after every opening and every press (see `ModelPicking`); the checks give it less.
     const settle = (): Promise<void> => this.p.waitForTimeout(this.opts.modelSettleMs ?? ModelPicking.settleMs);
-    // And a fixed pause before every press in the picker: the button, the group, the model (2026-10-06).
-    const beforePress = (): Promise<void> => this.p.waitForTimeout(this.opts.modelBeforePressMs ?? ModelPicking.beforePressMs);
+    const pause = this.opts.modelBeforePressMs ?? ModelPicking.beforePressMs;
+    const poll = this.opts.modelPollMs ?? ModelPicking.pollMs;
     const appear = this.opts.modelAppearMs ?? ModelPicking.appearMs;
-    /** Waits until the element is there and visible. */
-    const present = async (el: Locator): Promise<boolean> => await el.waitFor({ state: 'visible', timeout: appear }).then(() => true).catch(() => false);
+    let shot = 0;
+    /** With `modelStepShots`, a picture and the menu's HTML at each step, numbered, beside the transport's files. */
+    const picture = async (label: string): Promise<void> => {
+      if (!this.opts.modelStepShots) return;
+      shot += 1;
+      await this.captureMenu(`step-${String(shot).padStart(2, '0')}-${label.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)}`, await this.readMenuRows().catch(() => [])).catch(() => undefined);
+    };
+    /*
+     * The operator's rhythm for every element of the picker (2026-10-06): look for it; while it is not
+     * there, wait two seconds and look again; once it is there, wait two seconds more, then press it.
+     * Each look and each pause is in the record with its time, so the pauses can be seen.
+     */
+    const waitThenFind = async (label: string, find: () => Promise<Locator | null>): Promise<Locator | null> => {
+      const deadline = Date.now() + appear;
+      let looks = 1;
+      let el = await find();
+      while (!el && Date.now() < deadline) {
+        this.emit('model-step', { step: 'not there yet, waiting', what: label, look: looks, waitMs: poll });
+        await this.p.waitForTimeout(poll);
+        looks += 1;
+        el = await find();
+      }
+      if (!el) {
+        this.emit('model-step', { step: 'never appeared', what: label, looks });
+        return null;
+      }
+      this.emit('model-step', { step: 'there, pausing before the press', what: label, look: looks, text: await textOf(el), pauseMs: pause });
+      await this.p.waitForTimeout(pause);
+      await picture(`before-${label}`);
+      return el;
+    };
+    const visible = async (el: Locator | null): Promise<Locator | null> => (el && (await el.isVisible().catch(() => false)) ? el : null);
     const reach = async (): Promise<{ row: Locator } | { problem: string }> => {
-      const button = await this.resolveModelButton();
+      const button = await waitThenFind('the picker button', async () => visible(await this.resolveModelButton(1_000)));
       if (!button) return { problem: 'This chat does not show a model picker.' };
-      await beforePress();
-      await button.click();
+      await button.click({ timeout: 5_000 }).catch(() => undefined);
       await settle();
       if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
       this.emit('model-step', { step: 'picker opened' });
       if (target.group) {
-        const group = await this.rowByXPath(target.group.xpath, target.group.name, appear);
-        if (!group || !(await present(group))) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
-        this.emit('model-step', { step: 'group found', text: await textOf(group) });
+        const group = await waitThenFind(`the "${target.group.name}" group`, () => this.rowByXPath(target.group!.xpath, target.group!.name, 0));
+        if (!group) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
         /*
          * Opened without the mouse first: a mouse click goes to coordinates, and the picker moves while it
          * opens, so on the work machine a press meant for "GPT" (now second) opened "Claude" (now first)
          * (2026-10-06). A click sent to the element itself cannot land on another row; then the keyboard
-         * (focus, ArrowRight opens a submenu); the mouse only last. Each time, its model must be on screen.
+         * (focus, ArrowRight opens a submenu); the mouse only last. Each time, its model must appear.
          */
         const ways: Array<[string, () => Promise<void>]> = [
           ['click on the element', async () => { await group.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }); }],
@@ -1140,21 +1171,21 @@ Current URL: ${url}`);
           ['mouse click', async () => { await group.click({ timeout: 3_000 }); }],
         ];
         for (const [how, act] of ways) {
-          await beforePress();
           await act().catch(() => undefined);
           await settle();
-          const row = await this.rowByXPath(target.xpath, target.model, appear);
-          if (row && (await present(row))) {
+          const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, target.model, 0));
+          if (row) {
             this.emit('model-step', { step: 'group opened', how, model: await textOf(row) });
             return { row };
           }
           this.emit('model-step', { step: 'group not opened', how });
+          await this.p.waitForTimeout(pause);
         }
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (${target.xpath}); the menu is kept as models-select-failed.html/.png` };
       }
-      const row = await this.rowByXPath(target.xpath, target.model, appear);
-      if (!row || !(await present(row))) {
+      const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, target.model, 0));
+      if (!row) {
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" was not found by ${target.xpath}; the menu is kept as models-select-failed.html/.png` };
       }
@@ -1185,14 +1216,14 @@ Current URL: ${url}`);
       }
       // On the element itself, for the same reason as the group; the mouse only when that does nothing.
       this.emit('model-step', { step: 'model pressed', attempt, text: await textOf(found.row) });
-      await beforePress();
       await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
       await settle();
       if ((await this.modelMenuOpen()) && !(await checked(found.row))) {
-        await beforePress();
+        await this.p.waitForTimeout(pause);
         await found.row.click({ timeout: 3_000 }).catch(() => undefined);
         await settle();
       }
+      await picture('after-press');
       await this.closeMenu();
       await settle();
       /*

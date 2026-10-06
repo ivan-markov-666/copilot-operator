@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
+import { buttonShows } from '../transport/modelMatch.js';
 import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
@@ -135,6 +136,11 @@ export type RunDeps = {
  * on the way, so the saved catalogue follows it too.
  */
 export type ModelHooks = {
+  /**
+   * The operator's hand, when the chat could not be put on the chosen model by itself: they are asked to
+   * choose it in the Copilot window and answer — check and go on, go on as it is, or stop.
+   */
+  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number }) => Promise<'recheck' | 'continue' | 'stop'>;
   /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
   locate?: (name: string) => Promise<ModelLocator | undefined>;
   renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
@@ -672,11 +678,35 @@ async function applySessionModel(
   if (!wanted) return {};
 
   const locator = await hooks?.locate?.(wanted).catch(() => undefined);
-  const result: ModelChoice = await transport.selectModel(wanted, { locator }).catch((e: unknown) => ({
+  let result: ModelChoice = await transport.selectModel(wanted, { locator }).catch((e: unknown) => ({
     ok: false as const,
     current: null,
     reason: (e as Error).message,
   }));
+  /*
+   * The operator's hand, when the runner could not do it (operator's request, 2026-10-06): the run waits
+   * on a card in the UI asking them to choose the model in the Copilot window; "check and go on" reads
+   * the picker button again, and asks again while it still shows another model.
+   */
+  let goOnAsItIs = false;
+  for (let tries = 1; !result.ok && hooks?.askHelp; tries += 1) {
+    const shown = await transport.currentModel().catch(() => null);
+    bus.publish({ sessionId: session.id, type: 'model-help-asked', level: 'warn',
+      message: `the chat could not be put on "${wanted}" by the runner; asking the operator to choose it in the Copilot window (picker shows "${shown ?? 'nothing'}")`,
+      data: { asked: wanted, shown, why: result.reason ?? '', tries } });
+    const answer = await hooks.askHelp({ sessionId: session.id, asked: wanted, shown, why: result.reason ?? 'unknown reason', tries });
+    if (answer === 'stop') break;
+    if (answer === 'continue') {
+      goOnAsItIs = true;
+      bus.publish({ sessionId: session.id, type: 'model-help-continue', level: 'warn', message: `the operator chose to go on with the model the chat is on ("${shown ?? 'unknown'}"), not "${wanted}"`, data: { asked: wanted, shown } });
+      result = { ok: false, current: shown, reason: `the operator chose to go on with "${shown ?? 'unknown'}"` };
+      break;
+    }
+    const now = await transport.currentModel().catch(() => null);
+    result = buttonShows(now, wanted)
+      ? { ok: true, current: wanted, by: 'hand' }
+      : { ok: false, current: now, reason: `the picker still shows "${now ?? 'nothing'}", not "${wanted}"` };
+  }
   const renamed = await followPageModels('model', wanted, result, session, store, hooks, modelFrom);
   if (renamed) bus.publish({ sessionId: session.id, type: 'model-renamed', level: 'warn', message: renamed, data: { asked: wanted, chosen: result.matched } });
 
@@ -708,6 +738,7 @@ async function applySessionModel(
    * A model the operator chose and the chat is not on is not worked around: the run went on Auto with a
    * warning nobody saw, and its work was then taken for the chosen model's (2026-10-05). Nothing goes out.
    */
+  if (!result.ok && goOnAsItIs) return { current: result.current ?? undefined };
   if (!result.ok) {
     return {
       current: result.current ?? undefined,

@@ -1468,6 +1468,7 @@ export class OperatorService {
       // The page is the source of the model names: Settings and the saved list follow it (see `ModelHooks`).
       models: {
         locate: async (name) => (await this.store.getModels())?.options.find((o) => sameModel(o.name, name))?.locator,
+        askHelp: (ask) => this.askModelHelp(ask, controller.signal),
         renamedDefault: async (which, from, to) => {
           const now = (await this.settings.load()).copilot;
           if (which === 'model' && (now.defaultModel ?? '').trim() === from) await this.setDefaultModel(to);
@@ -2283,6 +2284,38 @@ export class OperatorService {
 
   // --- approvals ------------------------------------------------------------------------
 
+  /**
+   * Asks the operator to choose the model in the Copilot window, when the runner could not (operator's
+   * request, 2026-10-06). It waits on the approvals card like a held step, in every mode, until it is
+   * answered or the run is stopped.
+   */
+  askModelHelp(
+    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number },
+    signal: AbortSignal,
+  ): Promise<'recheck' | 'continue' | 'stop'> {
+    return new Promise((resolveAnswer) => {
+      if (signal.aborted) {
+        resolveAnswer('stop');
+        return;
+      }
+      const approval: PendingApproval = {
+        id: newId('a-'),
+        sessionId: ask.sessionId,
+        taskId: '',
+        stepId: 0,
+        description: `Choose "${ask.asked}" in the Copilot window`,
+        createdAt: new Date().toISOString(),
+        model: { asked: ask.asked, shown: ask.shown, why: ask.why, tries: ask.tries },
+      };
+      this.waiting.set(approval.id, {
+        approval,
+        resolve: (d) => resolveAnswer(d.action === 'run' ? 'recheck' : d.action === 'skip' ? 'continue' : 'stop'),
+      });
+      this.bus.publish({ sessionId: ask.sessionId, type: 'approval-requested', level: 'warn',
+        message: `choose "${ask.asked}" in the Copilot window, then answer on the card`, data: { approvalId: approval.id, model: approval.model } });
+    });
+  }
+
   pendingApprovals(sessionId?: string): PendingApproval[] {
     return [...this.waiting.values()].map((w) => w.approval).filter((a) => !sessionId || a.sessionId === sessionId);
   }
@@ -2371,7 +2404,7 @@ export class OperatorService {
       for (const [id, w] of this.waiting) {
         if (w.approval.sessionId !== sessionId) continue;
         // A fetch waits for its own answer: "run the rest without asking" is not an answer to it.
-        if (w.approval.network) continue;
+        if (w.approval.network || w.approval.model) continue;
         this.waiting.delete(id);
         w.resolve({ action: 'run' });
       }

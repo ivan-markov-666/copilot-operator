@@ -449,6 +449,9 @@ await scenario('an unexpected chat error fails the task, and names an Edge crash
 await scenario('a model that cannot be selected: nothing is sent, and the run says why', { copilot: { defaultModel: 'No Such Model' } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'model', [task('any-model')], { vcs: false }));
   await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  // Since 2026-10-06 the operator is asked to choose it by hand first; "Stop" on that card ends it here.
+  const ask = await waitFor('the card asking for the model', async () => (await h.call<Array<{ id: string; model?: unknown }>>('GET', '/approvals')).find((a) => !!a.model), 60_000);
+  await h.call('POST', `/approvals/${ask.id}`, { action: 'abort' });
   await h.idle();
   const after = await h.session(s!.id);
   t.check('the task stays queued, nothing sent', [after.tasks[0]!.status, h.chat.sent.length], ['queued', 0]);

@@ -362,6 +362,13 @@ export const dict = {
 
     // approval
     'approval.title': 'Step {n} is waiting for you',
+    'approval.modelTitle': 'Choose the model — the bot could not',
+    'approval.modelAsk': 'In the Copilot window, open the model picker and choose "{model}". Then press the button below: the bot checks the picker and goes on.',
+    'approval.modelShown': 'The picker shows now: {shown}',
+    'approval.modelWhy': 'Why the bot could not: {why} (asked {tries} time(s))',
+    'approval.modelChosen': 'I chose it — check and continue',
+    'approval.modelAsItIs': 'Continue on the model it is on',
+    'approval.modelStop': 'Stop',
     'approval.run': 'Run',
     'approval.runAll': 'Run this and the rest without asking',
     'approval.runAllWhy':
@@ -1591,6 +1598,13 @@ export const dict = {
     'session.groupHasChat': 'Тази сесия вече е в разговор и остава в него. Групата решава къде отива сесията при първото ѝ пускане.',
 
     'approval.title': 'Стъпка {n} чака вашето решение',
+    'approval.modelTitle': 'Изберете модела — ботът не успя',
+    'approval.modelAsk': 'В прозореца на Copilot отворете менюто с моделите и изберете „{model}“. После натиснете бутона отдолу: ботът проверява менюто и продължава.',
+    'approval.modelShown': 'Менюто показва сега: {shown}',
+    'approval.modelWhy': 'Защо ботът не успя: {why} (питано {tries} път/и)',
+    'approval.modelChosen': 'Избрах го — провери и продължи',
+    'approval.modelAsItIs': 'Продължи на текущия модел',
+    'approval.modelStop': 'Спри',
     'approval.run': 'Изпълни',
     'approval.runAll': 'Изпълни без да питаш повече',
     'approval.runAllWhy':

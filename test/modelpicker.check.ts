@@ -81,7 +81,7 @@ try {
     console.log(`\n=== a menu that closes on: ${mode} ===`);
     const page = await browser.newPage();
     const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
-    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelAppearMs: 1500, modelAttempts: 3 });
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3 });
     // The transport is given this page instead of opening Edge; `open()` is never called.
     (transport as unknown as { page: Page }).page = page;
     await page.setContent(PAGE.replace('__MODE__', mode));
@@ -136,7 +136,7 @@ try {
       );
     const page = await browser.newPage();
     const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
-    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelAppearMs: 1500, modelAttempts: 3 });
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3 });
     (transport as unknown as { page: Page }).page = page;
     await page.setContent(live);
     const setModel = async (name: string): Promise<void> => await page.evaluate((n) => (window as unknown as { setModel: (x: string) => void }).setModel(n), name);
@@ -231,7 +231,7 @@ try {
 </script></body></html>`;
     const page = await browser.newPage();
     const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
-    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelAppearMs: 1500, modelAttempts: 3 });
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3 });
     (transport as unknown as { page: Page }).page = page;
     await page.setContent(two);
     const menuOpen = async (): Promise<boolean> => await page.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
@@ -270,6 +270,12 @@ try {
   console.log('\n=== the operator\'s locators, on the work machine\'s menu ===');
   {
     const { operatorTargetFor } = await import('../src/transport/copilotTransport.js');
+    // The button may drop the last word of the name, no more (2026-10-06): "GPT" alone took every GPT model for set.
+    const { buttonShows } = await import('../src/transport/modelMatch.js');
+    t.check('what the picker button may show for "GPT-5.6 Sol Think deeper"', [
+      buttonShows('GPT-5.6 Sol Think deeper', 'GPT-5.6 Sol Think deeper'), buttonShows('GPT-5.6 Sol Think', 'GPT-5.6 Sol Think deeper'),
+      buttonShows('GPT-5.6 Sol', 'GPT-5.6 Sol Think deeper'), buttonShows('GPT', 'GPT-5.6 Sol Think deeper'), buttonShows('Think deeper', 'GPT-5.6 Sol Think deeper'),
+    ], [true, true, false, false, false]);
     const which = (n: string): string | null => {
       const x = operatorTargetFor(n);
       return x ? `${x.group ? `${x.group.name} > ` : ''}${x.model}` : null;
@@ -321,7 +327,7 @@ try {
 </script></body></html>`;
     const page = await browser.newPage();
     const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
-    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelAppearMs: 1500, modelAttempts: 3 });
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3 });
     (transport as unknown as { page: Page }).page = page;
     await page.setContent(work);
     const inForce = async (): Promise<string> => await page.evaluate(() => (window as unknown as { current: () => string }).current());
@@ -356,7 +362,7 @@ try {
     const page2 = await browser.newPage();
     const dir2 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
     const steps: Array<{ e: string; d?: Record<string, unknown> }> = [];
-    const t2 = new CopilotTransport({ profileDir: '', transportDir: dir2, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelAppearMs: 1500, modelAttempts: 3, onEvent: (e, d) => steps.push({ e, d }) });
+    const t2 = new CopilotTransport({ profileDir: '', transportDir: dir2, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3, onEvent: (e, d) => steps.push({ e, d }) });
     (t2 as unknown as { page: Page }).page = page2;
     await page2.setContent(covered);
     const inForce2 = async (): Promise<string> => await page2.evaluate(() => (window as unknown as { current: () => string }).current());
@@ -377,7 +383,7 @@ try {
     const page3 = await browser.newPage();
     const dir3 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
     const steps3: Array<{ e: string; d?: Record<string, unknown> }> = [];
-    const t3 = new CopilotTransport({ profileDir: '', transportDir: dir3, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelAppearMs: 4000, modelAttempts: 6, onEvent: (e, d) => steps3.push({ e, d }) });
+    const t3 = new CopilotTransport({ profileDir: '', transportDir: dir3, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 4000, modelAttempts: 6, onEvent: (e, d) => steps3.push({ e, d }) });
     (t3 as unknown as { page: Page }).page = page3;
     await page3.setContent(work);
     const inForce3 = async (): Promise<string> => await page3.evaluate(() => (window as unknown as { current: () => string }).current());
@@ -388,7 +394,13 @@ try {
     steps3.length = 0;
     await page3.evaluate(() => { (window as unknown as { openDelay: number }).openDelay = 2_000; });
     r3 = await t3.selectModel('Claude Opus 4.7 Think deeper');
-    t.check('a group whose models come two seconds late: waited for, chosen at once', [r3.ok, await inForce3(), steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length], [true, 'Claude Opus 4.7 Think deeper', 1]);
+    // The operator's rhythm (2026-10-06): not there → wait and look again; there → pause; then the press.
+    const rhythm = steps3.filter((x) => x.e === 'model-step').map((x) => String(x.d?.step));
+    const waited = rhythm.indexOf('not there yet, waiting');
+    const paused = rhythm.indexOf('there, pausing before the press', waited);
+    const pressed = rhythm.indexOf('model pressed', paused);
+    t.truthy('the late model: looked for, waited for, paused before, then pressed — in that order', waited >= 0 && paused > waited && pressed > paused, rhythm);
+    t.check('a group whose models come two seconds late: waited for, chosen at once',[r3.ok, await inForce3(), steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length], [true, 'Claude Opus 4.7 Think deeper', 1]);
     steps3.length = 0;
     await page3.evaluate(() => { (window as unknown as { openDelay: number; ignoreClicks: number }).openDelay = 0; (window as unknown as { ignoreClicks: number }).ignoreClicks = 99; });
     r3 = await t3.selectModel('Quick response');
@@ -404,7 +416,7 @@ try {
     const page4 = await browser.newPage();
     const dir4 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
     const steps4: Array<{ e: string; d?: Record<string, unknown> }> = [];
-    const t4 = new CopilotTransport({ profileDir: '', transportDir: dir4, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 300, modelAppearMs: 1500, modelAttempts: 6, onEvent: (e, d) => steps4.push({ e, d }) });
+    const t4 = new CopilotTransport({ profileDir: '', transportDir: dir4, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 300, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 6, onEvent: (e, d) => steps4.push({ e, d }) });
     (t4 as unknown as { page: Page }).page = page4;
     await page4.setContent(work);
     // After the first choice in a group, its submenu no longer opens.

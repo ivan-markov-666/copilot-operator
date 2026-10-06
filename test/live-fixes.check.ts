@@ -687,6 +687,9 @@ console.log('\n--- 2026-10-05: a model chosen and not offered stops the run befo
     });
     const r = await h.call<{ started: boolean }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
     t.check('the run starts (the model is known only in the chat)', r.started, true);
+    // Since 2026-10-06 the operator is asked to choose it by hand first; "Stop" on that card ends it here.
+    const ask = await waitFor('the card asking for the model', async () => (await h.call<Array<{ id: string; model?: unknown }>>('GET', '/approvals')).find((a) => !!a.model), 60_000);
+    await h.call('POST', `/approvals/${ask.id}`, { action: 'abort' });
     await h.idle();
     const v = await h.session(s!.id) as unknown as { tasks: Array<{ status: string; runId?: string }> };
     t.check('nothing was sent, the task stays queued', [h.chat.sent.length, v.tasks[0]!.status, v.tasks[0]!.runId ?? null], [0, 'queued', null]);

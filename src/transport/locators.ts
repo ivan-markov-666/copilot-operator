@@ -173,10 +173,15 @@ export const OperatorModelLocators = {
  */
 export const ModelPicking = {
   attempts: 6,
-  /** A fixed pause before every press in the picker: the button, the group, the model (2026-10-06: 2 s). */
+  /**
+   * The operator's rhythm (2026-10-06): an element of the picker is looked for; while it is not there the
+   * runner waits `pollMs` and looks again, up to `appearMs`; once it is there it waits `beforePressMs`
+   * more, then presses it.
+   */
+  pollMs: 2_000,
   beforePressMs: 2_000,
   settleMs: 1_500,
-  appearMs: 10_000,
+  appearMs: 20_000,
 } as const;
 
 /** A text as an XPath string literal, whatever quotes it holds. */

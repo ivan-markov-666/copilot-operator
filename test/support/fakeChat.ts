@@ -258,6 +258,11 @@ class FakeChat implements ChatTransport {
     return { ...choose(match, opts.locator ? 'reread' : 'name'), ...(sameModel(match.name, name) ? {} : { matched: match.name }), options: line };
   }
 
+  /** What the picker button shows: the model in force. */
+  async currentModel(): Promise<string | null> {
+    return this.world.currentModel;
+  }
+
   async listModels(): Promise<{ options: ModelOption[]; current: string | null; note?: string }> {
     return { options: this.lineUp(), current: this.world.currentModel };
   }

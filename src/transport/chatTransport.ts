@@ -34,6 +34,7 @@ export type ChatTransport = Pick<
   | 'currentChatId'
   | 'nameChat'
   | 'selectModel'
+  | 'currentModel'
   | 'listModels'
   | 'sendAndConfirm'
   | 'waitForReply'

@@ -105,6 +105,42 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
     }
   };
 
+  /*
+   * Not a step: the chat could not be put on the chosen model, and the operator is asked to choose it in
+   * the Copilot window, then say so here (2026-10-06). The run waits on this card in every mode.
+   */
+  if (approval.model) {
+    const m = approval.model;
+    return (
+      <div className="approval">
+        <div className="row">
+          <strong>{t('approval.modelTitle')}</strong>
+          <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
+          <span className="muted small">{fmtTime(approval.createdAt)}</span>
+        </div>
+        <p>{t('approval.modelAsk', { model: m.asked })}</p>
+        <p className="muted small">{t('approval.modelShown', { shown: m.shown ?? '—' })}</p>
+        <p className="reason small">{t('approval.modelWhy', { why: m.why, tries: m.tries })}</p>
+        {err && (
+          <p className="err" role="alert">
+            {err}
+          </p>
+        )}
+        <div className="row">
+          <button className="primary" disabled={busy} onClick={() => void decide('run')}>
+            {t('approval.modelChosen')}
+          </button>
+          <button disabled={busy} onClick={() => void decide('skip')}>
+            {t('approval.modelAsItIs')}
+          </button>
+          <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
+            {t('approval.modelStop')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="approval">
       <div className="row">
