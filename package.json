@@ -39,6 +39,7 @@
     "check:clipboard": "tsx test/clipboard.check.ts",
     "check:restart": "tsx test/restart.check.ts",
     "check:review": "tsx test/review.check.ts",
+    "check:review-evidence": "tsx test/review-evidence.check.ts",
     "check:shells": "tsx test/shells.check.ts",
     "check:save": "tsx test/save.check.ts",
     "check:guide": "tsx test/guide.check.ts",

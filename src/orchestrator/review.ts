@@ -116,6 +116,10 @@ export type PreviousRound = {
   findings: Array<ReviewFinding & { id?: string; repeated?: boolean }>;
   /** What that reviewer left running. A finding about one of those ports was its own doing. */
   leftovers?: ReviewLeftover[];
+  /** The implementer's own account of what it corrected since: a claim, to test. */
+  correction?: string;
+  /** What each finding's check came to at the last gate; absent for a finding that has none. */
+  evidenceChecks?: Array<{ findingId: string; name: string; state: string; passed?: boolean; detail?: string }>;
 };
 
 /** The sentence both sides get when a review left something listening. */
@@ -293,12 +297,26 @@ export function reviewBrief(
           'resolve it at all — a finding that survives a reported fix is often one the task itself made',
           'unsatisfiable: an instruction a tool overwrites, a setting a version removed.',
           '',
+          'A finding is resolved by its primary evidence — the artifact exists, the JSON has its envelope,',
+          'the telemetry carries the correlation ID and the rule or output signal, the probe runs and',
+          'succeeds, the cited symbol and path exist — never because the text now says "proved",',
+          '"verified", "derived" or "complete". Run the evidence for each one below.',
+          '',
           previous.findings
-            .map(
-              (f, i) =>
+            .map((f, i) => {
+              const check = previous.evidenceChecks?.find((c) => c.findingId === f.id);
+              return [
                 `${i + 1}. ${f.id ? `[${f.id}] ` : ''}${f.what}${f.where ? ` (${f.where})` : ''}${f.repeated ? ' — raised in more than one round already' : ''}`,
-            )
-            .join('\n'),
+                ...(f.evidence ? [`   Evidence then: ${f.evidence}`] : []),
+                check
+                  ? `   Its check "${check.name}": ${check.passed === undefined ? 'not run since' : check.passed ? 'passed at the last gate' : 'FAILED at the last gate'}${check.detail ? ` — ${check.detail}` : ''}${check.state !== 'active' ? ` (${check.state})` : ''}`
+                  : '   No machine check: judge it on the evidence yourself.',
+              ].join('\n');
+            })
+            .join('\n\n'),
+          ...(previous.correction
+            ? ['', "The implementer's account of what it corrected (a claim; test it, do not take it):", '', previous.correction.length > 3000 ? `${previous.correction.slice(0, 3000)}…` : previous.correction]
+            : []),
           ...(previous.leftovers && leftoverNote(previous.leftovers)
             ? ['', leftoverNote(previous.leftovers).replace('After this review', `After round ${previous.round}`), 'Stop what you start, in the same step, and check the port only after that.']
             : []),
@@ -584,6 +602,11 @@ ${machineNote}` : contract);
           const b = await transport.sendAndConfirm(refusedChecksMessage(validation.refused.map((r) => ({ id: r.finding.id, detail: r.outcome.detail }))));
           markdown = (await transport.waitForReply(b)).markdown;
           continue;
+        }
+        // A check that only asks for a word the text can say closes nothing: the finding stays a finding.
+        for (const l of validation.lexical) {
+          deps.event('review-check-lexical', { round, finding: l.finding.id, check: l.check.name, value: l.check.value ?? '' },
+            `the check given with ${l.finding.id} is not kept: ${l.why}. The finding stays, for the next reviewer to judge on the evidence`, 'warn');
         }
         for (const b of validation.blocked) {
           deps.event('review-check-blocked', { round, finding: b.finding.id, detail: b.outcome.detail },

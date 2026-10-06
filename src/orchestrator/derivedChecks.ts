@@ -58,6 +58,11 @@ export type DerivedValidation = {
    * The finding stands without it.
    */
   blocked: Array<{ finding: ReviewFinding & { id: string }; check: TaskCheck; outcome: CheckOutcome }>;
+  /**
+   * Lexical self-attestation: the check only asks a text to contain a word it can simply say (see
+   * `selfAttestationReason`). Not run and not kept; the finding stays a finding, for the next reviewer.
+   */
+  lexical: Array<{ finding: ReviewFinding & { id: string }; check: TaskCheck; why: string }>;
 };
 
 /**
@@ -78,10 +83,15 @@ export async function validateDerivedChecks(
     redactPatterns?: CheckRunOptions['redactPatterns'];
   },
 ): Promise<DerivedValidation> {
-  const out: DerivedValidation = { kept: [], refused: [], blocked: [] };
+  const out: DerivedValidation = { kept: [], refused: [], blocked: [], lexical: [] };
   for (const [i, finding] of findings.entries()) {
     if (!finding.check) continue;
     const check: TaskCheck = { ...finding.check, name: derivedCheckName(finding.id, finding.check.name) };
+    const lexical = selfAttestationReason(check);
+    if (lexical) {
+      out.lexical.push({ finding, check, why: lexical });
+      continue;
+    }
     const outcome = await runCheck(check, 500 + i, {
       cwd: opts.cwd,
       logDir: join(opts.logDir, 'derived'),
@@ -98,6 +108,34 @@ export async function validateDerivedChecks(
     else (outcome.passed ? out.refused : out.kept).push({ finding, check, outcome });
   }
   return out;
+}
+
+/** Words a text uses to vouch for itself. Anyone can write them; they prove nothing about the work. */
+const SELF_ATTESTATION = /\b(?:prove[dn]?|proof|derived|verif(?:y|ied|ies|ication)|validated|confirmed|complete[ds]?|completion|done|finished|tested|passe[sd]|successful(?:ly)?|success|resolved|fixed|activity|evidence|works|working)\b/i;
+/** Commands that only read or search text: what they print is a file's words, not the work running. */
+const TEXT_READ = /^\s*(?:Get-Content|gc|cat|type|more|Select-String|sls|findstr|grep|rg|Get-ChildItem\b.*\|\s*Select-String)\b/i;
+
+/**
+ * Why a check given with a finding is lexical self-attestation, or null when it is not.
+ *
+ * It is when all it asks is that a text contain a word the text can simply say — "proved", "derived",
+ * "verified", "Activity", "complete" — whether by `file-contains` or by reading a file and matching its
+ * output. Written so, the check passes the moment the deliverable says the word, and the finding is
+ * closed by the claim it was about (operator's feedback, 2026-10-06: "Review findings must not be closed
+ * by lexical self-attestation checks"). Text that is structure — a JSON envelope (`"status": "complete"`),
+ * an identifier, a path, a number — is not prose and is left alone: those test what the work produced.
+ */
+export function selfAttestationReason(check: TaskCheck): string | null {
+  const value = (check.value ?? '').trim();
+  if (!value || !SELF_ATTESTATION.test(value)) return null;
+  // A sentence, identifiers in it included ("bill_type is derived"); JSON, code and paths are structure,
+  // evidence of a kind, and left alone.
+  if (/[{}[\]()<>=:;"`/\\]/.test(value)) return null;
+  const textPresence =
+    check.expect === 'file-contains' ||
+    ((check.expect === 'output-contains' || check.expect === 'output-matches') && TEXT_READ.test(check.run ?? ''));
+  if (!textPresence) return null;
+  return `it only asks that a text contain "${value}", which the text can simply say; a check must test the primary evidence instead`;
 }
 
 /** The derived checks that run in the gate. */

@@ -879,6 +879,8 @@ export async function runTask(
   let reviewChecks: TaskReviewCheck[] = withAttemptIds(task.reviewChecks ?? []);
   /** Derived checks that still failed when the rounds ran out; the reviewer is told. */
   let derivedStillFailing: Array<{ name: string; detail: string }> = [];
+  /** The last gate's result for each check, by name: what a review's findings' checks came to (see `PreviousRound`). */
+  const lastGate = new Map<string, { passed: boolean; detail: string }>();
   /**
    * What was running before the task, so that what it and its reviews leave running can be
    * told apart and stopped. Taken once the working directory is known; null means "do not".
@@ -1684,6 +1686,7 @@ export async function runTask(
       };
       runAfterCommit = (cs) => runChecks(cs, checkOptions);
       const ran: CheckOutcome[] = await runChecks(checks, checkOptions);
+      for (const o of ran) lastGate.set(o.check.name, { passed: o.passed, detail: o.detail });
 
       /*
        * The operator stopped the run, which is not a verdict on the work. The check in flight was
@@ -1990,7 +1993,22 @@ export async function runTask(
           deliverable,
           deviations,
           disputes,
-          previous: reviewRounds > 1 ? { round: reviewRounds - 1, findings: previousFindings, leftovers: previousLeftovers } : undefined,
+          /*
+           * Each earlier finding with its evidence, the correction the implementer reports, and what the
+           * finding's own check came to at the last gate: the next reviewer judges the finding on the evidence,
+           * not on whether the new text says it is fixed (operator's feedback, 2026-10-06).
+           */
+          previous: reviewRounds > 1
+            ? {
+                round: reviewRounds - 1,
+                findings: previousFindings,
+                leftovers: previousLeftovers,
+                correction: closing,
+                evidenceChecks: reviewChecks
+                  .filter((rc) => previousFindings.some((f) => f.id === rc.findingId))
+                  .map((rc) => ({ findingId: rc.findingId, name: rc.check.name, state: rc.state, ...(lastGate.get(rc.check.name) ?? {}) })),
+              }
+            : undefined,
           repoDir: willCommit ? repoDirOf(session) : undefined,
           derivedFailing: derivedStillFailing,
           // Before the verdict is judged: a check given with a finding must fail on the work,

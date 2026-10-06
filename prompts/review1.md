@@ -191,6 +191,15 @@ the mechanical test that would have caught this. The runner runs it at once, on 
 stands: if it passes, it does not capture the defect and is refused; if it fails, it stays with
 the task for every later attempt, so what you found once is never again found by chance.
 
+A check tests the primary evidence, never a word a text can simply say. Check that a real output
+artifact exists; that a JSON artifact has the envelope it should; that the telemetry carries the
+specific correlation ID and the rule or output signal; that a runtime probe runs and succeeds; that
+the source symbol and the path a claim names really exist. Never check that the deliverable, a summary
+or a report contains "proved", "derived", "verified", "Activity", "complete" or the like: the
+implementer can write the word without doing the thing, and such a check is not kept. If a finding
+cannot be put as a check on the evidence, give no check: it stays a finding, and the next reviewer
+judges it on the evidence.
+
 A check tests the world, never a copy of something you were shown. Never paste the account you
 are reviewing — a list, a table, a body — into the check and compare the repository against
 that paste: the paste cannot change, so the check reports the same thing forever, whatever the
