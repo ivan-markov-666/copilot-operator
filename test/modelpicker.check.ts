@@ -160,7 +160,7 @@ try {
     r = await transport.selectModel('GPT 5.6 Think deeper', { locator: deep?.locator });
     t.check('and back again', [r.ok, r.by, r.current], [true, 'locator', 'GPT 5.6 Think deeper']);
     r = await transport.selectModel('Auto', { locator: first.options.find((o) => o.name === 'Auto')?.locator });
-    t.check('and a model of the top menu', [r.ok, r.by, r.current, await menuOpen()], [true, 'locator', 'Auto', false]);
+    t.check("and a model of the top menu (by the operator's locators since 2026-10-05)",[r.ok, r.by, r.current, await menuOpen()], [true, 'operator', 'Auto', false]);
 
     // The page moved the models since the list was read: the saved place now holds the other one.
     await page.evaluate(() => {
@@ -244,11 +244,11 @@ try {
     ]);
     const at = (name: string) => list.options.find((o) => o.name === name)?.locator;
     let r = await transport.selectModel('GPT-5.6 Sol Think deeper', { locator: at('GPT-5.6 Sol Think deeper') });
-    t.check('a GPT model chosen at its place, though Claude\'s submenu was open', [r.ok, r.by, r.current, await menuOpen()], [true, 'locator', 'GPT-5.6 Sol Think deeper', false]);
+    t.check('a GPT model chosen at its place, though Claude\'s submenu was open', [r.ok, r.by, r.current, await menuOpen()], [true, 'operator', 'GPT-5.6 Sol Think deeper', false]);
     r = await transport.selectModel('Claude Opus 4.7 Think deeper', { locator: at('Claude Opus 4.7 Think deeper') });
-    t.check('then a Claude one', [r.ok, r.by, r.current], [true, 'locator', 'Claude Opus 4.7 Think deeper']);
+    t.check('then a Claude one', [r.ok, r.by, r.current], [true, 'operator', 'Claude Opus 4.7 Think deeper']);
     r = await transport.selectModel('GPT-5.6 Sol Quick response', { locator: at('GPT-5.6 Sol Quick response') });
-    t.check('and back to GPT, the Claude row now reading the Claude model', [r.ok, r.by, r.current], [true, 'locator', 'GPT-5.6 Sol Quick response']);
+    t.check('and back to GPT, the Claude row now reading the Claude model', [r.ok, r.by, r.current], [true, 'operator', 'GPT-5.6 Sol Quick response']);
     // A name the page splits over two elements: text() sees "Advanced reasoning " only.
     r = await transport.selectModel('Advanced reasoning (Experimental)', { locator: at('Advanced reasoning (Experimental)') });
     t.check('a model whose name is split over two elements', [r.ok, r.by, r.current], [true, 'locator', 'Advanced reasoning (Experimental)']);
@@ -260,6 +260,73 @@ try {
       'Claude > Claude Opus 4.7 Think deeper', 'Claude > Claude Sonnet 4.6 Quick response *',
       'GPT > GPT-5.6 Sol Quick response', 'GPT > GPT-5.6 Sol Think deeper',
     ]);
+    rmSync(transportDir, { recursive: true, force: true });
+    await page.close();
+  }
+  /*
+   * The operator's own locators (2026-10-05), on a copy of the work machine's menu: four models at the top,
+   * a Claude group (Sonnet, Opus) and a GPT group, each opened by pressing it; names in nested divs.
+   */
+  console.log('\n=== the operator\'s locators, on the work machine\'s menu ===');
+  {
+    const { operatorTargetFor } = await import('../src/transport/copilotTransport.js');
+    const which = (n: string): string | null => {
+      const x = operatorTargetFor(n);
+      return x ? `${x.group ? `${x.group.name} > ` : ''}${x.model}` : null;
+    };
+    t.check('which locator a chosen model is', [
+      which('Auto'), which('Think deeper'), which('Advanced reasoning (Experimental)'),
+      which('Claude Sonnet 4.6'), which('Claude Opus 4.7 Think deeper'),
+      which('GPT-5.6 Sol Think deeper'), which('GPT 5.6 Sol Quick response'), which('Some other model'),
+    ], [
+      'Auto', 'Think deeper', 'Advanced reasoning (Experimental)',
+      'Claude > Sonnet', 'Claude > Opus',
+      'GPT > GPT-5.6 Sol Think deeper', 'GPT > GPT-5.6 Sol Quick response', null,
+    ]);
+
+    const row = (name: string, desc = ''): string => `<div role="menuitemradio" data-name="${name}" aria-checked="false"><div class="c"><div>${name}</div>${desc ? `<div>${desc}</div>` : ''}</div></div>`;
+    const work = String.raw`<!doctype html><html><body>
+<button id="gptModeSwitcher" aria-label="Model Selector" aria-expanded="false"><span id="shown">Auto</span></button>
+<div id="m365-chat-editor-target-element" contenteditable="true" style="margin-top:200px;min-height:40px">composer</div>
+<div id="menu" role="menu" aria-labelledby="gptModeSwitcher" style="display:none">
+  ${row('Auto', 'Decides how long to think')}${row('Quick response', 'Answers right away')}${row('Think deeper', 'Think longer')}${row('Advanced reasoning (Experimental)', 'Slow')}
+  <div role="menuitem" id="claude" aria-haspopup="menu"><div class="c"><div>Claude</div><div>Anthropic</div></div></div>
+  <div role="menuitem" id="gpt" aria-haspopup="menu"><div class="c"><div>GPT</div><div>OpenAI</div></div></div>
+</div>
+<div id="sub-claude" role="menu" aria-labelledby="claude" style="display:none">${row('Claude Sonnet 4.6')}${row('Claude Opus 4.7 Think deeper')}</div>
+<div id="sub-gpt" role="menu" aria-labelledby="gpt" style="display:none">${row('GPT-5.6 Sol Quick response')}${row('GPT-5.6 Sol Think deeper')}</div>
+<script>
+  let current = 'Auto';
+  const button = document.getElementById('gptModeSwitcher');
+  const menu = document.getElementById('menu');
+  const subs = { claude: document.getElementById('sub-claude'), gpt: document.getElementById('sub-gpt') };
+  const rows = () => [...document.querySelectorAll('[role=menuitemradio]')];
+  const close = () => { menu.style.display = 'none'; for (const s of Object.values(subs)) s.style.display = 'none'; button.setAttribute('aria-expanded', 'false'); };
+  button.onclick = () => { menu.style.display = 'block'; button.setAttribute('aria-expanded', 'true'); };
+  // These groups open on a press only.
+  for (const g of Object.keys(subs)) document.getElementById(g).onclick = () => { for (const s of Object.values(subs)) s.style.display = 'none'; subs[g].style.display = 'block'; };
+  for (const el of rows()) el.onclick = () => {
+    current = el.dataset.name;
+    for (const r of rows()) r.setAttribute('aria-checked', String(r.dataset.name === current));
+    document.getElementById('shown').textContent = current;
+    close();
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  window.current = () => current;
+</script></body></html>`;
+    const page = await browser.newPage();
+    const transportDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const transport = new CopilotTransport({ profileDir: '', transportDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000 });
+    (transport as unknown as { page: Page }).page = page;
+    await page.setContent(work);
+    const inForce = async (): Promise<string> => await page.evaluate(() => (window as unknown as { current: () => string }).current());
+    const menuOpen = async (): Promise<boolean> => await page.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
+    for (const name of ['Claude Sonnet 4.6', 'GPT-5.6 Sol Think deeper', 'Claude Opus 4.7 Think deeper', 'Advanced reasoning (Experimental)', 'GPT-5.6 Sol Quick response', 'Think deeper', 'Quick response', 'Auto']) {
+      const r = await transport.selectModel(name);
+      t.check(`"${name}": chosen by the operator's locators, and in force`, [r.ok, r.by, await inForce(), await menuOpen()], [true, 'operator', name, false]);
+    }
+    const again = await transport.selectModel('Auto');
+    t.check('the model already in force: nothing pressed, said so', [again.ok, again.by], [true, 'operator']);
     rmSync(transportDir, { recursive: true, force: true });
     await page.close();
   }

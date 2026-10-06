@@ -16,7 +16,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { landed } from './acceptance.js';
-import { Blocker, Css, Label, Model, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
+import { Blocker, Css, Label, Model, OperatorModelLocators, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
 
@@ -96,7 +96,7 @@ export type ModelChoice = {
   matched?: string;
   options?: ModelOption[];
   /** How it was found: at the saved locator, at a fresh one after the saved one missed, or by name with no saved one. */
-  by?: 'locator' | 'reread' | 'name';
+  by?: 'operator' | 'locator' | 'reread' | 'name';
   /** When the saved locator missed and a fresh reading found the model: why it missed. */
   locatorMiss?: string;
 };
@@ -151,6 +151,27 @@ type MenuRow = {
  * A group's name for the list. Its row reads the group ("GPT") until a model in it is chosen, and then
  * that model's name; then the name comes from its test id (`gptSubMenuModelTrigger-OpenAI` → "GPT").
  */
+/** One of the operator's locators for a model: the model's own, and its group's when it is in one. */
+type OperatorTarget = { model: string; xpath: string; group?: { name: string; xpath: string } };
+
+/**
+ * Which of the operator's locators a chosen model is. Groups first, by the word the locator is written
+ * with ("Sonnet", "Opus", "GPT-5.6 Sol Think deeper") contained in the name, longest first; then the
+ * models at the top, by their name ("Think deeper" is in "GPT-5.6 Sol Think deeper" too, so they come
+ * last). Null for a model the operator gave no locator for.
+ */
+export function operatorTargetFor(name: string): OperatorTarget | null {
+  const n = ` ${normModel(name)} `;
+  const has = (word: string): boolean => n.includes(` ${normModel(word)} `);
+  const inGroups = OperatorModelLocators.groups
+    .flatMap((g) => g.models.map((m) => ({ model: m.model, xpath: m.xpath, group: { name: g.group, xpath: g.xpath } })))
+    .sort((a, b) => b.model.length - a.model.length);
+  const grouped = inGroups.find((m) => has(m.model));
+  if (grouped) return grouped;
+  const top = OperatorModelLocators.top.find((m) => sameModel(m.model, name));
+  return top ? { model: top.model, xpath: top.xpath } : null;
+}
+
 /** The second line of a group's row: its vendor ("OpenAI", "Anthropic"). */
 function vendorOf(row: { raw: string }): string {
   return row.raw.split('\n')[1]?.trim() ?? '';
@@ -1075,6 +1096,63 @@ Current URL: ${url}`);
   }
 
   /**
+   * Chooses a model by the operator's own locators (`OperatorModelLocators`): the picker button, then the
+   * model; for a model in a group, the group first, then — once its models are on screen — the model. The
+   * choice counts only when the model's row is marked chosen, read again the same way.
+   */
+  private async chooseByOperatorLocators(name: string, target: OperatorTarget): Promise<ModelChoice> {
+    const before = await this.currentModel();
+    const reach = async (): Promise<{ row: Locator } | { problem: string }> => {
+      const button = await this.resolveModelButton();
+      if (!button) return { problem: 'This chat does not show a model picker.' };
+      await button.click();
+      if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
+      if (target.group) {
+        const group = await this.rowByXPath(target.group.xpath, target.group.name, 5_000);
+        if (!group) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
+        await this.press(group);
+        // Its models are waited for; a hover opens it in a build that does not open it on a press.
+        let row = await this.rowByXPath(target.xpath, target.model, 5_000);
+        if (!row) {
+          await group.hover({ timeout: 3_000 }).catch(() => undefined);
+          row = await this.rowByXPath(target.xpath, target.model, 5_000);
+        }
+        return row ? { row } : { problem: `"${target.model}" did not appear after pressing "${target.group.name}" (${target.xpath})` };
+      }
+      const row = await this.rowByXPath(target.xpath, target.model, 5_000);
+      return row ? { row } : { problem: `"${target.model}" was not found by ${target.xpath}` };
+    };
+    const checked = async (row: Locator): Promise<boolean> => (await row.getAttribute('aria-checked').catch(() => null)) === 'true';
+
+    const found = await reach();
+    if ('problem' in found) {
+      await this.closeMenu();
+      return { ok: false, current: before, reason: found.problem };
+    }
+    if (await checked(found.row)) {
+      await this.closeMenu();
+      this.emit('model-already-selected', { model: name, buttonShows: before, by: 'operator' });
+      return { ok: true, current: name, by: 'operator' };
+    }
+    await this.press(found.row).catch(() => undefined);
+    await this.p.waitForTimeout(800);
+    await this.closeMenu();
+    const again = await reach();
+    const ok = 'row' in again && (await checked(again.row));
+    await this.closeMenu();
+    const after = await this.currentModel();
+    if (ok) {
+      this.emit('model-selected', { model: name, buttonShows: after, by: 'operator' });
+      return { ok: true, current: name, by: 'operator' };
+    }
+    return {
+      ok: false,
+      current: after,
+      reason: 'problem' in again ? `after pressing "${target.model}": ${again.problem}` : `"${target.model}" was pressed, but the picker does not mark it as chosen (the button shows "${after ?? 'nothing'}").`,
+    };
+  }
+
+  /**
    * Whether the model picker is open: its button says so (`aria-expanded`), or its rows are on screen.
    * Both, because either alone has been wrong: rows can be mid-animation after the menu closed, and a
    * button re-rendered by the page can lose the attribute while the menu is still up.
@@ -1172,10 +1250,17 @@ Current URL: ${url}`);
     const button = await this.resolveModelButton();
     if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
 
+    // The operator's own locators first, for the models they cover (see `OperatorModelLocators`).
+    const target = operatorTargetFor(name);
     let first: ModelChoice | null = null;
-    if (opts.locator) {
-      first = await this.chooseAt(name, opts.locator);
+    if (target) {
+      first = await this.chooseByOperatorLocators(name, target);
       if (first.ok) return first;
+    }
+    if (opts.locator) {
+      const second = await this.chooseAt(name, opts.locator);
+      if (second.ok) return { ...second, ...(first?.reason ? { locatorMiss: first.reason } : {}) };
+      first = first ?? second;
     }
 
     // The line-up as the page shows it now, each model with its place in it.
@@ -1189,7 +1274,7 @@ Current URL: ${url}`);
         current: await this.currentModel(),
         reason:
           `The picker does not offer "${name}" any more${offered.length > 0 ? `; it offers ${offered.map((o) => `"${o}"`).join(', ')}` : ''}.` +
-          (first?.reason ? ` (At the place the list was read: ${first.reason})` : ''),
+          (first?.reason ? ` (${target ? "By the operator's locators" : 'At the place the list was read'}: ${first.reason})` : ''),
         ...(options.length > 0 ? { options } : {}),
       };
     }

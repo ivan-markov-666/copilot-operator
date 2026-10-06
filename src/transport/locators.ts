@@ -132,6 +132,39 @@ export const Model = {
   groupRowByAllText: (text: string): string => `//div[@role="menuitem"][contains(normalize-space(.), ${xpathText(text)})]`,
 } as const;
 
+/**
+ * The operator's locators for the model picker, as given on 2026-10-05, used exactly as they are. The
+ * picker button is pressed first; a model at the top is pressed directly; a model in a group is reached
+ * by pressing the group ("Claude", "GPT"), waiting for its models, and pressing the one. A model that
+ * is none of these is chosen as before (see `selectModel`). Change them here when the page changes.
+ */
+export const OperatorModelLocators = {
+  top: [
+    { model: 'Auto', xpath: `//div[contains(text(), 'Auto')]/ancestor-or-self::div[@role="menuitemradio"]` },
+    { model: 'Quick response', xpath: `//div[contains(text(), 'Quick response')]/ancestor-or-self::div[@role="menuitemradio"]` },
+    { model: 'Think deeper', xpath: `//div[contains(text(), 'Think deeper')]/ancestor-or-self::div[@role="menuitemradio"]` },
+    { model: 'Advanced reasoning (Experimental)', xpath: `//div[contains(text(), 'Advanced reasoning (Experimental)')]/ancestor-or-self::div[@role="menuitemradio"]` },
+  ],
+  groups: [
+    {
+      group: 'Claude',
+      xpath: `//div[contains(text(), 'Claude')]/ancestor-or-self::div[@role="menuitem"]`,
+      models: [
+        { model: 'Sonnet', xpath: `//div[contains(text(), 'Sonnet')]/ancestor-or-self::div[@role="menuitemradio"]` },
+        { model: 'Opus', xpath: `//div[contains(text(), 'Opus')]/ancestor-or-self::div[@role="menuitemradio"]` },
+      ],
+    },
+    {
+      group: 'GPT',
+      xpath: `//div[contains(text(), 'GPT')]/ancestor-or-self::div[@role="menuitem"]`,
+      models: [
+        { model: 'GPT-5.6 Sol Quick response', xpath: `//div[contains(text(), 'GPT-5.6 Sol Quick response')]/ancestor-or-self::div[@role="menuitemradio"]` },
+        { model: 'GPT-5.6 Sol Think deeper', xpath: `//div[contains(text(), 'GPT-5.6 Sol Think deeper')]/ancestor-or-self::div[@role="menuitemradio"]` },
+      ],
+    },
+  ],
+} as const;
+
 /** A text as an XPath string literal, whatever quotes it holds. */
 export function xpathText(text: string): string {
   if (!text.includes("'")) return `'${text}'`;
