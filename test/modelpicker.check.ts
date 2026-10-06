@@ -329,6 +329,33 @@ try {
     t.check('the model already in force: nothing pressed, said so', [again.ok, again.by], [true, 'operator']);
     rmSync(transportDir, { recursive: true, force: true });
     await page.close();
+
+    /*
+     * The work machine on 2026-10-06: asked for a GPT model, the mouse opened "Claude" — the row above —
+     * instead. Here a stretch of the Claude row lies over the GPT row, so anything sent by coordinates
+     * lands on Claude; the group is opened on the element itself, and its model must be the one shown.
+     */
+    console.log('\n=== the mouse aimed at "GPT" lands on "Claude" ===');
+    const covered = work.replace(
+      '<div role="menuitem" id="claude" aria-haspopup="menu"><div class="c"><div>Claude</div><div>Anthropic</div></div></div>',
+      '<div role="menuitem" id="claude" aria-haspopup="menu" style="position:relative"><div class="c"><div>Claude</div><div>Anthropic</div></div><div style="position:absolute;left:0;right:0;top:100%;height:200px;z-index:5"></div></div>',
+    );
+    const page2 = await browser.newPage();
+    const dir2 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const steps: Array<{ e: string; d?: Record<string, unknown> }> = [];
+    const t2 = new CopilotTransport({ profileDir: '', transportDir: dir2, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, onEvent: (e, d) => steps.push({ e, d }) });
+    (t2 as unknown as { page: Page }).page = page2;
+    await page2.setContent(covered);
+    const inForce2 = async (): Promise<string> => await page2.evaluate(() => (window as unknown as { current: () => string }).current());
+    for (const name of ['GPT-5.6 Sol Think deeper', 'Claude Sonnet 4.6', 'GPT-5.6 Sol Quick response']) {
+      steps.length = 0;
+      const r = await t2.selectModel(name);
+      t.check(`"${name}": chosen, though the mouse would open Claude`, [r.ok, r.by, await inForce2()], [true, 'operator', name]);
+      const opened = steps.find((s) => s.e === 'model-step' && s.d?.step === 'group opened');
+      t.truthy('  its group opened on the element itself, and the record says how', opened?.d?.how === 'click on the element', steps.filter((s) => s.e === 'model-step').map((s) => s.d));
+    }
+    rmSync(dir2, { recursive: true, force: true });
+    await page2.close();
   }
 } finally {
   await browser.close();

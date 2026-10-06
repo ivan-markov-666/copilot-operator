@@ -1016,7 +1016,7 @@ Current URL: ${url}`);
         if (!(await el.isVisible().catch(() => false))) continue;
         const line = ((await el.innerText().catch(() => '')) ?? '').split('\n')[0]?.trim() ?? '';
         if (sameModel(line, text)) return el;
-        first ??= el;
+        if (!first || (!containsModel(await first.innerText().catch(() => ''), text) && containsModel(line, text))) first = el;
       }
       if (first) return first;
       await this.p.waitForTimeout(200);
@@ -1102,25 +1102,47 @@ Current URL: ${url}`);
    */
   private async chooseByOperatorLocators(name: string, target: OperatorTarget): Promise<ModelChoice> {
     const before = await this.currentModel();
+    const textOf = async (el: Locator): Promise<string> => (((await el.innerText().catch(() => '')) ?? '').split('\n')[0] ?? '').trim();
     const reach = async (): Promise<{ row: Locator } | { problem: string }> => {
       const button = await this.resolveModelButton();
       if (!button) return { problem: 'This chat does not show a model picker.' };
       await button.click();
       if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
+      this.emit('model-step', { step: 'picker opened' });
       if (target.group) {
         const group = await this.rowByXPath(target.group.xpath, target.group.name, 5_000);
         if (!group) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
-        await this.press(group);
-        // Its models are waited for; a hover opens it in a build that does not open it on a press.
-        let row = await this.rowByXPath(target.xpath, target.model, 5_000);
-        if (!row) {
-          await group.hover({ timeout: 3_000 }).catch(() => undefined);
-          row = await this.rowByXPath(target.xpath, target.model, 5_000);
+        this.emit('model-step', { step: 'group found', text: await textOf(group) });
+        /*
+         * Opened without the mouse first: a mouse click goes to coordinates, and the picker moves while it
+         * opens, so on the work machine a press meant for "GPT" (now second) opened "Claude" (now first)
+         * (2026-10-06). A click sent to the element itself cannot land on another row; then the keyboard
+         * (focus, ArrowRight opens a submenu); the mouse only last. Each time, its model must be on screen.
+         */
+        const ways: Array<[string, () => Promise<void>]> = [
+          ['click on the element', async () => { await group.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }); }],
+          ['keyboard', async () => { await group.focus({ timeout: 3_000 }); await this.p.keyboard.press('ArrowRight'); }],
+          ['hover', async () => { await group.hover({ timeout: 3_000 }); }],
+          ['mouse click', async () => { await group.click({ timeout: 3_000 }); }],
+        ];
+        for (const [how, act] of ways) {
+          await act().catch(() => undefined);
+          const row = await this.rowByXPath(target.xpath, target.model, 3_000);
+          if (row) {
+            this.emit('model-step', { step: 'group opened', how, model: await textOf(row) });
+            return { row };
+          }
+          this.emit('model-step', { step: 'group not opened', how });
         }
-        return row ? { row } : { problem: `"${target.model}" did not appear after pressing "${target.group.name}" (${target.xpath})` };
+        await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
+        return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (${target.xpath}); the menu is kept as models-select-failed.html/.png` };
       }
       const row = await this.rowByXPath(target.xpath, target.model, 5_000);
-      return row ? { row } : { problem: `"${target.model}" was not found by ${target.xpath}` };
+      if (!row) {
+        await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
+        return { problem: `"${target.model}" was not found by ${target.xpath}; the menu is kept as models-select-failed.html/.png` };
+      }
+      return { row };
     };
     const checked = async (row: Locator): Promise<boolean> => (await row.getAttribute('aria-checked').catch(() => null)) === 'true';
 
@@ -1134,8 +1156,12 @@ Current URL: ${url}`);
       this.emit('model-already-selected', { model: name, buttonShows: before, by: 'operator' });
       return { ok: true, current: name, by: 'operator' };
     }
-    await this.press(found.row).catch(() => undefined);
+    // On the element itself, for the same reason as the group; the mouse only when that does nothing.
+    this.emit('model-step', { step: 'model pressed', text: await textOf(found.row) });
+    await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
     await this.p.waitForTimeout(800);
+    if (await this.modelMenuOpen() && !(await checked(found.row))) await found.row.click({ timeout: 3_000 }).catch(() => undefined);
+    await this.p.waitForTimeout(400);
     await this.closeMenu();
     const again = await reach();
     const ok = 'row' in again && (await checked(again.row));
