@@ -10,13 +10,13 @@
  *   2. Enter does not submit the composer. The Send button has to be clicked.
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
-import { normModel, pageModelFor, sameModel } from './modelMatch.js';
+import { buttonShows, normModel, pageModelFor, sameModel } from './modelMatch.js';
 import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { landed } from './acceptance.js';
-import { Blocker, Css, Label, Model, OperatorModelLocators, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
+import { Blocker, Css, Label, Model, ModelPicking, OperatorModelLocators, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { parseChatId } from './chatSession.js';
 
@@ -54,6 +54,10 @@ export type TransportOptions = {
   humanWaitMs?: number;
   /** Called with human-readable progress, so the CLI can show what is happening. */
   onEvent?: (event: string, detail?: Record<string, unknown>) => void;
+  /** For checks only: shorter pauses, waits and fewer attempts when choosing a model than `ModelPicking`. */
+  modelSettleMs?: number;
+  modelAppearMs?: number;
+  modelAttempts?: number;
   /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
   keepFailurePage?: boolean;
 };
@@ -96,7 +100,7 @@ export type ModelChoice = {
   matched?: string;
   options?: ModelOption[];
   /** How it was found: at the saved locator, at a fresh one after the saved one missed, or by name with no saved one. */
-  by?: 'operator' | 'locator' | 'reread' | 'name';
+  by?: 'already' | 'operator' | 'locator' | 'reread' | 'name';
   /** When the saved locator missed and a fresh reading found the model: why it missed. */
   locatorMiss?: string;
 };
@@ -1103,15 +1107,21 @@ Current URL: ${url}`);
   private async chooseByOperatorLocators(name: string, target: OperatorTarget): Promise<ModelChoice> {
     const before = await this.currentModel();
     const textOf = async (el: Locator): Promise<string> => (((await el.innerText().catch(() => '')) ?? '').split('\n')[0] ?? '').trim();
+    // A fixed pause after every opening and every press (see `ModelPicking`); the checks give it less.
+    const settle = (): Promise<void> => this.p.waitForTimeout(this.opts.modelSettleMs ?? ModelPicking.settleMs);
+    const appear = this.opts.modelAppearMs ?? ModelPicking.appearMs;
+    /** Waits until the element is there and visible. */
+    const present = async (el: Locator): Promise<boolean> => await el.waitFor({ state: 'visible', timeout: appear }).then(() => true).catch(() => false);
     const reach = async (): Promise<{ row: Locator } | { problem: string }> => {
       const button = await this.resolveModelButton();
       if (!button) return { problem: 'This chat does not show a model picker.' };
       await button.click();
+      await settle();
       if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
       this.emit('model-step', { step: 'picker opened' });
       if (target.group) {
-        const group = await this.rowByXPath(target.group.xpath, target.group.name, 5_000);
-        if (!group) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
+        const group = await this.rowByXPath(target.group.xpath, target.group.name, appear);
+        if (!group || !(await present(group))) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
         this.emit('model-step', { step: 'group found', text: await textOf(group) });
         /*
          * Opened without the mouse first: a mouse click goes to coordinates, and the picker moves while it
@@ -1127,8 +1137,9 @@ Current URL: ${url}`);
         ];
         for (const [how, act] of ways) {
           await act().catch(() => undefined);
-          const row = await this.rowByXPath(target.xpath, target.model, 3_000);
-          if (row) {
+          await settle();
+          const row = await this.rowByXPath(target.xpath, target.model, appear);
+          if (row && (await present(row))) {
             this.emit('model-step', { step: 'group opened', how, model: await textOf(row) });
             return { row };
           }
@@ -1137,8 +1148,8 @@ Current URL: ${url}`);
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (${target.xpath}); the menu is kept as models-select-failed.html/.png` };
       }
-      const row = await this.rowByXPath(target.xpath, target.model, 5_000);
-      if (!row) {
+      const row = await this.rowByXPath(target.xpath, target.model, appear);
+      if (!row || !(await present(row))) {
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" was not found by ${target.xpath}; the menu is kept as models-select-failed.html/.png` };
       }
@@ -1146,36 +1157,51 @@ Current URL: ${url}`);
     };
     const checked = async (row: Locator): Promise<boolean> => (await row.getAttribute('aria-checked').catch(() => null)) === 'true';
 
-    const found = await reach();
-    if ('problem' in found) {
+    /*
+     * The whole choice, tried again from a closed menu while the picker does not show the model as chosen,
+     * up to `ModelPicking.attempts` times (operator's request, 2026-10-06: "if it is not set, try again").
+     */
+    const attempts = this.opts.modelAttempts ?? ModelPicking.attempts;
+    let why = '';
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      this.emit('model-step', { step: 'attempt', attempt, of: attempts, model: name });
+      const found = await reach();
+      if ('problem' in found) {
+        why = found.problem;
+        this.emit('model-step', { step: 'not reached', attempt, why });
+        await this.closeMenu();
+        await settle();
+        continue;
+      }
+      if (await checked(found.row)) {
+        await this.closeMenu();
+        this.emit('model-already-selected', { model: name, buttonShows: before, by: 'operator', attempt });
+        return { ok: true, current: name, by: 'operator' };
+      }
+      // On the element itself, for the same reason as the group; the mouse only when that does nothing.
+      this.emit('model-step', { step: 'model pressed', attempt, text: await textOf(found.row) });
+      await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
+      await settle();
+      if ((await this.modelMenuOpen()) && !(await checked(found.row))) {
+        await found.row.click({ timeout: 3_000 }).catch(() => undefined);
+        await settle();
+      }
       await this.closeMenu();
-      return { ok: false, current: before, reason: found.problem };
-    }
-    if (await checked(found.row)) {
+      await settle();
+      // Is it set? Read again, the same way, from a fresh menu.
+      const again = await reach();
+      const ok = 'row' in again && (await checked(again.row));
       await this.closeMenu();
-      this.emit('model-already-selected', { model: name, buttonShows: before, by: 'operator' });
-      return { ok: true, current: name, by: 'operator' };
+      const after = await this.currentModel();
+      if (ok) {
+        this.emit('model-selected', { model: name, buttonShows: after, by: 'operator', attempt });
+        return { ok: true, current: name, by: 'operator' };
+      }
+      why = 'problem' in again ? `after pressing "${target.model}": ${again.problem}` : `"${target.model}" was pressed, but the picker does not mark it as chosen (the button shows "${after ?? 'nothing'}")`;
+      this.emit('model-step', { step: 'not set, trying again', attempt, why });
+      await settle();
     }
-    // On the element itself, for the same reason as the group; the mouse only when that does nothing.
-    this.emit('model-step', { step: 'model pressed', text: await textOf(found.row) });
-    await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
-    await this.p.waitForTimeout(800);
-    if (await this.modelMenuOpen() && !(await checked(found.row))) await found.row.click({ timeout: 3_000 }).catch(() => undefined);
-    await this.p.waitForTimeout(400);
-    await this.closeMenu();
-    const again = await reach();
-    const ok = 'row' in again && (await checked(again.row));
-    await this.closeMenu();
-    const after = await this.currentModel();
-    if (ok) {
-      this.emit('model-selected', { model: name, buttonShows: after, by: 'operator' });
-      return { ok: true, current: name, by: 'operator' };
-    }
-    return {
-      ok: false,
-      current: after,
-      reason: 'problem' in again ? `after pressing "${target.model}": ${again.problem}` : `"${target.model}" was pressed, but the picker does not mark it as chosen (the button shows "${after ?? 'nothing'}").`,
-    };
+    return { ok: false, current: await this.currentModel(), reason: `not chosen after ${attempts} attempts: ${why}` };
   }
 
   /**
@@ -1276,6 +1302,18 @@ Current URL: ${url}`);
     const button = await this.resolveModelButton();
     if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
 
+    /*
+     * Looked at before anything is opened: a conversation the run comes back to is usually on its model
+     * already, and choosing it again was a menu walk for nothing (operator's request, 2026-10-06). The
+     * button shows the model, shortened by words dropped from its end ("GPT-5.6 Sol Think"), and
+     * `buttonShows` takes only that, so "Think deeper" is never taken for "GPT-5.6 Sol Think deeper".
+     */
+    const shown = await this.currentModel();
+    if (buttonShows(shown, name)) {
+      this.emit('model-already-selected', { model: name, buttonShows: shown, by: 'button' });
+      return { ok: true, current: name, by: 'already' };
+    }
+
     // The operator's own locators first, for the models they cover (see `OperatorModelLocators`).
     const target = operatorTargetFor(name);
     let first: ModelChoice | null = null;
@@ -1307,6 +1345,8 @@ Current URL: ${url}`);
     const chosen = await this.chooseAt(match.name, match.locator);
     return {
       ...chosen,
+      // When both ways failed, why the operator's locators did is said too: that is the one to fix.
+      ...(!chosen.ok && first?.reason ? { reason: `${chosen.reason ?? 'not chosen'} (${target ? "by the operator's locators" : 'at the saved place'}: ${first.reason})` } : {}),
       ...(chosen.ok && !sameModel(match.name, name) ? { matched: match.name } : {}),
       ...(chosen.ok ? { by: opts.locator ? 'reread' : 'name' } : {}),
       // Why the saved locator missed, kept: what to look at when the page has changed.

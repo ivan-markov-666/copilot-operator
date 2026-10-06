@@ -891,6 +891,13 @@ export type Session = {
   review?: ReviewSettings;
   /** How this session treats the repository it works in. */
   vcs?: VersionControl;
+  /**
+   * Who chose `model` and `review.model`: the plan they were imported from, or the operator on the
+   * session's page or the run panel. The operator's word on the session outranks Settings; Settings
+   * outrank the plan (operator's rule, 2026-10-06). Absent — older sessions — counts as the plan's.
+   */
+  modelSource?: 'plan' | 'operator';
+  reviewModelSource?: 'plan' | 'operator';
   /** The commit every per-task branch of this session is cut from. Set by the first run. */
   vcsBaseCommit?: string;
   /** Where that commit came from, and why. See `VersionControl.startFrom`. */

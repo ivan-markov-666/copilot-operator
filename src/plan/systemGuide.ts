@@ -3428,6 +3428,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Колко различни подхода трябва да изброи „blocked“ (2–20); с по-малко чатът е помолен за още един.',
           },
           {
+            key: 'exec.maxReviewRounds',
+            kind: 'field',
+            en: 'Rounds of fixing after a failed review',
+            bg: 'Кръгове поправка след неуспешен преглед',
+            doesEn: 'How many times a failed review sends its findings back to be fixed and reviewed again (1–6) before the task ends blocked; separate from the approaches above.',
+            doesBg: 'Колко пъти неуспешен преглед връща находките за поправка и нов преглед (1–6), преди задачата да завърши „blocked“; отделно от подходите по-горе.',
+          },
+          {
             key: 'exec.retryBlocked',
             kind: 'field',
             en: 'When a task ends blocked, run it again in a fresh conversation',

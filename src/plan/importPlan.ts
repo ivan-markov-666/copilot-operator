@@ -282,6 +282,9 @@ export async function importPlan(
       s.review = { enabled: planned.review?.enabled !== false, model: (planned.review?.model || defaultReviewModel).trim() };
       s.conversationGroup = group || undefined;
       s.model = (planned.model || defaultModel).trim() || undefined;
+      // The plan's models are kept, and marked as the plan's: Settings outrank them (see `effectiveModels`).
+      if (planned.model?.trim()) s.modelSource = 'plan';
+      if (planned.review?.model?.trim()) s.reviewModelSource = 'plan';
       s.planName = plan.plan.trim() || undefined;
       s.vcs = vcs;
       // After the plan's own folders are in place, so only a session that named none is pointed at it.

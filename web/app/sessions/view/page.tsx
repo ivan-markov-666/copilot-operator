@@ -358,7 +358,8 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
 
       <div className="muted small" style={{ marginTop: 10 }}>
         {t('session.willUseModel', {
-          name: session.model || (settingsModel ? t('model.followsDefault', { name: settingsModel }) : t('model.default')),
+          // Settings outrank a model the plan named; the operator's own choice here outranks Settings.
+          name: (session.model && (session.modelSource === 'operator' || !settingsModel) ? session.model : '') || (settingsModel ? t('model.followsDefault', { name: settingsModel }) : t('model.default')),
         })}
       </div>
     </div>
@@ -454,7 +455,9 @@ function ModelPanel({ session, onChange }: { session: Session; onChange: () => v
     }
   };
 
-  const chosen = session.model ?? '';
+  // A model the plan named is not this session's own while Settings name one: Settings are used (2026-10-06).
+  const planOutranked = !!session.model && session.modelSource !== 'operator' && !!catalogue?.defaultModel;
+  const chosen = planOutranked ? '' : (session.model ?? '');
   const all = catalogue?.options ?? [];
   // A model saved before the list was last read still has to be selectable, or switching to
   // another one would silently drop it.
@@ -473,6 +476,7 @@ function ModelPanel({ session, onChange }: { session: Session; onChange: () => v
           {t('model.title')}
         </h2>
         {session.modelInUse && <span className="chip">{t('model.lastUsed', { name: session.modelInUse })}</span>}
+        {planOutranked && <p className="muted small">{t('model.planOutranked', { name: session.model ?? '' })}</p>}
       </div>
       <p className="muted small">{t('model.hint')}</p>
 
@@ -586,8 +590,14 @@ function ReviewPanel({ session, onChange }: { session: Session; onChange: () => 
   // The review model chosen in Settings, which a session without one of its own follows.
   const [settingsReview, setSettingsReview] = useState('');
   useEffect(() => {
-    api.models().then((c) => setSettingsReview(c.defaultReviewModel ?? '')).catch(() => undefined);
-  }, []);
+    api.models()
+      .then((c) => {
+        setSettingsReview(c.defaultReviewModel ?? '');
+        // The plan's review model gives way to the one in Settings, as the run does (2026-10-06).
+        if (c.defaultReviewModel && session.reviewModelSource !== 'operator') setModel('');
+      })
+      .catch(() => undefined);
+  }, [session.reviewModelSource]);
 
   const save = async () => {
     setBusy(true);

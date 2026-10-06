@@ -507,7 +507,7 @@ function ProjectEntry({
  * The retry count is a decision the operator meets after every blocked task. The two ceilings —
  * iterations and minutes per task — are what a long task runs into, and until 2026-09-28 they were
  * only in the settings file; a task cut off by them can be continued in its own chat ("Continue").
- * The review rounds and the rest of `limits` stay in the file.
+ * The review rounds are here too (2026-10-06), apart from the approaches; the rest of `limits` stays in the file.
  */
 function ExecutionSection() {
   const { t } = useT();
@@ -517,6 +517,7 @@ function ExecutionSection() {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const [retries, setRetries] = useState(2);
   const [approaches, setApproaches] = useState(2);
+  const [reviewRounds, setReviewRounds] = useState(2);
   const [iterations, setIterations] = useState(60);
   const [minutes, setMinutes] = useState(240);
   const [replySec, setReplySec] = useState(900);
@@ -542,11 +543,13 @@ function ExecutionSection() {
         const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as {
           retryBlockedInFreshChat?: number;
           minApproachesBeforeBlocked?: number;
+          maxReviewRounds?: number;
           maxIterations?: number;
           maxRunMinutes?: number;
         };
         setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
         setApproaches(typeof limits.minApproachesBeforeBlocked === 'number' ? limits.minApproachesBeforeBlocked : 2);
+        setReviewRounds(typeof limits.maxReviewRounds === 'number' ? limits.maxReviewRounds : 2);
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
@@ -605,6 +608,7 @@ function ExecutionSection() {
   };
   const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
   const saveApproachesLater = useDebouncedSave((n: number) => write('limits', 'minApproachesBeforeBlocked', n));
+  const saveReviewRoundsLater = useDebouncedSave((n: number) => write('limits', 'maxReviewRounds', n));
   const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
   const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
   const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
@@ -636,6 +640,24 @@ function ExecutionSection() {
         <span className="muted small">{t('exec.minApproachesUnit')}</span>
       </div>
       <p className="why">{t('exec.minApproachesWhy')}</p>
+
+      {/* Its own limit, apart from the approaches above: the export showed two limits, and only one was on screen (2026-10-06). */}
+      <label htmlFor="max-review-rounds">{t('exec.maxReviewRounds')}</label>
+      <div className="row">
+        <BoundedNumber
+          id="max-review-rounds"
+          value={reviewRounds}
+          min={1}
+          max={6}
+          onChange={(n) => {
+            setReviewRounds(n);
+            saveReviewRoundsLater(n);
+          }}
+          disabled={!raw}
+        />
+        <span className="muted small">{t('exec.maxReviewRoundsUnit')}</span>
+      </div>
+      <p className="why">{t('exec.maxReviewRoundsWhy')}</p>
 
       <label htmlFor="retry-blocked">{t('exec.retryBlocked')}</label>
       <div className="row">

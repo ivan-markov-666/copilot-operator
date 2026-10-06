@@ -152,10 +152,12 @@ async function followPageModels(
   session: Session,
   store: SessionStore | undefined,
   hooks: ModelHooks | undefined,
+  from: 'session' | 'settings' | 'plan' | 'none',
 ): Promise<string> {
   if (result.options?.length) await hooks?.seen?.(result.options, result.current).catch(() => undefined);
   if (!result.ok || !result.matched) return '';
-  const own = which === 'model' ? session.model?.trim() : session.review?.model?.trim();
+  // Written back where it came from: Settings for a model from Settings, the session for the rest.
+  const own = from !== 'settings';
   if (own) {
     await store
       ?.updateSession(session.id, (s) => {
@@ -638,11 +640,23 @@ export async function openSessionTransport(
  * A session gets a model of its own from the plan or from its own picker; one that has none
  * follows Settings, so a model chosen there after the session was made still reaches it.
  */
-export function effectiveModels(session: Pick<Session, 'model' | 'review'>, cfg: Pick<ResolvedConfig, 'copilot'>): { model: string; reviewModel: string } {
-  return {
-    model: (session.model ?? '').trim() || (cfg.copilot.defaultModel ?? '').trim(),
-    reviewModel: (session.review?.model ?? '').trim() || (cfg.copilot.defaultReviewModel ?? '').trim(),
-  };
+/**
+ * The models a session runs on, and where each came from.
+ *
+ * The operator's choice on the session's page or the run panel first; then Settings; the plan's last.
+ * Settings used to come after any model the session held, and a plan imported with a "model" — written
+ * by another chat, often a model the picker no longer had — overrode what the operator chose in Settings
+ * on every run (operator's rule, 2026-10-06: what is set in Settings outranks the same thing in the JSON).
+ */
+export function effectiveModels(
+  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource'>,
+  cfg: Pick<ResolvedConfig, 'copilot'>,
+): { model: string; reviewModel: string; modelFrom: 'session' | 'settings' | 'plan' | 'none'; reviewModelFrom: 'session' | 'settings' | 'plan' | 'none' } {
+  const pick = (own: string, source: 'plan' | 'operator' | undefined, settings: string): [string, 'session' | 'settings' | 'plan' | 'none'] =>
+    own && source === 'operator' ? [own, 'session'] : settings ? [settings, 'settings'] : own ? [own, 'plan'] : ['', 'none'];
+  const [model, modelFrom] = pick((session.model ?? '').trim(), session.modelSource, (cfg.copilot.defaultModel ?? '').trim());
+  const [reviewModel, reviewModelFrom] = pick((session.review?.model ?? '').trim(), session.reviewModelSource, (cfg.copilot.defaultReviewModel ?? '').trim());
+  return { model, reviewModel, modelFrom, reviewModelFrom };
 }
 
 async function applySessionModel(
@@ -653,7 +667,8 @@ async function applySessionModel(
   store?: SessionStore,
   hooks?: ModelHooks,
 ): Promise<{ current?: string; refused?: string }> {
-  const wanted = effectiveModels(session, cfg).model;
+  const { model: wanted, modelFrom } = effectiveModels(session, cfg);
+  const fromSettings = modelFrom === 'settings';
   if (!wanted) return {};
 
   const locator = await hooks?.locate?.(wanted).catch(() => undefined);
@@ -662,7 +677,7 @@ async function applySessionModel(
     current: null,
     reason: (e as Error).message,
   }));
-  const renamed = await followPageModels('model', wanted, result, session, store, hooks);
+  const renamed = await followPageModels('model', wanted, result, session, store, hooks, modelFrom);
   if (renamed) bus.publish({ sessionId: session.id, type: 'model-renamed', level: 'warn', message: renamed, data: { asked: wanted, chosen: result.matched } });
 
   bus.publish({
@@ -670,9 +685,9 @@ async function applySessionModel(
     type: result.ok ? 'model-selected' : 'model-not-selected',
     level: result.ok ? 'info' : 'warn',
     message: result.ok
-      ? `model: ${result.current ?? wanted}${session.model?.trim() ? '' : ' (from Settings)'}`
-      : `could not switch to "${wanted}"${session.model?.trim() ? '' : ' (the default model in Settings)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Nothing is sent on ${result.current ?? 'the chat default'} instead.`,
-    data: { asked: wanted, fromSettings: !session.model?.trim(), current: result.current, ok: result.ok, by: result.by ?? null, savedLocator: !!locator },
+      ? `model: ${result.current ?? wanted} (${modelFrom === 'settings' ? 'from Settings' : modelFrom === 'session' ? "the session's own" : 'from the plan'})`
+      : `could not switch to "${wanted}" (${modelFrom === 'settings' ? 'the default model in Settings' : modelFrom === 'session' ? "the session's own" : 'from the plan'}): ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Nothing is sent on ${result.current ?? 'the chat default'} instead.`,
+    data: { asked: wanted, from: modelFrom, fromSettings, current: result.current, ok: result.ok, by: result.by ?? null, savedLocator: !!locator },
   });
   // Kept on the session, so each task's record says which model it ran on and why (see `runTask`).
   await store
@@ -681,7 +696,7 @@ async function applySessionModel(
         asked: wanted,
         current: result.current ?? null,
         ok: result.ok,
-        fromSettings: !session.model?.trim(),
+        fromSettings,
         ...(result.matched ? { renamedTo: result.matched } : {}),
         ...(result.ok ? {} : { reason: (result.reason ?? 'unknown reason').replace(/[.\s]+$/, '') }),
         at: new Date().toISOString(),
@@ -697,7 +712,7 @@ async function applySessionModel(
     return {
       current: result.current ?? undefined,
       refused:
-        `The chat could not be put on the chosen model "${wanted}"${session.model?.trim() ? '' : ' (Settings)'}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. ` +
+        `The chat could not be put on the chosen model "${wanted}"${fromSettings ? ' (Settings)' : ''}: ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. ` +
         'Nothing was sent. Read the list again under Settings → Model, choose the model there, and start again.',
     };
   }
@@ -1972,7 +1987,7 @@ export async function runTask(
         if (model) {
           const reviewLocator = await deps.models?.locate?.(model).catch(() => undefined);
           const picked: ModelChoice = await transport.selectModel(model, { locator: reviewLocator }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
-          const renamed = await followPageModels('review', model, picked, session, store, deps.models);
+          const renamed = await followPageModels('review', model, picked, session, store, deps.models, effectiveModels(session, cfg).reviewModelFrom);
           if (renamed) sink.event('model-renamed', { asked: model, chosen: picked.matched, review: true }, renamed, 'warn');
           sink.event(picked.ok ? 'review-model-selected' : 'review-model-not-selected', { asked: model, current: picked.current },
             picked.ok ? `the review runs on ${picked.current ?? model}` : `the review could not switch to "${model}": ${picked.reason ?? 'unknown reason'}`,

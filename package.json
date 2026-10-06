@@ -40,6 +40,7 @@
     "check:restart": "tsx test/restart.check.ts",
     "check:review": "tsx test/review.check.ts",
     "check:review-evidence": "tsx test/review-evidence.check.ts",
+    "check:settings-precedence": "tsx test/settings-precedence.check.ts",
     "check:shells": "tsx test/shells.check.ts",
     "check:save": "tsx test/save.check.ts",
     "check:guide": "tsx test/guide.check.ts",

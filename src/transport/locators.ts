@@ -165,6 +165,18 @@ export const OperatorModelLocators = {
   ],
 } as const;
 
+/**
+ * How patiently a model is chosen with those locators (operator's request, 2026-10-06): every element is
+ * waited for until it is there and visible (`appearMs`), a fixed pause follows every opening and every
+ * press (`settleMs`), and a choice the picker does not show as made is tried again from the start, up to
+ * `attempts` times, before the run is told it failed.
+ */
+export const ModelPicking = {
+  attempts: 6,
+  settleMs: 1_500,
+  appearMs: 10_000,
+} as const;
+
 /** A text as an XPath string literal, whatever quotes it holds. */
 export function xpathText(text: string): string {
   if (!text.includes("'")) return `'${text}'`;

@@ -702,7 +702,11 @@ export class OperatorService {
       else if (patch.active === false) s.active = false;
       if (patch.onFailure === 'stop' || patch.onFailure === 'continue') s.onFailure = patch.onFailure;
       // An empty string is a real choice here: it means "leave the chat on whatever it is".
-      if (patch.model !== undefined) s.model = patch.model.trim() || undefined;
+      if (patch.model !== undefined) {
+        s.model = patch.model.trim() || undefined;
+        // Chosen on the session's page: the operator's own word, which outranks Settings.
+        s.modelSource = s.model ? 'operator' : undefined;
+      }
       // The same for the group: clearing it gives this session its conversation back. It does
       // not move the conversation it is already in; that history is where it is.
       if (patch.conversationGroup !== undefined) s.conversationGroup = patch.conversationGroup.trim() || undefined;
@@ -710,6 +714,7 @@ export class OperatorService {
         // Empty model means "the session's own", which is a real choice and not a missing one.
         const merged = { ...DEFAULT_REVIEW, ...s.review, ...patch.review };
         s.review = { enabled: merged.enabled !== false, model: (merged.model ?? '').trim() };
+        if (patch.review.model !== undefined) s.reviewModelSource = s.review.model ? 'operator' : undefined;
       }
       if (patch.projectDir !== undefined) s.projectDir = patch.projectDir.trim();
       if (patch.vcs) {
@@ -1732,12 +1737,16 @@ export class OperatorService {
       for (const entry of sessions) {
         if (entry.state !== 'waiting') continue;
         await this.store.updateSession(entry.sessionId, (s) => {
-          if (wantedModel && (s.model?.trim() || wantedModel !== followModel)) s.model = wantedModel;
+          if (wantedModel && (s.model?.trim() || wantedModel !== followModel)) {
+            s.model = wantedModel;
+            s.modelSource = 'operator';
+          }
           // Only the model is set here, never whether the review happens: a run panel is about
           // this run, and silently switching a session's review on or off from it would be a
           // change to the session that outlives the run.
           if (wantedReviewModel && (s.review?.model?.trim() || wantedReviewModel !== followReview)) {
             s.review = { ...DEFAULT_REVIEW, ...s.review, model: wantedReviewModel };
+            s.reviewModelSource = 'operator';
           }
         });
       }

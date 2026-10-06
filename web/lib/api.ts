@@ -581,6 +581,9 @@ export type Session = {
   contractSent: boolean;
   /** The model this conversation should run on, by the picker's exact name. */
   model?: string;
+  /** Who chose `model` / the review's model: the plan, or the operator here. Settings outrank the plan's. */
+  modelSource?: 'plan' | 'operator';
+  reviewModelSource?: 'plan' | 'operator';
   /** What the picker reported after the last run applied that choice. */
   modelInUse?: string;
   /** Whether the queue is one chain ('stop') or a set of independent tasks ('continue'). */
