@@ -56,6 +56,7 @@ export type TransportOptions = {
   onEvent?: (event: string, detail?: Record<string, unknown>) => void;
   /** For checks only: shorter pauses, waits and fewer attempts when choosing a model than `ModelPicking`. */
   modelSettleMs?: number;
+  modelBeforePressMs?: number;
   modelAppearMs?: number;
   modelAttempts?: number;
   /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
@@ -1109,12 +1110,15 @@ Current URL: ${url}`);
     const textOf = async (el: Locator): Promise<string> => (((await el.innerText().catch(() => '')) ?? '').split('\n')[0] ?? '').trim();
     // A fixed pause after every opening and every press (see `ModelPicking`); the checks give it less.
     const settle = (): Promise<void> => this.p.waitForTimeout(this.opts.modelSettleMs ?? ModelPicking.settleMs);
+    // And a fixed pause before every press in the picker: the button, the group, the model (2026-10-06).
+    const beforePress = (): Promise<void> => this.p.waitForTimeout(this.opts.modelBeforePressMs ?? ModelPicking.beforePressMs);
     const appear = this.opts.modelAppearMs ?? ModelPicking.appearMs;
     /** Waits until the element is there and visible. */
     const present = async (el: Locator): Promise<boolean> => await el.waitFor({ state: 'visible', timeout: appear }).then(() => true).catch(() => false);
     const reach = async (): Promise<{ row: Locator } | { problem: string }> => {
       const button = await this.resolveModelButton();
       if (!button) return { problem: 'This chat does not show a model picker.' };
+      await beforePress();
       await button.click();
       await settle();
       if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
@@ -1136,6 +1140,7 @@ Current URL: ${url}`);
           ['mouse click', async () => { await group.click({ timeout: 3_000 }); }],
         ];
         for (const [how, act] of ways) {
+          await beforePress();
           await act().catch(() => undefined);
           await settle();
           const row = await this.rowByXPath(target.xpath, target.model, appear);
@@ -1180,21 +1185,34 @@ Current URL: ${url}`);
       }
       // On the element itself, for the same reason as the group; the mouse only when that does nothing.
       this.emit('model-step', { step: 'model pressed', attempt, text: await textOf(found.row) });
+      await beforePress();
       await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
       await settle();
       if ((await this.modelMenuOpen()) && !(await checked(found.row))) {
+        await beforePress();
         await found.row.click({ timeout: 3_000 }).catch(() => undefined);
         await settle();
       }
       await this.closeMenu();
       await settle();
-      // Is it set? Read again, the same way, from a fresh menu.
+      /*
+       * Is it set? The picker button first: it shows the model in force, shortened by words dropped from
+       * its end, and reading it opens nothing. The menu was opened again to read the row's mark, and at
+       * work that second walk failed with the right model chosen (2026-10-06); it is now only the second
+       * witness, when the button does not show the model. Nothing here reloads the page: a choice not
+       * set is made again from the button, in the same page.
+       */
+      const shownNow = await this.currentModel();
+      if (buttonShows(shownNow, name) || buttonShows(shownNow, target.model)) {
+        this.emit('model-selected', { model: name, buttonShows: shownNow, by: 'operator', attempt, seenOn: 'button' });
+        return { ok: true, current: name, by: 'operator' };
+      }
       const again = await reach();
       const ok = 'row' in again && (await checked(again.row));
       await this.closeMenu();
       const after = await this.currentModel();
       if (ok) {
-        this.emit('model-selected', { model: name, buttonShows: after, by: 'operator', attempt });
+        this.emit('model-selected', { model: name, buttonShows: after, by: 'operator', attempt, seenOn: 'menu' });
         return { ok: true, current: name, by: 'operator' };
       }
       why = 'problem' in again ? `after pressing "${target.model}": ${again.problem}` : `"${target.model}" was pressed, but the picker does not mark it as chosen (the button shows "${after ?? 'nothing'}")`;

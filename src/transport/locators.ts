@@ -173,6 +173,8 @@ export const OperatorModelLocators = {
  */
 export const ModelPicking = {
   attempts: 6,
+  /** A fixed pause before every press in the picker: the button, the group, the model (2026-10-06: 2 s). */
+  beforePressMs: 2_000,
   settleMs: 1_500,
   appearMs: 10_000,
 } as const;
