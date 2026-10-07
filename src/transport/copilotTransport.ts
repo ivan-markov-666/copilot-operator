@@ -194,6 +194,12 @@ function containsModel(text: string, name: string): boolean {
 
 function groupLabel(group: MenuRow, children: MenuRow[]): string {
   if (!children.some((c) => sameModel(c.name, group.name))) return group.name;
+  /*
+   * The work machine's ids (2026-10-07) are "gptSubMenuModelTrigger-Claude" and "gptSubMenuModelTrigger-OpenAI":
+   * the start is "gpt" for every group, the end names the group — unless the end is the vendor, as for GPT.
+   */
+  const suffix = /-([A-Za-z0-9]+)$/.exec(group.testId)?.[1];
+  if (suffix && !/^(openai|anthropic|microsoft|google|meta|mistral|xai)$/i.test(suffix)) return suffix;
   const fromId = /^([a-z0-9]+?)SubMenu/i.exec(group.testId)?.[1];
   // "gpt" reads GPT, "claude" reads Claude: short ids are acronyms.
   if (fromId) return fromId.length <= 3 ? fromId.toUpperCase() : fromId.charAt(0).toUpperCase() + fromId.slice(1);
@@ -1173,7 +1179,7 @@ Current URL: ${url}`);
         for (const [how, act] of ways) {
           await act().catch(() => undefined);
           await settle();
-          const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, target.model, 0));
+          const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, name, 0));
           if (row) {
             this.emit('model-step', { step: 'group opened', how, model: await textOf(row) });
             return { row };
@@ -1184,7 +1190,7 @@ Current URL: ${url}`);
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (${target.xpath}); the menu is kept as models-select-failed.html/.png` };
       }
-      const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, target.model, 0));
+      const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, name, 0));
       if (!row) {
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" was not found by ${target.xpath}; the menu is kept as models-select-failed.html/.png` };
@@ -1222,7 +1228,8 @@ Current URL: ${url}`);
       for (let presses = 0; presses < 12; presses += 1) {
         const now = await focused();
         const line = now.text.split('\n')[0]?.trim() ?? '';
-        if (now.radio && (sameModel(line, name) || sameModel(line, target.model) || containsModel(now.text, target.model))) {
+        // The chosen model's own name: "Sonnet" alone would stop at "Sonnet 5.5" when "Sonnet 5" is asked for.
+        if (now.radio && (sameModel(line, name) || containsModel(now.text, name))) {
           this.emit('model-step', { step: 'model reached by the keyboard, pausing before Enter', attempt, text: line, presses, pauseMs: pause });
           await this.p.waitForTimeout(pause);
           await picture('before-enter');
@@ -1275,6 +1282,12 @@ Current URL: ${url}`);
         this.emit('model-already-selected', { model: name, buttonShows: before, by: 'operator', attempt });
         return { ok: true, current: name, by: 'operator' };
       }
+      // The names in the model's own menu, read before the press closes it: what a shortened button may mean.
+      const siblings: string[] = await found.row
+        .evaluate((el) =>
+          Array.from(el.closest('[role="menu"],[role="listbox"]')?.querySelectorAll('[role="menuitemradio"]') ?? []).map((r) => ((r as HTMLElement).innerText || '').split('\n')[0]!.trim()),
+        )
+        .catch(() => [] as string[]);
       // On the element itself, for the same reason as the group; the mouse only when that does nothing.
       this.emit('model-step', { step: 'model pressed', attempt, text: await textOf(found.row) });
       await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
@@ -1295,7 +1308,9 @@ Current URL: ${url}`);
        * set is made again from the button, in the same page.
        */
       const shownNow = await this.currentModel();
-      if (buttonShows(shownNow, name) || buttonShows(shownNow, target.model)) {
+      // The whole name, or a shortened one that no other model of the same menu reads as ("Sonnet" is both Sonnets).
+      const alsoMeant = siblings.filter((n) => !sameModel(n, name) && buttonShows(shownNow, n));
+      if (sameModel(shownNow, name) || (buttonShows(shownNow, name) && alsoMeant.length === 0)) {
         this.emit('model-selected', { model: name, buttonShows: shownNow, by: 'operator', attempt, seenOn: 'button' });
         return { ok: true, current: name, by: 'operator' };
       }
@@ -1419,7 +1434,12 @@ Current URL: ${url}`);
      * `buttonShows` takes only that, so "Think deeper" is never taken for "GPT-5.6 Sol Think deeper".
      */
     const shown = await this.currentModel();
-    if (buttonShows(shown, name)) {
+    /*
+     * Only the whole name: the button shortens a grouped model by its last word, and the live Claude group
+     * has "Sonnet 5.5" and "Sonnet 5", both "Sonnet" on the button (2026-10-07). A shortened name is looked
+     * at in the menu instead, where the row's own mark says it, and nothing is pressed when it is chosen.
+     */
+    if (sameModel(shown, name)) {
       this.emit('model-already-selected', { model: name, buttonShows: shown, by: 'button' });
       return { ok: true, current: name, by: 'already' };
     }

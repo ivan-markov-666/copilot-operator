@@ -453,6 +453,8 @@ program
       if (opts.set) {
         const result = await transport.selectModel(opts.set);
         console.log(result.ok ? `switched to: ${result.current}` : `not switched: ${result.reason}`);
+        // Said, because where this is depends on the folder the command was run from (2026-10-07: looked for in the wrong one).
+        if (opts.steps) console.log(`pictures and the menu's HTML of each step: ${join(installLayout().runsDir, '_models')}`);
       }
     } finally {
       await transport.close();

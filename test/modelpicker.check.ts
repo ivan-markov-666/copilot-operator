@@ -189,7 +189,7 @@ try {
   <div role="menuitemradio" data-name="Auto">Auto<br>Decides how long to think</div>
   <div role="menuitemradio" data-name="Think deeper">Think deeper<br>Takes longer</div>
   <div role="menuitemradio" data-name="Advanced reasoning (Experimental)"><div>Advanced reasoning <span>(Experimental)</span></div><div>Slow and careful</div></div>
-  <div role="menuitem" id="claude" data-test-id="claudeSubMenuModelTrigger-Anthropic" aria-haspopup="menu">Claude<br>Anthropic</div>
+  <div role="menuitem" id="claude" data-test-id="gptSubMenuModelTrigger-Claude" aria-haspopup="menu">Claude<br>Anthropic</div>
   <div role="menuitem" id="gpt" data-test-id="gptSubMenuModelTrigger-OpenAI" aria-haspopup="menu">GPT<br>OpenAI</div>
 </div>
 <div id="sub-claude" role="menu" aria-labelledby="claude" style="display:none">
@@ -367,7 +367,8 @@ try {
     await transport.selectModel('GPT-5.6 Sol Think deeper');
     const opensGpt = await page.evaluate(() => (window as unknown as { opens: number }).opens);
     const stay = await transport.selectModel('GPT-5.6 Sol Think deeper');
-    t.check('a grouped model already in force (the button shows it shortened): not chosen again', [stay.ok, stay.by, (await page.evaluate(() => (window as unknown as { opens: number }).opens)) - opensGpt], [true, 'already', 0]);
+    // Shortened on the button, which two models of a group can share (2026-10-07): looked at in the menu once, nothing pressed.
+    t.check('a grouped model already in force (the button shows it shortened): checked in the menu, not chosen again', [stay.ok, stay.by, (await page.evaluate(() => (window as unknown as { opens: number }).opens)) - opensGpt, await inForce()], [true, 'operator', 1, 'GPT-5.6 Sol Think deeper']);
     const other = await transport.selectModel('Think deeper');
     t.check('"Think deeper" is not taken for the GPT model on the button: it is chosen', [other.ok, other.by, await inForce()], [true, 'operator', 'Think deeper']);
     rmSync(transportDir, { recursive: true, force: true });
@@ -482,6 +483,25 @@ try {
     }
     rmSync(dir5, { recursive: true, force: true });
     await page5.close();
+
+    /*
+     * The work machine's Claude group as read live on 2026-10-07: "Sonnet 5.5", "Opus 5.5", "Sonnet 5". The
+     * operator's locator for Sonnet finds both Sonnets; the one whose name is the chosen one must be pressed.
+     */
+    console.log('\n=== the live Claude group: "Sonnet 5" beside "Sonnet 5.5" ===');
+    const claude = work.replace(row('Claude Sonnet 4.6') + row('Claude Opus 4.7 Think deeper'), row('Sonnet 5.5') + row('Opus 5.5') + row('Sonnet 5'));
+    const page6 = await browser.newPage();
+    const dir6 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const t6 = new CopilotTransport({ profileDir: '', transportDir: dir6, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3 });
+    (t6 as unknown as { page: Page }).page = page6;
+    await page6.setContent(claude);
+    const inForce6 = async (): Promise<string> => await page6.evaluate(() => (window as unknown as { current: () => string }).current());
+    for (const name of ['Sonnet 5', 'Sonnet 5.5', 'Opus 5.5', 'Sonnet 5']) {
+      const r6 = await t6.selectModel(name);
+      t.check(`"${name}": that one, not the other Sonnet`, [r6.ok, await inForce6()], [true, name]);
+    }
+    rmSync(dir6, { recursive: true, force: true });
+    await page6.close();
   }
 } finally {
   await browser.close();
