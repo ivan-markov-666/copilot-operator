@@ -114,13 +114,13 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
     return (
       <div className="approval">
         <div className="row">
-          <strong>{t('approval.modelTitle')}</strong>
+          <strong>{t(m.manual ? 'approval.manualTitle' : 'approval.modelTitle')}</strong>
           <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
           <span className="muted small">{fmtTime(approval.createdAt)}</span>
         </div>
-        <p>{t('approval.modelAsk', { model: m.asked })}</p>
+        <p>{m.manual ? (m.asked ? t('approval.manualAsk', { model: m.asked }) : t('approval.manualAskAny')) : t('approval.modelAsk', { model: m.asked })}</p>
         <p className="muted small">{t('approval.modelShown', { shown: m.shown ?? '—' })}</p>
-        <p className="reason small">{t('approval.modelWhy', { why: m.why, tries: m.tries })}</p>
+        {!m.manual && <p className="reason small">{t('approval.modelWhy', { why: m.why, tries: m.tries })}</p>}
         {err && (
           <p className="err" role="alert">
             {err}
@@ -128,7 +128,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
         )}
         <div className="row">
           <button className="primary" disabled={busy} onClick={() => void decide('run')}>
-            {t('approval.modelChosen')}
+            {t(m.manual ? 'approval.manualReady' : 'approval.modelChosen')}
           </button>
           <button disabled={busy} onClick={() => void decide('skip')}>
             {t('approval.modelAsItIs')}

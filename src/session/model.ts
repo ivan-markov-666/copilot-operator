@@ -981,7 +981,7 @@ export type PendingApproval = {
    * 2026-10-06). Answers: run = "I chose it, check and go on"; skip = "go on with the model it is on";
    * abort = stop. Asked in every mode, like a fetch.
    */
-  model?: { asked: string; shown: string | null; why: string; tries: number };
+  model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean };
 };
 
 export function newId(prefix = ''): string {

@@ -140,7 +140,7 @@ export type ModelHooks = {
    * The operator's hand, when the chat could not be put on the chosen model by itself: they are asked to
    * choose it in the Copilot window and answer — check and go on, go on as it is, or stop.
    */
-  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number }) => Promise<'recheck' | 'continue' | 'stop'>;
+  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean }) => Promise<'recheck' | 'continue' | 'stop'>;
   /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
   locate?: (name: string) => Promise<ModelLocator | undefined>;
   renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
@@ -675,38 +675,43 @@ async function applySessionModel(
 ): Promise<{ current?: string; refused?: string }> {
   const { model: wanted, modelFrom } = effectiveModels(session, cfg);
   const fromSettings = modelFrom === 'settings';
-  if (!wanted) return {};
+  const manual = !!cfg.copilot.manualModel && !!hooks?.askHelp;
+  if (!wanted && !manual) return {};
 
-  const locator = await hooks?.locate?.(wanted).catch(() => undefined);
-  let result: ModelChoice = await transport.selectModel(wanted, { locator }).catch((e: unknown) => ({
-    ok: false as const,
-    current: null,
-    reason: (e as Error).message,
-  }));
-  /*
-   * The operator's hand, when the runner could not do it (operator's request, 2026-10-06): the run waits
-   * on a card in the UI asking them to choose the model in the Copilot window; "check and go on" reads
-   * the picker button again, and asks again while it still shows another model.
-   */
-  let goOnAsItIs = false;
-  for (let tries = 1; !result.ok && hooks?.askHelp; tries += 1) {
+  let result: ModelChoice;
+  if (manual) {
+    /*
+     * Chosen by hand (operator's workaround, 2026-10-06): the picker is not touched. A conversation already
+     * on the model — the chat keeps its model — is not asked about; otherwise the card asks for it.
+     */
     const shown = await transport.currentModel().catch(() => null);
-    bus.publish({ sessionId: session.id, type: 'model-help-asked', level: 'warn',
-      message: `the chat could not be put on "${wanted}" by the runner; asking the operator to choose it in the Copilot window (picker shows "${shown ?? 'nothing'}")`,
-      data: { asked: wanted, shown, why: result.reason ?? '', tries } });
-    const answer = await hooks.askHelp({ sessionId: session.id, asked: wanted, shown, why: result.reason ?? 'unknown reason', tries });
-    if (answer === 'stop') break;
-    if (answer === 'continue') {
-      goOnAsItIs = true;
-      bus.publish({ sessionId: session.id, type: 'model-help-continue', level: 'warn', message: `the operator chose to go on with the model the chat is on ("${shown ?? 'unknown'}"), not "${wanted}"`, data: { asked: wanted, shown } });
-      result = { ok: false, current: shown, reason: `the operator chose to go on with "${shown ?? 'unknown'}"` };
-      break;
+    const hand = wanted && buttonShows(shown, wanted)
+      ? { result: { ok: true, current: wanted, by: 'already' } as ModelChoice, goOnAsItIs: false }
+      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: 'Settings ask for the model to be chosen by hand' }, hooks, session.id, bus, true);
+    if (!wanted) {
+      const now = await transport.currentModel().catch(() => null);
+      if (hand.result.ok || hand.goOnAsItIs) {
+        await store?.updateSession(session.id, (s) => { s.modelInUse = now ?? undefined; }).catch(() => undefined);
+        return { current: now ?? undefined };
+      }
+      return { refused: 'The model was to be chosen by hand, and the operator stopped the run. Nothing was sent.' };
     }
-    const now = await transport.currentModel().catch(() => null);
-    result = buttonShows(now, wanted)
-      ? { ok: true, current: wanted, by: 'hand' }
-      : { ok: false, current: now, reason: `the picker still shows "${now ?? 'nothing'}", not "${wanted}"` };
+    result = hand.result;
+    if (hand.goOnAsItIs) {
+      bus.publish({ sessionId: session.id, type: 'model-selected', level: 'warn', message: `model: ${result.current ?? 'unknown'} (chosen by hand; not "${wanted}")`, data: { asked: wanted, current: result.current, ok: false, by: 'hand' } });
+      return { current: result.current ?? undefined };
+    }
+  } else {
+    const locator = await hooks?.locate?.(wanted).catch(() => undefined);
+    result = await transport.selectModel(wanted, { locator }).catch((e: unknown) => ({
+      ok: false as const,
+      current: null,
+      reason: (e as Error).message,
+    }));
   }
+  const hand = await withOperatorHand(transport, wanted, result, hooks, session.id, bus, false);
+  result = hand.result;
+  const goOnAsItIs = hand.goOnAsItIs;
   const renamed = await followPageModels('model', wanted, result, session, store, hooks, modelFrom);
   if (renamed) bus.publish({ sessionId: session.id, type: 'model-renamed', level: 'warn', message: renamed, data: { asked: wanted, chosen: result.matched } });
 
@@ -717,7 +722,7 @@ async function applySessionModel(
     message: result.ok
       ? `model: ${result.current ?? wanted} (${modelFrom === 'settings' ? 'from Settings' : modelFrom === 'session' ? "the session's own" : 'from the plan'})`
       : `could not switch to "${wanted}" (${modelFrom === 'settings' ? 'the default model in Settings' : modelFrom === 'session' ? "the session's own" : 'from the plan'}): ${(result.reason ?? 'unknown reason').replace(/[.\s]+$/, '')}. Nothing is sent on ${result.current ?? 'the chat default'} instead.`,
-    data: { asked: wanted, from: modelFrom, fromSettings, current: result.current, ok: result.ok, by: result.by ?? null, savedLocator: !!locator },
+    data: { asked: wanted, from: modelFrom, fromSettings, current: result.current, ok: result.ok, by: result.by ?? null, manual },
   });
   // Kept on the session, so each task's record says which model it ran on and why (see `runTask`).
   await store
@@ -748,6 +753,43 @@ async function applySessionModel(
     };
   }
   return { current: result.current ?? undefined };
+}
+
+/**
+ * The operator's hand, when the runner could not put the chat on the model, or when Settings ask for it to
+ * be chosen by hand (operator's requests, 2026-10-06): the run waits on a card in the UI asking them to
+ * choose it in the Copilot window; "check and go on" reads the picker button again, and asks again while it
+ * still shows another model. With no model asked for, whatever the operator chose is taken.
+ */
+async function withOperatorHand(
+  transport: ChatTransport,
+  wanted: string,
+  first: ModelChoice,
+  hooks: ModelHooks | undefined,
+  sessionId: string,
+  bus: EventBus,
+  manual: boolean,
+): Promise<{ result: ModelChoice; goOnAsItIs: boolean }> {
+  let result = first;
+  for (let tries = 1; !result.ok && hooks?.askHelp; tries += 1) {
+    const shown = await transport.currentModel().catch(() => null);
+    bus.publish({ sessionId, type: 'model-help-asked', level: 'warn',
+      message: manual
+        ? `asking the operator to choose ${wanted ? `"${wanted}"` : 'the model'} in the Copilot window (Settings: by hand; picker shows "${shown ?? 'nothing'}")`
+        : `the chat could not be put on "${wanted}" by the runner; asking the operator to choose it in the Copilot window (picker shows "${shown ?? 'nothing'}")`,
+      data: { asked: wanted, shown, why: result.reason ?? '', tries, manual } });
+    const answer = await hooks.askHelp({ sessionId, asked: wanted, shown, why: result.reason ?? 'unknown reason', tries, ...(manual ? { manual: true } : {}) });
+    if (answer === 'stop') return { result, goOnAsItIs: false };
+    if (answer === 'continue') {
+      bus.publish({ sessionId, type: 'model-help-continue', level: 'warn', message: `the operator chose to go on with the model the chat is on ("${shown ?? 'unknown'}")${wanted ? `, not "${wanted}"` : ''}`, data: { asked: wanted, shown } });
+      return { result: { ok: false, current: shown, reason: `the operator chose to go on with "${shown ?? 'unknown'}"` }, goOnAsItIs: true };
+    }
+    const now = await transport.currentModel().catch(() => null);
+    result = !wanted || buttonShows(now, wanted)
+      ? { ok: true, current: wanted || now, by: 'hand' }
+      : { ok: false, current: now, reason: `the picker still shows "${now ?? 'nothing'}", not "${wanted}"` };
+  }
+  return { result, goOnAsItIs: false };
 }
 
 /** Runs one task to completion inside an already-open transport. */
@@ -2016,8 +2058,17 @@ export async function runTask(
       try {
         await transport.newChat();
         if (model) {
-          const reviewLocator = await deps.models?.locate?.(model).catch(() => undefined);
-          const picked: ModelChoice = await transport.selectModel(model, { locator: reviewLocator }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+          let picked: ModelChoice;
+          if (cfg.copilot.manualModel && deps.models?.askHelp) {
+            // By hand, as the work's model (see `applySessionModel`): the review's fresh conversation is asked about too.
+            const shown = await transport.currentModel().catch(() => null);
+            picked = buttonShows(shown, model)
+              ? { ok: true, current: model, by: 'already' }
+              : (await withOperatorHand(transport, model, { ok: false, current: shown, reason: 'Settings ask for the model to be chosen by hand (the review)' }, deps.models, session.id, bus, true)).result;
+          } else {
+            const reviewLocator = await deps.models?.locate?.(model).catch(() => undefined);
+            picked = await transport.selectModel(model, { locator: reviewLocator }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+          }
           const renamed = await followPageModels('review', model, picked, session, store, deps.models, effectiveModels(session, cfg).reviewModelFrom);
           if (renamed) sink.event('model-renamed', { asked: model, chosen: picked.matched, review: true }, renamed, 'warn');
           sink.event(picked.ok ? 'review-model-selected' : 'review-model-not-selected', { asked: model, current: picked.current },

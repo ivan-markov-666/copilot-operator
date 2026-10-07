@@ -616,7 +616,7 @@ export type Approval = {
   /** Set when the step was held because it downloads; asked about even in an unattended run. */
   network?: string;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */
-  model?: { asked: string; shown: string | null; why: string; tries: number };
+  model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean };
 };
 
 /** One thing wrong with a pasted plan, with the place in the document it is wrong at. */

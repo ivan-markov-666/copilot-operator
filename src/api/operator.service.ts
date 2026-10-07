@@ -2290,7 +2290,7 @@ export class OperatorService {
    * answered or the run is stopped.
    */
   askModelHelp(
-    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number },
+    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean },
     signal: AbortSignal,
   ): Promise<'recheck' | 'continue' | 'stop'> {
     return new Promise((resolveAnswer) => {
@@ -2303,9 +2303,9 @@ export class OperatorService {
         sessionId: ask.sessionId,
         taskId: '',
         stepId: 0,
-        description: `Choose "${ask.asked}" in the Copilot window`,
+        description: ask.asked ? `Choose "${ask.asked}" in the Copilot window` : 'Choose the model in the Copilot window',
         createdAt: new Date().toISOString(),
-        model: { asked: ask.asked, shown: ask.shown, why: ask.why, tries: ask.tries },
+        model: { asked: ask.asked, shown: ask.shown, why: ask.why, tries: ask.tries, ...(ask.manual ? { manual: true } : {}) },
       };
       this.waiting.set(approval.id, {
         approval,

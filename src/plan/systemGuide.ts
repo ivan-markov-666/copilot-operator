@@ -305,6 +305,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'На картата, която се появява, когато ботът не успее да избере модела: след като го изберете в прозореца на Copilot, ботът проверява менюто и продължава, или пита пак, ако то показва друг модел.',
           },
           {
+            key: 'approval.manualReady',
+            kind: 'button',
+            en: 'Ready — check and continue',
+            bg: 'Готово — провери и продължи',
+            doesEn: 'On the card shown when Settings ask for the model to be chosen by hand: after you chose it in the Copilot window, the bot checks the picker and starts.',
+            doesBg: 'На картата при ръчен избор на модела (от Настройки): след като го изберете в прозореца на Copilot, ботът проверява менюто и започва.',
+          },
+          {
             key: 'approval.modelAsItIs',
             kind: 'button',
             en: 'Continue on the model it is on',
@@ -3450,6 +3458,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Подходи, които чатът трябва да опита, преди да се откаже',
             doesEn: 'How many different approaches a "blocked" must list (2–20); with fewer the chat is asked for another.',
             doesBg: 'Колко различни подхода трябва да изброи „blocked“ (2–20); с по-малко чатът е помолен за още един.',
+          },
+          {
+            key: 'def.manualModel',
+            kind: 'field',
+            en: 'Choose the model by hand at the start of each run',
+            bg: 'Избирай модела ръчно в началото на всяко пускане',
+            doesEn: 'The bot leaves the model picker alone and asks, on a card, for the model to be chosen in the Copilot window; a conversation already on the model is not asked about.',
+            doesBg: 'Ботът не пипа менюто с моделите и моли, с карта, моделът да бъде избран в прозореца на Copilot; разговор, който вече е на модела, не се пита.',
           },
           {
             key: 'exec.maxReviewRounds',

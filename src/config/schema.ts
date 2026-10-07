@@ -107,6 +107,12 @@ export const RunConfigSchema = z.object({
        * different from whatever did the work.
        */
       defaultReviewModel: z.string().default(''),
+      /**
+       * Choose the model by hand (operator's workaround, 2026-10-06): at the start of a run, and of a review's
+       * conversation, the runner does not touch the picker; a card in the UI asks the operator to choose the
+       * model in the Copilot window and press "Ready". A conversation already on the model is not asked about.
+       */
+      manualModel: z.boolean().default(false),
       replyTimeoutSec: z.number().int().positive().default(900),
       signInTimeoutSec: z.number().int().positive().default(900),
       humanWaitSec: z.number().int().positive().default(900),

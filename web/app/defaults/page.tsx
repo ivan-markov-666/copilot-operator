@@ -914,12 +914,50 @@ function ModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refr
           : t('model.neverRead')}
       </p>
 
+      <ManualModelToggle />
+
       <h3>{t('proj.affects')}</h3>
       <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>
         <li>{t('def.modelAffectsNew')}</li>
         <li>{t('def.modelAffectsExisting')}</li>
         <li>{t('def.modelAffectsBatch')}</li>
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Choose the model by hand (operator's workaround, 2026-10-06): the bot leaves the picker alone and asks, on
+ * a card, for the model to be chosen in the Copilot window. Saved into `copilot.manualModel` at once.
+ */
+function ManualModelToggle() {
+  const { t } = useT();
+  const [on, setOn] = useState<boolean | null>(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => setOn(((s.raw.copilot as Record<string, unknown> | undefined)?.manualModel as boolean | undefined) === true))
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+  const save = async (value: boolean) => {
+    setOn(value);
+    try {
+      const s = await api.settings();
+      await api.saveSettings({ ...s.raw, copilot: { ...((s.raw.copilot as Record<string, unknown>) ?? {}), manualModel: value } });
+      setErr('');
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+  return (
+    <div style={{ marginTop: 12 }}>
+      <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <input id="manual-model" type="checkbox" checked={on === true} disabled={on === null} onChange={(e) => void save(e.target.checked)} />
+        <span>{t('def.manualModel')}</span>
+      </label>
+      <p className="why">{t('def.manualModelWhy')}</p>
+      {err && <div className="err">{err}</div>}
     </div>
   );
 }

@@ -1191,6 +1191,53 @@ Current URL: ${url}`);
       }
       return { row };
     };
+    /*
+     * A model in a group, by the keyboard (operator's choice, 2026-10-06: the submenu failed when it was
+     * expanded by click or hover). The picker opened, the group's row is focused, ArrowRight opens its
+     * submenu and puts the focus in it, ArrowDown moves the focus until it is on the model — read from the
+     * focused row's own text — and Enter chooses it. No hover, no coordinates.
+     */
+    const byKeyboard = async (attempt: number): Promise<boolean> => {
+      if (!target.group) return false;
+      const button = await waitThenFind('the picker button', async () => visible(await this.resolveModelButton(1_000)));
+      if (!button) return false;
+      await button.click({ timeout: 5_000 }).catch(() => undefined);
+      await settle();
+      if (!(await this.waitForPopup())) return false;
+      const group = await waitThenFind(`the "${target.group.name}" group`, () => this.rowByXPath(target.group!.xpath, target.group!.name, 0));
+      if (!group) {
+        await this.closeMenu();
+        return false;
+      }
+      await group.focus({ timeout: 3_000 }).catch(() => undefined);
+      await this.p.keyboard.press('ArrowRight');
+      this.emit('model-step', { step: 'group opened by the keyboard (ArrowRight)', attempt });
+      await settle();
+      const focused = (): Promise<{ text: string; radio: boolean }> =>
+        this.p.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          const row = el?.closest('[role="menuitemradio"],[role="menuitem"]') as HTMLElement | null;
+          return { text: (row?.innerText ?? '').trim(), radio: !!el?.closest('[role="menuitemradio"]') };
+        });
+      for (let presses = 0; presses < 12; presses += 1) {
+        const now = await focused();
+        const line = now.text.split('\n')[0]?.trim() ?? '';
+        if (now.radio && (sameModel(line, name) || sameModel(line, target.model) || containsModel(now.text, target.model))) {
+          this.emit('model-step', { step: 'model reached by the keyboard, pausing before Enter', attempt, text: line, presses, pauseMs: pause });
+          await this.p.waitForTimeout(pause);
+          await picture('before-enter');
+          await this.p.keyboard.press('Enter');
+          await settle();
+          return true;
+        }
+        await this.p.keyboard.press('ArrowDown');
+        await this.p.waitForTimeout(400);
+      }
+      this.emit('model-step', { step: 'model not reached by the keyboard', attempt });
+      await this.closeMenu();
+      await settle();
+      return false;
+    };
     const checked = async (row: Locator): Promise<boolean> => (await row.getAttribute('aria-checked').catch(() => null)) === 'true';
 
     /*
@@ -1201,6 +1248,17 @@ Current URL: ${url}`);
     let why = '';
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       this.emit('model-step', { step: 'attempt', attempt, of: attempts, model: name });
+      // A model in a group: the keyboard first; the other ways only when it does not get there.
+      if (target.group && (await byKeyboard(attempt))) {
+        await this.closeMenu();
+        await settle();
+        const shownNow = await this.currentModel();
+        if (buttonShows(shownNow, name)) {
+          this.emit('model-selected', { model: name, buttonShows: shownNow, by: 'operator', attempt, seenOn: 'button', how: 'keyboard' });
+          return { ok: true, current: name, by: 'operator' };
+        }
+        this.emit('model-step', { step: 'not shown on the button after Enter, trying the other ways', attempt, buttonShows: shownNow });
+      }
       const found = await reach();
       if ('problem' in found) {
         why = found.problem;

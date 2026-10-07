@@ -75,4 +75,51 @@ console.log('\n--- "continue on the model it is on", and "stop" ---');
   }
 }
 
+console.log('\n--- Settings: choose the model by hand (the workaround, 2026-10-06) ---');
+{
+  const h = await startHarness({ settings: { copilot: { defaultModel: 'Think deeper', manualModel: true } } });
+  try {
+    const [s] = await h.importPlan(plan(h));
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    const ask = await card(h);
+    t.check('a card for the model, the picker untouched', [ask.model?.asked, (ask.model as { manual?: boolean } | undefined)?.manual, h.chat.modelRequests.length, h.chat.sent.length], ['Think deeper', true, 0, 0]);
+    h.chat.currentModel = 'Think deeper';
+    await h.call('POST', `/approvals/${ask.id}`, { action: 'run' });
+    await h.idle();
+    const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string }> };
+    t.check('"Ready": checked on the picker, the run goes on', [v.tasks[0]!.status, v.modelInUse, h.chat.modelRequests.length], ['done', 'Think deeper', 0]);
+
+    // A conversation already on the model is not asked about.
+    const [s2] = await h.importPlan({ ...plan(h), sessions: [{ ...plan(h).sessions[0]!, name: 'already-on-it' }] });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.run(s2!.id, 'unattended');
+    const v2 = await h.session(s2!.id) as unknown as { tasks: Array<{ status: string }> };
+    t.check('the picker already on the model: no card, the run goes straight on', [v2.tasks[0]!.status, (await h.call<Approval[]>('GET', '/approvals')).length], ['done', 0]);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+{
+  const h = await startHarness({ settings: { copilot: { manualModel: true } } });
+  try {
+    const [s] = await h.importPlan(plan(h));
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
+    await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    const ask = await card(h);
+    t.check('no model in Settings: the card asks for whichever the operator wants', [ask.model?.asked, (ask.model as { manual?: boolean } | undefined)?.manual], ['', true]);
+    h.chat.currentModel = 'GPT 5.6 Think deeper';
+    await h.call('POST', `/approvals/${ask.id}`, { action: 'run' });
+    await h.idle();
+    const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string }> };
+    t.check('the run goes on, on the model chosen', [v.tasks[0]!.status, v.modelInUse], ['done', 'GPT 5.6 Think deeper']);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
 t.finish();

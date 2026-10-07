@@ -323,6 +323,30 @@ try {
     close();
   };
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  // The keyboard, as a Fluent menu has it: ArrowRight on a group opens it and focuses its first model,
+  // ArrowDown moves the focus (round), Enter chooses. window.clickOpens = false leaves groups to the keyboard only.
+  window.clickOpens = true;
+  for (const el of rows()) el.tabIndex = -1;
+  for (const g of Object.keys(subs)) {
+    const trigger = document.getElementById(g);
+    trigger.tabIndex = 0;
+    const onClick = trigger.onclick;
+    trigger.onclick = (ev) => { if (window.clickOpens) onClick.call(trigger, ev); };
+  }
+  document.addEventListener('keydown', (e) => {
+    const el = document.activeElement;
+    if (!el) return;
+    if (e.key === 'ArrowRight' && el.id in subs && window.keyboardOpens !== false) {
+      for (const s of Object.values(subs)) s.style.display = 'none';
+      subs[el.id].style.display = 'block';
+      subs[el.id].querySelector('[role=menuitemradio]').focus();
+    } else if (e.key === 'ArrowDown' && el.getAttribute('role') === 'menuitemradio') {
+      const sib = [...el.parentElement.querySelectorAll('[role=menuitemradio]')];
+      sib[(sib.indexOf(el) + 1) % sib.length].focus();
+    } else if (e.key === 'Enter' && el.getAttribute('role') === 'menuitemradio') {
+      el.click();
+    }
+  });
   window.current = () => current;
 </script></body></html>`;
     const page = await browser.newPage();
@@ -370,8 +394,8 @@ try {
       steps.length = 0;
       const r = await t2.selectModel(name);
       t.check(`"${name}": chosen, though the mouse would open Claude`, [r.ok, r.by, await inForce2()], [true, 'operator', name]);
-      const opened = steps.find((s) => s.e === 'model-step' && s.d?.step === 'group opened');
-      t.truthy('  its group opened on the element itself, and the record says how', opened?.d?.how === 'click on the element', steps.filter((s) => s.e === 'model-step').map((s) => s.d));
+      const how = steps.find((s) => s.e === 'model-selected')?.d?.how ?? steps.find((s) => s.e === 'model-step' && s.d?.step === 'group opened')?.d?.how;
+      t.truthy('  its group opened without the mouse (the keyboard, since 2026-10-06), and the record says how', how === 'keyboard' || how === 'click on the element', steps.filter((s) => s.e === 'model-step').map((s) => s.d));
     }
     rmSync(dir2, { recursive: true, force: true });
     await page2.close();
@@ -390,9 +414,10 @@ try {
     await page3.evaluate(() => { (window as unknown as { ignoreClicks: number }).ignoreClicks = 2; });
     let r3 = await t3.selectModel('GPT-5.6 Sol Think deeper');
     const tries = steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length;
-    t.check('two presses ignored: chosen on the third attempt, each attempt on record', [r3.ok, r3.by, await inForce3(), tries], [true, 'operator', 'GPT-5.6 Sol Think deeper', 3]);
+    // The keyboard's Enter and the click after it each spend one ignored press: the second attempt gets through.
+    t.check('two presses ignored: chosen on a later attempt, each attempt on record', [r3.ok, r3.by, await inForce3(), tries], [true, 'operator', 'GPT-5.6 Sol Think deeper', 2]);
     steps3.length = 0;
-    await page3.evaluate(() => { (window as unknown as { openDelay: number }).openDelay = 2_000; });
+    await page3.evaluate(() => { (window as unknown as { openDelay: number; keyboardOpens: boolean }).openDelay = 2_000; (window as unknown as { keyboardOpens: boolean }).keyboardOpens = false; });
     r3 = await t3.selectModel('Claude Opus 4.7 Think deeper');
     // The operator's rhythm (2026-10-06): not there → wait and look again; there → pause; then the press.
     const rhythm = steps3.filter((x) => x.e === 'model-step').map((x) => String(x.d?.step));
@@ -438,6 +463,24 @@ try {
     t.truthy('a pause before each of the three presses (button, group, model)', took4 >= 900, `${took4} ms`);
     rmSync(dir4, { recursive: true, force: true });
     await page4.close();
+    // The operator's choice (2026-10-06): the submenu by the keyboard. Here a group opens by nothing else.
+    console.log('\n=== a group that opens only by the keyboard ===');
+    const page5 = await browser.newPage();
+    const dir5 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const steps5: Array<{ e: string; d?: Record<string, unknown> }> = [];
+    const t5 = new CopilotTransport({ profileDir: '', transportDir: dir5, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3, onEvent: (e, d) => steps5.push({ e, d }) });
+    (t5 as unknown as { page: Page }).page = page5;
+    await page5.setContent(work);
+    await page5.evaluate(() => { (window as unknown as { clickOpens: boolean }).clickOpens = false; });
+    const inForce5 = async (): Promise<string> => await page5.evaluate(() => (window as unknown as { current: () => string }).current());
+    for (const name of ['GPT-5.6 Sol Think deeper', 'Claude Opus 4.7 Think deeper', 'GPT-5.6 Sol Quick response']) {
+      steps5.length = 0;
+      const r5 = await t5.selectModel(name);
+      const sel5 = steps5.find((x) => x.e === 'model-selected');
+      t.check(`"${name}": reached by the keyboard, chosen with Enter, seen on the button`, [r5.ok, await inForce5(), sel5?.d?.how, sel5?.d?.seenOn], [true, name, 'keyboard', 'button']);
+    }
+    rmSync(dir5, { recursive: true, force: true });
+    await page5.close();
   }
 } finally {
   await browser.close();
