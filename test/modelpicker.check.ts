@@ -414,8 +414,8 @@ try {
     await page3.evaluate(() => { (window as unknown as { ignoreClicks: number }).ignoreClicks = 2; });
     let r3 = await t3.selectModel('GPT-5.6 Sol Think deeper');
     const tries = steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length;
-    // The keyboard's Enter and the click after it each spend one ignored press: the second attempt gets through.
-    t.check('two presses ignored: chosen on a later attempt, each attempt on record', [r3.ok, r3.by, await inForce3(), tries], [true, 'operator', 'GPT-5.6 Sol Think deeper', 2]);
+    // The clicks first: each attempt spends one ignored press, so the third gets through.
+    t.check('two presses ignored: chosen on a later attempt, each attempt on record', [r3.ok, r3.by, await inForce3(), tries], [true, 'operator', 'GPT-5.6 Sol Think deeper', 3]);
     steps3.length = 0;
     await page3.evaluate(() => { (window as unknown as { openDelay: number; keyboardOpens: boolean }).openDelay = 2_000; (window as unknown as { keyboardOpens: boolean }).keyboardOpens = false; });
     r3 = await t3.selectModel('Claude Opus 4.7 Think deeper');
@@ -476,8 +476,9 @@ try {
     for (const name of ['GPT-5.6 Sol Think deeper', 'Claude Opus 4.7 Think deeper', 'GPT-5.6 Sol Quick response']) {
       steps5.length = 0;
       const r5 = await t5.selectModel(name);
-      const sel5 = steps5.find((x) => x.e === 'model-selected');
-      t.check(`"${name}": reached by the keyboard, chosen with Enter, seen on the button`, [r5.ok, await inForce5(), sel5?.d?.how, sel5?.d?.seenOn], [true, name, 'keyboard', 'button']);
+      // The clicks first (2026-10-07); where only the keyboard opens the group, it is what gets there.
+      const opened5 = steps5.find((x) => x.e === 'model-step' && x.d?.step === 'group opened')?.d?.how ?? steps5.find((x) => x.e === 'model-selected')?.d?.how;
+      t.check(`"${name}": the group opened by the keyboard, the model chosen`, [r5.ok, await inForce5(), opened5], [true, name, 'keyboard']);
     }
     rmSync(dir5, { recursive: true, force: true });
     await page5.close();

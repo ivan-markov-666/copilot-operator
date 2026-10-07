@@ -29,17 +29,14 @@ console.log('--- the operator chooses it in the Copilot window, then presses "ch
     t.check('the card names the model and what the picker shows, even in an unattended run', [first.model?.asked, first.model?.shown, first.model?.tries], ['GPT 9 Imaginary', 'Auto', 1]);
     t.check('nothing was sent while it waits', h.chat.sent.length, 0);
 
-    // Pressed before choosing it: the runner looks, and asks again.
+    // Since 2026-10-07 the operator's word is taken: the button's text could not be relied on at work.
+    // Pressed with the picker on another model, the run goes on, and the record says what the button read.
     await h.call('POST', `/approvals/${first.id}`, { action: 'run' });
-    const second = await waitFor('asked again', async () => (await h.call<Approval[]>('GET', '/approvals')).find((a) => !!a.model && a.id !== first.id), 60_000);
-    t.check('pressed with the picker still on Auto: asked again, saying so', [second.model?.tries, /still shows "Auto"/.test(second.model?.why ?? '')], [2, true]);
-
-    // Chosen by hand in the Copilot window, then pressed.
-    h.chat.currentModel = 'GPT 9 Imaginary';
-    await h.call('POST', `/approvals/${second.id}`, { action: 'run' });
     await h.idle();
     const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string }> };
-    t.check('the run goes on, on that model', [v.tasks[0]!.status, v.modelInUse], ['done', 'GPT 9 Imaginary']);
+    const events = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${s!.id}/events`);
+    t.check('"I chose it": the run goes on, on the operator\'s word', [v.tasks[0]!.status, (await h.call<Approval[]>('GET', '/approvals')).length], ['done', 0]);
+    t.truthy('and the record says what the button read', events.some((e) => e.type === 'model-help-taken-on-word' && /reads "Auto"/.test(e.message)), events.filter((e) => /model/.test(e.type)));
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

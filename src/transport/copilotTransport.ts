@@ -1248,23 +1248,26 @@ Current URL: ${url}`);
     let why = '';
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       this.emit('model-step', { step: 'attempt', attempt, of: attempts, model: name });
-      // A model in a group: the keyboard first; the other ways only when it does not get there.
-      if (target.group && (await byKeyboard(attempt))) {
-        await this.closeMenu();
-        await settle();
-        const shownNow = await this.currentModel();
-        if (buttonShows(shownNow, name)) {
-          this.emit('model-selected', { model: name, buttonShows: shownNow, by: 'operator', attempt, seenOn: 'button', how: 'keyboard' });
-          return { ok: true, current: name, by: 'operator' };
-        }
-        this.emit('model-step', { step: 'not shown on the button after Enter, trying the other ways', attempt, buttonShows: shownNow });
-      }
       const found = await reach();
       if ('problem' in found) {
         why = found.problem;
         this.emit('model-step', { step: 'not reached', attempt, why });
         await this.closeMenu();
         await settle();
+        /*
+         * The keyboard only when the clicks did not get there. Tried first on 2026-10-06, the live page did
+         * not move the focus into the submenu (2026-10-07: "model not reached by the keyboard", 6.5 s lost),
+         * while a click on the group's element opened it and the model was chosen at the first attempt.
+         */
+        if (target.group && (await byKeyboard(attempt))) {
+          await this.closeMenu();
+          await settle();
+          const shownNow = await this.currentModel();
+          if (buttonShows(shownNow, name)) {
+            this.emit('model-selected', { model: name, buttonShows: shownNow, by: 'operator', attempt, seenOn: 'button', how: 'keyboard' });
+            return { ok: true, current: name, by: 'operator' };
+          }
+        }
         continue;
       }
       if (await checked(found.row)) {

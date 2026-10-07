@@ -785,9 +785,17 @@ async function withOperatorHand(
       return { result: { ok: false, current: shown, reason: `the operator chose to go on with "${shown ?? 'unknown'}"` }, goOnAsItIs: true };
     }
     const now = await transport.currentModel().catch(() => null);
-    result = !wanted || buttonShows(now, wanted)
-      ? { ok: true, current: wanted || now, by: 'hand' }
-      : { ok: false, current: now, reason: `the picker still shows "${now ?? 'nothing'}", not "${wanted}"` };
+    /*
+     * The operator's word is taken (2026-10-07): the picker button's text could not be relied on at work —
+     * the right model chosen by hand, and "Ready" asked again and again because the button read otherwise.
+     * What the button shows is kept in the record beside it.
+     */
+    if (wanted && !buttonShows(now, wanted)) {
+      bus.publish({ sessionId, type: 'model-help-taken-on-word', level: 'warn',
+        message: `the operator says "${wanted}" is chosen; the picker button reads "${now ?? 'nothing'}", which the runner could not match — going on, on the operator's word`,
+        data: { asked: wanted, buttonShows: now } });
+    }
+    result = { ok: true, current: wanted || now, by: 'hand' };
   }
   return { result, goOnAsItIs: false };
 }
