@@ -692,6 +692,26 @@ function firstAttemptBase(task: Task): string | undefined {
   return earliestBase(task);
 }
 
+/**
+ * The branch a per-task session's task will be put on when its next attempt starts, worked out before the
+ * run by the rules `prepareForTask` applies at the start: a continuation, or a new prompt on finished work,
+ * goes on the previous attempt's branch; an attempt after one that committed nothing goes on that empty
+ * branch again; otherwise the planned or derived name, "-aN" from the second attempt on. A task that has
+ * run is judged as the attempt it would be queued as, by a plain re-run (no continuation). The one thing
+ * not asked here is whether that empty branch still sits where it was cut, which only the start can see.
+ */
+export function nextAttemptBranch(session: Session, task: Task): string {
+  const prefix = session.vcs?.branchPrefix || 'cop/';
+  const ran = task.status !== 'queued';
+  const attempt = (task.attempt ?? 1) + (ran ? 1 : 0);
+  const prev = ran ? { vcs: task.vcs } : task.attempts?.at(-1);
+  const carried = !ran && (task.continuing || task.buildsOn) ? task.attempts?.at(-1)?.vcs?.branch : undefined;
+  if (carried) return carried;
+  if (prev?.vcs?.branch && prev.vcs.baseCommit && !prev.vcs.commit && prev.vcs.baseCommit === firstAttemptBase(task)) return prev.vcs.branch;
+  const planned = task.vcsPlan?.branch?.trim();
+  return planned ? plannedBranchName(planned, prefix, attempt) : branchNameFrom([session.name, task.title, attempt > 1 ? `a${attempt}` : undefined], prefix);
+}
+
 async function switchTo(
   session: Session,
   task: Task,

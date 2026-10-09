@@ -238,6 +238,19 @@ export class OperatorController {
     return this.ops.rerunTask(id, taskId, patch, { buildOnFinished: buildOnFinished === true }).catch(fail);
   }
 
+  /** How the task contradicts itself, with the ways out of each contradiction. Changes nothing. */
+  @Get('sessions/:id/tasks/:taskId/contract')
+  contractCheck(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
+    return this.ops.contractCheck(id, taskId).catch(fail);
+  }
+
+  /** Applies one chosen fix per contradiction (-1 = none) and queues the task; starts nothing. */
+  @Post('sessions/:id/tasks/:taskId/contract-fix')
+  applyContractFix(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { choices?: number[]; expect?: string[] }): Promise<unknown> {
+    if (body?.expect !== undefined && (!Array.isArray(body.expect) || body.expect.some((x) => typeof x !== 'string'))) throw new BadRequestException('expect must be a list of the contradictions shown');
+    return this.ops.applyContractFix(id, taskId, body?.choices ?? [], body?.expect).catch(fail);
+  }
+
   /** What going back to before this task would do. Changes nothing. */
   @Get('sessions/:id/tasks/:taskId/restore')
   restorePreview(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {

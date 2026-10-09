@@ -10,7 +10,7 @@
  * or the reason it stopped, because "what was done and what was not" is the whole question.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api, fmtDuration, type Metrics, type MetricsRow, type Ratio, type RegistryEntry, type TaskCheck, type TaskStatus, sessionHref } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
@@ -28,6 +28,7 @@ import { confirmDialog } from '../dialog';
 import { ChangesButton } from '../diffView';
 import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { TaskStory } from '../taskStory';
+import { ContractFixPanel, RunQueuedPanel } from '../runQueued';
 
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
 /** Everything that ended without the work being done, which is what the counter asks about. */
@@ -62,6 +63,51 @@ function RunTook({ run }: { run: Run }) {
   const now = useNow(live);
   const span = runSpanMs(run, run.entries, now);
   return <>{t(span.live ? 'reg.runRunning' : 'reg.runTook', { d: fmtDuration(span.ms) })}</>;
+}
+
+/**
+ * Tasks with the same title in other sessions, by `sessionId:taskId`.
+ *
+ * A plan imported twice, or a session copied to try again, puts two tasks of one name on this page:
+ * one fixed and queued, one old and failed. Read by title, the actions beside the old one looked like
+ * the actions for the new one (operator feedback 2026-10-08), so each row says where the others are —
+ * their session, when they were added, their status and attempt. Not "newer" and "older": the time a
+ * task was added survives every re-queue, so a fixed copy could read as the old one, and two different
+ * tasks can share a title. A context rather than a prop, because every list on the page shows rows.
+ */
+const TwinsContext = createContext<Map<string, RegistryEntry[]>>(new Map());
+
+/** The queued row whose "Run this task" panel is open, for the whole page: one at a time, wherever the row is listed. */
+type RunPanelState = { taskId: string } | null;
+const RunPanelContext = createContext<{ runPanel: RunPanelState; setRunPanel: (next: RunPanelState) => void }>({
+  runPanel: null,
+  setRunPanel: () => undefined,
+});
+
+/**
+ * The dialog a row opened — a prompt rewritten, a contradiction fixed — held by the page, not by the list
+ * the row is in. Both end with the task queued again, which moves its row from "What has been done" to
+ * "What is next" on the next reload, and the offer to run it that follows has to survive that: held by
+ * the list, the dialog went with the list on the next 6-second reload, and an offer opened on the row
+ * landed in a folded or filtered list, out of sight (review of 2026-10-09).
+ */
+type TaskDialog = { kind: 'fix-prompt' | 'contract'; entry: RegistryEntry } | null;
+const TaskDialogContext = createContext<(next: TaskDialog) => void>(() => undefined);
+
+function twinsOf(entries: RegistryEntry[]): Map<string, RegistryEntry[]> {
+  const byTitle = new Map<string, RegistryEntry[]>();
+  for (const e of entries) {
+    const key = e.title.trim().toLowerCase();
+    byTitle.set(key, [...(byTitle.get(key) ?? []), e]);
+  }
+  const out = new Map<string, RegistryEntry[]>();
+  for (const group of byTitle.values()) {
+    for (const e of group) {
+      const others = group.filter((o) => o.sessionId !== e.sessionId);
+      if (others.length > 0) out.set(`${e.sessionId}:${e.taskId}`, others);
+    }
+  }
+  return out;
 }
 
 function groupIntoRuns(entries: RegistryEntry[]): { runs: Run[]; loose: RegistryEntry[] } {
@@ -155,6 +201,11 @@ export default function HistoryPage() {
   }, [all]);
 
   const grouped = useMemo(() => groupIntoRuns(shown), [shown]);
+  // Over every task, not the filtered ones: narrowing to one session must not hide that its task has a twin.
+  const twins = useMemo(() => twinsOf(all ?? []), [all]);
+  const [runPanel, setRunPanel] = useState<RunPanelState>(null);
+  const runPanelValue = useMemo(() => ({ runPanel, setRunPanel }), [runPanel]);
+  const [dialog, setDialog] = useState<TaskDialog>(null);
 
   const active = shown.filter((e) => e.status === 'running' || e.status === 'waiting-approval');
   /*
@@ -176,7 +227,29 @@ export default function HistoryPage() {
   const filtered = sessionId !== '' || status !== '' || query.trim() !== '';
 
   return (
-    <>
+    <TwinsContext.Provider value={twins}>
+    <RunPanelContext.Provider value={runPanelValue}>
+    <TaskDialogContext.Provider value={setDialog}>
+      {dialog?.kind === 'fix-prompt' && (
+        <FixPromptDialog
+          entry={dialog.entry}
+          offerRun
+          onClose={(changed) => {
+            setDialog(null);
+            if (changed) void load();
+          }}
+        />
+      )}
+      {dialog?.kind === 'contract' && (
+        <ContractDialog
+          entry={dialog.entry}
+          onChange={() => void load()}
+          onClose={(changed) => {
+            setDialog(null);
+            if (changed) void load();
+          }}
+        />
+      )}
       <div className="panel">
         <div className="row">
           <h2 className="grow" style={{ margin: 0 }}>
@@ -370,7 +443,9 @@ export default function HistoryPage() {
           {all && all.length > 0 && <MetricsPanel refreshKey={updatedAt} />}
         </>
       )}
-    </>
+    </TaskDialogContext.Provider>
+    </RunPanelContext.Provider>
+    </TwinsContext.Provider>
   );
 }
 
@@ -518,12 +593,15 @@ function Flow({
   const actions = useTaskActions(onChange ?? (() => undefined));
   // One tick for the whole list, and only while something in it is still going.
   const now = useNow(entries.some(isLive));
-  /** The failed task whose prompt is being rewritten, if one is. */
-  const [fixing, setFixing] = useState<RegistryEntry | null>(null);
   /** The rows whose story is unfolded. */
   const [storyOpen, setStoryOpen] = useState<Set<string>>(new Set());
   /** The row whose "Continue where it stopped" panel is open, if one is. */
   const [continuing, setContinuing] = useState<string | null>(null);
+  /** The queued row whose "Run this task" panel is open. */
+  const { runPanel, setRunPanel } = useContext(RunPanelContext);
+  /** Opens a row's dialog — the prompt, or the contradiction — at page level; see `TaskDialog`. */
+  const openDialog = useContext(TaskDialogContext);
+  const twins = useContext(TwinsContext);
   const flipStory = (taskId: string) =>
     setStoryOpen((prev) => {
       const next = new Set(prev);
@@ -534,21 +612,18 @@ function Flow({
 
   return (
     <>
-    {fixing && (
-      <FixPromptDialog
-        entry={fixing}
-        onClose={(changed) => {
-          setFixing(null);
-          if (changed) onChange?.();
-        }}
-      />
-    )}
     <ol className="flow">
       {entries.map((e) => {
         const isNext = upcoming && e.queuePosition === 1;
         const runSize = e.runGroup ? (sizes?.get(e.runGroup.id) ?? 1) : 0;
         return (
           <li key={`${e.sessionId}-${e.taskId}`} className={`${e.status}${isNext ? ' next' : ''}`}>
+            {/*
+              The status marker on the thread. An element rather than a drawn circle so it can say
+              what it is on hover: a hollow ring beside a row read as a radio button that did
+              nothing (operator feedback 2026-10-08). The actions are the buttons under the task.
+            */}
+            <span className="flow-mark" role="img" aria-label={t(`status.${e.status}` as Key)} title={t('flow.markWhy', { status: t(`status.${e.status}` as Key) })} />
             <div className="head">
               {picking && (
                 <input
@@ -562,6 +637,7 @@ function Flow({
               <strong>{e.title}</strong>
               <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
               {isNext && <span className="chip">{t('reg.next')}</span>}
+              <TwinChips entry={e} twins={twins.get(`${e.sessionId}:${e.taskId}`)} />
               {e.limit && (
                 <span className="chip" title={t('reg.limitChipWhy')}>
                   {t('reg.limitChip', { limit: limitWords(t, e.limit) })}
@@ -745,6 +821,31 @@ function Flow({
                 </button>
               )}
               {/*
+               * A waiting task is started from its own row. Before, the only starts were the
+               * session's and the grouped "Continue", so a task fixed and queued again had no button
+               * of its own, and the buttons near it belonged to the attempt that had failed.
+               */}
+              {e.status === 'queued' && !e.sessionRunning && !e.sessionInactive && (
+                <button
+                  className={runPanel?.taskId === e.taskId ? '' : 'primary'}
+                  aria-expanded={runPanel?.taskId === e.taskId}
+                  onClick={() => setRunPanel(runPanel?.taskId === e.taskId ? null : { taskId: e.taskId })}
+                  title={t('runq.buttonWhy')}
+                >
+                  {t('runq.button')}
+                </button>
+              )}
+              {e.stopCode === 'contract-conflict' && !OPEN_STATUSES.includes(e.status) && !e.sessionRunning && (
+                <button
+                  className="primary"
+                  aria-haspopup="dialog"
+                  onClick={() => openDialog({ kind: 'contract', entry: e })}
+                  title={t('cfix.buttonWhy')}
+                >
+                  {t('cfix.button')}
+                </button>
+              )}
+              {/*
                * On the row itself: a task stopped by a limit is noticed here, and carrying it on
                * used to mean finding its card on the session page or the grouped panel above.
                */}
@@ -764,7 +865,8 @@ function Flow({
                */}
               {!continuable(e) && (e.status === 'failed' || e.status === 'blocked') && !e.sessionRunning && !e.sessionInactive && (
                 <button
-                  className={continuing === e.taskId ? '' : 'primary'}
+                  // Run as it is, a task that contradicts itself only stops again: the fix beside it is the way on.
+                  className={continuing === e.taskId || e.stopCode === 'contract-conflict' ? '' : 'primary'}
                   aria-expanded={continuing === e.taskId}
                   onClick={() => setContinuing(continuing === e.taskId ? null : e.taskId)}
                   title={t('reg.rerunHereWhy')}
@@ -773,7 +875,7 @@ function Flow({
                 </button>
               )}
               {FAILED_STATUSES.includes(e.status) && !e.sessionRunning && (
-                <button className="quiet" onClick={() => setFixing(e)} title={t('reg.fixPromptHint')}>
+                <button className="quiet" aria-haspopup="dialog" onClick={() => openDialog({ kind: 'fix-prompt', entry: e })} title={t('reg.fixPromptHint')}>
                   {t('reg.fixPrompt')}
                 </button>
               )}
@@ -783,7 +885,7 @@ function Flow({
                * `Task.buildsOn`.
                */}
               {e.status === 'done' && !e.sessionRunning && (
-                <button className="quiet" onClick={() => setFixing(e)} title={t('reg.newPromptHint')}>
+                <button className="quiet" aria-haspopup="dialog" onClick={() => openDialog({ kind: 'fix-prompt', entry: e })} title={t('reg.newPromptHint')}>
                   {t('reg.newPrompt')}
                 </button>
               )}
@@ -821,6 +923,15 @@ function Flow({
                 }}
               />
             )}
+            {runPanel?.taskId === e.taskId && e.status === 'queued' && (
+              <RunQueuedPanel
+                target={{ sessionId: e.sessionId, taskId: e.taskId, title: e.title }}
+                onClose={(started) => {
+                  setRunPanel(null);
+                  if (started) onChange?.();
+                }}
+              />
+            )}
             {storyOpen.has(e.taskId) && e.runId && (
               <TaskStory sessionId={e.sessionId} taskId={e.taskId} live={e.status === 'running' || e.status === 'waiting-approval'} />
             )}
@@ -832,6 +943,26 @@ function Flow({
   );
 }
 
+
+/** Where tasks of the same title live in other sessions: each one's session, when it was added, its status and attempt. */
+function TwinChips({ entry, twins }: { entry: RegistryEntry; twins?: RegistryEntry[] }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
+  if (!twins || twins.length === 0) return null;
+  const why = t('twin.why', { mine: fmtTime(entry.createdAt), attempt: entry.attempt ?? 1 });
+  return (
+    <>
+      <span className="chip twin" title={why}>
+        {t('twin.sameTitle', { n: twins.length })}
+      </span>
+      {twins.map((o) => (
+        <span key={`${o.sessionId}:${o.taskId}`} className="chip twin" title={why}>
+          {t('twin.alsoIn', { session: o.sessionName, when: fmtTime(o.createdAt), status: t(`status.${o.status}` as Key), attempt: o.attempt ?? 1 })}
+        </span>
+      ))}
+    </>
+  );
+}
 
 /** The three JSON downloads, as a tight group of links with what each one answers on hover. */
 function ExportLinks({ where }: { where: { run?: string; session?: string; task?: string } }) {
@@ -1002,11 +1133,25 @@ function PastByRun({ entries, sizes, onChange }: { entries: RegistryEntry[]; siz
  * what gets rewritten. Nothing else is touched; the attempt that ran keeps the text it ran
  * with, and the new attempt goes to the back of the session's queue.
  */
-function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (changed: boolean) => void }) {
+function FixPromptDialog({
+  entry,
+  onClose,
+  offerRun = false,
+}: {
+  entry: RegistryEntry;
+  onClose: (changed: boolean) => void;
+  /**
+   * After saving, ask whether to run it now instead of closing. Off inside the Continue panel, which
+   * is itself the way to run what was just queued.
+   */
+  offerRun?: boolean;
+}) {
   const { t } = useT();
   const [prompt, setPrompt] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  /** Saved and queued: the dialog now asks whether to run it. */
+  const [saved, setSaved] = useState(false);
   /*
    * What the new prompt keeps from the old contract. A failed task given a fixed prompt is the same
    * question worded better, so its checks start ticked; a done task given a new prompt is a new
@@ -1023,11 +1168,15 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
   // Escape leaves it, as it does the other two dialogs; it did nothing here.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !busy) onClose(false);
+      /*
+       * Not when an "are you sure" box inside it (Run without asking) takes the key: that box marks it
+       * handled when its listener runs first, and is still on the page when this one does.
+       */
+      if (e.key === 'Escape' && !e.defaultPrevented && !busy && !document.querySelector('[role="alertdialog"]')) onClose(saved);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onClose]);
+  }, [busy, saved, onClose]);
 
   useEffect(() => {
     let live = true;
@@ -1065,7 +1214,10 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
         { buildOnFinished: entry.status === 'done' },
       );
       setMsg(t('reg.fixPromptSaved', { title: entry.title }));
-      setTimeout(() => onClose(true), 900);
+      if (offerRun) {
+        setSaved(true);
+        setBusy(false);
+      } else setTimeout(() => onClose(true), 900);
     } catch (e) {
       setMsg((e as Error).message);
       setBusy(false);
@@ -1073,9 +1225,22 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
   };
 
   return (
-    <div className="modal-backdrop" role="presentation" onClick={() => onClose(false)}>
+    <div className="modal-backdrop" role="presentation" onClick={() => onClose(saved)}>
       <div ref={boxRef} className="modal wide" role="dialog" aria-modal="true" aria-labelledby="fix-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="fix-title">{t('reg.fixPromptTitle', { title: entry.title })}</h2>
+        {saved ? (
+          /*
+           * Saved and queued: what running it would take, and the two ways to start, here in the dialog
+           * the operator is already looking at — not on a row that has just moved to another list.
+           */
+          <RunQueuedPanel
+            target={{ sessionId: entry.sessionId, taskId: entry.taskId, title: entry.title }}
+            intro={`${msg} ${t('runq.ask')}`}
+            focusFirst
+            onClose={() => onClose(true)}
+          />
+        ) : (
+          <>
         <p className="muted small">{t(entry.status === 'done' ? 'reg.newPromptHint' : 'reg.fixPromptHint')}</p>
         {entry.reason && <p className="what err small">{t('reg.stopped', { reason: entry.reason })}</p>}
         {prompt === null ? (
@@ -1119,6 +1284,57 @@ function FixPromptDialog({ entry, onClose }: { entry: RegistryEntry; onClose: (c
             {t('reg.fixPromptSave')}
           </button>
         </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Fix the contradiction" on a row: the ways out, then — once nothing is left in the way — the offer to
+ * run it, in one dialog held by the page (see `TaskDialog`). A partial fix keeps the dialog on what is
+ * still in the way.
+ */
+function ContractDialog({ entry, onChange, onClose }: { entry: RegistryEntry; onChange: () => void; onClose: (changed: boolean) => void }) {
+  const { t } = useT();
+  const [changed, setChanged] = useState(false);
+  /** Nothing left in the way: what was changed, said first in the offer to run it. */
+  const [ready, setReady] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(boxRef, true);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('[role="alertdialog"]')) onClose(changed);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [changed, onClose]);
+  const target = { sessionId: entry.sessionId, taskId: entry.taskId, title: entry.title };
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={() => onClose(changed)}>
+      <div ref={boxRef} className="modal wide" role="dialog" aria-modal="true" aria-labelledby="contract-title" onClick={(e) => e.stopPropagation()}>
+        <h2 id="contract-title">{t('cfix.button')}</h2>
+        {entry.reason && <p className="what err small">{t('reg.stopped', { reason: entry.reason })}</p>}
+        {ready !== null ? (
+          <RunQueuedPanel target={target} intro={`${ready} ${t('runq.savedOffer')}`} focusFirst onClose={() => onClose(true)} />
+        ) : (
+          <>
+            <ContractFixPanel
+              target={target}
+              onApplied={(remaining, said) => {
+                setChanged(true);
+                onChange();
+                if (remaining === 0) setReady(said);
+              }}
+            />
+            <div className="row modal-actions">
+              <button type="button" className="quiet" onClick={() => onClose(changed)}>
+                {changed ? t('runq.later') : t('dialog.cancel')}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1246,6 +1462,15 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
       </div>
     </div>
   );
+}
+
+/** In the Continue panel and the list view: which of several tasks of one title this is. */
+function TwinMark({ entry }: { entry: RegistryEntry }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
+  const twins = useContext(TwinsContext).get(`${entry.sessionId}:${entry.taskId}`);
+  if (!twins || twins.length === 0) return null;
+  return <span className="muted small"> · {t('twin.mark', { when: fmtTime(entry.createdAt), attempt: entry.attempt ?? 1 })}</span>;
 }
 
 function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange: () => void }) {
@@ -1397,6 +1622,7 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
                       <label className="option-inline">
                         <input type="checkbox" checked={picked.has(e.taskId)} onChange={(ev) => tick(e.taskId, ev.target.checked)} />
                         <strong>{e.title}</strong> · {e.sessionName} · <span className={`badge ${e.status}`}>{t(`status.${e.status}` as Key)}</span>
+                        <TwinMark entry={e} />
                         {continuable(e) && <span className="muted small"> · {t('reg.willContinue')}</span>}
                       </label>{' '}
                       {/* The use case this panel grew for: one fixed task, run on its own. */}
@@ -1494,6 +1720,7 @@ function ListView({ entries }: { entries: RegistryEntry[] }) {
             <tr key={`${e.sessionId}-${e.taskId}`}>
               <td>
                 <Link href={sessionHref(e.sessionId, e.taskId)}>{e.title}</Link>
+                <TwinMark entry={e} />
               </td>
               <td>
                 <Link href={sessionHref(e.sessionId)}>{e.sessionName}</Link>

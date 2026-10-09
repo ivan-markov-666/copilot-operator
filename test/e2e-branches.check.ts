@@ -1098,6 +1098,40 @@ await scenario('Run again from here on a session that carries on an existing bra
  * diverged, switched off and unreachable; these are the three quiet outcomes, which must leave the local
  * branch exactly where it was and must not stop the task.
  */
+/*
+ * "Run again from here" names, before anything moves, each later session of the run in the same
+ * repository that it moves onto a new branch, with the commits that stay behind on that session's branch.
+ * Only the first session's line used to be listed, and the later session's move came unannounced
+ * (review of 2026-10-09).
+ */
+await scenario('Run again from here lists the later sessions it moves, with their own commits, and moves nothing for a session set aside', {}, async (h) => {
+  const [first] = await h.importPlan(plan(h, 'first', [fileTask('one', 'one.txt', 'one')]));
+  const [second] = await h.importPlan(plan(h, 'second', [fileTask('two', 'two.txt', 'two')]));
+  h.chat.script(write('one.txt', 'one'), reply.done(), write('two.txt', 'two'), reply.done());
+  await h.call('POST', '/batch/start', { sessionIds: [first!.id, second!.id], mode: 'unattended', onFailure: 'continue' });
+  await waitFor('both sessions to finish', async () => (await read(h, second!.id)).tasks[0]!.status === 'done', 60_000);
+  await h.idle();
+  const one = (await read(h, first!.id)).tasks[0]!;
+  type Preview = { ok: boolean; restores: Array<{ leftBehind: string[]; laterSessions?: Array<{ sessionName: string; branch: string; commits: string[] }> }> };
+  const p = await h.call<Preview>('GET', `/sessions/${first!.id}/tasks/${one.id}/restart`);
+  const firstLine = h.git('log', '--oneline', `${one.vcs?.baseCommit ?? ''}..cop/first`).split('\n').filter(Boolean);
+  const secondLine = h.git('log', '--oneline', 'cop/first..cop/second').split('\n').filter(Boolean);
+  t.check('one repository, the first session\'s commits as before', [p.ok, p.restores.length, p.restores[0]?.leftBehind], [true, 1, firstLine]);
+  t.check('and the second session named, with the branch it leaves and its own commit', p.restores[0]?.laterSessions, [{ sessionName: 'second', branch: 'cop/second', commits: secondLine }]);
+  t.truthy('a commit is named once', secondLine.length === 1 && !firstLine.includes(secondLine[0]!), { firstLine, secondLine });
+
+  // A session it would run set aside: refused before anything moves (it used to take the repository
+  // back and queue the tasks, and only then refuse the run — review of 2026-10-09).
+  await h.call('PUT', `/sessions/${second!.id}`, { active: false });
+  const head = h.git('rev-parse', 'HEAD');
+  const branchBefore = h.git('branch', '--show-current');
+  const asked = await h.call<Preview & { problem?: string }>('GET', `/sessions/${first!.id}/tasks/${one.id}/restart`);
+  t.truthy('the preview says it cannot, naming the inactive session', !asked.ok && /"second": the session is inactive/.test(asked.problem ?? ''), asked.problem);
+  const r = await h.call<Restarted>('POST', `/sessions/${first!.id}/tasks/${one.id}/restart`, { restore: false });
+  t.truthy('refused, even without a restore', !r.started && /inactive/.test(r.reason ?? ''), r);
+  t.check('and nothing moved: no repository, no task, no branch', [r.restored, r.requeued, h.git('rev-parse', 'HEAD'), h.git('branch', '--show-current'), (await read(h, first!.id)).tasks[0]!.status], [[], 0, head, branchBefore, 'done']);
+});
+
 await scenario('update from the remote: no remote, ahead, up to date', {}, async (h) => {
   const fromMain = (name: string): Record<string, unknown> => plan(h, name, [fileTask(`${name}-task`, `${name}.txt`, name)], { startFrom: 'branch', baseBranch: 'main' });
 

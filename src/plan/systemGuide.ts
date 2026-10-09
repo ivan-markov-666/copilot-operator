@@ -1771,9 +1771,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Run again',
             bg: 'Пусни отново',
             doesEn:
-              'Puts a finished task back in the queue unchanged, to start afresh; the earlier attempt is kept with its own log. It only queues.',
+              'Puts a finished task back in the queue unchanged, to start afresh; the earlier attempt is kept with its own log. It only queues, then offers "Run this task" on the card.',
             doesBg:
-              'Връща приключила задача в опашката без промяна, да тръгне отначало; предишният опит се пази със собствен дневник. Само я нарежда.',
+              'Връща приключила задача в опашката без промяна, да тръгне отначало; предишният опит се пази със собствен дневник. Само я нарежда, после предлага „Пусни тази задача“ на картата.',
           },
           {
             key: 'restore.button',
@@ -2607,9 +2607,79 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Fix the prompt and queue it again',
             bg: 'Поправи prompt-а и върни в опашката',
             doesEn:
-              'On a row that did not end done, its session idle: rewrite the task\'s text and queue it again. It does not start it.',
+              'On a row that did not end done, its session idle: rewrite the task\'s text and queue it again. Saving does not start it; the same dialog then asks "Run it now?" with the "Run this task" choices and buttons.',
             doesBg:
-              'На ред, който не е завършил готов, при спряна сесия: пренапишете текста на задачата и я върнете в опашката. Не я пуска.',
+              'На ред, който не е завършил готов, при спряна сесия: пренапишете текста на задачата и я върнете в опашката. Запазването не я пуска; после същият прозорец пита „Да я пусна ли сега?“ с изборите и бутоните на „Пусни тази задача“.',
+          },
+          {
+            key: 'runq.later',
+            kind: 'button',
+            en: 'Later',
+            bg: 'По-късно',
+            doesEn:
+              'On a "Run this task" panel that was offered rather than asked for — after a prompt was saved, a contradiction fixed, or a task queued again on its card: leaves the task waiting in the queue.',
+            doesBg:
+              'В панела „Пусни тази задача“, когато е предложен, а не поискан — след запазен prompt, поправено противоречие или задача, върната в опашката от картата ѝ: оставя задачата да чака в опашката.',
+          },
+          {
+            key: 'runq.button',
+            kind: 'button',
+            en: 'Run this task',
+            bg: 'Пусни тази задача',
+            doesEn:
+              'On a waiting (queued) row, its session idle and active: a panel to start that task now — "Only this task", or "This one and the N queued after it" in its session. It lists what runs, says the tasks that already ran are not touched, and names an earlier task of a chain that did not succeed (a warning, not a refusal). Also on a queued task card on the session page.',
+            doesBg:
+              'На чакащ ред, при спряна и активна сесия: панел за пускане на задачата сега — „Само тази задача“ или „Тази и N чакащи след нея“ в сесията ѝ. Изброява какво ще тръгне, казва, че вече изпълнените задачи не се пипат, и назовава по-ранна задача от верига, която не е минала (предупреждение, не отказ). Има го и на картата на чакаща задача в страницата на сесията.',
+          },
+          {
+            key: 'runq.go',
+            kind: 'button',
+            en: 'Run, asking before each command',
+            bg: 'Пусни, с питане преди всяка команда',
+            doesEn:
+              'In "Run this task": starts what the panel lists, step by step. A refusal is said in the panel; if the task contradicts itself, its fixes open right there.',
+            doesBg:
+              'В „Пусни тази задача“: пуска изброеното в панела, стъпка по стъпка. Отказът се казва в панела; ако задачата си противоречи, поправките ѝ се отварят там.',
+          },
+          {
+            key: 'runq.unattended',
+            kind: 'button',
+            en: 'Run without asking',
+            bg: 'Пусни без да пита',
+            doesEn:
+              'In "Run this task": the same, on its own, without stopping to ask; asks "are you sure" first unless Settings say not to.',
+            doesBg:
+              'В „Пусни тази задача“: същото, самостоятелно, без да спира да пита; първо пита „сигурни ли сте“, освен ако настройките не казват друго.',
+          },
+          {
+            key: 'cfix.button',
+            kind: 'button',
+            en: 'Fix the contradiction',
+            bg: 'Поправи противоречието',
+            doesEn:
+              'On a row (a dialog) or task card blocked because it contradicts itself (the chip "task contradicts itself"): lists each contradiction with the ways out, the least change chosen — add the file to the scope, let a read-only task change only that file, drop the scope, or drop one of its own checks. Never changes the prompt. A task a run refused to start for this stays queued: its fixes open inside "Run this task".',
+            doesBg:
+              'На ред (или карта), блокиран с „задачата си противоречи“: изброява всяко противоречие с изходите от него, като е избрана най-малката промяна — файлът в обхвата, задача само за четене да променя само този файл, без обхват, или без една от собствените ѝ проверки. Prompt-ът никога не се променя.',
+          },
+          {
+            key: 'cfix.apply',
+            kind: 'button',
+            en: 'Apply and queue it again',
+            bg: 'Приложи и върни в опашката',
+            doesEn:
+              'Applies the chosen fixes, queues the task as a new attempt and offers "Run this task". Nothing starts by itself.',
+            doesBg:
+              'Прилага избраните поправки, връща задачата в опашката като нов опит и предлага „Пусни тази задача“. Нищо не тръгва само.',
+          },
+          {
+            key: 'cfix.applyQueued',
+            kind: 'button',
+            en: 'Apply',
+            bg: 'Приложи',
+            doesEn:
+              'The same for a task still waiting (a run refused to start it): edits it where it waits; then start it again from the same panel.',
+            doesBg:
+              'Същото за задача, която още чака (пускането е отказано): променя я на място; после я пуснете отново от същия панел.',
           },
           {
             key: 'reg.newPrompt',

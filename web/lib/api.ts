@@ -525,6 +525,8 @@ export type RestartPlan = {
     branchName?: string;
     leftBehind: string[];
     keptOn?: string;
+    /** Later sessions in this repository moved onto a new branch, with their own commits that stay behind. */
+    laterSessions?: Array<{ sessionName: string; branch: string; commits: string[] }>;
   }>;
   /** How the run it repeats was started; `confirm` when it left no record of its own. */
   mode: RunMode;
@@ -535,6 +537,16 @@ export type RestartPlan = {
   unattendedRefused?: string;
   onFailure: OnFailure;
 };
+
+/** The smallest change to a task's contract that removes one contradiction; see `ContractFix` in the API. */
+export type ContractFix =
+  | { kind: 'add-to-scope'; path: string }
+  | { kind: 'not-read-only'; scope: string[] }
+  | { kind: 'drop-scope' }
+  | { kind: 'drop-check'; check: string };
+
+/** One way a task contradicts itself, and the ways out of it, least change first. */
+export type ContractConflict = { text: string; fixes: ContractFix[] };
 
 export type RestartResult = {
   started: boolean;
@@ -1142,6 +1154,16 @@ export const api = {
   /** Does it: a new branch at the commit that task started from, checked out. */
   restore: (id: string, taskId: string) =>
     call<RestoreResult>(`/sessions/${id}/tasks/${taskId}/restore`, { method: 'POST', body: '{}' }),
+
+  /** How a task contradicts itself, with the ways out. Changes nothing. */
+  contractCheck: (id: string, taskId: string) => call<{ conflicts: ContractConflict[] }>(`/sessions/${id}/tasks/${taskId}/contract`),
+  /** One chosen fix per contradiction (-1 = none); the task is queued with them, nothing starts. */
+  /** `expect`: the contradictions the choices were made from; refused when the task's are not those any more. */
+  applyContractFix: (id: string, taskId: string, choices: number[], expect: string[]) =>
+    call<{ task: Task; applied: string[]; remaining: ContractConflict[] }>(`/sessions/${id}/tasks/${taskId}/contract-fix`, {
+      method: 'POST',
+      body: JSON.stringify({ choices, expect }),
+    }),
 
   /** What starting the whole run again from this task would re-queue, and do to the code. */
   restartPlan: (id: string, taskId: string) => call<RestartPlan>(`/sessions/${id}/tasks/${taskId}/restart`),

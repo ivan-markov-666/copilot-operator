@@ -21,6 +21,7 @@ import { useTaskActions } from '../../taskActions';
 import { usePoll } from '../../../lib/usePoll';
 import { ContractFields, scopeLines } from '../../contractFields';
 import { PrepareFolder } from '../../prepareFolder';
+import { ContractFixPanel, RunQueuedPanel } from '../../runQueued';
 
 // ---------------------------------------------------------------------------------------
 // The page
@@ -1613,6 +1614,12 @@ function TaskCard({
   const now = useNow(isLive(task));
   const [files, setFiles] = useState<{ reports: string[]; artifacts: string[]; replies: string[] } | null>(null);
   const [msg, setMsg] = useState('');
+  /**
+   * The "Run this task" panel, open on a queued card: asked for with the button, or offered after an
+   * edit put the task back in the queue or a contradiction was fixed (`intro` says which).
+   */
+  const [runPanel, setRunPanel] = useState<{ intro?: string } | null>(null);
+  const [fixingContract, setFixingContract] = useState(false);
 
   /*
    * The form starts from the task as it is now, every time it opens. The fields were copied from
@@ -1674,6 +1681,8 @@ function TaskCard({
     try {
       await api.continueTask(session.id, task.id);
       onChange();
+      // Queued, not started: every way back into the queue ends with the offer to run it.
+      setRunPanel({ intro: t('runq.savedOffer') });
     } catch (e) {
       setMsg((e as Error).message);
     }
@@ -1684,6 +1693,7 @@ function TaskCard({
     try {
       await api.rerunTask(session.id, task.id);
       onChange();
+      setRunPanel({ intro: t('runq.savedOffer') });
     } catch (e) {
       setMsg((e as Error).message);
     }
@@ -1707,6 +1717,8 @@ function TaskCard({
       );
       setEditing(false);
       onChange();
+      // Queued again: the next thing anyone wants is to run it, so that is offered here, on the card.
+      setRunPanel({ intro: t('runq.savedOffer') });
     } catch (e) {
       setMsg((e as Error).message);
     }
@@ -1779,6 +1791,27 @@ function TaskCard({
                 different in kind from a record of something finished. */}
             {isLive(task) && !showStory && <span className="dot" aria-hidden="true" />}
             {showStory ? t('story.hide') : isLive(task) ? t('story.showLive') : t('story.show')}
+          </button>
+        )}
+        {/* A waiting task is started from its own card, alone or with the queued ones after it. */}
+        {task.status === 'queued' && !session.running && session.active !== false && (
+          <button
+            className={runPanel ? '' : 'primary'}
+            aria-expanded={!!runPanel}
+            onClick={() => {
+              // One fix panel per card: the run panel shows the task's own when a contradiction is left.
+              setFixingContract(false);
+              setRunPanel(runPanel ? null : {});
+            }}
+            title={t('runq.buttonWhy')}
+          >
+            {t('runq.button')}
+          </button>
+        )}
+        {/* Kept while its panel is open: a partial fix queues the task, and the panel still needs its close. */}
+        {(fixingContract || (task.stopCode === 'contract-conflict' && !active && task.status !== 'queued' && !session.running)) && (
+          <button className={fixingContract ? '' : 'primary'} aria-expanded={fixingContract} onClick={() => setFixingContract(!fixingContract)} title={t('cfix.buttonWhy')}>
+            {t('cfix.button')}
           </button>
         )}
         {editable && (
@@ -1946,6 +1979,30 @@ function TaskCard({
               ? t('task.gitBranchOnly', { branch: task.vcsPlan.branch })
               : t('task.gitCommitOnly', { subject: (task.vcsPlan.commitMessage ?? '').split('\n')[0] })}
         </div>
+      )}
+
+      {fixingContract && (
+        <ContractFixPanel
+          target={{ sessionId: session.id, taskId: task.id, title: task.title }}
+          onApplied={(remaining, changed) => {
+            onChange();
+            if (remaining === 0) {
+              setFixingContract(false);
+              setRunPanel({ intro: `${changed} ${t('runq.savedOffer')}` });
+            }
+          }}
+        />
+      )}
+      {runPanel && task.status === 'queued' && (
+        <RunQueuedPanel
+          target={{ sessionId: session.id, taskId: task.id, title: task.title }}
+          intro={runPanel.intro}
+          checkContract={!fixingContract}
+          onClose={(started) => {
+            setRunPanel(null);
+            if (started) onChange();
+          }}
+        />
       )}
 
       {showStory && task.runId && (

@@ -18,6 +18,10 @@
  * - Restore on a register row: the question, Cancel, and the answer under that row only;
  * - Settings that gate autonomy, and the number fields that used to fight the typing;
  * - the task card's editor, which used to start from a stale prompt;
+ * - a queued task started from its own row or card: the run offered in the dialog that saved its fix,
+ *   surviving the register's reload; this one and the ones after it, earlier tasks untouched; a task that
+ *   contradicts itself offered its smallest fix, stale choices refused; an inactive session refused before
+ *   any browser; two tasks of one title told apart; the status marker saying it is not a button;
  * - the rarer parts of a task card (review, scope put back, foreign commit, suspicious file, fresh-chat
  *   retry) rendering without an error;
  * - both languages having the same keys and placeholders, and Bulgarian fitting on a phone;
@@ -64,6 +68,8 @@ type Batch = {
 type Raw = { raw: { execution?: Record<string, unknown>; limits?: Record<string, unknown>; copilot?: Record<string, unknown> } };
 type Card = SessionView['tasks'][number] & {
   startedAt?: string;
+  scope?: string[];
+  stopCode?: string;
   checks?: Array<{ name: string; expect: string; run?: string }>;
   scopeReverted?: string[];
   freshRetry?: boolean;
@@ -605,6 +611,22 @@ try {
     const row1 = page.locator('ol.flow > li', { hasText: 'first-file' }).first();
     const row2 = page.locator('ol.flow > li', { hasText: 'second-file' }).first();
     const posts = recordPosts(page);
+
+    /*
+     * "Run again from here" names the commits it moves aside and what becomes of each task before it
+     * asks, not only how many (operator feedback 2026-10-08). Cancel moves nothing.
+     */
+    await row1.getByRole('button', { name: 'Run again from here', exact: true }).click();
+    const again = page.getByRole('alertdialog');
+    await again.waitFor();
+    const asked = (await again.textContent()) ?? '';
+    const moved = h.git('log', '--oneline', `${base}..cop/undo`).split('\n').filter(Boolean);
+    t.truthy('the question lists every commit that leaves the line, by hash and subject', moved.length === 2 && moved.every((c) => asked.includes(c)), { moved, asked });
+    t.check('and says each finished task runs again', asked.split('(done — runs again').length - 1, 2);
+    await again.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await again.waitFor({ state: 'detached' });
+    t.check('Cancel sends no restart', posts.filter((p) => p.endsWith('/restart')), []);
+    posts.length = 0;
     // The question is asked after a GET of what would happen; only a POST to this path moves anything.
     const restores = (): string[] => posts.filter((p) => p.endsWith(`/tasks/${ran.tasks[0]!.id}/restore`));
     await row1.getByRole('button', { name: 'Restore', exact: true }).click();
@@ -757,6 +779,225 @@ try {
     await waitFor('the done task to be queued again', async () => (await cards(h, s!.id))[0]!.status === 'queued', 10_000).catch(() => undefined);
     const again = (await cards(h, s!.id))[0]!;
     t.check('queued again, with the run it had kept as attempt 1', [again.status, again.attempts?.length], ['queued', 1]);
+  });
+
+  /*
+   * A queued task is started from its own row (operator feedback 2026-10-08: a task fixed and put back in
+   * the queue had no way to start on its own; the marker beside it looked like a button and did nothing).
+   * "Save and queue again" asks, in the same dialog, whether to run it now — and the dialog survives the
+   * register's 6-second reload, which moves the row to another list (review of 2026-10-09: it did not).
+   * The panel offers this task alone or with the queued ones after it, says what is left alone, and the
+   * run takes exactly what it listed. Two tasks of one title in two sessions each say where the other is.
+   */
+  await scenario('a queued task runs from its own row: run offered after a fix, this one and the ones after it, earlier ones untouched', { execution: { mode: 'unattended' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'chain', [task('first-file', 'one.txt'), task('second-file', 'two.txt'), task('third-file', 'three.txt')]));
+    await sleep(30);
+    const [copy] = await h.importPlan(planFor(h, 'chain-copy', [task('third-file', 'three.txt')]));
+    h.chat.script(reply.steps(write('one.txt', 'first')), reply.done(), ...reply.triedThenBlocked());
+    const ran = await h.run(s!.id);
+    t.check('first done, second blocked, third still waiting', ran.tasks.map((x) => x.status), ['done', 'blocked', 'queued']);
+    const first = ran.tasks[0]!;
+
+    await page.goto(url('/history'));
+    const inSession = (title: string, name: string) =>
+      page.locator('ol.flow > li', { hasText: title }).filter({ has: page.locator('.when a', { hasText: new RegExp(`^${name}$`) }) }).first();
+    const third = inSession('third-file', 'chain');
+    await third.waitFor();
+    const mark = third.locator('.flow-mark');
+    t.truthy('the status marker says it is only a marker', ((await mark.getAttribute('title')) ?? '').includes('not a button'), await mark.getAttribute('title'));
+    t.check('and no circle is drawn beside the row any more', await third.evaluate((li) => getComputedStyle(li, '::before').content), 'none');
+    t.check('the queued row has a start of its own', await third.getByRole('button', { name: en['runq.button']!, exact: true }).count(), 1);
+    const twinChips = async (row: ReturnType<typeof inSession>): Promise<string[]> => await row.locator('.chip.twin').allTextContents();
+    const mine = await twinChips(third);
+    t.truthy('a task whose title another session has says so, naming that session, when it was added, its status and attempt',
+      mine[0] === 'same title in 1 other session(s)' && /^"chain-copy", added .+: queued, attempt 1$/.test(mine[1] ?? ''), mine);
+    const theirs = await twinChips(inSession('third-file', 'chain-copy'));
+    t.truthy('and the other one says the same of this one', theirs.length === 2 && /^"chain", added .+: queued, attempt 1$/.test(theirs[1] ?? ''), theirs);
+
+    const second = inSession('second-file', 'chain');
+    await second.getByRole('button', { name: 'Fix the prompt and queue it again' }).click();
+    const fix = page.getByRole('dialog');
+    const box = fix.locator('textarea.prose');
+    await waitFor('the fix dialog to read the task', async () => (await box.count()) > 0 && (await box.inputValue()) !== '', 10_000);
+    await box.fill('Create two.txt in the repository root holding exactly the word second. This time it works.');
+    await fix.getByRole('button', { name: 'Save and queue again' }).click();
+    const panel = fix.getByRole('group', { name: 'Run "second-file"' });
+    await panel.waitFor();
+    t.truthy('saved, the same dialog asks to run it now', ((await panel.textContent()) ?? '').includes(en['runq.ask']!), await panel.textContent());
+    t.check('and nothing has started yet', [(await h.call<{ running: boolean }>('GET', '/activity')).running, (await cards(h, s!.id))[1]!.status], [false, 'queued']);
+    const go = panel.getByRole('button', { name: en['runq.go']!, exact: true });
+    const focused = await waitFor('the keyboard on the first start button', async () => await go.evaluate((b) => b === document.activeElement), 5_000).then(() => true, () => false);
+    t.check('the keyboard is on its first start button', focused, true);
+    t.check('which says it starts only what is listed', await go.getAttribute('title'), en['runq.goWhy']);
+    // The register reloads every 6 s, and this reload moves the requeued row out of the list it was in.
+    await sleep(7_000);
+    t.check('the dialog is still there after the register reloaded', await panel.isVisible(), true);
+    t.check('"only this task" is chosen first', await panel.getByRole('radio', { name: en['runq.onlyThis']! }).isChecked(), true);
+    t.check('what runs: this one', await panel.locator('ol > li').allTextContents(), ['second-file']);
+    await panel.getByRole('radio', { name: 'This one and the 1 queued after it in "chain"' }).check();
+    t.check('what runs follows the choice', await panel.locator('ol > li').allTextContents(), ['second-file', 'third-file']);
+    t.truthy('the earlier task is said to be left alone', ((await panel.textContent()) ?? '').includes('1 earlier task(s) of this session have already run'), await panel.textContent());
+
+    h.chat.script(reply.steps(write('two.txt', 'second')), reply.done(), reply.steps(write('three.txt', 'third')), reply.done());
+    await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    const b = await waitFor('the run to start', async () => await h.call<(Batch & { onlyTasks?: string[] }) | null>('GET', '/batch'), 15_000);
+    t.check('the run takes exactly those two, in order', b.onlyTasks, [ran.tasks[1]!.id, ran.tasks[2]!.id]);
+    await fix.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+    t.check('and the dialog closed once it started', await fix.count(), 0);
+    await waitFor('both to finish', async () => (await cards(h, s!.id)).every((x) => x.status === 'done'), 30_000).catch(() => undefined);
+    await h.idle();
+    const after = await cards(h, s!.id);
+    t.check('both ran to done', after.map((x) => x.status), ['done', 'done', 'done']);
+    t.check('the earlier task was not touched: same attempt, same run', [after[0]!.attempt ?? 1, after[0]!.runId, after[0]!.attempts?.length ?? 0], [first.attempt ?? 1, first.runId, 0]);
+    t.check('and the copy in the other session still waits', (await cards(h, copy!.id))[0]!.status, 'queued');
+  });
+
+  /*
+   * Escape on the "are you sure" box of "Run without asking", inside the dialog that saved a prompt,
+   * answers that box only — also after the register's 6-second reload, which re-registered the dialog's
+   * own Escape behind the box's and let one key close both (review of 2026-10-09).
+   */
+  await scenario('Escape on the "are you sure" box inside the prompt dialog closes that box only, after a reload too', { limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'escape', [task('lone-file', 'lone.txt')]));
+    h.chat.script(...reply.triedThenBlocked());
+    const ran = await h.run(s!.id);
+    t.check('the task blocked', ran.tasks[0]!.status, 'blocked');
+    await page.goto(url('/history'));
+    const row = page.locator('ol.flow > li:visible', { hasText: 'lone-file' }).first();
+    await row.getByRole('button', { name: 'Fix the prompt and queue it again' }).click();
+    const fix = page.getByRole('dialog');
+    const box = fix.locator('textarea.prose');
+    await waitFor('the fix dialog to read the task', async () => (await box.count()) > 0 && (await box.inputValue()) !== '', 10_000);
+    await fix.getByRole('button', { name: 'Save and queue again' }).click();
+    const panel = fix.getByRole('group', { name: 'Run "lone-file"' });
+    await panel.waitFor();
+    const posts = recordPosts(page);
+    await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    const sure = page.getByRole('alertdialog');
+    await sure.waitFor({ timeout: 3_000 });
+    await sleep(7_000);
+    await page.keyboard.press('Escape');
+    await sure.waitFor({ state: 'detached', timeout: 5_000 });
+    await sleep(300);
+    t.check('the "are you sure" box is gone, the prompt dialog and its offer are not', [await fix.count(), await panel.isVisible()], [1, true]);
+    t.check('and nothing was started', posts.filter((p) => p.endsWith('/batch/start')), []);
+  });
+
+  /*
+   * A task that contradicts itself — scoped away from the file its own check needs — stops before it
+   * starts. Its row opens a dialog with the smallest fix (the file added to its scope), applies it with
+   * one press, queues the task with it and offers, in the same dialog, to run it; the run then passes.
+   * Choices made for other contradictions than the task has now are refused, and change nothing.
+   */
+  await scenario('a task that contradicts itself is offered its smallest fix, queued with it, and runs', { execution: { mode: 'unattended' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    const scoped = { title: 'scoped-greeting', prompt: greeting.prompt, scope: ['notes/'], checks: greeting.checks };
+    const [s] = await h.importPlan(planFor(h, 'scoped', [scoped]));
+    /*
+     * The task as the runner leaves it when the contradiction is found only at the task's start (the tree
+     * it starts from was not known before the run): blocked, contract-conflict, nothing sent. A run's own
+     * refusal keeps a task queued instead (the next scenario), so this end state is written as the runner
+     * writes it.
+     */
+    const file = join(h.dataDir, 'sessions', `${s!.id}.json`);
+    const stored = JSON.parse(readFileSync(file, 'utf8')) as { tasks: Array<Record<string, unknown>> };
+    const at = new Date().toISOString();
+    Object.assign(stored.tasks[0]!, {
+      status: 'blocked',
+      stopCode: 'contract-conflict',
+      startedAt: at,
+      finishedAt: at,
+      reason: 'the task contradicts itself, so it was not started: The check "greeting written" fails now and can only pass if hello.txt changes, but the task\'s scope (notes/) leaves that file out.',
+    });
+    writeFileSync(file, JSON.stringify(stored, null, 2), 'utf8');
+    const blocked = (await cards(h, s!.id))[0]!;
+    t.check('it is blocked for contradicting itself, before any round', [blocked.status, blocked.stopCode, blocked.iterations], ['blocked', 'contract-conflict', 0]);
+
+    const stale = await h.raw('POST', `/sessions/${s!.id}/tasks/${blocked.id}/contract-fix`, { choices: [0], expect: ['a contradiction this task does not have'] });
+    t.truthy('choices made for other contradictions are refused', stale.status >= 400 && /not the ones shown/.test(JSON.stringify(stale.body)), stale);
+    t.check('and change nothing', [(await cards(h, s!.id))[0]!.status, (await cards(h, s!.id))[0]!.scope], ['blocked', ['notes/']]);
+
+    await page.goto(url('/history'));
+    const row = page.locator('ol.flow > li:visible', { hasText: 'scoped-greeting' }).first();
+    await row.getByRole('button', { name: en['cfix.button']!, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: en['cfix.button']! });
+    const fixPanel = dialog.getByRole('group', { name: 'How "scoped-greeting" contradicts itself' });
+    await fixPanel.waitFor();
+    const smallest = fixPanel.getByRole('radio', { name: /Add hello\.txt to the paths it may change/ });
+    await smallest.waitFor();
+    t.check('the smallest fix is chosen first', await smallest.isChecked(), true);
+    t.check('and offered beside it: dropping the check', await fixPanel.getByRole('radio', { name: 'Drop the check "greeting written"' }).count(), 1);
+    t.check('nothing changed before Apply', (await cards(h, s!.id))[0]!.scope, ['notes/']);
+    await fixPanel.getByRole('button', { name: en['cfix.apply']!, exact: true }).click();
+    await waitFor('the task to be queued with the fix', async () => (await cards(h, s!.id))[0]!.status === 'queued', 10_000).catch(() => undefined);
+    const fixed = (await cards(h, s!.id))[0]!;
+    t.check('queued again as attempt 2, hello.txt added to its scope, its check and prompt kept', [fixed.status, fixed.attempt, fixed.scope, fixed.checks?.map((c) => c.name), fixed.prompt], ['queued', 2, ['notes/', 'hello.txt'], ['greeting written'], greeting.prompt]);
+
+    const panel = dialog.getByRole('group', { name: 'Run "scoped-greeting"' });
+    await panel.waitFor();
+    t.truthy('running it is offered at once, in the same dialog, saying what changed', ((await panel.textContent()) ?? '').includes(`Changed: may change only notes/, hello.txt. ${en['runq.savedOffer']}`), await panel.textContent());
+    h.chat.script(reply.steps(write('hello.txt', 'hi')), reply.done());
+    await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    await waitFor('the fixed task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
+    await h.idle();
+    t.check('and it ran to done', (await cards(h, s!.id))[0]!.status, 'done');
+  });
+
+  /*
+   * The same from the session page, for a task a run would refuse at its start (it never ran, so it is
+   * still queued). Its fixes show as "Run this task" opens — not only after a press bound to be refused.
+   * Two contradictions: one fixed and one left, the panel stays with what is left and what was changed;
+   * the second fixed, the panel goes and the change is said beside the start buttons. An inactive session
+   * is refused before any browser, and its offered panel is shut, saying why (review of 2026-10-09).
+   */
+  await scenario('a queued task on its card: its contradictions fixed in the run panel, one at a time, then run', { execution: { mode: 'unattended' } }, async (h, page, url) => {
+    const checks = [...greeting.checks, { name: 'farewell written', expect: 'file-contains', file: 'bye.txt', value: 'bye' }];
+    const prompt = 'Create hello.txt holding exactly the word hi and bye.txt holding exactly the word bye, both in the repository root, and nothing else.';
+    const [s] = await h.importPlan(planFor(h, 'card', [{ title: 'scoped-greeting', prompt, scope: ['notes/'], checks }]));
+    const [only] = await cards(h, s!.id);
+    // Set aside: a start is refused before any browser opens, saying why — not with the contradiction a
+    // preflight of a session that will not run would find, and not "started" (review of 2026-10-09).
+    await h.call('PUT', `/sessions/${s!.id}`, { active: false });
+    const refused = await h.call<{ started: boolean; reason?: string }>('POST', '/batch/start', { sessionIds: [s!.id], mode: 'unattended', onFailure: 'stop', taskIds: [only!.id] });
+    t.truthy('an inactive session is refused up front, for being inactive', !refused.started && /inactive/.test(refused.reason ?? '') && !/contradicts/.test(refused.reason ?? ''), refused);
+    const single = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    t.truthy('and so is its own Start', !single.started && /inactive/.test(single.reason ?? ''), single);
+    t.check('and no chat was opened for it', h.chat.opened, 0);
+    await h.call('PUT', `/sessions/${s!.id}`, { active: true });
+
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    const card = page.locator(`div.task[id="${only!.id}"]`);
+    await card.getByRole('button', { name: en['runq.button']!, exact: true }).click();
+    const panel = card.getByRole('group', { name: 'Run "scoped-greeting"' });
+    await panel.waitFor();
+    const fixPanel = panel.getByRole('group', { name: 'How "scoped-greeting" contradicts itself' });
+    const shownAtOnce = await appears(fixPanel, 5_000);
+    t.check('its fixes are shown as the panel opens, before any start is pressed', [shownAtOnce, h.chat.opened], [true, 0]);
+    await fixPanel.locator('fieldset').nth(1).getByRole('radio', { name: en['cfix.leave']! }).check();
+    await fixPanel.getByRole('button', { name: en['cfix.applyQueued']!, exact: true }).click();
+    await waitFor('the first fix to be applied', async () => ((await cards(h, s!.id))[0]!.scope ?? []).includes('hello.txt'), 10_000).catch(() => undefined);
+    t.check('edited where it waits: same attempt, hello.txt in its scope, bye.txt not', [(await cards(h, s!.id))[0]!.attempt ?? 1, (await cards(h, s!.id))[0]!.scope], [1, ['notes/', 'hello.txt']]);
+    await fixPanel.getByText(/It still contradicts itself in 1 way/).waitFor();
+    t.truthy('the panel stays, with what changed and what is left', ((await fixPanel.textContent()) ?? '').includes('Changed: may change only notes/, hello.txt.') && (await fixPanel.locator('fieldset').count()) === 1, await fixPanel.textContent());
+    await fixPanel.getByRole('button', { name: en['cfix.applyQueued']!, exact: true }).click();
+    await fixPanel.waitFor({ state: 'detached', timeout: 10_000 });
+    t.truthy('nothing left: the fix panel goes, and the change is said beside the start buttons', ((await panel.textContent()) ?? '').includes('Changed: may change only notes/, hello.txt, bye.txt.'), await panel.textContent());
+
+    h.chat.script(reply.steps(write('hello.txt', 'hi'), write('bye.txt', 'bye')), reply.done());
+    await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
+    await h.idle();
+    t.check('and it ran to done', (await cards(h, s!.id))[0]!.status, 'done');
+
+    // Set aside again, then queued again from the card: the panel it offers is shut, and says why.
+    await h.call('PUT', `/sessions/${s!.id}`, { active: false });
+    await waitFor('the card to show the task done', async () => ((await card.locator('.badge').first().textContent()) ?? '') === en['status.done'], 20_000).catch(() => undefined);
+    await card.getByRole('button', { name: en['task.rerun']!, exact: true }).click();
+    const sure = page.getByRole('alertdialog');
+    await sure.waitFor({ timeout: 3_000 });
+    await sure.getByRole('button', { name: 'OK' }).click();
+    const offered = card.getByRole('group', { name: 'Run "scoped-greeting"' });
+    await offered.getByText(en['runq.sessionInactive']!).waitFor({ timeout: 15_000 });
+    t.check('an inactive session\'s offered panel: both start buttons shut', [await offered.getByRole('button', { name: en['runq.go']!, exact: true }).isDisabled(), await offered.getByRole('button', { name: en['runq.unattended']!, exact: true }).isDisabled()], [true, true]);
   });
 
   /*

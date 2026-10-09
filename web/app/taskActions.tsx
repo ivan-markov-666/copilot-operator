@@ -16,7 +16,7 @@
 import { useCallback, useState } from 'react';
 import { api } from '../lib/api';
 import { confirmDialog } from './dialog';
-import { useT } from '../lib/i18n';
+import { useT, type Key } from '../lib/i18n';
 
 export type TaskRef = { sessionId: string; taskId: string; title: string };
 
@@ -127,20 +127,41 @@ export function useTaskActions(onChange: () => void): TaskActions {
           return;
         }
 
+        /*
+         * The commits by name, not only their number: "3 later commits" does not tell an operator
+         * whether one of them is the fix they made by hand yesterday. Capped, because a long run can
+         * leave dozens, and the count above already says how many there are.
+         */
+        const shownCommits = 15;
         const repos = plan.restores
           .map((r) =>
-            t('restart.repoLine', {
-              repo: r.repoDir,
-              commit: (r.baseCommit ?? '').slice(0, 8),
-              branch: r.branchName ?? '',
-              n: r.leftBehind.length,
-              kept: r.keptOn ?? '',
-            }),
+            [
+              t('restart.repoLine', {
+                repo: r.repoDir,
+                commit: (r.baseCommit ?? '').slice(0, 8),
+                branch: r.branchName ?? '',
+                n: r.leftBehind.length,
+                kept: r.keptOn ?? '',
+              }),
+              ...(r.leftBehind.length > 0 ? [t('restart.commitsHead', { kept: r.keptOn ?? '' })] : []),
+              ...r.leftBehind.slice(0, shownCommits).map((c) => `      ${c}`),
+              ...(r.leftBehind.length > shownCommits ? [t('restart.commitsMore', { n: r.leftBehind.length - shownCommits })] : []),
+              // Later sessions in the same repository move too, each leaving its own commits on its branch.
+              ...(r.laterSessions ?? []).flatMap((m) => [
+                t('restart.laterSession', { session: m.sessionName, n: m.commits.length, branch: m.branch }),
+                ...m.commits.slice(0, shownCommits).map((c) => `      ${c}`),
+                ...(m.commits.length > shownCommits ? [t('restart.commitsMore', { n: m.commits.length - shownCommits })] : []),
+              ]),
+            ].join('\n'),
           )
           .join('\n');
 
+        // Each task with what becomes of it: a finished one is done again, a waiting one is left alone.
         const list = plan.tasks
-          .map((x) => `  ${x.sessionName} / ${x.title}${x.alreadyQueued ? t('restart.alreadyQueued') : ''}`)
+          .map(
+            (x) =>
+              `  ${x.sessionName} / ${x.title}${x.alreadyQueued ? t('restart.alreadyQueued') : t('restart.taskRedo', { status: t(`status.${x.status}` as Key) })}`,
+          )
           .join('\n');
 
         /*

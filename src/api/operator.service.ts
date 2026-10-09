@@ -55,8 +55,8 @@ function sameFolder(a: string, b: string): boolean {
 }
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { readInterruption } from '../session/interruption.js';
-import { branchAt, commitInterrupted, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
-import { branchExists, branchNameFrom, changedFilesBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
+import { branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
+import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
@@ -70,7 +70,7 @@ import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } 
 import { askpassProgram } from '../vcs/remoteAuth.js';
 import { appendRunLog, appendSessionLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
 import { workingDirFor, isWorkingDirProblem } from '../exec/workDir.js';
-import { contractConflicts, type ContractTree } from '../orchestrator/contract.js';
+import { contractConflictsWithFixes, contractFixPatch, describeContractChange, type ContractConflict, type ContractTree } from '../orchestrator/contract.js';
 import { checkRefusalForOperator, lineRefusal } from '../orchestrator/taskRunner.js';
 import { preferredShell } from '../exec/shells.js';
 import { sessionRoots } from '../exec/confinement.js';
@@ -222,6 +222,12 @@ export type RestartPlan = {
     branchName?: string;
     leftBehind: string[];
     keptOn?: string;
+    /**
+     * Later sessions of the run in the same repository that the restart moves onto a new branch (see
+     * `rerunFromRestore`), each with its own commits that stay on the branch it leaves. Listed apart from
+     * `leftBehind`, which holds only the first session's line; a commit is named once.
+     */
+    laterSessions?: Array<{ sessionName: string; branch: string; commits: string[] }>;
   }>;
   /**
    * How the original run was started, which is how this one will be unless told otherwise. A run
@@ -236,7 +242,12 @@ export type RestartPlan = {
    */
   unattendedRefused?: string;
   onFailure: 'stop' | 'continue';
+  /** A session it would run is set aside on the Sessions page: refused before anything moves, whatever is asked. */
+  inactive?: boolean;
 };
+
+/** Why a session set aside on the Sessions page does not run: one sentence for every start that refuses it. */
+const INACTIVE_REASON = 'the session is inactive; make it active on the Sessions page to run it';
 
 /** A session the store already holds that a plan would create all over again. */
 export type PlanDuplicate = { name: string; sessionId: string; createdAt: string; tasks: number };
@@ -1309,6 +1320,11 @@ export class OperatorService {
     try {
       // A run nobody named is named after what it is a run of, rather than left to show up in the
       // register as "Unnamed run" beside five others of the same description.
+      // Set aside on the Sessions page: said first, before the preflight judges a session that will not run.
+      if ((await this.store.getSession(sessionId))?.active === false) {
+        this.releaseBrowser(claim.holder);
+        return { started: false, reason: INACTIVE_REASON };
+      }
       const chosenName = name?.trim() || (await this.suggestRunName([sessionId]));
       const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
       // A run of one is still a run, and it records the same thing a batch does, so that going
@@ -1382,7 +1398,7 @@ export class OperatorService {
     if (!session) return { started: false, reason: 'no such session', done: Promise.resolve(idle) };
     // Set aside by the operator on the Sessions page: not started by anything until made active.
     if (session.active === false) {
-      return { started: false, reason: 'the session is inactive; make it active on the Sessions page to run it', done: Promise.resolve(idle) };
+      return { started: false, reason: INACTIVE_REASON, done: Promise.resolve(idle) };
     }
     const queuedIds = queuedToRun(session, onlyTasks).map((t) => t.id);
     if (queuedIds.length === 0) return { started: false, reason: 'no queued tasks', done: Promise.resolve(idle) };
@@ -1640,7 +1656,21 @@ export class OperatorService {
       // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
       // The batch's id first, so the preflight is recorded under the run it decides about.
       const batchId = newId('b-');
-      const notReady = await this.runPreflight(batchId, wanted, onlyTasks);
+      /*
+       * Sessions set aside on the Sessions page are left out before the preflight: judged there, an inactive
+       * session's contradiction or version-control problem was the answer to the press — and could refuse
+       * the whole batch — although it would never have run (review of 2026-10-09). `prepareBatch` records
+       * them as skipped, with the reason.
+       */
+      const active: string[] = [];
+      const inactive: string[] = [];
+      for (const id of wanted) {
+        const s = await this.store.getSession(id);
+        if (s?.active === false) inactive.push(s.name);
+        else active.push(id);
+      }
+      if (active.length === 0) return { started: false, reason: `${inactive.map((n) => `"${n}"`).join(', ')}: ${INACTIVE_REASON}` };
+      const notReady = await this.runPreflight(batchId, active, onlyTasks);
       if (notReady) return { started: false, reason: notReady };
       const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name, batchId);
       if (!begun.batch) return { started: false, reason: begun.reason };
@@ -1696,6 +1726,15 @@ export class OperatorService {
         sessions.push({ sessionId: id, name: id, state: 'skipped', ran: 0, failed: 0, reason: 'no such session' });
         continue;
       }
+      /*
+       * Set aside on the Sessions page: left out here, before the browser opens, with the reason `start`
+       * gives. Let through, the batch said "started", opened the browser, and only then skipped it — a
+       * "Run" that reported success and ran nothing.
+       */
+      if (s.active === false) {
+        sessions.push({ sessionId: id, name: s.name, state: 'skipped', ran: 0, failed: 0, reason: INACTIVE_REASON });
+        continue;
+      }
       const queued = queuedToRun(s, onlyTasks).length;
       sessions.push(
         queued === 0
@@ -1705,7 +1744,10 @@ export class OperatorService {
     }
 
     if (!sessions.some((s) => s.state === 'waiting')) {
-      return { reason: 'none of the selected sessions has a queued task' };
+      const inactive = sessions.filter((s) => s.reason === INACTIVE_REASON);
+      return {
+        reason: inactive.length > 0 ? `${inactive.map((s) => `"${s.name}"`).join(', ')}: ${INACTIVE_REASON}` : 'none of the selected sessions has a queued task',
+      };
     }
 
     /*
@@ -2582,28 +2624,38 @@ export class OperatorService {
   private async contractRefusal(session: Session, onlyTasks?: ReadonlySet<string>, afterOthers = false): Promise<string | null> {
     const next = queuedToRun(session, onlyTasks)[0];
     if (!next) return null;
+    const conflicts = await this.contractFor(session, next, afterOthers);
+    return conflicts.length === 0
+      ? null
+      : `The task "${next.title}" of "${session.name}" contradicts itself, so it was not started and stays queued: ${conflicts.map((c) => c.text).join(' ')} Press "Run this task" on it, in the register or on the session's page, and the smallest change that removes it is offered there; or change the prompt, the checks, the scope or read-only on the session's page, and start again.`;
+  }
+
+  /**
+   * Each way the task contradicts itself, judged as its next attempt would start, with the ways out
+   * (see `ContractFix`). The one judgement behind the refusal at a run's start and behind the fixes
+   * the pages offer, so a fix offered is a fix for the refusal the operator was shown.
+   */
+  private async contractFor(session: Session, next: Task, afterOthers = false): Promise<ContractConflict[]> {
     const cfg = await this.settings.load();
     const work = workingDirFor(session, cfg.resolved.cwd);
-    if (isWorkingDirProblem(work)) return null;
+    if (isWorkingDirProblem(work)) return [];
     /*
      * The branch the task will be on, where that is known before the run: so a check that expects another
      * branch is refused here too, not after the browser opened and a branch was cut (live run 2026-10-04).
      */
     const prefix = session.vcs?.branchPrefix || 'cop/';
-    const attempt = next.attempt ?? 1;
+    // By the runner's own rules for the attempt's branch; a task that has run is judged as the attempt it would be queued as.
     const branch = !session.vcs?.enabled
       ? undefined
       : session.vcs.startFrom === 'existing-branch'
         ? session.vcs.existingBranch?.trim() || undefined
         : session.vcs.branchMode === 'per-session'
           ? sessionBranchName(session)
-          : next.vcsPlan?.branch?.trim()
-            ? plannedBranchName(next.vcsPlan.branch, prefix, attempt)
-            : branchNameFrom([session.name, next.title, attempt > 1 ? `a${attempt}` : undefined], prefix);
+          : nextAttemptBranch({ ...session, vcs: { ...session.vcs, branchPrefix: prefix } }, next);
     const files = await this.contractTree(session, afterOthers).catch((): ContractTree => 'unknown');
     // Input files are carried onto a first start from their last capture: not judged before it (see `contract.ts`).
     const carried = !session.vcsBaseCommit ? inputSettings(session.vcs)?.patterns : undefined;
-    const conflicts = await contractConflicts(next, work.cwd, repoDirOf(session) || work.cwd, { branch, files, carried }).catch(() => [] as string[]);
+    const conflicts = await contractConflictsWithFixes(next, work.cwd, repoDirOf(session) || work.cwd, { branch, files, carried }).catch(() => [] as ContractConflict[]);
     // A plan check the runner refuses for its own command line can never run: the task could never pass.
     const roots = sessionRoots(work.cwd, [cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)]);
     const shell = preferredShell(cfg.execution.defaultShell);
@@ -2611,11 +2663,93 @@ export class OperatorService {
       const run = c.run?.trim();
       if (!run) continue;
       const why = lineRefusal(run, c.shell ?? shell, c.cwd ? resolve(work.cwd, c.cwd) : work.cwd, cfg.execution, roots);
-      if (why) conflicts.push(`The check "${c.name}" is refused by the runner for its own command line, so it can never run and the task could never pass: ${checkRefusalForOperator(why)}.`);
+      if (why) {
+        conflicts.push({
+          text: `The check "${c.name}" is refused by the runner for its own command line, so it can never run and the task could never pass: ${checkRefusalForOperator(why)}.`,
+          fixes: [{ kind: 'drop-check', check: c.name }],
+        });
+      }
     }
-    return conflicts.length === 0
-      ? null
-      : `The task "${next.title}" of "${session.name}" contradicts itself, so it was not started and stays queued: ${conflicts.join(' ')} Change the prompt, the checks, the scope or read-only on the session's page, and start again.`;
+    return conflicts;
+  }
+
+  /**
+   * How a task contradicts itself, asked by a page: a task that ended `contract-conflict`, or a queued
+   * one a run refused to start for it. Changes nothing.
+   */
+  async contractCheck(sessionId: string, taskId: string): Promise<{ conflicts: ContractConflict[] }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw new Error('No such session.');
+    const task = session.tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error('No such task.');
+    return { conflicts: await this.contractFor(session, task) };
+  }
+
+  /**
+   * Applies the chosen way out of each contradiction and puts the task back in the queue.
+   *
+   * `choices` holds one entry per contradiction `contractCheck` names, in its order: the index of the
+   * fix taken, or -1 to leave that one as it is. Judged again here rather than trusted from the page,
+   * and refused when the contradictions are no longer the ones the operator chose from — an edit in
+   * another tab, a check that passes now. A queued task is edited in place; one that has run is queued
+   * again with the change, its attempt kept on the record as any re-run keeps it. Nothing starts.
+   */
+  async applyContractFix(
+    sessionId: string,
+    taskId: string,
+    choices: number[],
+    /** The contradictions the choices were made from, as the page was shown them. */
+    expect?: string[],
+  ): Promise<{ task: Task; applied: string[]; remaining: ContractConflict[] }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw new Error('No such session.');
+    const task = session.tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error('No such task.');
+    if (task.status === 'running' || task.status === 'waiting-approval') throw new Error('This task is running. Stop the session first.');
+    const conflicts = await this.contractFor(session, task);
+    // The same ones, not only as many: a fix chosen for one contradiction must not be applied to another.
+    const same = Array.isArray(expect) ? expect.length === conflicts.length && expect.every((x, i) => x === conflicts[i]!.text) : true;
+    if (!Array.isArray(choices) || choices.length !== conflicts.length || !same) {
+      throw new Error(`The task's contradictions are not the ones shown (${conflicts.length} now). Look again before applying a fix.`);
+    }
+    const chosen = conflicts.flatMap((c, i) => {
+      const at = choices[i] ?? -1;
+      if (at === -1) return [];
+      const fix = Number.isInteger(at) ? c.fixes[at] : undefined;
+      if (!fix) throw new Error(`There is no fix number ${at} for "${c.text}".`);
+      return [fix];
+    });
+    if (chosen.length === 0) throw new Error('No fix was chosen.');
+    const patch = contractFixPatch(task, chosen);
+    const applied = describeContractChange(task, patch);
+    // Judged on the task as it was read: one edited meanwhile, in another tab, is not overwritten with a patch made from the old one.
+    const contract = (t?: Task) => JSON.stringify([t?.status, !!t?.readOnly, t?.scope ?? [], t?.checks ?? []]);
+    const meanwhile = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
+    if (contract(meanwhile) !== contract(task)) throw new Error('The task was changed while its contradictions were being judged. Look again before applying a fix.');
+    const updated = task.status === 'queued' ? await this.updateTask(sessionId, taskId, patch) : await this.rerunTask(sessionId, taskId, patch);
+    const after = await this.store.getSession(sessionId);
+    const now = after?.tasks.find((t) => t.id === taskId) ?? updated;
+    const remaining = after ? await this.contractFor(after, now) : [];
+    const cfg = await this.settings.load();
+    await appendSessionLog(cfg.resolved.runsDir, sessionId, {
+      type: 'contract-fixed',
+      message: `"${now.title}": ${applied.join('; ')}${remaining.length > 0 ? `; ${remaining.length} contradiction(s) left` : ''}`,
+      data: { taskId, applied: chosen, remaining: remaining.map((c) => c.text) },
+    }).catch(() => undefined);
+    this.bus.publish({
+      sessionId,
+      taskId,
+      type: 'contract-fixed',
+      level: 'info',
+      message:
+        remaining.length === 0
+          ? `"${now.title}" changed so it no longer contradicts itself: ${applied.join('; ')}`
+          : `"${now.title}" changed (${applied.join('; ')}), and it still contradicts itself in ${remaining.length} way(s)`,
+      data: { applied: chosen, remaining: remaining.length },
+    });
+    return { task: now, applied, remaining };
   }
 
   /**
@@ -2943,11 +3077,32 @@ export class OperatorService {
     // Asked of the machine as it is now, as `restartFrom` will ask it; see `unattendedRefused`.
     if (plan.mode === 'unattended') plan.unattendedRefused = (await this.unattendedRefusal('unattended')) ?? undefined;
 
+    // The sessions in the order the run had them: the order `rerunFromRestore` moves them in.
+    const inOrder = [...new Map(tasks.map(({ session: s }) => [s.id, s])).values()];
     for (const target of restoreTargets(tasks)) {
       const preview = await restorePreview(target.session, target.task);
       // What would stop the restore itself, asked here as well, so the dialog says it before the
       // operator agrees rather than after.
       const refused = target.problem ?? (await this.restoreRefusal(target.session));
+      /*
+       * What the restart moves besides the first session's line: each later per-session session in this
+       * repository that ran goes onto a new branch, and its own commits stay on the branch it leaves. By
+       * the conditions `rerunFromRestore` applies when it does it, so the list is what will happen.
+       */
+      const listed = new Set(preview.leftBehind);
+      const here = normaliseDir(target.dir);
+      const laterSessions: NonNullable<RestartPlan['restores'][number]['laterSessions']> = [];
+      for (const s of inOrder.slice(inOrder.findIndex((x) => x.id === target.session.id) + 1)) {
+        if (!s.vcs?.enabled || s.vcs.branchMode !== 'per-session' || s.vcs.startFrom === 'existing-branch') continue;
+        if (!s.vcsBaseCommit || normaliseDir(repoDirOf(s)) !== here) continue;
+        const first = tasks.find((x) => x.session.id === s.id && x.task.startedAt)?.task;
+        if (!first) continue;
+        const branch = sessionBranchName(s);
+        const from = (s.vcsStart?.kind === 'branch' ? restorePoint(s, first) : undefined) ?? s.vcsBaseCommit;
+        const commits = (await commitsBetween(target.dir, from, branch).catch(() => [] as string[])).filter((c) => !listed.has(c));
+        commits.forEach((c) => listed.add(c));
+        laterSessions.push({ sessionName: s.name, branch, commits });
+      }
       plan.restores.push({
         repoDir: preview.repoDir || target.dir,
         ok: preview.ok && !refused,
@@ -2957,6 +3112,7 @@ export class OperatorService {
         branchName: preview.branchName,
         leftBehind: preview.leftBehind,
         keptOn: preview.keptOn,
+        ...(laterSessions.length > 0 ? { laterSessions } : {}),
       });
     }
     /*
@@ -2968,6 +3124,17 @@ export class OperatorService {
     if (plan.ok && refusedRestores.length > 0) {
       plan.ok = false;
       plan.problem = refusedRestores.map((r) => `${r.repoDir}: ${r.problem ?? 'the restore cannot be made'}`).join(' ');
+    }
+    /*
+     * A session set aside on the Sessions page would not run, and the run is refused at its start for it:
+     * said here, before anything moves, as the other entrance rules are (review of 2026-10-09: the
+     * repositories were taken back and the tasks queued, and only then was the run refused).
+     */
+    const inactive = sessions.filter((s) => s.active === false);
+    if (inactive.length > 0) {
+      plan.ok = false;
+      plan.inactive = true;
+      plan.problem = `${inactive.map((s) => `"${s.name}"`).join(', ')}: ${INACTIVE_REASON}`;
     }
 
     return plan;
@@ -2995,6 +3162,8 @@ export class OperatorService {
     if (this.batch?.running) return { ...idle, reason: 'A run is in progress. Stop it first.' };
 
     const plan = await this.restartPlan(sessionId, taskId);
+    // A session set aside stops it whatever is asked: its run would be refused after everything moved.
+    if (plan.inactive) return { ...idle, reason: plan.problem };
     // A refused restore stops the restart only when the restore is asked for: `restore: false` queues without one.
     const onlyRestoreRefused = plan.tasks.length > 0 && plan.restores.some((r) => !r.ok);
     if (!plan.ok && !(opts.restore === false && onlyRestoreRefused)) return { ...idle, reason: plan.problem };
