@@ -19,6 +19,8 @@ import { Tally } from './support/harness.js';
 
 const t = new Tally();
 const c = (x: Partial<TaskCheck>): TaskCheck => ({ name: 'x', expect: 'file-contains', ...x }) as TaskCheck;
+/** A check as a reviewer can give one with a finding: the runner's own kinds (commit-clean, content-clean) are not among them. */
+type FindingCheck = NonNullable<Parameters<typeof validateDerivedChecks>[0][number]['check']>;
 
 console.log('--- which checks are lexical self-attestation ---');
 {
@@ -48,7 +50,7 @@ console.log('\n--- a finding whose check is lexical stays a finding, and the che
 {
   const dir = mkdtempSync(join(tmpdir(), 'cop-evidence-'));
   try {
-    const finding = (id: string, check: TaskCheck) => ({ id, what: 'the claim is not shown', evidence: 'no artifact', basis: 'b', where: 'docs/report.md', about: 'work' as const, check });
+    const finding = (id: string, check: TaskCheck) => ({ id, what: 'the claim is not shown', evidence: 'no artifact', basis: 'b', where: 'docs/report.md', about: 'work' as const, check: check as FindingCheck });
     const v = await validateDerivedChecks(
       [
         finding('r1f1', c({ name: 'report says proved', file: 'docs/report.md', value: 'proved' })),

@@ -24,16 +24,29 @@ function check(what: string, got: unknown, want: unknown): void {
 
 console.log('--- which model a session runs on ---');
 {
+  /*
+   * The order since 0.1.33 (operator's rule, 2026-10-06; see test/settings-precedence.check.ts): the
+   * operator's own choice on the session's page or the run panel, then Settings, then the plan's. A model
+   * whose origin is not recorded — a session from before the rule — counts as the plan's.
+   */
   const settings = { copilot: { defaultModel: 'GPT 5.6 Think deeper', defaultReviewModel: 'Think deeper' } } as never;
   check('none of its own: Settings', effectiveModels({ model: undefined, review: undefined } as never, settings), {
     model: 'GPT 5.6 Think deeper',
     reviewModel: 'Think deeper',
+    modelFrom: 'settings',
+    reviewModelFrom: 'settings',
   });
-  check('its own wins', effectiveModels({ model: 'Quick response', review: { enabled: true, model: 'Auto' } } as never, settings), {
-    model: 'Quick response',
-    reviewModel: 'Auto',
-  });
-  check('nothing anywhere: nothing', effectiveModels({ model: '' } as never, { copilot: {} } as never), { model: '', reviewModel: '' });
+  check(
+    "the operator's own choice wins",
+    effectiveModels({ model: 'Quick response', modelSource: 'operator', review: { enabled: true, model: 'Auto' }, reviewModelSource: 'operator' } as never, settings),
+    { model: 'Quick response', reviewModel: 'Auto', modelFrom: 'session', reviewModelFrom: 'session' },
+  );
+  check(
+    "a model of unrecorded origin gives way to Settings, as the plan's does",
+    effectiveModels({ model: 'Quick response', review: { enabled: true, model: 'Auto' } } as never, settings),
+    { model: 'GPT 5.6 Think deeper', reviewModel: 'Think deeper', modelFrom: 'settings', reviewModelFrom: 'settings' },
+  );
+  check('nothing anywhere: nothing', effectiveModels({ model: '' } as never, { copilot: {} } as never), { model: '', reviewModel: '', modelFrom: 'none', reviewModelFrom: 'none' });
 }
 
 const data = await mkdtemp(join(tmpdir(), 'cop-models-'));

@@ -317,7 +317,8 @@ await scenario('a reviewer that never reaches a verdict: accepted, recorded as a
 
 /*
  * The reviewer can be put on a different model — the same model has the same blind spots in either
- * conversation. Settings give the default; a session's own review model overrides it.
+ * conversation. Settings give the default; a review model the operator chose for the session overrides
+ * it (a plan's gives way to Settings since 0.1.33: test/settings-precedence.check.ts).
  */
 const models = { copilot: { defaultModel: 'Auto', defaultReviewModel: 'Think deeper' } };
 await scenario('the review runs on the review model from Settings', models, async (h) => {
@@ -336,8 +337,10 @@ await scenario('the review runs on the review model from Settings', models, asyn
   t.check('and the task records which model reviewed it', task.review?.model, 'Think deeper');
 });
 
-await scenario('a session\'s own review model overrides Settings', models, async (h) => {
-  const [s] = await h.importPlan(plan(h, 'ownmodel', [greeting], { enabled: true, model: 'GPT 5.6 Think deeper' }));
+await scenario('a review model chosen on the session\'s page overrides Settings', models, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'ownmodel', [greeting]));
+  // As the session's page sends it: the operator's own word.
+  await h.call('PUT', `/sessions/${s!.id}`, { review: { enabled: true, model: 'GPT 5.6 Think deeper' } });
   h.chat.script(write('hi'), reply.done(), look(), reply.pass());
   const task = full((await h.run(s!.id)).tasks[0]!);
   t.check('the session model, then the session\'s review model', h.chat.modelRequests, ['Auto', 'GPT 5.6 Think deeper']);

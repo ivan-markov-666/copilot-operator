@@ -419,7 +419,8 @@ await scenario('what an import stamps on the tasks it makes', { copilot: { defau
   const task = ran.tasks[0]!;
   t.check('the task is done', task.status, 'done');
   t.truthy('its first message carries the expected result under its heading', opening.includes('### Expected result') && opening.includes('hello.txt holds hi'), opening.slice(-600));
-  t.check('the session\'s own model wins over the one in Settings', h.chat.modelRequests, ['Think deeper']);
+  // The plan named "Think deeper"; Settings name another, and outrank a plan since 0.1.33 (test/settings-precedence.check.ts).
+  t.check('the plan\'s model gives way to the one in Settings', h.chat.modelRequests, ['GPT 5.6 Think deeper']);
   t.truthy('a session with no review key was reviewed, in a conversation of its own', task.review?.verdict === 'pass' && reviewChat !== '' && reviewChat !== ran.chat?.chatId, task.review);
   t.check('two conversations: the task\'s and the review\'s', h.chat.conversations.size - before, 2);
 
@@ -427,14 +428,16 @@ await scenario('what an import stamps on the tasks it makes', { copilot: { defau
   const [u] = await h.importPlan(planOf({ ...onBranch(h, 'unreviewed', [fileTask('quiet', 'quiet.txt', 'quiet', { review: false })]), review: undefined }));
   const unreviewed = (await full(h, u!.id)) as unknown as { review?: { enabled?: boolean } };
   t.check('the session itself is reviewed', unreviewed.review?.enabled, true);
+  // Chosen on the session's page: the operator's own word, which outranks Settings.
+  await h.call('PUT', `/sessions/${u!.id}`, { model: 'Think deeper' });
   h.chat.script(write('quiet.txt', 'quiet'), reply.done());
   const beforeQuiet = h.chat.conversations.size;
   const quiet = ((await h.run(u!.id)) as unknown as FullSession).tasks[0]!;
   t.check('the task is done, its review skipped', [quiet.status, quiet.review?.verdict], ['done', 'skipped']);
   t.check('and only one conversation was opened', h.chat.conversations.size - beforeQuiet, 1);
-  // The control for "wins over": this session names no model, so the Settings default is what it asks
-  // for. Without it, ['Think deeper'] above could as well mean the setting is never read.
-  t.check('a session with no model of its own asks for the one in Settings', h.chat.modelRequests, ['Think deeper', 'GPT 5.6 Think deeper']);
+  // The control for "gives way": the operator's choice on the session's page does win. Without it,
+  // ['GPT 5.6 Think deeper'] above could as well mean a session's model is never read.
+  t.check('a model chosen on the session\'s page wins over the one in Settings', h.chat.modelRequests, ['GPT 5.6 Think deeper', 'Think deeper']);
 });
 
 // --- 5. shared conversations ----------------------------------------------------------------------

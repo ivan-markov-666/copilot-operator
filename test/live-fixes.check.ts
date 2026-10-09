@@ -723,14 +723,14 @@ console.log('\n--- 2026-10-05: the list read in Settings keeps where each model 
     h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
     await h.run(s!.id, 'unattended');
     t.check('the run chose the work model and the review model at their saved places', h.chat.modelPicks, [{ name: 'GPT-5.6 Sol Think deeper', by: 'locator' }, { name: 'Think deeper', by: 'locator' }]);
-    const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ status: string; runId: string }> };
+    const v = await h.session(s!.id) as unknown as { modelInUse?: string; tasks: Array<{ id: string; status: string; runId: string }> };
     t.check('the task ran on it', [v.tasks[0]!.status, v.modelInUse], ['done', 'GPT-5.6 Sol Think deeper']);
     const line = readFileSync(join(h.runsDir, v.tasks[0]!.runId, 'transcript.jsonl'), 'utf8').split('\n').find((l) => l.includes('"model-in-use"')) ?? '';
     t.truthy('and its record says so', /"ok":true/.test(line) && /GPT-5\.6 Sol Think deeper/.test(line), line);
 
     // The page moved the model since the list was read: found again on a fresh reading, by name.
     h.chat.models = [o('Auto'), o('Think deeper'), o('Quick response'), o('GPT-5.6 Sol Think deeper', 'GPT'), o('GPT-5.6 Sol Quick response', 'GPT')];
-    await h.call('POST', `/sessions/${s!.id}/tasks/${v.tasks[0]!.id ?? (await h.session(s!.id)).tasks[0]!.id}/rerun`, {});
+    await h.call('POST', `/sessions/${s!.id}/tasks/${v.tasks[0]!.id}/rerun`, {});
     h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done());
     await h.run(s!.id, 'unattended');
     t.check('moved within its group: chosen at its new place', h.chat.modelPicks.slice(-2)[0], { name: 'GPT-5.6 Sol Think deeper', by: 'reread' });
