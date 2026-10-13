@@ -281,7 +281,7 @@ async function prepare(
     const previous = task.attempts?.at(-1);
     const startedFirst = task.attempts?.[0]?.startedAt;
     const laterRan = !!startedFirst && session.tasks.some((t) => t.id !== task.id && t.startedAt && t.startedAt > startedFirst);
-    const restartAt = !task.continuing && !task.buildsOn && previous && previous.status !== 'done' ? firstAttemptBase(task) : undefined;
+    const restartAt = !task.continuing && !task.buildsOn && previous && previous.status !== 'done' ? firstAttemptBase(task, session.startRechosenAt) : undefined;
     // Already there — "Run again from here" or a Restore moved the session onto a branch at that point — then nothing to move.
     const tipNow = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${sessionBranchName(session)}^{commit}`])).stdout;
     if (restartAt && !laterRan && tipNow && tipNow !== restartAt) {
@@ -323,7 +323,7 @@ async function prepare(
    * about where the attempt stands.
    */
   const prev = task.attempts?.at(-1);
-  if (prev?.vcs?.branch && prev.vcs.baseCommit && !prev.vcs.commit && prev.vcs.baseCommit === firstAttemptBase(task)) {
+  if (prev?.vcs?.branch && prev.vcs.baseCommit && !prev.vcs.commit && prev.vcs.baseCommit === firstAttemptBase(task, session.startRechosenAt)) {
     const tip = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${prev.vcs.branch}^{commit}`])).stdout;
     if (tip && tip === prev.vcs.baseCommit) {
       return await switchTo(session, task, dir, prev.vcs.branch, prev.vcs.baseCommit, bus, { reuseExisting: true, start, stage: carryInputs });
@@ -331,7 +331,7 @@ async function prepare(
   }
   // A re-run starts from where that task started the first time, not from where the previous
   // attempt ended. That is the whole point of recording the base commit.
-  const from = firstAttemptBase(task) ?? base;
+  const from = firstAttemptBase(task, session.startRechosenAt) ?? base;
   return await switchTo(session, task, dir, wanted, from, bus, { reuseExisting: false, start, stage: carryInputs });
 }
 
@@ -723,9 +723,17 @@ export function sessionBranches(session: Session): SessionBranches {
   return { mode, branches };
 }
 
-/** The commit the task's first attempt started from, if it has one. */
-function firstAttemptBase(task: Task): string | undefined {
-  return earliestBase(task);
+/**
+ * The commit the task's first attempt started from, if it has one — counting only attempts made since the
+ * operator last chose where the session starts (`Session.startRechosenAt`): before that choice they stood
+ * on the old start, and a re-run that went back to them ignored the new one (operator's report, 2026-10-13).
+ */
+function firstAttemptBase(task: Task, since?: string): string | undefined {
+  if (!since) return earliestBase(task);
+  return [...(task.attempts ?? []), { startedAt: task.startedAt, vcs: task.vcs }]
+    .filter((a) => !!a.startedAt && a.startedAt >= since)
+    .map((a) => a.vcs?.baseCommit)
+    .find(Boolean);
 }
 
 /**
@@ -743,7 +751,7 @@ export function nextAttemptBranch(session: Session, task: Task): string {
   const prev = ran ? { vcs: task.vcs } : task.attempts?.at(-1);
   const carried = !ran && (task.continuing || task.buildsOn) ? task.attempts?.at(-1)?.vcs?.branch : undefined;
   if (carried) return carried;
-  if (prev?.vcs?.branch && prev.vcs.baseCommit && !prev.vcs.commit && prev.vcs.baseCommit === firstAttemptBase(task)) return prev.vcs.branch;
+  if (prev?.vcs?.branch && prev.vcs.baseCommit && !prev.vcs.commit && prev.vcs.baseCommit === firstAttemptBase(task, session.startRechosenAt)) return prev.vcs.branch;
   const planned = task.vcsPlan?.branch?.trim();
   return planned ? plannedBranchName(planned, prefix, attempt) : branchNameFrom([session.name, task.title, attempt > 1 ? `a${attempt}` : undefined], prefix);
 }

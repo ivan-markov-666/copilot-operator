@@ -37,7 +37,8 @@ import { mergeRedactions } from '../exec/redaction.js';
 import { trackedRepoOf } from '../vcs/taskVcs.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { Pacer } from '../util/pacing.js';
-import type { Session, Task, TaskCheck } from '../session/model.js';
+import type { Session, Task, TaskCheck, TaskPlan } from '../session/model.js';
+import { planForReviewer } from './planMode.js';
 import { inScope } from '../vcs/scope.js';
 
 /** How a review ended. `error` is the review itself failing, which is not the work's fault. */
@@ -78,6 +79,8 @@ export type ReviewDeps = {
   changedFiles: string[];
   /** The closing account, given only when it is the product. See `Deliverable`. */
   deliverable?: Deliverable;
+  /** The approved plan the work was to follow, in plan mode: the review checks the work against it. */
+  plan?: TaskPlan;
   /** Instructions the implementer says it could not follow as written. Claims, not facts. */
   deviations: Deviation[];
   /** Findings from earlier rounds the implementer says are wrong, by id. Claims, not facts. */
@@ -194,6 +197,8 @@ export function reviewBrief(
   derivedFailing: Array<{ name: string; detail: string }> = [],
   earlier: Array<{ title: string; prompt: string }> = [],
   deliverable?: Deliverable,
+  /** The approved plan, in plan mode: see `planForReviewer`. */
+  plan?: TaskPlan,
 ): string {
   // The same repository the runner branched and read the changed files from, however it is named.
   const repo = trackedRepoOf(session);
@@ -219,6 +224,7 @@ export function reviewBrief(
     '## The project instructions that applied',
     '',
     task.level2.trim() || '(none)',
+    ...(plan ? ['', planForReviewer(plan)] : []),
     ...(earlier.length > 0
       ? [
           '',
@@ -419,7 +425,7 @@ ${machineNote}` : contract);
     await pacer.throttleSend();
     // The brief is saved as sent. Until it was, whether a later round had been told what the
     // earlier one found could not be checked from the run folder at all.
-    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier, deps.deliverable);
+    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier, deps.deliverable, deps.plan);
     await saveReply('00-brief', brief);
     await deps.record(`REVIEW ${round} BRIEF`, brief);
     before = await transport.sendAndConfirm(brief);

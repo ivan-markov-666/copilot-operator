@@ -369,6 +369,16 @@ const SessionInput = z.object({
    * the same name. Empty means it gets a conversation of its own.
    */
   conversationGroup: z.string().trim().default(''),
+  /**
+   * Plan mode for the session's tasks (see `PlanMode` in session/model.ts): "auto" plans first and goes
+   * on, "approve" plans first and waits for the operator in a run that asks before each command, "off"
+   * does not plan apart. Absent follows Settings.
+   */
+  planMode: z
+    .enum(['off', 'auto', 'approve'], {
+      error: 'planMode must be "off", "auto" (plan first, approved by the runner) or "approve" (plan first, approved by the operator in a run that asks before each command).',
+    })
+    .optional(),
   vcs: VcsInput,
   review: ReviewInput.optional(),
   /**

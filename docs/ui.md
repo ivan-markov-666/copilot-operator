@@ -179,6 +179,22 @@ once. A run that ends for any reason aborts whatever was still pending.
 
 Unattended mode skips the question entirely and is behind a confirmation dialog in the UI.
 
+**Plan first** (plan mode, 2026-10-13). Settings → Execution → "Plan first", and per session on its page
+("As in Settings" by default; `planMode` in a plan's session): off, on with the plan approved by the
+runner, or on with the plan approved by the operator. With it on, a task opens with a phase of its own:
+the chat reads the project — what is already there, what is missing, what a change would affect — and
+replies with status "plan" (`existing`, `approach`, `steps`, `files`, `verification`, `risks`). Nothing
+changes in that phase: on the task's own branch whatever a round changed is put back and the chat told,
+and a "done" before a plan is sent back. The plan is recorded on the task (`plan`, with its version,
+who approved it and why, and the comments that asked for earlier versions to change) and shown on the
+task's card. "I approve the plan" puts it on a card in the approvals banner — the plan in full, a note
+for the chat, "Approve and start the work", "Ask for another plan" (the note says what to change, so it
+is required) and "Stop the task" — only in a run that asks before each command; a run that does not
+ask approves it itself and records why, so an unattended run never waits on a plan. The independent
+review is given the approved plan and checks that the work followed it: an undeclared departure is a
+finding. A task carried on (a limit, a new prompt) plans no more and keeps its plan. See
+`src/orchestrator/planMode.ts`; verified by `npm run check:e2e-planmode`.
+
 ## Version control
 
 On by default, per session, and the runner does the git itself. A step written by Copilot goes
@@ -291,7 +307,15 @@ branch the local branch is made from it or fast-forwarded to it first, and one t
 is refused with nothing changed. The choice is written on the session (`startFrom`, `baseBranch` or
 `existingBranch`, and `baseRemote` for a remote branch, which the run reads as
 `refs/remotes/<remote>/<branch>` and never fetches again), every session's choice is checked before
-any branch moves, and a session that has run keeps the start it has. A repository not ready only
+any branch moves. A session that has run is shown where it started — its branch and commit then and
+now, the branch's commit on the remote as last fetched, and a warning when the repository is on another
+branch — with "Keep: carry on <branch>" chosen first, "The branch checked out now: <branch> (<commit>)",
+and every other choice beside them; the window's button names the branch and commit the work starts on.
+Another start for it (`rechoose`) is recorded as `startRechosenAt`: the tasks that run next — a task run
+again too — start from it, not from where their first attempt started, a session on one branch gets a
+fresh branch name, and what already ran stays on its branches. A session with a task carried on from an
+earlier attempt keeps its start ("Fix the prompt and queue it again" starts that task over). "Read the
+branches again" reads the repository afresh after a checkout made outside the bot. A repository not ready only
 because of where a session starts keeps the run buttons on: the window settles it. See
 `src/vcs/startChoice.ts`; verified by `npm run check:startbranch` and the browser checks.
 
@@ -347,6 +371,23 @@ and level 2 it ran with, so its summary keeps standing under the question it act
 answered; only then is the new text applied. Editing in place would leave an old attempt
 claiming it was asked something that was written afterwards. A task the runner is inside of is
 the only one closed to edits.
+
+**After a failure, which way on** (2026-10-13). A task that failed or blocked on its work offers, on its
+register row and its card:
+
+| Button | Where the work starts | The chat |
+|---|---|---|
+| "Continue with a new prompt" (marked first) | from where it got to: its own branch, the failed attempt's work in the tree | its own conversation, told how the attempt ended and why — the runner's reason, the checks that did not pass, what the review found, its summary — then given the new prompt |
+| "Fix the prompt and queue it again" | over, from where the task first started; the failed work stays on its own branch | the session's conversation, sent the rewritten task |
+| "Run only this one again" | over, as above | the task sent again as it is |
+
+The new prompt is added to the task's own, never put in its place: the assignment, its checks and its
+expected result stand, and the chat is told that where they disagree the new prompt wins. It is kept on
+the attempt it was given for (`TaskContinuation.instruction`, with `ended`), shown on the task card, and
+a second failure takes a second prompt the same way. "Continue where it stopped" — after a limit, the bot
+stopping or the operator — takes an optional new prompt too. A task that contradicted itself never
+started its work and is not carried on: its fix is the way on. Verified by `npm run check:continue`,
+`check:e2e-continue` and the browser checks.
 
 ## Taking the record away
 
@@ -405,6 +446,7 @@ POST   /api/sessions/:id/stop
 GET    /api/sessions/:id/events      recent history
 GET    /api/sessions/:id/stream      server-sent events
 GET    /api/approvals?session=       POST /api/approvals/:id { action: run | skip | abort }
+POST   /api/approvals/:id/plan       { action: approve | revise | stop, note? } a plan waiting (plan mode)
 GET    /api/tasks                    every task of every session, for the register
 GET    /api/activity                 { running, sessions, batch } — in-memory, safe to poll
 GET    /api/sessions/:id/tasks/:taskId/restart   what starting again from here would do
@@ -412,7 +454,7 @@ POST   /api/sessions/:id/tasks/:taskId/restart   { restore?, start?, mode?, onFa
 GET    /api/models                   the cached model list plus the default for new sessions
 POST   /api/models/refresh           re-reads the chat's model picker (opens the browser)
 PUT    /api/models/default           { model } the model new sessions start on
-PUT    /api/sessions/:id              { onFailure, vcs } queue behaviour and version control
+PUT    /api/sessions/:id              { onFailure, vcs, planMode } queue behaviour, version control, plan first
 GET    /api/sessions/:id/vcs          can version control work here, and on which branch
 POST   /api/sessions/:id/tasks/:taskId/rerun    queues a finished task again
 POST   /api/sessions/:id/mode        { mode } asks or stops asking, mid-run

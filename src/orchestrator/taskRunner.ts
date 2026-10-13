@@ -46,6 +46,7 @@ import { RunLog } from '../log/runLog.js';
 import { composeOpening, readOnlyNote } from '../session/compose.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
+import { PLAN_FIRST, PLAN_NOT_NOW, PLAN_NUDGE_AFTER, describePlan, planApprovedMessage, planFrom, planModeNote, planNudge, planReviseMessage } from './planMode.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
 import { contractConflicts, readsTreeClean } from './contract.js';
@@ -53,7 +54,7 @@ import { treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import type { PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf, whereLeft } from '../vcs/taskVcs.js';
 import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
@@ -128,6 +129,12 @@ export type RunDeps = {
   beforeBrowser?: () => Promise<void>;
   /** What the picker on the page says about the models: see `ModelHooks`. */
   models?: ModelHooks;
+  /**
+   * Plan mode `approve`, in a run that asks before each command: the plan is put to the operator, and the
+   * answer is approve (with a note, optionally), revise (with what to change) or stop. Absent, or in a run
+   * that does not ask, the runner approves the plan itself. See `PlanMode`.
+   */
+  approvePlan?: (ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan }) => Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }>;
 };
 
 /**
@@ -801,6 +808,13 @@ async function withOperatorHand(
 }
 
 /** Runs one task to completion inside an already-open transport. */
+/** The approved plan a task works to: its own attempt's, else, for a continuation, the latest one before it. */
+function approvedPlanOf(task: Task): TaskPlan | undefined {
+  if (task.plan?.approved) return task.plan;
+  if (!task.continuing) return undefined;
+  return [...(task.attempts ?? [])].reverse().find((a) => a.plan?.approved)?.plan;
+}
+
 export async function runTask(
   transport: ChatTransport,
   session: Session,
@@ -1460,6 +1474,23 @@ export async function runTask(
      */
     const scopeEnforced = (scope.length > 0 || !!task.readOnly) && onOwnBranch;
     if (scopeEnforced) enforcement = { scope, readOnly: !!task.readOnly };
+    /*
+     * Plan mode (2026-10-13): the session's own, else Settings. A continuation carries on under the plan
+     * its attempt already has — it is in the conversation — so only a task that starts anew plans; a new
+     * prompt on finished work is a new instruction, and plans. The planning phase is read-only, enforced
+     * the way a read-only task is wherever the task has a branch of its own.
+     */
+    const planMode: PlanMode = session.planMode ?? cfg.execution.planMode ?? 'off';
+    let planning = planMode !== 'off' && !task.continuing;
+    const planEnforced = planning && onOwnBranch;
+    let planVersion = 0;
+    let planningRounds = 0;
+    const planRevisions: NonNullable<TaskPlan['revisions']> = [];
+    /*
+     * The approved plan the work follows, for the reviewer: one approved in this attempt, or the earlier
+     * attempt's for a task carried on. Kept here, because `task` is the record as it was when the attempt began.
+     */
+    let planInForce = approvedPlanOf(task);
     if (watchesTree) startState = await treeState(repoDirOf(session));
     // The operator's input files, read-only on a branch of the task's own; see `vcs/inputs.ts`.
     const startNow = (await store.getSession(session.id))?.vcsStart;
@@ -1595,6 +1626,8 @@ export async function runTask(
       contractAlreadySent: session.contractSent && !!session.chat,
       continuing,
       buildsOn,
+      // The operator's new prompt goes out whether or not the attempt it follows reached a conversation.
+      ...(task.continuing?.instruction ? { instruction: { text: task.continuing.instruction, fromAttempt: task.continuing.fromAttempt, ended: task.continuing.ended } } : {}),
       workDirNote: workingDirNote(work),
       vcsNote: prepared.note,
       // What is said about a commit is true only where one happens (live run 2026-10-03: promised with commits off).
@@ -1621,6 +1654,9 @@ export async function runTask(
             `each listed in "tried". With fewer, the runner asks you for another approach instead of accepting it.`
           : undefined,
       shellNote: shellNote(shells, defaultShell),
+      ...(planning && planMode !== 'off'
+        ? { planNote: planModeNote(planMode, planEnforced, planMode === 'approve' && !!deps.approvePlan && (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm') }
+        : {}),
     });
     await setTask((t) => {
       t.firstMessage = opening.firstMessage;
@@ -2099,6 +2135,11 @@ export async function runTask(
           deviations,
           disputes,
           /*
+           * The approved plan, for the review to hold the work to (plan mode, 2026-10-13): this attempt's, or —
+           * carried on in its chat — the one the attempt it continues worked to.
+           */
+          ...(planInForce ? { plan: planInForce } : {}),
+          /*
            * Each earlier finding with its evidence, the correction the implementer reports, and what the
            * finding's own check came to at the last gate: the next reviewer judges the finding on the evidence,
            * not on whether the new text says it is fixed (operator's feedback, 2026-10-06).
@@ -2469,7 +2510,9 @@ export async function runTask(
       await setTask((t) => {
         t.iterations = iterations;
       });
-      const { reply, done, blocked } = parsed;
+      const { reply, blocked } = parsed;
+      // Nothing is done while the plan is being made: the stop word in a planning round ends nothing.
+      const done = parsed.done && !planning;
       sink.event('reply-parsed', { iteration: iterations, status: reply.status, steps: reply.steps.length, notes: reply.notes },
         `iteration ${iterations}: ${reply.steps.length} step(s)${reply.notes ? ` — ${reply.notes}` : ''}`);
 
@@ -2538,6 +2581,79 @@ export async function runTask(
        * what the reply said, at greater length and one message later. The reason carries the
        * approaches that were tried, and that is what the register shows.
        */
+      /*
+       * Plan mode: the reply that ends the planning phase — put to the operator or approved by the runner —
+       * and the two that do not belong in it. Answered here, in a message of its own, as a repair of the
+       * format is: no step runs and nothing is committed in between.
+       */
+      if (reply.status === 'plan' || (planning && reply.status === 'done')) {
+        let message: string;
+        let tag: string;
+        if (reply.status === 'done') {
+          message = PLAN_FIRST;
+          tag = 'plan-first';
+          sink.event('plan-first', { iteration: iterations }, '"done" in the planning phase: nothing has been changed yet; the chat was asked for the plan', 'warn');
+        } else if (!planning || !reply.plan) {
+          message = PLAN_NOT_NOW;
+          tag = 'plan-not-asked';
+          sink.event('plan-not-asked', { iteration: iterations }, 'a plan arrived when none is asked for; the chat was told to carry on', 'warn');
+        } else {
+          planVersion += 1;
+          tag = `plan-${planVersion}`;
+          const plan = planFrom(reply.plan, planVersion, [...planRevisions]);
+          await setTask((t) => {
+            t.plan = plan;
+          });
+          await record(`PLAN ${planVersion}`, describePlan(plan));
+          sink.event('plan-received', { version: planVersion, steps: plan.steps.length, files: plan.files },
+            `plan ${planVersion} received: ${plan.steps.length} stage(s)${plan.files.length > 0 ? `, ${plan.files.length} file(s)` : ''}`);
+          // Asked of the operator only in a run that asks before each command: one that does not, approves it itself.
+          const asks = planMode === 'approve' && !!deps.approvePlan && (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm';
+          let answer: { decision: 'approve' | 'revise' | 'stop'; note?: string } = { decision: 'approve' };
+          if (asks) {
+            sink.event('plan-waiting', { version: planVersion }, `plan ${planVersion} is waiting for the operator`, 'warn');
+            answer = await deps.approvePlan!({ sessionId: session.id, taskId: task.id, title: task.title, plan });
+          }
+          if (signal?.aborted || answer.decision === 'stop') {
+            return await finish('aborted', answer.decision === 'stop' ? 'stopped by the operator at its plan' : 'stopped by the operator', undefined, lastMarkdown);
+          }
+          if (answer.decision === 'revise') {
+            const comment = (answer.note ?? '').trim() || 'Make the plan more concrete: name the files and the stages.';
+            planRevisions.push({ version: planVersion, comment, at: new Date().toISOString() });
+            await setTask((t) => {
+              if (t.plan) t.plan.revisions = [...planRevisions];
+            });
+            sink.event('plan-revise', { version: planVersion, comment }, `the operator asked for another plan: ${comment}`);
+            message = planReviseMessage(comment, planVersion);
+          } else {
+            // Who approved it, and why the operator was not asked when they were not.
+            const why = asks ? undefined : planMode === 'auto' ? 'plan mode approves plans automatically' : 'the run does not ask before each command';
+            const approved = {
+              by: asks ? ('operator' as const) : ('auto' as const),
+              at: new Date().toISOString(),
+              ...(answer.note?.trim() ? { note: answer.note.trim() } : {}),
+              ...(why ? { why } : {}),
+            };
+            await setTask((t) => {
+              if (t.plan) t.plan.approved = approved;
+            });
+            planInForce = { ...plan, approved };
+            sink.event('plan-approved', { version: planVersion, by: approved.by, ...(approved.note ? { note: approved.note } : {}) },
+              `plan ${planVersion} approved ${asks ? 'by the operator' : `by the runner — ${why}`}${approved.note ? `, with a note` : ''}`);
+            planning = false;
+            message = planApprovedMessage(approved);
+          }
+        }
+        await record(tag.toUpperCase().replace(/-/g, ' '), message);
+        await pacer.throttleSend();
+        const before = await transport.sendAndConfirm(message);
+        const next = await transport.waitForReply(before);
+        await saveReply(tag, next);
+        lastMarkdown = next.markdown;
+        await pacer.settle();
+        continue;
+      }
+
       if (!blocked && reply.steps.length > 0) earlyBlocks = 0;
       /*
        * "Blocked" before a single step ran in this attempt: what it lists as tried was thinking, not
@@ -2555,8 +2671,12 @@ export async function runTask(
          * usually lost the assignment, said "above": it is given again rather than told nothing ran (live run 2026-10-04).
          */
         const message = task.continuing
-          ? 'Not yet: this task is being continued, and nothing has run since. The assignment is this one, unchanged:\n\n' +
+          ? `Not yet: this task is being continued, and nothing has run since. The assignment is this one${task.continuing.instruction ? '' : ', unchanged'}:\n\n` +
             `${task.prompt.length > 6000 ? `${task.prompt.slice(0, 6000)}…` : task.prompt}\n\n` +
+            // With the operator's new prompt, when there is one: the reason the task is being carried on at all.
+            (task.continuing.instruction
+              ? `With the operator's new instruction, which wins where the two disagree:\n\n${task.continuing.instruction.length > 6000 ? `${task.continuing.instruction.slice(0, 6000)}…` : task.continuing.instruction}\n\n`
+              : '') +
             'Carry on from where it stopped: send your next step now with status "continue", for example a command that shows ' +
             'the state of the files the task works on. A task may end "blocked" only after steps that ran.'
           : 'Not yet: nothing has been run in this task. You do not need to operate anything yourself — this runner executes ' +
@@ -2825,6 +2945,26 @@ export async function runTask(
             t.scopeReverted = [...new Set([...(t.scopeReverted ?? []), ...check.reverted])];
           });
         }
+      }
+      /*
+       * The planning phase changes nothing: what a round changed is put back before the chat reads the
+       * results, as for a read-only task, and the chat is told. A reminder after many rounds that the
+       * plan is what ends the phase.
+       */
+      if (planning) {
+        planningRounds += 1;
+        if (planEnforced) {
+          const check = await enforceScope(repoDirOf(session), [], true).catch(() => null);
+          if (check && (check.outside.length > 0 || check.failed.length > 0)) {
+            sink.event('plan-change-reverted', { iteration: iterations, reverted: check.reverted, failed: check.failed },
+              `changed in the planning phase, put back: ${check.reverted.join(', ') || '(none)'}`, 'warn');
+            runnerNotes.push(
+              `This is the planning phase, and nothing may change yet: the runner put back ${check.reverted.length > 0 ? check.reverted.join(', ') : 'nothing it could'}` +
+                `${check.failed.length > 0 ? ` and could not put back ${check.failed.map((f) => f.path).join(', ')}` : ''}. Read, then send the plan.`,
+            );
+          }
+        }
+        if (planningRounds === PLAN_NUDGE_AFTER) runnerNotes.push(planNudge(planningRounds));
       }
       await guardInputs(iterations);
 

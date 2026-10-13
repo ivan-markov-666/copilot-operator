@@ -162,6 +162,13 @@ export const RunConfigSchema = z.object({
        */
       networkFetch: z.enum(['ask', 'refuse', 'run']).default('ask'),
       /**
+       * Plan mode, for every session that does not set its own (see `PlanMode` in session/model.ts): a
+       * task's chat first looks at the project read-only and replies with a plan, and the work begins once
+       * the plan is approved — by the runner (`auto`), or by the operator (`approve`, in a run that asks
+       * before each command; a run without asking approves it itself). Off by default: it costs messages.
+       */
+      planMode: z.enum(['off', 'auto', 'approve']).default('off'),
+      /**
        * The shell a step or a check runs in when it names none of its own.
        *
        * A preference rather than an instruction. A machine without PowerShell 7 falls through to

@@ -281,6 +281,7 @@ export async function importPlan(
       // the standing default, else the session's own.
       s.review = { enabled: planned.review?.enabled !== false, model: (planned.review?.model || defaultReviewModel).trim() };
       s.conversationGroup = group || undefined;
+      if (planned.planMode) s.planMode = planned.planMode;
       s.model = (planned.model || defaultModel).trim() || undefined;
       // The plan's models are kept, and marked as the plan's: Settings outrank them (see `effectiveModels`).
       if (planned.model?.trim()) s.modelSource = 'plan';

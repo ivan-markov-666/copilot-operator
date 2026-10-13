@@ -379,6 +379,12 @@ const FIELD_ROWS_EN = [
     'Overrides the setting above for this one session: give the same name to the sessions that should share a chat, and leave it "" for a session that should have its own.',
   ],
   [
+    'planMode',
+    'session',
+    'no',
+    'Plan first: "auto" — each task looks at the code read-only and makes a plan, approved by the runner, before it changes anything; "approve" — the same, approved by the operator in a run that asks before each command; "off". Leave it out to follow Settings. Ask when the work is large or the code base is new to the chat.',
+  ],
+  [
     'projectDir',
     'session',
     'no',
@@ -449,6 +455,12 @@ const FIELD_ROWS_BG = [
     'сесия',
     'не',
     'Отменя настройката горе само за тази сесия: дай едно и също име на сесиите, които да споделят чат, и остави "" на онази, която да е сама.',
+  ],
+  [
+    'planMode',
+    'сесия',
+    'не',
+    'Първо план: "auto" — всяка задача разглежда кода само с четене и прави план, одобрен от runner-а, преди да промени нещо; "approve" — същото, одобрено от оператора при пускане с питане преди всяка команда; "off". Пропусни го, за да следва Настройките. Питай, когато работата е голяма или кодът е непознат за чата.',
   ],
   [
     'projectDir',

@@ -93,6 +93,8 @@ export type TaskAttempt = {
   prompt?: string;
   level2?: string;
   vcs?: TaskVcs;
+  /** The plan this attempt made (plan mode). */
+  plan?: TaskPlan;
 };
 
 /** One condition that has to hold before a task is allowed to end. */
@@ -223,7 +225,15 @@ export type Task = {
   logFile?: string;
   /** 1 for the first run, one higher after every re-run. */
   attempt?: number;
-  continuing?: { fromAttempt: number; stoppedBecause?: string };
+  continuing?: {
+    fromAttempt: number;
+    stoppedBecause?: string;
+    how?: 'limit' | 'interrupted' | 'stopped' | 'failed';
+    /** The operator's new prompt for this attempt. */
+    instruction?: string;
+    /** How the attempt it carries on ended, as the chat was told. */
+    ended?: { status: TaskStatus; reason?: string; summary?: string; failedChecks?: Array<{ name: string; detail: string }>; findings?: Array<{ what: string; where?: string; evidence: string }> };
+  };
   /** Attempts that already finished, oldest first. */
   attempts?: TaskAttempt[];
   /** The press of a start button this task ran under. Tasks sharing one ran together. */
@@ -255,6 +265,8 @@ export type Task = {
   limit?: TaskLimit;
   /** What the independent review concluded, once it has run. */
   review?: TaskReview;
+  /** The plan this attempt made before changing anything (plan mode). */
+  plan?: TaskPlan;
 };
 
 export type VersionControl = {
@@ -608,6 +620,8 @@ export type Session = {
   onFailure?: 'stop' | 'continue';
   /** Sessions with the same group share one Copilot conversation. */
   conversationGroup?: string;
+  /** Plan mode for this session's tasks; absent follows Settings. */
+  planMode?: 'off' | 'auto' | 'approve';
   /** The name of the plan this session was imported from, offered as the run's name. */
   planName?: string;
   vcs?: VersionControl;
@@ -635,6 +649,22 @@ export type Approval = {
   network?: string;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */
   model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean };
+  /** Set when this is a task's plan waiting for approval (plan mode). */
+  plan?: { title: string; plan: TaskPlan };
+};
+
+/** A task's plan, in plan mode: see `TaskPlan` on the server. */
+export type TaskPlan = {
+  existing: string;
+  approach: string;
+  steps: string[];
+  files: string[];
+  verification: string;
+  risks?: string;
+  version: number;
+  at: string;
+  approved?: { by: 'operator' | 'auto'; at: string; note?: string; why?: string };
+  revisions?: Array<{ version: number; comment: string; at: string }>;
 };
 
 /** One thing wrong with a pasted plan, with the place in the document it is wrong at. */
@@ -762,9 +792,9 @@ export type ContextText = { content: string; customised: boolean; example: strin
 /** See `src/vcs/prepareFromRemote.ts`: what preparing the folder from the remote's main would keep where. */
 /** Where one session's work starts, as the start window chooses it. See src/vcs/startChoice.ts. */
 export type StartChoice =
-  | { from: 'local'; branch: string; onBranch?: boolean }
-  | { from: 'remote'; remote: string; branch: string; onBranch?: boolean }
-  | { from: 'previous-session' };
+  | { from: 'local'; branch: string; onBranch?: boolean; rechoose?: boolean }
+  | { from: 'remote'; remote: string; branch: string; onBranch?: boolean; rechoose?: boolean }
+  | { from: 'previous-session'; rechoose?: boolean };
 
 export type BranchTip = { name: string; commit: string };
 
@@ -785,8 +815,18 @@ export type StartOptionSession = {
   name: string;
   vcs: boolean;
   repoDir?: string;
-  /** The start is fixed already: what it is. */
+  /** The start is fixed already: what it is. Kept unless another start is chosen for it. */
   fixed?: string;
+  /** For a session that has run: the branch its work is on, its recorded start, and where that branch is now. */
+  started?: {
+    mode: 'existing-branch' | 'per-session' | 'per-task';
+    branch?: string;
+    recorded?: string;
+    tipNow?: string | null;
+    remote?: { name: string; commit: string };
+  };
+  /** Why another start cannot be chosen now: the queued tasks that carry an earlier attempt on. */
+  rechooseBlocked?: string;
   /** A start prepared before the run, which another choice drops. */
   prepared?: string;
   choice?: StartChoice;
@@ -857,6 +897,11 @@ export type TaskLimit = {
 /** Whether "Continue" may carry a task on where it stopped. The same rule as `isContinuable` in src/session/model.ts. */
 export function isContinuable(t: { status: TaskStatus; limit?: TaskLimit }): boolean {
   return t.status === 'limit-reached' || t.status === 'aborted' || (!!t.limit && (t.status === 'failed' || t.status === 'blocked'));
+}
+
+/** See `canFollowUp` in src/session/model.ts: a task that failed or blocked on its work, carried on with a new prompt. */
+export function canFollowUp(t: { status: TaskStatus; stopCode?: string }): boolean {
+  return (t.status === 'failed' || t.status === 'blocked') && t.stopCode !== 'contract-conflict';
 }
 
 /** See `src/session/handoff.ts`: every entry is something the runner recorded, not the model's words. */
@@ -1002,6 +1047,8 @@ export const api = {
       review?: Partial<ReviewSettings>;
       projectDir?: string;
       vcs?: Partial<VersionControl>;
+      /** Plan mode for this session; empty follows Settings. */
+      planMode?: '' | 'off' | 'auto' | 'approve';
     },
   ) =>
     call<Session>(`/sessions/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
@@ -1013,7 +1060,12 @@ export const api = {
     call<Task>(`/sessions/${id}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteTask: (id: string, taskId: string) => call<{ ok: true }>(`/sessions/${id}/tasks/${taskId}`, { method: 'DELETE' }),
   /** Queues a finished task again, keeping the earlier attempt on the record. */
-  continueTask: (id: string, taskId: string) => call<Task>(`/sessions/${id}/tasks/${taskId}/continue`, { method: 'POST', body: '{}' }),
+  /**
+   * Queues a task to carry on where it stopped — or, with a new prompt, where a failed one ended: the same
+   * chat and branch, the chat told how it ended and given the prompt.
+   */
+  continueTask: (id: string, taskId: string, instruction?: string) =>
+    call<Task>(`/sessions/${id}/tasks/${taskId}/continue`, { method: 'POST', body: JSON.stringify(instruction?.trim() ? { instruction } : {}) }),
   rerunTask: (
     id: string,
     taskId: string,
@@ -1082,6 +1134,12 @@ export const api = {
   /** Every step waiting for a decision right now, or only one session's. */
   approvals: (sessionId?: string) =>
     call<Approval[]>(`/approvals${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''}`),
+  /** A plan waiting for approval: approve (with a note), ask for another (saying what to change), or stop the task. */
+  decidePlan: (approvalId: string, action: 'approve' | 'revise' | 'stop', note?: string) =>
+    call<{ ok: boolean }>(`/approvals/${approvalId}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ action, ...(note?.trim() ? { note } : {}) }),
+    }),
   /** `run-all` runs this step and stops asking for the rest of the run. */
   decide: (approvalId: string, action: 'run' | 'skip' | 'abort' | 'run-all') =>
     call<{ ok: boolean }>(`/approvals/${approvalId}`, { method: 'POST', body: JSON.stringify({ action }) }),

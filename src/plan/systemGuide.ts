@@ -247,6 +247,56 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Само за сесия, чието начало е подготвено преди пускането — стартова снимка, одобрена в панела за пускане — и тогава е избрано първо: пускането тръгва от нея, както е одобрена. Всеки друг избор по-долу я отменя.',
           },
           {
+            key: 'startdlg.refresh',
+            kind: 'button',
+            en: 'Read the branches again',
+            bg: 'Прочети клоновете отново',
+            doesEn:
+              'Beside the window\'s first line: reads the repository again — the branch checked out, the branches and their commits — after a checkout or a pull made outside the bot; what was chosen stays chosen.',
+            doesBg:
+              'До първия ред на прозореца: прочита хранилището отново — избрания клон, клоновете и комитите им — след checkout или pull, направени извън бота; избраното остава избрано.',
+          },
+          {
+            key: 'startdlg.keepStarted',
+            kind: 'radio',
+            en: 'Keep: carry on {branch}',
+            bg: 'Запази: продължи на {branch}',
+            doesEn:
+              'For a session that has run already, chosen first: it carries on its own branch (named in the label). Above it the window says where that branch is now, where the session started, the branch on the remote, and warns when the repository is on another branch.',
+            doesBg:
+              'За сесия, която вече е вървяла, избрано първо: продължава на собствения си клон (името е в надписа). Над него прозорецът казва къде е клонът сега, откъде е тръгнала сесията, клона в remote, и предупреждава, когато хранилището е на друг клон.',
+          },
+          {
+            key: 'startdlg.useCurrent',
+            kind: 'radio',
+            en: 'The branch checked out now: {branch} ({commit})',
+            bg: 'Клонът, избран в момента: {branch} ({commit})',
+            doesEn:
+              'For a session that has run, when the repository is on another branch: the work starts from the branch checked out now. Like any other branch chosen for it, the tasks that run next start from it — a task run again too — and what already ran stays on its branches.',
+            doesBg:
+              'За сесия, която вече е вървяла, когато хранилището е на друг клон: работата тръгва от клона, избран в момента. Както при всеки друг избран клон, задачите, които тръгнат оттук нататък, тръгват от него — и пуснатата отново задача — а изпълненото остава в своите клонове.',
+          },
+          {
+            key: 'startdlg.goUnattendedOn',
+            kind: 'button',
+            en: 'Start without asking — on {where}',
+            bg: 'Започни без питане — на {where}',
+            doesEn:
+              'The window\'s start button when the run has one session: says the branch and commit the work starts on.',
+            doesBg:
+              'Бутонът за старт на прозореца, когато пускането е на една сесия: казва клона и комита, от които тръгва работата.',
+          },
+          {
+            key: 'startdlg.goStepOn',
+            kind: 'button',
+            en: 'Start, asking before each command — on {where}',
+            bg: 'Започни, с питане преди всяка команда — на {where}',
+            doesEn:
+              'The same, for a run that asks before each command.',
+            doesBg:
+              'Същото, за пускане с питане преди всяка команда.',
+          },
+          {
             key: 'startdlg.local',
             kind: 'radio',
             en: 'Local branch',
@@ -501,6 +551,40 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Спри',
             doesEn: 'Nothing is sent: the session stops, its tasks stay queued.',
             doesBg: 'Нищо не се изпраща: сесията спира, задачите ѝ остават на опашката.',
+          },
+          {
+            key: 'pm.note',
+            kind: 'field',
+            en: 'Note for the chat (optional when approving; says what to change when asking for another plan)',
+            bg: 'Бележка за чата (по желание при одобрение; казва какво да се промени, когато искаш друг план)',
+            doesEn:
+              'On a plan waiting for approval (plan first): sent to the chat with the answer — a condition for the work when approving, what to change when asking for another plan.',
+            doesBg:
+              'На план, който чака одобрение („Първо план“): изпраща се на чата с отговора — условие за работата при одобрение, какво да се промени, когато искаш друг план.',
+          },
+          {
+            key: 'pm.approve',
+            kind: 'button',
+            en: 'Approve and start the work',
+            bg: 'Одобри и започни работата',
+            doesEn: 'The plan is recorded as approved by the operator and the chat starts changing the code, following it.',
+            doesBg: 'Планът се записва като одобрен от оператора и чатът започва да променя кода, като го следва.',
+          },
+          {
+            key: 'pm.revise',
+            kind: 'button',
+            en: 'Ask for another plan',
+            bg: 'Поискай друг план',
+            doesEn: 'Needs the note: the chat makes a new version of the plan with it, still without changing anything, and the card comes back.',
+            doesBg: 'Иска бележка: чатът прави нова версия на плана с нея, пак без да променя нищо, и картата се връща.',
+          },
+          {
+            key: 'pm.stop',
+            kind: 'button',
+            en: 'Stop the task',
+            bg: 'Спри задачата',
+            doesEn: 'After a confirmation the task ends as stopped, with nothing changed; it can be run again.',
+            doesBg: 'След потвърждение задачата приключва като спряна, без нищо променено; може да се пусне отново.',
           },
         ],
       },
@@ -1343,6 +1427,24 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Сесиите с едно и също име тук споделят един разговор в Copilot; празно дава на тази собствен.',
           },
           {
+            key: 'pm.sessionSetting',
+            kind: 'select',
+            en: 'Plan first, for this session',
+            bg: 'Първо план, за тази сесия',
+            doesEn:
+              'Plan first for this session\'s tasks: "As in Settings", off, approved without asking, or approved by the operator; overrides Settings → Execution → Plan first.',
+            doesBg:
+              '„Първо план“ за задачите на тази сесия: „Както е в Настройки“, изключено, одобрява се без питане или от оператора; отменя Настройки → Изпълнение → Първо план.',
+          },
+          {
+            key: 'pm.followSettings',
+            kind: 'select',
+            en: 'As in Settings',
+            bg: 'Както е в Настройки',
+            doesEn: 'The session follows Settings → Execution → Plan first.',
+            doesBg: 'Сесията следва Настройки → Изпълнение → Първо план.',
+          },
+          {
             key: 'session.run',
             kind: 'button',
             en: 'Run {n} task(s)',
@@ -1920,6 +2022,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'В редакцията, с включен контрол на версиите: заглавието и тялото на комита.',
           },
           {
+            key: 'fup.button',
+            kind: 'button',
+            en: 'Continue with a new prompt',
+            bg: 'Продължи с нов prompt',
+            doesEn:
+              'On a task card that failed or blocked on its work: the same dialog as on the register\'s row — how it ended, a new prompt, and the task carries on from where it got to in its chat and on its branch.',
+            doesBg:
+              'На карта на задача, провалена или блокирана по работата: същият прозорец като на реда в регистъра — как е завършила, нов prompt, и задачата продължава оттам, докъдето е стигнала, в чата и на клона си.',
+          },
+          {
             key: 'task.continue',
             kind: 'button',
             en: 'Continue in the same chat',
@@ -2036,6 +2148,24 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'The exact first message that opened the task.',
             doesBg:
               'Точното първо съобщение, с което е започнала задачата.',
+          },
+          {
+            key: 'pm.taskApproved',
+            kind: 'disclosure',
+            en: 'Plan (version {n}, approved)',
+            bg: 'План (версия {n}, одобрен)',
+            doesEn:
+              'The plan the work follows (plan first): what was already there, the approach, steps, files, how it shows the work is done, risks; who approved it and the comments that asked for earlier versions to change.',
+            doesBg:
+              'Планът, който работата следва („Първо план“): какво вече има, подход, стъпки, файлове, как ще покаже, че е готово, рискове; кой го е одобрил и коментарите, поискали промени в по-ранни версии.',
+          },
+          {
+            key: 'pm.taskWaiting',
+            kind: 'disclosure',
+            en: 'Plan (version {n}, waiting for approval)',
+            bg: 'План (версия {n}, чака одобрение)',
+            doesEn: 'The same, open while the plan waits on its approval card at the top of every page.',
+            doesBg: 'Същото, отворено, докато планът чака на картата си за одобрение най-горе на всяка страница.',
           },
           {
             key: 'task.finalReply',
@@ -2621,6 +2751,43 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         ],
       },
       {
+        headingKey: 'fup.title',
+        en: 'Continue “{title}” with a new prompt',
+        bg: 'Продължи „{title}“ с нов prompt',
+        controls: [
+          {
+            key: 'fup.original',
+            kind: 'disclosure',
+            en: 'The task’s prompt as it stands',
+            bg: 'Prompt-ът на задачата, какъвто е',
+            doesEn:
+              'Shows the task\'s own prompt, which stays as it is: the new one is added to it.',
+            doesBg:
+              'Показва собствения prompt на задачата, който остава какъвто е: новият се добавя към него.',
+          },
+          {
+            key: 'fup.prompt',
+            kind: 'field',
+            en: 'New prompt',
+            bg: 'Нов prompt',
+            doesEn:
+              'What to do now, in the operator\'s words: what was wrong and what to do instead. Required. It wins where it and the task\'s prompt disagree.',
+            doesBg:
+              'Какво да направи сега, с думите на оператора: какво е било грешно и какво да направи вместо това. Задължително. Надделява, където то и prompt-ът на задачата си противоречат.',
+          },
+          {
+            key: 'fup.save',
+            kind: 'button',
+            en: 'Queue it to continue with this prompt',
+            bg: 'Върни в опашката да продължи с този prompt',
+            doesEn:
+              'Queues the task to carry on with the prompt, in its chat and on its branch; the dialog then offers "Run this task".',
+            doesBg:
+              'Връща задачата в опашката да продължи с prompt-а, в чата и на клона ѝ; после прозорецът предлага „Пусни тази задача“.',
+          },
+        ],
+      },
+      {
         headingKey: null,
         en: 'On every task row, in every view',
         bg: 'На всеки ред със задача, във всеки изглед',
@@ -2756,6 +2923,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'На ред, провален или блокиран по работата: казва какво става с чата, клона и записа, после пуска нов опит само за тази задача; останалите в опашката остават.',
           },
           {
+            key: 'fup.button',
+            kind: 'button',
+            en: 'Continue with a new prompt',
+            bg: 'Продължи с нов prompt',
+            doesEn:
+              'The way on after a task failed or blocked on its work: opens a dialog that shows how it ended (the reason, the checks that did not pass, what the review found) and takes a new prompt. Queued with it, the task carries on from where it got to — its own chat and branch, the failed attempt\'s work in the tree — and the chat is told how it ended and why, then given the prompt, which is added to the task\'s own. Saving does not start it; the dialog then offers "Run this task". Recommend this when the operator wants to keep the work and correct it.',
+            doesBg:
+              'Пътят напред, когато задача се е провалила или блокирала по работата: отваря прозорец, който показва как е завършила (причината, проверките, които не минаха, какво откри рецензията) и приема нов prompt. Върната с него в опашката, задачата продължава оттам, докъдето е стигнала — собственият ѝ чат и клон, с работата на неуспешния опит в дървото — а чатът научава как и защо е завършила и получава prompt-а, който се добавя към собствения на задачата. Запазването не я пуска; после прозорецът предлага „Пусни тази задача“. Препоръчвай го, когато операторът иска да запази работата и да я поправи.',
+          },
+          {
             key: 'reg.continueHere',
             kind: 'button',
             en: 'Continue where it stopped',
@@ -2766,14 +2943,24 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'На ред, спрян от лимит в настройките (минути, съобщения, чакане на отговор, кръгове поправки), от спрял бот или от оператора: казва какво става с чата, клона и файловете, после пуска само тази задача в чата ѝ.',
           },
           {
+            key: 'reg.continueHerePrompt',
+            kind: 'field',
+            en: 'New prompt (optional)',
+            bg: 'Нов prompt (по желание)',
+            doesEn:
+              'In the "Continue where it stopped" panel: a new prompt to carry on with, optional — added to the task, and the chat does it as it carries on.',
+            doesBg:
+              'В панела „Продължи откъдето спря“: нов prompt, с който да продължи, по желание — добавя се към задачата и чатът го изпълнява, докато продължава.',
+          },
+          {
             key: 'reg.fixPrompt',
             kind: 'button',
             en: 'Fix the prompt and queue it again',
             bg: 'Поправи prompt-а и върни в опашката',
             doesEn:
-              'On a row that did not end done, its session idle: rewrite the task\'s text and queue it again. Saving does not start it; the same dialog then asks "Run it now?" with the "Run this task" choices and buttons.',
+              'On a row that did not end done, its session idle: rewrite the task\'s text and queue it again — it starts over from where the task first began, the failed attempt\'s work set aside on its branch (to keep that work and go on from it: "Continue with a new prompt"). Saving does not start it; the same dialog then asks "Run it now?" with the "Run this task" choices and buttons.',
             doesBg:
-              'На ред, който не е завършил готов, при спряна сесия: пренапишете текста на задачата и я върнете в опашката. Запазването не я пуска; после същият прозорец пита „Да я пусна ли сега?“ с изборите и бутоните на „Пусни тази задача“.',
+              'На ред, който не е завършил готов, при спряна сесия: пренапишете текста на задачата и я върнете в опашката — тя започва отначало оттам, откъдето е тръгнала първия път, а работата на неуспешния опит остава в неговия клон (за да я запазите и да продължите от нея: „Продължи с нов prompt“). Запазването не я пуска; после същият прозорец пита „Да я пусна ли сега?“ с изборите и бутоните на „Пусни тази задача“.',
           },
           {
             key: 'runq.later',
@@ -3846,6 +4033,42 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'It runs without anyone reading it. Only on a machine where that is acceptable.',
             doesBg:
               'Изпълнява се, без някой да я е прочел. Само на машина, където това е приемливо.',
+          },
+          {
+            key: 'pm.setting',
+            kind: 'select',
+            en: 'Plan first',
+            bg: 'Първо план',
+            doesEn:
+              'Each task first looks at the code without changing anything and makes a plan; the work starts once the plan is approved, and the review checks the work followed it. A run that does not ask approves the plan itself, so it never waits.',
+            doesBg:
+              'Всяка задача първо разглежда кода, без да променя нищо, и прави план; работата започва, когато планът е одобрен, а прегледът проверява дали работата го следва. Пускане, което не пита, одобрява плана само, така че никога не чака.',
+          },
+          {
+            key: 'pm.off',
+            kind: 'select',
+            en: 'Off — the work starts at once',
+            bg: 'Изключено — работата започва веднага',
+            doesEn: 'No plan: the task starts changing the code in its first reply, as before.',
+            doesBg: 'Без план: задачата започва да променя кода от първия си отговор, както досега.',
+          },
+          {
+            key: 'pm.auto',
+            kind: 'select',
+            en: 'On — the plan is approved without asking',
+            bg: 'Включено — планът се одобрява без питане',
+            doesEn: 'The runner approves the plan as soon as it is complete and records that it did.',
+            doesBg: 'Runner-ът одобрява плана веднага щом е пълен и записва, че го е направил.',
+          },
+          {
+            key: 'pm.approveMode',
+            kind: 'select',
+            en: 'On — I approve the plan when the run asks before each command',
+            bg: 'Включено — аз одобрявам плана, когато пускането пита преди всяка команда',
+            doesEn:
+              'In a run that asks before each command, the plan waits on a card at the top of every page; an unattended run approves it itself and says why.',
+            doesBg:
+              'При пускане с питане преди всяка команда планът чака на карта най-горе на всяка страница; пускане без надзор го одобрява само и казва защо.',
           },
         ],
       },

@@ -19,6 +19,7 @@ import { api, sessionHref, type Approval } from '../lib/api';
 import { useT, useFmtTime } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { usePoll } from '../lib/usePoll';
+import { PlanView } from './planView';
 
 const EVERY_MS = 2_000;
 
@@ -105,6 +106,9 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
     }
   };
 
+  // Not a step: a task's plan, waiting to be approved before the work starts (plan mode, 2026-10-13).
+  if (approval.plan) return <PlanCard approval={approval} sessionName={sessionName} onDecided={onDecided} />;
+
   /*
    * Not a step: the chat could not be put on the chosen model, and the operator is asked to choose it in
    * the Copilot window, then say so here (2026-10-06). The run waits on this card in every mode.
@@ -169,6 +173,80 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
         </button>
         <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
           {t('approval.abort')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A task's plan, waiting before the work starts: the plan in full, a note the chat gets with the
+ * answer, and three answers — approve it, ask for another (the note says what to change, so it is
+ * required), or stop the task.
+ */
+function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName: string; onDecided: () => void }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const deciding = useRef(false);
+  const p = approval.plan!;
+
+  const decide = async (action: 'approve' | 'revise' | 'stop') => {
+    if (deciding.current) return;
+    if (action === 'revise' && !note.trim()) {
+      setErr(t('pm.reviseNeedsNote'));
+      return;
+    }
+    if (action === 'stop' && !(await confirmDialog(t('pm.stopConfirm')))) return;
+    deciding.current = true;
+    setBusy(true);
+    setErr('');
+    try {
+      await api.decidePlan(approval.id, action, note);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      deciding.current = false;
+      setBusy(false);
+      onDecided();
+    }
+  };
+
+  return (
+    <div className="approval">
+      <div className="row">
+        <strong>{t('pm.cardTitle', { title: p.title })}</strong>
+        <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
+        <span className="muted small">{fmtTime(approval.createdAt)}</span>
+      </div>
+      <p className="small">{t('pm.cardWhy')}</p>
+      <PlanView plan={p.plan} showApproval={false} />
+      <label htmlFor={`plan-note-${approval.id}`}>{t('pm.note')}</label>
+      <textarea
+        id={`plan-note-${approval.id}`}
+        className="prose"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder={t('pm.notePlaceholder')}
+        style={{ minHeight: 70 }}
+        disabled={busy}
+      />
+      {err && (
+        <p className="err" role="alert">
+          {err}
+        </p>
+      )}
+      <div className="row">
+        <button className="primary" disabled={busy} onClick={() => void decide('approve')}>
+          {t('pm.approve')}
+        </button>
+        <button disabled={busy} onClick={() => void decide('revise')} title={t('pm.reviseWhy')}>
+          {t('pm.revise')}
+        </button>
+        <button className="danger" disabled={busy} onClick={() => void decide('stop')}>
+          {t('pm.stop')}
         </button>
       </div>
     </div>

@@ -27,7 +27,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { freshRetriesOfLatestRun, isContinuable, newId, tidyVcsPlan, type TaskPatch } from '../session/model.js';
+import { freshRetriesOfLatestRun, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type PlanMode, type TaskPatch, type TaskPlan } from '../session/model.js';
 import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
 import { buildExport, type ExportVariant } from '../session/exportRecord.js';
 import { buildDebugExport } from '../session/debugExport.js';
@@ -117,7 +117,16 @@ type Running = {
   policy: PolicyConfig;
 };
 
-type Waiting = { approval: PendingApproval; resolve: (d: PolicyDecision) => void };
+/**
+ * Something waiting for the operator. `resolvePlan`: a plan waiting for approval, answered with the
+ * operator's note; the plain `resolve` reaches it too — a stop, the end of the run, "run the rest without
+ * asking" — and is read as stop, stop and approve.
+ */
+type Waiting = {
+  approval: PendingApproval;
+  resolve: (d: PolicyDecision) => void;
+  resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
+};
 
 /** Who has the browser profile: a session's run of its own, a batch, or a read of the model list. */
 type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'batch' } | { kind: 'models' } | { kind: 'login' };
@@ -729,6 +738,8 @@ export class OperatorService {
       vcs?: Partial<VersionControl>;
       review?: Partial<ReviewSettings>;
       active?: boolean;
+      /** Plan mode for this session; empty follows Settings. See `PlanMode`. */
+      planMode?: PlanMode | '';
     },
   ): Promise<Session> {
     await this.init();
@@ -756,6 +767,10 @@ export class OperatorService {
         if (patch.review.model !== undefined) s.reviewModelSource = s.review.model ? 'operator' : undefined;
       }
       if (patch.projectDir !== undefined) s.projectDir = patch.projectDir.trim();
+      if (patch.planMode !== undefined) {
+        if (patch.planMode === 'off' || patch.planMode === 'auto' || patch.planMode === 'approve') s.planMode = patch.planMode;
+        else delete s.planMode;
+      }
       if (patch.vcs) {
         const merged = { ...DEFAULT_VCS, ...s.vcs, ...patch.vcs };
         // A prefix is what makes the bot's branches recognisable in `git branch`, so an empty
@@ -892,7 +907,15 @@ export class OperatorService {
    * the old attempt's summary sitting under a question that was never asked.
    */
   /** "Continue" on a task that stopped before it finished — a limit from the settings, the bot stopping, the operator: same chat, same branch, fresh count. */
-  async continueTask(sessionId: string, taskId: string): Promise<Task> {
+  async continueTask(
+    sessionId: string,
+    taskId: string,
+    /**
+     * The operator's new prompt: what carries a task that failed on from where it got to, in its chat and
+     * on its branch (2026-10-13); optional with any other Continue. See `TaskContinuation.instruction`.
+     */
+    instruction?: string,
+  ): Promise<Task> {
     await this.init();
     /*
      * An attempt the operator stopped: which of its last steps ran, and what they printed, read from its
@@ -902,15 +925,21 @@ export class OperatorService {
     const before = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
     const cfg = await this.settings.load();
     const stoppedAt = before?.status === 'aborted' && !before.interruption && before.runId ? await readInterruption(join(cfg.resolved.runsDir, before.runId)).catch(() => null) : null;
-    const task = await this.store.continueTask(sessionId, taskId, stoppedAt);
-    await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'continue', message: `"${task.title}" queued to continue as attempt ${task.attempt ?? 1}`, data: { taskId, attempt: task.attempt } }).catch(() => undefined);
+    const task = await this.store.continueTask(sessionId, taskId, stoppedAt, instruction);
+    const after = task.continuing?.how === 'failed' ? ` after it ended ${task.continuing.ended?.status ?? 'failed'}` : '';
+    const withPrompt = task.continuing?.instruction ? ', with a new prompt' : '';
+    await appendSessionLog(cfg.resolved.runsDir, sessionId, {
+      type: 'continue',
+      message: `"${task.title}" queued to continue as attempt ${task.attempt ?? 1}${after}${withPrompt}`,
+      data: { taskId, attempt: task.attempt, ...(task.continuing?.instruction ? { instruction: task.continuing.instruction } : {}) },
+    }).catch(() => undefined);
     this.bus.publish({
       sessionId,
       taskId,
       type: 'task-requeued',
       level: 'info',
-      message: `"${task.title}" is queued to continue where it stopped (attempt ${task.attempt ?? 1})`,
-      data: { attempt: task.attempt, continuing: true },
+      message: `"${task.title}" is queued to continue where it ${after ? 'ended' : 'stopped'}${after}${withPrompt} (attempt ${task.attempt ?? 1})`,
+      data: { attempt: task.attempt, continuing: true, ...(task.continuing?.instruction ? { instruction: true } : {}) },
     });
     return task;
   }
@@ -1493,8 +1522,16 @@ export class OperatorService {
           x.vcsBaseCommit = undefined;
           x.vcsStart = undefined;
         }
+        // Chosen again after the session ran: a re-run starts from it too, and a per-session line goes on under a new name.
+        if (applied.restart) {
+          x.startRechosenAt = new Date().toISOString();
+          if (applied.restart.freshBranch) {
+            x.vcs.branchName = applied.restart.freshBranch;
+            x.vcs.branchNameExact = true;
+          }
+        }
       });
-      const message = `${applied.said}${applied.note ? `; ${applied.note}` : ''}${applied.clearStart ? '; the start prepared before (a starting snapshot) no longer applies' : ''}`;
+      const message = `${applied.said}${applied.note ? `; ${applied.note}` : ''}${applied.clearStart && !applied.restart ? '; the start prepared before (a starting snapshot) no longer applies' : ''}`;
       entries.push({ at: new Date().toISOString(), type: 'start-chosen', message, data: { session: id, choice: starts[id], ...(applied.note ? { note: applied.note } : {}) } });
       this.bus.publish({ sessionId: id, type: 'start-chosen', level: 'info', message, data: { runId, choice: starts[id] } });
       await appendSessionLog(cfg.resolved.runsDir, id, { type: 'start-chosen', message, data: { runId, choice: starts[id] } }).catch(() => undefined);
@@ -1718,6 +1755,8 @@ export class OperatorService {
           await this.store.saveModels({ options, current: current ?? undefined, readAt: new Date().toISOString() });
         },
       },
+      // Plan mode `approve`: the plan is put to the operator on the approvals card.
+      approvePlan: (ask) => this.askPlanApproval(ask, controller.signal),
     })
       .then(async (outcome) => {
         const tally = { ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused, ...(outcome.refused ? { refused: outcome.refused } : {}) };
@@ -2638,6 +2677,53 @@ export class OperatorService {
       this.bus.publish({ sessionId: ask.sessionId, type: 'approval-requested', level: 'warn',
         message: `choose "${ask.asked}" in the Copilot window, then answer on the card`, data: { approvalId: approval.id, model: approval.model } });
     });
+  }
+
+  /**
+   * A task's plan, put to the operator (plan mode `approve`, in a run that asks before each command): it
+   * waits on the approvals card, on every page, until it is approved, sent back for another, or the task
+   * is stopped. See `PlanMode`.
+   */
+  askPlanApproval(ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan }, signal: AbortSignal): Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }> {
+    return new Promise((resolveAnswer) => {
+      if (signal.aborted) {
+        resolveAnswer({ decision: 'stop' });
+        return;
+      }
+      const approval: PendingApproval = {
+        id: newId('a-'),
+        sessionId: ask.sessionId,
+        taskId: ask.taskId,
+        stepId: 0,
+        description: `The plan of "${ask.title}" (version ${ask.plan.version})`,
+        createdAt: new Date().toISOString(),
+        plan: { title: ask.title, plan: ask.plan },
+      };
+      this.waiting.set(approval.id, {
+        approval,
+        resolve: (d) => resolveAnswer(d.action === 'run' ? { decision: 'approve' } : { decision: 'stop' }),
+        resolvePlan: resolveAnswer,
+      });
+      this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
+        message: `the plan of "${ask.title}" (version ${ask.plan.version}) is waiting for you to approve it`, data: { approvalId: approval.id, plan: true } });
+    });
+  }
+
+  /**
+   * Answers a plan waiting for approval: approve it (with a note the chat is given beside it), ask for
+   * another (saying what to change), or stop the task.
+   */
+  decidePlan(approvalId: string, action: 'approve' | 'revise' | 'stop', note?: string): { ok: boolean; problem?: string } {
+    const w = this.waiting.get(approvalId);
+    if (!w || !w.resolvePlan) return { ok: false, problem: 'That plan is not waiting any more.' };
+    const text = (note ?? '').trim();
+    if (action === 'revise' && !text) return { ok: false, problem: 'Say what to change in the plan, so the chat knows what the next one must do differently.' };
+    if (text.length > MAX_INSTRUCTION_CHARS) return { ok: false, problem: `The note is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.` };
+    this.waiting.delete(approvalId);
+    w.resolvePlan({ decision: action, ...(text ? { note: text } : {}) });
+    this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
+      message: `plan: ${action}${text ? ' (with a note)' : ''}`, data: { approvalId, action, plan: true } });
+    return { ok: true };
   }
 
   pendingApprovals(sessionId?: string): PendingApproval[] {

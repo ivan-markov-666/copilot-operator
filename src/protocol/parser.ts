@@ -158,12 +158,34 @@ export function normaliseProse(value: unknown): { value: unknown; coerced: strin
       });
     }
   }
+  // A plan's prose, in plan mode: read as text whatever shape it came in, as the fields above are.
+  if (out.plan && typeof out.plan === 'object' && !Array.isArray(out.plan)) {
+    const plan: Record<string, unknown> = { ...(out.plan as Record<string, unknown>) };
+    for (const key of ['existing', 'approach', 'verification', 'risks']) {
+      if (key in plan && plan[key] !== undefined && typeof plan[key] !== 'string') {
+        plan[key] = proseOf(plan[key]);
+        coerced.push(`plan.${key}`);
+      }
+    }
+    for (const key of ['steps', 'files']) {
+      if (typeof plan[key] === 'string') {
+        // One item per line, its numbering or bullet taken off: "1. add the writer\n2. add the route".
+        plan[key] = (plan[key] as string)
+          .split(/\r?\n/)
+          .map((l) => l.replace(/^\s*(?:\d+[.)]|[-*•])\s+/, '').trim())
+          .filter(Boolean);
+        coerced.push(`plan.${key}`);
+      }
+    }
+    out.plan = plan;
+  }
   return { value: out, coerced };
 }
 
 /** What each field must look like, said in the message that asks for a reformatted reply. */
 const FIELD_SHAPES: Array<[RegExp, string]> = [
-  [/^status$/, '"status" is one of "continue", "done", "blocked"'],
+  [/^status$/, '"status" is one of "continue", "done", "blocked" — and "plan", in plan mode only'],
+  [/^plan(\.|$)/, '"plan" is {"existing": "…", "approach": "…", "steps": ["…"], "files": ["…"], "verification": "…", "risks": "…"} with plain strings'],
   [/^steps(\.|$)/, '"steps" is a list of {"id": 1, "type": "command", "cmd": "the command"} ("shell", "expect", "timeoutSec" optional)'],
   [/^tried(\.|$)/, '"tried" is a list of plain strings, one sentence per approach'],
   [/^deviations(\.|$)/, '"deviations" is a list of {"instruction": "…", "did": "…", "why": "…"} with plain strings'],
@@ -240,11 +262,13 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       // model that writes "Край" under an explanation of why it cannot finish has ended the
       // task, not completed it, and reading that as `done` would file a failure as a success.
       const blocked = reply.status === 'blocked';
+      // A plan waits for its approval: the stop word in it does not end the task.
+      const plan = reply.status === 'plan';
 
       return {
         ok: true,
         reply: { ...reply, steps },
-        done: reply.status === 'done' || (markerHit && hasSummary && !blocked),
+        done: reply.status === 'done' || (markerHit && hasSummary && !blocked && !plan),
         blocked,
         json: text.trim(),
         ...(prose.coerced.length > 0 ? { coerced: prose.coerced } : {}),

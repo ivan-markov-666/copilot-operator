@@ -23,14 +23,18 @@
  * its tasks carry on from there, and the window says so instead of offering a choice.
  */
 import type { Session, VersionControl } from '../session/model.js';
-import { git, isAncestor, isValidBranchName, lastFetchedAt } from './git.js';
+import { freeBranchName, git, isAncestor, isValidBranchName, lastFetchedAt } from './git.js';
 import { fetchAsOperator, fetchCommandFor, type OperatorFetch } from './remoteAuth.js';
-import { describeStart, remoteTip, repoDirOf } from './taskVcs.js';
+import { describeStart, remoteTip, repoDirOf, sessionBranchName } from './taskVcs.js';
 
+/**
+ * `rechoose`: the operator chose another start for a session that has run already — its start is
+ * otherwise kept, whatever is sent for it (see `startIsFixed`).
+ */
 export type StartChoice =
-  | { from: 'local'; branch: string; onBranch?: boolean }
-  | { from: 'remote'; remote: string; branch: string; onBranch?: boolean }
-  | { from: 'previous-session' };
+  | { from: 'local'; branch: string; onBranch?: boolean; rechoose?: boolean }
+  | { from: 'remote'; remote: string; branch: string; onBranch?: boolean; rechoose?: boolean }
+  | { from: 'previous-session'; rechoose?: boolean };
 
 export type BranchTip = { name: string; commit: string };
 
@@ -56,8 +60,22 @@ export type StartOptionSession = {
   /** Version control is on: without it the runner does no git, and there is nothing to choose. */
   vcs: boolean;
   repoDir?: string;
-  /** The start is fixed already; what it is, in a sentence. Nothing is offered then. */
+  /** The start is fixed already; what it is, in a sentence. Kept unless another start is chosen for it. */
   fixed?: string;
+  /**
+   * For a session that has run: the branch its work is on, where its start was recorded and where that
+   * branch is now, here and on the remote as last fetched — so the window can say when the repository has
+   * moved on, or is on another branch (operator's report, 2026-10-13).
+   */
+  started?: {
+    mode: 'existing-branch' | 'per-session' | 'per-task';
+    branch?: string;
+    recorded?: string;
+    tipNow?: string | null;
+    remote?: { name: string; commit: string };
+  };
+  /** Why another start cannot be chosen for it now: a queued task carries an earlier attempt on. */
+  rechooseBlocked?: string;
   /** A start prepared before the run (a starting snapshot), which another choice drops. */
   prepared?: string;
   /** What the window offers first: the session's own setting, made into one of the choices. */
@@ -170,15 +188,48 @@ export async function startOptions(sessions: Session[]): Promise<{ repos: RepoBr
       repoDir: repo.repoDir,
       previousOffered: s.vcs?.startFrom === 'previous-session' || earlierHere,
     };
-    if (startIsFixed(s) && s.vcsStart) entry.fixed = describeStart(s.vcsStart);
-    else if (startIsFixed(s)) entry.fixed = `it started from ${s.vcsBaseCommit?.slice(0, 8)}`;
-    else {
+    if (startIsFixed(s)) {
+      entry.fixed = s.vcsStart ? describeStart(s.vcsStart) : `it started from ${s.vcsBaseCommit?.slice(0, 8)}`;
+      if (!repo.problem) {
+        entry.started = await startedOn(s, repo);
+        // What "another branch" offers first: the session's own setting, as for a session that has not run.
+        entry.choice = defaultChoice(s, repo);
+        const carries = carriedOn(s);
+        if (carries.length > 0) entry.rechooseBlocked = carries.join(', ');
+      }
+    } else {
       if (s.vcsStart) entry.prepared = describeStart(s.vcsStart);
       if (!repo.problem) entry.choice = defaultChoice(s, repo);
     }
     out.push(entry);
   }
   return { repos: [...repos.values()], sessions: out };
+}
+
+/** The queued tasks that carry an earlier attempt on, on that attempt's branch: by title, quoted. */
+function carriedOn(s: Session): string[] {
+  return s.tasks.filter((t) => t.status === 'queued' && (t.continuing || t.buildsOn)).map((t) => `"${t.title}"`);
+}
+
+/** Where a session that has run stands: see `StartOptionSession.started`. */
+async function startedOn(s: Session, repo: RepoBranches): Promise<NonNullable<StartOptionSession['started']>> {
+  const dir = repo.repoDir;
+  const mode = s.vcs?.startFrom === 'existing-branch' ? 'existing-branch' : s.vcs?.branchMode === 'per-session' ? 'per-session' : 'per-task';
+  const branch = mode === 'existing-branch' ? s.vcs?.existingBranch?.trim() : mode === 'per-session' ? sessionBranchName(s) : s.vcsStart?.branch;
+  const recorded = s.vcsStart?.commit ?? s.vcsBaseCommit;
+  let tipNow: string | null = null;
+  let remote: { name: string; commit: string } | undefined;
+  if (branch) {
+    if (mode === 'per-task' && s.vcsStart?.remote && branch.startsWith(`${s.vcsStart.remote}/`)) {
+      tipNow = await remoteTip(dir, s.vcsStart.remote, branch.slice(s.vcsStart.remote.length + 1));
+    } else {
+      tipNow = repo.local.find((b) => b.name === branch)?.commit ?? null;
+      const r = s.vcs?.baseRemote?.trim() || defaultRemote(repo);
+      const theirs = r ? repo.remotes.find((x) => x.name === r)?.branches.find((b) => b.name === branch) : undefined;
+      if (r && theirs) remote = { name: `${r}/${branch}`, commit: theirs.commit };
+    }
+  }
+  return { mode, ...(branch ? { branch } : {}), ...(recorded ? { recorded } : {}), tipNow, ...(remote ? { remote } : {}) };
 }
 
 /** What choosing a start does to a session: its version control fields, and whether its recorded start goes. */
@@ -191,6 +242,12 @@ export type AppliedChoice = {
   note?: string;
   /** In a sentence, for the record: where the work starts now. */
   said: string;
+  /**
+   * Chosen for a session that had run already: from now its tasks start from the new choice, a re-run
+   * included (`Session.startRechosenAt`). `freshBranch`: the one branch of a per-session session goes on
+   * under a new name, the old one keeping what was done on it.
+   */
+  restart?: { freshBranch?: string };
 };
 
 /**
@@ -204,8 +261,50 @@ export async function applyStartChoice(
   choice: StartChoice,
   opts: { dry?: boolean } = {},
 ): Promise<{ ok: true; applied?: AppliedChoice } | { ok: false; problem: string }> {
-  // Nothing to choose without version control, or once the start is fixed: see `startIsFixed`.
-  if (!session.vcs?.enabled || startIsFixed(session)) return { ok: true };
+  // Nothing to choose without version control; a start that is fixed is kept unless chosen again.
+  if (!session.vcs?.enabled) return { ok: true };
+  if (!startIsFixed(session)) return await chooseStart(session, choice, opts);
+  if (!choice.rechoose) return { ok: true };
+  /*
+   * Chosen again after the session ran (operator's report, 2026-10-13: "the retry remains permanently bound
+   * to the session's original branch and commit"). Not while a queued task carries an earlier attempt on:
+   * that attempt's work is on its own branch, and the task goes on there.
+   */
+  const carries = carriedOn(session);
+  if (carries.length > 0) {
+    return {
+      ok: false,
+      problem:
+        `${carries.join(', ')} ${carries.length === 1 ? 'carries' : 'carry'} an earlier attempt on, on its own branch, so where "${session.name}" starts stays as it is. ` +
+        'To start it from another branch, queue it with "Fix the prompt and queue it again" instead.',
+    };
+  }
+  const done = await chooseStart(session, choice, opts);
+  if (!done.ok || !done.applied) return done;
+  const applied = done.applied;
+  // A branch carried on is the new one itself; the one branch of a per-session session goes on under a new name.
+  const perSession = session.vcs.branchMode === 'per-session' && (applied.vcs.startFrom ?? session.vcs.startFrom) !== 'existing-branch';
+  const freshBranch = perSession && !opts.dry ? await freeBranchName(repoDirOf(session), sessionBranchName(session)) : undefined;
+  return {
+    ok: true,
+    applied: {
+      ...applied,
+      clearStart: true,
+      restart: freshBranch ? { freshBranch } : {},
+      said:
+        `${applied.said} — chosen again after the session had run: the tasks that run next start from it, a task run again included` +
+        (freshBranch ? `, on the new branch ${freshBranch} (${sessionBranchName(session)} keeps what was done on it)` : ''),
+    },
+  };
+}
+
+/** `applyStartChoice` for a session whose start is not fixed: see there. */
+async function chooseStart(
+  session: Session,
+  choice: StartChoice,
+  opts: { dry?: boolean },
+): Promise<{ ok: true; applied?: AppliedChoice } | { ok: false; problem: string }> {
+  if (!session.vcs?.enabled) return { ok: true };
   const dir = repoDirOf(session);
   const before = pointOf(session.vcs);
 

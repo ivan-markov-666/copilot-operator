@@ -101,13 +101,22 @@ const planFor = (h: Harness, name: string, tasks: unknown[] = [greeting]): Plan 
 const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
 
 /**
+ * The start window's own button: "Start without asking", or — with one session under version control —
+ * the same words naming where the work starts ("… — on main @ 1a2b3c4d"), the operator's report of 2026-10-13.
+ */
+const goButton = (w: Locator, mode: 'step' | 'unattended'): Locator => {
+  const words = en[mode === 'step' ? 'startdlg.goStep' : 'startdlg.goUnattended']!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return w.getByRole('button', { name: new RegExp(`^${words}( — on .+)?$`) });
+};
+
+/**
  * The start window every start button opens first (2026-10-13): where the work starts. Its own button
  * starts the run; once it has, the window closes. `started: false` for a start that is meant to be refused.
  */
 async function throughStartWindow(page: Page, mode: 'step' | 'unattended', started = true): Promise<Locator> {
   const w = page.getByRole('dialog', { name: en['startdlg.title']! });
   await w.waitFor({ timeout: 10_000 });
-  await w.getByRole('button', { name: en[mode === 'step' ? 'startdlg.goStep' : 'startdlg.goUnattended']!, exact: true }).click();
+  await goButton(w, mode).click();
   if (started) await w.waitFor({ state: 'detached', timeout: 30_000 });
   return w;
 }
@@ -521,7 +530,7 @@ try {
     // An input with a list of suggestions is a combobox to the accessibility tree.
     await w.getByRole('combobox', { name: en['startdlg.remoteBranch']! }).fill(FEATURE);
     t.truthy('a remote branch: the window says Git\'s own window asks for a passphrase', ((await w.textContent()) ?? '').includes(en['prep.password']!));
-    await w.getByRole('button', { name: en['startdlg.goUnattended']!, exact: true }).click();
+    await goButton(w, 'unattended').click();
     await w.waitFor({ state: 'detached', timeout: 30_000 });
     await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
     await h.idle();
@@ -963,6 +972,172 @@ try {
     t.check('both ran to done', after.map((x) => x.status), ['done', 'done', 'done']);
     t.check('the earlier task was not touched: same attempt, same run', [after[0]!.attempt ?? 1, after[0]!.runId, after[0]!.attempts?.length ?? 0], [first.attempt ?? 1, first.runId, 0]);
     t.check('and the copy in the other session still waits', (await cards(h, copy!.id))[0]!.status, 'queued');
+  });
+
+  /*
+   * Asked for on 2026-10-13: a task that failed goes on from its row with a new prompt — the way on marked
+   * first — from where it got to, the chat told how it ended; the card then says which prompt it carried on with.
+   */
+  await scenario('a task that blocked goes on from its row with a new prompt, from where it got to', { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'onward', [task('onward-file', 'onward.txt')]));
+    h.chat.script(reply.steps(write('half.txt', 'half')), reply.blocked());
+    const ran = await h.run(s!.id);
+    t.check('the task blocked, after writing a file', ran.tasks[0]!.status, 'blocked');
+    await page.goto(url('/history'));
+    const row = page.locator('ol.flow > li', { hasText: 'onward-file' }).first();
+    const button = row.getByRole('button', { name: en['fup.button']!, exact: true });
+    await button.waitFor();
+    t.check('"Continue with a new prompt" is the way on marked first; "Run only this one again" is not', [await button.getAttribute('class'), await row.getByRole('button', { name: en['reg.rerunHere']!, exact: true }).getAttribute('class')], ['primary', '']);
+    await button.click();
+    const dialog = page.getByRole('dialog', { name: 'Continue “onward-file” with a new prompt' });
+    await dialog.getByText(en['fup.ended']!.replace('{status}', en['status.blocked']!)).waitFor();
+    t.truthy('it shows how the task ended, and that it goes on in its chat and branch', ((await dialog.textContent()) ?? '').includes(en['fup.chat']!), await dialog.textContent());
+    const save = dialog.getByRole('button', { name: en['fup.save']!, exact: true });
+    t.check('nothing to save until a prompt is written', await save.isDisabled(), true);
+    const instruction = 'Nothing is missing: create onward.txt yourself, holding exactly the word onward.';
+    await dialog.getByRole('textbox', { name: en['fup.prompt']! }).fill(instruction);
+    await save.click();
+    const panel = dialog.getByRole('group', { name: 'Run "onward-file"' });
+    await panel.waitFor();
+    t.truthy('saved, the same dialog offers to run it', ((await panel.textContent()) ?? '').includes(en['runq.ask']!), await panel.textContent());
+    h.chat.script(
+      (m) => {
+        t.truthy('the chat is told how it ended, then given the prompt', /did not succeed: it ended blocked/.test(m.text) && m.text.includes(instruction), m.text.slice(0, 400));
+        return reply.steps(write('onward.txt', 'onward'));
+      },
+      reply.done(),
+    );
+    await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    await throughStartWindow(page, 'unattended');
+    await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
+    await h.idle();
+    const done = (await cards(h, s!.id))[0]!;
+    t.check('it finished on the same branch, with the blocked attempt\'s file still there', [done.status, done.vcs?.branch, h.git('show', `${done.vcs?.branch}:half.txt`).trim()], ['done', ran.tasks[0]!.vcs?.branch, 'half']);
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    await page.getByText(en['task.continuedWith']!.replace('{n}', '1')).waitFor();
+    t.truthy('the card says which prompt it carried on with', await page.getByText(instruction).first().isVisible());
+  });
+
+  /*
+   * The operator's report of 2026-10-13: a session that has run, its task fixed and queued again while the
+   * repository is on another branch. The start window shows where the session started and where the
+   * repository is, warns that they differ, keeps the session's start unless told otherwise, and starts from
+   * the branch checked out now when that is chosen — its button saying where.
+   */
+  await scenario('a session that has run starts again from the branch checked out now', { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'again', [task('again-file', 'again.txt')]));
+    h.chat.script(...reply.triedThenBlocked());
+    const first = (await h.run(s!.id)).tasks[0]!;
+    t.check('the task blocked, on the session\'s branch', [first.status, first.vcs?.branch], ['blocked', 'cop/again']);
+    await h.call('POST', `/sessions/${s!.id}/tasks/${first.id}/rerun`, { prompt: 'Create again.txt in the repository root holding exactly the word again, and nothing else.' });
+    // The operator moves to another branch outside the bot, with a commit of its own.
+    h.git('checkout', '-q', '-b', 'feature/schema-v2', 'main');
+    writeFileSync(join(h.repo, 'schema.txt'), 'v2\n', 'utf8');
+    h.git('add', '-A');
+    h.git('commit', '-q', '-m', 'schema v2');
+    const head = h.git('rev-parse', 'HEAD');
+
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    await page.getByRole('button', { name: 'Run 1 task(s)', exact: true }).click();
+    const w = page.getByRole('dialog', { name: en['startdlg.title']! });
+    await w.locator('fieldset legend').first().waitFor();
+    const keep = w.getByRole('radio', { name: en['startdlg.keepStarted']!.replace('{branch}', 'cop/again') });
+    await keep.waitFor();
+    const text = (await w.textContent()) ?? '';
+    t.truthy('the window says the session started already', text.includes('Started already:'), text.slice(0, 600));
+    t.truthy('and that the repository is on another branch now', text.includes(en['startdlg.differs']!.replace('{current}', 'feature/schema-v2').replace('{head}', head.slice(0, 8)).replace('{branch}', 'cop/again')), text.slice(0, 900));
+    t.check('keeping the session\'s own start is chosen first', await keep.isChecked(), true);
+    t.check('and the button says where that is', await goButton(w, 'unattended').textContent().then((x) => x?.startsWith(`${en['startdlg.goUnattended']} — on cop/again @ `)), true);
+    t.check('nothing has started yet', [(await h.call<{ running: boolean }>('GET', '/activity')).running], [false]);
+    await w.getByRole('radio', { name: en['startdlg.useCurrent']!.replace('{branch}', 'feature/schema-v2').replace('{commit}', head.slice(0, 8)) }).check();
+    t.truthy('another start says what it means for what already ran', await w.getByText(en['startdlg.rechooseNote']!).isVisible());
+    const go = w.getByRole('button', { name: `${en['startdlg.goUnattended']} — on feature/schema-v2 @ ${head.slice(0, 8)}`, exact: true });
+    t.check('the button names the branch and commit the work starts on', await go.count(), 1);
+
+    h.chat.script(reply.steps(write('again.txt', 'again')), reply.done());
+    await go.click();
+    await w.waitFor({ state: 'detached', timeout: 30_000 });
+    await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
+    await h.idle();
+    const done = (await cards(h, s!.id))[0]!;
+    t.check('it ran from the branch checked out now', [done.status, done.vcs?.baseCommit], ['done', head]);
+    t.truthy('on a branch of its own, not the one the session first used', !!done.vcs?.branch && done.vcs.branch !== 'cop/again' && h.git('show', `${done.vcs.branch}:schema.txt`).trim() === 'v2', done.vcs);
+    t.check('the first branch is left as it was', h.git('rev-parse', 'cop/again'), first.vcs?.commit ?? h.git('rev-parse', 'cop/again'));
+  });
+
+  /*
+   * Plan mode (2026-10-13), as the operator meets it: chosen in Settings and per session; the plan waits on a
+   * card in the banner, another is asked for with a note, the next approved; the task's card shows the plan.
+   */
+  await scenario('plan mode: chosen in Settings and per session, approved on its card, shown on the task', { execution: { mode: 'confirm', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await page.goto(url('/defaults'));
+    const setting = page.locator('#plan-mode');
+    await waitFor('the settings to load', async () => !(await setting.isDisabled()), 10_000);
+    t.check('Settings start with plan mode off', await setting.inputValue(), 'off');
+    await setting.selectOption('approve');
+    const saved = await waitFor('plan mode to be saved', async () => ((await settingsOf(h)).execution?.planMode === 'approve' ? 'approve' : null), 10_000).catch(() => (null));
+    t.check('choosing "I approve the plan" is saved in Settings', saved, 'approve');
+
+    const [s] = await h.importPlan(planFor(h, 'planned', [task('planned-file', 'planned.txt')]));
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    const own = page.getByRole('combobox', { name: en['pm.sessionSetting']! });
+    await own.waitFor();
+    t.check('the session follows Settings unless told otherwise', await own.inputValue(), '');
+    await own.selectOption('auto');
+    await waitFor('the session\'s own choice', async () => ((await h.call<{ planMode?: string }>('GET', `/sessions/${s!.id}`)).planMode === 'auto' ? true : null), 10_000).catch(() => undefined);
+    t.check('a session can have its own', (await h.call<{ planMode?: string }>('GET', `/sessions/${s!.id}`)).planMode, 'auto');
+    await own.selectOption('');
+    await waitFor('the session to follow Settings again', async () => ((await h.call<{ planMode?: string }>('GET', `/sessions/${s!.id}`)).planMode === undefined ? true : null), 10_000).catch(() => undefined);
+    t.check('and follow Settings again', (await h.call<{ planMode?: string }>('GET', `/sessions/${s!.id}`)).planMode, undefined);
+
+    const comment = 'Say how you will read the file back.';
+    const note = 'One word in the file, nothing else.';
+    h.chat.script(
+      reply.plan({ files: ['planned.txt'] }),
+      (m) => {
+        t.truthy('the comment typed on the card reaches the chat', m.text.includes(comment), m.text);
+        return reply.plan({ files: ['planned.txt'], steps: ['write the file', 'read it back with Get-Content'] });
+      },
+      (m) => {
+        t.truthy('the approval and its note reach the chat', m.text.startsWith('The operator approved your plan.') && m.text.includes(note), m.text);
+        return reply.steps(write('planned.txt', 'planned'));
+      },
+      reply.done(),
+    );
+    await page.getByRole('button', { name: en['session.runStep']!, exact: true }).click();
+    await throughStartWindow(page, 'step');
+
+    const card = page.locator('.approval-banner .approval', { hasText: en['pm.cardTitle']!.replace('{title}', 'planned-file') });
+    await card.waitFor({ timeout: 30_000 });
+    t.truthy('the card shows the plan: what is there, the approach, the stages', ((await card.textContent()) ?? '').includes('Only README.md') && ((await card.textContent()) ?? '').includes('create the file'), await card.textContent());
+    t.check('and the three answers', await card.getByRole('button').allTextContents(), [en['pm.approve'], en['pm.revise'], en['pm.stop']]);
+    await card.getByRole('button', { name: en['pm.revise']!, exact: true }).click();
+    t.truthy('another plan needs a note saying what to change', await card.getByText(en['pm.reviseNeedsNote']!).isVisible());
+    await card.getByRole('textbox', { name: en['pm.note']! }).fill(comment);
+    await card.getByRole('button', { name: en['pm.revise']!, exact: true }).click();
+
+    const second = page.locator('.approval-banner .approval', { hasText: 'Plan version 2' });
+    await second.waitFor({ timeout: 30_000 });
+    t.truthy('the next version comes back with the comment that asked for it', ((await second.textContent()) ?? '').includes(comment), await second.textContent());
+    await second.getByRole('textbox', { name: en['pm.note']! }).fill(note);
+    await second.getByRole('button', { name: en['pm.approve']!, exact: true }).click();
+
+    // The work then asks before its command, as the run was started.
+    const step = page.locator('.approval-banner .approval', { hasText: 'planned.txt' }).filter({ hasNot: page.getByRole('button', { name: en['pm.approve']! }) });
+    await step.waitFor({ timeout: 30_000 });
+    await step.getByRole('button', { name: en['approval.run']!, exact: true }).click();
+    await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
+    await h.idle();
+    t.check('the task is done', (await cards(h, s!.id))[0]!.status, 'done');
+
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    const summary = page.getByText(en['pm.taskApproved']!.replace('{n}', '2'), { exact: true });
+    await summary.waitFor();
+    await summary.click();
+    const shown = page.locator('.plan-view').first();
+    t.truthy('the task\'s card shows the approved plan, who approved it, with the note and the earlier comment',
+      ((await shown.textContent()) ?? '').includes('Approved by the operator') && ((await shown.textContent()) ?? '').includes(note) && ((await shown.textContent()) ?? '').includes(comment),
+      await shown.textContent());
   });
 
   /*

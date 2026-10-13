@@ -154,6 +154,7 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
         onFailure: s.onFailure ?? 'stop',
         level2: split.level2,
         conversationGroup: shared ? '' : (s.conversationGroup ?? ''),
+        ...(s.planMode ? { planMode: s.planMode } : {}),
         vcs: {
           enabled: s.vcs?.enabled ?? false,
           repoDir: s.vcs?.repoDir ?? '',

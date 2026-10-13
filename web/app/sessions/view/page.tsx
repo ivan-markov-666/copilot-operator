@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { API, api, withToken, fmtBytes, CHECK_KINDS, checkNeedsCommand, checkNeedsValue, type Approval, type TaskCheck, type ModelCatalogue, type Handoff, type Preset, type Session, type SessionEvent, type Task, type TaskDeviation, type TaskDispute, type TaskReview, type SnapshotPlan, type VcsStatus, type VersionControl } from '../../../lib/api';
 import { useT, useFmtTime, type Key } from '../../../lib/i18n';
 import { AttemptRecord, SaveLog } from '../../saveLog';
-import { fmtDuration, isContinuable } from '../../../lib/api';
+import { canFollowUp, fmtDuration, isContinuable } from '../../../lib/api';
 import { elapsedMs, isLive, latestRun, runSpanMs } from '../../../lib/clock';
 import { useNow } from '../../../lib/useNow';
 import { useAppearance } from '../../../lib/appearance';
@@ -22,7 +22,9 @@ import { usePoll } from '../../../lib/usePoll';
 import { ContractFields, scopeLines } from '../../contractFields';
 import { PrepareFolder } from '../../prepareFolder';
 import { ContractFixPanel, RunQueuedPanel } from '../../runQueued';
+import { FollowUpDialog } from '../../followUp';
 import { openStartDialog } from '../../startDialog';
+import { PlanView } from '../../planView';
 
 // ---------------------------------------------------------------------------------------
 // The page
@@ -355,6 +357,31 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
         {t('session.groupWhy')}
         {session.chat && ` ${t('session.groupHasChat')}`}
       </p>
+
+      {/* Plan mode for this session's tasks: its own, or as Settings say (2026-10-13). */}
+      <label htmlFor="session-plan-mode">{t('pm.sessionSetting')}</label>
+      <select
+        id="session-plan-mode"
+        value={session.planMode ?? ''}
+        onChange={(e) => {
+          const v = e.target.value as '' | 'off' | 'auto' | 'approve';
+          void api
+            .updateSession(session.id, { planMode: v })
+            .then(() => {
+              setMsg(t('pm.saved'));
+              onChange();
+            })
+            .catch((err: unknown) => setMsg((err as Error).message));
+        }}
+        disabled={session.running}
+        style={{ width: 'auto', maxWidth: '100%' }}
+      >
+        <option value="">{t('pm.followSettings')}</option>
+        <option value="off">{t('pm.off')}</option>
+        <option value="auto">{t('pm.auto')}</option>
+        <option value="approve">{t('pm.approveMode')}</option>
+      </select>
+      <p className="why">{t('pm.sessionWhy')}</p>
 
       <div className="muted small" style={{ marginTop: 10 }}>
         {t('session.willUseModel', {
@@ -1625,6 +1652,8 @@ function TaskCard({
    */
   const [runPanel, setRunPanel] = useState<{ intro?: string } | null>(null);
   const [fixingContract, setFixingContract] = useState(false);
+  /** "Continue with a new prompt" is open for this task. */
+  const [followingUp, setFollowingUp] = useState(false);
 
   /*
    * The form starts from the task as it is now, every time it opens. The fields were copied from
@@ -1681,6 +1710,8 @@ function TaskCard({
   // A task that stopped before it finished — a limit from the settings, the bot stopping under it,
   // the operator — is carried on where it stopped; one with a verdict on its work is run again.
   const continuable = !active && isContinuable(task);
+  // A task that failed on its work is carried on with a new prompt, from where it got to (2026-10-13).
+  const followable = !active && !continuable && canFollowUp(task) && !session.running;
   const carryOn = async () => {
     if (!(await confirmDialog(t('task.continueConfirm', { title: task.title })))) return;
     try {
@@ -1748,6 +1779,7 @@ function TaskCard({
       setMsg((e as Error).message);
     }
   };
+  const planShown = task.plan ?? (task.continuing ? [...(task.attempts ?? [])].reverse().find((a) => a.plan?.approved)?.plan : undefined);
   // Read each time the list is opened, not once: a running task keeps adding reports and replies.
   const loadFiles = async () => {
     try {
@@ -1829,8 +1861,13 @@ function TaskCard({
             {t('task.continue')}
           </button>
         )}
+        {followable && (
+          <button className="primary" aria-haspopup="dialog" onClick={() => setFollowingUp(true)} title={t('fup.buttonWhy')}>
+            {t('fup.button')}
+          </button>
+        )}
         {rerunnable && (
-          <button className={continuable ? '' : 'primary'} onClick={() => void rerun()} title={t('task.rerunWhy')}>
+          <button className={continuable || followable ? '' : 'primary'} onClick={() => void rerun()} title={t('task.rerunWhy')}>
             {t('task.rerun')}
           </button>
         )}
@@ -1986,6 +2023,17 @@ function TaskCard({
         </div>
       )}
 
+      {followingUp && (
+        <FollowUpDialog
+          sessionId={session.id}
+          taskId={task.id}
+          title={task.title}
+          onClose={(changed) => {
+            setFollowingUp(false);
+            if (changed) onChange();
+          }}
+        />
+      )}
       {fixingContract && (
         <ContractFixPanel
           target={{ sessionId: session.id, taskId: task.id, title: task.title }}
@@ -2241,6 +2289,27 @@ function TaskCard({
               )}
               <div className="muted small">{t('task.prompt')}</div>
               <pre>{task.prompt}</pre>
+            </details>
+          )}
+
+          {/* What this attempt was told to do besides the task: the operator's new prompt, said where the prompt is read. */}
+          {task.continuing?.instruction && (
+            <div className="notice calm small" style={{ marginTop: 6 }}>
+              <strong>{t('task.continuedWith', { n: task.continuing.fromAttempt })}</strong>
+              <pre style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap' }}>{task.continuing.instruction}</pre>
+            </div>
+          )}
+
+          {/*
+           * The plan the work follows (plan mode): open while it waits, folded once approved. A carried-on
+           * attempt plans no more and follows its earlier attempt's plan, which is shown in its place.
+           */}
+          {planShown && (
+            <details open={!planShown.approved}>
+              <summary>
+                {planShown.approved ? t('pm.taskApproved', { n: planShown.version }) : t('pm.taskWaiting', { n: planShown.version })}
+              </summary>
+              <PlanView plan={planShown} />
             </details>
           )}
 

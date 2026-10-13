@@ -12,7 +12,7 @@
  * and it keeps each task self-contained in the transcript. The priority of level 1 over
  * level 2 is stated inside level 1 itself; the composition only makes the boundary visible.
  */
-import type { TaskContinuation, TaskLimit } from './model.js';
+import type { TaskContinuation, TaskEnding, TaskLimit } from './model.js';
 import { describeInterruption } from './interruption.js';
 
 export type ComposeInput = {
@@ -26,6 +26,12 @@ export type ComposeInput = {
   continuing?: TaskContinuation;
   /** A new prompt for a task that ended done, building on that attempt's work. See `Task.buildsOn`. */
   buildsOn?: { fromAttempt: number };
+  /**
+   * The operator's new prompt for this attempt, with how the attempt before it ended. Passed apart from
+   * `continuing`, which the runner drops when the earlier attempt never reached a conversation: the
+   * prompt and the ending still go out then, with the task in full. See `TaskContinuation.instruction`.
+   */
+  instruction?: { text: string; fromAttempt: number; ended?: TaskEnding };
   contractAlreadySent: boolean;
   /**
    * Where the runner will execute the steps, as a fact for Copilot.
@@ -59,6 +65,8 @@ export type ComposeInput = {
    * that says nothing. Absent on a machine with PowerShell 7, which is most of them.
    */
   shellNote?: string;
+  /** Plan mode: the planning phase the task opens with. See `orchestrator/planMode.ts`. */
+  planNote?: string;
 };
 
 const LEVEL2_HEADER = '## Project instructions (level 2)';
@@ -74,7 +82,7 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.readOnlyNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.planNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
 
@@ -119,6 +127,7 @@ function level2Block(level2: string): string {
  * the steps it had just asked for actually ran.
  */
 function whyItStopped(c: TaskContinuation): string {
+  if (c.how === 'failed') return describeEnding(c.fromAttempt, c.ended, c.stoppedBecause);
   if (c.how === 'interrupted') {
     const where = c.interruption ? `\n\n${describeInterruption(c.interruption)}\n\n` : ' ';
     return (
@@ -143,6 +152,32 @@ function whyItStopped(c: TaskContinuation): string {
   return `It stopped because the runner's limit${which} was reached${why} — not because anything failed. The files are as you left them.`;
 }
 
+/**
+ * How an attempt ended without the work being done, in the words the chat is sent: its status and the
+ * runner's reason, the checks that did not pass, what the independent review found, and the attempt's
+ * own summary. The chat that carries it on needs the why as much as the what (2026-10-13).
+ */
+export function describeEnding(fromAttempt: number, ended: TaskEnding | undefined, reason?: string): string {
+  const status = ended?.status ?? 'failed';
+  const why = (ended?.reason ?? reason ?? '').trim();
+  const lines = [`The previous attempt (attempt ${fromAttempt}) did not succeed: it ended ${status}${why ? ` — ${why}` : '.'}`];
+  if (ended?.failedChecks?.length) {
+    lines.push('', 'The checks that did not pass:');
+    for (const c of ended.failedChecks) lines.push(`- ${c.name}: ${c.detail}`);
+  }
+  if (ended?.findings?.length) {
+    lines.push('', 'What the independent review found:');
+    for (const f of ended.findings) lines.push(`- ${f.what}${f.where ? ` (${f.where})` : ''}: ${f.evidence}`);
+  }
+  if (ended?.summary) lines.push('', `That attempt's own summary: ${ended.summary}`);
+  return lines.join('\n');
+}
+
+/** The operator's new prompt, as its own section of the message. */
+function instructionSection(text: string): string {
+  return `## New instruction from the operator\n\nAdded to the task above, not in place of it; where the two disagree, this wins.\n\n${text.trim()}`;
+}
+
 /** Each limit from the settings, as the chat is told about it. See `TaskLimit`. */
 const LIMIT_WORDS: Record<TaskLimit['setting'], (n: number) => string> = {
   maxRunMinutes: (n) => `${n} minutes per task`,
@@ -162,24 +197,51 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
    * again — sending it would read as a new task and start the work over. Only when the
    * conversation was lost does the task go out in full, with a line saying it is a continuation.
    */
+  const instruction = input.instruction?.text.trim() ? input.instruction : undefined;
   if (input.continuing && input.contractAlreadySent) {
+    const title = input.taskTitle.trim() || 'untitled';
+    /*
+     * After a failure, with the operator's new prompt: told how it ended and why, that its files are
+     * there, and what to do now — not "carry on from your plan", which is the plan that failed.
+     */
+    if (input.continuing.how === 'failed' && instruction) {
+      const message =
+        `Continue task ${input.taskNumber}: ${title}, in this same conversation, with a new instruction from the operator.\n\n` +
+        `${whyItStopped(input.continuing)}\n\n` +
+        `The files are as that attempt left them, and what it changed is in your working tree. Do not start over: look at ` +
+        `what is there first, keep what is right, and do what the instruction below says. The assignment is the one you ` +
+        `were given above, with the instruction added to it. Verify the result as for any task. Step numbering restarts at 1.\n\n` +
+        `${instructionSection(instruction.text)}\n\n` +
+        `${runnerBlock(input)}`.trimEnd();
+      return { messages: [message], firstMessage: message };
+    }
     const message =
-      `Continue task ${input.taskNumber}: ${input.taskTitle.trim() || 'untitled'}, in this same conversation. ` +
+      `Continue task ${input.taskNumber}: ${title}, in this same conversation. ` +
       `${whyItStopped(input.continuing)} ` +
       `Do not start over and do not repeat work that is done: start from ` +
       `your plan, say in \`notes\` which stages are done and which one you are on, and carry on. ` +
-      `The assignment is the one you were given above; it has not changed. Step numbering restarts at 1.\n\n` +
+      (instruction
+        ? `The assignment is the one you were given above, with the operator's instruction below added to it. Step numbering restarts at 1.\n\n${instructionSection(instruction.text)}\n\n`
+        : `The assignment is the one you were given above; it has not changed. Step numbering restarts at 1.\n\n`) +
       `${runnerBlock(input)}`.trimEnd();
     return { messages: [message], firstMessage: message };
   }
   const continuationLine = input.continuing
-    ? `\n\nThis continues an earlier attempt at this task. ${whyItStopped(input.continuing)} ` +
-      `Look at what is already done before changing anything, and carry on from there.`
+    ? `\n\nThis continues an earlier attempt at this task. ${whyItStopped(input.continuing)}` +
+      (input.continuing.how === 'failed'
+        ? `\n\nWhat that attempt changed is in your working tree. Look at it before changing anything, keep what is right, and do what the instruction below says.`
+        : ` Look at what is already done before changing anything, and carry on from there.`) +
+      (instruction ? `\n\n${instructionSection(instruction.text)}` : '')
     : input.buildsOn
       ? `\n\nThis task was done once already (attempt ${input.buildsOn.fromAttempt}), and that work is in your ` +
         `working tree. The text above is a new instruction for it: look at what is there first, build on it, and ` +
-        `change or undo it only where the new instruction asks. Verify the result as for any task.`
-      : '';
+        `change or undo it only where the new instruction asks. Verify the result as for any task.` +
+        (instruction ? `\n\n${describeEnding(instruction.fromAttempt, instruction.ended)}\n\n${instructionSection(instruction.text)}` : '')
+      : instruction
+        ? // The attempt it follows never reached a conversation: what is known of its ending, then the prompt.
+          `\n\nAn earlier attempt at this task never reached this conversation. ${describeEnding(instruction.fromAttempt, instruction.ended)}` +
+          `\n\n${instructionSection(instruction.text)}`
+        : '';
 
   if (!input.contractAlreadySent) {
     const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}${continuationLine}`;

@@ -30,13 +30,22 @@ import { dict } from '../web/lib/strings.js';
 const en = dict.en as Record<string, string>;
 
 /**
+ * The start window's own button: "Start without asking", or — with one session under version control —
+ * the same words naming where the work starts ("… — on main @ 1a2b3c4d"), the operator's report of 2026-10-13.
+ */
+const goButton = (w: Locator, mode: 'step' | 'unattended'): Locator => {
+  const words = en[mode === 'step' ? 'startdlg.goStep' : 'startdlg.goUnattended']!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return w.getByRole('button', { name: new RegExp(`^${words}( — on .+)?$`) });
+};
+
+/**
  * The start window every start button opens first (2026-10-13): where the work starts. Its own button
  * starts the run; once it has, the window closes. `started: false` for a start that is meant to be refused.
  */
 async function throughStartWindow(page: Page, mode: 'step' | 'unattended', started = true): Promise<Locator> {
   const w = page.getByRole('dialog', { name: en['startdlg.title']! });
   await w.waitFor({ timeout: 10_000 });
-  await w.getByRole('button', { name: en[mode === 'step' ? 'startdlg.goStep' : 'startdlg.goUnattended']!, exact: true }).click();
+  await goButton(w, mode).click();
   if (started) await w.waitFor({ state: 'detached', timeout: 30_000 });
   return w;
 }

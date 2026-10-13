@@ -2,6 +2,8 @@
  * Everything that happens to a task after its first run, end to end through the API, with the
  * scripted chat of test/support/fakeChat.ts in place of Copilot. No browser, no Microsoft 365.
  *
+ * - a task that blocked, carried on with the operator's new prompt: same chat and branch, the blocked
+ *   attempt's work kept, the chat told how it ended and then given the prompt;
  * - a task that stops at the message limit, continued in the same chat and on the same branch;
  * - every other limit from the settings — the reply wait, rounds of fixing checks — continued the same way,
  *   with its work committed and "Continue" offered on its register row;
@@ -54,6 +56,45 @@ async function scenario(title: string, settings: Record<string, unknown>, body: 
     await h.stop();
   }
 }
+
+/*
+ * Asked for on 2026-10-13: a task that failed goes on with a new prompt from the operator — from where it
+ * got to, in its own chat and on its own branch, with the chat told how it ended and why.
+ */
+await scenario('a task that blocked is carried on with a new prompt, from where it got to', { limits: { retryBlockedInFreshChat: 0 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'followup', [task('okta-tests', 'result.txt', 'finished')])] });
+  h.chat.script(write('partial.txt', 'half'), reply.blocked());
+  const blocked = (await h.run(s!.id)).tasks[0]!;
+  t.check('the task blocked, after a step that wrote a file', [blocked.status, blocked.vcs?.branch, h.git('show', 'cop/followup:partial.txt')], ['blocked', 'cop/followup', 'half']);
+  const firstChat = (await h.session(s!.id)).chat?.chatId;
+
+  const refused = await h.raw('POST', `/sessions/${s!.id}/tasks/${blocked.id}/continue`, {});
+  t.truthy('without a new prompt it is not carried on', refused.status === 400 && /new prompt/.test(JSON.stringify(refused.body)), refused.body);
+
+  const instruction = 'The file it needs is not missing: create result.txt yourself, holding exactly the text finished.';
+  const queued = await h.call<{ status: string; prompt: string; continuing?: { how?: string; instruction?: string; ended?: { status?: string } } }>(
+    'POST',
+    `/sessions/${s!.id}/tasks/${blocked.id}/continue`,
+    { instruction },
+  );
+  t.check('with one: queued to carry on after the failure, the prompt added to the task\'s own', [queued.status, queued.continuing?.how, queued.continuing?.instruction, queued.continuing?.ended?.status, queued.prompt.startsWith('Create result.txt')], ['queued', 'failed', instruction, 'blocked', true]);
+
+  h.chat.script(
+    (m) => {
+      t.check('it goes back into the same conversation', m.chatId, firstChat);
+      t.truthy('which is told the attempt did not succeed, how it ended and why', /did not succeed: it ended blocked/.test(m.text), m.text.slice(0, 500));
+      t.truthy('that its work is there and not to start over', /what it changed is in your working tree\. Do not start over/.test(m.text), m.text.slice(0, 600));
+      t.truthy('and then given the new prompt', m.text.includes('## New instruction from the operator') && m.text.includes(instruction), m.text.slice(-600));
+      return reply.steps('Get-Content partial.txt', "Set-Content -Path result.txt -Value 'finished' -Encoding utf8");
+    },
+    reply.done(),
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('it finishes on the same branch, on top of the work the blocked attempt did', [after.status, after.vcs?.branch, h.git('show', 'cop/followup:partial.txt'), h.git('show', 'cop/followup:result.txt')], ['done', 'cop/followup', 'half', 'finished']);
+  t.check('the blocked attempt stays on the record', after.attempts?.map((a) => a.status), ['blocked']);
+  const card = (await h.session(s!.id)).tasks[0] as unknown as { continuing?: { instruction?: string; fromAttempt?: number } };
+  t.check('and the task says which prompt it carried on with, after which attempt', [card.continuing?.instruction, card.continuing?.fromAttempt], [instruction, 1]);
+});
 
 await scenario('a task stopped at the message limit is continued in the same chat, on the same branch', { limits: { maxIterations: 5 } }, async (h) => {
   const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'limited', [task('long-job', 'result.txt', 'finished')])] });

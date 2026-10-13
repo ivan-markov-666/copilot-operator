@@ -84,9 +84,10 @@ export function StartDialogHost() {
 
 /**
  * One session's choice as it is being made: every field kept, so switching back and forth loses nothing.
- * `keep`: the start prepared before this run (a starting snapshot) stays, and nothing is sent for it.
+ * `keep`: the start it has stays — prepared before this run (a starting snapshot), or recorded when it
+ * ran — and nothing is sent for it. `current`: the branch the repository is on now (a session that ran).
  */
-type Draft = { from: 'local' | 'remote' | 'previous-session' | 'keep'; local: string; remote: string; remoteBranch: string; onBranch: boolean };
+type Draft = { from: 'local' | 'remote' | 'previous-session' | 'keep' | 'current'; local: string; remote: string; remoteBranch: string; onBranch: boolean };
 
 type FetchGroup = { key: string; dir: string; remote: string; branches: string[] };
 
@@ -132,8 +133,11 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
 
   const busy = phase.kind === 'fetching' || phase.kind === 'starting' || listBusy !== '';
 
-  /** The sessions and their branches, and each session's choice as the server now has it. */
-  const loadOptions = (): Promise<void> =>
+  /**
+   * The sessions and their branches, and each session's choice as the server now has it. `keepChoices`:
+   * "Read the branches again" — what is shown is read afresh, what the operator chose stays chosen.
+   */
+  const loadOptions = (keepChoices = false): Promise<void> =>
     api
       .startOptions(req.sessionIds)
       .then((o) => {
@@ -143,12 +147,15 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
         setRepos(byKey);
         const d: Record<string, Draft> = {};
         for (const s of o.sessions) {
-          if (!s.vcs || s.fixed || !s.repoDir) continue;
+          if (!s.vcs || !s.repoDir || (s.fixed && !s.choice)) continue;
           const draft = draftFrom(s.choice, byKey[repoKey(s.repoDir)]);
-          // Prepared on the run panel — approved file by file — and kept unless the operator chooses otherwise.
-          d[s.id] = s.prepared ? { ...draft, from: 'keep' } : draft;
+          /*
+           * Prepared on the run panel — approved file by file — or recorded when it ran: kept unless the
+           * operator chooses otherwise. A session that ran offers its own start first, and the rest beside it.
+           */
+          d[s.id] = s.prepared || s.fixed ? { ...draft, from: 'keep' } : draft;
         }
-        setDrafts(d);
+        setDrafts((before) => (keepChoices ? { ...d, ...Object.fromEntries(Object.entries(before).filter(([id]) => id in d)) } : d));
       })
       .catch((e: unknown) => setLoadErr((e as Error).message));
   useEffect(() => {
@@ -182,15 +189,20 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
       const d = drafts[s.id];
       const repo = repoOf(s.repoDir);
       if (!d || !s.repoDir || !repo || repo.problem || d.from === 'keep') continue;
+      // Another start for a session that has run: said as such, or the server keeps the one it has.
+      const again = s.fixed ? { rechoose: true } : {};
       if (d.from === 'previous-session') {
-        starts[s.id] = { from: 'previous-session' };
+        starts[s.id] = { from: 'previous-session', ...again };
+      } else if (d.from === 'current') {
+        if (!repo.current) return { problem: t('startdlg.needBranch', { name: s.name }) };
+        starts[s.id] = { from: 'local', branch: repo.current, ...(d.onBranch ? { onBranch: true } : {}), ...again };
       } else if (d.from === 'local') {
         if (!d.local || !repo.local.some((b) => b.name === d.local)) return { problem: t('startdlg.needBranch', { name: s.name }) };
-        starts[s.id] = { from: 'local', branch: d.local, ...(d.onBranch ? { onBranch: true } : {}) };
+        starts[s.id] = { from: 'local', branch: d.local, ...(d.onBranch ? { onBranch: true } : {}), ...again };
       } else {
         const branch = d.remoteBranch.trim();
         if (!d.remote || !branch) return { problem: t('startdlg.needBranch', { name: s.name }) };
-        starts[s.id] = { from: 'remote', remote: d.remote, branch, ...(d.onBranch ? { onBranch: true } : {}) };
+        starts[s.id] = { from: 'remote', remote: d.remote, branch, ...(d.onBranch ? { onBranch: true } : {}), ...again };
         const at = `${repoKey(s.repoDir)}|${d.remote}`;
         const g = fetches.get(at) ?? { key: at, dir: repo.repoDir, remote: d.remote, branches: [] };
         if (!g.branches.includes(branch)) g.branches.push(branch);
@@ -284,7 +296,29 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
   };
 
   const anyRemote = Object.values(drafts).some((d) => d.from === 'remote');
-  const goLabel = req.mode === 'unattended' ? t('startdlg.goUnattended') : t('startdlg.goStep');
+  /** Where a session's work will start, in a few words, when that can be said: "feature/x @ 1a2b3c4d". */
+  const whereOf = (s: StartOptions['sessions'][number]): string | undefined => {
+    const d = drafts[s.id];
+    const repo = repoOf(s.repoDir);
+    if (!d || !repo) return undefined;
+    const at = (c?: string | null): string => (c ? ` @ ${c.slice(0, 8)}` : '');
+    if (d.from === 'keep') return s.fixed && s.started?.branch ? `${s.started.branch}${at(s.started.tipNow ?? s.started.recorded)}` : undefined;
+    if (d.from === 'current') return repo.current ? `${repo.current}${at(repo.head)}` : undefined;
+    if (d.from === 'local') return `${d.local}${at(repo.local.find((b) => b.name === d.local)?.commit)}`;
+    if (d.from === 'remote') return d.remoteBranch.trim() ? `${d.remote}/${d.remoteBranch.trim()}` : undefined;
+    return undefined;
+  };
+  /*
+   * The button says where the work starts when there is one session to say it of (operator's report,
+   * 2026-10-13: "Start without asking" did not say on which branch, at which commit).
+   */
+  const withVcs = (opts?.sessions ?? []).filter((s) => s.vcs);
+  const onlyWhere = withVcs.length === 1 ? whereOf(withVcs[0]!) : undefined;
+  const goLabel = onlyWhere
+    ? t(req.mode === 'unattended' ? 'startdlg.goUnattendedOn' : 'startdlg.goStepOn', { where: onlyWhere })
+    : req.mode === 'unattended'
+      ? t('startdlg.goUnattended')
+      : t('startdlg.goStep');
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={() => !busy && onDone(false)}>
@@ -298,7 +332,15 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
         style={{ overflowWrap: 'anywhere' }}
       >
         <h2 id={`${uid}-title`}>{t('startdlg.title')}</h2>
-        <p className="small muted" style={{ marginTop: 0 }}>{t('startdlg.intro')}</p>
+        <p className="small muted" style={{ marginTop: 0 }}>
+          {t('startdlg.intro')}{' '}
+          {opts && phase.kind === 'choose' && (
+            // What the repository is like now — after a checkout or a pull outside the bot — read again.
+            <button type="button" className="quiet" onClick={() => void loadOptions(true)} disabled={busy}>
+              {t('startdlg.refresh')}
+            </button>
+          )}
+        </p>
 
         {loadErr && <StartFailureNotice reason={loadErr} />}
         {!opts && !loadErr && <p className="small" role="status">{t('startdlg.loading')}</p>}
@@ -317,12 +359,52 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
                 {s.repoDir && <p className="muted small" style={{ margin: '2px 0 6px' }}>{t('startdlg.repoOn', { repo: s.repoDir, branch: repo?.current ?? 'HEAD' })}</p>}
                 {!s.vcs ? (
                   <p className="small">{t('startdlg.vcsOff')}</p>
-                ) : s.fixed ? (
-                  <p className="small">{t('startdlg.fixed', { start: s.fixed })}</p>
                 ) : !repo || repo.problem || !d ? (
-                  <p className="err small">{t('startdlg.repoProblem', { problem: repo?.problem ?? '' })}</p>
+                  s.fixed ? (
+                    <p className="small">{t('startdlg.fixed', { start: s.fixed })}</p>
+                  ) : (
+                    <p className="err small">{t('startdlg.repoProblem', { problem: repo?.problem ?? '' })}</p>
+                  )
+                ) : s.fixed && s.rechooseBlocked ? (
+                  <>
+                    <p className="small">{t('startdlg.fixed', { start: s.fixed })}</p>
+                    <p className="muted small">{t('startdlg.rechooseBlocked', { tasks: s.rechooseBlocked })}</p>
+                  </>
                 ) : (
                   <>
+                    {s.fixed && (
+                      <>
+                        <p className="small" style={{ margin: '2px 0' }}>{t('startdlg.fixed', { start: s.fixed })}</p>
+                        {s.started?.branch && (
+                          <p className="small" style={{ margin: '2px 0' }}>
+                            {s.started.tipNow
+                              ? t('startdlg.branchNow', { branch: s.started.branch, now: s.started.tipNow.slice(0, 8), recorded: (s.started.recorded ?? '').slice(0, 8) })
+                              : t('startdlg.branchGone', { branch: s.started.branch, recorded: (s.started.recorded ?? '').slice(0, 8) })}
+                            {s.started.remote ? ` ${t('startdlg.branchRemote', { name: s.started.remote.name, commit: s.started.remote.commit.slice(0, 8) })}` : ''}
+                          </p>
+                        )}
+                        {/* Said when the repository is on another branch: the operator's report, a checkout made outside the bot. */}
+                        {repo.current && s.started?.branch && repo.current !== s.started.branch && s.started.mode !== 'per-task' && (
+                          <p className="notice caution small" style={{ margin: '4px 0' }}>
+                            {t('startdlg.differs', { current: repo.current, head: (repo.head ?? '').slice(0, 8), branch: s.started.branch })}
+                          </p>
+                        )}
+                        <div className="option">
+                          <label>
+                            <input type="radio" name={name} checked={d.from === 'keep'} onChange={() => setDraft(s.id, { from: 'keep' })} disabled={busy} />
+                            <span>{s.started?.branch ? t('startdlg.keepStarted', { branch: s.started.branch }) : t('startdlg.keepStartedNoBranch')}</span>
+                          </label>
+                        </div>
+                        {repo.current && repo.current !== s.started?.branch && (
+                          <div className="option">
+                            <label>
+                              <input type="radio" name={name} checked={d.from === 'current'} onChange={() => setDraft(s.id, { from: 'current' })} disabled={busy} />
+                              <span>{t('startdlg.useCurrent', { branch: repo.current, commit: (repo.head ?? '').slice(0, 8) })}</span>
+                            </label>
+                          </div>
+                        )}
+                      </>
+                    )}
                     {s.prepared && (
                       <div className="option">
                         <label>
@@ -421,11 +503,12 @@ function StartDialog({ req, onDone: done }: { req: Req; onDone: (outcome: StartO
 
                     <div className="option">
                       <label>
-                        <input type="checkbox" checked={d.onBranch && (d.from === 'local' || d.from === 'remote')} onChange={(e) => setDraft(s.id, { onBranch: e.target.checked })} disabled={busy || (d.from !== 'local' && d.from !== 'remote')} />
+                        <input type="checkbox" checked={d.onBranch && (d.from === 'local' || d.from === 'remote' || d.from === 'current')} onChange={(e) => setDraft(s.id, { onBranch: e.target.checked })} disabled={busy || (d.from !== 'local' && d.from !== 'remote' && d.from !== 'current')} />
                         <span>{t('startdlg.onBranch')}</span>
                       </label>
                       <p className="why">{t('startdlg.onBranchWhy')}</p>
                     </div>
+                    {s.fixed && d.from !== 'keep' && <p className="notice caution small">{t('startdlg.rechooseNote')}</p>}
                   </>
                 )}
               </fieldset>

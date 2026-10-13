@@ -12,7 +12,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, fmtDuration, type Metrics, type MetricsRow, type Ratio, type RegistryEntry, type TaskCheck, type TaskStatus, sessionHref } from '../../lib/api';
+import { api, canFollowUp, fmtDuration, type Metrics, type MetricsRow, type Ratio, type RegistryEntry, type TaskCheck, type TaskStatus, sessionHref } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { useModalFocus } from '../../lib/useModalFocus';
 import { ContractFields, scopeLines } from '../contractFields';
@@ -30,6 +30,7 @@ import { ChangesButton } from '../diffView';
 import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { TaskStory } from '../taskStory';
 import { ContractFixPanel, RunQueuedPanel } from '../runQueued';
+import { FollowUpDialog } from '../followUp';
 
 const OPEN_STATUSES: TaskStatus[] = ['queued', 'running', 'waiting-approval'];
 /** Everything that ended without the work being done, which is what the counter asks about. */
@@ -92,7 +93,7 @@ const RunPanelContext = createContext<{ runPanel: RunPanelState; setRunPanel: (n
  * the list, the dialog went with the list on the next 6-second reload, and an offer opened on the row
  * landed in a folded or filtered list, out of sight (review of 2026-10-09).
  */
-type TaskDialog = { kind: 'fix-prompt' | 'contract'; entry: RegistryEntry } | null;
+type TaskDialog = { kind: 'fix-prompt' | 'contract' | 'follow-up'; entry: RegistryEntry } | null;
 const TaskDialogContext = createContext<(next: TaskDialog) => void>(() => undefined);
 
 function twinsOf(entries: RegistryEntry[]): Map<string, RegistryEntry[]> {
@@ -235,6 +236,17 @@ export default function HistoryPage() {
         <FixPromptDialog
           entry={dialog.entry}
           offerRun
+          onClose={(changed) => {
+            setDialog(null);
+            if (changed) void load();
+          }}
+        />
+      )}
+      {dialog?.kind === 'follow-up' && (
+        <FollowUpDialog
+          sessionId={dialog.entry.sessionId}
+          taskId={dialog.entry.taskId}
+          title={dialog.entry.title}
           onClose={(changed) => {
             setDialog(null);
             if (changed) void load();
@@ -861,13 +873,22 @@ function Flow({
                 </button>
               )}
               {/*
-               * A task that failed or blocked on its work starts again rather than carrying on — but
-               * on its own, from its row, without the rest of the queue going with it.
+               * A task that failed on its work is carried on with a new prompt, from where it got to: the
+               * way on the operator asked for (2026-10-13), so it is the one marked first.
+               */}
+              {!continuable(e) && canFollowUp(e) && !e.sessionRunning && !e.sessionInactive && (
+                <button className="primary" aria-haspopup="dialog" onClick={() => openDialog({ kind: 'follow-up', entry: e })} title={t('fup.buttonWhy')}>
+                  {t('fup.button')}
+                </button>
+              )}
+              {/*
+               * Or it starts again rather than carrying on — but on its own, from its row, without the rest
+               * of the queue going with it.
                */}
               {!continuable(e) && (e.status === 'failed' || e.status === 'blocked') && !e.sessionRunning && !e.sessionInactive && (
                 <button
                   // Run as it is, a task that contradicts itself only stops again: the fix beside it is the way on.
-                  className={continuing === e.taskId || e.stopCode === 'contract-conflict' ? '' : 'primary'}
+                  className={continuing === e.taskId || e.stopCode === 'contract-conflict' || canFollowUp(e) ? '' : 'primary'}
                   aria-expanded={continuing === e.taskId}
                   onClick={() => setContinuing(continuing === e.taskId ? null : e.taskId)}
                   title={t('reg.rerunHereWhy')}
@@ -1404,6 +1425,8 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
   const quietStart = useUnattendedWithoutAsking();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  /** A new prompt to carry on with, optional: see `TaskContinuation.instruction`. */
+  const [prompt, setPrompt] = useState('');
   // Stopped: carried on where it stopped. Failed or blocked on its work: a new attempt, the same way alone.
   const carryOn = continuable(e);
   const branchLine = !carryOn
@@ -1433,7 +1456,7 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
         mode,
         start: async (starts) => {
           if (!queued) {
-            if (carryOn) await api.continueTask(e.sessionId, e.taskId);
+            if (carryOn) await api.continueTask(e.sessionId, e.taskId, prompt);
             else await api.rerunTask(e.sessionId, e.taskId);
             queued = true;
           }
@@ -1465,6 +1488,15 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
         <li>{t(carryOn ? 'reg.continueHereCount' : 'reg.rerunHereKept')}</li>
         <li>{t('reg.continueHereAlone')}</li>
       </ul>
+      {carryOn && (
+        <>
+          <label htmlFor={`continue-prompt-${e.taskId}`} className="small">
+            {t('reg.continueHerePrompt')}
+          </label>
+          <textarea id={`continue-prompt-${e.taskId}`} className="prose" value={prompt} onChange={(ev) => setPrompt(ev.target.value)} style={{ minHeight: 90 }} disabled={busy} />
+          <p className="why">{t('reg.continueHerePromptWhy')}</p>
+        </>
+      )}
       <div className="row">
         <button className="primary" disabled={busy} onClick={() => void start('confirm')} title={t('reg.continueWhy')}>
           {t('reg.continueGo')}

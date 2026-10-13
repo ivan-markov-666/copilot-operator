@@ -23,7 +23,7 @@ import type {
   ReviewSettings,
   VersionControl,
 } from './model.js';
-import { isContinuable, newId, tidyVcsPlan, type TaskPatch } from './model.js';
+import { endingOf, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type TaskPatch } from './model.js';
 
 /** A task the runner is inside of. It cannot be edited, deleted, or left behind at startup. */
 const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
@@ -143,6 +143,7 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   leftovers: 'archived',
   environment: 'archived',
   handoff: 'archived',
+  plan: 'archived',
   interruption: 'cleared',
   finalReply: 'cleared',
   firstMessage: 'cleared',
@@ -593,11 +594,32 @@ export class SessionStore {
     taskId: string,
     /** Where an attempt the operator stopped had got to, read from its run folder by the caller. */
     stoppedAt?: Interruption | null,
+    /**
+     * The operator's new prompt (2026-10-13): what carries a task that failed or blocked on from where
+     * it got to, and may come with any other Continue. See `TaskContinuation.instruction`.
+     */
+    instruction?: string,
   ): Promise<Task> {
     const current = (await this.getSession(sessionId))?.tasks.find((x) => x.id === taskId);
     if (!current) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
+    const text = instruction?.trim() || undefined;
+    if (text && text.length > MAX_INSTRUCTION_CHARS) throw new Error(`The new prompt is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
     if (!isContinuable(current)) {
-      throw new Error('Only a task that stopped before it finished, or at a limit from the settings, can be continued; run this one again instead.');
+      if (current.status === 'failed' || current.status === 'blocked') {
+        if (current.stopCode === 'contract-conflict') {
+          throw new Error('This task never started its work: it contradicts itself. Fix the contradiction ("Fix the contradiction"), then run it.');
+        }
+        if (!text) throw new Error('A task that failed is carried on with a new prompt: say what to do now. To run it again as it is, use "Run again".');
+        // The task as it ended, before the attempt is archived: what the chat is told about it.
+        return await this.rerunTask(sessionId, taskId, {}, {
+          fromAttempt: current.attempt ?? 1,
+          stoppedBecause: current.reason,
+          how: 'failed',
+          instruction: text,
+          ended: endingOf(current),
+        });
+      }
+      throw new Error('Only a task that stopped before it finished, at a limit from the settings, or that failed can be continued; run this one again instead.');
     }
     const how = current.status === 'limit-reached' || current.limit ? 'limit' : current.interruption ? 'interrupted' : 'stopped';
     return await this.rerunTask(sessionId, taskId, {}, {
@@ -606,6 +628,7 @@ export class SessionStore {
       how,
       ...(current.limit ? { limit: current.limit } : {}),
       ...(current.interruption ? { interruption: current.interruption } : how === 'stopped' && stoppedAt ? { interruption: stoppedAt } : {}),
+      ...(text ? { instruction: text } : {}),
     });
   }
 
@@ -665,6 +688,7 @@ export class SessionStore {
           inputsRestored: t.inputsRestored,
           artifactsKept: t.artifactsKept,
           vcs: t.vcs,
+          plan: t.plan,
         },
       ];
 
@@ -699,6 +723,7 @@ export class SessionStore {
       // marks itself again after this, in the runner.
       t.stats = undefined;
       t.handoff = undefined;
+      t.plan = undefined;
       t.scopeReverted = undefined;
       t.treeChanged = undefined;
       t.inputsRestored = undefined;

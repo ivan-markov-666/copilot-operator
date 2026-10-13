@@ -86,7 +86,7 @@ async function session(name: string, repo: string, vcs: Partial<VersionControl> 
 }
 
 /** What the run would do with a choice: written as the service writes it. */
-async function choose(s: Session, choice: StartChoice): Promise<{ ok: boolean; problem?: string; note?: string; cleared?: boolean; vcs?: VersionControl }> {
+async function choose(s: Session, choice: StartChoice): Promise<{ ok: boolean; problem?: string; note?: string; cleared?: boolean; vcs?: VersionControl; restart?: { freshBranch?: string } }> {
   const done = await applyStartChoice(s, choice);
   if (!done.ok) return { ok: false, problem: done.problem };
   if (!done.applied) return { ok: true };
@@ -98,8 +98,33 @@ async function choose(s: Session, choice: StartChoice): Promise<{ ok: boolean; p
       x.vcsBaseCommit = undefined;
       x.vcsStart = undefined;
     }
+    // As the service writes it: see `applyStartChoices`.
+    if (applied.restart) {
+      x.startRechosenAt = new Date().toISOString();
+      if (applied.restart.freshBranch) {
+        x.vcs.branchName = applied.restart.freshBranch;
+        x.vcs.branchNameExact = true;
+      }
+    }
   });
-  return { ok: true, note: applied.note, cleared: applied.clearStart, vcs: after.vcs };
+  return { ok: true, note: applied.note, cleared: applied.clearStart, vcs: after.vcs, ...(applied.restart ? { restart: applied.restart } : {}) };
+}
+
+/** The session's one task as it would be after it ran and failed, attempt archived, queued again by "Fix the prompt". */
+async function ranAndRequeued(s: Session, base: string, branch: string): Promise<Session> {
+  const ranAt = new Date(Date.now() - 60_000).toISOString();
+  await store.updateSession(s.id, (x) => {
+    x.vcsBaseCommit = base;
+    x.vcsStart = x.vcs?.startFrom === 'existing-branch' ? { kind: 'existing-branch', commit: base, branch } : { kind: 'branch', commit: base, branch: 'main' };
+    const t = x.tasks[0]!;
+    t.status = 'failed';
+    t.reason = 'the review found the work incomplete';
+    t.startedAt = ranAt;
+    t.finishedAt = ranAt;
+    t.vcs = { branch, baseCommit: base };
+  });
+  await store.rerunTask(s.id, (await store.getSession(s.id))!.tasks[0]!.id, { prompt: 'Fixed prompt: do the work properly.' });
+  return (await store.getSession(s.id)) as Session;
 }
 
 try {
@@ -145,7 +170,8 @@ try {
     });
     const startedNow = (await store.getSession(started.id)) as Session;
     const fixed = await startOptions([startedNow]);
-    t.check('a session that has run is shown its start, and offered no choice', [!!fixed.sessions[0]?.fixed, fixed.sessions[0]?.choice ?? null], [true, null]);
+    // Kept first; another start is offered beside it since the operator's report of 2026-10-13 (see below).
+    t.check('a session that has run is shown its start, with another one offered beside it', [!!fixed.sessions[0]?.fixed, fixed.sessions[0]?.choice ?? null, fixed.sessions[0]?.started?.branch], [true, { from: 'local', branch: 'main' }, 'main']);
     t.check('and a choice sent for it anyway changes nothing', await applyStartChoice(startedNow, { from: 'remote', remote: 'origin', branch: FEATURE }), { ok: true });
 
     // A start prepared before the run (a snapshot approved on the run panel), no task run yet.
@@ -250,6 +276,68 @@ try {
     t.check('the same branch keeps the starting snapshot prepared before the run', [same.cleared, ((await store.getSession(prep.id)) as Session).vcsBaseCommit], [false, oldMain]);
     const moved = await choose((await store.getSession(prep.id)) as Session, { from: 'remote', remote: 'origin', branch: 'main' });
     t.check('another branch drops it', [moved.cleared, ((await store.getSession(prep.id)) as Session).vcsBaseCommit ?? null], [true, null]);
+  }
+
+  /*
+   * The operator's report of 2026-10-13: a session that ran on one branch, the team moved on to another
+   * (checked out, clean, in step with the remote), the failed task's prompt fixed and run again — and the
+   * start window offered only the session's old branch and commit, a re-run going back to them whatever
+   * was chosen. Now the window says where things stand and lets another start be chosen, and a re-run
+   * starts from it.
+   */
+  console.log('\n--- a session that has run: another start chosen for it ---');
+  {
+    const w = world('again');
+    const oldMain = g(w.repo, 'rev-parse', 'main');
+    g(w.repo, 'branch', 'feature/CASC-277-Rules-Engine-Tiff-Splitting');
+    g(w.repo, 'checkout', '-q', '-b', 'feature/casc-277-schema-v2-tiff-splitting');
+    const newTip = commitFile(w.repo, 'schema-v2.txt', 'v2\n', 'schema v2');
+
+    // Carrying on an existing branch, as the report's session did.
+    const onIt = await ranAndRequeued(
+      await session('existing', w.repo, { startFrom: 'existing-branch', existingBranch: 'feature/CASC-277-Rules-Engine-Tiff-Splitting' }),
+      oldMain,
+      'feature/CASC-277-Rules-Engine-Tiff-Splitting',
+    );
+    const offered = (await startOptions([onIt])).sessions[0]!;
+    t.check('the window says it has run, on which branch, where that is now, and where it started', [!!offered.fixed, offered.started?.mode, offered.started?.branch, offered.started?.tipNow, offered.started?.recorded, offered.rechooseBlocked ?? null], [true, 'existing-branch', 'feature/CASC-277-Rules-Engine-Tiff-Splitting', oldMain, oldMain, null]);
+    t.check('and the repository is on another branch, which the window can offer', (await repoBranches(w.repo)).current, 'feature/casc-277-schema-v2-tiff-splitting');
+    t.check('a choice sent without "chosen again" changes nothing, as before', await applyStartChoice(onIt, { from: 'local', branch: 'feature/casc-277-schema-v2-tiff-splitting', onBranch: true }), { ok: true });
+    const moved = await choose(onIt, { from: 'local', branch: 'feature/casc-277-schema-v2-tiff-splitting', onBranch: true, rechoose: true });
+    t.check('chosen again: it carries on the branch checked out now, its recorded start cleared', [moved.ok, moved.vcs?.existingBranch, moved.cleared, moved.restart?.freshBranch ?? null], [true, 'feature/casc-277-schema-v2-tiff-splitting', true, null]);
+    const again = (await store.getSession(onIt.id)) as Session;
+    const prepared = await prepareForTask(again, again.tasks[0]!, bus, async (m) => void (await store.updateSession(onIt.id, m)), all);
+    t.check('the re-run goes on that branch, at its tip — not the old branch and commit', [prepared.vcs.branch, g(w.repo, 'rev-parse', 'HEAD'), ((await store.getSession(onIt.id)) as Session).vcsStart?.branch], ['feature/casc-277-schema-v2-tiff-splitting', newTip, 'feature/casc-277-schema-v2-tiff-splitting']);
+
+    // A branch of the bot's own per task: the re-run used to be cut from where the task first started.
+    g(w.repo, 'checkout', '-q', 'feature/casc-277-schema-v2-tiff-splitting');
+    const perTask = await ranAndRequeued(await session('per-task', w.repo, { startFrom: 'branch', baseBranch: 'main' }), oldMain, 'cop/per-task/old');
+    const rechosen = await choose(perTask, { from: 'local', branch: 'feature/casc-277-schema-v2-tiff-splitting', rechoose: true });
+    t.check('per task, chosen again: it starts from the branch chosen now', [rechosen.ok, rechosen.vcs?.startFrom, rechosen.vcs?.baseBranch], [true, 'branch', 'feature/casc-277-schema-v2-tiff-splitting']);
+    const pt = (await store.getSession(perTask.id)) as Session;
+    const ptPrepared = await prepareForTask(pt, pt.tasks[0]!, bus, async (m) => void (await store.updateSession(perTask.id, m)), all);
+    t.check('the re-run is cut from the new start, not from where the task first started', [ptPrepared.vcs.baseCommit, existsSync(join(w.repo, 'schema-v2.txt'))], [newTip, true]);
+    g(w.repo, 'checkout', '-q', 'feature/casc-277-schema-v2-tiff-splitting');
+
+    // One branch for the whole session: it goes on under a new name, the old one keeping its work.
+    g(w.repo, 'branch', 'cop/one-line', oldMain);
+    const perSession = await ranAndRequeued(await session('per-session', w.repo, { startFrom: 'branch', baseBranch: 'main', branchMode: 'per-session', branchName: 'cop/one-line', branchNameExact: true }), oldMain, 'cop/one-line');
+    const fresh = await choose(perSession, { from: 'local', branch: 'feature/casc-277-schema-v2-tiff-splitting', rechoose: true });
+    t.check('per session, chosen again: a new branch name for the line, the old branch kept', [fresh.ok, fresh.restart?.freshBranch, fresh.vcs?.branchName, g(w.repo, 'rev-parse', 'cop/one-line')], [true, 'cop/one-line-2', 'cop/one-line-2', oldMain]);
+    const ps = (await store.getSession(perSession.id)) as Session;
+    const psPrepared = await prepareForTask(ps, ps.tasks[0]!, bus, async (m) => void (await store.updateSession(perSession.id, m)), all);
+    t.check('and the re-run goes on it, cut from the new start', [psPrepared.vcs.branch, psPrepared.vcs.baseCommit], ['cop/one-line-2', newTip]);
+    g(w.repo, 'checkout', '-q', 'feature/casc-277-schema-v2-tiff-splitting');
+
+    // A task that carries an earlier attempt on stays where that attempt is.
+    const carrying = await ranAndRequeued(await session('carrying', w.repo, { startFrom: 'branch', baseBranch: 'main' }), oldMain, 'cop/carrying/old');
+    await store.updateSession(carrying.id, (x) => {
+      x.tasks[0]!.continuing = { fromAttempt: 1, how: 'failed', instruction: 'go on' };
+    });
+    const c = (await store.getSession(carrying.id)) as Session;
+    t.truthy('a session whose queued task carries an earlier attempt on keeps its start, and the window says why', !!(await startOptions([c])).sessions[0]?.rechooseBlocked);
+    const refusedAgain = await applyStartChoice(c, { from: 'local', branch: 'main', rechoose: true });
+    t.truthy('and choosing again is refused, naming the way that does work', !refusedAgain.ok && /Fix the prompt/.test(refusedAgain.problem), refusedAgain);
   }
 
   console.log('\n--- the passphrase goes through the password window ---');

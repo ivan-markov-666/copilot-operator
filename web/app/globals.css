@@ -860,3 +860,8 @@ button .dot {
 .approval-banner h2 { margin: 0 0 4px; color: var(--warn); }
 .approval-banner .approval { position: static; background: var(--bg); margin-bottom: 10px; }
 .approval-banner .approval button { font-size: calc(15px * var(--scale)); padding: 8px 14px; }
+
+/* A task's plan (plan mode): the approval card and the task's card. */
+.plan-view h4 { margin: 10px 0 2px; font-size: calc(13.5px * var(--scale)); }
+.plan-view p, .plan-view ol, .plan-view ul { margin: 2px 0 6px; }
+.plan-view .pre-wrap { white-space: pre-wrap; word-break: break-word; }

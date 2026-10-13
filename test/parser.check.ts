@@ -158,3 +158,28 @@ console.log(
     .map((l) => '  ' + l)
     .join('\n'),
 );
+
+/*
+ * Plan mode (2026-10-13): the reply that ends the planning phase. Asserted, unlike the cases above:
+ * a plan read as anything else would start the work before anybody approved it.
+ */
+console.log('\n--- a plan, in plan mode ---');
+let planWrong = 0;
+const expectPlan = (label: string, got: unknown, want: unknown): void => {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) planWrong += 1;
+  console.log(`${ok ? 'ok   ' : 'WRONG'} ${label}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`);
+};
+const aPlan = { existing: 'src/api has the routes; nothing for exports yet', approach: 'add a route and a writer', steps: ['add the writer', 'add the route', 'test it'], files: ['src/api/exports.ts'], verification: 'npm test passes' };
+const planned = parseReply(block({ status: 'plan', notes: 'read the routes', plan: aPlan }) + '\nКрай', opts);
+expectPlan('a plan is read as a plan, not done even with the stop word', planned.ok && [planned.reply.status, planned.done, planned.reply.plan?.steps.length, planned.reply.plan?.files], ['plan', false, 3, ['src/api/exports.ts']]);
+const noFiles = parseReply(block({ status: 'plan', plan: { ...aPlan, files: undefined } }), opts);
+expectPlan('the files may be left out', noFiles.ok && noFiles.reply.plan?.files, []);
+const asText = parseReply(block({ status: 'plan', plan: { ...aPlan, steps: '1. add the writer\n2. add the route' } }), opts);
+expectPlan('stages written as one text are split', asText.ok && asText.reply.plan?.steps, ['add the writer', 'add the route']);
+const empty = parseReply(block({ status: 'plan', notes: 'here it is' }), opts);
+expectPlan('"plan" without the plan is refused', empty.ok, false);
+const withSteps = parseReply(block({ status: 'plan', plan: aPlan, steps: [{ id: 1, type: 'command', cmd: 'Get-Date' }] }), opts);
+expectPlan('"plan" with steps is refused', withSteps.ok, false);
+console.log(`\nplan failures: ${planWrong} (expect 0)`);
+if (planWrong > 0) process.exitCode = 1;

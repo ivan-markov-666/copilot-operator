@@ -335,6 +335,21 @@ export const reply = {
   triedThenBlocked(): string[] {
     return [reply.steps('Get-ChildItem'), reply.blocked()];
   },
+  /** A plan, in plan mode: what is there, how, the stages, the files, how it will be shown done. */
+  plan(over: Partial<{ existing: string; approach: string; steps: string[]; files: string[]; verification: string; risks: string }> = {}): string {
+    return fenced({
+      status: 'plan',
+      notes: 'I read the project; this is the plan.',
+      plan: {
+        existing: 'Only README.md; nothing the task names exists yet.',
+        approach: 'Create the file the task names, holding the text it asks for.',
+        steps: ['create the file', 'read it back'],
+        files: ['result.txt'],
+        verification: 'Get-Content prints exactly the text the task asks for.',
+        ...over,
+      },
+    });
+  },
   /** Not JSON at all: what a chat that forgot the format sends. */
   prose(text = 'Sure! I will get right on that.'): string {
     return text;

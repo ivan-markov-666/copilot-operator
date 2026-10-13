@@ -524,6 +524,8 @@ function ExecutionSection() {
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [startMode, setStartMode] = useState<StartMode>('confirm');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
+  /** Plan mode for every session that sets none of its own (2026-10-13). See `PlanMode` on the server. */
+  const [planMode, setPlanMode] = useState<'off' | 'auto' | 'approve'>('off');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
@@ -558,10 +560,12 @@ function ExecutionSection() {
           isolation?: Isolation;
           mode?: StartMode;
           networkFetch?: NetworkFetch;
+          planMode?: 'off' | 'auto' | 'approve';
         };
         setIsolation(exec.isolation ?? 'none');
         setStartMode(exec.mode ?? 'confirm');
         setNetworkFetch(exec.networkFetch ?? 'ask');
+        setPlanMode(exec.planMode ?? 'off');
       })
       .catch((e) => setErr((e as Error).message));
   }, []);
@@ -617,7 +621,7 @@ function ExecutionSection() {
    * The fields that change what a run is allowed to do rather than how hard it tries. Saved
    * immediately on choosing, like the other selects on this page.
    */
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch', value: string) => write('execution', key, value);
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'planMode', value: string) => write('execution', key, value);
 
   return (
     <div className="panel" id="execution">
@@ -783,8 +787,25 @@ function ExecutionSection() {
         <option value="refuse">{t('exec.networkFetchRefuse')}</option>
         <option value="run">{t('exec.networkFetchRun')}</option>
       </select>
-      <SavedNote msg={msg} />
       <p className="why">{t('exec.networkFetchWhy')}</p>
+
+      <label htmlFor="plan-mode">{t('pm.setting')}</label>
+      <select
+        id="plan-mode"
+        value={planMode}
+        onChange={(e) => {
+          const v = e.target.value as 'off' | 'auto' | 'approve';
+          setPlanMode(v);
+          void saveExecution('planMode', v);
+        }}
+        disabled={!raw}
+      >
+        <option value="off">{t('pm.off')}</option>
+        <option value="auto">{t('pm.auto')}</option>
+        <option value="approve">{t('pm.approveMode')}</option>
+      </select>
+      <SavedNote msg={msg} />
+      <p className="why">{t('pm.settingWhy')}</p>
     </div>
   );
 }

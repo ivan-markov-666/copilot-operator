@@ -63,9 +63,11 @@ function startsFrom(raw: unknown): Record<string, StartChoice> | undefined {
     const x = c as Record<string, unknown>;
     const branch = typeof x.branch === 'string' ? x.branch : '';
     const onBranch = x.onBranch === true ? { onBranch: true } : {};
-    if (x.from === 'previous-session') out[id] = { from: 'previous-session' };
-    else if (x.from === 'local' && branch) out[id] = { from: 'local', branch, ...onBranch };
-    else if (x.from === 'remote' && branch && typeof x.remote === 'string' && x.remote) out[id] = { from: 'remote', remote: x.remote, branch, ...onBranch };
+    // Another start for a session that has run: see `StartChoice.rechoose`.
+    const rechoose = x.rechoose === true ? { rechoose: true } : {};
+    if (x.from === 'previous-session') out[id] = { from: 'previous-session', ...rechoose };
+    else if (x.from === 'local' && branch) out[id] = { from: 'local', branch, ...onBranch, ...rechoose };
+    else if (x.from === 'remote' && branch && typeof x.remote === 'string' && x.remote) out[id] = { from: 'remote', remote: x.remote, branch, ...onBranch, ...rechoose };
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -232,8 +234,10 @@ export class OperatorController {
    */
   /** A task that stopped at the runner's limit carries on in its own conversation and branch. */
   @Post('sessions/:id/tasks/:taskId/continue')
-  continueTask(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
-    return this.ops.continueTask(id, taskId).catch(fail);
+  continueTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { instruction?: unknown } = {}): Promise<unknown> {
+    // The operator's new prompt, when one is given: see `TaskContinuation.instruction`.
+    const instruction = typeof body?.instruction === 'string' ? body.instruction : undefined;
+    return this.ops.continueTask(id, taskId, instruction).catch(fail);
   }
 
   @Post('sessions/:id/tasks/:taskId/rerun')
@@ -731,6 +735,15 @@ export class OperatorController {
       throw new BadRequestException('action must be run, run-all, skip or abort');
     }
     return this.ops.decide(id, body.action);
+  }
+
+  /** A plan waiting for approval (plan mode): approve it, with a note or not; ask for another; or stop the task. */
+  @Post('approvals/:id/plan')
+  decidePlan(@Param('id') id: string, @Body() body: { action?: string; note?: unknown }): unknown {
+    if (!['approve', 'revise', 'stop'].includes(body?.action ?? '')) throw new BadRequestException('action must be approve, revise or stop');
+    const result = this.ops.decidePlan(id, body.action as 'approve', typeof body?.note === 'string' ? body.note : undefined);
+    if (!result.ok) throw new BadRequestException(result.problem);
+    return result;
   }
 
   /** Turns asking on or off in the middle of a run. */

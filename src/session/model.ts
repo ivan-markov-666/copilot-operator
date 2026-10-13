@@ -175,6 +175,8 @@ export type Task = {
   runGroup?: TaskRunGroup;
   /** What version control did for the current attempt. */
   vcs?: TaskVcs;
+  /** The plan this attempt made before it changed anything, in plan mode. See `TaskPlan`. */
+  plan?: TaskPlan;
   /** What version control was *asked* to do for this task, as opposed to what it did. */
   vcsPlan?: TaskVcsPlan;
   /**
@@ -515,6 +517,8 @@ export type TaskAttempt = {
   artifactsKept?: Task['artifactsKept'];
   /** How this attempt ended, in the runner's fixed shape. */
   handoff?: Handoff;
+  /** The plan this attempt made and worked to, in plan mode. */
+  plan?: TaskPlan;
   /**
    * What version control did for this attempt, including the commit it started from.
    *
@@ -678,14 +682,115 @@ export type DirtyWorktree = {
  * same branch. `how` says why it stopped, which is what the chat is told: the runner's limit, the
  * bot itself stopping under it (with where it was), or the operator.
  */
+/**
+ * Plan mode (asked for on 2026-10-13): before a task changes anything, its chat looks at the project with
+ * read-only steps — what is already there, what the task needs — and replies with a plan; only once the
+ * plan is approved does the work begin, and the independent review checks that the work followed it.
+ *
+ *   off      as before: the plan is a few lines in the first reply's notes, and work begins at once
+ *   auto     plan first, approved by the runner, then the work
+ *   approve  plan first, and the operator approves it, asks for another, or stops the task — in a run
+ *            that asks before each command; a run without asking approves it itself, and says so
+ *
+ * Settings → Execution holds the default; a session may set its own (`Session.planMode`).
+ */
+export type PlanMode = 'off' | 'auto' | 'approve';
+
+/** A task's plan, as its chat gave it in plan mode, and what became of it. */
+export type TaskPlan = {
+  /** What is already there: the files, functions and behaviour the task touches, as the chat found them. */
+  existing: string;
+  /** How it means to do the task. */
+  approach: string;
+  /** The stages, in order. */
+  steps: string[];
+  /** The files it expects to create or change. */
+  files: string[];
+  /** How it will show the result works. */
+  verification: string;
+  /** Risks and open questions, when it has any. */
+  risks?: string;
+  /** 1 for the first plan, one more for each one the operator asked for again. */
+  version: number;
+  at: string;
+  /** Approved by the operator, with what they added, or by the runner, and why it did not ask. */
+  approved?: { by: 'operator' | 'auto'; at: string; note?: string; why?: string };
+  /** What the operator asked to change in earlier versions, oldest first. */
+  revisions?: Array<{ version: number; comment: string; at: string }>;
+};
+
 export type TaskContinuation = {
   fromAttempt: number;
   stoppedBecause?: string;
-  how?: 'limit' | 'interrupted' | 'stopped';
+  /**
+   * `failed`: the attempt ended failed or blocked, and the operator gave a new prompt to carry the work
+   * on from where it got to (2026-10-13) — in its chat and on its branch, told how it ended and why.
+   */
+  how?: 'limit' | 'interrupted' | 'stopped' | 'failed';
   interruption?: Interruption;
   /** For `how: 'limit'`: which setting, when the attempt recorded it. */
   limit?: TaskLimit;
+  /**
+   * The operator's new prompt for this attempt: required after a failure, optional with any other
+   * Continue. Added to the task's own prompt, never put in its place — the assignment, its checks and
+   * its expected result stand, and the chat is told that where they disagree, this wins. Kept with the
+   * attempt it was given for, so the record shows what was asked at each step.
+   */
+  instruction?: string;
+  /** How the attempt being carried on ended, as the chat is told it. See `endingOf`. */
+  ended?: TaskEnding;
 };
+
+/** How an attempt ended without the work being done: what is said to the chat that carries it on. */
+export type TaskEnding = {
+  status: TaskStatus;
+  reason?: string;
+  summary?: string;
+  stopCode?: Task['stopCode'];
+  failedChecks?: Array<{ name: string; detail: string }>;
+  findings?: Array<{ what: string; where?: string; evidence: string }>;
+};
+
+const clipText = (s: string | undefined, n: number): string | undefined => {
+  const t = (s ?? '').trim();
+  if (!t) return undefined;
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+};
+
+/**
+ * How a task's latest attempt ended, for the next one to be told: its status and reason, its own
+ * summary, the checks that did not pass and what the independent review found — clipped, since it
+ * goes into a chat message.
+ */
+export function endingOf(t: Pick<Task, 'status' | 'reason' | 'summary' | 'stopCode' | 'checkResults' | 'review'>): TaskEnding {
+  const failedChecks = (t.checkResults ?? []).filter((c) => !c.passed).slice(0, 10).map((c) => ({ name: c.name, detail: clipText(c.detail, 400) ?? '' }));
+  const findings = t.review?.verdict === 'fail'
+    ? (t.review.findings ?? []).slice(0, 10).map((f) => ({ what: clipText(f.what, 400) ?? '', ...(f.where ? { where: clipText(f.where, 200) } : {}), evidence: clipText(f.evidence, 400) ?? '' }))
+    : [];
+  const reason = clipText(t.reason, 2000);
+  const summary = clipText(t.summary, 2000);
+  return {
+    status: t.status,
+    ...(reason ? { reason } : {}),
+    ...(summary && summary !== reason ? { summary } : {}),
+    ...(t.stopCode ? { stopCode: t.stopCode } : {}),
+    ...(failedChecks.length > 0 ? { failedChecks } : {}),
+    ...(findings.length > 0 ? { findings } : {}),
+  };
+}
+
+/**
+ * Whether a task can be carried on with a new prompt after it failed: it ended failed or blocked on its
+ * work. Not one that contradicted itself — it never started its work, and its way on is the fix of the
+ * contradiction. A task that stopped at a limit or was stopped is continued anyway (`isContinuable`),
+ * with a new prompt or without.
+ */
+export function canFollowUp(t: Pick<Task, 'status' | 'stopCode'>): boolean {
+  return (t.status === 'failed' || t.status === 'blocked') && t.stopCode !== 'contract-conflict';
+}
+
+/** The longest new prompt taken: it goes into one chat message beside the task. */
+export const MAX_INSTRUCTION_CHARS = 20_000;
 
 /**
  * A limit from the settings that ended an attempt, and its value at the time.
@@ -915,6 +1020,15 @@ export type Session = {
   vcsBaseCommit?: string;
   /** Where that commit came from, and why. See `VersionControl.startFrom`. */
   vcsStart?: SessionStart;
+  /**
+   * When the operator chose another start for this session after it had run (the start window,
+   * 2026-10-13). A task's attempts from before it do not decide where its next attempt starts: a re-run
+   * went back to where the task first started, on the old branch, whatever was chosen — the operator's
+   * report: "the retry remains permanently bound to the session's original branch and commit".
+   */
+  startRechosenAt?: string;
+  /** Plan mode for this session's tasks; absent follows Settings (`execution.planMode`). See `PlanMode`. */
+  planMode?: PlanMode;
   /** The last run this session was part of, and what that run asked of it. */
   runGroup?: SessionRunGroup;
   /**
@@ -995,6 +1109,12 @@ export type PendingApproval = {
    * abort = stop. Asked in every mode, like a fetch.
    */
   model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean };
+  /**
+   * Set when this is a task's plan waiting for the operator (plan mode `approve`, in a run that asks
+   * before each command). Answers: approve (with a note, optionally), ask for another plan (with what to
+   * change), or stop the task.
+   */
+  plan?: { title: string; plan: TaskPlan };
 };
 
 export function newId(prefix = ''): string {

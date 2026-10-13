@@ -104,6 +104,26 @@ export const DisputeSchema = z.object({
 
 export type Dispute = z.infer<typeof DisputeSchema>;
 
+/** A list item that arrived as an object or a number: read as its text, since nothing in a plan is run. */
+const asText = (v: unknown): unknown =>
+  typeof v === 'string' ? v : v && typeof v === 'object' ? Object.values(v as Record<string, unknown>).map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' — ') : String(v ?? '');
+
+/**
+ * The plan of a task in plan mode (see `PlanMode` in session/model.ts): what is already there, how the
+ * task will be done, its stages, the files it touches, how the result will be shown to work, and the
+ * risks. Prose, never run; a list item in another shape is read as its text.
+ */
+export const PlanSchema = z.object({
+  existing: z.string().trim().min(1, 'plan.existing must say what is already in the project that the task touches: the files, functions and behaviour you found.'),
+  approach: z.string().trim().min(1, 'plan.approach must say how you mean to do the task.'),
+  steps: z.array(z.preprocess(asText, z.string().trim().min(1))).min(1, 'plan.steps must list the stages, in order.'),
+  files: z.array(z.preprocess(asText, z.string().trim().min(1))).default([]),
+  verification: z.string().trim().min(1, 'plan.verification must say how you will show the result works.'),
+  risks: z.string().optional(),
+});
+
+export type PlanReply = z.infer<typeof PlanSchema>;
+
 export const ReplySchema = z
   .object({
     /**
@@ -119,8 +139,13 @@ export const ReplySchema = z
      * costing a message, a reply and a report, and ending in a timeout that says nothing about
      * why. A task that stops with "I tried these three things and this is in the way" is a
      * result. A task that runs out of iterations is not.
+     *
+     * `plan` — in plan mode only: here is the plan, made from what I read; no steps with it, and no change
+     * made yet. See `PlanSchema`.
      */
-    status: z.enum(['continue', 'done', 'blocked']),
+    status: z.enum(['continue', 'done', 'blocked', 'plan']),
+    /** Required when `status` is `plan`. */
+    plan: PlanSchema.optional(),
     steps: z.array(StepSchema).default([]),
     notes: z.string().optional(),
     /**
@@ -154,8 +179,13 @@ export const ReplySchema = z
   })
   .refine((r) => r.status === 'continue' || r.steps.length === 0, {
     message:
-      'status "done" and status "blocked" both end the task, so they cannot carry steps. ' +
-      'Send the steps with status "continue" first, then end.',
+      'status "done", "blocked" and "plan" cannot carry steps: "done" and "blocked" end the task, and "plan" waits for the plan to be approved. ' +
+      'Send the steps with status "continue".',
+  })
+  .refine((r) => r.status !== 'plan' || !!r.plan, {
+    message:
+      'status "plan" requires a "plan" object: { "existing": what is already there, "approach": how, "steps": [the stages], ' +
+      '"files": [the files you will create or change], "verification": how you will show it works, "risks": optional }.',
   })
   .refine((r) => r.status !== 'done' || (r.summary ?? '').trim().length >= MIN_SUMMARY_CHARS, {
     message:
@@ -218,7 +248,7 @@ export function describeDeviations(deviations: Deviation[]): string {
  * because forgetting to repeat is more common than meaning to retract.
  */
 export function resolveDeviations(existing: Deviation[], status: Reply['status'], incoming: Deviation[]): Deviation[] {
-  if (status !== 'continue' && incoming.length > 0) return mergeDeviations([], incoming);
+  if (status !== 'continue' && status !== 'plan' && incoming.length > 0) return mergeDeviations([], incoming);
   return mergeDeviations(existing, incoming);
 }
 

@@ -12,8 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionStore } from '../src/session/store.js';
 import { composeOpening } from '../src/session/compose.js';
-import { isContinuable } from '../src/session/model.js';
-import { isContinuable as webIsContinuable } from '../web/lib/api.js';
+import { canFollowUp, isContinuable, MAX_INSTRUCTION_CHARS } from '../src/session/model.js';
+import { canFollowUp as webCanFollowUp, isContinuable as webIsContinuable } from '../web/lib/api.js';
 
 let wrong = 0;
 function check(what: string, got: unknown, want: unknown): void {
@@ -302,6 +302,100 @@ console.log('\n--- after the bot stopped under a task ---');
   } finally {
     await rm(runs, { recursive: true, force: true });
     await rm(data, { recursive: true, force: true });
+  }
+}
+
+/*
+ * A task that failed, carried on with a new prompt (asked for on 2026-10-13): the operator says what to
+ * do now, the task goes back to its chat and branch, and the chat is told how the attempt ended and why
+ * before it is given the prompt — added to the task's own, not in its place.
+ */
+console.log('\n--- a failed task, carried on with a new prompt ---');
+{
+  check('who may: failed or blocked on the work', [canFollowUp({ status: 'failed' }), canFollowUp({ status: 'blocked' })], [true, true]);
+  check('not a task that contradicted itself, nor one that ended any other way', [canFollowUp({ status: 'blocked', stopCode: 'contract-conflict' }), canFollowUp({ status: 'done' }), canFollowUp({ status: 'aborted' }), canFollowUp({ status: 'queued' })], [false, false, false, false]);
+  const statuses = ['queued', 'running', 'waiting-approval', 'done', 'blocked', 'failed', 'aborted', 'limit-reached'] as const;
+  check('the page and the runner agree on who may', statuses.flatMap((st) => [undefined, 'contract-conflict' as const].map((sc) => canFollowUp({ status: st, stopCode: sc }) === webCanFollowUp({ status: st, stopCode: sc }))).every(Boolean), true);
+
+  const ended = {
+    status: 'failed' as const,
+    reason: '1 check(s) still failing after 3 attempt(s)',
+    failedChecks: [{ name: 'okta url read', detail: 'expected src/okta.ts to contain "config/okta.json", and it does not' }],
+    findings: [{ what: 'The URL is hard-coded', where: 'src/okta.ts:12', evidence: 'const url = "https://dev.okta.example"' }],
+    summary: 'I added the validation tests; one still fails.',
+  };
+  const same = composeOpening({
+    ...base,
+    contractAlreadySent: true,
+    continuing: { fromAttempt: 2, how: 'failed', stoppedBecause: ended.reason, instruction: 'Read the Okta URL from config/okta.json instead of hard-coding it, then run the tests again.', ended },
+    instruction: { text: 'Read the Okta URL from config/okta.json instead of hard-coding it, then run the tests again.', fromAttempt: 2, ended },
+  });
+  const text = same.messages.join('\n');
+  check('one message, in the same conversation', [same.messages.length, /^Continue task 1: basic-operations, in this same conversation, with a new instruction from the operator/.test(text)], [1, true]);
+  check('it says the attempt did not succeed, how it ended and why', /attempt 2\) did not succeed: it ended failed — 1 check\(s\) still failing/.test(text), true);
+  check('with the checks that did not pass and what the review found', text.includes('- okta url read: expected src/okta.ts') && text.includes('- The URL is hard-coded (src/okta.ts:12): const url'), true);
+  check('and that attempt\'s own summary', text.includes("That attempt's own summary: I added the validation tests"), true);
+  check('the work is there, not to be started over', /what it changed is in your working tree\. Do not start over/.test(text), true);
+  check('then the new prompt, as its own section, added to the task', /## New instruction from the operator\n\nAdded to the task above, not in place of it; where the two disagree, this wins\.\n\nRead the Okta URL from config\/okta\.json/.test(text), true);
+  check('not "carry on from your plan", which is the plan that failed; nor "the assignment has not changed"', [/start from\s+your plan/.test(text), /it has not changed/.test(text)], [false, false]);
+  check('the assignment is not sent again', text.includes('Build the calculator'), false);
+
+  const lost = composeOpening({ ...base, contractAlreadySent: false, continuing: { fromAttempt: 2, how: 'failed', instruction: 'Use config/okta.json.', ended }, instruction: { text: 'Use config/okta.json.', fromAttempt: 2, ended } });
+  const lostText = lost.messages.join('\n');
+  check('a chat that lost it gets the task in full, how the attempt ended, and the prompt after it', [lostText.includes('Build the calculator'), /did not succeed/.test(lostText), lostText.indexOf('Build the calculator') < lostText.indexOf('## New instruction from the operator'), lostText.includes('Use config/okta.json.')], [true, true, true, true]);
+  const never = composeOpening({ ...base, contractAlreadySent: true, instruction: { text: 'Use config/okta.json.', fromAttempt: 2, ended } });
+  const neverText = never.messages.join('\n');
+  check('an attempt that never reached a chat: the task, then how it ended and the prompt', [neverText.includes('Build the calculator'), /never reached this conversation/.test(neverText), neverText.includes('Use config/okta.json.')], [true, true, true]);
+  const limitPlus = composeOpening({ ...base, contractAlreadySent: true, continuing: { fromAttempt: 1, how: 'limit', limit: { setting: 'maxRunMinutes', value: 120 }, instruction: 'Skip the slow e2e suite.' }, instruction: { text: 'Skip the slow e2e suite.', fromAttempt: 1 } }).messages.join('\n');
+  check('a Continue after a limit may bring a prompt too: carries on, with it added', [/start from\s+your plan/.test(limitPlus), limitPlus.includes('## New instruction from the operator'), limitPlus.includes('Skip the slow e2e suite.'), /it has not changed/.test(limitPlus)], [true, true, true, false]);
+
+  const dir2 = await mkdtemp(join(tmpdir(), 'cop-followup-'));
+  try {
+    const store = new SessionStore(dir2, join(dir2, 'level1.md'));
+    await store.init();
+    const s = await store.createSession('okta');
+    const t = await store.addTask(s.id, { title: 'okta-tests', level2: '', prompt: 'Add Okta validation tests.' });
+    await store.updateSession(s.id, (x) => {
+      const task = x.tasks.find((y) => y.id === t.id)!;
+      task.status = 'failed';
+      task.reason = ended.reason;
+      task.summary = ended.summary;
+      task.checkResults = [{ name: 'okta url read', passed: false, detail: ended.failedChecks[0]!.detail }, { name: 'tests exist', passed: true, detail: 'ok' }];
+      task.review = { verdict: 'fail', rounds: 1, stepsRun: 2, findings: [{ what: ended.findings[0]!.what, where: ended.findings[0]!.where, evidence: ended.findings[0]!.evidence }] } as never;
+      task.vcs = { branch: 'cop/okta/okta-tests', baseCommit: 'abc1234', commit: 'def5678' } as never;
+    });
+    const without = await store.continueTask(s.id, t.id).then(() => 'queued', (e: Error) => e.message);
+    check('without a prompt it is refused, saying a prompt is what carries it on', /carried on with a new prompt/.test(without), true);
+    const tooLong = await store.continueTask(s.id, t.id, null, 'x'.repeat(MAX_INSTRUCTION_CHARS + 1)).then(() => 'queued', (e: Error) => e.message);
+    check('nor with one longer than a message can carry', /at most/.test(tooLong), true);
+    const next = await store.continueTask(s.id, t.id, null, '  Read the URL from config/okta.json.  ');
+    check('with one: queued as the next attempt, carrying on after the failure', [next.status, next.attempt, next.continuing?.how, next.continuing?.instruction], ['queued', 2, 'failed', 'Read the URL from config/okta.json.']);
+    check('with how it ended: the reason, the failed check only, the review finding, the summary', next.continuing?.ended, {
+      status: 'failed',
+      reason: ended.reason,
+      summary: ended.summary,
+      failedChecks: [{ name: 'okta url read', detail: ended.failedChecks[0]!.detail }],
+      findings: [{ what: ended.findings[0]!.what, where: ended.findings[0]!.where, evidence: ended.findings[0]!.evidence }],
+    });
+    check('the prompt is added, not put in place of the task\'s', next.prompt, 'Add Okta validation tests.');
+    check('the failed attempt is kept, with its branch', [next.attempts?.at(-1)?.status, (next.attempts?.at(-1)?.vcs as { branch?: string } | undefined)?.branch], ['failed', 'cop/okta/okta-tests']);
+    // Ended again, and continued again: the earlier prompt stays with the attempt it was given for.
+    await store.updateSession(s.id, (x) => {
+      const task = x.tasks.find((y) => y.id === t.id)!;
+      task.status = 'blocked';
+      task.reason = 'config/okta.json is not in the repository';
+    });
+    const third = await store.continueTask(s.id, t.id, null, 'It is in config/samples/okta.json.');
+    check('a second prompt after a second failure: its own, and the first one stays on the attempt it ran with', [third.continuing?.instruction, third.continuing?.ended?.status, third.attempts?.at(-1)?.continuing?.instruction], ['It is in config/samples/okta.json.', 'blocked', 'Read the URL from config/okta.json.']);
+    await store.updateSession(s.id, (x) => {
+      const task = x.tasks.find((y) => y.id === t.id)!;
+      task.status = 'blocked';
+      task.stopCode = 'contract-conflict';
+    });
+    const conflicted = await store.continueTask(s.id, t.id, null, 'Anything.').then(() => 'queued', (e: Error) => e.message);
+    check('a task that contradicted itself is sent to its fix instead', /Fix the contradiction/.test(conflicted), true);
+  } finally {
+    await rm(dir2, { recursive: true, force: true });
   }
 }
 
