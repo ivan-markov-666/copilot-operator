@@ -292,7 +292,13 @@ export const Blocker = {
  * bot when it is really a sign-in problem.
  */
 export const Surface = {
-  workHost: 'm365.cloud.microsoft',
+  /**
+   * The work Copilot's hosts. `copilot.cloud.microsoft` since Microsoft began moving the chat there: on
+   * 2026-10-13 the work machine's `m365.cloud.microsoft/chat` landed on
+   * `copilot.cloud.microsoft/chat?es=SSR&redirfrom=mcmToCcm`, the same chat with the same composer, and
+   * the sign-in was refused as "not the Microsoft 365 Copilot chat" because only the old host was known.
+   */
+  workHosts: ['m365.cloud.microsoft', 'copilot.cloud.microsoft'],
   /** Only the work surface has this composer id and these test ids. */
   workMarkers: ['#m365-chat-editor-target-element'],
   consumerHosts: ['copilot.microsoft.com', 'www.bing.com', 'bing.com'],

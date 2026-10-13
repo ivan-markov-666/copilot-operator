@@ -87,6 +87,26 @@ export type ReplyCapture = {
 const ORIGIN = 'https://m365.cloud.microsoft';
 
 /**
+ * Which Copilot an address is, by its host — not by whether the text appears anywhere in it: the
+ * consumer Copilot and a sign-in page carry the work chat's address in their query (`ru=`,
+ * `redirect_uri=`), and a check of the whole URL took them for each other. `work` here only says the
+ * host is the work Copilot's; `surface()` also looks for its composer.
+ */
+export function surfaceOfUrl(url: string): 'work' | 'consumer' | 'sign-in' | 'unknown' {
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return 'unknown';
+  }
+  const on = (h: string): boolean => host === h || host.endsWith(`.${h}`);
+  if (on(Signal.loginHost)) return 'sign-in';
+  if (Surface.consumerHosts.some(on)) return 'consumer';
+  if (Surface.workHosts.some(on)) return 'work';
+  return 'unknown';
+}
+
+/**
  * One entry of the model picker, exactly as the chat offered it.
  *
  * `name` is what is clicked and what is stored on a session; `raw` is the option's whole text,
@@ -411,14 +431,10 @@ export class CopilotTransport {
    * when it is really a sign-in problem.
    */
   async surface(): Promise<'work' | 'consumer' | 'sign-in' | 'unknown'> {
-    const url = this.p.url();
-    if (url.includes(Signal.loginHost)) return 'sign-in';
-    if (Surface.consumerHosts.some((h) => url.includes(h))) return 'consumer';
-    if (url.includes(Surface.workHost)) {
-      const hasWorkComposer = (await this.p.locator(Surface.workMarkers[0]).count()) > 0;
-      return hasWorkComposer ? 'work' : 'unknown';
-    }
-    return 'unknown';
+    const where = surfaceOfUrl(this.p.url());
+    if (where !== 'work') return where;
+    const hasWorkComposer = (await this.p.locator(Surface.workMarkers[0]).count()) > 0;
+    return hasWorkComposer ? 'work' : 'unknown';
   }
 
   /**

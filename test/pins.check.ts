@@ -40,7 +40,7 @@ import type { RunResult } from '../src/exec/runner.js';
 import { RunConfigSchema } from '../src/config/schema.js';
 import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
-import { isReplyTimeout } from '../src/transport/copilotTransport.js';
+import { isReplyTimeout, surfaceOfUrl } from '../src/transport/copilotTransport.js';
 import { Url } from '../src/transport/locators.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
@@ -591,6 +591,22 @@ try {
   t.check('a new chat has no id', parseChatId('https://m365.cloud.microsoft/chat?es=SSR'), null);
   t.check('upper-case hex is accepted', parseChatId(`https://m365.cloud.microsoft/chat/conversation/${uuid.toUpperCase()}`), uuid.toUpperCase());
   t.check('the address the bot navigates to reads back as the same id', parseChatId(Url.conversation(uuid)), uuid);
+  t.check('and so does one on the new host', parseChatId(`https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`), uuid);
+
+  /*
+   * Which Copilot an address is (2026-10-13): the work machine's m365.cloud.microsoft/chat now lands on
+   * copilot.cloud.microsoft/chat?es=SSR&redirfrom=mcmToCcm, and the sign-in was refused as "not the
+   * Microsoft 365 Copilot chat" because only the old host was known. Judged by the host, so an address
+   * that only carries the other one in its query is not taken for it.
+   */
+  console.log('\n--- which Copilot an address is ---');
+  t.check('the old work host', surfaceOfUrl('https://m365.cloud.microsoft/chat?es=SSR'), 'work');
+  t.check('the new work host, as the redirect leaves it', surfaceOfUrl('https://copilot.cloud.microsoft/chat?es=SSR&redirfrom=mcmToCcm'), 'work');
+  t.check('the consumer Copilot', surfaceOfUrl('https://copilot.microsoft.com/chats/abc'), 'consumer');
+  t.check('the consumer Copilot with the work address in its query is still the consumer one', surfaceOfUrl('https://www.bing.com/chat?ru=https%3A%2F%2Fm365.cloud.microsoft%2Fchat'), 'consumer');
+  t.check('a sign-in page that returns to the work chat is a sign-in page', surfaceOfUrl('https://login.microsoftonline.com/common/oauth2/v2.0/authorize?redirect_uri=https%3A%2F%2Fcopilot.cloud.microsoft%2F'), 'sign-in');
+  t.check('a host that only ends like one is not it', surfaceOfUrl('https://evilcopilot.cloud.microsoft.example.com/chat'), 'unknown');
+  t.check('not an address', surfaceOfUrl('about:blank'), 'unknown');
 
   /*
    * Whether a sent message landed.
