@@ -83,6 +83,13 @@ export default function SystemPage() {
             </tbody>
           </table>
         )}
+        {/* What the bot's console printed, for when something went wrong and no page says why. See src/log/terminal.ts. */}
+        <div className="row" style={{ marginTop: 10 }}>
+          <a className="button-link plain" href={api.terminalUrl()} download>
+            {t('startfail.terminal')}
+          </a>
+        </div>
+        <p className="why">{t('sys.terminalWhy')}</p>
       </div>
 
       <div className="panel">

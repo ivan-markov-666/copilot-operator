@@ -17,6 +17,7 @@ import { pruneRuns } from '../session/retention.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { installLayout, type InstallLayout } from '../config/layout.js';
+import { captureTerminal } from '../log/terminal.js';
 
 export type StartOptions = {
   /** Defaults to COP_API_PORT, then 4000. */
@@ -68,6 +69,11 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   const PORT = opts.port ?? Number(process.env.COP_API_PORT ?? 4000);
   const WEB_ORIGIN = opts.webOrigin ?? process.env.COP_WEB_ORIGIN ?? 'http://localhost:3210';
   const log = opts.quiet ? (): void => undefined : (line: string): void => console.log(line);
+  /*
+   * What the console shows from here on is copied for the page to offer as a file (see
+   * `log/terminal.ts`): kept in memory now, written to the data folder once its permissions are set.
+   */
+  captureTerminal();
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: opts.quiet ? ['error', 'warn'] : ['error', 'warn', 'log'] });
   // A plan pasted from a chat carries every task's text at once, which the 100 KB default
   // refuses with a message about entity size that says nothing about plans.
@@ -113,6 +119,7 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   // Before the token is read: a token any local account can read guards nothing. See `dataAcl.ts`.
   const acl = secureDataDir(dataDir);
   if (!acl.ok) throw new Error(`copilot-operator api will not start: ${acl.reason}`);
+  captureTerminal(join(dataDir, 'logs'));
   const token = await ensureApiToken(dataDir);
   // The dev UI's origin, and this process's own for the interface it serves itself.
   const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1'), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];

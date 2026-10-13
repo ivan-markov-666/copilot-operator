@@ -1031,9 +1031,15 @@ await scenario('the entrance: what a start or a batch is refused for, and how', 
 
   const nope = await h.raw('POST', '/sessions/nope-0000/start', { mode: 'confirm' });
   // Nothing is written onto the session before the start is accepted, so a missing one is beginRun's own refusal.
-  t.check('a start for a session that does not exist is an answer, not a server error', [nope.status >= 200 && nope.status < 300, nope.body], [true, { started: false, reason: 'no such session' }]);
+  // The answer carries the failure on record (2026-10-13), with no run: nothing of one was made.
+  type Refused = { started: boolean; reason?: string; failure?: { stage: string; answered: boolean; runId?: string } };
+  const said = (r: { status: number; body: unknown }): unknown[] => {
+    const b = r.body as Refused;
+    return [r.status >= 200 && r.status < 300, b.started, b.reason, b.failure?.stage, b.failure?.answered, b.failure?.runId ?? null];
+  };
+  t.check('a start for a session that does not exist is an answer, not a server error', said(nope), [true, false, 'no such session', 'refused', true, null]);
   const path = await h.raw('POST', `/sessions/${encodeURIComponent('..\\..\\x')}/start`, { mode: 'confirm' });
-  t.check('and so is one for an id that is a path', [path.status >= 200 && path.status < 300, path.body], [true, { started: false, reason: 'no such session' }]);
+  t.check('and so is one for an id that is a path', said(path), [true, false, 'no such session', 'refused', true, null]);
 
   // A refused start leaves the run the session last belonged to on record: here, the single run of
   // s1 above. Its task ended aborted, so a start now finds nothing queued.

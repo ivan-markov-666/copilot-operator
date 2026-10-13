@@ -89,9 +89,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
     nameEn: 'The header and the navigation',
     nameBg: 'Заглавната лента и навигацията',
     purposeEn:
-      'The links down the side of every page, the language switch, the round to-the-top and to-the-bottom buttons of a long page, the box that asks before anything irreversible, and the banner of steps waiting for a decision, which appears on every page.',
+      'The links down the side of every page, the language switch, the round to-the-top and to-the-bottom buttons of a long page, the box that asks before anything irreversible, the start window every start button opens first (where the work starts), the notice of a start that did not happen, and the banner of steps waiting for a decision, which appears on every page.',
     purposeBg:
-      'Връзките отстрани на всяка страница, смяната на езика, кръглите бутони към началото и края на дълга страница, прозорецът, който пита преди нещо необратимо, и лентата със стъпки, чакащи решение, която се появява на всяка страница.',
+      'Връзките отстрани на всяка страница, смяната на езика, кръглите бутони към началото и края на дълга страница, прозорецът, който пита преди нещо необратимо, прозорецът за старт, който всеки бутон за пускане отваря първо (откъде тръгва работата), съобщението за пускане, което не е започнало, и лентата със стъпки, чакащи решение, която се появява на всяка страница.',
     sections: [
       {
         headingKey: 'nav.label',
@@ -228,6 +228,180 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'The title of a box that only informs; its one button is "OK".',
             doesBg:
               'Заглавието на прозорец, който само съобщава; единственият му бутон е „Добре“.',
+          },
+        ],
+      },
+      {
+        headingKey: 'startdlg.title',
+        en: 'Where the work starts',
+        bg: 'Откъде да тръгне работата',
+        controls: [
+          {
+            key: 'startdlg.keep',
+            kind: 'radio',
+            en: 'Keep the start prepared before this run',
+            bg: 'Запази началото, подготвено преди това пускане',
+            doesEn:
+              'Only for a session whose start was prepared before the run — a starting snapshot approved on the run panel — and chosen first then: the run starts from it as approved. Any other choice below drops it.',
+            doesBg:
+              'Само за сесия, чието начало е подготвено преди пускането — стартова снимка, одобрена в панела за пускане — и тогава е избрано първо: пускането тръгва от нея, както е одобрена. Всеки друг избор по-долу я отменя.',
+          },
+          {
+            key: 'startdlg.local',
+            kind: 'radio',
+            en: 'Local branch',
+            bg: 'Локален клон',
+            doesEn:
+              'The start window opens on every start button — the run buttons on /, a session\'s Start, "Run this task", the register\'s Continue and "Run only this one again" — and nothing starts until its own button is pressed. This choice: the work starts from the local branch picked in the list beside it, as it is in the folder; nothing is fetched.',
+            doesBg:
+              'Прозорецът за старт се отваря от всеки бутон за пускане — бутоните за пускане на /, „Старт“ на сесия, „Пусни тази задача“, „Продължи“ и „Пусни само тази отново“ в регистъра — и нищо не тръгва, преди да се натисне неговият бутон. Този избор: работата тръгва от локалния клон, избран в списъка до него, какъвто е в папката; нищо не се изтегля.',
+          },
+          {
+            key: 'startdlg.remote',
+            kind: 'radio',
+            en: 'Remote branch (fetched now)',
+            bg: 'Remote клон (изтегля се сега)',
+            doesEn:
+              'The work starts from the branch as it is on the server: type its name (feature/…) or pick it from the list. It is fetched when the window\'s start button is pressed; if the SSH key has a passphrase, Git\'s own window asks for it (it may be behind the browser) — the operator types it there, the bot never sees it. The local branch of that name is not touched.',
+            doesBg:
+              'Работата тръгва от клона, какъвто е на сървъра: напиши името му (feature/…) или го избери от списъка. Изтегля се при натискане на бутона за старт на прозореца; ако SSH ключът има passphrase, собственият прозорец на Git я иска (може да е зад браузъра) — операторът я въвежда там, ботът не я вижда. Локалният клон със същото име не се пипа.',
+          },
+          {
+            key: 'startdlg.refreshRemote',
+            kind: 'button',
+            en: 'Get the list of branches from the remote',
+            bg: 'Вземи списъка с клонове от remote',
+            doesEn:
+              'Fetches the whole remote (the password window may open) so the list of remote branches to pick from is current.',
+            doesBg:
+              'Изтегля целия remote (може да се отвори прозорецът за парола), за да е актуален списъкът с remote клонове за избор.',
+          },
+          {
+            key: 'startdlg.previous',
+            kind: 'radio',
+            en: 'Carry on from the session before it',
+            bg: 'Продължи от предната сесия',
+            doesEn:
+              'Offered for a session that follows another in the same repository: carries on from the end of that session\'s branch.',
+            doesBg:
+              'Предлага се за сесия след друга в същото хранилище: продължава от края на клона на онази сесия.',
+          },
+          {
+            key: 'startdlg.onBranch',
+            kind: 'checkbox',
+            en: 'Work directly on this branch, without a new branch',
+            bg: 'Работи направо на този клон, без нов клон',
+            doesEn:
+              'Off, as usual: the bot cuts a branch of its own from the chosen one. On: the tasks commit on the chosen branch itself; a remote branch is first made locally, or the local one brought up to it (fast-forward only). A local branch that has gone its own way from the remote one is refused, with nothing changed.',
+            doesBg:
+              'Изключено, както обикновено: ботът прави свой клон от избрания. Включено: задачите комитват направо на избрания клон; при remote клон първо се прави локален или локалният се довежда до него (само fast-forward). Локален клон, тръгнал по свой път спрямо remote, се отказва, без да се променя нищо.',
+          },
+          {
+            key: 'startdlg.goStep',
+            kind: 'button',
+            en: 'Start, asking before each command',
+            bg: 'Започни, с питане преди всяка команда',
+            doesEn:
+              'The window\'s own start button, for a run that asks before each command: fetches what was chosen from the remote, writes the choice on the sessions and starts.',
+            doesBg:
+              'Собственият бутон за старт на прозореца, за пускане с питане преди всяка команда: изтегля избраното от remote, записва избора в сесиите и стартира.',
+          },
+          {
+            key: 'startdlg.goUnattended',
+            kind: 'button',
+            en: 'Start without asking',
+            bg: 'Започни без питане',
+            doesEn:
+              'The same, for a run without asking.',
+            doesBg:
+              'Същото, за пускане без питане.',
+          },
+          {
+            key: 'startdlg.retryFetch',
+            kind: 'button',
+            en: 'Fetch again',
+            bg: 'Изтегли отново',
+            doesEn:
+              'After a fetch that did not get through — a passphrase not typed, a branch name the remote does not have: fetches again.',
+            doesBg:
+              'След изтегляне, което не е минало — непопълнен passphrase, име на клон, което remote няма: изтегля отново.',
+          },
+          {
+            key: 'startdlg.useFetched',
+            kind: 'button',
+            en: 'Go on with what was last fetched',
+            bg: 'Продължи с последно изтегленото',
+            doesEn:
+              'After such a fetch, when that branch was fetched here before: starts from that older copy instead.',
+            doesBg:
+              'След такова изтегляне, ако клонът е бил изтеглян тук преди: тръгва от онова по-старо копие.',
+          },
+          {
+            key: 'startdlg.back',
+            kind: 'button',
+            en: 'Back to the choice',
+            bg: 'Обратно към избора',
+            doesEn:
+              'Back to the choice of branches, after a fetch or a start that did not go through.',
+            doesBg:
+              'Обратно към избора на клонове след изтегляне или старт, които не са минали.',
+          },
+          {
+            key: 'startdlg.tryAgain',
+            kind: 'button',
+            en: 'Try to start again',
+            bg: 'Опитай пак да започнеш',
+            doesEn:
+              'After a start that did not happen — for instance once the version control fixes shown in the window are done: starts again with the same choice, without fetching again.',
+            doesBg:
+              'След старт, който не се е случил — например след като поправките на контрола на версиите, показани в прозореца, са направени: стартира пак със същия избор, без ново изтегляне.',
+          },
+        ],
+      },
+      {
+        headingKey: null,
+        en: 'A start that did not happen',
+        bg: 'Пускане, което не е започнало',
+        controls: [
+          {
+            key: 'startfail.title',
+            kind: 'note',
+            en: 'The work did not start',
+            bg: 'Работата не започна',
+            doesEn:
+              'In the start window when its button did not start the work, on / under the run buttons once the window is closed, and on every page when a run was accepted and then could not begin (the browser, the profile, the sign-in, a session refused at its turn): the error itself and where it stopped.',
+            doesBg:
+              'В прозореца за старт, когато бутонът му не е стартирал работата, на / под бутоните за пускане след затварянето му, и на всяка страница, когато пускане е прието, а после не е могло да започне (браузърът, профилът, влизането, сесия, отказана на своя ред): самата грешка и къде е спряло.',
+          },
+          {
+            key: 'startfail.download',
+            kind: 'link',
+            en: 'Download what happened (error, run record and terminal)',
+            bg: 'Изтегли какво се случи (грешка, запис на пускането и терминал)',
+            doesEn:
+              'A text file with the error, where it stopped, the run\'s own record, the sessions\' events and every line the bot\'s console printed from the press until a few seconds after. Ask the operator for it when a run does not start.',
+            doesBg:
+              'Текстов файл с грешката, къде е спряло, собствения запис на пускането, събитията на сесиите и всеки ред, който конзолата на бота е отпечатала от натискането до няколко секунди след това. Поискай го от оператора, когато пускане не тръгва.',
+          },
+          {
+            key: 'startfail.terminal',
+            kind: 'link',
+            en: 'Download what the terminal showed',
+            bg: 'Изтегли какво показа терминалът',
+            doesEn:
+              'The latest lines the bot\'s console (npm start or cop start) printed, with the time of each, as a text file. Also on /system.',
+            doesBg:
+              'Последните редове, отпечатани от конзолата на бота (npm start или cop start), с часа на всеки, като текстов файл. Има го и на /system.',
+          },
+          {
+            key: 'startfail.dismiss',
+            kind: 'button',
+            en: 'Close this notice',
+            bg: 'Затвори съобщението',
+            doesEn:
+              'Closes the notice of a run that could not begin, on every page; the files stay on record.',
+            doesBg:
+              'Затваря съобщението за пускане, което не е могло да започне, на всяка страница; файловете остават.',
           },
         ],
       },
@@ -824,8 +998,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'Prepare version control for this run',
             bg: 'Подготви контрола на версиите за това пускане',
-            doesEn: 'Shown under the run settings when a repository of the ticked sessions is not ready: one box per repository, with the fixes. The run buttons stay off until every box is ready, and a start is refused before the browser opens.',
-            doesBg: 'Показва се под настройките на пускането, когато хранилище на отметнатите сесии не е готово: по една кутия на хранилище, с решенията. Бутоните за пускане остават изключени, докато всяка кутия не е готова, а старт се отказва преди да се отвори браузърът.',
+            doesEn: 'Shown under the run settings when a repository of the ticked sessions is not ready: one box per repository, with the fixes. The run buttons stay off until every box is ready — unless all that is wrong is where a session starts (a branch that is not here), which the start window settles — and a start is refused before the browser opens.',
+            doesBg: 'Показва се под настройките на пускането, когато хранилище на отметнатите сесии не е готово: по една кутия на хранилище, с решенията. Бутоните за пускане остават изключени, докато всяка кутия не е готова — освен ако единственият проблем е откъде тръгва сесия (клон, който го няма тук), което се решава в прозореца за старт — а старт се отказва преди да се отвори браузърът.',
           },
           {
             key: 'runvcs.repo',
@@ -937,27 +1111,17 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Run {n} session(s)',
             bg: 'Пусни {n} сесия(и)',
             doesEn:
-              'Starts the ticked sessions one after another and runs every command without asking. It asks "are you sure" first, unless Settings → Execution → "Starting a run without supervision" is "Start it without asking".',
+              'Starts the ticked sessions one after another and runs every command without asking. It asks "are you sure" first, unless Settings → Execution → "Starting a run without supervision" is "Start it without asking". The start window opens first ("Where the work starts"), where the branch of each session is chosen.',
             doesBg:
-              'Пуска отметнатите сесии една след друга и изпълнява всяка команда без питане. Първо пита „сигурен ли си“, освен ако Настройки → Изпълнение → „Пускане без надзор“ е „Пускай, без да питаш“.',
+              'Пуска отметнатите сесии една след друга и изпълнява всяка команда без питане. Първо пита „сигурен ли си“, освен ако Настройки → Изпълнение → „Пускане без надзор“ е „Пускай, без да питаш“. Първо се отваря прозорецът за старт („Откъде да тръгне работата“), където се избира клонът на всяка сесия.',
           },
           {
             key: 'batch.runStep',
             kind: 'button',
             en: 'Step by step',
             bg: 'Стъпка по стъпка',
-            doesEn: 'Starts the same sessions but stops before every command and waits for a decision.',
-            doesBg: 'Пуска същите сесии, но спира преди всяка команда и чака решение.',
-          },
-          {
-            key: 'batch.notStartedTitle',
-            kind: 'note',
-            en: 'The run did not start',
-            bg: 'Пускането не тръгна',
-            doesEn:
-              'The box over the two run buttons when a press was refused, with the reason under it. Nothing was opened and nothing ran; read the reason before pressing again.',
-            doesBg:
-              'Карето над двата бутона за пускане, когато натискането е отказано, с причината под него. Нищо не е отваряно и нищо не е пускано; прочети причината, преди да натиснеш пак.',
+            doesEn: 'Starts the same sessions but stops before every command and waits for a decision. The start window opens first, as for the other button.',
+            doesBg: 'Пуска същите сесии, но спира преди всяка команда и чака решение. Първо се отваря прозорецът за старт, както при другия бутон.',
           },
           {
             key: 'batch.notStartedIsolation',
@@ -3996,6 +4160,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'The block showing the settings as saved and the paths they resolve to.',
             doesBg:
               'Блокът с настройките, както са запазени, и пътищата, до които водят.',
+          },
+          {
+            key: 'startfail.terminal',
+            kind: 'link',
+            en: 'Download what the terminal showed',
+            bg: 'Изтегли какво показа терминалът',
+            doesEn:
+              'Under "This machine": the latest lines the bot\'s console printed, with their times, as a text file — what to ask for when something went wrong and nothing on the pages says why.',
+            doesBg:
+              'Под „Тази машина“: последните редове, отпечатани от конзолата на бота, с часовете им, като текстов файл — това се иска, когато нещо се е объркало и нищо по страниците не казва защо.',
           },
           {
             key: 'sys.profileHeld',

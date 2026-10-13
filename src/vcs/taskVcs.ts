@@ -451,9 +451,26 @@ export async function sessionStart(
 ): Promise<{ start?: SessionStart } | { problem: string }> {
   const how = session.vcs?.startFrom ?? 'head';
   const baseBranch = session.vcs?.baseBranch?.trim() || 'main';
+  const baseRemote = session.vcs?.baseRemote?.trim() || '';
   if (how === 'head') return head ? { start: { kind: 'head', commit: head } } : {};
 
   const fromBranch = async (note?: string): Promise<{ start?: SessionStart } | { problem: string }> => {
+    /*
+     * A remote branch chosen in the start window: the remote-tracking branch as that window fetched it,
+     * with the operator there to type a key's passphrase. Not fetched again here — a run's fetch may not
+     * ask anybody anything — and the local branch of that name is neither read nor moved.
+     */
+    if (baseRemote) {
+      const tip = await remoteTip(dir, baseRemote, baseBranch);
+      if (!tip) {
+        return {
+          problem:
+            `this session is set to start from the remote branch "${baseRemote}/${baseBranch}", and ${dir} has no copy of it. ` +
+            'Start the run again and choose it in the start window, which fetches it.',
+        };
+      }
+      return { start: { kind: 'branch', commit: tip, branch: `${baseRemote}/${baseBranch}`, remote: baseRemote, ...(note ? { note } : {}) } };
+    }
     // The code as it is on the server, not as this checkout last pulled it: see `updateFromRemote`.
     const update = !opts.dry && session.vcs?.updateFromRemote !== false && (await branchTip(dir, baseBranch)) ? await updateFromRemote(dir, baseBranch) : undefined;
     const tip = await branchTip(dir, baseBranch);
@@ -597,6 +614,23 @@ async function branchTip(dir: string, branch: string): Promise<string | null> {
   return r.ok && r.stdout.trim() ? r.stdout.trim() : null;
 }
 
+/** Where `<remote>/<branch>` was when it was last fetched here, or null when it never was. */
+export async function remoteTip(dir: string, remote: string, branch: string): Promise<string | null> {
+  if (!/^[\w.-]+$/.test(remote) || !(await isValidBranchName(dir, branch))) return null;
+  const r = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}^{commit}`]);
+  return r.ok && r.stdout.trim() ? r.stdout.trim() : null;
+}
+
+/**
+ * The ref a session's `startFrom: branch` reads, and the name it is shown by: `refs/remotes/origin/x`
+ * as `origin/x` for a remote branch chosen in the start window, else `refs/heads/<baseBranch>`.
+ */
+export function baseRefOf(vcs: VersionControl | undefined): { ref: string; name: string; remote?: string; branch: string } {
+  const branch = vcs?.baseBranch?.trim() || 'main';
+  const remote = vcs?.baseRemote?.trim();
+  return remote ? { ref: `refs/remotes/${remote}/${branch}`, name: `${remote}/${branch}`, remote, branch } : { ref: `refs/heads/${branch}`, name: branch, branch };
+}
+
 function normalise(dir: string): string {
   return dir.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
 }
@@ -614,7 +648,9 @@ export function describeStart(start: SessionStart): string {
       : start.kind === 'existing-branch'
         ? `this session carries on the existing branch ${start.branch}, from its tip ${at}`
         : start.kind === 'branch'
-        ? `this session starts from the local branch ${start.branch} (${at})`
+        ? start.remote
+          ? `this session starts from the remote branch ${start.branch} (${at}), as fetched when the run was started`
+          : `this session starts from the local branch ${start.branch} (${at})`
         : `this session starts from where the repository was (${at})`;
   const updated = start.update ? ` (${describeUpdate(start.update as BranchUpdate)})` : '';
   const plus = carried ? `, plus the operator's input files carried from ${carried.from} as ${start.commit.slice(0, 8)} on ${carried.branch}` : '';
@@ -631,10 +667,10 @@ export async function whereLeft(session: Session): Promise<string | null> {
   const files = session.vcsStart?.inputs?.files ?? [];
   const dir = repoDirOf(session);
   if (!session.vcs?.enabled || files.length === 0 || !dir) return null;
-  const base = session.vcs.baseBranch?.trim() || 'main';
+  const { ref, name: base } = baseRefOf(session.vcs);
   const state = await repoState(dir).catch(() => null);
   if (!state?.isRepo || !state.branch || state.branch === base) return null;
-  const onBase = await git(dir, ['cat-file', '-e', `refs/heads/${base}:${files[0]!.path}`]);
+  const onBase = await git(dir, ['cat-file', '-e', `${ref}:${files[0]!.path}`]);
   if (onBase.ok) return null;
   const paths = files.map((f) => f.path);
   const list = paths.slice(0, 5).join(', ') + (paths.length > 5 ? ` and ${paths.length - 5} more` : '');
@@ -861,7 +897,7 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
       : ctx.start?.kind === 'existing-branch'
         ? `This session carries on the existing branch \`${ctx.start.branch}\`: the work already on it is in your working tree. Build on it; do not redo it.`
         : ctx.start?.kind === 'branch'
-        ? `This session started from the local branch \`${ctx.start.branch}\`, not from any earlier session's work${ctx.start.note ? ` (${ctx.start.note})` : ''}.`
+        ? `This session started from the ${ctx.start.remote ? 'remote branch' : 'local branch'} \`${ctx.start.branch}\`${ctx.start.remote ? ' (the code on the server, fetched when the run was started)' : ''}, not from any earlier session's work${ctx.start.note ? ` (${ctx.start.note})` : ''}.`
         : '';
   return [
     '## Version control',
@@ -1293,7 +1329,7 @@ export async function restoreToBase(
 export async function vcsPreflight(
   session: Session,
   allSessions: () => Promise<Session[]> = async () => [],
-): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; snapshot?: SnapshotPlan }> {
+): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; snapshot?: SnapshotPlan; startProblem?: boolean }> {
   const settings: VersionControl | undefined = session.vcs;
   if (!settings?.enabled) return { ok: false, repoDir: '', problem: 'off' };
 
@@ -1349,7 +1385,8 @@ export async function vcsPreflight(
    */
   if (!session.vcsBaseCommit && settings.startFrom === 'previous-session') {
     const planned = await sessionStart(session, repoDir, state.head, allSessions, { dry: true });
-    if ('problem' in planned) return { ok: false, repoDir, branch: state.branch ?? undefined, problem: planned.problem };
+    // About where it starts only: another choice in the start window gets past it (see `RunVcsGroup.startChoiceCanFix`).
+    if ('problem' in planned) return { ok: false, repoDir, branch: state.branch ?? undefined, problem: planned.problem, startProblem: true };
   }
   return { ok: true, repoDir, branch: state.branch ?? undefined };
 }

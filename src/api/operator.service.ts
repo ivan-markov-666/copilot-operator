@@ -48,6 +48,19 @@ export type ProjectDefault = {
   others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string }>;
 };
 
+/**
+ * A settings file or a policy lock that cannot be used: answered 409 with its own message on every route
+ * (see `server.ts`), so a start passes it on rather than answering it as a start that did not happen.
+ */
+function unusableConfig(e: unknown): boolean {
+  return e instanceof SettingsUnusableError || e instanceof PolicyLockUnusableError;
+}
+
+/** `20261013-102231` from an ISO time, in this machine's time as the file's contents are, for a file name. */
+function fileStamp(iso: string): string {
+  return localTime(iso).replace(/[-:]/g, '').replace(/\..*$/, '').replace(' ', '-');
+}
+
 /** Windows paths: case and the slash direction do not make two folders. */
 function sameFolder(a: string, b: string): boolean {
   const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
@@ -55,7 +68,7 @@ function sameFolder(a: string, b: string): boolean {
 }
 import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { readInterruption } from '../session/interruption.js';
-import { branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
+import { baseRefOf, branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
@@ -68,7 +81,11 @@ import { composeHandoff } from '../session/handoff.js';
 import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } from '../vcs/prepareFromRemote.js';
 import { askpassProgram } from '../vcs/remoteAuth.js';
-import { appendRunLog, appendSessionLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
+import { appendRunLog, appendSessionLog, readRunLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
+import { applyStartChoice, fetchForStart, startOptions, withChoice, type AppliedChoice, type RepoBranches, type StartChoice, type StartFetch, type StartOptionSession } from '../vcs/startChoice.js';
+import { StartFailures, failureReport, refOf, type StartFailureRef, type StartStage } from '../session/startFailure.js';
+import { formatTerminal, localTime, terminalLines, terminalLogFile } from '../log/terminal.js';
+import { redactSecrets } from '../exec/redaction.js';
 import { workingDirFor, isWorkingDirProblem } from '../exec/workDir.js';
 import { contractConflictsWithFixes, contractFixPatch, describeContractChange, type ContractConflict, type ContractTree } from '../orchestrator/contract.js';
 import { checkRefusalForOperator, lineRefusal } from '../orchestrator/taskRunner.js';
@@ -82,7 +99,8 @@ import { botVersion } from '../config/version.js';
 import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
-import { settingsOf } from './settings.js';
+import { settingsOf, SettingsUnusableError } from './settings.js';
+import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import type { ResolvedConfig } from '../config/schema.js';
 
 /**
@@ -106,6 +124,12 @@ type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'batch' } | { 
 
 /** Who is asking for the browser, so a refusal can be said in terms of what they pressed. */
 type BrowserAsk = { kind: 'run'; sessionId: string } | { kind: 'batch'; sessionIds: string[] } | { kind: 'models' } | { kind: 'login' };
+
+/**
+ * The answer to a start: started, or why not — with the failure on record when it did not, so the page
+ * can offer what happened as a file (see `session/startFailure.ts`).
+ */
+export type StartReply = { started: boolean; reason?: string; batch?: BatchState; failure?: StartFailureRef };
 
 /** How one finished run went, counted over the tasks that were queued when it started. */
 export type RunTally = {
@@ -153,6 +177,8 @@ export type BatchSession = {
 export type BatchState = {
   id: string;
   startedAt: string;
+  /** When its start was asked for: where the console lines of a failed start begin. */
+  pressedAt?: string;
   /** What the operator called the run. See `TaskRunGroup.name`. */
   name?: string;
   /** The tasks this run was limited to, when the operator chose some. See `startBatch`. */
@@ -473,6 +499,8 @@ export class OperatorService {
   readonly settings = settingsOf(this.layout);
   readonly store = new SessionStore(this.dataDir, join(this.layout.promptsDir, 'level1.md'));
   readonly bus = new EventBus();
+  /** Starts that did not get as far as a first task, for the page to show and offer as a file. */
+  readonly startFailures = new StartFailures();
 
   private readonly running = new Map<string, Running>();
   private readonly waiting = new Map<string, Waiting>();
@@ -740,6 +768,16 @@ export class OperatorService {
         }
         if (merged.baseBranch !== undefined) merged.baseBranch = merged.baseBranch.trim();
         if (merged.existingBranch !== undefined) merged.existingBranch = merged.existingBranch.trim();
+        /*
+         * The session page names local branches: a start or a branch changed there is a local one, and
+         * the remote the start window chose it from last time no longer applies (see `baseRemote`).
+         */
+        const pointMoved =
+          (patch.vcs.startFrom !== undefined && patch.vcs.startFrom !== s.vcs?.startFrom) ||
+          (patch.vcs.baseBranch !== undefined && patch.vcs.baseBranch.trim() !== (s.vcs?.baseBranch ?? '').trim()) ||
+          (patch.vcs.existingBranch !== undefined && patch.vcs.existingBranch.trim() !== (s.vcs?.existingBranch ?? '').trim());
+        if (pointMoved && patch.vcs.baseRemote === undefined) delete merged.baseRemote;
+        if (merged.baseRemote !== undefined && !merged.baseRemote.trim()) delete merged.baseRemote;
         // Only the two known fields, and absent when it says what absent says: reject, asking first.
         const dirty = dirtyPolicy(merged);
         if (dirty.policy === 'reject') delete merged.dirtyWorktree;
@@ -782,6 +820,7 @@ export class OperatorService {
           (merged.startFrom ?? 'head') !== (s.vcs?.startFrom ?? 'head') ||
           (merged.baseBranch || 'main') !== (s.vcs?.baseBranch || 'main') ||
           (merged.existingBranch ?? '') !== (s.vcs?.existingBranch ?? '') ||
+          (merged.baseRemote ?? '') !== (s.vcs?.baseRemote ?? '') ||
           (merged.updateFromRemote !== false) !== (s.vcs?.updateFromRemote !== false) ||
           merged.repoDir.toLowerCase() !== (s.vcs?.repoDir ?? '').trim().toLowerCase();
         if (startChanged) {
@@ -1310,23 +1349,50 @@ export class OperatorService {
    * Starts the session's queued tasks in the background. Returns immediately; progress
    * arrives on the event stream. One run at a time, of this session or any other.
    */
-  async start(sessionId: string, mode: 'confirm' | 'unattended' = 'confirm', name?: string): Promise<{ started: boolean; reason?: string }> {
+  async start(
+    sessionId: string,
+    mode: 'confirm' | 'unattended' = 'confirm',
+    name?: string,
+    /** Where the session starts, as chosen in the start window: see `vcs/startChoice.ts`. Absent keeps its settings. */
+    starts?: Record<string, StartChoice>,
+  ): Promise<StartReply> {
+    const pressedAt = new Date().toISOString();
     // One conversation at a time is not a policy, it is the browser profile: a second run
     // does not get a second browser, it gets an error about a closed one. Whatever has the
     // browser now — a batch, another session, a read of the models — the start is refused where
     // the reason can still be read, rather than three minutes later in a stack trace.
     const claim = this.claimBrowser({ kind: 'run', sessionId });
-    if ('refused' in claim) return { started: false, reason: claim.refused };
+    if ('refused' in claim) return await this.notStarted({ stage: 'refused', message: claim.refused, sessionIds: [sessionId], pressedAt });
+    let runId: string | undefined;
     try {
       // A run nobody named is named after what it is a run of, rather than left to show up in the
       // register as "Unnamed run" beside five others of the same description.
       // Set aside on the Sessions page: said first, before the preflight judges a session that will not run.
       if ((await this.store.getSession(sessionId))?.active === false) {
         this.releaseBrowser(claim.holder);
-        return { started: false, reason: INACTIVE_REASON };
+        return await this.notStarted({ stage: 'refused', message: INACTIVE_REASON, sessionIds: [sessionId], pressedAt });
       }
       const chosenName = name?.trim() || (await this.suggestRunName([sessionId]));
       const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
+      runId = runGroup.id;
+      /*
+       * What refuses this start whatever branch is chosen, asked before the choice moves anything: a local
+       * branch made or brought up to its remote, and the session's settings, stayed changed after a start
+       * refused for an unattended run this machine does not allow (review of 2026-10-13).
+       */
+      const before = await this.store.getSession(sessionId);
+      const earlyRefusal = !before ? 'no such session' : queuedToRun(before).length === 0 ? 'no queued tasks' : await this.unattendedRefusal(mode);
+      if (earlyRefusal) {
+        this.releaseBrowser(claim.holder);
+        // No run log for a session that does not exist: the id is the caller's, and may be anything.
+        return await this.notStarted({ stage: 'refused', message: earlyRefusal, sessionIds: [sessionId], pressedAt, ...(before ? { runId } : {}) });
+      }
+      // The branch the session starts from, as the start window chose it, before the preflight judges it.
+      const unusable = await this.applyStartChoices(runGroup.id, [sessionId], starts);
+      if (unusable) {
+        this.releaseBrowser(claim.holder);
+        return await this.notStarted({ stage: 'branch', message: unusable, sessionIds: [sessionId], pressedAt, runId });
+      }
       // A run of one is still a run, and it records the same thing a batch does, so that going
       // back and starting again from a task works the same whether one session was started or six.
       // Recorded by `beginRun` once the start is accepted, not here: see `recordOnSession`.
@@ -1334,12 +1400,12 @@ export class OperatorService {
       const notReady = await this.runPreflight(runGroup.id, [sessionId]);
       if (notReady) {
         this.releaseBrowser(claim.holder);
-        return { started: false, reason: notReady };
+        return await this.notStarted({ stage: 'preflight', message: notReady, sessionIds: [sessionId], pressedAt, runId });
       }
-      const begun = await this.beginRun(sessionId, mode, undefined, runGroup, undefined, { recordOnSession: true });
+      const begun = await this.beginRun(sessionId, mode, undefined, runGroup, undefined, { recordOnSession: true, pressedAt });
       if (!begun.started) {
         this.releaseBrowser(claim.holder);
-        return { started: false, reason: begun.reason };
+        return await this.notStarted({ stage: 'refused', message: begun.reason ?? 'not started', sessionIds: [sessionId], pressedAt, runId });
       }
       // The window closes before the run's promise settles (see `runSession`), so the browser is
       // free again exactly when it is.
@@ -1347,8 +1413,158 @@ export class OperatorService {
       return { started: true };
     } catch (e) {
       this.releaseBrowser(claim.holder);
-      throw e;
+      if (unusableConfig(e)) throw e;
+      // Said with the error itself, and on record with the console of those moments, rather than as a bare 500.
+      console.error('[start] the session could not be started:', (e as Error).stack ?? (e as Error).message);
+      return await this.notStarted({ stage: 'error', message: (e as Error).message, sessionIds: [sessionId], pressedAt, runId });
     }
+  }
+
+  /**
+   * A start that did not happen, put on record (`session/startFailure.ts`) and in the run's log when it
+   * had a run, and said on the console, so the terminal shows it as well. `answered`: the reply to the
+   * press carries it; false for one found after the start was accepted, which every page then shows.
+   */
+  private async notStarted(f: {
+    stage: StartStage;
+    message: string;
+    sessionIds: string[];
+    pressedAt: string;
+    runId?: string;
+    answered?: boolean;
+  }): Promise<{ started: false; reason: string; failure: StartFailureRef }> {
+    const sessions: Array<{ id: string; name: string }> = [];
+    for (const id of f.sessionIds) {
+      const s = await this.store.getSession(id).catch(() => null);
+      sessions.push({ id, name: s?.name ?? id });
+    }
+    const recorded = this.startFailures.record({
+      pressedAt: f.pressedAt,
+      stage: f.stage,
+      message: f.message,
+      ...(f.runId ? { runId: f.runId } : {}),
+      sessions,
+      answered: f.answered !== false,
+    });
+    console.warn(`[start] the work did not start (${f.stage}${f.runId ? `, run ${f.runId}` : ''}): ${f.message}`);
+    if (f.runId) {
+      const cfg = await this.settings.load().catch(() => null);
+      if (cfg) {
+        await appendRunLog(cfg.resolved.runsDir, f.runId, [
+          { at: recorded.at, type: 'start-failed', message: f.message, data: { stage: f.stage, failure: recorded.id, sessions: f.sessionIds } },
+        ]).catch(() => undefined);
+      }
+    }
+    return { started: false, reason: f.message, failure: refOf(recorded) };
+  }
+
+  /**
+   * Writes the start window's choices onto the sessions of a run, or says why one cannot be used.
+   *
+   * Every choice is checked first, with nothing moved (`dry`), so a choice that cannot be used for one
+   * session leaves every other session and every branch as it was; then each is written, and a local
+   * branch made from, or brought up to, its remote one where the choice was to work on it. A session
+   * whose start is fixed keeps it. Recorded in the run's log and the session's.
+   */
+  private async applyStartChoices(runId: string, sessionIds: string[], starts?: Record<string, StartChoice>): Promise<string | null> {
+    if (!starts || typeof starts !== 'object') return null;
+    const wanted = sessionIds.filter((id) => starts[id]);
+    if (wanted.length === 0) return null;
+    for (const id of wanted) {
+      const s = await this.store.getSession(id);
+      if (!s) continue;
+      if (this.running.has(id)) return `"${s.name}" is running; its start cannot be changed now.`;
+      const checked = await applyStartChoice(s, starts[id] as StartChoice, { dry: true });
+      if (!checked.ok) return `"${s.name}": ${checked.problem}`;
+    }
+    const cfg = await this.settings.load();
+    const entries: RunLogEntry[] = [];
+    for (const id of wanted) {
+      const s = await this.store.getSession(id);
+      if (!s) continue;
+      const done = await applyStartChoice(s, starts[id] as StartChoice);
+      if (!done.ok) return `"${s.name}": ${done.problem}`;
+      if (!done.applied) continue;
+      const applied: AppliedChoice = done.applied;
+      await this.store.updateSession(id, (x) => {
+        if (!x.vcs) return;
+        x.vcs = withChoice(x.vcs, applied.vcs);
+        if (applied.clearStart) {
+          x.vcsBaseCommit = undefined;
+          x.vcsStart = undefined;
+        }
+      });
+      const message = `${applied.said}${applied.note ? `; ${applied.note}` : ''}${applied.clearStart ? '; the start prepared before (a starting snapshot) no longer applies' : ''}`;
+      entries.push({ at: new Date().toISOString(), type: 'start-chosen', message, data: { session: id, choice: starts[id], ...(applied.note ? { note: applied.note } : {}) } });
+      this.bus.publish({ sessionId: id, type: 'start-chosen', level: 'info', message, data: { runId, choice: starts[id] } });
+      await appendSessionLog(cfg.resolved.runsDir, id, { type: 'start-chosen', message, data: { runId, choice: starts[id] } }).catch(() => undefined);
+    }
+    await appendRunLog(cfg.resolved.runsDir, runId, entries).catch(() => undefined);
+    return null;
+  }
+
+  /** The start window's question for these sessions: their starts and the branches of their repositories. */
+  async startChoices(sessionIds: string[]): Promise<{ repos: RepoBranches[]; sessions: StartOptionSession[] }> {
+    await this.init();
+    const sessions: Session[] = [];
+    for (const id of [...new Set(sessionIds.map((x) => x.trim()).filter(Boolean))]) {
+      const s = await this.store.getSession(id);
+      if (s) sessions.push(s);
+    }
+    return await startOptions(sessions);
+  }
+
+  /**
+   * Fetches branches of a remote for the start window, where the operator is looking — so through Git's
+   * own password window when the remote asks (see `vcs/remoteAuth.ts`). Only for a folder this bot works
+   * in; only remote-tracking branches move.
+   */
+  async startFetch(dir: string, remote: string, branches: string[] | null): Promise<StartFetch> {
+    await this.init();
+    await this.knownProjectFolder(dir, 'it is not fetched from here');
+    return await fetchForStart(resolve(dir.trim()), remote.trim(), branches, await askpassProgram());
+  }
+
+  /** The starts that did not get as far as a first task, newest first: see `session/startFailure.ts`. */
+  recentStartFailures(unansweredOnly: boolean): StartFailureRef[] {
+    return this.startFailures.recent({ unansweredOnly }).slice(0, 10).map(refOf);
+  }
+
+  /**
+   * One of them as a file: what failed and where, the run's record, the sessions' events from the press,
+   * and the console lines from the press to a few seconds after — secret-shaped text taken out.
+   */
+  async startFailureReport(id: string): Promise<{ fileName: string; content: string }> {
+    await this.init();
+    const f = this.startFailures.get(id);
+    if (!f) throw new Error('That failed start is not known to this process (was the bot restarted since?). Its console is still in the terminal log: System → "Download what the terminal showed".');
+    const cfg = await this.settings.load();
+    const from = new Date(new Date(f.pressedAt).getTime() - 2_000).toISOString();
+    const to = new Date(new Date(f.at).getTime() + 5_000).toISOString();
+    const events = f.sessions.flatMap((s) => this.bus.recent(s.id)).filter((e) => e.at >= from).sort((a, b) => a.at.localeCompare(b.at));
+    const text = failureReport(f, {
+      runLog: await readRunLog(cfg.resolved.runsDir, f.runId),
+      events,
+      terminal: terminalLines({ from, to, max: 2_000 }),
+      terminalFile: terminalLogFile(),
+      version: botVersion(),
+    });
+    return { fileName: `copilot-operator-not-started-${fileStamp(f.at)}.txt`, content: redactSecrets(text, cfg.report.redactPatterns) };
+  }
+
+  /** What the bot's console showed: the latest lines kept in memory, as a file. See `log/terminal.ts`. */
+  async terminalReport(): Promise<{ fileName: string; content: string }> {
+    const cfg = await this.settings.load();
+    const lines = terminalLines({ max: 5_000 });
+    const file = terminalLogFile();
+    const head = [
+      "copilot-operator — what the terminal showed (the bot's console)",
+      `Version: ${botVersion()}`,
+      `${lines.length} line(s), the latest kept in memory${file ? `; everything since the bot started is in ${file}` : ''}.`,
+      '',
+      '',
+    ].join('\n');
+    return { fileName: `copilot-operator-terminal-${fileStamp(new Date().toISOString())}.txt`, content: redactSecrets(`${head}${formatTerminal(lines)}\n`, cfg.report.redactPatterns) };
   }
 
   /**
@@ -1389,6 +1605,13 @@ export class OperatorService {
        * later run of any session before its first task.
        */
       shouldPause?: () => boolean;
+      /** When the start was asked for; a run that fails before its first task is recorded from then. */
+      pressedAt?: string;
+      /**
+       * An earlier session of the same batch began already: a failure before this one's first task is a
+       * session that did not begin at its turn, not a run that could not begin.
+       */
+      laterInRun?: boolean;
     } = {},
   ): Promise<{ started: boolean; reason?: string; done: Promise<RunTally> }> {
     await this.init();
@@ -1437,7 +1660,8 @@ export class OperatorService {
      */
     const authorizer: StepAuthorizer = this.webAuthorizer(policy, controller.signal);
 
-    this.running.set(sessionId, { controller, startedAt: new Date().toISOString(), mode, policy });
+    const startedAt = new Date().toISOString();
+    this.running.set(sessionId, { controller, startedAt, mode, policy });
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
     // Said at the start of every run, in both modes, because it is the one fact about this tool a
     // data-protection team needs and the one an operator forgets: the reports leave the machine.
@@ -1495,10 +1719,27 @@ export class OperatorService {
         },
       },
     })
-      .then(async (outcome) => ({ ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused, ...(outcome.refused ? { refused: outcome.refused } : {}) }))
+      .then(async (outcome) => {
+        const tally = { ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused, ...(outcome.refused ? { refused: outcome.refused } : {}) };
+        // Refused at its turn in a run that was going: nothing of it began, and nobody was answered with it.
+        if (outcome.refused && tally.ran === 0) {
+          await this.notStarted({ stage: 'at-turn', message: outcome.refused, sessionIds: [sessionId], pressedAt: how.pressedAt ?? startedAt, ...(runGroup ? { runId: runGroup.id } : {}), answered: false });
+        }
+        return tally;
+      })
       .catch(async (e: unknown) => {
         this.bus.publish({ sessionId, type: 'run-failed', level: 'error', message: (e as Error).message });
-        return { ...(await this.tally(sessionId, queuedIds)), error: (e as Error).message };
+        const tally = { ...(await this.tally(sessionId, queuedIds)), error: (e as Error).message };
+        /*
+         * Failed before any task of it began — the browser, the profile, the sign-in, the model: the start
+         * was answered "started" already, so the failure is shown on every page, with the console (2026-10-13).
+         */
+        // Not when the operator stopped it: that is an answer, not a failure to show.
+        if (tally.ran === 0 && !controller.signal.aborted) {
+          console.error('[start] the run ended before its first task:', (e as Error).stack ?? (e as Error).message);
+          await this.notStarted({ stage: how.laterInRun ? 'at-turn' : 'run', message: (e as Error).message, sessionIds: [sessionId], pressedAt: how.pressedAt ?? startedAt, ...(runGroup ? { runId: runGroup.id } : {}), answered: false });
+        }
+        return tally;
       })
       .finally(() => {
         this.running.delete(sessionId);
@@ -1623,13 +1864,16 @@ export class OperatorService {
      * tasks nobody chose stay queued exactly as they were. Absent means every queued task.
      */
     taskIds?: string[],
-  ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
+    /** Where each session starts, as chosen in the start window: see `vcs/startChoice.ts`. Absent keeps their settings. */
+    starts?: Record<string, StartChoice>,
+  ): Promise<StartReply> {
+    const pressedAt = new Date().toISOString();
     const wanted = [...new Set(sessionIds.map((s) => s.trim()).filter(Boolean))];
     // Before anything is waited for (see `browser`): a second batch, a session running on its own
     // — one of these or any other — and a read of the models all have the browser already.
     const claim = this.claimBrowser({ kind: 'batch', sessionIds: wanted });
-    if ('refused' in claim) return { started: false, reason: claim.refused };
-    return await this.startBatchHolding(claim.holder, wanted, mode, onFailure, model, reviewModel, name, taskIds);
+    if ('refused' in claim) return await this.notStarted({ stage: 'refused', message: claim.refused, sessionIds: wanted, pressedAt });
+    return await this.startBatchHolding(claim.holder, wanted, mode, onFailure, model, reviewModel, name, taskIds, { starts, pressedAt });
   }
 
   /**
@@ -1647,15 +1891,18 @@ export class OperatorService {
     reviewModel: string | undefined,
     name: string | undefined,
     taskIds: string[] | undefined,
-  ): Promise<{ started: boolean; reason?: string; batch?: BatchState }> {
+    how: { starts?: Record<string, StartChoice>; pressedAt?: string } = {},
+  ): Promise<StartReply> {
     const onlyTasks = taskIds && taskIds.length > 0 ? new Set(taskIds.map((t) => t.trim()).filter(Boolean)) : undefined;
+    const pressedAt = how.pressedAt ?? new Date().toISOString();
     let handedOn = false;
+    // The batch's id first, so the preflight is recorded under the run it decides about.
+    const batchId = newId('b-');
+    const refuse = (stage: StartStage, message: string, runId?: string) => this.notStarted({ stage, message, sessionIds: wanted, pressedAt, ...(runId ? { runId } : {}) });
     try {
       await this.init();
-      if (wanted.length === 0) return { started: false, reason: 'no sessions were selected' };
+      if (wanted.length === 0) return await refuse('refused', 'no sessions were selected');
       // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
-      // The batch's id first, so the preflight is recorded under the run it decides about.
-      const batchId = newId('b-');
       /*
        * Sessions set aside on the Sessions page are left out before the preflight: judged there, an inactive
        * session's contradiction or version-control problem was the answer to the press — and could refuse
@@ -1669,15 +1916,36 @@ export class OperatorService {
         if (s?.active === false) inactive.push(s.name);
         else active.push(id);
       }
-      if (active.length === 0) return { started: false, reason: `${inactive.map((n) => `"${n}"`).join(', ')}: ${INACTIVE_REASON}` };
+      if (active.length === 0) return await refuse('refused', `${inactive.map((n) => `"${n}"`).join(', ')}: ${INACTIVE_REASON}`);
+      /*
+       * What refuses the batch whatever branch is chosen, asked before the choices move anything (review of
+       * 2026-10-13): nothing queued among the chosen tasks, an unattended run this machine does not allow.
+       */
+      let anyQueued = false;
+      for (const id of active) {
+        const s = await this.store.getSession(id);
+        if (s && queuedToRun(s, onlyTasks).length > 0) anyQueued = true;
+      }
+      if (!anyQueued) return await refuse('refused', 'none of the selected sessions has a queued task', batchId);
+      const blockedEarly = await this.unattendedRefusal(mode);
+      if (blockedEarly) return await refuse('refused', blockedEarly, batchId);
+      // The branch each session starts from, as the start window chose it, before the preflight judges it.
+      const unusable = await this.applyStartChoices(batchId, active, how.starts);
+      if (unusable) return await refuse('branch', unusable, batchId);
       const notReady = await this.runPreflight(batchId, active, onlyTasks);
-      if (notReady) return { started: false, reason: notReady };
+      if (notReady) return await refuse('preflight', notReady, batchId);
       const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name, batchId);
-      if (!begun.batch) return { started: false, reason: begun.reason };
+      if (!begun.batch) return await refuse('refused', begun.reason, batchId);
+      begun.batch.pressedAt = pressedAt;
       this.batch = begun.batch;
       handedOn = true;
       void this.runBatch(begun.batch, holder);
       return { started: true, batch: this.batchState() as BatchState };
+    } catch (e) {
+      if (unusableConfig(e)) throw e;
+      // Said with the error itself, and on record with the console of those moments, rather than as a bare 400.
+      console.error('[start] the run could not be started:', (e as Error).stack ?? (e as Error).message);
+      return await refuse('error', (e as Error).message, batchId);
     } finally {
       if (!handedOn) this.releaseBrowser(holder);
     }
@@ -1926,6 +2194,19 @@ export class OperatorService {
         level: 'error',
         message: `the browser could not be opened: ${(e as Error).message}`,
       });
+      /*
+       * The run had been accepted, so the press was answered "started": this is shown on every page
+       * until it is closed, with what the console printed (2026-10-13). The stack is printed for it.
+       */
+      console.error('[start] the browser could not be opened:', (e as Error).stack ?? (e as Error).message);
+      await this.notStarted({
+        stage: 'browser',
+        message: `the browser could not be opened: ${(e as Error).message}`,
+        sessionIds: batch.sessions.map((x) => x.sessionId),
+        pressedAt: batch.pressedAt ?? batch.startedAt,
+        runId: batch.id,
+        answered: false,
+      });
       return;
     }
 
@@ -1999,6 +2280,7 @@ export class OperatorService {
         // switched the batch with it (see `setRunMode`). The hold is this batch's own.
         const begun = await this.beginRun(entry.sessionId, batch.mode, browser, runGroup, batch.onlyTasks ? new Set(batch.onlyTasks) : undefined, {
           shouldPause: () => batch.pausing,
+          laterInRun: batch.sessions.some((x) => x.ran > 0),
         });
         if (!begun.started) {
           entry.state = 'skipped';
@@ -2774,12 +3056,14 @@ export class OperatorService {
     if (how === 'previous-session') return 'unknown';
     const branch = how === 'existing-branch' ? session.vcs?.existingBranch?.trim() : session.vcs?.baseBranch?.trim() || 'main';
     if (!branch) return 'unknown';
+    // A remote branch chosen in the start window: its remote-tracking branch, as that window fetched it.
+    const ref = how === 'branch' ? baseRefOf(session.vcs).ref : `refs/heads/${branch}`;
     // Brought up to its remote first: what that brings is known only then.
-    if (session.vcs?.updateFromRemote !== false) {
+    if (session.vcs?.updateFromRemote !== false && !(how === 'branch' && session.vcs?.baseRemote)) {
       const remotes = await git(repo, ['remote']);
       if (!remotes.ok || remotes.stdout.trim() !== '') return 'unknown';
     }
-    const tip = await git(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
+    const tip = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
     return tip.ok && tip.stdout ? { ref: tip.stdout } : 'unknown';
   }
 

@@ -29,8 +29,8 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { branchNameFrom, freeBranchName, git, gitFetch, lastFetchedAt, porcelainPaths, RUNNER_EMAIL } from './git.js';
-import { closePasswordWindows, describeFetchFailure, fetchCommandFor, operatorFetchEnv, QUIET_FETCH_ENV } from './remoteAuth.js';
+import { branchNameFrom, freeBranchName, git, lastFetchedAt, porcelainPaths, RUNNER_EMAIL } from './git.js';
+import { fetchAsOperator, fetchCommandFor } from './remoteAuth.js';
 
 export type PreparePlan = {
   ok: boolean;
@@ -147,23 +147,12 @@ export async function planPrepare(folder: string, opts: { fetch: boolean; prefix
   let fetched: PreparePlan['fetched'];
   if (opts.fetch) {
     /*
-     * With the password window: five minutes for the operator to type, and the window not hidden. One
-     * connection only — `remote set-head --auto` would open a second and ask for the password again —
-     * so the remote's main is read from what was fetched, below.
+     * With the password window when there is one, the whole remote in one connection, so the remote's
+     * main is read from what was fetched, below. Once more when the first try fails: see `gitFetch`
+     * (2026-10-05, every first press failed at work).
      */
-    const asked = !!opts.askpass;
-    const env = asked ? operatorFetchEnv(opts.askpass as string) : QUIET_FETCH_ENV;
-    const args = [...(asked ? [] : ['-c', 'credential.interactive=false']), 'fetch', '--quiet', '--no-tags', '--prune', remote];
-    const started = new Date(Date.now() - 1000);
-    // Once more when the first try fails: see `gitFetch` (2026-10-05, every first press failed at work).
-    const f = await gitFetch(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked, killTree: true });
-    // Given up on with the window still open: closed, so it is not left on screen asking for nothing.
-    if (!f.ok && asked && /gave up after/.test(f.stderr)) await closePasswordWindows(opts.askpass as string, started);
-    if (f.ok) fetched = { ok: true, asked, ...(f.retried ? { retried: true, ...(f.firstError ? { firstError: f.firstError } : {}) } : {}) };
-    else {
-      const why = describeFetchFailure(f.stderr || f.stdout);
-      fetched = { ok: false, detail: why.detail, auth: why.auth, asked };
-    }
+    const f = await fetchAsOperator(repoDir, remote, { askpass: opts.askpass ?? null });
+    fetched = f.ok ? { ok: true, asked: f.asked, ...(f.retried ? { retried: true, ...(f.firstError ? { firstError: f.firstError } : {}) } : {}) } : { ok: false, detail: f.detail, auth: f.auth, asked: f.asked };
   }
 
   let target = '';

@@ -278,6 +278,34 @@ browser opens, with nothing sent. The work export's `baseline` names the commit,
 approved inputs with their sums, the approval, the sessions, and whether a session inherited it. A
 task refused before it ran keeps no artifacts. Verified by `npm run check:e2e-run-vcs`.
 
+**Where the work starts, asked at every start** (2026-10-13). Every start button — the Sessions page's
+run buttons, a session's Start, "Run this task", the register's Continue and "Run only this one again"
+— opens the start window first ("Where the work starts"), and only its own button starts anything.
+For each session it offers a local branch, as it is in the folder (nothing fetched), or a remote
+branch — picked from the list as last fetched, or typed, for a branch a colleague has just pushed —
+which is fetched when the window's button is pressed, through Git's own password window when the SSH
+key has a passphrase ("Get the list of branches from the remote" fetches the whole remote); for a
+session after another in the same repository, the session before it. "Work directly on this branch"
+makes it carry on the branch itself instead of a branch of the bot's own cut from it; from a remote
+branch the local branch is made from it or fast-forwarded to it first, and one that went its own way
+is refused with nothing changed. The choice is written on the session (`startFrom`, `baseBranch` or
+`existingBranch`, and `baseRemote` for a remote branch, which the run reads as
+`refs/remotes/<remote>/<branch>` and never fetches again), every session's choice is checked before
+any branch moves, and a session that has run keeps the start it has. A repository not ready only
+because of where a session starts keeps the run buttons on: the window settles it. See
+`src/vcs/startChoice.ts`; verified by `npm run check:startbranch` and the browser checks.
+
+**A start that did not happen** is said with where it stopped — not let in, the chosen branch, the
+version control check, the browser, the run before its first task, a later session at its turn, or
+the bot itself — the error, and two downloads: "Download what happened (error, run record and
+terminal)", a text file with the run's own record, the sessions' events and every line the bot's
+console printed from the press until a few seconds after; and "Download what the terminal showed"
+(also on the System page). The console of the API process is copied, line by line with its time, to
+`<data>/logs/terminal.log` (rolled over at 5 MB) and kept in memory for the downloads; secret-shaped
+text is taken out of them. A refusal is the answer to the press, in the start window and under the
+run buttons; a run accepted and then unable to begin — Edge or its profile would not open — is shown
+on every page until it is closed. See `src/session/startFailure.ts` and `src/log/terminal.ts`.
+
 ## One chain, or independent tasks
 
 A queue can be either, and the runner cannot guess which. The choice sits above the tasks and

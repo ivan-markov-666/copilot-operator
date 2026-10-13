@@ -22,9 +22,25 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type Locator, type Page } from 'playwright';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { dict } from '../web/lib/strings.js';
+
+const en = dict.en as Record<string, string>;
+
+/**
+ * The start window every start button opens first (2026-10-13): where the work starts. Its own button
+ * starts the run; once it has, the window closes. `started: false` for a start that is meant to be refused.
+ */
+async function throughStartWindow(page: Page, mode: 'step' | 'unattended', started = true): Promise<Locator> {
+  const w = page.getByRole('dialog', { name: en['startdlg.title']! });
+  await w.waitFor({ timeout: 10_000 });
+  await w.getByRole('button', { name: en[mode === 'step' ? 'startdlg.goStep' : 'startdlg.goUnattended']!, exact: true }).click();
+  if (started) await w.waitFor({ state: 'detached', timeout: 30_000 });
+  return w;
+}
+
 
 const t = new Tally();
 const root = join(import.meta.dirname, '..');
@@ -342,6 +358,7 @@ try {
     await page.getByRole('button', { name: 'Step by step' }).click();
     const confirm = page.getByRole('alertdialog');
     if (await confirm.isVisible().catch(() => false)) await confirm.getByRole('button', { name: 'OK' }).click();
+    await throughStartWindow(page, 'step');
 
     await page.goto(url('/appearance'));
     const banner = page.locator('.approval-banner');
@@ -430,6 +447,7 @@ try {
     const confirm = page.getByRole('alertdialog');
     // "Are you sure" before an unattended start, unless Settings say not to ask.
     await confirm.waitFor({ timeout: 3_000 }).then(() => confirm.getByRole('button', { name: 'OK' }).click()).catch(() => undefined);
+    await throughStartWindow(page, 'unattended');
     await waitFor('the continued task to finish', async () => (await h.session(s!.id)).tasks[0]!.status === 'done');
     await h.idle();
     const after = (await h.session(s!.id)).tasks[0]!;
@@ -504,6 +522,7 @@ try {
     await panel.getByRole('button', { name: 'Continue without asking' }).click();
     const confirm = page.getByRole('alertdialog');
     await confirm.waitFor({ timeout: 3_000 }).then(() => confirm.getByRole('button', { name: 'OK' }).click()).catch(() => undefined);
+    await throughStartWindow(page, 'unattended');
     await waitFor('the task to run again', async () => (await h.session(s!.id)).tasks[0]!.status === 'done');
     await h.idle();
     t.check('it ran again and is done; the other stayed queued', (await h.session(s!.id)).tasks.map((x) => x.status), ['done', 'queued']);

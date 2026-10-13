@@ -22,6 +22,7 @@ import { usePoll } from '../../../lib/usePoll';
 import { ContractFields, scopeLines } from '../../contractFields';
 import { PrepareFolder } from '../../prepareFolder';
 import { ContractFixPanel, RunQueuedPanel } from '../../runQueued';
+import { openStartDialog } from '../../startDialog';
 
 // ---------------------------------------------------------------------------------------
 // The page
@@ -215,12 +216,10 @@ function Header({ session, queued, onChange }: { session: Session; queued: numbe
   const start = async (mode: 'confirm' | 'unattended') => {
     if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('session.unattendedConfirm')))) return;
     await act(async () => {
-      const r = await api.start(session.id, mode, session.planName);
-      setMsg(
-        r.started
-          ? t(mode === 'unattended' ? 'session.startedAuto' : 'session.startedStep')
-          : t('session.notStarted', { reason: r.reason ?? '' }),
-      );
+      // Where the session starts is asked first, every time; the window's own button starts it.
+      const r = await openStartDialog({ sessionIds: [session.id], mode, start: (starts) => api.start(session.id, mode, session.planName, starts) });
+      if (r.started) setMsg(t(mode === 'unattended' ? 'session.startedAuto' : 'session.startedStep'));
+      else if (r.reply) setMsg(t('session.notStarted', { reason: r.reply.reason ?? '' }));
     });
   };
   const stop = () =>
@@ -941,6 +940,12 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
             chose. The old behaviour stays available, and last, for sessions that relied on it.
           */}
           <h3>{t('vcs.startFrom')}</h3>
+          <p className="muted small">{t('vcs.startAsked')}</p>
+          {vcs.baseRemote && (startFrom === 'branch' || startFrom === 'existing-branch') && (
+            <p className="small">
+              {t('vcs.fromRemote', { remote: vcs.baseRemote, branch: (startFrom === 'existing-branch' ? vcs.existingBranch : vcs.baseBranch) || 'main' })}
+            </p>
+          )}
           <div className="option">
             <label>
               <input
@@ -1042,7 +1047,7 @@ function VcsPanel({ session, onChange }: { session: Session; onChange: () => voi
                 : session.vcsStart.kind === 'previous-session'
                 ? t('vcs.startedPrevious', { name: session.vcsStart.fromSession?.name ?? '', branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
                 : session.vcsStart.kind === 'branch'
-                  ? t('vcs.startedBranch', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
+                  ? t(session.vcsStart.remote ? 'vcs.startedRemote' : 'vcs.startedBranch', { branch: session.vcsStart.branch ?? '', commit: session.vcsStart.commit.slice(0, 8) })
                   : session.vcsStart.kind === 'snapshot'
                     ? t('vcs.startedSnapshot', {
                         branch: session.vcsStart.branch ?? '',

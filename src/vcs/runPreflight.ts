@@ -30,7 +30,7 @@ import type { Session, SessionStart } from '../session/model.js';
 import { branchNameFrom, describeUpdate, freeBranchName, git, updateFromRemote } from './git.js';
 import { commitOnto, dirtyBesidesInputs, inputSettings, inputSumsAt, missingInputPatterns } from './inputs.js';
 import { approvalMismatch, dirtyPolicy, takeSnapshot, type SnapshotChoice, type SnapshotEntry } from './snapshot.js';
-import { repoDirOf, sessionBranchName, vcsPreflight } from './taskVcs.js';
+import { baseRefOf, repoDirOf, sessionBranchName, vcsPreflight } from './taskVcs.js';
 import { artifactPatterns } from './artifacts.js';
 import { inScope } from './scope.js';
 import { findSuspicious } from './commitHygiene.js';
@@ -66,6 +66,12 @@ export type RunVcsGroup = {
    * task starts: said before the browser opens (live run 2026-10-03: made afterwards, announced nowhere).
    */
   carry?: string;
+  /**
+   * Not ready only because of where a session starts — a branch that is not here, a session before it
+   * that has not finished: another choice in the start window (`vcs/startChoice.ts`) gets past it, so the
+   * run buttons stay on and the window asks.
+   */
+  startChoiceCanFix?: boolean;
   /** The run's sessions in this repository, in run order, and how each will start. */
   sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; hasStart: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
   inputPatterns: string[];
@@ -105,8 +111,15 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
   const branch = branchR.ok && branchR.stdout !== 'HEAD' ? branchR.stdout : null;
   const head = headR.ok && headR.stdout ? headR.stdout : null;
   const startFrom = first.vcs?.startFrom ?? 'head';
-  const baseBranch = startFrom === 'branch' || startFrom === 'previous-session' ? first.vcs?.baseBranch?.trim() || 'main' : undefined;
-  const baseHead = baseBranch ? (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}^{commit}`])).stdout || null : undefined;
+  /*
+   * The branch the sessions start from, by its name on screen (`origin/x` for a remote branch chosen in
+   * the start window) and the ref git reads for it: a remote-tracking branch is never the local one of
+   * the same name, and is not brought up to anything here — the start window fetched it.
+   */
+  const base = startFrom === 'branch' || startFrom === 'previous-session' ? baseRefOf(first.vcs) : undefined;
+  const baseBranch = base?.name;
+  const baseHead = base ? (await git(repoDir, ['rev-parse', '--verify', '--quiet', `${base.ref}^{commit}`])).stdout || null : undefined;
+  const updates = first.vcs?.updateFromRemote !== false && !base?.remote;
   const settings = inputSettings(first.vcs);
   const workName =
     first.vcs?.startFrom === 'existing-branch'
@@ -119,7 +132,7 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
   const sessions = list.map((s, i) => {
     const sf = s.vcs?.startFrom ?? 'head';
     const role: RunVcsGroup['sessions'][number]['role'] =
-      i === 0 ? 'first' : sf === 'previous-session' ? 'inherits' : sf === 'branch' && (s.vcs?.baseBranch?.trim() || 'main') === baseBranch && !s.vcsBaseCommit ? 'shares' : 'own';
+      i === 0 ? 'first' : sf === 'previous-session' ? 'inherits' : sf === 'branch' && baseRefOf(s.vcs).name === baseBranch && !s.vcsBaseCommit ? 'shares' : 'own';
     // Started means a task of it ran; a start recorded by the panel (a snapshot) is not that (live run 2026-10-03).
     const started = s.tasks.some((t) => !!t.startedAt || (t.attempts ?? []).some((a) => !!a.startedAt));
     return { id: s.id, name: s.name, startFrom: sf, started, hasStart: !!s.vcsBaseCommit, role };
@@ -164,14 +177,19 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
    * The branches the sessions name, before the browser opens rather than at their first task: a
    * branch to carry on that is not there, a base branch that is not there.
    */
+  const otherThanStart = (!!problem && !pre.startProblem) || blocking;
+  let branchMissing = false;
   for (const s of list) {
     if (s.vcsBaseCommit) continue;
-    const named = s.vcs?.startFrom === 'existing-branch' ? s.vcs.existingBranch?.trim() : s.vcs?.startFrom === 'branch' ? s.vcs.baseBranch?.trim() || 'main' : '';
-    if (!named) continue;
-    const there = (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${named}^{commit}`])).stdout;
+    const named = s.vcs?.startFrom === 'existing-branch' ? { ref: `refs/heads/${s.vcs.existingBranch?.trim() ?? ''}`, name: s.vcs.existingBranch?.trim() ?? '', remote: undefined } : s.vcs?.startFrom === 'branch' ? baseRefOf(s.vcs) : null;
+    if (!named?.name) continue;
+    const there = (await git(repoDir, ['rev-parse', '--verify', '--quiet', `${named.ref}^{commit}`])).stdout;
     if (!there) {
       blocking = true;
-      problem = `${problem ? `${problem} ` : ''}"${s.name}" is set to ${s.vcs?.startFrom === 'existing-branch' ? 'carry on' : 'start from'} the local branch "${named}", and there is no such branch: create it, or change "Start from" on the session's page.`;
+      branchMissing = true;
+      problem =
+        `${problem ? `${problem} ` : ''}"${s.name}" is set to ${s.vcs?.startFrom === 'existing-branch' ? 'carry on' : 'start from'} the ${named.remote ? 'remote' : 'local'} branch "${named.name}", and there is no such branch` +
+        (named.remote ? ' here: start the run again and choose it in the start window, which fetches it.' : ': create it, or choose another branch when you start the run.');
     }
   }
   const noCommits = first.vcs?.commitOnFinish === false;
@@ -189,7 +207,7 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
   }
   if (baseBranch && !first.vcsBaseCommit && inputs.length > 0) {
     const why = !baseHead
-      ? `there is no local branch "${baseBranch}"`
+      ? `there is no ${base?.remote ? 'fetched copy of the remote' : 'local'} branch "${baseBranch}"`
       : unrelated.length > 0
         ? `besides the input files there are other uncommitted changes (${unrelated.slice(0, 5).map((u) => u.path).join(', ')}${unrelated.length > 5 ? '…' : ''}): commit or stash them first${branch !== baseBranch ? ', or use the current branch instead' : ', or take them as a starting snapshot'}`
         : blockedInputs.length > 0
@@ -205,11 +223,11 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
       ...(why ? { why } : {}),
       // The update from the remote said first: it moves the base branch, and the checkout with it when that is the branch checked out (live run 2026-10-04).
       result:
-        (first.vcs?.updateFromRemote !== false
+        (updates
           ? `First brings "${baseBranch}" up to its remote, fast-forward only${branch === baseBranch ? ', which moves your checkout with it' : ''}; then commits`
           : 'Commits') +
-        ` the ${inputs.length} input file(s) on top of "${baseBranch}" (${short(baseHead)}${first.vcs?.updateFromRemote !== false ? ' now, or where the update takes it' : ''}) as "Capture user-provided inputs", on the new branch ${baselineName}, ` +
-        `without switching branches: your checkout${branch ? ` of "${branch}"` : ''} and the files stay as they are${first.vcs?.updateFromRemote !== false && branch === baseBranch ? ', apart from that update' : ''}. ` +
+        ` the ${inputs.length} input file(s) on top of "${baseBranch}" (${short(baseHead)}${updates ? ' now, or where the update takes it' : ''}) as "Capture user-provided inputs", on the new branch ${baselineName}, ` +
+        `without switching branches: your checkout${branch ? ` of "${branch}"` : ''} and the files stay as they are${updates && branch === baseBranch ? ', apart from that update' : ''}. ` +
         `${names(sharing)} ${verb(sharing, 'starts', 'start')} from it${inheriting.length > 0 ? `; ${names(inheriting)} ${verb(inheriting, 'carries', 'carry')} it on through the chain` : ''}.`,
     });
   }
@@ -274,6 +292,7 @@ async function groupFor(list: Session[], allSessions: () => Promise<Session[]>):
     head,
     ...(baseBranch ? { baseBranch, baseHead } : {}),
     ...(workBranch && workBranch.name !== branch ? { workBranch } : {}),
+    ...(!ready && !otherThanStart && (branchMissing || pre.startProblem) ? { startChoiceCanFix: true } : {}),
     ...(settings && inputs.length === 0 && !first.vcsBaseCommit && !blocking
       ? { carry: `the input files (${settings.patterns.join(', ')}) are not in the working tree: when the first task starts they are committed on top of its start as ${prefix}input/${first.id}, from the latest earlier capture of them` }
       : {}),
@@ -321,6 +340,8 @@ export async function runVcsPrepare(
         if (x.vcs) {
           x.vcs.startFrom = 'branch';
           x.vcs.baseBranch = group.branch ?? undefined;
+          // The branch the repository is on is a local one.
+          delete x.vcs.baseRemote;
         }
         x.vcsBaseCommit = undefined;
         x.vcsStart = undefined;
@@ -353,8 +374,10 @@ export async function runVcsPrepare(
    * branch does: the snapshot is the commit every session here starts from, and it skipped the update
    * without a word, so a run cut its work from a main the team had already moved past (live run 2026-10-03).
    */
-  const update = first.vcs?.updateFromRemote !== false ? await updateFromRemote(top, group.baseBranch) : undefined;
-  const baseHead = (await git(top, ['rev-parse', '--verify', '--quiet', `refs/heads/${group.baseBranch}^{commit}`])).stdout || group.baseHead;
+  // Not a remote branch chosen in the start window: that was fetched there, and has no local branch to move.
+  const baseRef = baseRefOf(first.vcs);
+  const update = first.vcs?.updateFromRemote !== false && !baseRef.remote ? await updateFromRemote(top, group.baseBranch) : undefined;
+  const baseHead = (await git(top, ['rev-parse', '--verify', '--quiet', `${baseRef.ref}^{commit}`])).stdout || group.baseHead;
   const files: Array<{ path: string; mode: string; blob: string }> = [];
   for (const path of paths) {
     const blob = await git(top, ['hash-object', '-w', `--path=${path}`, '--', join(top, path)]);

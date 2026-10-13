@@ -600,6 +600,14 @@ export type VersionControl = {
   /** The local branch `startFrom: branch` starts from, and the fallback of `previous-session`. */
   baseBranch?: string;
   /**
+   * The remote `baseBranch` (or `existingBranch`) was chosen from, `origin`, when the operator picked a
+   * remote branch in the start window (`vcs/startChoice.ts`). With `startFrom: branch` the session is
+   * cut from the remote-tracking branch `<remote>/<baseBranch>` as the start window fetched it, never
+   * from the local branch of that name; with `existing-branch` the local branch was made from, or
+   * brought up to, that remote branch when the run was started. Absent: local, as it always was.
+   */
+  baseRemote?: string;
+  /**
    * What a session's first run does when the repository has uncommitted changes. Absent is
    * `reject`, what it always was. See `DirtyWorktree` and `vcs/snapshot.ts`.
    */
@@ -736,8 +744,13 @@ export type SessionStart = {
     detail?: string;
   };
   commit: string;
-  /** The branch the commit was the tip of, when there was one. */
+  /** The branch the commit was the tip of, when there was one: `origin/main` for a remote branch. */
   branch?: string;
+  /**
+   * For `branch`: the remote whose branch the session started from (`branch` is then the
+   * remote-tracking name, `origin/feature/x`), as fetched in the start window. Absent: a local branch.
+   */
+  remote?: string;
   /** For `previous-session`: the session whose work this one continues. */
   fromSession?: { id: string; name: string };
   /** Said when the start is not what was asked for: no earlier session in this repository. */

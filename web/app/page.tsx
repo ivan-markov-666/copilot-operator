@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type RunVcsGroup, type Session, sessionHref } from '../lib/api';
+import { api, apiToken, type Approval, type BatchState, type ModelCatalogue, type RunVcsGroup, type Session, type StartFailureRef, sessionHref } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import { useT, useFmtTime, type Key } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { useUnattendedWithoutAsking } from '../lib/useUnattendedWithoutAsking';
 import { ModelHint } from './defaultHints';
 import { RunVcsPanel } from './runVcs';
+import { openStartDialog } from './startDialog';
+import { StartFailureNotice } from './startFailure';
 
 export default function SessionsPage() {
   const { t } = useT();
@@ -547,6 +549,8 @@ function BatchPanel({
    * sat below the fold. A refusal is the answer to the press, so it is shown as one.
    */
   const [refusal, setRefusal] = useState('');
+  /** The failure behind it, on record, for the files that show what happened. See startFailure.tsx. */
+  const [refusalRecord, setRefusalRecord] = useState<StartFailureRef | undefined>(undefined);
   const [model, setModel] = useState('');
   /*
    * The reviewer's model, separate from the one doing the work.
@@ -628,8 +632,12 @@ function BatchPanel({
   const queuedTotal = runnable.reduce((n, s) => n + queuedIn(s), 0);
   const running = batch?.running === true;
   const oneAlreadyRunning = sessions.some((s) => s.running);
-  // Not until version control is ready in every repository of the run: the start would be refused.
-  const vcsNotReady = vcsGroups.some((g) => !g.ready);
+  /*
+   * Not until version control is ready in every repository of the run: the start would be refused. A
+   * repository not ready only because of where a session starts — a branch that is not here — is the
+   * start window's to settle, so the buttons that open it stay.
+   */
+  const vcsNotReady = vcsGroups.some((g) => !g.ready && !g.startChoiceCanFix);
   const blocked = running || runnable.length === 0 || oneAlreadyRunning || vcsNotReady;
 
   /** The one thing standing in the way, said in the order the operator would meet it. */
@@ -667,16 +675,19 @@ function BatchPanel({
   const start = async (mode: 'confirm' | 'unattended') => {
     if (mode === 'unattended' && !quietStart && !(await confirmDialog(t('batch.unattendedConfirm', { n: runnable.length })))) return;
     await act(async () => {
-      const r = await api.startBatch(
-        runnable.map((s) => s.id),
+      const ids = runnable.map((s) => s.id);
+      // Where each session starts is asked first, every time; the window's own button starts the run.
+      const r = await openStartDialog({
+        sessionIds: ids,
         mode,
-        onFailure,
-        model || undefined,
-        reviewModel || undefined,
-        runName.trim() || runnable.map((s) => s.planName).find(Boolean) || undefined,
-      );
+        start: (starts) =>
+          api.startBatch(ids, mode, onFailure, model || undefined, reviewModel || undefined, runName.trim() || runnable.map((s) => s.planName).find(Boolean) || undefined, undefined, starts),
+      });
       setMsg('');
-      setRefusal(r.started ? '' : r.reason ?? '');
+      // Kept here after the window is closed, with the files that show what happened.
+      setRefusal(r.started ? '' : r.reply?.reason ?? '');
+      setRefusalRecord(r.started ? undefined : r.reply?.failure);
+      setVcsTick((n) => n + 1);
     });
   };
 
@@ -874,16 +885,14 @@ function BatchPanel({
           <RunVcsPanel groups={vcsGroups} sessionIds={runnable.map((s) => s.id)} onChange={() => setVcsTick((n) => n + 1)} />
 
           {refusal && (
-            <div className="notice caution" role="alert">
-              <strong>{t('batch.notStartedTitle')}</strong>
-              <div className="small" style={{ marginTop: 4 }}>{refusal}</div>
+            <StartFailureNotice failure={refusalRecord} reason={refusal}>
               {/* The one refusal with a setting behind it gets a way to that setting. */}
               {/execution\.isolation/.test(refusal) && (
                 <div className="small" style={{ marginTop: 4 }}>
                   <Link href="/defaults">{t('batch.notStartedIsolation')}</Link>
                 </div>
               )}
-            </div>
+            </StartFailureNotice>
           )}
 
           {/*

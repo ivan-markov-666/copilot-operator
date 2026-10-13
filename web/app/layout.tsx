@@ -10,6 +10,8 @@ import { Nav, SkipLink } from './nav';
 import { DialogHost } from './dialog';
 import { GlobalApprovals } from './approvals';
 import { ScrollJump } from './scrollJump';
+import { StartDialogHost } from './startDialog';
+import { StartFailureBanner } from './startFailure';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -51,9 +53,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 </header>
                 {/* Whatever page is open, a step waiting for a decision is asked about here. */}
                 <GlobalApprovals />
+                {/* And a run that was accepted and then could not begin, with what happened as a file. */}
+                <StartFailureBanner />
                 <main id="main">{children}</main>
               </div>
               <ScrollJump />
+              {/* The start window every start button opens first: where the work starts. */}
+              <StartDialogHost />
             </DialogHost>
           </LanguageProvider>
         </AppearanceProvider>

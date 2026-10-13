@@ -16,6 +16,7 @@ import { api, fmtDuration, type Metrics, type MetricsRow, type Ratio, type Regis
 import { usePoll } from '../../lib/usePoll';
 import { useModalFocus } from '../../lib/useModalFocus';
 import { ContractFields, scopeLines } from '../contractFields';
+import { openStartDialog } from '../startDialog';
 import { elapsedMs, isLive, runSpanMs } from '../../lib/clock';
 import { useNow } from '../../lib/useNow';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
@@ -1421,11 +1422,27 @@ function ContinueHere({ entry: e, onClose }: { entry: RegistryEntry; onClose: (s
     setBusy(true);
     setMsg('');
     try {
-      if (carryOn) await api.continueTask(e.sessionId, e.taskId);
-      else await api.rerunTask(e.sessionId, e.taskId);
       const name = await api.suggestedRunName([e.sessionId]).then((r) => r.name).catch(() => undefined);
-      const r = await api.startBatch([e.sessionId], mode, 'stop', undefined, undefined, name, [e.taskId]);
-      if (!r.started) {
+      /*
+       * Where the session starts is asked first, every time; the window's own button queues the task
+       * again and starts it — once, however many times the window's "Try to start again" is pressed.
+       */
+      let queued = false;
+      const outcome = await openStartDialog({
+        sessionIds: [e.sessionId],
+        mode,
+        start: async (starts) => {
+          if (!queued) {
+            if (carryOn) await api.continueTask(e.sessionId, e.taskId);
+            else await api.rerunTask(e.sessionId, e.taskId);
+            queued = true;
+          }
+          return await api.startBatch([e.sessionId], mode, 'stop', undefined, undefined, name, [e.taskId], starts);
+        },
+      });
+      if (!outcome.started && !outcome.reply) return;
+      const r = outcome.reply ?? { started: true };
+      if (!outcome.started) {
         // Queued to continue all the same: the grouped "Continue" above, or the session page, starts it.
         setMsg(t('batch.notStarted', { reason: r.reason ?? '' }));
         return;
@@ -1566,15 +1583,28 @@ function ContinueRun({ entries, onChange }: { entries: RegistryEntry[]; onChange
     setBusy(true);
     setMsg('');
     try {
-      // A task that stopped before it finished carries on where it stopped, in its chat and on its
-      // branch; one with a verdict on its work starts again.
-      for (const e of requeue) {
-        if (continuable(e)) await api.continueTask(e.sessionId, e.taskId);
-        else await api.rerunTask(e.sessionId, e.taskId);
-      }
-      // Exactly what is ticked: the queued tasks nobody chose stay queued for another run.
-      const r = await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name.trim() || undefined, chosen.map((e) => e.taskId));
-      setMsg(r.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
+      const queued = new Set<string>();
+      // Where each session starts is asked first, every time; the window's own button starts the run.
+      const outcome = await openStartDialog({
+        sessionIds,
+        mode,
+        start: async (starts) => {
+          // A task that stopped before it finished carries on where it stopped, in its chat and on its
+          // branch; one with a verdict on its work starts again. Each once, however often the start is tried.
+          for (const e of requeue) {
+            const key = `${e.sessionId}/${e.taskId}`;
+            if (queued.has(key)) continue;
+            if (continuable(e)) await api.continueTask(e.sessionId, e.taskId);
+            else await api.rerunTask(e.sessionId, e.taskId);
+            queued.add(key);
+          }
+          // Exactly what is ticked: the queued tasks nobody chose stay queued for another run.
+          return await api.startBatch(sessionIds, mode, 'stop', undefined, undefined, name.trim() || undefined, chosen.map((e) => e.taskId), starts);
+        },
+      });
+      if (!outcome.started && !outcome.reply) return;
+      const r = outcome.reply ?? { started: true };
+      setMsg(outcome.started ? t('reg.continueStarted', { n: sessionIds.length }) : t('batch.notStarted', { reason: r.reason ?? '' }));
       setOpen(false);
       onChange();
     } catch (e) {

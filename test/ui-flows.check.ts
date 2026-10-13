@@ -38,10 +38,12 @@
  * Set COP_UI_SHOTS to a folder to keep a screenshot of every scenario that fails.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { chromium, type Browser, type BrowserContext, type Page, type Response as PwResponse } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Locator, type Page, type Response as PwResponse } from 'playwright';
 import { startHarness, waitFor, Tally, type Harness, type SessionView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { setTransportFactory, type ChatTransport } from '../src/transport/chatTransport.js';
 import { dict } from '../web/lib/strings.js';
 
 const t = new Tally();
@@ -97,6 +99,18 @@ const session = (h: Harness, name: string, tasks: unknown[] = [greeting]): Recor
 });
 const planFor = (h: Harness, name: string, tasks: unknown[] = [greeting]): Plan => ({ version: 1, sessions: [session(h, name, tasks)] });
 const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+
+/**
+ * The start window every start button opens first (2026-10-13): where the work starts. Its own button
+ * starts the run; once it has, the window closes. `started: false` for a start that is meant to be refused.
+ */
+async function throughStartWindow(page: Page, mode: 'step' | 'unattended', started = true): Promise<Locator> {
+  const w = page.getByRole('dialog', { name: en['startdlg.title']! });
+  await w.waitFor({ timeout: 10_000 });
+  await w.getByRole('button', { name: en[mode === 'step' ? 'startdlg.goStep' : 'startdlg.goUnattended']!, exact: true }).click();
+  if (started) await w.waitFor({ state: 'detached', timeout: 30_000 });
+  return w;
+}
 
 // ---------------------------------------------------------------------------------------------
 // The release gate. Read first: if publishing never runs the browser checks, every browser check
@@ -289,6 +303,7 @@ try {
     await button.click();
     await dialog.waitFor({ timeout: 3_000 });
     await dialog.getByRole('button', { name: 'OK' }).click();
+    await throughStartWindow(page, 'unattended');
     const left = await waitFor('the task to leave limit-reached', async () => (await cards(h, id))[0]!.status !== 'limit-reached', 15_000).then(() => true, () => false);
     t.truthy('OK: the task leaves limit-reached', left);
     // Queued first, then started once version control is checked (before the browser opens): wait for
@@ -308,6 +323,8 @@ try {
     const asked = await appears(dialog, 1_000);
     t.check('no dialog within 1 s', asked, false);
     if (asked) await dialog.getByRole('button', { name: 'OK' }).click();
+    // Not asked "are you sure"; where the work starts is asked all the same.
+    await throughStartWindow(page, 'unattended');
     const left = await waitFor('the task to leave limit-reached', async () => (await cards(h, id))[0]!.status !== 'limit-reached', 15_000).then(() => true, () => false);
     t.truthy('the task left limit-reached', left);
     await h.idle();
@@ -417,6 +434,10 @@ try {
 
     h.chat.script(reply.steps('Write-Output charlie'));
     await page.getByRole('button', { name: 'Step by step' }).click();
+    const startWindow = page.getByRole('dialog', { name: en['startdlg.title']! });
+    await startWindow.locator('fieldset legend').first().waitFor();
+    t.check('the start window asks each session where it starts, in run order', await startWindow.locator('fieldset legend').allTextContents(), ['alpha', 'charlie']);
+    await throughStartWindow(page, 'step');
     const b = await waitFor('the run to start', async () => {
       const x = await h.call<Batch | null>('GET', '/batch');
       return x?.running ? x : null;
@@ -446,13 +467,104 @@ try {
     const confirm = page.getByRole('alertdialog');
     await confirm.waitFor({ timeout: 3_000 });
     await confirm.getByRole('button', { name: 'OK' }).click();
-    const alert = page.getByRole('alert').filter({ hasText: en['batch.notStartedTitle']! });
+    const startWindow = await throughStartWindow(page, 'unattended', false);
+    const inWindow = startWindow.getByRole('alert').filter({ hasText: en['startfail.title']! });
+    await inWindow.waitFor();
+    const there = (await inWindow.textContent()) ?? '';
+    t.truthy('the refusal is said in the start window, with where it stopped and the reason', /execution\.isolation/.test(there) && there.includes(en['startfail.stage.refused']!), there);
+    const report = inWindow.getByRole('link', { name: en['startfail.download']! });
+    t.truthy('with what happened as a file to download', /\/api\/start\/failures\/sf-[\w-]+\/report/.test((await report.getAttribute('href')) ?? ''), await report.getAttribute('href'));
+    t.truthy('and the terminal as a file', /\/api\/terminal/.test((await inWindow.getByRole('link', { name: en['startfail.terminal']! }).getAttribute('href')) ?? ''));
+    await startWindow.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await startWindow.waitFor({ state: 'detached' });
+    const alert = page.getByRole('alert').filter({ hasText: en['startfail.title']! });
     await alert.waitFor();
     const said = (await alert.textContent()) ?? '';
-    t.truthy('the refusal is shown as an alert, with the reason', /execution\.isolation/.test(said) && said.includes('refused'), said);
+    t.truthy('closed, the refusal stays on the page as an alert, with the reason', /execution\.isolation/.test(said) && said.includes('refused'), said);
     const toSettings = alert.getByRole('link', { name: en['batch.notStartedIsolation']! });
     t.truthy('with a link to Settings', /\/defaults\/?$/.test((await toSettings.getAttribute('href')) ?? ''), await toSettings.getAttribute('href'));
     t.check('and nothing ran: no batch, no chat opened', [await h.call<unknown>('GET', '/batch'), h.chat.opened], [null, 0]);
+  });
+
+  /*
+   * The start window (2026-10-13): where the work starts is asked every time. A branch a colleague has just
+   * pushed, typed into it as a remote branch, is fetched there and the session's work is cut from it; the
+   * local branch of that name is not made, and the session page says where it started.
+   */
+  await scenario('the start window: a remote branch typed in is fetched, and the work starts from it', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const g = (dir: string, ...args: string[]): string => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim();
+    const server = join(h.base, 'server.git');
+    execFileSync('git', ['clone', '-q', '--bare', h.repo, server]);
+    h.git('remote', 'add', 'origin', server);
+    h.git('fetch', '-q', 'origin');
+    const mate = join(h.base, 'mate');
+    execFileSync('git', ['clone', '-q', '-c', 'core.autocrlf=false', server, mate]);
+    g(mate, 'config', 'user.email', 'mate@example.invalid');
+    g(mate, 'config', 'user.name', 'mate');
+    const FEATURE = 'feature/casw-2312-add-okta-validation-tests';
+    g(mate, 'checkout', '-q', '-b', FEATURE);
+    writeFileSync(join(mate, 'okta.spec.ts'), 'test("okta")\n');
+    g(mate, 'add', '-A');
+    g(mate, 'commit', '-q', '-m', 'okta tests');
+    g(mate, 'push', '-q', 'origin', FEATURE);
+    const featureTip = g(mate, 'rev-parse', 'HEAD');
+
+    const [s] = await h.importPlan(planFor(h, 'okta'));
+    await page.goto(url(`/sessions/view?id=${s!.id}`));
+    h.chat.script(reply.steps(write('hello.txt', 'hi')), reply.done());
+    await page.getByRole('button', { name: 'Run 1 task(s)', exact: true }).click();
+    const w = page.getByRole('dialog', { name: en['startdlg.title']! });
+    await w.locator('fieldset legend').first().waitFor();
+    t.check('it opens on the session\'s own setting: the local branch, main', [await w.getByRole('radio', { name: en['startdlg.local']! }).isChecked(), await w.getByRole('combobox', { name: en['startdlg.localBranch']! }).inputValue()], [true, 'main']);
+    t.check('nothing has started yet', [(await h.call<{ running: boolean }>('GET', '/activity')).running, h.chat.opened], [false, 0]);
+    await w.getByRole('radio', { name: en['startdlg.remote']! }).check();
+    // An input with a list of suggestions is a combobox to the accessibility tree.
+    await w.getByRole('combobox', { name: en['startdlg.remoteBranch']! }).fill(FEATURE);
+    t.truthy('a remote branch: the window says Git\'s own window asks for a passphrase', ((await w.textContent()) ?? '').includes(en['prep.password']!));
+    await w.getByRole('button', { name: en['startdlg.goUnattended']!, exact: true }).click();
+    await w.waitFor({ state: 'detached', timeout: 30_000 });
+    await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
+    await h.idle();
+    const after = await h.session(s!.id);
+    t.check('the work was cut from the server\'s branch, and the session says where it started', [after.tasks[0]!.status, after.tasks[0]!.vcs?.baseCommit, after.vcsStart?.branch], ['done', featureTip, `origin/${FEATURE}`]);
+    t.check('no local branch of that name was made', h.git('branch', '--list', FEATURE), '');
+    await page.reload();
+    await page.getByText(/Started from the remote branch origin\/feature\/casw-2312/).waitFor();
+    t.truthy('the session page says it started from the remote branch', true);
+  });
+
+  /*
+   * A run accepted and then unable to begin — here the browser would not open — is said on every page, with
+   * the error, where it stopped and the files, until it is closed (2026-10-13).
+   */
+  await scenario('a run that could not begin is said on every page, with what happened as a file', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'no-browser'));
+    setTransportFactory(() => ({
+      open: async () => {
+        throw new Error('browserType.launchPersistentContext: the profile is in use by another Edge (ui check)');
+      },
+      close: async () => undefined,
+    }) as unknown as ChatTransport);
+    await page.goto(url('/'));
+    await page.getByRole('checkbox', { name: 'no-browser', exact: true }).check();
+    await page.getByRole('button', { name: 'Run 1 session(s)' }).click();
+    await throughStartWindow(page, 'unattended');
+    await h.idle();
+    await page.goto(url('/appearance'));
+    const notice = page.getByRole('alert').filter({ hasText: en['startfail.later']! });
+    await notice.waitFor({ timeout: 15_000 });
+    const said = (await notice.textContent()) ?? '';
+    t.truthy('on another page: the run could not begin, the error, and where it stopped', said.includes('profile is in use by another Edge') && said.includes(en['startfail.stage.browser']!), said);
+    const href = (await notice.getByRole('link', { name: en['startfail.download']! }).getAttribute('href')) ?? '';
+    const file = await page.request.get(href.startsWith('http') ? href : url(href.replace(/^https?:\/\/[^/]+/, '')));
+    const text = await file.text();
+    t.truthy('its file has the error, the run\'s record and the console', file.ok() && text.includes('profile is in use') && /browser-launch-requested/.test(text) && /What the terminal showed/.test(text), text.slice(0, 800));
+    t.check('nothing of the session ran', (await cards(h, s!.id))[0]!.status, 'queued');
+    await notice.getByRole('button', { name: en['startfail.dismiss']!, exact: true }).click();
+    await notice.waitFor({ state: 'detached' });
+    await page.goto(url('/history'));
+    await sleep(6_000);
+    t.check('closed, it does not come back', await page.getByRole('alert').filter({ hasText: en['startfail.later']! }).count(), 0);
   });
 
   /*
@@ -840,6 +952,7 @@ try {
 
     h.chat.script(reply.steps(write('two.txt', 'second')), reply.done(), reply.steps(write('three.txt', 'third')), reply.done());
     await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    await throughStartWindow(page, 'unattended');
     const b = await waitFor('the run to start', async () => await h.call<(Batch & { onlyTasks?: string[] }) | null>('GET', '/batch'), 15_000);
     t.check('the run takes exactly those two, in order', b.onlyTasks, [ran.tasks[1]!.id, ran.tasks[2]!.id]);
     await fix.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
@@ -937,6 +1050,7 @@ try {
     t.truthy('running it is offered at once, in the same dialog, saying what changed', ((await panel.textContent()) ?? '').includes(`Changed: may change only notes/, hello.txt. ${en['runq.savedOffer']}`), await panel.textContent());
     h.chat.script(reply.steps(write('hello.txt', 'hi')), reply.done());
     await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    await throughStartWindow(page, 'unattended');
     await waitFor('the fixed task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
     await h.idle();
     t.check('and it ran to done', (await cards(h, s!.id))[0]!.status, 'done');
@@ -984,6 +1098,7 @@ try {
 
     h.chat.script(reply.steps(write('hello.txt', 'hi'), write('bye.txt', 'bye')), reply.done());
     await panel.getByRole('button', { name: en['runq.unattended']!, exact: true }).click();
+    await throughStartWindow(page, 'unattended');
     await waitFor('the task to finish', async () => (await cards(h, s!.id))[0]!.status === 'done', 30_000).catch(() => undefined);
     await h.idle();
     t.check('and it ran to done', (await cards(h, s!.id))[0]!.status, 'done');

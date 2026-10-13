@@ -83,7 +83,8 @@ console.log('--- the report: files on a branch of their own, the plan starting f
     const ids = runIds(h);
     t.check('one run log, for the refused start', ids.length, 1);
     const refusedLog = runLog(h, ids[0]!).map((e) => e.type);
-    t.check('which says what happened, in order', refusedLog, ['run-preflight-started', 'repository-preflight', 'snapshot-approval-required', 'run-preflight-refused']);
+    // Ending with the start that did not happen, on record for the page's "what happened" file (2026-10-13).
+    t.check('which says what happened, in order', refusedLog, ['run-preflight-started', 'repository-preflight', 'snapshot-approval-required', 'run-preflight-refused', 'start-failed']);
 
     // The fix on the run screen: start from the current branch, take the file as the starting snapshot.
     const groups = () => h.call<Group[]>('GET', `/batch/vcs?ids=${s!.id}`);

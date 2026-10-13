@@ -164,6 +164,7 @@ export function buildPlanExport(scope: ExportScope): Record<string, unknown> {
           // Only when chosen: absent is the old behaviour, and writing it out would suggest a choice.
           ...(s.vcs?.startFrom ? { startFrom: s.vcs.startFrom } : {}),
           ...(s.vcs?.baseBranch ? { baseBranch: s.vcs.baseBranch } : {}),
+          ...(s.vcs?.baseRemote ? { baseRemote: s.vcs.baseRemote } : {}),
           ...(s.vcs?.existingBranch ? { existingBranch: s.vcs.existingBranch } : {}),
           // Only when switched off: absent is on.
           ...(s.vcs?.updateFromRemote === false ? { updateFromRemote: false } : {}),

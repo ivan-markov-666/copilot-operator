@@ -58,6 +58,11 @@ const VcsInput = z
       /** The local branch `startFrom: "branch"` starts from, and `previous-session`'s fallback. */
       baseBranch: z.string().trim().optional(),
       /**
+       * The remote `baseBranch` was chosen from in the start window (`origin`): the session starts from
+       * that remote branch as fetched there. Written by the export; the start window asks every time.
+       */
+      baseRemote: z.string().trim().optional(),
+      /**
        * The existing local branch the whole session works on, exactly as named: no new branch, no
        * prefix. Given alone it means `startFrom: "existing-branch"`. See `VersionControl.startFrom`.
        */

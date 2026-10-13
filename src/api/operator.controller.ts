@@ -10,6 +10,7 @@ import { Observable } from 'rxjs';
 import { OperatorService } from './operator.service.js';
 import type { TaskCheck } from '../session/model.js';
 import type { ContextKind } from '../session/store.js';
+import type { StartChoice } from '../vcs/startChoice.js';
 import { SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 
@@ -48,6 +49,25 @@ function asContextKind(kind: string): ContextKind {
     throw new BadRequestException('kind must be organisation, persona or work');
   }
   return kind;
+}
+
+/**
+ * The start window's choices as the service takes them: one per session id, each of a known shape, and
+ * nothing else. A choice of any other shape is dropped, which leaves that session on its settings.
+ */
+function startsFrom(raw: unknown): Record<string, StartChoice> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, StartChoice> = {};
+  for (const [id, c] of Object.entries(raw as Record<string, unknown>)) {
+    if (!c || typeof c !== 'object') continue;
+    const x = c as Record<string, unknown>;
+    const branch = typeof x.branch === 'string' ? x.branch : '';
+    const onBranch = x.onBranch === true ? { onBranch: true } : {};
+    if (x.from === 'previous-session') out[id] = { from: 'previous-session' };
+    else if (x.from === 'local' && branch) out[id] = { from: 'local', branch, ...onBranch };
+    else if (x.from === 'remote' && branch && typeof x.remote === 'string' && x.remote) out[id] = { from: 'remote', remote: x.remote, branch, ...onBranch };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function contentDisposition(fileName: string): string {
@@ -481,8 +501,56 @@ export class OperatorController {
   // --- run control ------------------------------------------------------------------------
 
   @Post('sessions/:id/start')
-  start(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended'; name?: string }): Promise<unknown> {
-    return this.ops.start(id, body?.mode === 'unattended' ? 'unattended' : 'confirm', body?.name);
+  start(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended'; name?: string; starts?: Record<string, StartChoice> }): Promise<unknown> {
+    return this.ops.start(id, body?.mode === 'unattended' ? 'unattended' : 'confirm', body?.name, startsFrom(body?.starts));
+  }
+
+  /**
+   * The start window's question: where each of these sessions starts, and the branches of their
+   * repositories as they are here (nothing fetched). See `vcs/startChoice.ts`.
+   */
+  @Get('start/options')
+  startOptions(@Query('sessions') sessions?: string): Promise<unknown> {
+    return this.ops.startChoices((sessions ?? '').split(',').map((x) => x.trim()).filter(Boolean)).catch(fail);
+  }
+
+  /** Fetches branches of a remote for the start window — through Git's password window when it asks. */
+  @Post('start/fetch')
+  startFetch(@Body() body: { dir?: string; remote?: string; branches?: string[] }): Promise<unknown> {
+    const branches = Array.isArray(body?.branches) ? body.branches.filter((b): b is string => typeof b === 'string') : null;
+    return this.ops.startFetch(body?.dir ?? '', body?.remote ?? '', branches).catch(fail);
+  }
+
+  /** Starts that did not get as far as a first task, newest first; `unanswered=1` only those no press was answered with. */
+  @Get('start/failures')
+  startFailures(@Query('unanswered') unanswered?: string): unknown {
+    return this.ops.recentStartFailures(unanswered === '1' || unanswered === 'true');
+  }
+
+  /** One of them as a text file: the error, where it stopped, the run's record, the events and the console. */
+  @Get('start/failures/:id/report')
+  async startFailureReport(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    try {
+      const { fileName, content } = await this.ops.startFailureReport(id);
+      res.type('text/plain; charset=utf-8');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.send(content);
+    } catch (e) {
+      failText(res, e);
+    }
+  }
+
+  /** What the bot's console showed, the latest lines, as a text file. See `log/terminal.ts`. */
+  @Get('terminal')
+  async terminal(@Res() res: Response): Promise<void> {
+    try {
+      const { fileName, content } = await this.ops.terminalReport();
+      res.type('text/plain; charset=utf-8');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.send(content);
+    } catch (e) {
+      failText(res, e);
+    }
   }
 
   @Post('sessions/:id/stop')
@@ -531,6 +599,8 @@ export class OperatorController {
       name?: string;
       /** Only these queued tasks; absent means every queued task of the sessions. */
       taskIds?: string[];
+      /** Where each session starts, by session id, as the start window chose it. */
+      starts?: Record<string, StartChoice>;
     },
   ): Promise<unknown> {
     if (!Array.isArray(body?.sessionIds)) throw new BadRequestException('sessionIds must be a list of session ids');
@@ -547,6 +617,7 @@ export class OperatorController {
         body?.reviewModel,
         body?.name,
         body?.taskIds,
+        startsFrom(body?.starts),
       )
       .catch(fail);
   }

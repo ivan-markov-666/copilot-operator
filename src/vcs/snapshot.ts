@@ -162,7 +162,10 @@ async function startProblem(session: Session, dir: string, branch: string | null
   if ('problem' in resolved) return resolved.problem;
   const commit = resolved.start?.commit;
   if (!commit || commit === head) return undefined;
-  const wanted = resolved.start?.kind === 'previous-session' ? `the end of "${resolved.start.fromSession?.name ?? ''}"'s branch ${resolved.start.branch}` : `the local branch ${resolved.start?.branch ?? ''}`;
+  const wanted =
+    resolved.start?.kind === 'previous-session'
+      ? `the end of "${resolved.start.fromSession?.name ?? ''}"'s branch ${resolved.start.branch}`
+      : `the ${resolved.start?.remote ? 'remote' : 'local'} branch ${resolved.start?.branch ?? ''}`;
   return (
     `the changes are on ${where}, and this session is set to start from ${wanted} (${commit.slice(0, 8)}). ` +
     'A snapshot is taken where the changes are, so the session would not start where it was told to. ' +

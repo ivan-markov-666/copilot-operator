@@ -269,6 +269,8 @@ export type VersionControl = {
   startFrom?: 'branch' | 'previous-session' | 'head' | 'existing-branch';
   /** The local branch `startFrom: branch` starts from; `main` when empty. */
   baseBranch?: string;
+  /** The remote the start window chose `baseBranch` (or `existingBranch`) from: the remote branch, as fetched there. */
+  baseRemote?: string;
   /** For `startFrom: existing-branch`: the branch every task works on, exactly as named. */
   existingBranch?: string;
   /** Fetch and fast-forward the starting branch before the session's first branch. Absent means yes. */
@@ -288,6 +290,8 @@ export type SessionStart = {
   update?: { branch: string; remote?: string; outcome: string; from?: string; to?: string; detail?: string };
   commit: string;
   branch?: string;
+  /** For `branch`: the remote whose branch it started from; `branch` is then `origin/x`. */
+  remote?: string;
   fromSession?: { id: string; name: string };
   note?: string;
   /** For `snapshot`: where the operator's changes were taken from, and what went in. */
@@ -326,6 +330,8 @@ export type RunVcsGroup = {
   baseHead?: string | null;
   sessions: Array<{ id: string; name: string; startFrom: string; started: boolean; hasStart: boolean; role: 'first' | 'shares' | 'inherits' | 'own' }>;
   workBranch?: { name: string; head: string | null };
+  /** Not ready only because of where a session starts: the start window can choose past it. */
+  startChoiceCanFix?: boolean;
   inputPatterns: string[];
   inputs: SnapshotEntry[];
   unrelated: Array<{ path: string; reason?: string }>;
@@ -754,6 +760,68 @@ export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
 
 /** See `src/vcs/prepareFromRemote.ts`: what preparing the folder from the remote's main would keep where. */
+/** Where one session's work starts, as the start window chooses it. See src/vcs/startChoice.ts. */
+export type StartChoice =
+  | { from: 'local'; branch: string; onBranch?: boolean }
+  | { from: 'remote'; remote: string; branch: string; onBranch?: boolean }
+  | { from: 'previous-session' };
+
+export type BranchTip = { name: string; commit: string };
+
+/** One repository as the start window shows it: its branches, local and as last fetched. */
+export type RepoBranches = {
+  repoDir: string;
+  problem?: string;
+  current: string | null;
+  head: string | null;
+  local: BranchTip[];
+  remotes: Array<{ name: string; branches: BranchTip[] }>;
+  lastFetched?: string;
+};
+
+/** One session of the run in the start window. */
+export type StartOptionSession = {
+  id: string;
+  name: string;
+  vcs: boolean;
+  repoDir?: string;
+  /** The start is fixed already: what it is. */
+  fixed?: string;
+  /** A start prepared before the run, which another choice drops. */
+  prepared?: string;
+  choice?: StartChoice;
+  previousOffered: boolean;
+};
+
+export type StartOptions = { repos: RepoBranches[]; sessions: StartOptionSession[] };
+
+/** How a fetch from the start window went. */
+export type StartFetch = {
+  ok: boolean;
+  problem?: string;
+  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked: boolean; retried?: boolean };
+  missing: string[];
+  fetchCommand?: string;
+  lastFetched?: string;
+  repo?: RepoBranches;
+};
+
+/** Where a start that did not get as far as a first task stopped. See src/session/startFailure.ts. */
+export type StartStage = 'refused' | 'branch' | 'preflight' | 'browser' | 'run' | 'at-turn' | 'error';
+
+export type StartFailureRef = {
+  id: string;
+  at: string;
+  stage: StartStage;
+  message: string;
+  runId?: string;
+  answered: boolean;
+  sessions: string[];
+};
+
+/** The answer to a start button. */
+export type StartReply = { started: boolean; reason?: string; batch?: BatchState; failure?: StartFailureRef };
+
 export type PreparePlan = {
   ok: boolean;
   problem?: string;
@@ -994,8 +1062,22 @@ export const api = {
       { method: 'POST', body: '{}' },
     ),
 
-  start: (id: string, mode: 'confirm' | 'unattended', name?: string) =>
-    call<{ started: boolean; reason?: string }>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode, name }) }),
+  start: (id: string, mode: 'confirm' | 'unattended', name?: string, starts?: Record<string, StartChoice>) =>
+    call<StartReply>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode, name, starts }) }, { timeoutMs: 120_000 }),
+  /** The start window's question: where each session starts, and the branches of their repositories. */
+  startOptions: (sessionIds: string[]) => call<StartOptions>(`/start/options?sessions=${encodeURIComponent(sessionIds.join(','))}`),
+  /**
+   * Fetches branches of a remote for the start window; without names, the whole remote. It may wait up
+   * to five minutes for the operator to type a passphrase in Git's own window (src/vcs/remoteAuth.ts).
+   */
+  startFetch: (dir: string, remote: string, branches?: string[]) =>
+    call<StartFetch>('/start/fetch', { method: 'POST', body: JSON.stringify({ dir, remote, ...(branches ? { branches } : {}) }) }, { timeoutMs: 330_000 }),
+  /** Starts that did not get as far as a first task, newest first. */
+  startFailures: (unansweredOnly = false) => call<StartFailureRef[]>(`/start/failures${unansweredOnly ? '?unanswered=1' : ''}`),
+  /** One of them as a text file: the error, the run's record, the events and the console of those moments. */
+  startFailureUrl: (id: string) => withToken(`${API}/start/failures/${encodeURIComponent(id)}/report`),
+  /** What the bot's console showed, the latest lines, as a text file. */
+  terminalUrl: () => withToken(`${API}/terminal`),
   stop: (id: string) => call<{ stopping: boolean }>(`/sessions/${id}/stop`, { method: 'POST', body: '{}' }),
   /** Every step waiting for a decision right now, or only one session's. */
   approvals: (sessionId?: string) =>
@@ -1021,13 +1103,20 @@ export const api = {
     name?: string,
     /** Only these queued tasks; the rest of the sessions' queues stay as they are. */
     taskIds?: string[],
+    /** Where each session starts, by id, as the start window chose it. */
+    starts?: Record<string, StartChoice>,
   ) =>
-    call<{ started: boolean; reason?: string; batch?: BatchState }>('/batch/start', {
-      method: 'POST',
-      // An absent model leaves every session on the one it already has; a name is written
-      // onto all of them before the run starts.
-      body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name, taskIds }),
-    }),
+    call<StartReply>(
+      '/batch/start',
+      {
+        method: 'POST',
+        // An absent model leaves every session on the one it already has; a name is written
+        // onto all of them before the run starts.
+        body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name, taskIds, starts }),
+      },
+      // The version control check and a local branch brought up to its remote can take a while on a big repository.
+      { timeoutMs: 120_000 },
+    ),
   /** What the run would be called if nothing is typed, so the field can start there. */
   suggestedRunName: (sessionIds: string[]) =>
     call<{ name: string }>(`/batch/name?sessions=${encodeURIComponent(sessionIds.join(','))}`),

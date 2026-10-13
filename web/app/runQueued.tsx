@@ -21,6 +21,7 @@ import { useT, type Key } from '../lib/i18n';
 import { usePoll } from '../lib/usePoll';
 import { runQueuedSelection } from '../lib/runSelection';
 import { confirmDialog } from './dialog';
+import { openStartDialog } from './startDialog';
 import { useUnattendedWithoutAsking } from '../lib/useUnattendedWithoutAsking';
 
 export type RunQueuedTarget = { sessionId: string; taskId: string; title: string };
@@ -118,8 +119,15 @@ export function RunQueuedPanel({
     setContradicts(false);
     try {
       const name = await api.suggestedRunName([target.sessionId]).then((r) => r.name).catch(() => undefined);
-      const r = await api.startBatch([target.sessionId], mode, 'stop', undefined, undefined, name, runs.map((x) => x.id));
-      if (!r.started) {
+      // Where the session starts is asked first, every time; the window's own button starts the run.
+      const outcome = await openStartDialog({
+        sessionIds: [target.sessionId],
+        mode,
+        start: (starts) => api.startBatch([target.sessionId], mode, 'stop', undefined, undefined, name, runs.map((x) => x.id), starts),
+      });
+      if (!outcome.started && !outcome.reply) return;
+      const r = outcome.reply ?? { started: true };
+      if (!outcome.started) {
         setMsg(t('batch.notStarted', { reason: r.reason ?? '' }));
         // A refusal for a contradiction is answered with its fixes, here, rather than with a sentence to act on elsewhere.
         const check = await api.contractCheck(target.sessionId, target.taskId).catch(() => ({ conflicts: [] as ContractConflict[] }));

@@ -20,7 +20,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { git } from './git.js';
+import { git, gitFetch } from './git.js';
 import { psQuote } from './syncCommand.js';
 
 /** No prompt anywhere: what every fetch of a run uses. */
@@ -95,3 +95,29 @@ export function fetchCommandFor(dir: string, remote: string): string {
   return `git -C ${psQuote(dir)} fetch --prune ${psQuote(remote)}`;
 }
 
+/** How a fetch the operator was present for went: see `fetchAsOperator`. */
+export type OperatorFetch = { ok: boolean; detail?: string; auth?: boolean; asked: boolean; retried?: boolean; firstError?: string };
+
+/**
+ * A fetch the operator just pressed a button for, and is looking at: with Git's password window when
+ * there is one (five minutes to type, the window not hidden), quiet otherwise. One connection only —
+ * `remote set-head --auto` would open a second and ask for the password again. Tried once more when
+ * the first try fails (see `gitFetch`), and a window left on screen by a fetch that was given up on is
+ * closed. `refspecs` fetches only those branches; without them the whole remote is fetched and pruned.
+ *
+ * The one fetch behind "Prepare the folder from the remote main branch" and the start window's
+ * remote branches (`startChoice.ts`).
+ */
+export async function fetchAsOperator(repoDir: string, remote: string, opts: { askpass: string | null; refspecs?: string[] }): Promise<OperatorFetch> {
+  const asked = !!opts.askpass;
+  const env = asked ? operatorFetchEnv(opts.askpass as string) : QUIET_FETCH_ENV;
+  const whole = !opts.refspecs || opts.refspecs.length === 0;
+  const args = [...(asked ? [] : ['-c', 'credential.interactive=false']), 'fetch', '--quiet', '--no-tags', ...(whole ? ['--prune'] : []), remote, ...(opts.refspecs ?? [])];
+  const started = new Date(Date.now() - 1000);
+  const f = await gitFetch(repoDir, args, asked ? 300_000 : 120_000, env, { windowsHide: !asked, killTree: true });
+  // Given up on with the window still open: closed, so it is not left on screen asking for nothing.
+  if (!f.ok && asked && /gave up after/.test(f.stderr)) await closePasswordWindows(opts.askpass as string, started);
+  if (f.ok) return { ok: true, asked, ...(f.retried ? { retried: true, ...(f.firstError ? { firstError: f.firstError } : {}) } : {}) };
+  const why = describeFetchFailure(f.stderr || f.stdout);
+  return { ok: false, detail: why.detail, auth: why.auth, asked };
+}

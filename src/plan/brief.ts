@@ -525,10 +525,13 @@ is clean: the runner commits after the checks, and its own commit is what leaves
   user already has. The branch must exist when the plan is imported; \`branchMode\`, \`branchName\`
   and the prefix do not apply.
 
-Before a session's first branch the runner fetches and fast-forwards the branch it starts from
-(\`baseBranch\`, or \`existingBranch\`), so the work begins from the server's code; it never resets or
-merges. \`"updateFromRemote": false\` turns that off — only when the user asks to work offline or from
-local commits on purpose.
+Every start button opens a start window first, in which the user chooses again, session by session,
+the branch the work starts from — a local branch as it is, or a remote branch fetched there and then
+(through Git's own window for an SSH key's passphrase) — and whether the work goes on that branch
+itself. What the plan says is what that window offers first, so a branch that is only on the server can
+still be named in \`baseBranch\` — with \`"baseRemote": "origin"\` it is offered from the remote. A start
+that does not go through the window ("Run again from here") first fetches and fast-forwards the
+starting branch unless \`"updateFromRemote": false\`.
 
 **dirtyWorktree** — what happens when the repository has uncommitted changes (the user's own, such as
 input files a task needs) before a session's first task. Ask only when the user mentions such files:
@@ -610,10 +613,13 @@ const VCS_DETAIL_BG = `
   друга, върху това, което вече е там. За нова работа, която продължава клон, който потребителят вече
   има. Клонът трябва да съществува при импорта; \`branchMode\`, \`branchName\` и представката не се прилагат.
 
-Преди първия клон на сесията runner-ът прави fetch и fast-forward на клона, от който тя тръгва
-(\`baseBranch\` или \`existingBranch\`), така че работата започва от кода на сървъра; никога не прави
-reset или merge. \`"updateFromRemote": false\` го изключва — само ако потребителят поиска да работи
-офлайн или нарочно от локални commit-и.
+Всеки бутон за пускане първо отваря прозорец за старт, в който потребителят избира отново, сесия по
+сесия, клона, от който тръгва работата — локален клон, какъвто е, или remote клон, изтеглен в момента
+(през собствения прозорец на Git за passphrase на SSH ключа) — и дали работата да е направо на този
+клон. Каквото казва планът, това прозорецът предлага първо, така че клон, който е само на сървъра,
+пак може да се посочи в \`baseBranch\` — с \`"baseRemote": "origin"\` се предлага от remote. Старт,
+който не минава през прозореца („Пусни отново оттук“), първо прави fetch и fast-forward на началния
+клон, освен ако \`"updateFromRemote": false\`.
 
 **dirtyWorktree** — какво става, когато хранилището има некомитнати промени (на потребителя, например
 входни файлове, които задача използва) преди първата задача на сесията. Питай само ако потребителят

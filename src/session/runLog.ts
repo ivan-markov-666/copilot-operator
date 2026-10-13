@@ -20,7 +20,11 @@ export type RunLogType =
   | 'run-preflight-passed'
   | 'run-preflight-refused'
   | 'task-contract-refused'
-  | 'browser-launch-requested';
+  | 'browser-launch-requested'
+  /** Where each session starts, as chosen in the start window: see `vcs/startChoice.ts`. */
+  | 'start-chosen'
+  /** The work did not start, and where it stopped: see `session/startFailure.ts`. */
+  | 'start-failed';
 
 export type RunLogEntry = { at: string; type: RunLogType; message: string; data?: Record<string, unknown> };
 
