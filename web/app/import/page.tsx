@@ -400,14 +400,14 @@ export default function ImportPage() {
           <p className="muted small">{t('plan.step3Hint')}</p>
           <div className="row">
             <Link
-              href={`/?run=${encodeURIComponent(imported.result.sessions.map((x) => x.id).join(','))}&fail=${
+              href={`/sessions?run=${encodeURIComponent(imported.result.sessions.map((x) => x.id).join(','))}&fail=${
                 imported.summary.onFailure
               }`}
               className="button-link"
             >
               {t('plan.runThese')}
             </Link>
-            <Link href="/" className="button-link plain">
+            <Link href="/sessions" className="button-link plain">
               {t('plan.toSessions')}
             </Link>
           </div>

@@ -186,6 +186,55 @@ await scenario('out of rounds of fixing failed checks: failed, but continued in 
   t.check('the continued attempt finishes', (await h.run(s!.id)).tasks[0]!.status, 'done');
 });
 
+/*
+ * Asked for on 2026-10-14: like Claude Code, the work goes on until the task is done; the limits bound it.
+ * A task a limit stopped is carried on at once in its own chat, up to limits.autoContinue times.
+ */
+await scenario('keep going: stopped at the message limit, carried on by itself in its chat, until done', { limits: { maxIterations: 3, autoContinue: 2 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'nonstop', [task('long-job', 'result.txt', 'finished')])] });
+  for (let i = 1; i <= 4; i++) h.chat.script(reply.steps(`Write-Output 'round ${i}'`));
+  let firstChat = '';
+  h.chat.script(
+    (m) => {
+      firstChat = h.chat.sent.find((x) => x.contract === 'task')?.chatId ?? '';
+      t.check('the continuation goes into the same conversation, with nobody pressing anything', m.chatId, firstChat);
+      t.truthy('and tells the chat to carry on, not start over', /Continue task 1/.test(m.text) && /Do not start over/.test(m.text), m.text.slice(0, 300));
+      return write('result.txt', 'finished');
+    },
+    reply.done(),
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('one run: the task is done, as attempt 2, the limit-reached attempt kept', [after.status, after.attempt, after.attempts?.map((a) => a.status)], ['done', 2, ['limit-reached']]);
+  const types = (await h.call<Array<{ type: string; data?: Record<string, unknown> }>>('GET', `/sessions/${s!.id}/events`)).filter((e) => e.type.startsWith('task-auto-continue'));
+  t.check('the events say it was carried on once, and that it ended done', types.map((e) => [e.type, e.data?.setting ?? e.data?.status]), [['task-auto-continue', 'maxIterations'], ['task-auto-continue-ended', 'done']]);
+  t.check('the contract was sent only once', h.chat.sent.filter((m) => m.contract === 'task').length, 1);
+});
+
+await scenario('keep going is bounded: after limits.autoContinue times it waits for the operator', { limits: { maxIterations: 2, autoContinue: 1 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'bounded', [task('endless-job', 'result.txt', 'finished')])] });
+  // Two attempts of two messages each, every round doing something new, so only the limits end them.
+  for (let i = 1; i <= 3; i++) h.chat.script(reply.steps(`Write-Output 'first ${i}'`));
+  for (let i = 1; i <= 3; i++) h.chat.script(reply.steps(`Write-Output 'second ${i}'`));
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('carried on once, then stopped at the limit again and left for the operator', [after.status, after.attempt, after.attempts?.map((a) => a.status)], ['limit-reached', 2, ['limit-reached']]);
+  const ended = (await h.call<Array<{ type: string; message?: string }>>('GET', `/sessions/${s!.id}/events`)).find((e) => e.type === 'task-auto-continue-ended');
+  t.truthy('the record says the bound was reached', /limits\.autoContinue \(1\) reached/.test(ended?.message ?? ''), ended);
+  t.check('and "Continue" is still offered', (await row(h, after.id)).continuable, true);
+});
+
+await scenario('keep going: out of rounds of fixing failed checks, carried on until the checks pass', { limits: { maxCheckRounds: 1, autoContinue: 1 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'checked', [task('checked-job', 'result.txt', 'finished')])] });
+  h.chat.script(
+    write('result.txt', 'nearly'), reply.done(), write('result.txt', 'almost'), reply.done(),
+    (m) => {
+      t.truthy('the chat is told the rounds ran out and what failed is still open', /1 rounds of fixing failed checks/.test(m.text) && /still open/.test(m.text), m.text.slice(0, 400));
+      return write('result.txt', 'finished');
+    },
+    reply.done(),
+  );
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('done in the same run, the failed attempt kept', [after.status, after.attempts?.map((a) => a.status)], ['done', ['failed']]);
+});
 
 await scenario('"only this one": a run of one picked task leaves the rest queued', {}, async (h) => {
   const [s] = await h.importPlan({

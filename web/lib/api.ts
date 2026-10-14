@@ -95,7 +95,34 @@ export type TaskAttempt = {
   vcs?: TaskVcs;
   /** The plan this attempt made (plan mode). */
   plan?: TaskPlan;
+  /** Undone by the operator: `this` its work taken out, `back` the line put back to before it. */
+  undone?: { how: 'this' | 'back'; at: string; commit?: string; branch?: string; byTask?: string };
+  accepted?: { at: string; note?: string; was: TaskStatus; reason?: string };
 };
+
+/** What "Undo only this task" would do; see `UndoThisPreview` on the server. */
+export type UndoThisPreview = {
+  ok: boolean;
+  problem?: string;
+  repoDir: string;
+  perTask?: boolean;
+  branch?: string;
+  commits: string[];
+  files: string[];
+  later: string[];
+  nothing?: string;
+  baseCommit?: string;
+};
+
+/** Kerrigan's changes, read against the sessions as they are; see `plan/changes.ts`. */
+export type ChangesCheck =
+  | { ok: true; notes: string; changes: Array<{ index: number; says: string; sessionId: string; sessionName: string; taskId?: string; taskTitle?: string }>; warnings: string[] }
+  | { ok: false; issues: Array<{ path: string; message: string }>; warnings: string[] };
+
+export type RepoTree = { ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> };
+export type RepoFile = { ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean };
+export type RepoLog = { ref: string; label: string; commits: Array<{ sha: string; subject: string; author: string; at: string; taskId?: string; taskTitle?: string }> };
+
 
 /** One condition that has to hold before a task is allowed to end. */
 export type TaskCheck = {
@@ -267,6 +294,10 @@ export type Task = {
   review?: TaskReview;
   /** The plan this attempt made before changing anything (plan mode). */
   plan?: TaskPlan;
+  /** The operator's notes to the chat about this task; each goes out with the task's next message. */
+  notes?: Array<{ id: string; text: string; at: string; sentAt?: string; attempt?: number }>;
+  /** Accepted as done by the operator though it did not end so. */
+  accepted?: { at: string; note?: string; was: TaskStatus; reason?: string };
 };
 
 export type VersionControl = {
@@ -1134,6 +1165,33 @@ export const api = {
   /** Every step waiting for a decision right now, or only one session's. */
   approvals: (sessionId?: string) =>
     call<Approval[]>(`/approvals${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''}`),
+  /** Undo, both ways: what each would do, then doing one. Nothing is started. */
+  undoPreview: (id: string, taskId: string) => call<{ this: UndoThisPreview; back: RestartPlan; problem?: string }>(`/sessions/${id}/tasks/${taskId}/undo`),
+  undoTask: (id: string, taskId: string, how: 'this' | 'back') =>
+    call<{ ok: boolean; message: string; requeued: number }>(`/sessions/${id}/tasks/${taskId}/undo`, { method: 'POST', body: JSON.stringify({ how }) }),
+  /** A task that did not end done, accepted as done by the operator. */
+  acceptTask: (id: string, taskId: string, note?: string) =>
+    call<Task>(`/sessions/${id}/tasks/${taskId}/accept`, { method: 'POST', body: JSON.stringify(note?.trim() ? { note } : {}) }),
+  /** A note to the chat about a task, sent with its next message (at once, in effect, while it runs). */
+  addTaskNote: (id: string, taskId: string, text: string) =>
+    call<Task>(`/sessions/${id}/tasks/${taskId}/notes`, { method: 'POST', body: JSON.stringify({ text }) }),
+  /** What happened, for Kerrigan, with the operator's note. */
+  kerriganReport: (body: { sessionIds?: string[]; taskIds?: string[]; note?: string }) =>
+    call<{ text: string; sessions: number }>('/kerrigan/report', { method: 'POST', body: JSON.stringify(body) }),
+  checkChanges: (text: string) => call<ChangesCheck>('/changes/check', { method: 'POST', body: JSON.stringify({ text }) }),
+  applyChanges: (text: string) =>
+    call<{ ok: boolean; check?: ChangesCheck; applied: Array<{ index: number; says: string }>; problem?: string; failedAt?: number }>('/changes/apply', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+  /** The session's repository, read-only: a folder, a file, the commits on its line. */
+  repoTree: (id: string, path = '', taskId?: string) =>
+    call<RepoTree>(`/sessions/${id}/repo/tree?path=${encodeURIComponent(path)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}`),
+  repoFile: (id: string, path: string, taskId?: string) =>
+    call<RepoFile>(`/sessions/${id}/repo/file?path=${encodeURIComponent(path)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}`),
+  repoLog: (id: string) => call<RepoLog>(`/sessions/${id}/repo/log`),
+  /** The session's recent events, newest last. */
+  sessionEvents: (id: string) => call<SessionEvent[]>(`/sessions/${id}/events`),
   /** A plan waiting for approval: approve (with a note), ask for another (saying what to change), or stop the task. */
   decidePlan: (approvalId: string, action: 'approve' | 'revise' | 'stop', note?: string) =>
     call<{ ok: boolean }>(`/approvals/${approvalId}/plan`, {

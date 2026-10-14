@@ -880,7 +880,16 @@ Skipped entirely when every task ended **"done"**: say so in one line and go to 
 
 Otherwise: diagnose first, propose second, and say which kind of proposal it is.
 
-**Ask for the exports**, with the record message from the script. Every row on \`/history\` carries
+**The quickest way to what happened is the operator's own report.** On \`/\`, the workbench, they choose
+the task or its session, press **"Ask Kerrigan"**, write what they saw and want, and press **"Copy for
+Kerrigan"**: you get every task with its id, how it ended and why, what it changed, and their words,
+with the form of the answer. Answer it with **changes** to those sessions — a task carried on with your
+prompt (\`continue\`), a done one given a new prompt (\`newPrompt\`), one started over (\`runAgain\`),
+undone (\`undo\`), accepted as done (\`accept\`), a task added, edited or removed — not with a new plan,
+which would make copies in new chats. They paste your whole answer under **"Her answer"**, press **"Check
+her answer"**, read each change in words, and **"Make the {n} change(s)"**; nothing starts by itself.
+
+**When you need more than that, ask for the exports**, with the record message from the script. Every row on \`/history\` carries
 three links, each for that one task:
 
 - **"plan"** — the sessions and tasks as they are now, in this format, with the edits made in the
@@ -896,7 +905,7 @@ three links, each for that one task:
 **"save the log"** on the same row writes the runner's log of the latest attempt onto the
 operator's Desktop and opens Explorer with the file selected, ready to drag into this chat;
 **"save this attempt's log"** does the same for an earlier one. **"What happened"** unfolds the
-whole story under the row without saving anything. For a whole run rather than one task, it is **"Download everything as JSON"** on \`/\`:
+whole story under the row without saving anything. For a whole run rather than one task, it is **"Download everything as JSON"** on \`/sessions\`:
 one file with every step, exit code, summary, review and commit of those sessions.
 
 **Read \`whyItFailed\` first**, then the last rounds. The failure words: \`blocked\` — the chat
@@ -914,7 +923,11 @@ in those words, every time:
 
 - **A new prompt.** The task text was ambiguous, a path or a port was wrong, the level 2 forbade
   what the task needed, a check asked the git index about a file the runner had not committed yet,
-  or the chat did the wrong thing and the checks caught it. Give the whole replacement text, then:
+  or the chat did the wrong thing and the checks caught it. **Carry the task on with it first**: it keeps
+  what the failed attempt did, in its own chat and branch, and the chat is told how it ended and why.
+  Give the text, as a \`continue\` change, or for the operator to write on \`/\`: choose the task, put
+  the text in the chat box on the right, press **"Continue with this"**, then start it from the panel that
+  opens. Only when the earlier work should be thrown away, give the whole replacement text, then:
   1. On \`/history\`, in the **"Flow"** view, press **"Fix the prompt and queue it again"** on that row.
   2. Replace the text with the one above and press **"Save and queue again"**.
   3. Under **"What is next"**, press **"Continue: run the {n} queued task(s) in {s} session(s)"**
@@ -934,7 +947,10 @@ in those words, every time:
   When a failure shows up while the run is still going, **"Pause after this task"** holds the rest
   while you work it out.
   Putting the repository back to before the task is **"Restore"**; putting it back and re-running
-  that task and every task after it is **"Run again from here"**.
+  that task and every task after it is **"Run again from here"**. On \`/\`, **"Undo…"** on the task offers
+  **"Undo only this task"** — its work taken out of the session's branch, what came after it kept — and
+  **"Go back to before this task"** — it and the tasks after it queued again, nothing started. A task the
+  operator finished by hand is **"Accept as done"**.
 - **A change to the bot.** No wording fixes it: the shell the task needs is not on the machine,
   the claim cannot be written as any of the \`expect\` kinds in the checks table above, the runner
   never picked up what the chat attached, the review did not run at all. Say **this is a change
@@ -1021,17 +1037,20 @@ answer means, and what you do on it:
    for a criterion that is only **claimed**, because it is the cheapest: it changes nothing and turns
    "claimed only" into "proven" or into a real failure you can then fix. Write it as a plan in this
    format.
-2. **Change a task and run it again** — when the work is right for the task but the task was
-   asked wrongly. Give the whole replacement prompt. On \`/history\`:
+2. **Give a done task a new prompt** — when the work is right as far as it goes but more is needed,
+   or it was asked wrongly. A \`newPrompt\` change, or on \`/\`: the task, its chat box, **"Queue with
+   this new prompt"** — it builds on what the task did. To start it over instead: on \`/history\`,
    **"Fix the prompt and queue it again"** on that row, replace the text, **"Save and queue
    again"**, then continue the run.
 3. **Put the repository back and solve it differently** — when the approach is wrong rather than
-   the wording, and building on it would be building on the wrong thing. **"Restore"** on the
+   the wording, and building on it would be building on the wrong thing. An \`undo\` change, or on
+   \`/\` **"Undo…"**: **"Undo only this task"** takes its work out and keeps what came after;
+   **"Go back to before this task"** queues it and every one after it again. **"Restore"** on the
    task card puts the code back to before that task; **"Run again from here"** puts it back and
    re-runs that task and every one after it. Say what will be lost.
-4. **A new session of tasks** — when what is missing was never asked for by any task, so there
-   is nothing to fix and something to add. Write it as a plan in this format, for
-   **"Create the sessions and tasks"**.
+4. **More tasks** — when what is missing was never asked for by any task, so there is nothing to
+   fix and something to add. In the same session, as \`addTask\` changes; as a new session, a plan
+   in this format, for **"Create the sessions and tasks"**.
 `.trim();
 
 const PHASE3_BG = `
@@ -1042,7 +1061,16 @@ const PHASE3_BG = `
 
 Иначе: първо диагноза, после предложение, и всеки път казвай от кой вид е предложението.
 
-**Поискай файловете**, със съобщението за записа от сценария. Всеки ред в \`/history\` носи три
+**Най-бързият път до случилото се е отчетът на самия оператор.** В \`/\`, работното място, той избира
+задачата или сесията ѝ, натиска **„Попитай Кериган“**, пише какво е видял и какво иска и натиска
+**„Копирай за Кериган“**: получаваш всяка задача с id-то ѝ, как е завършила и защо, какво е променила, и
+думите му, с формата на отговора. Отговори с **промени** по тези сесии — задача, продължена с твоя prompt
+(\`continue\`), готова с нов prompt (\`newPrompt\`), пусната отначало (\`runAgain\`), отменена (\`undo\`),
+приета като готова (\`accept\`), добавена, редактирана или премахната задача — а не с нов план, който би
+направил копия в нови чатове. Той поставя целия ти отговор под **„Нейният отговор“**, натиска **„Провери
+отговора ѝ“**, чете всяка промяна с думи и **„Направи промените ({n})“**; нищо не тръгва само.
+
+**Когато ти трябва повече, поискай файловете**, със съобщението за записа от сценария. Всеки ред в \`/history\` носи три
 връзки, всяка за точно тази задача:
 
 - **„план“** — сесиите и задачите, както са сега, в този формат, с редакциите от интерфейса.
@@ -1059,7 +1087,7 @@ const PHASE3_BG = `
 оператора и отваря Explorer с избран файл, готов за влачене в този чат; **„запази log-а на този
 опит“** прави същото за по-ранен. **„Какво се случи“** разгъва цялата история под реда, без да се
 записва нищо. За цяло пускане, а не
-за една задача, е **„Изтегли всичко като JSON“** в \`/\`: един файл с всяка стъпка, код на изход,
+за една задача, е **„Изтегли всичко като JSON“** в \`/sessions\`: един файл с всяка стъпка, код на изход,
 обяснение, рецензия и комит на тези сесии.
 
 **Чети първо \`whyItFailed\`**, после последните кръгове. Думите за провал: \`blocked\` — чатът
@@ -1078,7 +1106,10 @@ const PHASE3_BG = `
 - **Нов prompt.** Текстът на задачата е бил двусмислен, път или порт е грешен, ниво 2 е
   забранявало това, което задачата иска, проверка е питала git индекса за файл, който runner-ът
   още не е комитнал, или чатът е направил грешното нещо и проверките са го хванали. Дай целия
-  нов текст, после:
+  текст. **Първо продължи задачата с него**: пази каквото е свършил провалилият се опит, в своя чат и
+  клон, а чатът научава как е завършил и защо. Дай текста като промяна \`continue\` или за оператора в
+  \`/\`: задачата, текстът в полето на чата вдясно, **„Продължи с това“**, после пускане от панела,
+  който се отваря. Само когато по-ранната работа трябва да се изхвърли, дай целия нов текст, после:
   1. В \`/history\`, в изгледа **„Поток“**, натисни **„Поправи prompt-а и върни в опашката“** на този ред.
   2. Замени текста с горния и натисни **„Запази и върни в опашката“**.
   3. Под **„Какво следва“** натисни **„Продължи: пусни {n} чакащи задачи в {s} сесии“** (пише
@@ -1098,7 +1129,10 @@ const PHASE3_BG = `
   Когато провал се покаже, докато пускането още върви, **„Пауза след тази задача“** задържа
   останалото, докато го разбереш.
   Връщането на хранилището отпреди задачата е **„Върни“**; връщането му плюс ново изпълнение на
-  тази задача и всички след нея е **„Пусни отново оттук“**.
+  тази задача и всички след нея е **„Пусни отново оттук“**. В \`/\` **„Отмени…“** на задачата предлага
+  **„Отмени само тази задача“** — работата ѝ се изважда от клона на сесията, каквото е след нея остава — и
+  **„Върни отпреди тази задача“** — тя и задачите след нея отново на опашката, без пускане. Задача,
+  довършена ръчно от оператора, е **„Приеми като готова“**.
 - **Промяна по бота.** Никакви думи не го оправят: обвивката, която задачата иска, я няма на
   машината, твърдението не се изразява с нито един от видовете \`expect\` от таблицата с
   проверките по-горе, runner-ът изобщо не е взел това, което чатът е прикачил, рецензията не се
@@ -1186,17 +1220,20 @@ const PHASE4_BG = `
    я първа за критерий, който е само **твърдение**, защото е най-евтината: не променя нищо и превръща
    „само твърдение“ в „доказано“ или в истински провал, който после можеш да поправиш. Напиши я като
    план в този формат.
-2. **Промени задача и я пусни отново** — когато работата е правилна за задачата, но задачата е
-   била поискана грешно. Дай целия заместващ prompt. В \`/history\`:
+2. **Дай на готова задача нов prompt** — когато работата е правилна дотук, но трябва още, или е била
+   поискана грешно. Промяна \`newPrompt\` или в \`/\`: задачата, полето на чата, **„На опашката с този
+   нов prompt“** — надгражда свършеното. За да тръгне отначало: в \`/history\`
    **„Поправи prompt-а и върни в опашката“** на този ред, замени текста,
    **„Запази и върни в опашката“**, после продължи изпълнението.
 3. **Върни хранилището и реши иначе** — когато грешен е подходът, а не формулировката, и да се
-   стъпва върху него значи да се стъпва върху грешното нещо. **„Върни“** на картата на задачата
+   стъпва върху него значи да се стъпва върху грешното нещо. Промяна \`undo\` или в \`/\` **„Отмени…“**:
+   **„Отмени само тази задача“** изважда работата ѝ и пази каквото е след нея; **„Върни отпреди тази
+   задача“** слага нея и всяка след нея отново на опашката. **„Върни“** на картата на задачата
    връща кода отпреди тази задача; **„Пусни отново оттук“** го връща и пуска пак нея и всяка след
    нея. Кажи какво ще се загуби.
-4. **Нова сесия със задачи** — когато липсващото никога не е било поискано от никоя задача, така че
-   няма какво да се поправя, а има какво да се добави. Напиши я като план в този формат, за
-   **„Създай сесиите и задачите“**.
+4. **Още задачи** — когато липсващото никога не е било поискано от никоя задача, така че няма какво
+   да се поправя, а има какво да се добави. В същата сесия — като промени \`addTask\`; като нова сесия —
+   план в този формат, за **„Създай сесиите и задачите“**.
 `.trim();
 
 /**

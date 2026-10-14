@@ -194,7 +194,7 @@ try {
       new MutationObserver((records, observer) => {
         for (const r of records) {
           for (const n of r.addedNodes) {
-            if (n instanceof HTMLElement && n.classList.contains('wrap')) {
+            if (n instanceof HTMLElement && (n.classList.contains('wrap') || n.classList.contains('wb-root'))) {
               (n as HTMLElement & { fromHtml?: boolean }).fromHtml = true;
               observer.disconnect();
               return;
@@ -203,14 +203,14 @@ try {
         }
       }).observe(document, { childList: true, subtree: true });
     });
-    const pages = ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/sessions', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
     const redrawn: string[] = [];
     for (let round = 1; round <= 2; round++) {
       for (const p of pages) {
         await page.goto(url(p));
         // The router mounts it once the hydration has committed, as it was or drawn again.
         await page.locator('next-route-announcer').waitFor({ state: 'attached' });
-        const kept = await page.evaluate(() => (document.querySelector('div.wrap') as (HTMLElement & { fromHtml?: boolean }) | null)?.fromHtml === true);
+        const kept = await page.evaluate(() => (document.querySelector('div.wrap, div.wb-root') as (HTMLElement & { fromHtml?: boolean }) | null)?.fromHtml === true);
         if (!kept) redrawn.push(`round ${round}: ${p}`);
       }
     }
@@ -250,7 +250,7 @@ try {
     await h.run(s!.id);
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto(url('/appearance'));
-    const pages = ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/sessions', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
     const wide: Record<string, number> = {};
     for (const size of ['normal', 'giant']) {
       await page.evaluate((textSize) => localStorage.setItem('cop.appearance', JSON.stringify({ textSize })), size);
@@ -321,7 +321,7 @@ try {
     const [s] = await h.importPlan(planFor(h, 'labels'));
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
     await h.run(s!.id);
-    const pages = ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/sessions', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
     const unnamed: Record<string, string[]> = {};
     for (const p of pages) {
       await page.goto(url(p));
@@ -355,7 +355,7 @@ try {
     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save the brief as a file' }).click()]);
     t.check('the brief can be saved as a .txt file', download.suggestedFilename(), 'copilot-operator-brief.en.txt');
     t.check('one session, its task queued, nothing started', sessions.map((s) => [s.name, s.tasks.map((x) => x.status)]), [['imported', ['queued']]]);
-    await page.goto(url('/'));
+    await page.goto(url('/sessions'));
     await page.getByRole('link', { name: 'imported' }).first().waitFor();
     t.truthy('the sessions page lists it', true);
   });
@@ -555,7 +555,7 @@ try {
     });
     const order = async (): Promise<string[]> =>
       (await page.locator('table tbody tr td:nth-child(4) a').allTextContents()).map((x) => x.trim());
-    await page.goto(url('/'));
+    await page.goto(url('/sessions'));
     await page.getByRole('link', { name: 'gamma' }).waitFor();
     t.check('the plan in its own order', await order(), ['alpha', 'beta', 'gamma']);
 
@@ -625,7 +625,7 @@ try {
     await h.call('POST', `/sessions/${busy!.id}/start`, { mode: 'confirm' });
     await waitFor('the step to wait', async () => (await h.call<unknown[]>('GET', '/approvals')).length > 0);
 
-    await page.goto(url('/'));
+    await page.goto(url('/sessions'));
     const manage = (name: string) => page.getByRole('checkbox', { name: `Manage ${name}` });
     await manage('busy').waitFor();
     t.check('the running session cannot be ticked to manage', await manage('busy').isDisabled(), true);

@@ -126,6 +126,11 @@ export async function makeDirs(settings: Record<string, unknown> = {}): Promise<
     ...settings,
     // No isolation, accepted: the machine running the checks is the operator's own, as in real use.
     execution: { isolation: 'none-accepted', ...((settings.execution as object | undefined) ?? {}) },
+    /*
+     * A limit stops the task, as the checks of each limit expect; carrying on by itself (`limits.autoContinue`,
+     * on by default) is checked where it is under test, by giving it a value there.
+     */
+    limits: { autoContinue: 0, ...((settings.limits as object | undefined) ?? {}) },
   };
   await writeFile(join(dirs.dataDir, 'settings.json'), JSON.stringify(written, null, 2), 'utf8');
   return dirs;

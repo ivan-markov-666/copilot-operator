@@ -1,17 +1,15 @@
 import type { ReactNode } from 'react';
-import Link from 'next/link';
 import './globals.css';
 import { LanguageProvider } from '../lib/i18n';
 import { AppearanceProvider } from '../lib/appearance';
 // From a module without 'use client', so the page carries the script's text and not a reference to
 // a chunk that may load after React has begun hydrating <head>. See lib/themeScript.ts.
 import { themeScript } from '../lib/themeScript';
-import { Nav, SkipLink } from './nav';
+import { SkipLink } from './nav';
+import { Shell } from './shell';
 import { DialogHost } from './dialog';
-import { GlobalApprovals } from './approvals';
 import { ScrollJump } from './scrollJump';
 import { StartDialogHost } from './startDialog';
-import { StartFailureBanner } from './startFailure';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -44,19 +42,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <LanguageProvider>
             <DialogHost>
               <SkipLink />
-              <div className="wrap">
-                <header className="top">
-                  <h1>
-                    <Link href="/">copilot-operator</Link>
-                  </h1>
-                  <Nav />
-                </header>
-                {/* Whatever page is open, a step waiting for a decision is asked about here. */}
-                <GlobalApprovals />
-                {/* And a run that was accepted and then could not begin, with what happened as a file. */}
-                <StartFailureBanner />
-                <main id="main">{children}</main>
-              </div>
+              {/* The page's frame: the workbench at / takes the whole window, the other pages their column. */}
+              <Shell>{children}</Shell>
               <ScrollJump />
               {/* The start window every start button opens first: where the work starts. */}
               <StartDialogHost />

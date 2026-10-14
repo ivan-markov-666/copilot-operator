@@ -125,7 +125,7 @@ function SessionPage() {
   return (
     <>
       <div className="crumbs">
-        <Link href="/">{t('session.crumb')}</Link> / {session.name}
+        <Link href="/sessions">{t('session.crumb')}</Link> / {session.name}
       </div>
 
       {err && (

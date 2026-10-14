@@ -43,7 +43,7 @@ import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
-import { composeOpening, readOnlyNote } from '../session/compose.js';
+import { composeOpening, operatorNotesSection, readOnlyNote } from '../session/compose.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { PLAN_FIRST, PLAN_NOT_NOW, PLAN_NUDGE_AFTER, describePlan, planApprovedMessage, planFrom, planModeNote, planNudge, planReviseMessage } from './planMode.js';
@@ -55,6 +55,7 @@ import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import { isContinuable } from '../session/model.js';
 import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf, whereLeft } from '../vcs/taskVcs.js';
 import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
@@ -1615,6 +1616,8 @@ export async function runTask(
     // --- opening messages -------------------------------------------------------------
     const { content: level1 } = await store.getLevel1();
     const taskNumber = session.tasks.findIndex((t) => t.id === task.id) + 1;
+    // The operator's notes not sent yet, marked sent as they go into this opening.
+    const openingNotes = await store.takeUnsentNotes(session.id, task.id).catch(() => []);
     const opening = composeOpening({
       level1,
       level2: task.level2,
@@ -1657,7 +1660,12 @@ export async function runTask(
       ...(planning && planMode !== 'off'
         ? { planNote: planModeNote(planMode, planEnforced, planMode === 'approve' && !!deps.approvePlan && (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm') }
         : {}),
+      // The operator's notes about this task not sent yet: they go out with this opening (2026-10-14).
+      ...(openingNotes.length > 0 ? { operatorNotes: operatorNotesSection(openingNotes, false) } : {}),
     });
+    if (openingNotes.length > 0) {
+      sink.event('operator-note-sent', { notes: openingNotes.length, with: 'opening' }, `${openingNotes.length} note(s) from the operator go out with the opening`);
+    }
     await setTask((t) => {
       t.firstMessage = opening.firstMessage;
     });
@@ -2966,6 +2974,15 @@ export async function runTask(
         }
         if (planningRounds === PLAN_NUDGE_AFTER) runnerNotes.push(planNudge(planningRounds));
       }
+      /*
+       * What the operator wrote while the task works (2026-10-14: like Claude Code, the user can say more
+       * while it runs): it goes out with this report, and is marked sent.
+       */
+      const fromOperator = await store.takeUnsentNotes(session.id, task.id).catch(() => []);
+      if (fromOperator.length > 0) {
+        runnerNotes.push(operatorNotesSection(fromOperator, true));
+        sink.event('operator-note-sent', { notes: fromOperator.length, with: 'report', iteration: iterations }, `${fromOperator.length} note(s) from the operator go out with this report`);
+      }
       await guardInputs(iterations);
 
       // --- report back ---------------------------------------------------------------
@@ -3263,49 +3280,99 @@ export async function runSession(
        */
       const retriesAllowed = cfg.limits.retryBlockedInFreshChat ?? 0;
       let retried = 0;
-      while (outcome.status === 'blocked' && retried < retriesAllowed && !deps.signal?.aborted && !(outcome.stopCode && NOT_THE_CHATS.includes(outcome.stopCode))) {
-        retried += 1;
+      /*
+       * Keep going until it is done (operator's request, 2026-10-14: "like Claude Code — the work does not stop
+       * until the task is ready, and the limits keep it from looping for ever"). A task stopped by a limit from
+       * the settings — messages, minutes, the reply wait, replies in the wrong shape, rounds of fixing checks or
+       * review findings — is carried on at once in its own chat, from where it got to, as "Continue" would, up
+       * to `limits.autoContinue` times; that count is the bound on the whole, so a task gets at most
+       * (autoContinue + 1) × maxIterations messages and as many × maxRunMinutes. Not a task the operator
+       * stopped, not one that blocked with nothing to do (that goes to a fresh chat below, then to a person),
+       * and not when a pause or Stop was asked for.
+       */
+      const autoAllowed = Math.max(0, cfg.limits.autoContinue ?? 0);
+      let autoContinued = 0;
+      const carriedOnAtOnce = async (): Promise<boolean> => {
+        if (autoContinued >= autoAllowed || deps.signal?.aborted || deps.shouldPause?.()) return false;
+        const now = (await store.getSession(sessionId))?.tasks.find((x) => x.id === task.id);
+        if (!now || !now.limit || now.status === 'aborted' || !isContinuable(now)) return false;
+        autoContinued += 1;
         bus.publish({
           sessionId,
           taskId: task.id,
-          type: 'task-retry-fresh-chat',
+          type: 'task-auto-continue',
           level: 'warn',
-          message: `"${task.title}" ended blocked; running it again in a fresh conversation (${retried} of ${retriesAllowed})`,
-          data: { attempt: retried, of: retriesAllowed, reason: outcome.reason },
+          message: `"${task.title}" stopped at ${now.limit.setting} (${now.limit.value}); carrying it on in its own chat, from where it got to (${autoContinued} of ${autoAllowed})`,
+          data: { setting: now.limit.setting, value: now.limit.value, time: autoContinued, of: autoAllowed, status: now.status },
         });
-        await store.rerunTask(sessionId, task.id, {});
-        // The conversation pointer is dropped, so the next message opens a new chat, registers
-        // it and sends the contract again. The old chat stays where it is, readable.
-        session = await store.updateSession(sessionId, (s) => {
-          s.chat = undefined;
-          s.contractSent = false;
-          // Marked, not counted: how many retries this run made is read back from the marks
-          // (`freshRetriesOfLatestRun`), so a later run cannot add to an earlier one's count.
-          const again = s.tasks.find((x) => x.id === task.id);
-          if (again) again.freshRetry = true;
-        });
-        await chat.newChat();
-        /*
-         * The picker belongs to the conversation, so a new conversation has lost the choice.
-         *
-         * The model is applied once, before the first task, because that is where the
-         * conversation is opened — and this is the other place one is opened, so it has to be
-         * applied again here. Without it a session that asked for a particular model ran its
-         * retries on whatever the chat opens on, which is "Auto", and the record went on saying
-         * it was the model the session asked for. The review has always done this for its own
-         * fresh conversations a few hundred lines up; this path simply never did.
-         */
-        const freshModel = await applySessionModel(chat, session, bus, cfg, store, deps.models);
-        if (effectiveModels(session, cfg).model) {
-          session = await store.updateSession(sessionId, (s) => {
-            s.modelInUse = freshModel.current;
-          });
-        }
-        if (freshModel.refused) throw new Error(freshModel.refused);
-        const fresh = session.tasks.find((x) => x.id === task.id);
-        if (!fresh) break;
-        outcome = await runTask(chat, session, fresh, deps);
+        await store.continueTask(sessionId, task.id);
+        session = (await store.getSession(sessionId)) as Session;
+        const again = session.tasks.find((x) => x.id === task.id);
+        if (!again) return false;
+        outcome = await runTask(chat, session, again, deps);
         ran += 1;
+        return true;
+      };
+      for (;;) {
+        while (outcome.status === 'blocked' && retried < retriesAllowed && !deps.signal?.aborted && !(outcome.stopCode && NOT_THE_CHATS.includes(outcome.stopCode))
+          // A task a limit stopped is carried on where it is, with its work, not started over in a fresh chat.
+          && !(autoContinued < autoAllowed && !!(await store.getSession(sessionId))?.tasks.find((x) => x.id === task.id)?.limit)) {
+          retried += 1;
+          bus.publish({
+            sessionId,
+            taskId: task.id,
+            type: 'task-retry-fresh-chat',
+            level: 'warn',
+            message: `"${task.title}" ended blocked; running it again in a fresh conversation (${retried} of ${retriesAllowed})`,
+            data: { attempt: retried, of: retriesAllowed, reason: outcome.reason },
+          });
+          await store.rerunTask(sessionId, task.id, {});
+          // The conversation pointer is dropped, so the next message opens a new chat, registers
+          // it and sends the contract again. The old chat stays where it is, readable.
+          session = await store.updateSession(sessionId, (s) => {
+            s.chat = undefined;
+            s.contractSent = false;
+            // Marked, not counted: how many retries this run made is read back from the marks
+            // (`freshRetriesOfLatestRun`), so a later run cannot add to an earlier one's count.
+            const again = s.tasks.find((x) => x.id === task.id);
+            if (again) again.freshRetry = true;
+          });
+          await chat.newChat();
+          /*
+           * The picker belongs to the conversation, so a new conversation has lost the choice.
+           *
+           * The model is applied once, before the first task, because that is where the
+           * conversation is opened — and this is the other place one is opened, so it has to be
+           * applied again here. Without it a session that asked for a particular model ran its
+           * retries on whatever the chat opens on, which is "Auto", and the record went on saying
+           * it was the model the session asked for. The review has always done this for its own
+           * fresh conversations a few hundred lines up; this path simply never did.
+           */
+          const freshModel = await applySessionModel(chat, session, bus, cfg, store, deps.models);
+          if (effectiveModels(session, cfg).model) {
+            session = await store.updateSession(sessionId, (s) => {
+              s.modelInUse = freshModel.current;
+            });
+          }
+          if (freshModel.refused) throw new Error(freshModel.refused);
+          const fresh = session.tasks.find((x) => x.id === task.id);
+          if (!fresh) break;
+          outcome = await runTask(chat, session, fresh, deps);
+          ran += 1;
+        }
+        if (!(await carriedOnAtOnce())) break;
+      }
+      if (autoContinued > 0) {
+        bus.publish({
+          sessionId,
+          taskId: task.id,
+          type: 'task-auto-continue-ended',
+          level: outcome.status === 'done' ? 'info' : 'warn',
+          message: outcome.status === 'done'
+            ? `"${task.title}" done after being carried on ${autoContinued} time(s) on its own`
+            : `"${task.title}" ended ${outcome.status} after being carried on ${autoContinued} time(s) on its own${autoContinued >= autoAllowed ? ` — limits.autoContinue (${autoAllowed}) reached` : ''}`,
+          data: { times: autoContinued, of: autoAllowed, status: outcome.status },
+        });
       }
       if (retried > 0) {
         bus.publish({

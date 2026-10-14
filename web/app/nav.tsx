@@ -14,6 +14,7 @@ import { LanguageSwitcher, useT, type Key } from '../lib/i18n';
  */
 const ICONS: Record<string, ReactNode> = {
   sessions: <path d="M4 5h16v4H4zM4 11h16v4H4zM4 17h10v2H4z" />,
+  workbench: <path d="M3 4h18v16H3zM9 4v16M3 15h6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
   defaults: <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.5 4 1.5 1-1.6 2.8-1.8-.4a7 7 0 0 1-1.5 1.5l.4 1.8L14.7 21l-1-1.5a7 7 0 0 1-3.4 0l-1 1.5-2.8-1.6.4-1.8A7 7 0 0 1 5.4 16l-1.8.4L2 13.6 3.5 12.6V11.4L2 10.4l1.6-2.8 1.8.4A7 7 0 0 1 6.9 6.5l-.4-1.8L9.3 3l1 1.5a7 7 0 0 1 3.4 0l1-1.5 2.8 1.6-.4 1.8a7 7 0 0 1 1.5 1.5l1.8-.4L22 10.4l-1.5 1z" />,
   import: <path d="M12 3v10m0 0 4-4m-4 4-4-4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
   history: <path d="M12 3a9 9 0 1 0 8.5 6M12 7v5l3 2M3 4v5h5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
@@ -24,7 +25,8 @@ const ICONS: Record<string, ReactNode> = {
 };
 
 const LINKS: Array<{ href: string; label: Key; icon: keyof typeof ICONS }> = [
-  { href: '/', label: 'nav.sessions', icon: 'sessions' },
+  { href: '/', label: 'nav.workbench', icon: 'workbench' },
+  { href: '/sessions', label: 'nav.sessions', icon: 'sessions' },
   { href: '/defaults', label: 'nav.defaults', icon: 'defaults' },
   { href: '/import', label: 'nav.import', icon: 'import' },
   { href: '/history', label: 'nav.history', icon: 'history' },

@@ -23,7 +23,7 @@ import type {
   ReviewSettings,
   VersionControl,
 } from './model.js';
-import { endingOf, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type TaskPatch } from './model.js';
+import { endingOf, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type TaskNote, type TaskPatch } from './model.js';
 
 /** A task the runner is inside of. It cannot be edited, deleted, or left behind at startup. */
 const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
@@ -144,6 +144,9 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   environment: 'archived',
   handoff: 'archived',
   plan: 'archived',
+  accepted: 'archived',
+  // Every note stays with the task; the ones not sent yet go out with the next attempt's opening.
+  notes: 'kept',
   interruption: 'cleared',
   finalReply: 'cleared',
   firstMessage: 'cleared',
@@ -633,6 +636,58 @@ export class SessionStore {
   }
 
   /**
+   * A note from the operator to the chat about this task (2026-10-14): it goes out with the next message the
+   * task sends — the opening of its next attempt, or the next report while it runs. See `Task.notes`.
+   */
+  async addTaskNote(sessionId: string, taskId: string, text: string): Promise<Task> {
+    const note = text.trim();
+    if (!note) throw new Error('The note is empty.');
+    if (note.length > MAX_INSTRUCTION_CHARS) throw new Error(`The note is ${note.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
+    let result: Task | undefined;
+    await this.updateSession(sessionId, (s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
+      t.notes = [...(t.notes ?? []), { id: newId('n-'), text: note, at: new Date().toISOString() }];
+      result = t;
+    });
+    return result as Task;
+  }
+
+  /** Marks notes as sent with this attempt's message; returns the ones it marked. */
+  async takeUnsentNotes(sessionId: string, taskId: string): Promise<TaskNote[]> {
+    let taken: TaskNote[] = [];
+    await this.updateSession(sessionId, (s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t?.notes?.some((n) => !n.sentAt)) return;
+      const at = new Date().toISOString();
+      taken = t.notes.filter((n) => !n.sentAt);
+      t.notes = t.notes.map((n) => (n.sentAt ? n : { ...n, sentAt: at, attempt: t.attempt ?? 1 }));
+    });
+    return taken;
+  }
+
+  /**
+   * The operator accepts a task as done though it did not end so (2026-10-14): what it was is kept beside it,
+   * and the run's chain goes on past it as past any done task.
+   */
+  async acceptTask(sessionId: string, taskId: string, note?: string): Promise<Task> {
+    const text = note?.trim() || undefined;
+    if (text && text.length > MAX_INSTRUCTION_CHARS) throw new Error(`The note is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
+    let result: Task | undefined;
+    await this.updateSession(sessionId, (s) => {
+      const t = s.tasks.find((x) => x.id === taskId);
+      if (!t) throw new Error(`Task ${taskId} does not exist in session ${sessionId}.`);
+      if (!['failed', 'blocked', 'limit-reached', 'aborted'].includes(t.status)) {
+        throw new Error(t.status === 'done' ? 'This task is done already.' : 'Only a task that ended without being done can be accepted as done.');
+      }
+      t.accepted = { at: new Date().toISOString(), was: t.status, ...(t.reason ? { reason: t.reason } : {}), ...(text ? { note: text } : {}) };
+      t.status = 'done';
+      result = t;
+    });
+    return result as Task;
+  }
+
+  /**
    * What a new attempt does with each field of a task — see `TASK_FIELD_ON_RERUN`.
    */
   async rerunTask(
@@ -689,6 +744,7 @@ export class SessionStore {
           artifactsKept: t.artifactsKept,
           vcs: t.vcs,
           plan: t.plan,
+          accepted: t.accepted,
         },
       ];
 
@@ -724,6 +780,7 @@ export class SessionStore {
       t.stats = undefined;
       t.handoff = undefined;
       t.plan = undefined;
+      t.accepted = undefined;
       t.scopeReverted = undefined;
       t.treeChanged = undefined;
       t.inputsRestored = undefined;

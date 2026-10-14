@@ -399,6 +399,16 @@ export const RunConfigSchema = z.object({
        * its record. Zero turns it off.
        */
       retryBlockedInFreshChat: z.number().int().nonnegative().default(2),
+      /**
+       * How many times a task a limit stopped is carried on at once, in its own chat and from where it got
+       * to, before it waits for the operator's "Continue" (operator's request, 2026-10-14: keep going until
+       * the task is done, like Claude Code, with the limits as the bound). Every limit above counts —
+       * messages, minutes, the reply wait, replies in the wrong shape, rounds of fixing checks or review
+       * findings — so a task gets at most (autoContinue + 1) times each of them. The loop guards (repeats,
+       * no progress) do not carry on: they end a task as blocked, which a fresh chat may cure, then a person.
+       * Zero turns it off.
+       */
+      autoContinue: z.number().int().min(0).max(20).default(3),
       /*
        * How many genuinely different approaches the chat must have tried before it may end a task
        * "blocked". The reply format's own floor is 2 (replySchema.ts); this raises it. A "blocked"

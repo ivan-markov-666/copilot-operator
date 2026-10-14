@@ -177,6 +177,14 @@ export type Task = {
   vcs?: TaskVcs;
   /** The plan this attempt made before it changed anything, in plan mode. See `TaskPlan`. */
   plan?: TaskPlan;
+  /**
+   * What the operator told the chat about this task besides its prompt (2026-10-14: "the user must be able to
+   * add more information to a task"): each note goes out with the next message — the opening of its next
+   * attempt, or the next report while it runs — and is marked sent then. Kept across attempts.
+   */
+  notes?: TaskNote[];
+  /** The operator accepted the task as done though it did not end so (2026-10-14), and what it was before. */
+  accepted?: { at: string; note?: string; was: TaskStatus; reason?: string };
   /** What version control was *asked* to do for this task, as opposed to what it did. */
   vcsPlan?: TaskVcsPlan;
   /**
@@ -461,6 +469,9 @@ export function tidyVcsPlan(plan: TaskVcsPlan | undefined): TaskVcsPlan | undefi
  * task without reading anything from disk, and so a deleted run folder does not erase the
  * knowledge that the attempt happened at all.
  */
+/** One note from the operator to the chat about a task: see `Task.notes`. */
+export type TaskNote = { id: string; text: string; at: string; sentAt?: string; attempt?: number };
+
 export type TaskAttempt = {
   runId?: string;
   /** The run this attempt belonged to. */
@@ -519,6 +530,13 @@ export type TaskAttempt = {
   handoff?: Handoff;
   /** The plan this attempt made and worked to, in plan mode. */
   plan?: TaskPlan;
+  accepted?: Task['accepted'];
+  /**
+   * The operator undid this attempt (2026-10-14): `this` — its work taken out of the session's line by a
+   * revert (`commit`), or the folder put back at its start in per-task mode (`branch`); `back` — the line
+   * put back at the start of this task or of one before it, with the tasks after it queued again.
+   */
+  undone?: { how: 'this' | 'back'; at: string; commit?: string; branch?: string; byTask?: string };
   /**
    * What version control did for this attempt, including the commit it started from.
    *
@@ -751,7 +769,7 @@ export type TaskEnding = {
   findings?: Array<{ what: string; where?: string; evidence: string }>;
 };
 
-const clipText = (s: string | undefined, n: number): string | undefined => {
+export const clipText = (s: string | undefined, n: number): string | undefined => {
   const t = (s ?? '').trim();
   if (!t) return undefined;
   return t.length > n ? `${t.slice(0, n)}…` : t;

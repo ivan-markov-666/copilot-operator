@@ -24,7 +24,7 @@ import { dirtyBesidesInputs, inputSettings, inputsNote, settleInputs } from './i
 import { artifactPatterns, excludeArtifacts } from './artifacts.js';
 import { workingTreePaths } from './git.js';
 import { inScope } from './scope.js';
-import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type BranchUpdate, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState } from './git.js';
+import { branchExists, branchNameFrom, describeUpdate, updateFromRemote, type BranchUpdate, localBranches, commitAll, commitFiles, commitsBetween, commitSubject, createBranch, foreignCommits, isAncestor, checkoutExisting, freeBranchName, git, isValidBranchName, plannedBranchName, repoState, RUNNER_EMAIL } from './git.js';
 
 /** Which repository a session works in: its own setting, else the project it mirrors. */
 export function repoDirOf(session: Pick<Session, 'vcs' | 'projectDir'>): string {
@@ -1331,6 +1331,153 @@ export async function restoreToBase(
     leftBehind: preview.leftBehind,
     keptOn: preview.keptOn,
   };
+}
+
+/**
+ * Taking one task's work out of the session's line, with what came after it kept (operator's request,
+ * 2026-10-14: "an option to put git back as it was when the task had not been done"). In per-session mode
+ * the session is one branch and each task one commit, so the task's own commits are reverted there, in one
+ * new commit that says which task it undoes; nothing is reset or deleted, and the history keeps both. Only
+ * the runner's own commits of the task are taken out: a commit the operator made meanwhile, or an input
+ * file captured on the line, stays. A revert that conflicts with what later tasks did is given up whole
+ * (`git revert --abort`), and "Go back to before this task" is the way then.
+ *
+ * Per-task mode keeps each task on its own branch, which nothing else builds on: there "undo" puts the
+ * folder back at the task's start (a Restore) and leaves its branch as it is. See `OperatorService.undoTask`.
+ */
+export type UndoThisPreview = {
+  ok: boolean;
+  problem?: string;
+  repoDir: string;
+  /** Per-task mode: the folder goes back to the task's start; its branch is kept. */
+  perTask?: boolean;
+  /** The line the task's work is taken out of. */
+  branch?: string;
+  /** The task's commits a revert takes out, newest first, as "sha subject". */
+  commits: string[];
+  /** The files the task changed. */
+  files: string[];
+  /** Commits after the task's on the same line, which stay. */
+  later: string[];
+  /** Set when there is nothing in git to take out, and why: the task is only queued again. */
+  nothing?: string;
+  /** Per-task mode: where the folder goes back to. */
+  baseCommit?: string;
+};
+
+/** The line a per-session task's work is on now: the session's branch, or the existing branch it works on. */
+function sessionLine(session: Session): string {
+  return session.vcs?.startFrom === 'existing-branch' && session.vcs.existingBranch?.trim()
+    ? session.vcs.existingBranch.trim()
+    : sessionBranchName(session);
+}
+
+/** The runner's own commits of the task, newest first, as [sha, subject]; the operator's and captured inputs are left out. */
+async function ownCommits(dir: string, session: Session, base: string, tip: string): Promise<Array<[string, string]>> {
+  const r = await git(dir, ['log', '--format=%H%x09%ae%x09%s', `${base}..${tip}`]);
+  if (!r.ok || !r.stdout) return [];
+  const captured = (session.vcsStart?.inputs?.recaptured ?? []).map((c) => c.commit);
+  return r.stdout
+    .split('\n')
+    .map((l) => l.split('\t'))
+    .filter(([sha, email]) => !!sha && email === RUNNER_EMAIL && !captured.some((c) => c && (sha.startsWith(c) || c.startsWith(sha))))
+    .map(([sha, , subject]) => [sha!, subject ?? ''] as [string, string]);
+}
+
+const DIRTY = (changed: string[]): string =>
+  `There are uncommitted changes (${changed.slice(0, 3).join(', ')}${changed.length > 3 ? '…' : ''}). ` +
+  'Undoing a task now would mix them in or lose them, and neither is this tool\'s decision to make. Commit or stash them first.';
+
+/** What "Undo only this task" would do, asked before anything is done. */
+export async function undoThisPreview(session: Session, task: Task): Promise<UndoThisPreview> {
+  const repoDir = repoDirOf(session);
+  const files = (task.vcs?.files ?? []).map((f) => f.path);
+  const empty: UndoThisPreview = { ok: true, repoDir, commits: [], files, later: [] };
+  if (!session.vcs?.enabled) return { ...empty, nothing: 'Version control is off for this session, so there is nothing in git to take out; the task is only queued again.' };
+
+  if (session.vcs.branchMode === 'per-task') {
+    const back = await restorePreview(session, task);
+    if (!back.ok) {
+      return back.baseCommit || back.problem?.startsWith('There are uncommitted')
+        ? { ...empty, ok: false, perTask: true, problem: back.problem }
+        : { ...empty, perTask: true, nothing: back.problem ?? 'There is nothing to go back to.' };
+    }
+    return { ...empty, perTask: true, branch: task.vcs?.branch, baseCommit: back.baseCommit, later: [] };
+  }
+
+  const vcs = task.vcs;
+  if (!vcs?.baseCommit || !vcs.commit || vcs.commit === vcs.baseCommit) {
+    return { ...empty, nothing: 'This attempt committed nothing, so there is nothing in git to take out; the task is only queued again.' };
+  }
+  const state = await repoState(repoDir);
+  if (!state.isRepo) return { ...empty, ok: false, problem: state.problem ?? 'The repository could not be read.' };
+  if (state.dirty) return { ...empty, ok: false, problem: DIRTY(state.changed) };
+
+  const line = sessionLine(session);
+  if (!(await branchExists(repoDir, line)) || !(await isAncestor(repoDir, vcs.commit, line))) {
+    return { ...empty, branch: line, nothing: `Its work is not on ${line}, the branch the session works on now (it was left on ${vcs.branch ?? 'another branch'}), so there is nothing to take out there; the task is only queued again.` };
+  }
+  const own = await ownCommits(repoDir, session, vcs.baseCommit, vcs.commit);
+  if (own.length === 0) return { ...empty, branch: line, nothing: 'None of the commits since the task started are the runner\'s, so there is nothing of its own to take out; the task is only queued again.' };
+  return {
+    ok: true,
+    repoDir,
+    branch: line,
+    commits: own.map(([sha, subject]) => `${sha.slice(0, 8)} ${subject}`),
+    files,
+    later: await commitsBetween(repoDir, vcs.commit, line),
+  };
+}
+
+/** Does it, in per-session mode: the task's commits reverted on its line, in one commit. */
+export async function revertTaskWork(
+  session: Session,
+  task: Task,
+  bus: EventBus,
+): Promise<{ ok: boolean; problem?: string; commit?: string; branch?: string; reverted: string[]; nothing?: string }> {
+  const preview = await undoThisPreview(session, task);
+  if (!preview.ok) return { ok: false, problem: preview.problem, reverted: [] };
+  if (preview.nothing || preview.perTask) return { ok: true, reverted: [], ...(preview.nothing ? { nothing: preview.nothing } : {}) };
+  const dir = preview.repoDir;
+  const line = preview.branch!;
+  const vcs = task.vcs!;
+  const own = await ownCommits(dir, session, vcs.baseCommit!, vcs.commit!);
+
+  const state = await repoState(dir);
+  if (state.branch !== line) {
+    const moved = await checkoutExisting(dir, line);
+    if (!moved.ok) return { ok: false, problem: `${line} could not be checked out: ${moved.stderr || moved.stdout}`, reverted: [] };
+  }
+  const r = await git(dir, ['revert', '--no-commit', ...own.map(([sha]) => sha)]);
+  if (!r.ok) {
+    const conflicted = (await git(dir, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').filter(Boolean);
+    await git(dir, ['revert', '--abort']);
+    return {
+      ok: false,
+      reverted: [],
+      problem:
+        (conflicted.length > 0
+          ? `Taking it out conflicts with what came after it, in ${conflicted.slice(0, 5).join(', ')}${conflicted.length > 5 ? '…' : ''}`
+          : `git could not take it out: ${(r.stderr || r.stdout).split('\n')[0]}`) +
+        '. Nothing was changed. "Go back to before this task" puts the line back at its start instead, with the tasks after it queued again.',
+    };
+  }
+  const message = `Undo task ${session.tasks.findIndex((t) => t.id === task.id) + 1} "${task.title}"\n\nReverts ${own.map(([sha]) => sha.slice(0, 8)).join(', ')}, asked for by the operator.`;
+  const done = await commitAll(dir, message);
+  await git(dir, ['revert', '--quit']);
+  if (!done.committed) {
+    if (done.problem) return { ok: false, problem: done.problem, reverted: [] };
+    return { ok: true, reverted: [], branch: line, nothing: 'Its changes are no longer in the code on this line, so nothing needed taking out; the task is only queued again.' };
+  }
+  bus.publish({
+    sessionId: session.id,
+    taskId: task.id,
+    type: 'vcs-undone',
+    level: 'info',
+    message: `took the work of "${task.title}" out of ${line}: ${own.length} commit(s) reverted in ${done.commit?.slice(0, 8)}; ${preview.later.length > 0 ? `the ${preview.later.length} commit(s) after it stay` : 'nothing came after it'}`,
+    data: { branch: line, commit: done.commit, reverted: own.map(([sha]) => sha), later: preview.later.length },
+  });
+  return { ok: true, commit: done.commit, branch: line, reverted: own.map(([sha]) => sha) };
 }
 
 /** What the UI shows before a run: is version control going to work here? */

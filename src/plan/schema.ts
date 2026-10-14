@@ -270,7 +270,7 @@ const TaskVcsInput = z.object({
  */
 const LegacyMirrorInput = z.object({ enabled: z.boolean().optional(), rootDir: z.string().optional() }).passthrough();
 
-const TaskInput = z.object({
+export const TaskInput = z.object({
   title: z
     .string()
     .trim()

@@ -66,10 +66,11 @@ function sameFolder(a: string, b: string): boolean {
   const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
   return a.trim() !== '' && norm(a) === norm(b);
 }
-import { importPlan, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
+import { composeLevel2, composePrompt, importPlan, personaBlock, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
+import { checkChanges, kerriganReport, type ChangesCheck } from '../plan/changes.js';
 import { readInterruption } from '../session/interruption.js';
-import { baseRefOf, branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
-import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
+import { baseRefOf, branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, revertTaskWork, undoThisPreview, type UndoThisPreview, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
+import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, looksLikeRepo, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
@@ -282,6 +283,20 @@ export type RestartPlan = {
 };
 
 /** Why a session set aside on the Sessions page does not run: one sentence for every start that refuses it. */
+/** The id of the task a change names by id, number or title; see `plan/changes.ts`. */
+function checkTaskRef(session: Session, ref: string | number): string | undefined {
+  if (typeof ref === 'number' || /^\d+$/.test(String(ref))) return session.tasks[Number(ref) - 1]?.id;
+  return (session.tasks.find((t) => t.id === ref) ?? session.tasks.find((t) => t.title === ref) ?? session.tasks.find((t) => t.title.toLowerCase() === String(ref).toLowerCase()))?.id;
+}
+
+/** Why this task cannot be undone now, or null: only a task that ran and is not running or queued. */
+function undoRefusalOf(task: Task): string | null {
+  if (task.status === 'queued') return 'This task is queued and has not run since; there is nothing of it to undo.';
+  if (task.status === 'running' || task.status === 'waiting-approval') return 'This task is running. Stop it first.';
+  if (!task.startedAt) return 'This task has not run; there is nothing of it to undo.';
+  return null;
+}
+
 const INACTIVE_REASON = 'the session is inactive; make it active on the Sessions page to run it';
 
 /** A session the store already holds that a plan would create all over again. */
@@ -897,6 +912,35 @@ export class OperatorService {
   async deleteTask(sessionId: string, taskId: string): Promise<void> {
     await this.init();
     await this.store.deleteTask(sessionId, taskId);
+  }
+
+  /**
+   * A note to the chat about a task (2026-10-14): queued, running or waiting, it goes out with the task's
+   * next message — at once, in effect, for a task that is running. See `Task.notes`.
+   */
+  async addTaskNote(sessionId: string, taskId: string, text: string): Promise<Task> {
+    await this.init();
+    const task = await this.store.addTaskNote(sessionId, taskId, text);
+    const running = this.running.has(sessionId) && ['running', 'waiting-approval'].includes(task.status);
+    this.bus.publish({ sessionId, taskId, type: 'task-note-added', level: 'info',
+      message: running ? 'a note from the operator; it goes to the chat with the next report' : 'a note from the operator; it goes to the chat when the task runs next',
+      data: { length: text.trim().length, running } });
+    return task;
+  }
+
+  /** The operator accepts a task as done that did not end so (2026-10-14). */
+  async acceptTask(sessionId: string, taskId: string, note?: string): Promise<Task> {
+    await this.init();
+    if (this.running.has(sessionId)) {
+      const now = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
+      if (now && ['running', 'waiting-approval'].includes(now.status)) throw new Error('This task is running. Stop it first.');
+    }
+    const task = await this.store.acceptTask(sessionId, taskId, note);
+    const message = `"${task.title}" accepted as done by the operator (it had ended ${task.accepted?.was})${task.accepted?.note ? `: ${task.accepted.note}` : ''}`;
+    this.bus.publish({ sessionId, taskId, type: 'task-accepted', level: 'info', message, data: { was: task.accepted?.was } });
+    const cfg = await this.settings.load();
+    await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'accept', message, data: { taskId, was: task.accepted?.was } }).catch(() => undefined);
+    return task;
   }
 
   /**
@@ -2645,6 +2689,188 @@ export class OperatorService {
     };
   }
 
+  // --- the repository, read-only, for the workbench (2026-10-14) ------------------------------
+
+  /**
+   * Where a session's work is in its repository: the session's branch in per-session mode, the task's own
+   * branch when one is named, else what is checked out. Read-only; nothing here moves anything.
+   */
+  private async repoRefOf(sessionId: string, taskId?: string): Promise<{ dir: string; ref: string; label: string }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw new Error('No such session.');
+    const dir = repoDirOf(session);
+    if (!dir || !looksLikeRepo(dir)) throw new Error('This session has no repository to show.');
+    const task = taskId ? session.tasks.find((t) => t.id === taskId) : undefined;
+    const candidates = [
+      ...(task?.vcs?.commit ? [task.vcs.commit] : []),
+      ...(session.vcs?.enabled && session.vcs.branchMode === 'per-session' ? [sessionBranchName(session)] : []),
+      'HEAD',
+    ];
+    for (const ref of candidates) {
+      const r = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+      if (r.ok && r.stdout) return { dir, ref: r.stdout, label: ref === 'HEAD' ? 'HEAD' : ref.length >= 40 ? ref.slice(0, 8) : ref };
+    }
+    throw new Error('The repository has no commit to show yet.');
+  }
+
+  /** One folder of the repository at that point: its folders and files, folders first. */
+  async repoTree(sessionId: string, path = '', taskId?: string): Promise<{ ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> }> {
+    const clean = path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (clean.split('/').some((p) => p === '..')) throw new Error('That path is not inside the repository.');
+    const { dir, ref, label } = await this.repoRefOf(sessionId, taskId);
+    const r = await git(dir, ['ls-tree', '-l', clean ? `${ref}:${clean}` : ref]);
+    if (!r.ok) throw new Error(clean ? `There is no folder ${clean} there.` : 'The repository could not be read.');
+    const entries = r.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [meta, name] = line.split('\t');
+        const [, type, , size] = (meta ?? '').split(/\s+/);
+        return { name: name ?? '', path: clean ? `${clean}/${name}` : (name ?? ''), type: type === 'tree' ? ('dir' as const) : ('file' as const), ...(type === 'blob' && size && size !== '-' ? { size: Number(size) } : {}) };
+      })
+      .filter((e) => e.name)
+      .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
+    return { ref, label, path: clean, entries };
+  }
+
+  /** One file of the repository at that point, as text; a binary or very large file is said to be one. */
+  async repoFile(sessionId: string, path: string, taskId?: string): Promise<{ ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean }> {
+    const clean = path.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!clean || clean.split('/').some((p) => p === '..')) throw new Error('That path is not inside the repository.');
+    const { dir, ref, label } = await this.repoRefOf(sessionId, taskId);
+    const got = await fileAt(dir, ref, clean, 2 * 1024 * 1024);
+    if (!got.bytes && !got.tooLarge) throw new Error(`There is no file ${clean} there.`);
+    const binary = !!got.bytes && got.bytes.subarray(0, 8000).includes(0);
+    return { ref, label, path: clean, text: got.bytes && !binary ? got.bytes.toString('utf8').replace(/^﻿/, '') : null, binary, tooLarge: got.tooLarge };
+  }
+
+  /** The commits on the session's line, newest first, each with the task that made it when one did. */
+  async repoLog(sessionId: string, limit = 60): Promise<{ ref: string; label: string; commits: Array<{ sha: string; subject: string; author: string; at: string; taskId?: string; taskTitle?: string }> }> {
+    const { dir, ref, label } = await this.repoRefOf(sessionId);
+    const session = (await this.store.getSession(sessionId))!;
+    const r = await git(dir, ['log', `-${Math.max(1, Math.min(limit, 300))}`, '--format=%H%x09%an%x09%aI%x09%s', ref]);
+    const byCommit = new Map<string, Task>();
+    for (const t of session.tasks) {
+      for (const v of [t.vcs, ...(t.attempts ?? []).map((a) => a.vcs)]) if (v?.commit) byCommit.set(v.commit, t);
+    }
+    const commits = (r.ok ? r.stdout.split('\n').filter(Boolean) : []).map((line) => {
+      const [sha = '', author = '', at = '', subject = ''] = line.split('\t');
+      const task = byCommit.get(sha);
+      return { sha, subject, author, at, ...(task ? { taskId: task.id, taskTitle: task.title } : {}) };
+    });
+    return { ref, label, commits };
+  }
+
+  // --- Kerrigan: what happened, and her changes to existing work (2026-10-14) ---------------------
+
+  /** What happened in these sessions (all, when none are named), for Kerrigan, with the operator's note. */
+  async kerriganReport(opts: { sessionIds?: string[]; taskIds?: string[]; note?: string } = {}): Promise<{ text: string; sessions: number }> {
+    await this.init();
+    const all = await this.store.listSessions();
+    const wanted = (opts.sessionIds ?? []).filter(Boolean);
+    const taskIds = (opts.taskIds ?? []).filter(Boolean);
+    const sessions = all.filter((s) => (wanted.length > 0 ? wanted.includes(s.id) : taskIds.length > 0 ? s.tasks.some((t) => taskIds.includes(t.id)) : true));
+    if (sessions.length === 0) throw new Error('None of these sessions exists.');
+    if ((opts.note ?? '').length > MAX_INSTRUCTION_CHARS) throw new Error(`The note is ${(opts.note ?? '').length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
+    return { text: kerriganReport(sessions, { note: opts.note, taskIds }), sessions: sessions.length };
+  }
+
+  /** Kerrigan's answer read against the sessions as they are now; nothing is changed. */
+  async checkChanges(text: string): Promise<ChangesCheck> {
+    await this.init();
+    return checkChanges(text ?? '', await this.store.listSessions());
+  }
+
+  /**
+   * Applies Kerrigan's changes one by one, through the paths the buttons use, and stops at the first that is
+   * refused, saying which were done. Nothing is started.
+   */
+  async applyChanges(text: string): Promise<{ ok: boolean; check?: ChangesCheck; applied: Array<{ index: number; says: string }>; problem?: string; failedAt?: number }> {
+    const check = await this.checkChanges(text);
+    if (!check.ok) return { ok: false, check, applied: [] };
+    const cfg = await this.settings.load();
+    const persona = (await this.getContext('persona', 'en')).content;
+    const applied: Array<{ index: number; says: string }> = [];
+    for (const r of check.changes) {
+      const c = r.change;
+      try {
+        switch (c.op) {
+          case 'addTask': {
+            const session = await this.store.getSession(r.sessionId);
+            if (!session) throw new Error('The session is gone.');
+            const afterId = c.after !== undefined ? checkTaskRef(session, c.after) : undefined;
+            const reference = afterId ? session.tasks.find((t) => t.id === afterId) : session.tasks.at(-1);
+            const level2 = c.task.level2.trim()
+              ? composeLevel2({ level2: '', goal: '' } as PlanSession, c.task, persona)
+              : (reference?.level2 ?? personaBlock(persona));
+            const added = await this.store.addTask(r.sessionId, {
+              title: c.task.title,
+              level2,
+              prompt: composePrompt(c.task),
+              vcsPlan: c.task.vcs,
+              checks: c.task.checks,
+              reviewEnabled: c.task.review,
+              readOnly: c.task.readOnly || undefined,
+              scope: c.task.scope.length > 0 ? c.task.scope : undefined,
+              outputs: c.task.outputs.length > 0 ? c.task.outputs : undefined,
+            });
+            if (afterId) {
+              await this.store.updateSession(r.sessionId, (s) => {
+                const from = s.tasks.findIndex((t) => t.id === added.id);
+                const [moved] = s.tasks.splice(from, 1);
+                s.tasks.splice(s.tasks.findIndex((t) => t.id === afterId) + 1, 0, moved!);
+              });
+            }
+            break;
+          }
+          case 'editTask':
+            await this.updateTask(r.sessionId, r.taskId!, {
+              ...(c.title ? { title: c.title } : {}),
+              ...(c.prompt ? { prompt: c.prompt } : {}),
+              ...(c.checks ? { checks: c.checks as Task['checks'] } : {}),
+              ...(c.scope ? { scope: c.scope } : {}),
+            });
+            break;
+          case 'removeTask':
+            await this.deleteTask(r.sessionId, r.taskId!);
+            break;
+          case 'continue':
+            await this.continueTask(r.sessionId, r.taskId!, c.instruction);
+            break;
+          case 'newPrompt':
+            await this.rerunTask(r.sessionId, r.taskId!, { prompt: c.prompt }, { buildOnFinished: true });
+            break;
+          case 'runAgain':
+            await this.rerunTask(r.sessionId, r.taskId!, c.prompt ? { prompt: c.prompt } : {});
+            break;
+          case 'undo': {
+            const done = await this.undoTask(r.sessionId, r.taskId!, c.how);
+            if (!done.ok) throw new Error(done.problem ?? 'it could not be undone');
+            break;
+          }
+          case 'accept':
+            await this.acceptTask(r.sessionId, r.taskId!, c.note);
+            break;
+          case 'note':
+            await this.addTaskNote(r.sessionId, r.taskId!, c.text);
+            break;
+        }
+        applied.push({ index: r.index, says: r.says });
+        await appendSessionLog(cfg.resolved.runsDir, r.sessionId, { type: 'kerrigan-change', message: r.says, data: { op: c.op, ...(r.taskId ? { taskId: r.taskId } : {}) } }).catch(() => undefined);
+        this.bus.publish({ sessionId: r.sessionId, ...(r.taskId ? { taskId: r.taskId } : {}), type: 'kerrigan-change', level: 'info', message: `from Kerrigan's answer: ${r.says}` });
+      } catch (e) {
+        return {
+          ok: false,
+          applied,
+          failedAt: r.index,
+          problem: `Change ${r.index + 1} (${r.says}) was refused: ${(e as Error).message}${applied.length > 0 ? ` The ${applied.length} before it were made.` : ' Nothing was changed.'}`,
+        };
+      }
+    }
+    return { ok: true, applied };
+  }
+
   // --- approvals ------------------------------------------------------------------------
 
   /**
@@ -3264,6 +3490,94 @@ export class OperatorService {
     // rather than showing what would happen and refusing when they say yes.
     const refused = await this.restoreRefusal(session);
     return refused ? { ...preview, ok: false, problem: refused } : preview;
+  }
+
+  /**
+   * What undoing this task would do, both ways (operator's request, 2026-10-14): "Undo only this task" — its
+   * work taken out of the session's line, what came after it kept — and "Go back to before this task" — the
+   * line put back at its start, it and the tasks after it queued again, nothing started. See `undoTask`.
+   */
+  async undoPreview(sessionId: string, taskId: string): Promise<{ this: UndoThisPreview; back: RestartPlan; problem?: string }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw new Error('No such session.');
+    const task = session.tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error('No such task.');
+    const notYet = undoRefusalOf(task);
+    const refused = notYet ?? (await this.restoreRefusal(session));
+    const own = await undoThisPreview(session, task);
+    const back = await this.restartPlan(sessionId, taskId);
+    return {
+      this: refused ? { ...own, ok: false, problem: refused } : own,
+      back: refused ? { ...back, ok: false, problem: refused } : back,
+      ...(refused ? { problem: refused } : {}),
+    };
+  }
+
+  /**
+   * Undoes a task that ran. `this`: its work is taken out of the session's line by a revert (per-session),
+   * or the folder is put back at its start (per-task); the task goes back to the queue. `back`: "Run again
+   * from here" without the run — the line goes back to the task's start and it and the tasks after it are
+   * queued. Nothing is started and nothing in git is deleted: the old branch or the reverted commits stay.
+   */
+  async undoTask(sessionId: string, taskId: string, how: 'this' | 'back'): Promise<{ ok: boolean; problem?: string; message?: string; requeued?: number }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw new Error('No such session.');
+    const task = session.tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error('No such task.');
+    const notYet = undoRefusalOf(task);
+    if (notYet) return { ok: false, problem: notYet };
+    const refused = await this.restoreRefusal(session);
+    if (refused) return { ok: false, problem: refused };
+    const cfg = await this.settings.load();
+    const at = new Date().toISOString();
+
+    if (how === 'back') {
+      const plan = await this.restartPlan(sessionId, taskId);
+      const r = await this.restartFrom(sessionId, taskId, { restore: true, start: false });
+      if (r.reason && r.requeued === 0) return { ok: false, problem: r.reason };
+      for (const t of plan.tasks.filter((x) => !x.alreadyQueued)) {
+        await this.store
+          .updateSession(t.sessionId, (s) => {
+            const last = s.tasks.find((x) => x.id === t.taskId)?.attempts?.at(-1);
+            if (last) last.undone = { how: 'back', at, ...(r.restored[0] ? { branch: r.restored[0] } : {}), ...(t.taskId !== taskId ? { byTask: taskId } : {}) };
+          })
+          .catch(() => undefined);
+      }
+      const message = `went back to before "${task.title}": ${r.requeued} task(s) queued again${r.restored.length > 0 ? `, the code on ${r.restored.join(', ')}` : ''}; nothing was started`;
+      await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'undo', message, data: { taskId, how, requeued: r.requeued, restored: r.restored } }).catch(() => undefined);
+      this.bus.publish({ sessionId, taskId, type: 'task-undone', level: 'info', message, data: { how, requeued: r.requeued } });
+      return { ok: true, message, requeued: r.requeued };
+    }
+
+    let done: { commit?: string; branch?: string; nothing?: string } = {};
+    if (session.vcs?.enabled && session.vcs.branchMode === 'per-task') {
+      const preview = await undoThisPreview(session, task);
+      if (!preview.ok) return { ok: false, problem: preview.problem };
+      if (!preview.nothing) {
+        const back = await restoreToBase(session, task, this.bus);
+        if (!back.ok) return { ok: false, problem: back.problem };
+        done = { branch: back.branch };
+      } else done = { nothing: preview.nothing };
+    } else {
+      const r = await revertTaskWork(session, task, this.bus);
+      if (!r.ok) return { ok: false, problem: r.problem };
+      done = { commit: r.commit, branch: r.branch, nothing: r.nothing };
+    }
+    await this.store.rerunTask(sessionId, taskId, {});
+    await this.store.updateSession(sessionId, (s) => {
+      const last = s.tasks.find((x) => x.id === taskId)?.attempts?.at(-1);
+      if (last) last.undone = { how: 'this', at, ...(done.commit ? { commit: done.commit } : {}), ...(done.branch ? { branch: done.branch } : {}) };
+    });
+    const message = done.commit
+      ? `took the work of "${task.title}" out of ${done.branch} in ${done.commit.slice(0, 8)}; the task is queued again, nothing was started`
+      : done.branch
+        ? `put the folder back as it was before "${task.title}", on ${done.branch}; its own branch is kept, the task is queued again`
+        : `${done.nothing ?? 'nothing in git to take out'} The task is queued again.`;
+    await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'undo', message, data: { taskId, how, ...done } }).catch(() => undefined);
+    this.bus.publish({ sessionId, taskId, type: 'task-undone', level: 'info', message, data: { how, ...done } });
+    return { ok: true, message, requeued: 1 };
   }
 
   async restore(

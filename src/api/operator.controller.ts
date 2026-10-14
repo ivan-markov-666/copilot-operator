@@ -232,6 +232,19 @@ export class OperatorController {
    * A body with `title`, `prompt` or `level2` edits the task on the way: the attempt that
    * already ran keeps the text it ran with, and the next one uses the new text.
    */
+  /** A note to the chat about this task: sent with its next message, at once while it runs. */
+  @Post('sessions/:id/tasks/:taskId/notes')
+  addTaskNote(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { text?: unknown } = {}): Promise<unknown> {
+    if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
+    return this.ops.addTaskNote(id, taskId, body.text).catch(fail);
+  }
+
+  /** The operator accepts a task as done that did not end so. */
+  @Post('sessions/:id/tasks/:taskId/accept')
+  acceptTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { note?: unknown } = {}): Promise<unknown> {
+    return this.ops.acceptTask(id, taskId, typeof body?.note === 'string' ? body.note : undefined).catch(fail);
+  }
+
   /** A task that stopped at the runner's limit carries on in its own conversation and branch. */
   @Post('sessions/:id/tasks/:taskId/continue')
   continueTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { instruction?: unknown } = {}): Promise<unknown> {
@@ -285,6 +298,21 @@ export class OperatorController {
   @Post('sessions/:id/tasks/:taskId/restore')
   restore(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
     return this.ops.restore(id, taskId).catch(fail);
+  }
+
+  /** What undoing this task would do, both ways: only this task, or back to before it. */
+  @Get('sessions/:id/tasks/:taskId/undo')
+  undoPreview(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
+    return this.ops.undoPreview(id, taskId).catch(fail);
+  }
+
+  /** Does it: `this` takes the task's work out (queued again); `back` goes back to before it (it and the later ones queued). */
+  @Post('sessions/:id/tasks/:taskId/undo')
+  async undoTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { how?: string }): Promise<unknown> {
+    if (body?.how !== 'this' && body?.how !== 'back') throw new BadRequestException('how must be "this" or "back"');
+    const r = await this.ops.undoTask(id, taskId, body.how).catch(fail);
+    if (!r.ok) throw new BadRequestException(r.problem);
+    return r;
   }
 
   /** What starting the run again from this task would re-queue, and do to the code. */
@@ -683,6 +711,44 @@ export class OperatorController {
   @Delete('context/:kind')
   resetContext(@Param('kind') kind: string, @Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
     return this.ops.resetContext(asContextKind(kind), lang ?? 'en');
+  }
+
+  /** One folder of the session's repository at its branch (or the task's commit): read-only, for the workbench. */
+  @Get('sessions/:id/repo/tree')
+  repoTree(@Param('id') id: string, @Query('path') path?: string, @Query('task') task?: string): Promise<unknown> {
+    return this.ops.repoTree(id, path ?? '', task?.trim() || undefined).catch(fail);
+  }
+
+  /** One file of it, as text. */
+  @Get('sessions/:id/repo/file')
+  repoFile(@Param('id') id: string, @Query('path') path?: string, @Query('task') task?: string): Promise<unknown> {
+    if (!path) throw new BadRequestException('path is required');
+    return this.ops.repoFile(id, path, task?.trim() || undefined).catch(fail);
+  }
+
+  /** The commits on the session's line, each with the task that made it. */
+  @Get('sessions/:id/repo/log')
+  repoLog(@Param('id') id: string): Promise<unknown> {
+    return this.ops.repoLog(id).catch(fail);
+  }
+
+  /** What happened in these sessions, for Kerrigan, with the operator's note and the form of her answer. */
+  @Post('kerrigan/report')
+  kerriganReport(@Body() body: { sessionIds?: unknown; taskIds?: unknown; note?: unknown } = {}): Promise<unknown> {
+    const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+    return this.ops.kerriganReport({ sessionIds: ids(body?.sessionIds), taskIds: ids(body?.taskIds), note: typeof body?.note === 'string' ? body.note : undefined }).catch(fail);
+  }
+
+  /** Kerrigan's changes to existing work, read against it as it is now; nothing is changed. */
+  @Post('changes/check')
+  checkChanges(@Body() body: { text?: unknown } = {}): Promise<unknown> {
+    return this.ops.checkChanges(typeof body?.text === 'string' ? body.text : '').catch(fail);
+  }
+
+  /** Applies them one by one, stopping at the first refused; nothing is started. */
+  @Post('changes/apply')
+  applyChanges(@Body() body: { text?: unknown } = {}): Promise<unknown> {
+    return this.ops.applyChanges(typeof body?.text === 'string' ? body.text : '').catch(fail);
   }
 
   /** Checks a pasted plan without importing anything, and says what it would duplicate. */

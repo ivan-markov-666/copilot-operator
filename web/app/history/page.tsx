@@ -1373,7 +1373,7 @@ function NewTaskPanel({ sessions }: { sessions: Array<[string, string]> }) {
   const { t } = useT();
   return (
     <div className="row" style={{ margin: '14px 0 18px' }}>
-      <Link href="/#new-session" className="button-link">
+      <Link href="/sessions#new-session" className="button-link">
         {t('reg.newSession')}
       </Link>
       {sessions.length > 0 && (

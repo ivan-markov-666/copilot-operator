@@ -865,3 +865,161 @@ button .dot {
 .plan-view h4 { margin: 10px 0 2px; font-size: calc(13.5px * var(--scale)); }
 .plan-view p, .plan-view ol, .plan-view ul { margin: 2px 0 6px; }
 .plan-view .pre-wrap { white-space: pre-wrap; word-break: break-word; }
+
+/* ---------------------------------------------------------------------------------------------
+ * The workbench at / (2026-10-14): an IDE's layout in this app's own colours. The whole window:
+ * a bar on top, the activity column, the explorer, the editor with its tabs and the panel under
+ * it, the chat on the right, the status bar along the bottom. Everything from the tokens above,
+ * so the themes and the text sizes apply as everywhere else.
+ * ------------------------------------------------------------------------------------------- */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+button.linkish { border: 0; background: none; padding: 0; color: var(--accent); text-align: left; font: inherit; cursor: pointer; }
+button.linkish:hover { text-decoration: underline; }
+
+.wb-root { height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.wb-root > .approval-banner { margin: 6px 8px 0; }
+.wb-main { flex: 1; min-height: 0; }
+.wb { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; color: var(--ink); background: var(--bg); }
+
+.wb-top { display: flex; align-items: center; gap: 12px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.wb-brand { font-weight: 700; color: var(--accent); white-space: nowrap; }
+.wb-search { flex: 0 1 460px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 auto; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--muted); font-size: calc(13px * var(--scale)); cursor: pointer; min-width: 0; }
+.wb-search span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-search kbd, .wb kbd { font-family: var(--mono); font-size: calc(11px * var(--scale)); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; background: var(--panel); }
+.wb-menu { display: flex; align-items: center; gap: 12px; font-size: calc(13px * var(--scale)); white-space: nowrap; }
+.wb-menu a { color: var(--ink); }
+
+.wb-body { display: grid; grid-template-columns: 46px var(--wb-side) 5px minmax(0, 1fr) 5px var(--wb-chat); min-height: 0; }
+.wb-body.no-side { grid-template-columns: 46px minmax(0, 1fr) 5px var(--wb-chat); }
+.wb-body.no-chat { grid-template-columns: 46px var(--wb-side) 5px minmax(0, 1fr); }
+.wb-body.no-side.no-chat { grid-template-columns: 46px minmax(0, 1fr); }
+.wb-body > [hidden] { display: none !important; }
+
+.wb-activity { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; background: var(--bg-tint); border-right: 1px solid var(--line); }
+.wb-act { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-left: 2px solid transparent; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; padding: 0; }
+.wb-act:hover { color: var(--ink); }
+.wb-act.on { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+
+.wb-side { overflow: auto; background: var(--panel); min-width: 0; }
+.wb-side-head { display: flex; align-items: center; gap: 4px; padding: 8px 10px 4px; }
+.wb-side-head h2 { margin: 0; font-size: calc(11.5px * var(--scale)); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.wb-icon-btn { display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; font-size: calc(14px * var(--scale)); text-decoration: none; }
+.wb-icon-btn:hover { border-color: var(--line-strong); color: var(--ink); text-decoration: none; }
+.wb-filter { padding: 2px 10px 6px; }
+.wb-filter input { width: 100%; padding: 4px 8px; font-size: calc(13px * var(--scale)); }
+.wb-pad { padding: 6px 10px; margin: 0; }
+.wb-tree-list, .wb-tree-list ul, .wb-commits, .wb-problems { list-style: none; margin: 0; padding: 0; }
+.wb-tree-list ul { padding-left: 14px; }
+.wb-row { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; padding: 3px 10px; border: 0; border-radius: 0; background: none; color: var(--ink); text-align: left; font: inherit; font-size: calc(13.5px * var(--scale)); cursor: pointer; }
+.wb-row:hover { background: var(--bg-tint); }
+.wb-row.sel { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.wb-row.plain { cursor: default; }
+.wb-row.session { padding: 0; font-weight: 600; }
+.wb-row-main { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 3px 10px 3px 2px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.wb-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-chev { width: 22px; flex: none; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; }
+.wb-num { color: var(--muted); font-variant-numeric: tabular-nums; }
+.wb-count { color: var(--muted); font-size: calc(11.5px * var(--scale)); font-variant-numeric: tabular-nums; }
+.wb-ico { color: var(--muted); }
+.wb-commits li { padding-bottom: 4px; }
+.wb-commit-meta { padding: 0 10px 0 52px; font-size: calc(11.5px * var(--scale)); }
+.wb-live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); flex: none; }
+
+.wb-status { display: inline-grid; place-items: center; width: 1.2em; flex: none; font-weight: 700; }
+.wb-status.s-done { color: var(--ok); }
+.wb-status.s-failed, .wb-status.s-blocked { color: var(--bad); }
+.wb-status.s-limit-reached, .wb-status.s-aborted, .wb-status.s-waiting-approval { color: var(--warn); }
+.wb-status.s-queued { color: var(--muted); }
+.wb-status.s-running { color: var(--accent); }
+
+.wb-split { background: var(--line); cursor: col-resize; touch-action: none; }
+.wb-split.y { cursor: row-resize; height: 5px; }
+.wb-split:hover, .wb-split:focus-visible { background: var(--accent); outline: none; }
+
+.wb-center { display: grid; grid-template-rows: auto minmax(0, 1fr) auto var(--wb-bottom); min-width: 0; min-height: 0; background: var(--bg); }
+.wb-tabs { display: flex; overflow-x: auto; background: var(--bg-tint); border-bottom: 1px solid var(--line); min-height: 34px; }
+.wb-tabs-empty { padding: 8px 12px; }
+.wb-tab { display: flex; align-items: center; border-right: 1px solid var(--line); max-width: 260px; }
+.wb-tab > button[role="tab"] { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 4px 6px 12px; border: 0; background: none; color: var(--muted); font: inherit; font-size: calc(13px * var(--scale)); cursor: pointer; }
+.wb-tab.active { background: var(--bg); box-shadow: inset 0 2px 0 var(--accent); }
+.wb-tab.active > button[role="tab"] { color: var(--ink); }
+.wb-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-tab-close { border: 0; background: none; color: var(--muted); padding: 2px 8px; cursor: pointer; font-size: calc(15px * var(--scale)); }
+.wb-tab-close:hover { color: var(--bad); }
+.wb-editor { overflow: auto; padding: 14px 18px 24px; min-height: 0; }
+
+.wb-welcome { max-width: 760px; }
+.wb-welcome h2 { margin-top: 0; }
+.wb-list { margin: 4px 0 8px; padding-left: 20px; }
+.wb-list li { margin: 3px 0; }
+.wb-list li.bad { color: var(--bad); }
+.wb-list li.ok { color: var(--ok); }
+.wb-task { max-width: 980px; }
+.wb-task-head { display: flex; align-items: flex-start; gap: 10px; }
+.wb-task-head h2 { margin: 0; font-size: calc(19px * var(--scale)); }
+.wb-task-head p { margin: 2px 0 0; }
+.wb-task-head .wb-status { font-size: calc(20px * var(--scale)); }
+.wb-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 8px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.wb-inline-panel { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); }
+.wb-inline-panel .option { margin-bottom: 10px; }
+.wb-sec { margin: 14px 0; }
+.wb-sec h3 { font-size: calc(14px * var(--scale)); margin: 0 0 4px; }
+.wb-sec > summary { font-size: calc(14px * var(--scale)); margin: 0 0 4px; cursor: pointer; font-weight: 600; }
+.wb-session-tasks { padding-left: 4px; list-style: none; }
+
+.wb-file .wb-code { margin: 0; padding: 8px 0; max-height: none; overflow: auto; white-space: pre; }
+.wb-line { display: block; padding-right: 12px; }
+.wb-ln { display: inline-block; width: 4.5em; padding-right: 12px; text-align: right; color: var(--muted); user-select: none; }
+
+.wb-bottom { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; border-top: 1px solid var(--line); background: var(--panel); }
+.wb-bottom-tabs, .wb-chat-tabs { display: flex; align-items: center; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--line); min-height: 33px; }
+.wb-bottom-tabs > button[role="tab"], .wb-chat-tabs > button[role="tab"] { padding: 6px 10px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); font: inherit; font-size: calc(12px * var(--scale)); letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer; }
+.wb-bottom-tabs > button.on, .wb-chat-tabs > button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.wb-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 9px; background: var(--bad-soft); color: var(--bad); font-size: calc(11px * var(--scale)); }
+.wb-bottom-body { overflow: auto; min-height: 0; }
+.wb-terminal { height: 100%; overflow: auto; padding: 6px 10px; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); line-height: 1.45; background: var(--code); }
+.wb-terminal pre { margin: 2px 0 8px; padding: 0; border: 0; background: none; max-height: none; }
+.wb-terminal .bad, .wb-terminal .bad .wb-cmd { color: var(--bad); }
+.wb-terminal .warnline { color: var(--warn); }
+.wb-cmd { font-weight: 600; }
+.wb-sev.error { color: var(--bad); }
+.wb-sev.warn { color: var(--warn); }
+
+.wb-chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--panel); }
+.wb-chat-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.wb-chat-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px 4px; min-width: 0; }
+.wb-chat-story { flex: 1; min-height: 0; overflow: auto; padding: 0 10px; }
+.wb-chat-empty { padding: 16px; }
+.wb-compose { padding: 8px 10px 10px; border-top: 1px solid var(--line); background: var(--bg); }
+.wb-compose textarea { width: 100%; min-height: 80px; max-height: 40vh; resize: vertical; }
+.wb-kerrigan { flex: 1; overflow: auto; padding: 8px 12px 16px; }
+.wb-kerrigan h3 { font-size: calc(14px * var(--scale)); margin: 8px 0 2px; }
+.wb-kerrigan textarea { width: 100%; }
+.wb-scope { border: 0; padding: 0; margin: 4px 0; display: flex; flex-wrap: wrap; gap: 12px; }
+
+.wb-statusbar { display: flex; align-items: center; gap: 16px; padding: 2px 10px; min-height: 24px; background: var(--accent); color: var(--accent-ink); font-size: calc(12px * var(--scale)); white-space: nowrap; overflow: hidden; }
+.wb-statusbar > * { overflow: hidden; text-overflow: ellipsis; }
+.wb-status-btn { border: 0; background: none; color: inherit; font: inherit; padding: 0 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.wb-status-btn:hover { text-decoration: underline; }
+.wb-status-btn.warn { font-weight: 700; }
+
+.wb-palette { position: fixed; top: 10vh; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 24px)); max-height: 70vh; display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+.wb-palette input { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px 14px; font-size: calc(15px * var(--scale)); }
+.wb-palette ul { list-style: none; margin: 0; padding: 4px 0; overflow: auto; }
+.wb-palette li { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; cursor: pointer; }
+.wb-palette li.on { background: var(--accent-soft); }
+
+/* Narrower windows: the chat goes over the editor rather than beside it; a phone gets one column. */
+@media (max-width: 1100px) {
+  .wb-body:not(.no-chat) { grid-template-columns: 46px var(--wb-side) 5px minmax(0, 1fr); }
+  .wb-body.no-side:not(.no-chat) { grid-template-columns: 46px minmax(0, 1fr); }
+  .wb-body:not(.no-chat) > .wb-split.x:last-of-type { display: none; }
+  .wb-body:not(.no-chat) > .wb-chat { position: fixed; right: 0; top: 40px; bottom: 24px; width: min(420px, 92vw); z-index: 40; border-left: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+}
+@media (max-width: 700px) {
+  .wb-menu a { display: none; }
+  .wb-body, .wb-body.no-chat, .wb-body:not(.no-chat) { grid-template-columns: 46px minmax(0, 1fr); }
+  .wb-body > .wb-split.x { display: none; }
+  .wb-body:not(.no-side) > .wb-side { position: fixed; left: 46px; top: 40px; bottom: 24px; width: min(300px, 80vw); z-index: 39; border-right: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+  .wb-body > .wb-center { grid-column: 2; }
+}

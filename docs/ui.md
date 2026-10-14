@@ -12,6 +12,49 @@ The UI is a thin client over it. The core in `src/` does not know either exists:
 takes an authorizer (who approves steps), a store (where sessions persist) and an event bus
 (where progress goes), and the API supplies web-flavoured versions of all three.
 
+## The workbench
+
+The home screen (`/`, 2026-10-14) is laid out as an IDE with the chat beside it: the operator asked for the
+app to work like VS Code with a chat bot at its side, in this app's own design. `web/app/workbench/`.
+
+| Part | What it shows | What it does |
+|---|---|---|
+| Activity bar (far left) | three views of the explorer; the chat; Settings | switches the explorer, hides or shows the chat |
+| Explorer | sessions and their tasks as a tree, with a filter; or the repository's files at the session's branch (the task's commit when a task is chosen); or the commits on that branch, each with the task that made it | opens a task, a session or a file in a tab |
+| Editor | tabs: a task — how it stands and **every way on from there**; a session — run, step by step, stop, its tasks; a file — read-only, with line numbers | the task's toolbar never offers nothing: run, note, edit, remove; write to the chat, stop; continue, continue with a new prompt; new prompt; run again; accept as done; undo (only this task / back to before it); see the changes; ask Kerrigan. Whatever queues the task offers to run it there |
+| Panel (below) | Terminal: the commands the chosen task ran and their output, following while live; Problems: failed checks, review findings, why tasks stopped, across the session; Output: the session's events | each problem opens its task |
+| Chat (right) | the chosen task's conversation as it happens | the box below it follows the task: queued or working — a note (sent with the next message); failed, blocked or stopped — the prompt it carries on with; done — a new prompt that builds on it. The button says which |
+| Kerrigan (right, second tab) | what happened, for her: this task, this session or all of them, with the operator's note | copy or save the report; paste her answer, check it (each change said in words), make the changes |
+| Status bar | the repository's branch, what is running (session › task, message n of the limit, minutes), steps waiting for an answer, the model | opens the running task; brings the waiting card into view |
+
+Ctrl+K (or Ctrl+Shift+P) opens a palette that finds any task, session, page or command; Ctrl+B hides the
+explorer, Ctrl+J the panel, Ctrl+L puts the keyboard in the chat box. The chosen task is in the address
+(`/?s=…&t=…`); the panels' sizes and which are open are kept in the browser. The list of sessions with the
+run panel that used to be `/` is `/sessions`, one click away.
+
+**Undo a task** (2026-10-14). "Undo only this task": in a session on one branch, the runner's own commits of
+the task are reverted in one new commit on the session's branch, the tasks after it kept; a revert that
+conflicts with later work is given up whole (`git revert --abort`) and says so. In per-task mode the folder
+goes back to the task's start and its branch is kept. "Go back to before this task" is "Run again from here"
+without the run: the line back at the task's start on a branch of its own, it and the tasks after it queued.
+Both queue the task again and start nothing; nothing in git is deleted; the archived attempt records
+`undone`. `GET|POST /sessions/:id/tasks/:taskId/undo`. **Accept as done**: a task that did not end done is
+marked done by the operator, with what it was and why (`Task.accepted`). **Notes**: `Task.notes`, sent with
+the task's next message — its opening, or the next report while it runs.
+
+**Keep going until done** (2026-10-14): a task a limit stopped — messages, minutes, the reply wait, replies in
+the wrong shape, rounds of fixing checks or review findings — is carried on at once in its own chat, from where
+it got to, up to `limits.autoContinue` times (3; Settings → Execution → "Keep going after a limit"), so the
+limits still bound it at (autoContinue + 1) × each. A task that blocked goes to a fresh chat, then waits; one
+the operator stopped is never carried on. Events `task-auto-continue`, `task-auto-continue-ended`.
+
+**Kerrigan's changes** (`src/plan/changes.ts`). `POST /kerrigan/report { sessionIds?, taskIds?, note? }` writes
+what happened with ids and the answer's form; her answer `{"version":1,"changes":[…]}` — `continue`,
+`newPrompt`, `runAgain`, `undo`, `accept`, `addTask`, `editTask`, `removeTask`, `note`, naming sessions and
+tasks by id, number or title — is read by `POST /changes/check` against the sessions as they are and applied by
+`POST /changes/apply` one by one through the same paths as the buttons, stopping at the first refused. Checked
+by `npm run check:e2e-kerrigan`, `check:e2e-undo` and the browser checks.
+
 ## Concepts the UI is built around
 
 **Session.** One Copilot conversation. Created with a name; the conversation itself is opened
@@ -446,6 +489,16 @@ POST   /api/sessions/:id/stop
 GET    /api/sessions/:id/events      recent history
 GET    /api/sessions/:id/stream      server-sent events
 GET    /api/approvals?session=       POST /api/approvals/:id { action: run | skip | abort }
+GET    /api/sessions/:id/tasks/:taskId/undo     what undoing would do, both ways
+POST   /api/sessions/:id/tasks/:taskId/undo     { how: this | back }  nothing is started
+POST   /api/sessions/:id/tasks/:taskId/accept   { note? }  accepted as done
+POST   /api/sessions/:id/tasks/:taskId/notes    { text }   to the chat with the task's next message
+GET    /api/sessions/:id/repo/tree?path=&task=  one folder, read-only
+GET    /api/sessions/:id/repo/file?path=&task=  one file, as text
+GET    /api/sessions/:id/repo/log               commits on the session's line, with their tasks
+POST   /api/kerrigan/report          { sessionIds?, taskIds?, note? } what happened, for Kerrigan
+POST   /api/changes/check            { text } her changes, said in words; nothing changes
+POST   /api/changes/apply            { text } made one by one; nothing is started
 POST   /api/approvals/:id/plan       { action: approve | revise | stop, note? } a plan waiting (plan mode)
 GET    /api/tasks                    every task of every session, for the register
 GET    /api/activity                 { running, sessions, batch } — in-memory, safe to poll

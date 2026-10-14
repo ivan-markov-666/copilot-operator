@@ -67,7 +67,23 @@ export type ComposeInput = {
   shellNote?: string;
   /** Plan mode: the planning phase the task opens with. See `orchestrator/planMode.ts`. */
   planNote?: string;
+  /** The operator's notes about this task not sent yet (`Task.notes`), as `operatorNotesSection` writes them. */
+  operatorNotes?: string;
 };
+
+/** The operator's notes about a task, as the chat is given them: with the opening, or with a report while it runs. */
+export function operatorNotesSection(notes: ReadonlyArray<{ text: string }>, whileWorking: boolean): string {
+  if (notes.length === 0) return '';
+  return [
+    whileWorking
+      ? `## ${notes.length > 1 ? 'Notes' : 'A note'} from the operator, while you work`
+      : `## ${notes.length > 1 ? 'Notes' : 'A note'} from the operator about this task`,
+    '',
+    'Take this into account from now on; where it and the task disagree, this wins.',
+    '',
+    ...notes.map((n) => (notes.length > 1 ? `- ${n.text.trim().replace(/\n/g, '\n  ')}` : n.text.trim())),
+  ].join('\n');
+}
 
 const LEVEL2_HEADER = '## Project instructions (level 2)';
 const TASK_HEADER = '## Task';
@@ -82,7 +98,7 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.readOnlyNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.planNote].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.planNote, input.operatorNotes].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
 

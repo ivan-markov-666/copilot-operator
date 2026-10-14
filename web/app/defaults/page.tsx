@@ -516,6 +516,8 @@ function ExecutionSection() {
   const rawRef = useRef<Record<string, unknown> | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const [retries, setRetries] = useState(2);
+  /** Times a task a limit stopped is carried on by itself (`limits.autoContinue`). */
+  const [autoContinue, setAutoContinue] = useState(3);
   const [approaches, setApproaches] = useState(2);
   const [reviewRounds, setReviewRounds] = useState(2);
   const [iterations, setIterations] = useState(60);
@@ -548,7 +550,9 @@ function ExecutionSection() {
           maxReviewRounds?: number;
           maxIterations?: number;
           maxRunMinutes?: number;
+          autoContinue?: number;
         };
+        setAutoContinue(typeof limits.autoContinue === 'number' ? limits.autoContinue : 3);
         setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
         setApproaches(typeof limits.minApproachesBeforeBlocked === 'number' ? limits.minApproachesBeforeBlocked : 2);
         setReviewRounds(typeof limits.maxReviewRounds === 'number' ? limits.maxReviewRounds : 2);
@@ -611,6 +615,7 @@ function ExecutionSection() {
     return done;
   };
   const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
+  const saveAutoContinueLater = useDebouncedSave((n: number) => write('limits', 'autoContinue', n));
   const saveApproachesLater = useDebouncedSave((n: number) => write('limits', 'minApproachesBeforeBlocked', n));
   const saveReviewRoundsLater = useDebouncedSave((n: number) => write('limits', 'maxReviewRounds', n));
   const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
@@ -628,6 +633,24 @@ function ExecutionSection() {
       <h2>{t('exec.title')}</h2>
       <p className="muted small">{t('exec.intro')}</p>
       {err && <div className="err">{err}</div>}
+      {/* Keep going until done (2026-10-14): first, as it decides whether a limit ends the work at all. */}
+      <label htmlFor="auto-continue">{t('exec.autoContinue')}</label>
+      <div className="row">
+        <BoundedNumber
+          id="auto-continue"
+          value={autoContinue}
+          min={0}
+          max={20}
+          onChange={(n) => {
+            setAutoContinue(n);
+            saveAutoContinueLater(n);
+          }}
+          disabled={!raw}
+        />
+        <span className="muted small">{t('exec.autoContinueUnit')}</span>
+      </div>
+      <p className="why">{t('exec.autoContinueWhy')}</p>
+
       <label htmlFor="min-approaches">{t('exec.minApproaches')}</label>
       <div className="row">
         <BoundedNumber
@@ -1048,7 +1071,7 @@ function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing
       </ul>
 
       <div className="row" style={{ marginTop: 12 }}>
-        <Link href="/" className="button-link plain">
+        <Link href="/sessions" className="button-link plain">
           {t('proj.toSessions')}
         </Link>
         <Link href="/import" className="button-link quiet">

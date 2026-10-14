@@ -18,6 +18,7 @@ import { stdin, stdout } from 'node:process';
 
 import { loadConfig, expandPath } from './config/schema.js';
 import { CopilotTransport } from './transport/copilotTransport.js';
+import { parseChatId } from './transport/chatSession.js';
 import { runSession } from './orchestrator/taskRunner.js';
 import { SessionStore } from './session/store.js';
 import { settingsOf, SettingsUnusableError } from './api/settings.js';
@@ -416,7 +417,8 @@ program
   .option('--json', 'print the raw list, for pasting into an issue')
   .option('--set <name>', 'also switch the chat to this model, by its exact name')
   .option('--steps', 'with --set: print each step of the choice with its time, and keep a picture of each in runs/_models')
-  .action(async (opts: { profile: string; url: string; json?: boolean; set?: string; steps?: boolean }) => {
+  .option('--chat <id-or-address>', 'first open this existing conversation (its id, or its address from the browser), as a task carried on does')
+  .action(async (opts: { profile: string; url: string; json?: boolean; set?: string; steps?: boolean; chat?: string }) => {
     const transport = new CopilotTransport({
       profileDir: opts.profile,
       transportDir: join(installLayout().runsDir, '_models'),
@@ -433,6 +435,16 @@ program
     try {
       await transport.open();
       await transport.ensureSignedIn();
+      /*
+       * Back in a conversation that already ran, as a failed task carried on is: the case the operator saw
+       * the model check go wrong in (2026-10-14). What the picker button reads there is printed first.
+       */
+      if (opts.chat) {
+        const id = parseChatId(opts.chat) ?? opts.chat.trim();
+        const opened = await transport.openConversation(id);
+        console.log(opened ? `opened the conversation ${id}` : `the conversation ${id} could not be opened; going on in the page as it is`);
+        console.log(`the picker button reads: ${(await transport.currentModel()) ?? '(nothing)'}`);
+      }
       const { options, current, note } = await transport.listModels();
 
       if (opts.json) {

@@ -125,6 +125,22 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   const allowedOrigins = [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1'), `http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
   app.use(localApiGuard({ token, port: PORT, allowedOrigins, servesInterface: webDir !== null }));
   if (webDir) {
+    /*
+     * A page whose name is also a folder of pages: `/sessions` is `sessions.html`, and `sessions/` holds
+     * `view.html` (2026-10-14, when the list moved there). The static server finds the folder first and
+     * redirects to it, where there is no page; the page is served instead.
+     */
+    const root = webDir;
+    app.use((req: { method: string; path: string }, res: { sendFile: (p: string) => void }, next: () => void) => {
+      if ((req.method === 'GET' || req.method === 'HEAD') && /^\/[a-z0-9-]+$/i.test(req.path)) {
+        const page = join(root, `${req.path.slice(1)}.html`);
+        if (existsSync(page) && existsSync(join(root, req.path.slice(1)))) {
+          res.sendFile(page);
+          return;
+        }
+      }
+      next();
+    });
     // The prebuilt interface, from the package: one process, one port, no dev server.
     app.useStaticAssets(webDir, { extensions: ['html'], index: 'index.html' });
   }
