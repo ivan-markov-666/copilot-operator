@@ -287,6 +287,30 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
   }
 }
 
+/*
+ * A page whose name is also a folder of pages (`/sessions` is sessions.html beside sessions/view.html), served from an
+ * interface in a folder whose path has a dot folder in it — `.claude\worktrees`, pnpm's `node_modules\.pnpm`. Handed
+ * over by its whole path, it was refused as a dotfile and the Sessions page was a 404 (2026-10-17).
+ */
+{
+  const base = mkdtempSync(join(tmpdir(), 'cop-guard-dotweb-'));
+  const web = join(base, '.dotted', 'web');
+  mkdirSync(join(web, 'sessions'), { recursive: true });
+  writeFileSync(join(web, 'index.html'), '<p>ui</p>', 'utf8');
+  writeFileSync(join(web, 'sessions.html'), '<p>the sessions</p>', 'utf8');
+  writeFileSync(join(web, 'sessions', 'view.html'), '<p>one session</p>', 'utf8');
+  try {
+    await scenario('the served interface, from a path with a dot folder in it', { webDir: web }, async (h) => {
+      const list = await wire(h.api.port, 'GET', '/sessions');
+      t.check('/sessions is its page, not a 404', [list.status, list.text.includes('<p>the sessions</p>')], [200, true]);
+      const one = await wire(h.api.port, 'GET', '/sessions/view');
+      t.check('and /sessions/view the page in its folder', [one.status, one.text.includes('<p>one session</p>')], [200, true]);
+    });
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
 // --- a checkout does not serve the interface -----------------------------------------------------
 
 /*
