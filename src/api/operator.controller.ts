@@ -738,9 +738,24 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
-    return this.ops.chatSend({ text: body.text, ...(typeof body.threadId === 'string' && body.threadId ? { threadId: body.threadId } : {}) }).catch(fail);
+    return this.ops
+      .chatSend({
+        text: body.text,
+        ...(typeof body.threadId === 'string' && body.threadId ? { threadId: body.threadId } : {}),
+        ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model } : {}),
+      })
+      .catch(fail);
+  }
+
+  /** Back to before a message: the folder as it was then, that message and the ones after it taken out. */
+  @Post('chat/:id/rewind')
+  async chatRewind(@Param('id') id: string, @Body() body: { taskId?: unknown } = {}): Promise<unknown> {
+    if (typeof body?.taskId !== 'string' || !body.taskId) throw new BadRequestException('taskId is required');
+    const r = await this.ops.chatRewind(id, body.taskId).catch(fail);
+    if (!r.ok) throw new BadRequestException(r.problem);
+    return r;
   }
 
   /** One folder of the session's repository at its branch (or the task's commit): read-only, for the workbench. */

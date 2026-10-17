@@ -69,6 +69,7 @@ function sameFolder(a: string, b: string): boolean {
 import { composeLevel2, composePrompt, importPlan, personaBlock, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { checkChanges, kerriganReport, type ChangesCheck } from '../plan/changes.js';
 import { workspaceFile, workspaceFiles, workspaceInfo, type WorkspaceInfo } from '../session/workspace.js';
+import { restoreCheckpoint } from '../session/checkpoint.js';
 import { readInterruption } from '../session/interruption.js';
 import { baseRefOf, branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, revertTaskWork, undoThisPreview, type UndoThisPreview, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, looksLikeRepo, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
@@ -103,7 +104,7 @@ import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
-import type { ResolvedConfig } from '../config/schema.js';
+import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
 
 /**
  * A run in progress. `mode` is mutable on purpose: the operator can decide, in the middle of
@@ -1708,7 +1709,9 @@ export class OperatorService {
     const queuedIds = queuedToRun(session, onlyTasks).map((t) => t.id);
     if (queuedIds.length === 0) return { started: false, reason: 'no queued tasks', done: Promise.resolve(idle) };
 
-    const cfg = await this.settings.load();
+    const loaded = await this.settings.load();
+    // A chat conversation's git is the operator's: switching branches and committing are allowed there (2026-10-17).
+    const cfg: ResolvedConfig = session.kind === 'chat' ? { ...loaded, execution: { ...loaded.execution, denyPatterns: chatDenyPatterns(loaded.execution.denyPatterns) } } : loaded;
     const policy = {
       mode,
       denyPatterns: cfg.execution.denyPatterns,
@@ -2727,7 +2730,7 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -2750,18 +2753,18 @@ export class OperatorService {
         s.onFailure = 'continue';
         s.review = { enabled: false, model: '' };
         s.planMode = 'off';
-        s.vcs = ws.isRepo
-          ? {
-              ...(s.vcs ?? DEFAULT_VCS),
-              enabled: true,
-              repoDir: ws.dir,
-              branchMode: 'per-session',
-              // The operator's own uncommitted work is normal in an open folder: taken along as the conversation's
-              // starting snapshot, once they approve it, rather than refusing the first message.
-              dirtyWorktree: { policy: 'snapshot' },
-            }
-          : { ...(s.vcs ?? DEFAULT_VCS), enabled: false, repoDir: '' };
+        /*
+         * No version control of the bot's own (2026-10-17): no branch, no commit, no question about where the work
+         * starts. The chat works on the branch the folder is on, with what is in it, as an IDE's chat does; each
+         * message is photographed before it runs instead, so the operator can go back to before it.
+         */
+        s.vcs = { ...(s.vcs ?? DEFAULT_VCS), enabled: false, repoDir: '' };
         s.projectDir = ws.dir;
+        // The model chosen in the chat for this conversation: the operator's word, which outranks Settings.
+        if (input.model?.trim()) {
+          s.model = input.model.trim();
+          s.modelSource = 'operator';
+        }
       });
       this.bus.publish({ sessionId: session.id, type: 'chat-started', level: 'info', message: `a conversation in ${ws.dir}` });
     }
@@ -2770,8 +2773,59 @@ export class OperatorService {
       level2: '',
       prompt: text,
     });
-    const fresh = (await this.store.getSession(session.id))!;
-    return { threadId: fresh.id, taskId: task.id, needsStart: !fresh.vcsStart && !fresh.tasks.some((t) => t.startedAt) };
+    // After going back, the conversation is told with this message: it still holds what was undone.
+    const pending = (await this.store.getSession(session.id))?.rewindNote;
+    if (pending) {
+      await this.store.addTaskNote(session.id, task.id, pending);
+      await this.store.updateSession(session.id, (s) => {
+        s.rewindNote = undefined;
+      });
+    }
+    return { threadId: session.id, taskId: task.id, needsStart: false };
+  }
+
+  /**
+   * Back to before a message of the chat (2026-10-17): the folder put back exactly as it was just before that
+   * message ran — branch, commit, uncommitted changes — and that message and every one after it taken out of the
+   * conversation, because they did not happen. They stay on the record (`Session.rewound`), and the folder as it
+   * was before going back is kept as a safety photograph. The Copilot conversation still holds them, so its next
+   * message says what was undone. See `session/checkpoint.ts`.
+   */
+  async chatRewind(threadId: string, taskId: string): Promise<{ ok: boolean; problem?: string; message?: string; text?: string; safety?: string }> {
+    await this.init();
+    const session = await this.store.getSession(threadId);
+    if (!session || session.kind !== 'chat') return { ok: false, problem: 'That conversation is not there any more.' };
+    if (this.running.has(threadId) || session.status !== 'idle') return { ok: false, problem: 'The conversation is working. Stop it first, then go back.' };
+    const at = session.tasks.findIndex((t) => t.id === taskId);
+    if (at < 0) return { ok: false, problem: 'That message is not in the conversation.' };
+    const task = session.tasks[at]!;
+    // A message that never ran changed nothing: it is only taken out, with the ones after it.
+    const firstRan = session.tasks.slice(at).find((t) => t.checkpoint);
+    const dir = session.projectDir?.trim() || '';
+    let safety: string | undefined;
+    if (firstRan?.checkpoint) {
+      const other = await this.runningIn(dir);
+      if (other) return { ok: false, problem: `Session "${other.name}" is running in this folder. Stop it first.` };
+      const done = await restoreCheckpoint(dir, firstRan.checkpoint);
+      if (!done.ok) return { ok: false, problem: done.problem };
+      safety = done.safety;
+    }
+    const removed = session.tasks.slice(at);
+    const titles = removed.map((t) => `"${t.title}"`).join(', ');
+    await this.store.updateSession(threadId, (s) => {
+      s.tasks = s.tasks.slice(0, at);
+      s.rewound = [...(s.rewound ?? []), { at: new Date().toISOString(), toBefore: taskId, safety: safety ?? '', tasks: removed }];
+      s.rewindNote =
+        `The operator went back to before the message "${task.title}": the folder is again exactly as it was then` +
+        `${firstRan?.checkpoint ? ` (on ${firstRan.checkpoint.branch || 'commit ' + firstRan.checkpoint.head.slice(0, 8)})` : ''}, and that message and the ` +
+        `${removed.length > 1 ? `${removed.length - 1} after it were` : 'ones after it were'} undone (${titles}). Forget what was done for them; ` +
+        'work from the folder as it is now.';
+    });
+    const message = `went back to before "${task.title}": ${removed.length} message(s) taken out${safety ? `, the folder as it was is kept as ${safety.slice(0, 8)}` : ''}`;
+    const cfg = await this.settings.load();
+    await appendSessionLog(cfg.resolved.runsDir, threadId, { type: 'chat-rewind', message, data: { taskId, removed: removed.map((t) => t.id), safety } }).catch(() => undefined);
+    this.bus.publish({ sessionId: threadId, type: 'chat-rewind', level: 'info', message, data: { taskId, removed: removed.length, safety } });
+    return { ok: true, message, text: task.prompt, ...(safety ? { safety } : {}) };
   }
 
   // --- the repository, read-only, for the workbench (2026-10-14) ------------------------------

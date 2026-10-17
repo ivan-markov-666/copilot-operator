@@ -10,17 +10,19 @@
  * while it works is a note it gets with its next report. A command waiting for an answer is asked about here.
  *
  * Each conversation is a session of kind `chat` and each message a task of it, so everything the runner does for
- * a task — the limits, keep going, version control, the record — holds here too. The first message asks where
- * the work starts (the start window); the rest go on where it is.
+ * a task — the limits, keep going, the record — holds here too. It asks nothing about branches (2026-10-17): it
+ * works on the branch the folder is on, which is the operator's to change, by hand or by asking the chat. Before
+ * each message the folder is photographed, and "go back" on a message puts it back as it was then, with that
+ * message and the ones after it gone from the conversation. The model is chosen under the box, as in an IDE.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type Approval, type ChatThread, type Session, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
+import { api, type Approval, type ChatThread, type ModelCatalogue, type Session, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { confirmDialog } from '../dialog';
-import { openStartDialog } from '../startDialog';
+import { ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
 import { RichText } from '../richText';
 import { StatusMark } from './workbench';
@@ -54,6 +56,10 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState('');
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  /** The models as the chat's picker last offered them, and the one for a conversation not started yet. */
+  const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
+  const [newModel, setNewModel] = useState('');
+  const [reading, setReading] = useState(false);
   const box = useRef<HTMLTextAreaElement | null>(null);
   const running = !!session && session.status !== 'idle';
 
@@ -70,6 +76,9 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
   useEffect(() => {
     if (composeAsk > 0) box.current?.focus();
   }, [composeAsk]);
+  useEffect(() => {
+    api.models().then(setCatalogue).catch(() => undefined);
+  }, []);
 
   const readThreads = useCallback(() => api.chatThreads().then(setThreads).catch(() => undefined), []);
   usePoll(readThreads, 5000);
@@ -110,21 +119,22 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
     setBusy(true);
     setSaid('');
     try {
-      const r = await api.chatSend(message, threadId || undefined);
+      const fresh = !threadId;
+      const r = await api.chatSend(message, threadId || undefined, fresh ? newModel || undefined : undefined);
       setText('');
       choose(r.threadId);
       if (r.noted) {
         setSaid(t('chat.noted'));
         return;
       }
-      if (mode === 'unattended' && r.needsStart && !quietStart && !(await confirmDialog(t('session.unattendedConfirm')))) {
+      // Commands run without asking: said once, when a conversation begins, unless Settings say not to ask.
+      if (mode === 'unattended' && fresh && !quietStart && !(await confirmDialog(t('session.unattendedConfirm')))) {
         setSaid(t('chat.notStartedYet'));
         return;
       }
-      const reply = r.needsStart
-        ? (await openStartDialog({ sessionIds: [r.threadId], mode, start: (starts) => api.start(r.threadId, mode, undefined, starts) })).reply
-        : await api.start(r.threadId, mode);
-      if (reply && !reply.started) setSaid(t('chat.notStarted', { reason: reply.reason ?? '' }));
+      // No question about branches: the chat works on the branch the folder is on.
+      const reply = await api.start(r.threadId, mode);
+      if (!reply.started) setSaid(t('chat.notStarted', { reason: reply.reason ?? '' }));
     } catch (e) {
       setSaid((e as Error).message);
     } finally {
@@ -132,6 +142,51 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
       void readSession();
       void readThreads();
       onChange();
+    }
+  };
+  /** "Go back to before this message": the folder as it was then, the message back in the box to write again. */
+  const rewind = async (task: Task) => {
+    if (!session || busy) return;
+    if (!(await confirmDialog(t('chat.rewindConfirm', { n: session.tasks.length - session.tasks.indexOf(task) })))) return;
+    setBusy(true);
+    setSaid('');
+    try {
+      const r = await api.chatRewind(session.id, task.id);
+      setText(r.text);
+      setSaid(t('chat.rewound'));
+      box.current?.focus();
+    } catch (e) {
+      setSaid((e as Error).message);
+    } finally {
+      setBusy(false);
+      void readSession();
+      onChange();
+    }
+  };
+  /** The model of this conversation (or of the next one), as in an IDE's chat: chosen under the box. */
+  const chooseModel = async (name: string) => {
+    if (!session) {
+      setNewModel(name);
+      return;
+    }
+    try {
+      await api.updateSession(session.id, { model: name });
+      void readSession();
+    } catch (e) {
+      setSaid((e as Error).message);
+    }
+  };
+  /** The latest models, read from Copilot's own picker (it opens the browser for a moment). */
+  const readModels = async () => {
+    setReading(true);
+    setSaid(t('chat.modelsReading'));
+    try {
+      setCatalogue(await api.refreshModels());
+      setSaid(t('chat.modelsRead'));
+    } catch (e) {
+      setSaid((e as Error).message);
+    } finally {
+      setReading(false);
     }
   };
   const stop = () => {
@@ -166,7 +221,9 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
         {!session ? (
           <Welcome workspace={workspace} onPick={(p) => { setText(p); box.current?.focus(); }} onOpenFolder={onOpenFolder} />
         ) : (
-          session.tasks.map((task) => <Turn key={task.id} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onOpenFile={onOpenFile} />)
+          session.tasks.map((task) => (
+            <Turn key={task.id} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
+          ))
         )}
         {said && <p className="cs-system" role="status">{said}</p>}
       </div>
@@ -187,6 +244,21 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
             }
           }}
         />
+        <div className="cs-bar">
+          <label htmlFor="cs-model" className="sr-only">{t('chat.model')}</label>
+          <ModelPicker
+            id="cs-model"
+            chosen={session ? (session.model ?? '') : newModel}
+            onChange={(n) => void chooseModel(n)}
+            none={catalogue?.defaultModel ? t('chat.modelDefault', { model: catalogue.defaultModel }) : t('chat.modelChat')}
+            catalogue={catalogue}
+            disabled={running}
+            style={{ minWidth: 0, maxWidth: '48%' }}
+          />
+          <button type="button" className="wb-icon-btn" onClick={() => void readModels()} disabled={reading || running} title={t('chat.readModels')} aria-label={t('chat.readModels')}>
+            ↻
+          </button>
+        </div>
         <div className="cs-bar">
           <label htmlFor="cs-mode" className="sr-only">{t('chat.mode')}</label>
           <select id="cs-mode" value={mode} onChange={(e) => { const m = e.target.value as 'confirm' | 'unattended'; setMode(m); keep(MODE_KEY, m); }} disabled={running} title={t('chat.modeWhy')}>
@@ -239,7 +311,7 @@ function Welcome({ workspace, onPick, onOpenFolder }: { workspace: Workspace | n
 }
 
 /** One message and everything that came of it. */
-function Turn({ session, task, approvals, onOpenFile }: { session: Session; task: Task; approvals: Approval[]; onOpenFile: (path: string) => void }) {
+function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Session; task: Task; approvals: Approval[]; onOpenFile: (path: string) => void; onRewind?: () => void }) {
   const { t } = useT();
   const [story, setStory] = useState<Story | null>(null);
   const live = task.status === 'running' || task.status === 'waiting-approval';
@@ -256,8 +328,15 @@ function Turn({ session, task, approvals, onOpenFile }: { session: Session; task
 
   return (
     <section className="cs-turn" aria-label={t('chat.turn', { text: task.title })}>
-      <div className="cs-user">
-        <RichText text={task.prompt} />
+      <div className="cs-user-row">
+        {onRewind && (task.checkpoint || task.status === 'queued') && (
+          <button type="button" className="wb-icon-btn cs-rewind" onClick={onRewind} title={t('chat.rewind')} aria-label={t('chat.rewind')}>
+            ↶
+          </button>
+        )}
+        <div className="cs-user">
+          <RichText text={task.prompt} />
+        </div>
       </div>
       {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
       {entries.map((e, i) =>

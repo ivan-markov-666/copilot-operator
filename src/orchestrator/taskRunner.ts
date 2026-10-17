@@ -44,13 +44,14 @@ import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, operatorNotesSection, readOnlyNote } from '../session/compose.js';
+import { takeAfter, takeCheckpoint } from '../session/checkpoint.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { PLAN_FIRST, PLAN_NOT_NOW, PLAN_NUDGE_AFTER, describePlan, planApprovedMessage, planFrom, planModeNote, planNudge, planReviseMessage } from './planMode.js';
 import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
 import { contractConflicts, readsTreeClean } from './contract.js';
-import { treeFingerprint } from '../vcs/git.js';
+import { commitFiles, treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
@@ -808,6 +809,20 @@ async function withOperatorHand(
   return { result, goOnAsItIs: false };
 }
 
+/**
+ * What a chat message is told about the folder (2026-10-17): it works on the operator's own branch, nothing is
+ * committed for it, and git is the operator's to ask for — unlike a task of the bot's sessions, where the runner
+ * owns the repository.
+ */
+const CHAT_NOTE = [
+  '## Working in the operator\'s folder',
+  '',
+  'This is the operator\'s chat in their own folder, on the branch it is on. Nothing is branched or committed for',
+  'you, and the rule against git commands that change something does not hold here: when the operator asks, you',
+  'may switch or create a branch, stage, commit, stash, pull or merge. Never push, reset, rebase or clean, and',
+  'never rewrite history; the runner refuses those. The operator can put the folder back to before any message.',
+].join('\n');
+
 /** Runs one task to completion inside an already-open transport. */
 /** The approved plan a task works to: its own attempt's, else, for a continuation, the latest one before it. */
 function approvedPlanOf(task: Task): TaskPlan | undefined {
@@ -1054,12 +1069,30 @@ export async function runTask(
     return check;
   };
 
+  /** A chat message's checkpoint and folder (2026-10-17), set where the task starts; read by `finish`. */
+  let chatCheckpoint = session.kind === 'chat' ? task.checkpoint : undefined;
+  const chatDir = session.kind === 'chat' ? session.projectDir?.trim() ?? '' : '';
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     // How it ended as reported; the runner's own checks below can still change it, and the final word is written at the end.
     await record(`ENDING: ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
 
     // The net under the plan's own checks: whatever the task left running is stopped and named.
     await reap(processesBefore, 'the task');
+
+    /*
+     * A chat message: the folder photographed again after it, on top of its checkpoint, so what it changed is
+     * one commit's worth of files, shown under the message and in the changes view. Nothing is committed on the
+     * operator's branch.
+     */
+    if (chatCheckpoint && chatDir) {
+      const after = await takeAfter(chatDir, task.id, chatCheckpoint).catch((e: unknown) => ({ problem: (e as Error).message }));
+      if (!('problem' in after)) {
+        const files = await commitFiles(chatDir, after.commit).catch(() => []);
+        await setTask((t) => {
+          t.vcs = { baseCommit: chatCheckpoint!.commit, commit: after.commit, files };
+        });
+      }
+    }
 
     /*
      * The operator's input files, once more before the commit: put back what the last round changed,
@@ -1319,6 +1352,23 @@ export async function runTask(
     if (reviewChecks.length > 0) t.reviewChecks = reviewChecks;
   });
   sink.event('task-started', { runId, title: task.title }, `task "${task.title}" starting (run ${runId})`);
+  /*
+   * A chat message: the folder photographed before it first runs, so the operator can go back to before it
+   * (2026-10-17). Kept from the first attempt: a message carried on goes back to where it began.
+   */
+  if (session.kind === 'chat' && !chatCheckpoint && chatDir) {
+    const cp = await takeCheckpoint(chatDir, task.id).catch((e: unknown) => ({ problem: (e as Error).message }));
+    if ('problem' in cp) {
+      sink.event('chat-checkpoint-missing', { problem: cp.problem }, `no way back to before this message: ${cp.problem}`, 'warn');
+    } else {
+      chatCheckpoint = cp;
+      await setTask((t) => {
+        t.checkpoint = cp;
+      });
+      sink.event('chat-checkpoint', { commit: cp.commit, branch: cp.branch, head: cp.head },
+        `the folder before this message is kept as ${cp.commit.slice(0, 8)} (on ${cp.branch || cp.head.slice(0, 8)})`);
+    }
+  }
   {
     const sel = (await store.getSession(session.id))?.modelSelection;
     if (sel) {
@@ -1632,7 +1682,7 @@ export async function runTask(
       // The operator's new prompt goes out whether or not the attempt it follows reached a conversation.
       ...(task.continuing?.instruction ? { instruction: { text: task.continuing.instruction, fromAttempt: task.continuing.fromAttempt, ended: task.continuing.ended } } : {}),
       workDirNote: workingDirNote(work),
-      vcsNote: prepared.note,
+      vcsNote: session.kind === 'chat' ? CHAT_NOTE : prepared.note,
       // What is said about a commit is true only where one happens (live run 2026-10-03: promised with commits off).
       readOnlyNote: task.readOnly ? readOnlyNote(!!(session.vcs?.enabled && session.vcs.commitOnFinish !== false && trackedRepoOf(session)), artifactPatterns(session.vcs)) : undefined,
       scopeNote: [

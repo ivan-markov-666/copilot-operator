@@ -1143,9 +1143,10 @@ try {
   });
 
   /*
-   * The workbench's chat, like an IDE's (2026-10-17): written to, it works in the open folder — the commands run
-   * there and show in the conversation with their output, the summary and the changed files after them, the file
-   * opens in the editor; the next message goes on in the same conversation without asking where the work starts.
+   * The workbench's chat, like an IDE's (2026-10-17): written to, it works in the open folder on the branch it is
+   * on, asking nothing about branches — the commands run there and show in the conversation with their output, the
+   * summary and the changed files after them, the file opens in the editor; the next message goes on in the same
+   * conversation; going back to before a message puts the folder as it was and takes the later messages out.
    */
   await scenario('the chat works in the open folder: commands in the conversation, the file opens, the next message goes on', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
     await page.goto(url('/'));
@@ -1158,9 +1159,11 @@ try {
     h.chat.script(reply.steps(write('hi.txt', 'hi')), reply.done('I wrote hi.txt holding the word hi and read it back to check it.'));
     await input.fill('Create hi.txt holding the word hi.');
     await input.press('Enter');
-    await throughStartWindow(page, 'unattended');
     const chat = page.locator('.cs-body');
     await chat.getByText('I wrote hi.txt holding the word hi').waitFor({ timeout: 30_000 });
+    t.check('nothing was asked about where the work starts', await page.getByRole('dialog', { name: en['startdlg.title']! }).count(), 0);
+    t.check('it worked on main, the branch the folder is on, and committed nothing', [h.git('rev-parse', '--abbrev-ref', 'HEAD'), h.git('log', '--format=%s')], ['main', 'initial']);
+    t.truthy('the model is chosen under the box, with a button to read the latest ones', (await page.getByRole('combobox', { name: en['chat.model']! }).count()) === 1 && (await page.getByRole('button', { name: en['chat.readModels']! }).count()) === 1);
     t.truthy('the message, its command and the summary are in the conversation', ((await chat.textContent()) ?? '').includes('Create hi.txt holding the word hi.') && (await chat.locator('.cs-cmd').count()) === 1 && ((await chat.locator('.cs-cmd').textContent()) ?? '').includes('Set-Content -Path hi.txt'), await chat.textContent());
     await chat.getByRole('button', { name: /^hi\.txt/ }).click();
     const editor = page.getByRole('tabpanel').first();
@@ -1182,10 +1185,15 @@ try {
     await input.fill('Now bye.txt holding bye.');
     await input.press('Enter');
     await chat.getByText('I wrote bye.txt holding the word bye').waitFor({ timeout: 30_000 });
-    t.check('without asking again where the work starts', await page.getByRole('dialog', { name: en['startdlg.title']! }).count(), 0);
-    t.check('two messages in the conversation', await chat.locator('.cs-turn').count(), 2);
-    t.check('both on the conversation\'s branch', h.git('ls-tree', '--name-only', h.git('rev-parse', '--abbrev-ref', 'HEAD')).split('\n'), ['README.md', 'bye.txt', 'hi.txt']);
+    t.check('two messages in the conversation, both files in the folder', [await chat.locator('.cs-turn').count(), existsSync(join(h.repo, 'hi.txt')), existsSync(join(h.repo, 'bye.txt'))], [2, true, true]);
     t.check('and the conversation is in the list', await page.getByRole('combobox', { name: en['chat.thread']! }).locator('option').allTextContents(), [en['chat.newThread'], 'Create hi.txt holding the word hi.']);
+
+    // Back to before the second message: its file gone, the message out of the conversation and back in the box.
+    await chat.locator('.cs-turn').nth(1).getByRole('button', { name: en['chat.rewind']! }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    await waitFor('the second message to be gone', async () => (await chat.locator('.cs-turn').count()) === 1, 10_000).catch(() => undefined);
+    t.check('back to before it: one message left, its file gone, the first one\'s kept', [await chat.locator('.cs-turn').count(), existsSync(join(h.repo, 'bye.txt')), existsSync(join(h.repo, 'hi.txt'))], [1, false, true]);
+    t.check('and the message is back in the box, to send again or change', await input.inputValue(), 'Now bye.txt holding bye.');
   });
 
   /*

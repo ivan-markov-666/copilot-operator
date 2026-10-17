@@ -185,6 +185,11 @@ export type Task = {
   notes?: TaskNote[];
   /** The operator accepted the task as done though it did not end so (2026-10-14), and what it was before. */
   accepted?: { at: string; note?: string; was: TaskStatus; reason?: string };
+  /**
+   * A chat message's checkpoint (2026-10-17): the folder as it was just before the message first ran, which
+   * "go back to before this message" puts back. See `session/checkpoint.ts`.
+   */
+  checkpoint?: { commit: string; head: string; branch: string; at: string };
   /** What version control was *asked* to do for this task, as opposed to what it did. */
   vcsPlan?: TaskVcsPlan;
   /**
@@ -993,6 +998,13 @@ export type Session = {
    * writes is a task of it, run at once in the same Copilot conversation and on the same branch.
    */
   kind?: 'chat';
+  /**
+   * The chat went back to before a message (2026-10-17): said to the conversation with the next message, then
+   * cleared — the Copilot chat still holds what was undone, and must not build on it.
+   */
+  rewindNote?: string;
+  /** The messages a going-back took out of the conversation, kept on the record with the safety photograph. */
+  rewound?: Array<{ at: string; toBefore: string; safety: string; tasks: Task[] }>;
   /**
    * The name of the plan this session was imported from, if any. Offered as the run's name
    * when the session is started, so a run is called what its plan was called.

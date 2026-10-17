@@ -80,6 +80,27 @@ const GIT_SOMETIMES_WRITES =
   'reflog\\s+(?:delete|expire)|' +
   'notes\\s+(?:add|append|edit|remove|copy|prune)';
 
+/** The two default patterns that refuse git writes, as they stand in `execution.denyPatterns`. */
+export const GIT_WRITE_DENY = [
+  `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_ALWAYS_WRITES})(?![\\w-])`,
+  `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_SOMETIMES_WRITES})`,
+];
+
+/**
+ * In the workbench's chat the git is the operator's (2026-10-17: "the program works on the branch I left; I may
+ * ask the bot to change it"): switching or making a branch, committing, staging, stashing, pulling and merging
+ * are theirs to ask for. Still refused there: what reaches the remote, rewrites history or throws work away —
+ * push, reset, rebase, clean, history filters, low-level ref and object surgery — and the settings ones.
+ */
+const GIT_CHAT_WRITES =
+  'push|reset|rebase|clean|filter-branch|filter-repo|update-ref|update-index|gc|prune|repack|worktree|' +
+  'submodule|init|clone|checkout-index|commit-tree|read-tree|prune-packed|update-server-info';
+export function chatDenyPatterns(patterns: string[]): string[] {
+  const [always] = GIT_WRITE_DENY;
+  // Only the default pattern is narrowed: a list the operator wrote themselves is kept as they wrote it.
+  return patterns.map((p) => (p === always ? `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_CHAT_WRITES})(?![\\w-])` : p));
+}
+
 export const RunConfigSchema = z.object({
   copilot: z
     .object({

@@ -1061,3 +1061,6 @@ button.linkish:hover { text-decoration: underline; }
 .cs-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .cs-bar select { width: auto; max-width: 60%; padding: 3px 6px; font-size: calc(12.5px * var(--scale)); }
 .wb-task-compose { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 10px; }
+.cs-user-row { display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; }
+.cs-rewind { margin-top: 4px; opacity: 0.55; }
+.cs-user-row:hover .cs-rewind, .cs-rewind:focus-visible { opacity: 1; }

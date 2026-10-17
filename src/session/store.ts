@@ -147,6 +147,8 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   accepted: 'archived',
   // Every note stays with the task; the ones not sent yet go out with the next attempt's opening.
   notes: 'kept',
+  // The folder before the message first ran: the point "go back" returns to, whatever attempt came after.
+  checkpoint: 'kept',
   interruption: 'cleared',
   finalReply: 'cleared',
   firstMessage: 'cleared',

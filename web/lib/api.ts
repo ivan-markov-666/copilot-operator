@@ -304,6 +304,8 @@ export type Task = {
   notes?: Array<{ id: string; text: string; at: string; sentAt?: string; attempt?: number }>;
   /** Accepted as done by the operator though it did not end so. */
   accepted?: { at: string; note?: string; was: TaskStatus; reason?: string };
+  /** A chat message: the folder as it was before it first ran, which "go back" puts back. */
+  checkpoint?: { commit: string; head: string; branch: string; at: string };
 };
 
 export type VersionControl = {
@@ -1198,7 +1200,11 @@ export const api = {
   workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
   /** The chat: its conversations, and a message — a task of the conversation, or a note while it works. */
   chatThreads: () => call<ChatThread[]>('/chat/threads'),
-  chatSend: (text: string, threadId?: string) => call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}) }) }),
+  chatSend: (text: string, threadId?: string, model?: string) =>
+    call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}), ...(model ? { model } : {}) }) }),
+  /** Back to before a message: the folder as it was then; that message and the ones after it taken out. */
+  chatRewind: (threadId: string, taskId: string) =>
+    call<{ ok: boolean; message: string; text: string; safety?: string }>(`/chat/${threadId}/rewind`, { method: 'POST', body: JSON.stringify({ taskId }) }),
   /** The session's repository, read-only: a folder, a file, the commits on its line. */
   repoTree: (id: string, path = '', taskId?: string) =>
     call<RepoTree>(`/sessions/${id}/repo/tree?path=${encodeURIComponent(path)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}`),

@@ -34,10 +34,18 @@ done — shown as the conversation: the message, what Copilot says it is doing, 
 code and output, the summary, and the files it changed (each opens in the editor; "See the changes" shows the
 diff). A command waiting for an answer is asked about in the conversation (and not in the banner, on this
 screen). The next message goes on in the same Copilot conversation and on the same branch; one written while it
-works is added to what it is doing. Enter sends, Shift+Enter is a new line; the mode under the box says whether
-commands wait for you. Each conversation is a session of kind `chat` — one branch, no review, plan mode off,
-uncommitted work taken along as its starting snapshot once approved — and each message a task of it, so every
-rule of a task holds; the first message asks where the work starts, the rest go on where it is. The explorer's
+works is added to what it is doing. Enter sends, Shift+Enter is a new line; under the box are the model (with ↻ to
+read the latest ones from Copilot) and whether commands wait for you. Each conversation is a session of kind
+`chat` — no version control of the bot's own, no review, plan mode off — and each message a task of it, so every
+rule of a task holds. Nothing is asked about branches (operator's rule, 2026-10-17): it works on the branch the
+folder is on, with the operator's uncommitted work, and commits nothing; git is the operator's there (switching,
+committing, stashing and pulling are allowed to the chat's commands; push, reset, rebase, clean and history
+rewriting are not — `chatDenyPatterns`). Before each message the folder is photographed into a commit no branch
+points at (`refs/copilot-operator/checkpoints/<task>`), and after it again (`…/after/<task>`), which is where its
+changed files come from. ↶ on a message puts the folder back exactly as it was before it — branch, commit,
+uncommitted changes — after photographing it as it is (`…/safety/<time>`), takes that message and the ones after
+it out of the conversation (kept in `Session.rewound`), puts the message back in the box, and the next message
+tells Copilot what was undone. `POST /chat/:id/rewind { taskId }`; `session/checkpoint.ts`. The explorer's
 Files view and the editor read the folder as it is on disk. `GET /workspace`, `/workspace/files`,
 `/workspace/file?path=`, `GET /chat/threads`, `POST /chat { text, threadId? }`; checked by `npm run check:e2e-chat`.
 A task's own box (note, continue, new prompt) and its conversation are in its tab.
