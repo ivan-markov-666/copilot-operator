@@ -31,5 +31,14 @@ h.chat.script(write('schema.txt', 'v2'), reply.done(), ...reply.triedThenBlocked
 await h.run(a!.id);
 h.chat.script(write('split.txt', 'split'), reply.done());
 await h.run(b!.id);
+// The open folder is the demo's repository, and the chat answers whatever is typed: it lists the folder,
+// writes a file named after the message, reads it back, and says it is done.
+await h.call('PUT', '/settings', { ...(await h.call<{ raw: Record<string, unknown> }>('GET', '/settings')).raw, project: { rootDir: h.repo, name: 'demo-project' } });
+let n = 0;
+h.chat.fallback = (m) => {
+  if (m.text.includes('Terminal output for')) return reply.done(`Done. I listed the folder and wrote note-${n}.txt with your message in it, then read it back to check it is there.`);
+  n += 1;
+  return reply.steps('Get-ChildItem -Name', `Set-Content -Path note-${n}.txt -Value 'message ${n}' -Encoding utf8`, `Get-Content note-${n}.txt`);
+};
 console.log(`\nDEMO READY: http://127.0.0.1:${h.api.port}/\n`);
 await new Promise(() => undefined);

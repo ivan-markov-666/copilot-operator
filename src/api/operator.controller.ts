@@ -713,6 +713,36 @@ export class OperatorController {
     return this.ops.resetContext(asContextKind(kind), lang ?? 'en');
   }
 
+  /** The project folder the workbench has open, its files on disk, and one of them. Read-only. */
+  @Get('workspace')
+  workspace(): Promise<unknown> {
+    return this.ops.workspace().catch(fail);
+  }
+
+  @Get('workspace/files')
+  workspaceFiles(): Promise<unknown> {
+    return this.ops.workspaceFiles().catch(fail);
+  }
+
+  @Get('workspace/file')
+  workspaceFile(@Query('path') path?: string): Promise<unknown> {
+    if (!path) throw new BadRequestException('path is required');
+    return this.ops.workspaceFile(path).catch(fail);
+  }
+
+  /** The chat's conversations, newest first. */
+  @Get('chat/threads')
+  chatThreads(): Promise<unknown> {
+    return this.ops.chatThreads().catch(fail);
+  }
+
+  /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
+  @Post('chat')
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown } = {}): Promise<unknown> {
+    if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
+    return this.ops.chatSend({ text: body.text, ...(typeof body.threadId === 'string' && body.threadId ? { threadId: body.threadId } : {}) }).catch(fail);
+  }
+
   /** One folder of the session's repository at its branch (or the task's commit): read-only, for the workbench. */
   @Get('sessions/:id/repo/tree')
   repoTree(@Param('id') id: string, @Query('path') path?: string, @Query('task') task?: string): Promise<unknown> {

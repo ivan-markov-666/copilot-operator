@@ -5,12 +5,12 @@
  * what is running now and how far into its limits it is, and how many steps wait for an answer.
  */
 import { useEffect, useState } from 'react';
-import { api, type Session, type Task } from '../../lib/api';
+import { api, type Session, type Task, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useNow } from '../../lib/useNow';
 
-export function StatusBar({ sessions, session, task, onOpenTask }: { sessions: Session[]; session?: Session; task?: Task; onOpenTask: (sessionId: string, taskId: string) => void }) {
+export function StatusBar({ sessions, session, task, workspace, onOpenTask }: { sessions: Session[]; session?: Session; task?: Task; workspace: Workspace | null; onOpenTask: (sessionId: string, taskId: string) => void }) {
   const { t } = useT();
   const now = useNow(true, 5000);
   const [branch, setBranch] = useState('');
@@ -39,6 +39,12 @@ export function StatusBar({ sessions, session, task, onOpenTask }: { sessions: S
 
   return (
     <footer className="wb-statusbar" aria-label={t('wb.status')}>
+      {!session?.vcs?.enabled && workspace?.ok && (
+        <span title={workspace.dir}>
+          <span aria-hidden="true">⎇ </span>
+          {workspace.branch ? `${workspace.name} · ${workspace.branch}` : workspace.name}
+        </span>
+      )}
       {session?.vcs?.enabled && (
         <span title={t('wb.branchNow')}>
           <span aria-hidden="true">⎇ </span>

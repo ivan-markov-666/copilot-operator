@@ -119,6 +119,12 @@ export type ChangesCheck =
   | { ok: true; notes: string; changes: Array<{ index: number; says: string; sessionId: string; sessionName: string; taskId?: string; taskTitle?: string }>; warnings: string[] }
   | { ok: false; issues: Array<{ path: string; message: string }>; warnings: string[] };
 
+/** The project folder the workbench has open; see `session/workspace.ts`. */
+export type Workspace = { dir: string; name: string; ok: boolean; isRepo: boolean; branch?: string; problem?: string };
+export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number };
+export type ChatThread = { id: string; name: string; createdAt: string; status: 'idle' | 'running' | 'stopping'; turns: number; running: boolean; repoDir: string };
+export type ChatSent = { threadId: string; taskId: string; noted?: boolean; needsStart: boolean };
+
 export type RepoTree = { ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> };
 export type RepoFile = { ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean };
 export type RepoLog = { ref: string; label: string; commits: Array<{ sha: string; subject: string; author: string; at: string; taskId?: string; taskTitle?: string }> };
@@ -653,6 +659,8 @@ export type Session = {
   conversationGroup?: string;
   /** Plan mode for this session's tasks; absent follows Settings. */
   planMode?: 'off' | 'auto' | 'approve';
+  /** A conversation of the workbench's chat: each message is a task of it. */
+  kind?: 'chat';
   /** The name of the plan this session was imported from, offered as the run's name. */
   planName?: string;
   vcs?: VersionControl;
@@ -1184,6 +1192,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
+  /** The open project folder, as it is on disk: what it is, its files, one of them. */
+  workspace: () => call<Workspace>('/workspace'),
+  workspaceFiles: () => call<{ dir: string; files: string[]; truncated: boolean }>('/workspace/files'),
+  workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
+  /** The chat: its conversations, and a message — a task of the conversation, or a note while it works. */
+  chatThreads: () => call<ChatThread[]>('/chat/threads'),
+  chatSend: (text: string, threadId?: string) => call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}) }) }),
   /** The session's repository, read-only: a folder, a file, the commits on its line. */
   repoTree: (id: string, path = '', taskId?: string) =>
     call<RepoTree>(`/sessions/${id}/repo/tree?path=${encodeURIComponent(path)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}`),

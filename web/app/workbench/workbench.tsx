@@ -14,7 +14,7 @@
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import Link from 'next/link';
-import { api, type Session, type Task } from '../../lib/api';
+import { api, type Session, type Task, type Workspace } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { LanguageSwitcher, useT } from '../../lib/i18n';
 import { Explorer } from './explorer';
@@ -61,7 +61,11 @@ function WorkbenchInner() {
   const [sel, setSel] = useState<{ sessionId?: string; taskId?: string }>({});
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string>('');
-  const [side, setSide] = useState<SideView>('tasks');
+  const [side, setSide] = useState<SideView>('files');
+  /** The open project folder: what the chat works on and the Files view shows. */
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  /** The chat's latest message, shown in the terminal when no task tab is in front. */
+  const [chatTurn, setChatTurn] = useState<{ sessionId: string; taskId: string } | null>(null);
   const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
   const [chatTab, setChatTab] = useState<ChatTab>('chat');
   const [layout, setLayout] = useState<Layout>(DEFAULT_LAYOUT);
@@ -82,6 +86,20 @@ function WorkbenchInner() {
     [],
   );
   usePoll(load, 3000);
+  const readWorkspace = useCallback(() => api.workspace().then(setWorkspace).catch(() => undefined), []);
+  usePoll(readWorkspace, 10_000);
+  /** "Open a folder": the machine's folder dialog, and the folder kept as the project in Settings. */
+  const openFolder = useCallback(async () => {
+    try {
+      const pick = await api.browseFolder(workspace?.dir || undefined);
+      if (!pick.ok) return;
+      const st = await api.settings();
+      await api.saveSettings({ ...st.raw, project: { ...((st.raw.project as Record<string, unknown> | undefined) ?? {}), rootDir: pick.path } });
+      await readWorkspace();
+    } catch (e) {
+      setLoadErr((e as Error).message);
+    }
+  }, [workspace?.dir, readWorkspace]);
 
   // Layout and selection, read once in the browser.
   useEffect(() => {
@@ -138,6 +156,10 @@ function WorkbenchInner() {
   const session = sessions?.find((s) => s.id === sel.sessionId);
   const task: Task | undefined = session?.tasks.find((x) => x.id === sel.taskId);
   const activeTab = tabs.find((x) => tabKey(x) === active);
+  // The terminal follows the task in front; with none, the chat's latest message.
+  const chatSession = chatTurn ? sessions?.find((x) => x.id === chatTurn.sessionId) : undefined;
+  const termSession = activeTab?.kind === 'task' || !chatSession ? session : chatSession;
+  const termTask = activeTab?.kind === 'task' || !chatSession ? task : chatSession.tasks.find((x) => x.id === chatTurn?.taskId);
 
   const setL = (patch: Partial<Layout>) => setLayout((l) => ({ ...l, ...patch }));
 
@@ -222,7 +244,7 @@ function WorkbenchInner() {
 
         <aside className="wb-side" aria-label={t('wb.explorer')} hidden={!layout.sideOpen}>
           {loadErr && !sessions ? <p className="err small" style={{ padding: 10 }}>{loadErr}</p> : null}
-          <Explorer view={side} sessions={sessions} selected={sel} onOpen={open} onChange={() => void load()} />
+          <Explorer view={side} sessions={sessions} selected={sel} onOpen={open} onChange={() => void load()} workspace={workspace} onOpenFolder={() => void openFolder()} />
         </aside>
         {layout.sideOpen && <Splitter axis="x" label={t('wb.resize')} onDrag={(d) => setL({ side: clamp(layout.side + d, 180, 560) })} />}
 
@@ -257,14 +279,13 @@ function WorkbenchInner() {
           </div>
           <div className="wb-editor" role="tabpanel">
             {!activeTab ? (
-              <Welcome sessions={sessions} onOpen={open} onKerrigan={() => { setL({ chatOpen: true }); setChatTab('kerrigan'); }} />
+              <Welcome sessions={sessions} workspace={workspace} onOpen={open} onChat={() => { setL({ chatOpen: true }); setChatTab('chat'); setComposeAsk((n) => n + 1); }} onKerrigan={() => { setL({ chatOpen: true }); setChatTab('kerrigan'); }} />
             ) : activeTab.kind === 'task' ? (
               session && task ? (
                 <TaskView
                   session={session}
                   task={task}
                   onChange={() => void load()}
-                  onCompose={() => { setL({ chatOpen: true }); setChatTab('chat'); setComposeAsk((n) => n + 1); }}
                   onKerrigan={() => { setL({ chatOpen: true }); setChatTab('kerrigan'); }}
                   onOpenFile={(path) => open({ kind: 'file', sessionId: session.id, path, taskId: task.id })}
                 />
@@ -286,19 +307,32 @@ function WorkbenchInner() {
             onToggle={() => setL({ bottomOpen: !layout.bottomOpen })}
             tab={bottomTab}
             onTab={(b) => { setBottomTab(b); setL({ bottomOpen: true }); }}
-            session={session}
-            task={task}
+            session={termSession}
+            task={termTask}
             onOpenTask={(sessionId, taskId) => open({ kind: 'task', sessionId, taskId })}
           />
         </section>
 
         {layout.chatOpen && <Splitter axis="x" label={t('wb.resize')} onDrag={(d) => setL({ chat: clamp(layout.chat - d, 300, 820) })} />}
         <aside className="wb-chat" aria-label={t('wb.chatPanel')} hidden={!layout.chatOpen}>
-          <ChatPanel tab={chatTab} onTab={setChatTab} session={session} task={task} sessions={sessions ?? []} composeAsk={composeAsk} onChange={() => void load()} onClose={() => setL({ chatOpen: false })} />
+          <ChatPanel
+            tab={chatTab}
+            onTab={setChatTab}
+            session={session}
+            task={task}
+            sessions={(sessions ?? []).filter((x) => x.kind !== 'chat')}
+            workspace={workspace}
+            composeAsk={composeAsk}
+            onOpenFile={(path) => open({ kind: 'file', sessionId: '', path })}
+            onOpenFolder={() => void openFolder()}
+            onTurn={setChatTurn}
+            onChange={() => void load()}
+            onClose={() => setL({ chatOpen: false })}
+          />
         </aside>
       </div>
 
-      <StatusBar sessions={sessions ?? []} session={session} task={task} onOpenTask={(sessionId, taskId) => open({ kind: 'task', sessionId, taskId })} />
+      <StatusBar sessions={sessions ?? []} session={session} task={task} workspace={workspace} onOpenTask={(sessionId, taskId) => open({ kind: 'task', sessionId, taskId })} />
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
     </div>
   );
@@ -379,17 +413,18 @@ export function StatusMark({ status }: { status: Task['status'] }) {
 }
 
 /** What the editor shows with nothing open: where to begin. */
-function Welcome({ sessions, onOpen, onKerrigan }: { sessions: Session[] | null; onOpen: (t: Tab) => void; onKerrigan: () => void }) {
+function Welcome({ sessions, workspace, onOpen, onChat, onKerrigan }: { sessions: Session[] | null; workspace: Workspace | null; onOpen: (t: Tab) => void; onChat: () => void; onKerrigan: () => void }) {
   const { t } = useT();
-  const needing = (sessions ?? []).flatMap((s) => s.tasks.filter((x) => ['failed', 'blocked', 'limit-reached', 'aborted', 'waiting-approval'].includes(x.status)).map((x) => ({ s, x })));
-  const queued = (sessions ?? []).reduce((n, s) => n + s.tasks.filter((x) => x.status === 'queued').length, 0);
+  const bot = (sessions ?? []).filter((s) => s.kind !== 'chat');
+  const needing = bot.flatMap((s) => s.tasks.filter((x) => ['failed', 'blocked', 'limit-reached', 'aborted', 'waiting-approval'].includes(x.status)).map((x) => ({ s, x })));
+  const queued = bot.reduce((n, s) => n + s.tasks.filter((x) => x.status === 'queued').length, 0);
   return (
     <div className="wb-welcome">
-      <h2>{t('wb.welcome')}</h2>
-      <p className="muted">{t('wb.welcomeWhy')}</p>
+      <h2>{workspace?.ok ? workspace.name : t('wb.welcome')}</h2>
+      <p className="muted">{workspace?.ok ? t('wb.welcomeChat', { dir: workspace.dir }) : t('wb.welcomeWhy')}</p>
       <div className="row">
-        <Link className="button-link primary" href="/import">{t('wb.startPlan')}</Link>
-        <Link className="button-link" href="/sessions#new-session">{t('wb.newSession')}</Link>
+        <button type="button" className="primary" onClick={onChat}>{t('wb.startChat')}</button>
+        <Link className="button-link" href="/import">{t('wb.startPlan')}</Link>
         <button type="button" onClick={onKerrigan}>{t('wb.askKerrigan')}</button>
       </div>
       {needing.length > 0 && (

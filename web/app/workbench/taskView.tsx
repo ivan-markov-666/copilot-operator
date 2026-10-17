@@ -19,19 +19,19 @@ import { RunQueuedPanel } from '../runQueued';
 import { RichText } from '../richText';
 import { PlanView } from '../planView';
 import { StatusMark } from './workbench';
+import { TaskComposer } from './taskComposer';
+import { TaskStory } from '../taskStory';
 
 export function TaskView({
   session,
   task,
   onChange,
-  onCompose,
   onKerrigan,
   onOpenFile,
 }: {
   session: Session;
   task: Task;
   onChange: () => void;
-  onCompose: () => void;
   onKerrigan: () => void;
   onOpenFile: (path: string) => void;
 }) {
@@ -41,6 +41,9 @@ export function TaskView({
   const [busy, setBusy] = useState(false);
   const [runPanel, setRunPanel] = useState(false);
   const [undo, setUndo] = useState(false);
+  /** Asks this tab's own writing box for the keyboard. */
+  const [composeAsk, setComposeAsk] = useState(0);
+  const onCompose = () => setComposeAsk((x) => x + 1);
   const n = session.tasks.findIndex((x) => x.id === task.id) + 1;
   const running = task.status === 'running' || task.status === 'waiting-approval';
   const sessionBusy = session.status !== 'idle';
@@ -151,6 +154,8 @@ export function TaskView({
       {msg && <p className="notice small" role="status">{msg}</p>}
       {sessionBusy && !running && <p className="muted small">{t('wb.sessionBusy')}</p>}
 
+      {/* Writing to this task: a note, the prompt it carries on with, or a new one, by its state. */}
+      <TaskComposer session={session} task={task} focusAsk={composeAsk} onChange={onChange} />
       {acceptOpen && (
         <div className="wb-inline-panel" role="group" aria-label={t('wb.accept')}>
           <label htmlFor={`wb-accept-${task.id}`}>{t('wb.acceptNote')}</label>
@@ -247,6 +252,13 @@ export function TaskView({
             ))}
           </ul>
         </section>
+      )}
+
+      {(task.startedAt || running) && (
+        <details className="wb-sec" open={running}>
+          <summary>{t('wb.conversation')}</summary>
+          <TaskStory key={`${task.id}:${task.runId ?? ''}`} sessionId={session.id} taskId={task.id} runId={task.runId} live={running} />
+        </details>
       )}
 
       {(task.attempts?.length ?? 0) > 0 && (

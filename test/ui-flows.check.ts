@@ -1143,6 +1143,52 @@ try {
   });
 
   /*
+   * The workbench's chat, like an IDE's (2026-10-17): written to, it works in the open folder — the commands run
+   * there and show in the conversation with their output, the summary and the changed files after them, the file
+   * opens in the editor; the next message goes on in the same conversation without asking where the work starts.
+   */
+  await scenario('the chat works in the open folder: commands in the conversation, the file opens, the next message goes on', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await page.goto(url('/'));
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.waitFor();
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'README.md' }).waitFor();
+    t.truthy('the explorer shows the open folder\'s files, and the chat what it works on', ((await page.locator('.cs-welcome').textContent()) ?? '').includes(h.repo), await page.locator('.cs-welcome').textContent());
+    t.check('commands run as Settings say, here without asking', await page.getByRole('combobox', { name: en['chat.mode']! }).inputValue(), 'unattended');
+
+    h.chat.script(reply.steps(write('hi.txt', 'hi')), reply.done('I wrote hi.txt holding the word hi and read it back to check it.'));
+    await input.fill('Create hi.txt holding the word hi.');
+    await input.press('Enter');
+    await throughStartWindow(page, 'unattended');
+    const chat = page.locator('.cs-body');
+    await chat.getByText('I wrote hi.txt holding the word hi').waitFor({ timeout: 30_000 });
+    t.truthy('the message, its command and the summary are in the conversation', ((await chat.textContent()) ?? '').includes('Create hi.txt holding the word hi.') && (await chat.locator('.cs-cmd').count()) === 1 && ((await chat.locator('.cs-cmd').textContent()) ?? '').includes('Set-Content -Path hi.txt'), await chat.textContent());
+    await chat.getByRole('button', { name: /^hi\.txt/ }).click();
+    const editor = page.getByRole('tabpanel').first();
+    await editor.locator('pre.wb-code').waitFor();
+    t.check('the changed file opens in the editor, as it is on disk', (await editor.locator('pre.wb-code .wb-line').allTextContents()).map((l) => l.replace(/^\d+/, '').trim()), ['hi', '']);
+    await page.getByRole('button', { name: en['wb.refresh']!, exact: true }).first().click();
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'hi.txt' }).waitFor();
+    t.truthy('and is in the explorer', true);
+
+    let firstChat = '';
+    firstChat = h.chat.sent.find((m) => m.contract === 'task')?.chatId ?? '';
+    h.chat.script(
+      (m) => {
+        t.check('the next message goes into the same Copilot conversation', m.chatId, firstChat);
+        return reply.steps(write('bye.txt', 'bye'));
+      },
+      reply.done('I wrote bye.txt holding the word bye and read it back to check it.'),
+    );
+    await input.fill('Now bye.txt holding bye.');
+    await input.press('Enter');
+    await chat.getByText('I wrote bye.txt holding the word bye').waitFor({ timeout: 30_000 });
+    t.check('without asking again where the work starts', await page.getByRole('dialog', { name: en['startdlg.title']! }).count(), 0);
+    t.check('two messages in the conversation', await chat.locator('.cs-turn').count(), 2);
+    t.check('both on the conversation\'s branch', h.git('ls-tree', '--name-only', h.git('rev-parse', '--abbrev-ref', 'HEAD')).split('\n'), ['README.md', 'bye.txt', 'hi.txt']);
+    t.check('and the conversation is in the list', await page.getByRole('combobox', { name: en['chat.thread']! }).locator('option').allTextContents(), [en['chat.newThread'], 'Create hi.txt holding the word hi.']);
+  });
+
+  /*
    * The workbench (2026-10-14): the home screen as an IDE with the chat beside it, and no dead end — a task that
    * blocked is carried on from the chat box and started from where it is offered, then undone; the palette finds a
    * task by a few letters.
@@ -1154,6 +1200,8 @@ try {
     t.check('first done, second blocked', ran.tasks.map((x) => x.status), ['done', 'blocked']);
 
     await page.goto(url('/'));
+    // The explorer opens on the folder's files; the bot's sessions are the Tasks view.
+    await page.getByRole('button', { name: en['wb.viewTasks']!, exact: true }).click();
     const tree = page.getByRole('tree', { name: en['wb.sessions']! });
     await tree.getByRole('button', { name: 'bench-second' }).click();
     const editor = page.getByRole('tabpanel').first();
@@ -1234,6 +1282,7 @@ try {
     await page.getByText('add task "asked-check" to "asked", after "asked-first", queued').waitFor();
     await page.getByRole('button', { name: en['wb.kApply']!.replace('{n}', '1'), exact: true }).click();
     await page.getByText(en['wb.kApplied']!.replace('{n}', '1')).waitFor();
+    await page.getByRole('button', { name: en['wb.viewTasks']!, exact: true }).click();
     await page.getByRole('tree', { name: en['wb.sessions']! }).getByRole('button', { name: 'asked-check' }).waitFor();
     t.check('her change is made: the task sits after the first, queued', (await cards(h, s!.id)).map((x) => [x.title, x.status]), [['asked-first', 'done'], ['asked-check', 'queued'], ['asked-second', 'blocked']]);
 

@@ -989,6 +989,11 @@ export type Session = {
    */
   conversationGroup?: string;
   /**
+   * A conversation started from the workbench's chat (2026-10-17, "like Windsurf"): each message the operator
+   * writes is a task of it, run at once in the same Copilot conversation and on the same branch.
+   */
+  kind?: 'chat';
+  /**
    * The name of the plan this session was imported from, if any. Offered as the run's name
    * when the session is started, so a run is called what its plan was called.
    */

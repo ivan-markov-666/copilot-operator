@@ -27,6 +27,21 @@ app to work like VS Code with a chat bot at its side, in this app's own design. 
 | Kerrigan (right, second tab) | what happened, for her: this task, this session or all of them, with the operator's note | copy or save the report; paste her answer, check it (each change said in words), make the changes |
 | Status bar | the repository's branch, what is running (session › task, message n of the limit, minutes), steps waiting for an answer, the model | opens the running task; brings the waiting card into view |
 
+**The chat** (2026-10-17, "like Windsurf"): the right panel is the chat of the open project folder (Settings →
+project folder; "Open a folder" in the explorer changes it), not of a task. A message is sent to Copilot; the
+commands it answers with run in the folder and their output goes back, round after round, until it says it is
+done — shown as the conversation: the message, what Copilot says it is doing, a card per command with its exit
+code and output, the summary, and the files it changed (each opens in the editor; "See the changes" shows the
+diff). A command waiting for an answer is asked about in the conversation (and not in the banner, on this
+screen). The next message goes on in the same Copilot conversation and on the same branch; one written while it
+works is added to what it is doing. Enter sends, Shift+Enter is a new line; the mode under the box says whether
+commands wait for you. Each conversation is a session of kind `chat` — one branch, no review, plan mode off,
+uncommitted work taken along as its starting snapshot once approved — and each message a task of it, so every
+rule of a task holds; the first message asks where the work starts, the rest go on where it is. The explorer's
+Files view and the editor read the folder as it is on disk. `GET /workspace`, `/workspace/files`,
+`/workspace/file?path=`, `GET /chat/threads`, `POST /chat { text, threadId? }`; checked by `npm run check:e2e-chat`.
+A task's own box (note, continue, new prompt) and its conversation are in its tab.
+
 Ctrl+K (or Ctrl+Shift+P) opens a palette that finds any task, session, page or command; Ctrl+B hides the
 explorer, Ctrl+J the panel, Ctrl+L puts the keyboard in the chat box. The chosen task is in the address
 (`/?s=…&t=…`); the panels' sizes and which are open are kept in the browser. The list of sessions with the

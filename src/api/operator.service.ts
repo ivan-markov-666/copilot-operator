@@ -68,6 +68,7 @@ function sameFolder(a: string, b: string): boolean {
 }
 import { composeLevel2, composePrompt, importPlan, personaBlock, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
 import { checkChanges, kerriganReport, type ChangesCheck } from '../plan/changes.js';
+import { workspaceFile, workspaceFiles, workspaceInfo, type WorkspaceInfo } from '../session/workspace.js';
 import { readInterruption } from '../session/interruption.js';
 import { baseRefOf, branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, revertTaskWork, undoThisPreview, type UndoThisPreview, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
 import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, looksLikeRepo, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
@@ -2687,6 +2688,90 @@ export class OperatorService {
       // the same reason it is reported before: so nobody has to notice it in a list.
       duplicates: check.duplicates,
     };
+  }
+
+  // --- the workspace and its chat (2026-10-17, "like Windsurf") ------------------------------
+
+  /** The project folder the workbench has open: Settings → the default project. */
+  async workspace(): Promise<WorkspaceInfo> {
+    await this.init();
+    const cfg = await this.settings.load();
+    return await workspaceInfo(cfg.project?.rootDir ?? '', cfg.project?.name ?? '');
+  }
+
+  async workspaceFiles(): Promise<{ dir: string; files: string[]; truncated: boolean }> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return { dir: ws.dir, ...(await workspaceFiles(ws.dir)) };
+  }
+
+  async workspaceFile(path: string): Promise<{ path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number }> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await workspaceFile(ws.dir, path);
+  }
+
+  /** The chat's conversations, newest first. */
+  async chatThreads(): Promise<Array<{ id: string; name: string; createdAt: string; status: Session['status']; turns: number; running: boolean; repoDir: string }>> {
+    await this.init();
+    return (await this.store.listSessions())
+      .filter((s) => s.kind === 'chat')
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((s) => ({ id: s.id, name: s.name, createdAt: s.createdAt, status: s.status, turns: s.tasks.length, running: this.running.has(s.id), repoDir: s.vcs?.repoDir || s.projectDir }));
+  }
+
+  /**
+   * A message written in the chat. With no conversation yet, one is made in the open project folder: a session of
+   * kind `chat`, one branch for all of it, no independent review, plan mode off, so each message is answered as
+   * it would be in an IDE's chat. The message becomes a task of it, queued; the caller starts it (the start window
+   * the first time, where the work starts being asked once). While the conversation is working, the message is a
+   * note to the task in flight, which the chat gets with its next report.
+   */
+  async chatSend(input: { text: string; threadId?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+    await this.init();
+    const text = (input.text ?? '').trim();
+    if (!text) throw new Error('The message is empty.');
+    if (text.length > MAX_INSTRUCTION_CHARS) throw new Error(`The message is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
+    let session = input.threadId ? await this.store.getSession(input.threadId) : null;
+    if (input.threadId && (!session || session.kind !== 'chat')) throw new Error('That conversation is not there any more. Start a new one.');
+    if (session) {
+      const inFlight = session.tasks.find((t) => t.status === 'running' || t.status === 'waiting-approval');
+      if (inFlight && this.running.has(session.id)) {
+        await this.addTaskNote(session.id, inFlight.id, text);
+        return { threadId: session.id, taskId: inFlight.id, noted: true, needsStart: false };
+      }
+    } else {
+      const ws = await this.workspace();
+      if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+      const title = text.split(/\r?\n/)[0]!.trim().slice(0, 60);
+      const created = await this.store.createSession(`chat: ${title}`, ws.dir);
+      session = await this.store.updateSession(created.id, (s) => {
+        s.kind = 'chat';
+        s.onFailure = 'continue';
+        s.review = { enabled: false, model: '' };
+        s.planMode = 'off';
+        s.vcs = ws.isRepo
+          ? {
+              ...(s.vcs ?? DEFAULT_VCS),
+              enabled: true,
+              repoDir: ws.dir,
+              branchMode: 'per-session',
+              // The operator's own uncommitted work is normal in an open folder: taken along as the conversation's
+              // starting snapshot, once they approve it, rather than refusing the first message.
+              dirtyWorktree: { policy: 'snapshot' },
+            }
+          : { ...(s.vcs ?? DEFAULT_VCS), enabled: false, repoDir: '' };
+        s.projectDir = ws.dir;
+      });
+      this.bus.publish({ sessionId: session.id, type: 'chat-started', level: 'info', message: `a conversation in ${ws.dir}` });
+    }
+    const task = await this.store.addTask(session.id, {
+      title: text.split(/\r?\n/)[0]!.trim().slice(0, 80) || 'message',
+      level2: '',
+      prompt: text,
+    });
+    const fresh = (await this.store.getSession(session.id))!;
+    return { threadId: fresh.id, taskId: task.id, needsStart: !fresh.vcsStart && !fresh.tasks.some((t) => t.startedAt) };
   }
 
   // --- the repository, read-only, for the workbench (2026-10-14) ------------------------------

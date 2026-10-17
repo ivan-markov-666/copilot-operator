@@ -6,7 +6,8 @@
  */
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, type RepoLog, type RepoTree, type Session } from '../../lib/api';
+import { api, type RepoLog, type Session, type Workspace } from '../../lib/api';
+import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
 import { StatusMark, type SideView, type Tab } from './workbench';
 
@@ -16,16 +17,21 @@ export function Explorer({
   selected,
   onOpen,
   onChange,
+  workspace,
+  onOpenFolder,
 }: {
   view: SideView;
   sessions: Array<Session & { running?: boolean }> | null;
   selected: { sessionId?: string; taskId?: string };
   onOpen: (tab: Tab) => void;
   onChange: () => void;
+  workspace: Workspace | null;
+  onOpenFolder: () => void;
 }) {
-  if (view === 'files') return <Files sessions={sessions} selected={selected} onOpen={onOpen} />;
+  if (view === 'files') return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
   if (view === 'commits') return <Commits sessions={sessions} selected={selected} onOpen={onOpen} />;
-  return <Tree sessions={sessions} selected={selected} onOpen={onOpen} onChange={onChange} />;
+  // The chat's conversations are the chat's: the tree is the bot's sessions.
+  return <Tree sessions={sessions ? sessions.filter((s) => s.kind !== 'chat') : null} selected={selected} onOpen={onOpen} onChange={onChange} />;
 }
 
 function Head({ title, children }: { title: string; children?: React.ReactNode }) {
@@ -123,78 +129,107 @@ function useRepoSession(sessions: Session[] | null, selected: { sessionId?: stri
   return sessions?.find((s) => s.id === selected.sessionId) ?? sessions?.find((s) => s.vcs?.enabled && s.vcs.repoDir);
 }
 
-function Files({ sessions, selected, onOpen }: { sessions: Session[] | null; selected: { sessionId?: string; taskId?: string }; onOpen: (tab: Tab) => void }) {
+/** A folder of the open project, built from the flat list of its files. */
+type Dir = { dirs: Map<string, Dir>; files: string[] };
+function treeOf(paths: string[]): Dir {
+  const root: Dir = { dirs: new Map(), files: [] };
+  for (const p of paths) {
+    const parts = p.split('/');
+    let at = root;
+    for (const part of parts.slice(0, -1)) {
+      let next = at.dirs.get(part);
+      if (!next) {
+        next = { dirs: new Map(), files: [] };
+        at.dirs.set(part, next);
+      }
+      at = next;
+    }
+    at.files.push(p);
+  }
+  return root;
+}
+const byName = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+/**
+ * The open project folder as it is on disk (2026-10-17, "like Windsurf"): what the chat works on, every file of
+ * it a click from the editor. Read again on demand and every few seconds, so what the chat writes shows up.
+ */
+function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void }) {
   const { t } = useT();
-  const session = useRepoSession(sessions, selected);
-  const [dirs, setDirs] = useState<Record<string, RepoTree | 'loading' | { error: string }>>({});
-  const [open, setOpen] = useState<Set<string>>(new Set(['']));
-  const taskId = selected.sessionId === session?.id ? selected.taskId : undefined;
-
-  const read = (path: string) => {
-    if (!session) return;
-    setDirs((d) => ({ ...d, [path]: 'loading' }));
-    api
-      .repoTree(session.id, path, taskId)
-      .then((r) => setDirs((d) => ({ ...d, [path]: r })))
-      .catch((e: unknown) => setDirs((d) => ({ ...d, [path]: { error: (e as Error).message } })));
-  };
+  const [files, setFiles] = useState<string[] | null>(null);
+  const [err, setErr] = useState('');
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const read = () =>
+    workspace?.ok
+      ? api
+          .workspaceFiles()
+          .then((r) => {
+            setFiles(r.files);
+            setErr('');
+          })
+          .catch((e: unknown) => setErr((e as Error).message))
+      : Promise.resolve();
   useEffect(() => {
-    setDirs({});
-    setOpen(new Set(['']));
-    if (session) read('');
+    setFiles(null);
+    void read();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.id, taskId]);
+  }, [workspace?.dir, workspace?.ok]);
+  usePoll(read, 6000, !!workspace?.ok);
 
-  const root = dirs[''];
-  const label = root && typeof root === 'object' && 'label' in root ? root.label : '';
-  const render = (path: string): React.ReactNode => {
-    const d = dirs[path];
-    if (!d || d === 'loading') return <li className="muted small wb-pad">{t('wb.loading')}</li>;
-    if ('error' in d) return <li className="err small wb-pad">{d.error}</li>;
-    return d.entries.map((e) =>
-      e.type === 'dir' ? (
-        <li key={e.path} role="treeitem" aria-expanded={open.has(e.path)}>
-          <button
-            type="button"
-            className="wb-row"
-            onClick={() => {
-              setOpen((o) => {
-                const n = new Set(o);
-                if (n.has(e.path)) n.delete(e.path);
-                else {
-                  n.add(e.path);
-                  if (!dirs[e.path]) read(e.path);
-                }
-                return n;
-              });
-            }}
-          >
-            <span className="wb-chev" aria-hidden="true">{open.has(e.path) ? '▾' : '▸'}</span>
-            <span className="wb-row-name">{e.name}</span>
-          </button>
-          {open.has(e.path) && <ul role="group">{render(e.path)}</ul>}
-        </li>
-      ) : (
-        <li key={e.path} role="treeitem">
-          <button type="button" className="wb-row file" onClick={() => session && onOpen({ kind: 'file', sessionId: session.id, path: e.path, taskId })}>
+  const toggle = (p: string) =>
+    setOpen((o) => {
+      const n = new Set(o);
+      if (n.has(p)) n.delete(p);
+      else n.add(p);
+      return n;
+    });
+  const render = (dir: Dir, prefix: string): React.ReactNode => (
+    <>
+      {[...dir.dirs.keys()].sort(byName).map((name) => {
+        const p = prefix ? `${prefix}/${name}` : name;
+        return (
+          <li key={`d:${p}`} role="treeitem" aria-expanded={open.has(p)}>
+            <button type="button" className="wb-row" onClick={() => toggle(p)}>
+              <span className="wb-chev" aria-hidden="true">{open.has(p) ? '▾' : '▸'}</span>
+              <span className="wb-row-name">{name}</span>
+            </button>
+            {open.has(p) && <ul role="group">{render(dir.dirs.get(name)!, p)}</ul>}
+          </li>
+        );
+      })}
+      {[...dir.files].sort((a, b) => byName(a.split('/').pop()!, b.split('/').pop()!)).map((f) => (
+        <li key={`f:${f}`} role="treeitem">
+          <button type="button" className="wb-row file" onClick={() => onOpen({ kind: 'file', sessionId: '', path: f })} title={f}>
             <span className="wb-ico" aria-hidden="true">≡</span>
-            <span className="wb-row-name">{e.name}</span>
+            <span className="wb-row-name">{f.split('/').pop()}</span>
           </button>
         </li>
-      ),
-    );
-  };
+      ))}
+    </>
+  );
 
   return (
     <div className="wb-tree">
-      <Head title={t('wb.files')} />
-      {!session ? (
-        <p className="muted small wb-pad">{t('wb.noRepo')}</p>
+      <Head title={workspace?.ok ? workspace.name : t('wb.files')}>
+        <button type="button" className="wb-icon-btn" onClick={onOpenFolder} title={t('chat.openFolder')} aria-label={t('chat.openFolder')}>⋯</button>
+        <button type="button" className="wb-icon-btn" onClick={() => void read()} title={t('wb.refresh')} aria-label={t('wb.refresh')}>↻</button>
+      </Head>
+      {!workspace ? (
+        <p className="muted small wb-pad">{t('wb.loading')}</p>
+      ) : !workspace.ok ? (
+        <div className="wb-pad">
+          <p className="small">{workspace.problem}</p>
+          <button type="button" className="primary" onClick={onOpenFolder}>{t('chat.openFolder')}</button>
+        </div>
+      ) : err ? (
+        <p className="err small wb-pad">{err}</p>
+      ) : !files ? (
+        <p className="muted small wb-pad">{t('wb.loading')}</p>
       ) : (
         <>
-          <p className="muted small wb-pad">{t('wb.filesOf', { name: session.name, ref: label })}</p>
+          <p className="muted small wb-pad" title={workspace.dir}>{workspace.branch ? `⎇ ${workspace.branch}` : workspace.dir}</p>
           <ul className="wb-tree-list" role="tree" aria-label={t('wb.files')}>
-            {render('')}
+            {render(treeOf(files), '')}
           </ul>
         </>
       )}

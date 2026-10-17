@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { api, sessionHref, type Approval } from '../lib/api';
 import { useT, useFmtTime } from '../lib/i18n';
 import { confirmDialog } from './dialog';
@@ -25,9 +26,12 @@ const EVERY_MS = 2_000;
 
 export function GlobalApprovals() {
   const { t } = useT();
+  const pathname = usePathname();
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const known = useRef<Record<string, string>>({});
+  /** Sessions that are conversations of the workbench's chat, which asks about their steps itself. */
+  const chats = useRef<Set<string>>(new Set());
   const askedFor = useRef('');
 
   const load = useCallback(async () => {
@@ -46,7 +50,10 @@ export function GlobalApprovals() {
       if (unknown.length > 0 && key !== askedFor.current) {
         askedFor.current = key;
         const sessions = await api.sessions().catch(() => []);
-        for (const s of sessions) known.current[s.id] = s.name;
+        for (const s of sessions) {
+          known.current[s.id] = s.name;
+          if (s.kind === 'chat') chats.current.add(s.id);
+        }
         setNames({ ...known.current });
       }
     } catch {
@@ -62,13 +69,19 @@ export function GlobalApprovals() {
     document.title = approvals.length > 0 ? `(${approvals.length}) ${t('approval.tabTitle')} — ${base}` : base;
   }, [approvals.length, t]);
 
-  if (approvals.length === 0) return null;
+  /*
+   * On the workbench the chat asks about its own commands, in the conversation (2026-10-17, "like Windsurf"); the
+   * banner would say it a second time over the whole window. Every other page still shows them here. A session not
+   * read yet is held back for the moment it takes, rather than flashing the banner up and away.
+   */
+  const shown = pathname === '/' ? approvals.filter((a) => a.sessionId in known.current && !chats.current.has(a.sessionId)) : approvals;
+  if (shown.length === 0) return null;
 
   return (
     <section className="approval-banner" role="alert" aria-live="assertive">
       <h2>{t('approval.waitingHere')}</h2>
       <p className="small">{t('approval.waitingHereWhy')}</p>
-      {approvals.map((a) => (
+      {shown.map((a) => (
         <ApprovalCard key={a.id} approval={a} sessionName={names[a.sessionId] ?? a.sessionId} onDecided={() => void load()} />
       ))}
     </section>

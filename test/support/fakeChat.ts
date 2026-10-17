@@ -88,6 +88,9 @@ export class FakeCopilot {
   private readonly taskContract = firstLine('level1.md');
   private readonly reviewContract = firstLine('review1.md');
 
+  /** What answers when the queue is empty: only for test/support/demo.ts, where a person types. Checks leave it unset. */
+  fallback: Script | null = null;
+
   /** Adds replies to the end of the queue. */
   script(...replies: Script[]): this {
     this.queue.push(...replies);
@@ -140,7 +143,7 @@ export class FakeCopilot {
       m.contract = 'task';
       return 'Understood. Send the task.';
     }
-    const next = this.queue.shift();
+    const next = this.queue.shift() ?? this.fallback ?? undefined;
     if (next === undefined) {
       const problem = `the chat was sent a message the script has no reply for: ${m.text.slice(0, 160).replace(/\s+/g, ' ')}`;
       this.problems.push(problem);
