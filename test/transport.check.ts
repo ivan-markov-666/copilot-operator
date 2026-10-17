@@ -250,6 +250,36 @@ try {
   });
 
   // -------------------------------------------------------------------------------------------
+  await section('the sign-in wait ends on the run\'s Stop, on a closed window, and says when it ran out', async () => {
+    /*
+     * Waited for in one piece, up to the sign-in timeout (fifteen minutes by default), a Stop pressed while the
+     * operator had not signed in yet did nothing until it ran out (2026-10-17: "the Stop button seems not to work").
+     * The page here is blank: no composer ever shows.
+     */
+    const timed = async (run: () => Promise<unknown>): Promise<{ ms: number; error: Error | null }> => {
+      const from = Date.now();
+      const error = await run().then(() => null, (e: unknown) => e as Error);
+      return { ms: Date.now() - from, error };
+    };
+    const stop = new AbortController();
+    const a = await fixture('signin-stop', '<p>sign in</p>', { signInTimeoutMs: 60_000 });
+    setTimeout(() => stop.abort(), 1_500);
+    const stopped = await timed(() => a.transport.ensureSignedIn(blank, { signal: stop.signal }));
+    t.check('stopped while waiting: it ends with the stop', [stopped.error?.name, stopped.error?.message], ['StoppedByOperator', 'stopped by the operator while waiting for the sign-in']);
+    t.truthy('at once, not when the sign-in time runs out', stopped.ms < 4_000, `${stopped.ms} ms`);
+
+    const b = await fixture('signin-closed', '<p>sign in</p>', { signInTimeoutMs: 60_000 });
+    setTimeout(() => void b.page.close(), 1_500);
+    const closed = await timed(() => b.transport.ensureSignedIn(blank));
+    t.truthy('the window closed while waiting: it ends at once, as before', !!closed.error && closed.ms < 4_000, `${closed.ms} ms, ${closed.error?.message.split('\n')[0]}`);
+
+    const c = await fixture('signin-out', '<p>sign in</p>', { signInTimeoutMs: 1_000 });
+    const out = await timed(() => c.transport.ensureSignedIn(blank));
+    t.truthy('not signed in in time: said in words, with the setting', /The sign-in was not completed within 1 s \(Settings → copilot\.signInTimeoutSec\)/.test(out.error?.message ?? ''), out.error?.message);
+    t.truthy('after the page\'s own fifteen seconds and the second of the setting', out.ms >= 15_500 && out.ms < 20_000, `${out.ms} ms`);
+  });
+
+  // -------------------------------------------------------------------------------------------
   await section('dismissPopups only declines', async () => {
     /*
      * Edge's first-run dialog offers "Confirm" beside "Set later"; confirming makes Edge the

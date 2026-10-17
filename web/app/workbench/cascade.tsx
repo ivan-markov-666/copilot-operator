@@ -22,7 +22,7 @@ import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { confirmDialog } from '../dialog';
-import { ModelPicker } from '../modelPicker';
+import { BY_HAND, ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
 import { RichText } from '../richText';
 import { StatusMark } from './workbench';
@@ -62,6 +62,14 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
   const [reading, setReading] = useState(false);
   const box = useRef<HTMLTextAreaElement | null>(null);
   const running = !!session && session.status !== 'idle';
+  /*
+   * What the model picker shows. "Set the model by hand" when it was chosen, and also when nothing names a model —
+   * none of the conversation's own and none in Settings — because then the run asks for it by hand (2026-10-17;
+   * the runner decides the same way, see `modelByHand` in taskRunner.ts). It replaced "Whatever the chat is on".
+   */
+  const settingsModel = catalogue?.defaultModel ?? '';
+  const sessionModelShown = session ? (session.manualModel || (!session.model && !settingsModel) ? BY_HAND : (session.model ?? '')) : '';
+  const newModelShown = newModel === BY_HAND || (!newModel && !settingsModel) ? BY_HAND : newModel;
 
   useEffect(() => {
     setThreadId(kept(THREAD_KEY));
@@ -120,7 +128,9 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
     setSaid('');
     try {
       const fresh = !threadId;
-      const r = await api.chatSend(message, threadId || undefined, fresh ? newModel || undefined : undefined);
+      // Only when chosen: with no model anywhere the runner asks by hand anyway, and Settings may name one not read yet.
+      const byHand = fresh && newModel === BY_HAND;
+      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand);
       setText('');
       choose(r.threadId);
       if (r.noted) {
@@ -170,7 +180,7 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
       return;
     }
     try {
-      await api.updateSession(session.id, { model: name });
+      await api.updateSession(session.id, name === BY_HAND ? { model: '', manualModel: true } : { model: name, manualModel: false });
       void readSession();
     } catch (e) {
       setSaid((e as Error).message);
@@ -248,9 +258,10 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
           <label htmlFor="cs-model" className="sr-only">{t('chat.model')}</label>
           <ModelPicker
             id="cs-model"
-            chosen={session ? (session.model ?? '') : newModel}
+            chosen={session ? sessionModelShown : newModelShown}
             onChange={(n) => void chooseModel(n)}
-            none={catalogue?.defaultModel ? t('chat.modelDefault', { model: catalogue.defaultModel }) : t('chat.modelChat')}
+            byHand={t('chat.modelByHand')}
+            none={catalogue?.defaultModel ? t('chat.modelDefault', { model: catalogue.defaultModel }) : undefined}
             catalogue={catalogue}
             disabled={running}
             style={{ minWidth: 0, maxWidth: '48%' }}

@@ -74,6 +74,8 @@ export class FakeCopilot {
   currentModel = 'Auto';
   /** Every model the runner asked for, in order. */
   readonly modelRequests: string[] = [];
+  /** How long a choice of model takes, as the real picker's attempts can; it ends early on the run's Stop. */
+  modelPickMs = 0;
   /** Every model chosen, and how it was found: at the saved locator, at a fresh one, or by name. */
   readonly modelPicks: Array<{ name: string; by: 'locator' | 'reread' | 'name' }> = [];
   /** The accounts the page shows once signed in, for "Sign in" from Settings. */
@@ -240,8 +242,12 @@ class FakeChat implements ChatTransport {
     });
   }
 
-  async selectModel(name: string, opts: { locator?: ModelLocator } = {}): Promise<ModelChoice> {
+  async selectModel(name: string, opts: { locator?: ModelLocator; signal?: AbortSignal } = {}): Promise<ModelChoice> {
     this.world.modelRequests.push(name);
+    for (const until = Date.now() + this.world.modelPickMs; Date.now() < until; ) {
+      if (opts.signal?.aborted) return { ok: false, current: this.world.currentModel, reason: 'stopped by the operator' };
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const line = this.lineUp();
     const at = (l: ModelLocator): ModelOption | undefined =>
       line.find((o) => o.locator && o.locator.index === l.index && (o.locator.group?.testId ?? '') === (l.group?.testId ?? '') && sameModel(o.name, name));

@@ -650,6 +650,10 @@ export type Session = {
   contractSent: boolean;
   /** The model this conversation should run on, by the picker's exact name. */
   model?: string;
+  /** The model is set by hand in the Copilot window; the run waits on a card after signing in. */
+  manualModel?: boolean;
+  /** When the operator last set it by hand in this conversation, and what the picker showed then. */
+  modelByHand?: { at: string; shown: string | null; asked?: string };
   /** Who chose `model` / the review's model: the plan, or the operator here. Settings outrank the plan's. */
   modelSource?: 'plan' | 'operator';
   reviewModelSource?: 'plan' | 'operator';
@@ -1083,6 +1087,8 @@ export const api = {
       active?: boolean;
       name?: string;
       model?: string;
+      /** The model set by hand in the Copilot window. */
+      manualModel?: boolean;
       onFailure?: 'stop' | 'continue';
       conversationGroup?: string;
       review?: Partial<ReviewSettings>;
@@ -1200,8 +1206,8 @@ export const api = {
   workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
   /** The chat: its conversations, and a message — a task of the conversation, or a note while it works. */
   chatThreads: () => call<ChatThread[]>('/chat/threads'),
-  chatSend: (text: string, threadId?: string, model?: string) =>
-    call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}), ...(model ? { model } : {}) }) }),
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean) =>
+    call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}), ...(model ? { model } : {}), ...(manualModel ? { manualModel: true } : {}) }) }),
   /** Back to before a message: the folder as it was then; that message and the ones after it taken out. */
   chatRewind: (threadId: string, taskId: string) =>
     call<{ ok: boolean; message: string; text: string; safety?: string }>(`/chat/${threadId}/rewind`, { method: 'POST', body: JSON.stringify({ taskId }) }),

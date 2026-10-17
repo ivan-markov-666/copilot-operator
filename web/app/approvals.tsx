@@ -72,9 +72,14 @@ export function GlobalApprovals() {
   /*
    * On the workbench the chat asks about its own commands, in the conversation (2026-10-17, "like Windsurf"); the
    * banner would say it a second time over the whole window. Every other page still shows them here. A session not
-   * read yet is held back for the moment it takes, rather than flashing the banner up and away.
+   * read yet is held back for the moment it takes, rather than flashing the banner up and away. A chat's model or plan
+   * card is not a command and is not asked about in the conversation, which points up here for it ("the card at the
+   * top"): hidden too, it left a chat waiting with nothing to answer (2026-10-17).
    */
-  const shown = pathname === '/' ? approvals.filter((a) => a.sessionId in known.current && !chats.current.has(a.sessionId)) : approvals;
+  const shown =
+    pathname === '/'
+      ? approvals.filter((a) => a.sessionId in known.current && (!chats.current.has(a.sessionId) || !!a.model || !!a.plan))
+      : approvals;
   if (shown.length === 0) return null;
 
   return (

@@ -738,13 +738,14 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
         text: body.text,
         ...(typeof body.threadId === 'string' && body.threadId ? { threadId: body.threadId } : {}),
         ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model } : {}),
+        ...(body.manualModel === true ? { manualModel: true } : {}),
       })
       .catch(fail);
   }

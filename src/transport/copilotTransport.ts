@@ -252,6 +252,17 @@ export class SendRejectedError extends Error {
 }
 
 /**
+ * The run was stopped while the transport was in one of its long waits: the model picker's looks and pauses, or
+ * the sign-in. Thrown by `hold` and the sign-in wait, so a Stop is not left waiting minutes for them to end.
+ */
+export class StoppedByOperator extends Error {
+  constructor(message = 'stopped by the operator') {
+    super(message);
+    this.name = 'StoppedByOperator';
+  }
+}
+
+/**
  * Takes the copy button off the operator's clipboard.
  *
  * Reading a reply means clicking Copilot's "Copy Response" and taking the raw markdown, which
@@ -350,8 +361,25 @@ export class CopilotTransport {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private lock: LockHandle | null = null;
+  /**
+   * The run's Stop, while a choice of model is being made (see `selectModel`). The picker's waits add up to minutes
+   * — six attempts, each looking up to twenty seconds for each of its rows, in four ways — and a Stop pressed in them
+   * did nothing until they ended (2026-10-17: "the Stop button seems not to work").
+   */
+  private stop: AbortSignal | null = null;
 
   constructor(private readonly opts: TransportOptions) {}
+
+  /** A pause of the model picker that ends early, with `StoppedByOperator`, once the run is stopped. */
+  private async hold(ms: number): Promise<void> {
+    const until = Date.now() + ms;
+    for (;;) {
+      if (this.stop?.aborted) throw new StoppedByOperator();
+      const left = until - Date.now();
+      if (left <= 0) return;
+      await this.p.waitForTimeout(Math.min(250, left));
+    }
+  }
 
   private emit(event: string, detail?: Record<string, unknown>): void {
     this.opts.onEvent?.(event, detail);
@@ -419,6 +447,22 @@ export class CopilotTransport {
 
   private composer(): Locator {
     return this.p.locator(Css.composer).first();
+  }
+
+  /** Whether the composer shows within `ms`, looked for a second at a time; a Stop ends the wait with `StoppedByOperator`. */
+  private async composerWithin(ms: number, signal: AbortSignal | undefined, stopped: string): Promise<boolean> {
+    const until = Date.now() + ms;
+    for (;;) {
+      if (signal?.aborted) throw new StoppedByOperator(stopped);
+      try {
+        await this.composer().waitFor({ state: 'visible', timeout: Math.max(1, Math.min(1_000, until - Date.now())) });
+        return true;
+      } catch (e) {
+        // Only "not yet": a closed window or page ends the wait as it always did, at once.
+        if ((e as Error).name !== 'TimeoutError') throw e;
+        if (Date.now() >= until) return false;
+      }
+    }
   }
 
   /**
@@ -600,12 +644,22 @@ Current URL: ${url}`);
    * Opens the chat and, if the tenant has signed us out, waits for the human. The bot never
    * types credentials; it only waits for the composer to appear.
    */
-  async ensureSignedIn(url = this.opts.chatUrl): Promise<void> {
+  async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal } = {}): Promise<void> {
     await this.p.goto(url, { waitUntil: 'domcontentloaded' });
 
-    if (!(await this.isChatReady(15_000))) {
+    /*
+     * Looked for a second at a time, so a Stop pressed while the page loads or the operator has not signed in yet
+     * ends the wait at once, rather than after the whole sign-in timeout, fifteen minutes by default (2026-10-17).
+     */
+    const stoppedHere = 'stopped by the operator while waiting for the sign-in';
+    if (!(await this.composerWithin(15_000, opts.signal, stoppedHere))) {
       this.emit('sign-in-required', { url: this.p.url() });
-      await this.composer().waitFor({ state: 'visible', timeout: this.opts.signInTimeoutMs });
+      if (!(await this.composerWithin(this.opts.signInTimeoutMs, opts.signal, stoppedHere))) {
+        throw new Error(
+          `The sign-in was not completed within ${Math.round(this.opts.signInTimeoutMs / 1000)} s (Settings → copilot.signInTimeoutSec). ` +
+            'Sign in in the open Edge window, then start again.',
+        );
+      }
       this.emit('signed-in');
     }
 
@@ -764,11 +818,11 @@ Current URL: ${url}`);
   private async dismissOpenMenu(): Promise<void> {
     try {
       await this.p.keyboard.press('Escape');
-      await this.p.waitForTimeout(150);
+      await this.hold(150);
       const open = this.p.locator('[role="menu"]');
       if ((await open.count()) > 0) {
         await this.p.mouse.click(4, 4);
-        await this.p.waitForTimeout(150);
+        await this.hold(150);
       }
     } catch {
       /* the page may be navigating; a leftover menu is not worth an exception */
@@ -816,7 +870,7 @@ Current URL: ${url}`);
       const byLabel = this.p.getByRole('button', { name: Model.buttonLabel, exact: false });
       if ((await byLabel.count().catch(() => 0)) > 0) return byLabel.first();
 
-      await this.p.waitForTimeout(500);
+      await this.hold(500);
     } while (Date.now() < deadline);
     return null;
   }
@@ -1008,7 +1062,7 @@ Current URL: ${url}`);
         if (row.elId && rows.some((r) => r.menuOf === row.elId)) return row.elId;
         const fresh = rows.find((r) => !before.has(r.menuOf) && r.menuOf !== row.elId);
         if (fresh && (!row.elId || Date.now() - started > 1_500)) return fresh.menuOf;
-        await this.p.waitForTimeout(200);
+        await this.hold(200);
       } while (Date.now() - started < ms);
       return null;
     };
@@ -1049,7 +1103,7 @@ Current URL: ${url}`);
         if (!first || (!containsModel(await first.innerText().catch(() => ''), text) && containsModel(line, text))) first = el;
       }
       if (first) return first;
-      await this.p.waitForTimeout(200);
+      await this.hold(200);
     } while (Date.now() < deadline);
     return null;
   }
@@ -1107,7 +1161,7 @@ Current URL: ${url}`);
       return { ok: true, current: name, by: 'locator' };
     }
     await this.press(found.row).catch(() => undefined);
-    await this.p.waitForTimeout(800);
+    await this.hold(800);
     // Whatever the click did, the menu is not left open over the chat.
     await this.closeMenu();
     const again = await this.openToModel(name, group);
@@ -1134,7 +1188,7 @@ Current URL: ${url}`);
     const before = await this.currentModel();
     const textOf = async (el: Locator): Promise<string> => (((await el.innerText().catch(() => '')) ?? '').split('\n')[0] ?? '').trim();
     // A fixed pause after every opening and every press (see `ModelPicking`); the checks give it less.
-    const settle = (): Promise<void> => this.p.waitForTimeout(this.opts.modelSettleMs ?? ModelPicking.settleMs);
+    const settle = (): Promise<void> => this.hold(this.opts.modelSettleMs ?? ModelPicking.settleMs);
     const pause = this.opts.modelBeforePressMs ?? ModelPicking.beforePressMs;
     const poll = this.opts.modelPollMs ?? ModelPicking.pollMs;
     const appear = this.opts.modelAppearMs ?? ModelPicking.appearMs;
@@ -1156,7 +1210,7 @@ Current URL: ${url}`);
       let el = await find();
       while (!el && Date.now() < deadline) {
         this.emit('model-step', { step: 'not there yet, waiting', what: label, look: looks, waitMs: poll });
-        await this.p.waitForTimeout(poll);
+        await this.hold(poll);
         looks += 1;
         el = await find();
       }
@@ -1165,7 +1219,7 @@ Current URL: ${url}`);
         return null;
       }
       this.emit('model-step', { step: 'there, pausing before the press', what: label, look: looks, text: await textOf(el), pauseMs: pause });
-      await this.p.waitForTimeout(pause);
+      await this.hold(pause);
       await picture(`before-${label}`);
       return el;
     };
@@ -1201,7 +1255,7 @@ Current URL: ${url}`);
             return { row };
           }
           this.emit('model-step', { step: 'group not opened', how });
-          await this.p.waitForTimeout(pause);
+          await this.hold(pause);
         }
         await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
         return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (${target.xpath}); the menu is kept as models-select-failed.html/.png` };
@@ -1247,14 +1301,14 @@ Current URL: ${url}`);
         // The chosen model's own name: "Sonnet" alone would stop at "Sonnet 5.5" when "Sonnet 5" is asked for.
         if (now.radio && (sameModel(line, name) || containsModel(now.text, name))) {
           this.emit('model-step', { step: 'model reached by the keyboard, pausing before Enter', attempt, text: line, presses, pauseMs: pause });
-          await this.p.waitForTimeout(pause);
+          await this.hold(pause);
           await picture('before-enter');
           await this.p.keyboard.press('Enter');
           await settle();
           return true;
         }
         await this.p.keyboard.press('ArrowDown');
-        await this.p.waitForTimeout(400);
+        await this.hold(400);
       }
       this.emit('model-step', { step: 'model not reached by the keyboard', attempt });
       await this.closeMenu();
@@ -1309,7 +1363,7 @@ Current URL: ${url}`);
       await found.row.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
       await settle();
       if ((await this.modelMenuOpen()) && !(await checked(found.row))) {
-        await this.p.waitForTimeout(pause);
+        await this.hold(pause);
         await found.row.click({ timeout: 3_000 }).catch(() => undefined);
         await settle();
       }
@@ -1403,7 +1457,7 @@ Current URL: ${url}`);
     for (const [how, act] of ways) {
       if (!(await this.modelMenuOpen())) return;
       await act().catch(() => undefined);
-      await this.p.waitForTimeout(250);
+      await this.hold(250);
       if (!(await this.modelMenuOpen())) {
         if (how !== 'escape') this.emit('model-menu-closed', { how });
         return;
@@ -1424,7 +1478,7 @@ Current URL: ${url}`);
           if (await one.isVisible().catch(() => false)) return one;
         }
       }
-      await this.p.waitForTimeout(250);
+      await this.hold(250);
     }
     return null;
   }
@@ -1439,7 +1493,23 @@ Current URL: ${url}`);
    * menu item that is out of quota can look clicked and change nothing; when it did not take, the
    * caller is told what the chat is actually on.
    */
-  async selectModel(name: string, opts: { locator?: ModelLocator } = {}): Promise<ModelChoice> {
+  async selectModel(name: string, opts: { locator?: ModelLocator; signal?: AbortSignal } = {}): Promise<ModelChoice> {
+    if (opts.signal?.aborted) return { ok: false, current: null, reason: 'stopped by the operator' };
+    this.stop = opts.signal ?? null;
+    try {
+      return await this.chooseModel(name, opts);
+    } catch (e) {
+      if (!(e instanceof StoppedByOperator)) throw e;
+      this.stop = null;
+      this.emit('model-step', { step: 'stopped by the operator', model: name });
+      await this.closeMenu().catch(() => undefined);
+      return { ok: false, current: await this.currentModel().catch(() => null), reason: 'stopped by the operator' };
+    } finally {
+      this.stop = null;
+    }
+  }
+
+  private async chooseModel(name: string, opts: { locator?: ModelLocator }): Promise<ModelChoice> {
     const button = await this.resolveModelButton();
     if (!button) return { ok: false, current: null, reason: 'This chat does not show a model picker.' };
 

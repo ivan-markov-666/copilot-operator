@@ -749,6 +749,8 @@ export class OperatorService {
     patch: {
       name?: string;
       model?: string;
+      /** The model set by hand in the Copilot window; see `Session.manualModel`. */
+      manualModel?: boolean;
       onFailure?: 'stop' | 'continue';
       conversationGroup?: string;
       projectDir?: string;
@@ -764,6 +766,7 @@ export class OperatorService {
       throw new Error('This session is running; its status can be changed once it has stopped.');
     }
     return await this.store.updateSession(id, (s) => {
+      const before = { model: s.model, manualModel: s.manualModel };
       if (patch.name !== undefined) s.name = patch.name.trim() || s.name;
       if (patch.active === true) delete s.active;
       else if (patch.active === false) s.active = false;
@@ -773,6 +776,14 @@ export class OperatorService {
         s.model = patch.model.trim() || undefined;
         // Chosen on the session's page: the operator's own word, which outranks Settings.
         s.modelSource = s.model ? 'operator' : undefined;
+      }
+      if (typeof patch.manualModel === 'boolean') {
+        if (patch.manualModel) s.manualModel = true;
+        else delete s.manualModel;
+      }
+      // Another choice of model: what was set by hand in the conversation is not what is asked for any more.
+      if ((patch.model !== undefined || typeof patch.manualModel === 'boolean') && (s.model !== before.model || !!s.manualModel !== !!before.manualModel)) {
+        delete s.modelByHand;
       }
       // The same for the group: clearing it gives this session its conversation back. It does
       // not move the conversation it is already in; that history is where it is.
@@ -1885,8 +1896,9 @@ export class OperatorService {
     await this.store.updateSession(sessionId, (s) => {
       s.status = 'stopping';
     });
-    // The running step is cut off, not waited for: said as it is (live run 2026-10-03).
-    this.bus.publish({ sessionId, type: 'stop-requested', level: 'warn', message: 'stopping now: nothing more is sent, and a step still running is cut off' });
+    // The running step is cut off, not waited for: said as it is (live run 2026-10-03). An answer the chat is writing
+    // is waited for, so the conversation is left whole; the choice of model and the sign-in end at once (2026-10-17).
+    this.bus.publish({ sessionId, type: 'stop-requested', level: 'warn', message: 'stopping now: nothing more is sent, a step still running is cut off, and an answer Copilot is writing is waited for first' });
     return { stopping: true };
   }
 
@@ -2730,7 +2742,7 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -2761,7 +2773,8 @@ export class OperatorService {
         s.vcs = { ...(s.vcs ?? DEFAULT_VCS), enabled: false, repoDir: '' };
         s.projectDir = ws.dir;
         // The model chosen in the chat for this conversation: the operator's word, which outranks Settings.
-        if (input.model?.trim()) {
+        if (input.manualModel) s.manualModel = true;
+        else if (input.model?.trim()) {
           s.model = input.model.trim();
           s.modelSource = 'operator';
         }

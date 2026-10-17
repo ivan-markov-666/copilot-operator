@@ -32,20 +32,27 @@ export function useModelCatalogue(given?: ModelCatalogue | null): ModelCatalogue
   return given !== undefined ? given : loaded;
 }
 
+/** The value of the "set the model by hand" entry, which no model of the picker can be called. */
+export const BY_HAND = '::by-hand::';
+
 export function ModelPicker({
   id,
   chosen,
   onChange,
   none,
+  byHand,
   catalogue,
   disabled = false,
   style,
 }: {
   id: string;
+  /** A model's name, '' for the empty choice, or `BY_HAND`. */
   chosen: string;
   onChange: (name: string) => void;
-  /** What the empty choice means here: "leave the chat alone", "the session's own", ... */
-  none: string;
+  /** What the empty choice means here: "leave the chat alone", "the session's own", ... Left out, there is none. */
+  none?: string;
+  /** With a label, an entry for choosing the model by hand in the Copilot window, first; its value is `BY_HAND`. */
+  byHand?: string;
   /** Leave out to let the picker read the list itself. */
   catalogue?: ModelCatalogue | null;
   disabled?: boolean;
@@ -60,9 +67,9 @@ export function ModelPicker({
    * otherwise a model chosen from this very list showed as "not in the list" after the next read.
    */
   const norm = (n: string): string => n.toLowerCase().replace(/[-‐‑‒–—_]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const listed = chosen ? all.find((o) => norm(o.name) === norm(chosen)) : undefined;
+  const listed = chosen && chosen !== BY_HAND ? all.find((o) => norm(o.name) === norm(chosen)) : undefined;
   const value = listed?.name ?? chosen;
-  const known = !!listed;
+  const known = !!listed || (chosen === BY_HAND && byHand !== undefined);
   const ungrouped = all.filter((o) => !o.group);
   const grouped = new Map<string, typeof all>();
   for (const o of all) {
@@ -71,7 +78,8 @@ export function ModelPicker({
   }
   return (
     <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} style={{ width: 'auto', minWidth: 280, ...style }}>
-      <option value="">{none}</option>
+      {byHand !== undefined && <option value={BY_HAND}>{byHand}</option>}
+      {none !== undefined && <option value="">{none}</option>}
       {chosen && !known && <option value={chosen}>{t('model.notInList', { name: chosen })}</option>}
       {ungrouped.map((o) => (
         <option key={o.name} value={o.name} disabled={o.disabled}>

@@ -981,7 +981,12 @@ function ManualModelToggle() {
   useEffect(() => {
     api
       .settings()
-      .then((s) => setOn(((s.raw.copilot as Record<string, unknown> | undefined)?.manualModel as boolean | undefined) === true))
+      .then((s) => {
+        // Not in the file: the default, which is on since 2026-10-17.
+        const saved = (s.raw.copilot as Record<string, unknown> | undefined)?.manualModel;
+        const byDefault = (s.defaults as { copilot?: { manualModel?: boolean } } | undefined)?.copilot?.manualModel;
+        setOn(typeof saved === 'boolean' ? saved : byDefault !== false);
+      })
       .catch((e) => setErr((e as Error).message));
   }, []);
   const save = async (value: boolean) => {

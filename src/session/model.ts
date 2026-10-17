@@ -1020,6 +1020,20 @@ export type Session = {
    * than declared.
    */
   model?: string;
+  /**
+   * The model is set by hand in the Copilot window ("Set the model by hand" in the chat's picker,
+   * 2026-10-17): the bot leaves the picker alone, and after signing in it waits on a card until the
+   * operator has chosen the model and pressed "Ready". `model` and the model in Settings are not used.
+   * A chat with no model of its own and none in Settings is chosen by hand too: that is what its picker shows.
+   */
+  manualModel?: boolean;
+  /**
+   * The operator said the model was chosen by hand in the conversation the session is in: when, and what
+   * the picker button showed then. A run that comes back to that conversation is not asked again, since a
+   * conversation keeps its model; a new conversation is, and so is a change of the session's model choice,
+   * which clears this.
+   */
+  modelByHand?: { at: string; shown: string | null; asked?: string };
   /** What the picker actually reported after the last run applied the choice. */
   modelInUse?: string;
   /**

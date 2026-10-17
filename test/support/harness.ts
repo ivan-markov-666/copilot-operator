@@ -131,6 +131,11 @@ export async function makeDirs(settings: Record<string, unknown> = {}): Promise<
      * on by default) is checked where it is under test, by giving it a value there.
      */
     limits: { autoContinue: 0, ...((settings.limits as object | undefined) ?? {}) },
+    /*
+     * The runner chooses the model itself, as the checks of choosing it expect; choosing it by hand (on by default
+     * since 2026-10-17) is checked where it is under test, by giving it a value there.
+     */
+    copilot: { manualModel: false, ...((settings.copilot as object | undefined) ?? {}) },
   };
   await writeFile(join(dirs.dataDir, 'settings.json'), JSON.stringify(written, null, 2), 'utf8');
   return dirs;

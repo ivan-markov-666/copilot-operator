@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
-import { buttonShows } from '../transport/modelMatch.js';
+import { buttonShows, normModel } from '../transport/modelMatch.js';
 import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
@@ -433,6 +433,8 @@ export async function openBrowser(
   bus: EventBus,
   transportDir: string,
   sessionId: string,
+  /** The run's Stop: a sign-in still awaited ends with it. */
+  signal?: AbortSignal,
 ): Promise<ChatTransport> {
   const speaker = { id: sessionId };
   const transport = createTransport({
@@ -482,7 +484,7 @@ export async function openBrowser(
    */
   try {
     await transport.open();
-    await transport.ensureSignedIn();
+    await transport.ensureSignedIn(undefined, { signal });
   } catch (e) {
     await transport.close().catch(() => undefined);
     throw e;
@@ -635,8 +637,9 @@ export async function openSessionTransport(
   session: Session,
   bus: EventBus,
   runsDir: string,
+  signal?: AbortSignal,
 ): Promise<ChatTransport> {
-  const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id);
+  const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id, signal);
   await enterSessionConversation(transport, session, { closeOnFailure: true });
   return transport;
 }
@@ -664,14 +667,25 @@ export async function openSessionTransport(
  * on every run (operator's rule, 2026-10-06: what is set in Settings outranks the same thing in the JSON).
  */
 export function effectiveModels(
-  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource'>,
+  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'manualModel'>,
   cfg: Pick<ResolvedConfig, 'copilot'>,
 ): { model: string; reviewModel: string; modelFrom: 'session' | 'settings' | 'plan' | 'none'; reviewModelFrom: 'session' | 'settings' | 'plan' | 'none' } {
   const pick = (own: string, source: 'plan' | 'operator' | undefined, settings: string): [string, 'session' | 'settings' | 'plan' | 'none'] =>
     own && source === 'operator' ? [own, 'session'] : settings ? [settings, 'settings'] : own ? [own, 'plan'] : ['', 'none'];
-  const [model, modelFrom] = pick((session.model ?? '').trim(), session.modelSource, (cfg.copilot.defaultModel ?? '').trim());
+  // Set by hand in the Copilot window: no name is asked for, neither the session's nor the one in Settings.
+  const [model, modelFrom]: [string, 'session' | 'settings' | 'plan' | 'none'] = session.manualModel ? ['', 'none'] : pick((session.model ?? '').trim(), session.modelSource, (cfg.copilot.defaultModel ?? '').trim());
   const [reviewModel, reviewModelFrom] = pick((session.review?.model ?? '').trim(), session.reviewModelSource, (cfg.copilot.defaultReviewModel ?? '').trim());
   return { model, reviewModel, modelFrom, reviewModelFrom };
+}
+
+/**
+ * Whether the model of this session's conversation is chosen by hand in the Copilot window: Settings say so for
+ * every run, the session says so ("Set the model by hand" in the chat's picker), or it is a chat that names no
+ * model and has none from Settings either — its picker shows "by hand" for that, and what it shows is what happens.
+ */
+export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'model' | 'review' | 'modelSource' | 'reviewModelSource'>, cfg: Pick<ResolvedConfig, 'copilot'>): boolean {
+  if (cfg.copilot.manualModel || session.manualModel) return true;
+  return session.kind === 'chat' && !effectiveModels(session, cfg).model;
 }
 
 async function applySessionModel(
@@ -681,10 +695,16 @@ async function applySessionModel(
   cfg: Pick<ResolvedConfig, 'copilot'>,
   store?: SessionStore,
   hooks?: ModelHooks,
+  /** Whether the conversation was opened new for this run, rather than one the session already had. */
+  fresh = true,
+  /** The run's Stop: the picker's waits end with it, and nothing is sent. */
+  signal?: AbortSignal,
 ): Promise<{ current?: string; refused?: string }> {
+  const stopped = { refused: 'Stopped by the operator while the model was being chosen. Nothing was sent; the tasks stay queued.' };
+  if (signal?.aborted) return stopped;
   const { model: wanted, modelFrom } = effectiveModels(session, cfg);
   const fromSettings = modelFrom === 'settings';
-  const manual = !!cfg.copilot.manualModel && !!hooks?.askHelp;
+  const manual = modelByHand(session, cfg) && !!hooks?.askHelp;
   if (!wanted && !manual) return {};
 
   let result: ModelChoice;
@@ -694,29 +714,58 @@ async function applySessionModel(
      * on the model — the chat keeps its model — is not asked about; otherwise the card asks for it.
      */
     const shown = await transport.currentModel().catch(() => null);
+    /*
+     * The conversation is "on the model" when the operator set it by hand in it before, for the same name or for
+     * none: asked once, at its first run, not at every one (2026-10-17) — the picker button's text could not be
+     * relied on at work to say so. A new conversation is asked again, and so is another name asked for.
+     */
+    const setBefore = session.modelByHand;
+    if (!fresh && setBefore && normModel(setBefore.asked ?? '') === normModel(wanted)) {
+      bus.publish({ sessionId: session.id, type: 'model-kept-by-hand', level: 'info',
+        message: `model: set by hand in this conversation (the picker shows "${shown ?? 'nothing'}"); not asked again`,
+        data: { shown, setAt: setBefore.at, shownThen: setBefore.shown, asked: wanted } });
+      await store?.updateSession(session.id, (s) => { s.modelInUse = shown ?? undefined; }).catch(() => undefined);
+      return { current: shown ?? undefined };
+    }
+    const why = cfg.copilot.manualModel ? 'Settings ask for the model to be chosen by hand' : 'the session asks for the model to be set by hand';
     const hand = wanted && buttonShows(shown, wanted)
       ? { result: { ok: true, current: wanted, by: 'already' } as ModelChoice, goOnAsItIs: false }
-      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: 'Settings ask for the model to be chosen by hand' }, hooks, session.id, bus, true);
+      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: why }, hooks, session.id, bus, true);
     if (!wanted) {
       const now = await transport.currentModel().catch(() => null);
       if (hand.result.ok || hand.goOnAsItIs) {
-        await store?.updateSession(session.id, (s) => { s.modelInUse = now ?? undefined; }).catch(() => undefined);
+        await store
+          ?.updateSession(session.id, (s) => {
+            s.modelInUse = now ?? undefined;
+            s.modelByHand = { at: new Date().toISOString(), shown: now };
+          })
+          .catch(() => undefined);
         return { current: now ?? undefined };
       }
       return { refused: 'The model was to be chosen by hand, and the operator stopped the run. Nothing was sent.' };
     }
     result = hand.result;
+    // Set by hand in this conversation: the next run that comes back to it is not asked again.
+    if (result.ok || hand.goOnAsItIs) {
+      const now = await transport.currentModel().catch(() => null);
+      await store?.updateSession(session.id, (s) => { s.modelByHand = { at: new Date().toISOString(), shown: now, asked: wanted }; }).catch(() => undefined);
+    }
     if (hand.goOnAsItIs) {
       bus.publish({ sessionId: session.id, type: 'model-selected', level: 'warn', message: `model: ${result.current ?? 'unknown'} (chosen by hand; not "${wanted}")`, data: { asked: wanted, current: result.current, ok: false, by: 'hand' } });
       return { current: result.current ?? undefined };
     }
   } else {
     const locator = await hooks?.locate?.(wanted).catch(() => undefined);
-    result = await transport.selectModel(wanted, { locator }).catch((e: unknown) => ({
+    result = await transport.selectModel(wanted, { locator, signal }).catch((e: unknown) => ({
       ok: false as const,
       current: null,
       reason: (e as Error).message,
     }));
+    // Not put to the operator on a card: they asked for the run to stop.
+    if (signal?.aborted) {
+      bus.publish({ sessionId: session.id, type: 'model-not-selected', level: 'info', message: `stopped by the operator while "${wanted}" was being chosen; nothing was sent`, data: { asked: wanted, stopped: true } });
+      return stopped;
+    }
   }
   const hand = await withOperatorHand(transport, wanted, result, hooks, session.id, bus, false);
   result = hand.result;
@@ -1650,7 +1699,7 @@ export async function runTask(
          * record would go on naming the model the session asked for. Applied again here, as the
          * fresh-chat retry in `runSession` does for the same reason.
          */
-        const modelNow = await applySessionModel(transport, session, bus, cfg, store, deps.models);
+        const modelNow = await applySessionModel(transport, session, bus, cfg, store, deps.models, !chat, deps.signal);
         if (effectiveModels(session, cfg).model) {
           await store.updateSession(session.id, (s) => {
             s.modelInUse = modelNow.current;
@@ -2169,7 +2218,7 @@ export async function runTask(
               : (await withOperatorHand(transport, model, { ok: false, current: shown, reason: 'Settings ask for the model to be chosen by hand (the review)' }, deps.models, session.id, bus, true)).result;
           } else {
             const reviewLocator = await deps.models?.locate?.(model).catch(() => undefined);
-            picked = await transport.selectModel(model, { locator: reviewLocator }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
+            picked = await transport.selectModel(model, { locator: reviewLocator, signal }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
           }
           const renamed = await followPageModels('review', model, picked, session, store, deps.models, effectiveModels(session, cfg).reviewModelFrom);
           if (renamed) sink.event('model-renamed', { asked: model, chosen: picked.matched, review: true }, renamed, 'warn');
@@ -3274,20 +3323,22 @@ export async function runSession(
       await enterSessionConversation(borrowed, session, { closeOnFailure: false });
     } else {
       await deps.beforeBrowser?.();
-      transport = await openSessionTransport(cfg, session, bus, sessionRunsDir);
+      transport = await openSessionTransport(cfg, session, bus, sessionRunsDir, deps.signal);
     }
     const chat = transport as ChatTransport;
 
     // The picker belongs to the conversation, so the session's choice is applied once, here,
-    // before the first task goes out. What the chat ended up on is recorded either way.
-    const modelInUse = await applySessionModel(chat, session, bus, cfg, store, deps.models);
+    // before the first task goes out. What the chat ended up on is recorded either way. A conversation
+    // the session already had was reopened above; one it did not have was opened new.
+    const modelInUse = await applySessionModel(chat, session, bus, cfg, store, deps.models, !session.chat, deps.signal);
     if (effectiveModels(session, cfg).model) {
       await store.updateSession(sessionId, (s) => {
         s.modelInUse = modelInUse.current;
       });
     }
-    // Refused before a task is marked started: its tasks stay queued, and the run says why.
-    if (modelInUse.refused) throw new Error(modelInUse.refused);
+    // Refused before a task is marked started: its tasks stay queued, and the run says why. Stopped, the loop
+    // below ends before its first task.
+    if (modelInUse.refused && !deps.signal?.aborted) throw new Error(modelInUse.refused);
 
     for (const queuedTask of queued) {
       if (deps.signal?.aborted) break;
@@ -3398,7 +3449,7 @@ export async function runSession(
            * it was the model the session asked for. The review has always done this for its own
            * fresh conversations a few hundred lines up; this path simply never did.
            */
-          const freshModel = await applySessionModel(chat, session, bus, cfg, store, deps.models);
+          const freshModel = await applySessionModel(chat, session, bus, cfg, store, deps.models, true, deps.signal);
           if (effectiveModels(session, cfg).model) {
             session = await store.updateSession(sessionId, (s) => {
               s.modelInUse = freshModel.current;
@@ -3459,8 +3510,16 @@ export async function runSession(
       }
     }
   } catch (e) {
-    bus.publish({ sessionId, type: 'session-error', level: 'error', message: (e as Error).message });
-    throw e;
+    /*
+     * Stopped while the browser was opening, the sign-in awaited or the model chosen: what the operator asked for,
+     * not a failure. Said as a stop, and the tasks stay queued (2026-10-17).
+     */
+    if (deps.signal?.aborted && ran === 0) {
+      bus.publish({ sessionId, type: 'session-stopped', level: 'info', message: `stopped by the operator before the first task was sent; the tasks stay queued (${(e as Error).message})` });
+    } else {
+      bus.publish({ sessionId, type: 'session-error', level: 'error', message: (e as Error).message });
+      throw e;
+    }
   } finally {
     // A borrowed window belongs to whoever opened it and stays open for the next session.
     if (!borrowed) await transport?.close();

@@ -429,8 +429,25 @@ try {
     t.check('a group whose models come two seconds late: waited for, chosen at once',[r3.ok, await inForce3(), steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length], [true, 'Claude Opus 4.7 Think deeper', 1]);
     steps3.length = 0;
     await page3.evaluate(() => { (window as unknown as { openDelay: number; ignoreClicks: number }).openDelay = 0; (window as unknown as { ignoreClicks: number }).ignoreClicks = 99; });
+    const fullFrom = Date.now();
     r3 = await t3.selectModel('Quick response');
+    const fullMs = Date.now() - fullFrom;
     t.check('never set: refused after six attempts, saying so', [r3.ok, /not chosen after 6 attempts/.test(r3.reason ?? ''), steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length], [false, true, 6]);
+    /*
+     * The run's Stop, pressed while those attempts go on (2026-10-17, "the Stop button seems not to work"): their waits
+     * end at once, nothing more is pressed, and the menu is closed, instead of all six attempts being waited out.
+     */
+    steps3.length = 0;
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 600);
+    const stopFrom = Date.now();
+    r3 = await t3.selectModel('Quick response', { signal: stop.signal });
+    const stopMs = Date.now() - stopFrom;
+    const stepsAfterStop = steps3.filter((x) => x.e === 'model-step').map((x) => String(x.d?.step));
+    t.check('stopped while choosing: ends with "stopped by the operator"', [r3.ok, r3.reason, stepsAfterStop.at(-1)], [false, 'stopped by the operator', 'stopped by the operator']);
+    t.truthy('at once, not after the six attempts', stopMs < 2_000 && stopMs < fullMs / 3, { stopMs, fullMs });
+    t.check('and leaves the menu closed', await page3.locator('[role="menu"]:visible').count(), 0);
+    t.check('a Stop already pressed opens nothing', [(await t3.selectModel('Quick response', { signal: stop.signal })).reason, steps3.filter((x) => x.e === 'model-step').length], ['stopped by the operator', stepsAfterStop.length]);
     rmSync(dir3, { recursive: true, force: true });
     await page3.close();
 
