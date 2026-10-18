@@ -41,7 +41,7 @@ try {
     const started = Date.now();
     const named = await c.nameChat(chatId, name);
     const took = Date.now() - started;
-    t.check('named, and the sidebar shows the name', named, true);
+    t.check('named, and the sidebar shows the name', named, name);
     t.truthy('in seconds', took < 30_000, `${took} ms`);
     t.check('found again by that name', await c.openConversationByName(name), true);
     t.check('and it is the same conversation', await c.currentChatId(), chatId);

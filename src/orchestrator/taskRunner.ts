@@ -919,15 +919,17 @@ export async function runTask(
     if (!chat || chat.named !== false || nameTries >= 3) return;
     if ((await target.currentChatId().catch(() => null)) !== chat.chatId) return;
     nameTries += 1;
-    const named = await target.nameChat(chat.chatId, chat.name, { waitMs: 5_000 }).catch(() => false);
-    if (!named) return;
-    const { named: _was, ...done } = chat;
+    const saved = await target.nameChat(chat.chatId, chat.name, { waitMs: 5_000 }).catch(() => false as const);
+    if (!saved) return;
+    // The name Copilot took, which may be a shorter form of the one asked for: it is what the chat is found by.
+    const { named: _was, ...rest } = chat;
+    const done = { ...rest, name: saved };
     session.chat = done;
     await store.updateSession(session.id, (s) => {
-      if (s.chat?.chatId === chat.chatId) s.chat = { ...s.chat, named: undefined };
+      if (s.chat?.chatId === chat.chatId) s.chat = { ...s.chat, named: undefined, name: saved };
     }).catch(() => undefined);
     await savePointer(log.path('chat.json'), done).catch(() => undefined);
-    sink.event('chat-named-later', { chatId: chat.chatId, name: chat.name, tries: nameTries }, `chat named "${chat.name}" in Copilot's sidebar, now that it is there`);
+    sink.event('chat-named-later', { chatId: chat.chatId, name: saved, tries: nameTries }, `chat named "${saved}" in Copilot's sidebar, now that it is there`);
   };
   const chatOf = transport;
   transport = new Proxy(chatOf, {
@@ -1804,8 +1806,11 @@ export async function runTask(
         if (chatId) {
           // A fresh-chat retry, or any later attempt, says so in the name: the abandoned chat had the same one (live run 2026-10-03).
           // Only a retry in a fresh chat is named apart; a first conversation is not, whatever the attempt number.
-          const name = buildChatName(`${chatCode(session.id)}${task.freshRetry ? `/a${attempt}` : ''}`, session.name);
-          const named = await transport.nameChat(chatId, name).catch(() => false);
+          const asked = buildChatName(`${chatCode(session.id)}${task.freshRetry ? `/a${attempt}` : ''}`, session.name);
+          const saved = await transport.nameChat(chatId, asked).catch(() => false as const);
+          const named = saved !== false;
+          // The name Copilot took, which may be a shorter form of the one asked for (see `chatNameForms`).
+          const name = saved || asked;
           const chat: ChatPointer = {
             chatId,
             url: `${cfg.copilot.url.replace(/\/chat.*$/, '')}/chat/conversation/${chatId}?es=SSR`,

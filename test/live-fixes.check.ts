@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { startHarness, Tally, waitFor, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 import { noteFor } from '../src/vcs/taskVcs.js';
+import { buildChatName, chatCode, chatNameForms } from '../src/transport/chatSession.js';
 import { parseReply } from '../src/protocol/parser.js';
 import { readOnlyNote } from '../src/session/compose.js';
 import { versionControlLines } from '../src/session/exportRecord.js';
@@ -844,6 +845,44 @@ console.log('\n--- 2026-10-05: a conversation not yet in the sidebar when regist
     t.check('a second try, not more', h.chat.nameTries, 2);
     const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${s!.id}/events`);
     t.truthy('and the late naming is on record', events.some((e) => e.type === 'chat-named-later'), events.map((e) => e.type).filter((x) => /chat/.test(x)));
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+/*
+ * 2026-10-17: "the bot tries to save a chat name longer than 50 characters, and it breaks its logic". Copilot's
+ * dialog takes a shorter form of the name (see `chatNameForms`); that form is the chat's name on record, the one a
+ * later run finds it by — at the first naming and when it is named later, once the sidebar has the row.
+ */
+console.log('\n--- 2026-10-17: a chat name Copilot takes only shortened is the name on record ---');
+for (const late of [0, 1]) {
+  const h = await startHarness({});
+  try {
+    const takes = (asked: string): string => chatNameForms(asked).find((f) => Buffer.byteLength(f, 'utf8') <= 50) ?? asked;
+    h.chat.renameTakes = takes;
+    h.chat.sidebarLate = late;
+    const [s] = await session(h, {
+      version: 1,
+      sessions: [{ name: 'Създай калкулатор с тестове и документация', onFailure: 'stop', vcs: vcs(h), review: { enabled: false },
+        tasks: [
+          { title: 'write a', prompt: 'Write a.txt in the project folder holding exactly the word one.', checks: [] },
+          { title: 'write b', prompt: 'Write b.txt in the project folder holding exactly the word two.', checks: [] },
+        ] }],
+    });
+    h.chat.script(reply.steps("Set-Content -Path a.txt -Value 'one'"), reply.done(), reply.steps("Set-Content -Path b.txt -Value 'two'"), reply.done());
+    await h.run(s!.id, 'unattended');
+    const v = await h.session(s!.id) as unknown as { chat?: { chatId: string; name: string; named?: boolean }; tasks: Array<{ status: string; runId?: string }> };
+    const conv = v.chat ? h.chat.conversations.get(v.chat.chatId) : undefined;
+    const asked = buildChatName(chatCode(s!.id), 'Създай калкулатор с тестове и документация');
+    const when = late ? 'named later' : 'named at once';
+    t.truthy(`${when}: the name asked for was too long for that dialog`, Buffer.byteLength(asked, 'utf8') > 50, asked);
+    t.check(`${when}: the name on record is the one Copilot took, and the chat has it`, [v.chat?.name, conv?.name, v.chat?.named ?? null], [takes(asked), takes(asked), null]);
+    const pointer = JSON.parse(readFileSync(join(h.runsDir, v.tasks[0]!.runId!, 'chat.json'), 'utf8')) as { name: string };
+    t.check(`${when}: and so is the task's record of its conversation`, pointer.name, takes(asked));
+    t.check(`${when}: both tasks ran in that one conversation`, [v.tasks.map((x) => x.status), [...new Set(h.chat.sent.map((m) => m.chatId))]], [['done', 'done'], [v.chat?.chatId]]);
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

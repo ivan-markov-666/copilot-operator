@@ -66,6 +66,8 @@ export class FakeCopilot {
   sidebarLate = 0;
   /** How many times a conversation was asked to be named. */
   nameTries = 0;
+  /** The name the rename dialog ends up taking for the one asked, or false; unset, the one asked. */
+  renameTakes: ((name: string) => string | false) | null = null;
   models: ModelOption[] = [
     { name: 'Auto', raw: 'Auto', selected: true, disabled: false, role: 'menuitemradio' },
     { name: 'Think deeper', raw: 'Think deeper', selected: false, disabled: false, role: 'menuitemradio' },
@@ -217,7 +219,7 @@ class FakeChat implements ChatTransport {
     return this.current?.messages.length ? this.current.id : null;
   }
 
-  async nameChat(chatId: string, name: string): Promise<boolean> {
+  async nameChat(chatId: string, name: string): Promise<string | false> {
     const c = this.world.conversations.get(chatId);
     this.world.nameTries += 1;
     if (!c) return false;
@@ -226,8 +228,11 @@ class FakeChat implements ChatTransport {
       this.world.sidebarLate -= 1;
       return false;
     }
-    c.name = name;
-    return true;
+    // As the real dialog may: a shorter form of the name taken in place of the one asked for (see `chatNameForms`).
+    const taken = this.world.renameTakes ? this.world.renameTakes(name) : name;
+    if (taken === false) return false;
+    c.name = taken;
+    return taken;
   }
 
   /** The line-up as the real picker reads it: each model with its place (see `ModelLocator`). */

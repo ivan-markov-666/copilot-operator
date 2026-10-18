@@ -18,7 +18,7 @@ import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { landed } from './acceptance.js';
 import { Blocker, Css, Label, Model, ModelPicking, OperatorModelLocators, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
-import { parseChatId } from './chatSession.js';
+import { chatNameForms, parseChatId } from './chatSession.js';
 
 /**
  * The chat did not finish a reply within `copilot.replyTimeoutSec`.
@@ -721,7 +721,11 @@ Current URL: ${url}`);
    * Renames the current conversation. The sidebar row's overflow menu holds "Rename", the
    * dialog holds an input and a Save button, and Enter does not submit it.
    */
-  async nameChat(chatId: string, name: string, opts: { waitMs?: number } = {}): Promise<boolean> {
+  /**
+   * Renames the conversation in Copilot's sidebar. Returns the name it now has — the one asked for, or a shorter form
+   * of it when Copilot's dialog refused that one (see `chatNameForms`) — or false when it could not be renamed.
+   */
+  async nameChat(chatId: string, name: string, opts: { waitMs?: number } = {}): Promise<string | false> {
     const row = this.p.locator(`${Sidebar.conversationLink}[href*="${chatId}"]`).first();
     // Waited for, like everything below: a new chat's row appears in the sidebar some seconds after the
     // reply, and `count()` read it as missing and returned without a word (live run 2026-10-03). The run
@@ -769,10 +773,33 @@ Current URL: ${url}`);
 
       const input = this.p.locator(Rename.input);
       await input.waitFor({ state: 'visible', timeout: 10_000 });
-      const wanted = name.slice(0, Rename.maxLength);
-      await input.fill(wanted);
-      await this.press(this.p.getByRole('button', { name: Rename.saveText, exact: true }).first());
-      await input.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+      const save = this.p.getByRole('button', { name: Rename.saveText, exact: true }).first();
+      /*
+       * Offered in shorter forms until the dialog takes one. Copilot refuses a name it counts as longer than 50
+       * characters, by a count that is not always ours, and its dialog then stays open over the chat (2026-10-17: "the
+       * bot tries to save a chat name longer than 50 characters, and it breaks its logic"). A dialog that takes none is
+       * closed with Cancel, never left standing.
+       */
+      let wanted: string | null = null;
+      const refused: string[] = [];
+      for (const form of chatNameForms(name)) {
+        await input.fill(form);
+        await this.press(save);
+        if (await this.renameTaken(input, save)) {
+          wanted = form;
+          break;
+        }
+        refused.push(form);
+        this.emit('chat-name-refused', { chatId, name: form, says: await this.renameSays(input) });
+      }
+      if (wanted === null) {
+        await this.press(this.p.getByRole('button', { name: Rename.cancelText, exact: true }).first()).catch(() => undefined);
+        await input.waitFor({ state: 'detached', timeout: 3_000 }).catch(async () => {
+          await this.p.keyboard.press('Escape').catch(() => undefined);
+        });
+        this.emit('chat-name-failed', { chatId, name, error: `Copilot's rename dialog took none of ${refused.map((f) => `"${f}"`).join(', ')}; it was closed with Cancel` });
+        return false;
+      }
 
       // Named only when the sidebar says so: its row's label is the chat's name.
       const shows = async (): Promise<string> => ((await row.getAttribute('aria-label').catch(() => null)) ?? '').trim();
@@ -782,8 +809,8 @@ Current URL: ${url}`);
         this.emit('chat-name-failed', { chatId, name, error: `the sidebar still shows "${await shows()}"` });
         return false;
       }
-      this.emit('chat-named', { chatId, name });
-      return true;
+      this.emit('chat-named', { chatId, name: wanted, ...(wanted !== name ? { asked: name } : {}) });
+      return wanted;
     } catch (e) {
       this.emit('chat-name-failed', { chatId, name, error: (e as Error).message });
       return false;
@@ -792,6 +819,32 @@ Current URL: ${url}`);
       // chat list is not only untidy: it covers the rows and swallows the next click.
       if (opened) await this.dismissOpenMenu();
     }
+  }
+
+  /**
+   * Whether the rename dialog took the name it was given: it closes. A refusal it shows — the input marked invalid,
+   * an alert in the dialog, the Save button disabled — ends the wait at once; one it does not show, after ten seconds.
+   */
+  private async renameTaken(input: Locator, save: Locator): Promise<boolean> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if ((await input.count().catch(() => 0)) === 0 || !(await input.isVisible().catch(() => false))) return true;
+      const shown = await input
+        .evaluate((el) => {
+          const box = el.closest('[role="dialog"]') ?? el.parentElement;
+          return el.getAttribute('aria-invalid') === 'true' || !!box?.querySelector('[role="alert"]');
+        })
+        .catch(() => false);
+      if (shown || (await save.isDisabled().catch(() => false))) return false;
+      await this.p.waitForTimeout(250);
+    }
+    return false;
+  }
+
+  /** What the rename dialog says, for the record of a refusal. */
+  private async renameSays(input: Locator): Promise<string> {
+    const text = await input.evaluate((el) => (el.closest('[role="dialog"]') ?? el.parentElement)?.textContent ?? '').catch(() => '');
+    return text.replace(/\s+/g, ' ').trim().slice(0, 300);
   }
 
   /**

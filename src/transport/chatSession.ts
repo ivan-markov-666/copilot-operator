@@ -78,6 +78,41 @@ export function buildChatName(runId: string, label: string): string {
   return (prefix + clean).replace(/\/$/, '').slice(0, MAX_CHAT_NAME);
 }
 
+/**
+ * The forms of a chat name to offer Copilot's rename dialog, longest first, each shorter than the one before.
+ *
+ * The dialog refuses a name it counts as longer than 50 characters, and its count is not always this file's: the
+ * operator saw the bot try to save a longer one (2026-09-30, again 2026-10-17), while every name made here is 50
+ * UTF-16 units at most. A counter of UTF-8 bytes takes a Cyrillic letter as two, so a Bulgarian session's name of 50
+ * letters is a hundred to it. Rather than guess which count the page keeps, the dialog is offered these in turn and
+ * the first it takes is the chat's name (see `nameChat`): 50 letters, cut whole (a letter outside the BMP is not
+ * split in two); 50 bytes of UTF-8; the same in ASCII alone; the prefix and the session code alone, `op/<code>`,
+ * which is what makes the chat findable and which every count agrees is short.
+ */
+export function chatNameForms(name: string): string[] {
+  const forms: string[] = [];
+  const add = (form: string): void => {
+    const tidy = form.replace(/[-._/]+$/, '');
+    if (tidy && !forms.includes(tidy)) forms.push(tidy);
+  };
+  const letters = (s: string, n: number): string => Array.from(s).slice(0, n).join('');
+  const bytes = (s: string, n: number): string => {
+    let out = '';
+    for (const ch of s) {
+      if (Buffer.byteLength(out + ch, 'utf8') > n) break;
+      out += ch;
+    }
+    return out;
+  };
+  const ascii = name.normalize('NFKD').replace(/[^\x20-\x7e]/g, '').replace(/-{2,}/g, '-').replace(/\/-+/g, '/');
+  add(letters(name, MAX_CHAT_NAME));
+  add(bytes(name, MAX_CHAT_NAME));
+  add(bytes(ascii, MAX_CHAT_NAME));
+  const code = /^op\/[a-z0-9]+(?:\/a\d+)?/i.exec(name)?.[0];
+  if (code) add(code);
+  return forms;
+}
+
 /** Compact run id, e.g. `20260917-1912`. Stable, sortable, short enough to fit the name. */
 export function makeRunId(now = new Date()): string {
   const p = (n: number): string => String(n).padStart(2, '0');

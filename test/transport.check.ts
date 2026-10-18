@@ -55,6 +55,7 @@ import {
   type TransportOptions,
 } from '../src/transport/copilotTransport.js';
 import { acquireProfileLock, findEdgeUsingProfile } from '../src/transport/profileLock.js';
+import { buildChatName, chatNameForms } from '../src/transport/chatSession.js';
 import { Tally } from './support/harness.js';
 
 const t = new Tally();
@@ -655,7 +656,11 @@ try {
    * the menu has it) opens a dialog with #new-session-name and Save. The menu closes on Escape, or
    * — `closesOn: 'outside'` — only on a press outside it, which is the fallback nameChat relies on.
    */
-  const SIDEBAR = (withRename: boolean, closesOn: 'escape' | 'outside'): string => `${COUNT}
+  /*
+   * `refuse`, the source of a function of the name: the dialog's Save then refuses the names it returns true for, as
+   * Copilot's does a name it counts as too long — an alert in the dialog, which stays open until Cancel.
+   */
+  const SIDEBAR = (withRename: boolean, closesOn: 'escape' | 'outside', refuse = 'null'): string => `${COUNT}
     <style>.row .more { visibility: hidden } .row:hover .more { visibility: visible }</style>
     <nav><ul>
       <li class="row"><a href="/chat/conversation/OTHER-1" aria-label="another chat">another chat</a> <button class="more" aria-label="More" data-count="More OTHER-1">...</button></li>
@@ -663,7 +668,7 @@ try {
     </ul></nav>
     ${COMPOSER}
     <script>
-      const WITH_RENAME = ${withRename}, CLOSES_ON = '${closesOn}';
+      const WITH_RENAME = ${withRename}, CLOSES_ON = '${closesOn}', REFUSE = ${refuse};
       let menu = null, target = null;
       const closeMenu = () => { if (menu) { menu.remove(); menu = null; } };
       for (const a of document.querySelectorAll('a')) a.addEventListener('click', (e) => e.preventDefault());
@@ -686,8 +691,13 @@ try {
         d.setAttribute('role', 'dialog');
         d.innerHTML = '<input id="new-session-name" aria-label="Chat name"> <button data-count="Save">Save</button> <button data-count="Cancel">Cancel</button>';
         d.querySelector('input').value = target.getAttribute('aria-label');
+        d.querySelector('[data-count="Cancel"]').addEventListener('click', () => d.remove());
         d.querySelector('[data-count="Save"]').addEventListener('click', () => {
           const name = d.querySelector('input').value;
+          if (REFUSE && REFUSE(name)) {
+            if (!d.querySelector('[role="alert"]')) d.insertAdjacentHTML('beforeend', '<div role="alert">Your Copilot chat name can not be longer than 50 characters</div>');
+            return;
+          }
           target.setAttribute('aria-label', name);
           target.textContent = name;
           d.remove();
@@ -709,7 +719,7 @@ try {
      */
     const name = 'op/x/' + 'y'.repeat(60);
     const f = await fixture('name', SIDEBAR(true, 'escape'));
-    t.check('nameChat returns true', await f.transport.nameChat('ID-42', name), true);
+    t.check('nameChat returns the name it gave', await f.transport.nameChat('ID-42', name), name.slice(0, 50));
     const label = await f.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label');
     t.check('the link\'s aria-label is the name, cut to 50 characters', [label?.length, label], [50, name.slice(0, 50)]);
     const c = await clicks(f.page);
@@ -744,10 +754,33 @@ try {
     const started = Date.now();
     const ok = await f.transport.nameChat('ID-42', 'op/ab/covered');
     const took = Date.now() - started;
-    t.check('renamed, though the mouse cannot reach the button', [ok, await f.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label')], [true, 'op/ab/covered']);
+    t.check('renamed, though the mouse cannot reach the button', [ok, await f.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label')], ['op/ab/covered', 'op/ab/covered']);
     t.truthy('in seconds, not the minute of retries', took < 20_000, `${took} ms`);
     const c = await clicks(f.page);
     t.check('that chat\'s More only, then Rename and Save', [c['More ID-42'] ?? 0, c['More OTHER-1'] ?? 0, c['Rename'] ?? 0, c['Save'] ?? 0], [1, 0, 1, 1]);
+  });
+
+  await section('nameChat: a name Copilot refuses as too long is offered shorter, and the dialog is never left open', async () => {
+    /*
+     * The operator saw the bot try to save a chat name longer than 50 characters, and it broke the run (2026-10-17):
+     * Copilot's dialog refused it and stayed open over the chat. Here the dialog counts UTF-8 bytes, so a Bulgarian
+     * session's name of 50 letters is too long for it. The next, shorter form is taken, and that is the name returned.
+     */
+    const asked = buildChatName('ab', 'Създай калкулатор с тестове и документация за потребителя');
+    const forms = chatNameForms(asked);
+    t.truthy('the name asked for is 50 characters, and more than 50 bytes', asked.length <= 50 && Buffer.byteLength(asked, 'utf8') > 50, { asked, letters: asked.length, bytes: Buffer.byteLength(asked, 'utf8') });
+    const bytes = await fixture('name-bytes', SIDEBAR(true, 'escape', "(n) => new TextEncoder().encode(n).length > 50"));
+    const took = await bytes.transport.nameChat('ID-42', asked);
+    const shown = await bytes.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label');
+    t.check('the shorter form the dialog takes is the chat\'s name, and what is returned', [took, shown], [forms[1], forms[1]]);
+    t.truthy('a form of the same name: its prefix, code and start kept, 50 bytes at most', !!forms[1] && asked.startsWith(forms[1]) && forms[1].startsWith('op/ab/') && Buffer.byteLength(forms[1], 'utf8') <= 50, forms);
+    t.check('the refusal is on record, and no dialog or menu remains', [named(bytes.events, 'chat-name-refused').length, await bytes.page.locator('#new-session-name').count(), await bytes.page.locator('[role="menu"]:visible').count()], [1, 0, 0]);
+
+    // A dialog that takes nothing: every form offered, then Cancel; the chat keeps its name and the run is told.
+    const none = await fixture('name-none', SIDEBAR(true, 'escape', '() => true'));
+    t.check('no form taken: false', await none.transport.nameChat('ID-42', asked), false);
+    t.check('every form was offered, then the dialog was closed with Cancel', [named(none.events, 'chat-name-refused').length, (await clicks(none.page))['Cancel'] ?? 0, await none.page.locator('#new-session-name').count()], [forms.length, 1, 0]);
+    t.check('the name is unchanged and the failure said', [await none.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label'), named(none.events, 'chat-name-failed').length], ['old', 1]);
   });
 
   await section('openConversationByName matches the whole name', async () => {
