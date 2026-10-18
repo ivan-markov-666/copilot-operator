@@ -222,8 +222,12 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
             </option>
           ))}
         </select>
-        <button type="button" className="wb-icon-btn" onClick={fresh} title={t('chat.newChat')} aria-label={t('chat.newChat')}>
-          +
+        {/*
+          A button with its name on it (2026-10-18: "a 'New chat' button, where the tasks run in a new Copilot chat"): it
+          was a bare "+". The next message opens a new conversation in Copilot; this one stays in the list beside it.
+        */}
+        <button type="button" className="cs-new" onClick={fresh} disabled={!session} title={t('chat.newChatWhy')}>
+          {t('chat.newChat')}
         </button>
       </div>
 
@@ -376,6 +380,17 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
             {task.summary ? <RichText text={task.summary} /> : null}
             {task.status !== 'done' && task.reason ? <p className="small">{task.reason}</p> : null}
           </div>
+        </div>
+      )}
+      {/*
+        Everything that passed between the bot and Copilot for this message, and nothing of the others: every message
+        sent, every reply, every command with its whole output, every attempt (2026-10-18). See taskExchange.ts.
+      */}
+      {task.runId && (
+        <div className="cs-exchange">
+          <a className="button-link quiet small" href={api.taskExchangeUrl(session.id, task.id)} download title={t('chat.exchangeWhy')}>
+            {t('chat.exchange')}
+          </a>
         </div>
       )}
       {(task.vcs?.files?.length ?? 0) > 0 && !live && (

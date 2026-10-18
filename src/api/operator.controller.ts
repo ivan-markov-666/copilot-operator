@@ -508,6 +508,19 @@ export class OperatorController {
    * format that imports again), `domain` (what happened to the work) or `bot` (what the runner
    * did). Exactly one of `run`, `session` or `session`+`task` names the scope.
    */
+  /** One task's whole exchange with Copilot, as a JSON file (see `taskExchange.ts`). */
+  @Get('sessions/:id/tasks/:taskId/exchange')
+  async taskExchange(@Param('id') id: string, @Param('taskId') taskId: string, @Res() res: Response): Promise<void> {
+    try {
+      const { fileName, content } = await this.ops.taskExchange(id, taskId);
+      res.type('application/json; charset=utf-8');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.send(content);
+    } catch (e) {
+      failText(res, e);
+    }
+  }
+
   @Get('export/:kind')
   async exportView(
     @Param('kind') kind: string,

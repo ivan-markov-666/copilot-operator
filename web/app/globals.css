@@ -1049,6 +1049,8 @@ button.linkish:hover { text-decoration: underline; }
 .cs-end:not(.s-done) { background: var(--warn-soft); }
 .cs-end.s-failed, .cs-end.s-blocked { background: var(--bad-soft); }
 .cs-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cs-exchange { display: flex; justify-content: flex-end; }
+.cs-new { flex: none; padding: 4px 10px; font-size: calc(13px * var(--scale)); }
 .cs-file { padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--panel); color: var(--ink); font: inherit; font-size: calc(12px * var(--scale)); cursor: pointer; }
 .cs-file:hover { border-color: var(--accent); }
 .cs-system { color: var(--muted); font-size: calc(12.5px * var(--scale)); margin: 0; }

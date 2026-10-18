@@ -1367,6 +1367,8 @@ export const api = {
     if (where.task) q.set('task', where.task);
     return withToken(`${API}/export/${kind}?${q.toString()}`);
   },
+  /** One task's whole exchange with Copilot — messages, replies, commands and their output — as a JSON file. */
+  taskExchangeUrl: (id: string, taskId: string) => withToken(`${API}/sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/exchange`),
   debugExportUrl: (sessionIds: string[]) =>
     withToken(`${API}/debug/export${sessionIds.length > 0 ? `?sessions=${encodeURIComponent(sessionIds.join(','))}` : ''}`),
 

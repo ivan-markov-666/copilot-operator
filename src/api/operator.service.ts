@@ -34,6 +34,8 @@ import { buildDebugExport } from '../session/debugExport.js';
 import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, runScope, taskAtAttempt, taskInRun, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
+import { buildTaskExchange } from '../session/taskExchange.js';
+import { chatCode } from '../transport/chatSession.js';
 import type { ContextKind } from '../session/store.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSession, type PlanSummary } from '../plan/schema.js';
 import { planBrief, type BriefOptions, type UnattendedBlock } from '../plan/brief.js';
@@ -1348,6 +1350,23 @@ export class OperatorService {
           ? await buildDomainExport(scope, cfg.resolved.runsDir)
           : await buildBotExport(scope, cfg.resolved.runsDir, exportMachine(cfg));
     return { fileName: exportFileName(kind, scope.label), content: JSON.stringify(document, null, 2) };
+  }
+
+  /**
+   * Everything that passed between the bot and Copilot for one task — every message sent, every reply, every
+   * command with its whole output — every attempt of it and nothing of the tasks around it (2026-10-18: one JSON per
+   * message of the chat). See `taskExchange.ts`.
+   */
+  async taskExchange(sessionId: string, taskId: string): Promise<{ fileName: string; content: string }> {
+    await this.init();
+    const session = await this.store.getSession(sessionId);
+    const task = session?.tasks.find((t) => t.id === taskId);
+    if (!session || !task) throw new Error('No such task.');
+    const cfg = await this.settings.load();
+    const document = await buildTaskExchange(cfg.resolved.runsDir, session, task);
+    // The conversation's code and the message's place in it, then its first words: findable among a day's files.
+    const label = `${chatCode(session.id)}-${String(session.tasks.indexOf(task) + 1).padStart(2, '0')}-${task.title}`;
+    return { fileName: exportFileName('exchange', label), content: JSON.stringify(document, null, 2) };
   }
 
   /**

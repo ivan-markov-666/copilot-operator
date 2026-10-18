@@ -1178,6 +1178,11 @@ try {
     // The command's card comes with the task's story, read on a poll of its own: it can follow the summary by a moment.
     await chat.locator('.cs-cmd').first().waitFor({ timeout: 10_000 }).catch(() => undefined);
     t.truthy('the message, its command and the summary are in the conversation', ((await chat.textContent()) ?? '').includes('Create hi.txt holding the word hi.') && (await chat.locator('.cs-cmd').count()) === 1 && ((await chat.locator('.cs-cmd').textContent()) ?? '').includes('Set-Content -Path hi.txt'), await chat.textContent());
+    // The message's whole exchange with Copilot, as a file of its own (2026-10-18).
+    const [exchangeFile] = await Promise.all([page.waitForEvent('download'), chat.locator('.cs-turn').first().getByRole('link', { name: en['chat.exchange']! }).click()]);
+    const exchange = JSON.parse(readFileSync((await exchangeFile.path())!, 'utf8')) as { task: { message: string }; attempts: Array<{ entries: Array<{ kind: string; command?: string; exitCode?: number }> }> };
+    t.check('"⤓ JSON" on the message saves its exchange: the message, and the command that ran with its exit code', [exchange.task.message, exchange.attempts[0]?.entries.filter((e) => e.kind === 'command').map((e) => [e.command, e.exitCode])], ['Create hi.txt holding the word hi.', [[write('hi.txt', 'hi'), 0]]]);
+    t.truthy('named for its conversation and message', /^copilot-operator-exchange-.+-01-.+\.json$/.test(exchangeFile.suggestedFilename()), exchangeFile.suggestedFilename());
     await chat.getByRole('button', { name: /^hi\.txt/ }).click();
     const editor = page.getByRole('tabpanel').first();
     await editor.locator('pre.wb-code').waitFor();
@@ -1209,6 +1214,14 @@ try {
     await waitFor('the second message to be gone', async () => (await chat.locator('.cs-turn').count()) === 1, 10_000).catch(() => undefined);
     t.check('back to before it: one message left, its file gone, the first one\'s kept', [await chat.locator('.cs-turn').count(), existsSync(join(h.repo, 'bye.txt')), existsSync(join(h.repo, 'hi.txt'))], [1, false, true]);
     t.check('and the message is back in the box, to send again or change', await input.inputValue(), 'Now bye.txt holding bye.');
+
+    // "New chat", by its name (it was a bare "+"): an empty conversation, the one before kept in the list.
+    const newChat = page.getByRole('button', { name: en['chat.newChat']!, exact: true });
+    await newChat.click();
+    await page.locator('.cs-welcome').waitFor();
+    const threadPicker = page.getByRole('combobox', { name: en['chat.thread']! });
+    t.check('"New chat": a new, empty conversation, the one before still in the list', [await threadPicker.inputValue(), await chat.locator('.cs-turn').count(), (await threadPicker.locator('option').allTextContents()).includes('Create hi.txt holding the word hi.')], ['', 0, true]);
+    t.check('and, already on a new one, it has nothing more to do', await newChat.isDisabled(), true);
   });
 
   /*

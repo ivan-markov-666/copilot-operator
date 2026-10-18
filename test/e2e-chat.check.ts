@@ -120,7 +120,43 @@ try {
   const start = await h.call<{ ok: boolean }>('POST', `/chat/${first.threadId}/rewind`, { taskId: one.id });
   t.check('back to before the first message: no hi.txt, no three.txt, the draft kept, nothing left in the conversation', [start.ok, file('hi.txt'), file('three.txt'), file('notes.md'), (await h.call<ChatSession>('GET', `/sessions/${first.threadId}`)).tasks.length], [true, null, null, 'draft', 0]);
 
-  await h.call<Sent>('POST', '/chat', { text: 'A different question in a new conversation.' });
+  /*
+   * "New chat" (2026-10-18): a message with no conversation named starts a new one, in a new Copilot conversation,
+   * with nothing of the first in it.
+   */
+  const other = await h.call<Sent>('POST', '/chat', { text: 'A different question in a new conversation.', model: 'Think deeper' });
+  t.truthy('a new chat is a conversation of its own', other.threadId !== first.threadId, other);
+  const twoLines = "Write-Output 'line one'\nWrite-Output 'line two'";
+  h.chat.script(reply.steps(write('other.txt', 'other'), twoLines), reply.done('I wrote other.txt and printed two lines.'));
+  const otherRan = (await h.run(other.threadId)).tasks[0] as Full;
+  const otherChat = (await h.call<ChatSession>('GET', `/sessions/${other.threadId}`)).chat?.chatId;
+  t.check('it ran in a Copilot conversation of its own', [otherRan.status, !!otherChat && otherChat !== chatId], ['done', true]);
+  t.truthy('which was not told anything of the first', !h.chat.sent.filter((m) => m.chatId === otherChat).some((m) => m.text.includes('hi.txt')), h.chat.sent.filter((m) => m.chatId === otherChat).map((m) => m.text.slice(0, 120)));
+
+  /*
+   * One JSON per message (2026-10-18): everything between the bot and Copilot for that message — every message sent,
+   * every reply, every command with its whole output — and nothing of the other messages.
+   */
+  type Entry = { kind: string; at?: string; n?: number; text?: string; attachments?: Array<{ name: string; text: string | null }>; command?: string; output?: string; exitCode?: number; outcome?: string; shell?: string; cwd?: string };
+  type Exchange = { format: string; version: number; session: { id: string }; task: { id: string; message: string; status: string }; attempts: Array<{ runId: string; conversation: { chatId: string } | null; counts: Record<string, number>; entries: Entry[]; events: unknown[] }> };
+  const exchange = await h.call<Exchange>('GET', `/sessions/${other.threadId}/tasks/${otherRan.id}/exchange`);
+  const [attempt] = exchange.attempts;
+  const kinds = (attempt?.entries ?? []).map((e) => e.kind);
+  t.check('the message\'s JSON: its format, the message as written, how it ended, one attempt in its own conversation', [exchange.format, exchange.version, exchange.task.message, exchange.task.status, exchange.attempts.length, attempt?.conversation?.chatId], ['copilot-operator.task-exchange', 1, 'A different question in a new conversation.', 'done', 1, otherChat]);
+  const sentToCopilot = h.chat.sent.filter((m) => m.chatId === otherChat || (!m.chatId && m.text.includes('A different question')));
+  t.check('every message the bot sent, word for word, in order', (attempt?.entries ?? []).filter((e) => e.kind === 'sent').map((e) => e.text), sentToCopilot.map((m) => m.text));
+  t.truthy('the task\'s own message is among them', (attempt?.entries ?? []).some((e) => e.kind === 'sent' && (e.text ?? '').includes('A different question in a new conversation.')), kinds);
+  t.check('every reply, the steps and the "done" as Copilot wrote them', (attempt?.entries ?? []).filter((e) => e.kind === 'reply').length, (attempt?.counts.replies ?? -1));
+  t.truthy('a reply holds what Copilot wrote', (attempt?.entries ?? []).some((e) => e.kind === 'reply' && (e.text ?? '').includes('I wrote other.txt and printed two lines.')), (attempt?.entries ?? []).filter((e) => e.kind === 'reply').map((e) => (e.text ?? '').slice(0, 200)));
+  const commands = (attempt?.entries ?? []).filter((e) => e.kind === 'command');
+  t.check('every command that ran, with its exit code', commands.map((c) => [c.command, c.exitCode, c.outcome]), [[write('other.txt', 'other'), 0, 'completed'], [twoLines, 0, 'completed']]);
+  t.check('a command of two lines whole, and its output only what it printed', [commands[1]?.output?.split(/\r?\n/).map((l) => l.trim())], [['line one', 'line two']]);
+  t.truthy('with the shell and the folder it ran in', commands.every((c) => c.shell === 'pwsh' && !!c.cwd && c.cwd.toLowerCase() === (repo ?? '').toLowerCase()), commands.map((c) => [c.shell, c.cwd]));
+  t.truthy('the results file sent with the report, with what it said', (attempt?.entries ?? []).some((e) => e.kind === 'sent' && (e.attachments ?? []).some((a) => /iteration-1\.txt$/.test(a.name) && (a.text ?? '').includes('line two'))), (attempt?.entries ?? []).filter((e) => e.kind === 'sent').map((e) => e.attachments));
+  t.truthy('in time order, and the run\'s own record beside it', (attempt?.entries ?? []).every((e, i, all) => i === 0 || (all[i - 1]!.at ?? '') <= (e.at ?? '')) && (attempt?.events.length ?? 0) > 0, kinds);
+  t.truthy('nothing of the other conversation\'s messages in it', !JSON.stringify(exchange).includes('hi.txt'), 'hi.txt found in the other message\'s JSON');
+  t.check('a task that is not there: refused', (await h.raw('GET', `/sessions/${other.threadId}/tasks/nope/exchange`)).status, 400);
+
   const threads = await h.call<Thread[]>('GET', '/chat/threads');
   t.check('the conversations, newest first', threads.map((x) => x.name), ['chat: A different question in a new conversation.', 'chat: Create hi.txt holding exactly the word hi.']);
   t.check('a message to a conversation that is not there is refused', (await h.raw('POST', '/chat', { text: 'hello', threadId: 'nope' })).status >= 400, true);

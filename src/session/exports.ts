@@ -64,7 +64,7 @@ function fileLabel(label: string): string {
   return label.replace(/[^\p{L}\p{N}._ -]/gu, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'export';
 }
 
-export function exportFileName(kind: ExportKind | 'bundle', label: string): string {
+export function exportFileName(kind: ExportKind | 'bundle' | 'exchange', label: string): string {
   return `copilot-operator-${kind}-${fileLabel(label)}-${stamp()}.json`;
 }
 

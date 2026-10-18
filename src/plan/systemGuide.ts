@@ -1384,10 +1384,10 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           {
             key: 'chat.newChat',
             kind: 'button',
-            en: 'New conversation',
-            bg: 'Нов разговор',
-            doesEn: 'The + beside the list: starts a new conversation.',
-            doesBg: 'Плюсът до списъка: започва нов разговор.',
+            en: 'New chat',
+            bg: 'Нов чат',
+            doesEn: 'Beside the list: the next message starts a new conversation, in a new Copilot conversation with nothing of this one in it; this one stays in the list.',
+            doesBg: 'До списъка: следващото съобщение започва нов разговор, в нов разговор в Copilot без нищо от този; този остава в списъка.',
           },
           {
             key: 'chat.welcome',
@@ -1418,8 +1418,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'select',
             en: 'Model',
             bg: 'Модел',
-            doesEn: 'The model of this conversation (or of the next one): "As in Settings" or one the chat\'s picker offered when last read; it is chosen in Copilot when the next message runs.',
-            doesBg: 'Моделът на този разговор (или на следващия): „Както е в Настройки“ или някой, предложен от избора в чата при последното четене; избира се в Copilot, когато тръгне следващото съобщение.',
+            doesEn: 'The model of this conversation (or of the next one): "Set the model by hand" (the run waits after signing in until it is chosen in the Copilot window and "Ready" is pressed, once per conversation), "As in Settings", or one the chat\'s picker offered when last read.',
+            doesBg: 'Моделът на този разговор (или на следващия): „Ръчно задаване на модел“ (след входа пускането чака, докато моделът бъде избран в прозореца на Copilot и се натисне „Готово“, веднъж на разговор), „Както е в Настройки“ или някой, предложен от избора в чата при последното четене.',
           },
           {
             key: 'chat.readModels',
@@ -1428,6 +1428,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Прочети последните модели от Copilot',
             doesEn: 'The ↻ beside the model: reads the models Copilot\'s own picker offers now (the browser opens for a moment; not while a conversation works).',
             doesBg: '↻ до модела: прочита моделите, които изборът в Copilot предлага сега (браузърът се отваря за момент; не и докато разговор работи).',
+          },
+          {
+            key: 'chat.exchange',
+            kind: 'link',
+            en: '⤓ JSON',
+            bg: '⤓ JSON',
+            doesEn: 'Under a message: saves everything between the bot and Copilot for that message alone, as a JSON file — every message sent with its files, every reply, every command with its whole output and exit code, every attempt.',
+            doesBg: 'Под съобщение: запазва всичко между бота и Copilot само за това съобщение, като JSON файл — всяко изпратено съобщение с файловете му, всеки отговор, всяка команда с целия ѝ изход и изходен код, всеки опит.',
           },
           {
             key: 'chat.rewind',
