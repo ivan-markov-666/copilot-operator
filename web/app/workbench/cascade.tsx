@@ -15,7 +15,7 @@
  * each message the folder is photographed, and "go back" on a message puts it back as it was then, with that
  * message and the ones after it gone from the conversation. The model is chosen under the box, as in an IDE.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type Approval, type ChatThread, type ModelCatalogue, type Session, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
@@ -355,7 +355,9 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
           </button>
         )}
         <div className="cs-user">
-          <RichText text={task.prompt} />
+          <Folded>
+            <RichText text={task.prompt} />
+          </Folded>
           <div className="cs-copy-row">
             <CopyButton text={task.prompt} what="chat.copyMessage" />
           </div>
@@ -419,6 +421,59 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
         </div>
       )}
     </section>
+  );
+}
+
+/** How many lines of a long message show while it is folded. */
+const FOLDED_LINES = 3;
+
+/**
+ * A long message of the operator's, folded to its first three lines (2026-10-19: "if it is too long, do not show all of
+ * it: the first three lines, an arrow below them that opens it, and a blur that comes on gradually"). The lines fade
+ * out and blur more the lower they are; the arrow opens the whole and closes it again. A message that fits in three
+ * lines is shown as it is, with no arrow. Measured as it is drawn, so a change of the text size counts.
+ */
+function Folded({ children }: { children: ReactNode }) {
+  const { t } = useT();
+  const box = useRef<HTMLDivElement | null>(null);
+  const [limit, setLimit] = useState(0);
+  const [tall, setTall] = useState(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = (): void => {
+      const style = window.getComputedStyle(el);
+      const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.45;
+      const max = Math.round(line * FOLDED_LINES);
+      setLimit(max);
+      // A line's worth of slack: a fourth line cut to a sliver is not worth an arrow.
+      setTall(el.scrollHeight > max + line * 0.6);
+    };
+    measure();
+    const seen = new ResizeObserver(measure);
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, []);
+  const folded = tall && !open;
+  return (
+    <>
+      <div ref={box} className={`cs-fold${folded ? ' folded' : ''}`} style={folded ? { maxHeight: limit } : undefined}>
+        {children}
+        {folded && (
+          <div className="cs-fold-blur" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
+      </div>
+      {tall && (
+        <button type="button" className="cs-fold-toggle" aria-expanded={open} aria-label={t(open ? 'chat.foldClose' : 'chat.foldOpen')} title={t(open ? 'chat.foldClose' : 'chat.foldOpen')} onClick={() => setOpen(!open)}>
+          {open ? '▴' : '▾'}
+        </button>
+      )}
+    </>
   );
 }
 

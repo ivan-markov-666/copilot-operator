@@ -1454,6 +1454,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Под твое съобщение, под казаното от чата, до края и до команда: копира този текст (команда — заедно с изписаното от нея); за момент пише „Копирано“.',
           },
           {
+            key: 'chat.foldOpen',
+            kind: 'button',
+            en: 'Show the whole message',
+            bg: 'Покажи цялото съобщение',
+            doesEn: 'The ▾ under a long message of yours, shown folded to its first three lines, fading out: opens it whole.',
+            doesBg: 'Стрелката ▾ под твое дълго съобщение, свито до първите три реда, които избледняват: разгъва го цялото.',
+          },
+          {
+            key: 'chat.foldClose',
+            kind: 'button',
+            en: 'Fold the message to its first lines',
+            bg: 'Свий съобщението до първите редове',
+            doesEn: 'The ▴ under an opened long message: folds it back to three lines.',
+            doesBg: 'Стрелката ▴ под разгънато дълго съобщение: свива го обратно до три реда.',
+          },
+          {
             key: 'chat.exchange',
             kind: 'link',
             en: '⤓ JSON',

@@ -1290,6 +1290,37 @@ try {
   });
 
   /*
+   * A long message of the operator's folds to its first three lines, fading out, with an arrow that opens it and
+   * closes it again; a short one shows as it is (2026-10-19). "Copy" copies all of it, folded or not.
+   */
+  await scenario('a long message in the chat folds to three lines, and the arrow opens it', {}, async (h, page, url) => {
+    const long = Array.from({ length: 12 }, (_, i) => `Line ${i + 1} of a long instruction for the chat.`).join('\n');
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: long, model: 'Think deeper' });
+    await h.call('POST', '/chat', { text: 'Short one.', threadId });
+    await page.goto(url('/'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const turns = page.locator('.cs-turn');
+    await turns.nth(1).waitFor();
+    const first = turns.first();
+    const fold = first.locator('.cs-fold');
+    await first.getByRole('button', { name: en['chat.foldOpen']!, exact: true }).waitFor();
+    const shut = await fold.evaluate((el) => ({ shown: el.clientHeight, whole: el.scrollHeight, line: parseFloat(getComputedStyle(el).lineHeight) }));
+    t.truthy('folded: about three lines of twelve shown, blurring out', shut.shown <= shut.line * 3 + 2 && shut.whole > shut.shown * 2 && (await first.locator('.cs-fold-blur').count()) === 1, shut);
+    await first.getByRole('button', { name: en['chat.foldOpen']!, exact: true }).click();
+    const opened = await fold.evaluate((el) => ({ shown: el.clientHeight, whole: el.scrollHeight }));
+    const close = first.getByRole('button', { name: en['chat.foldClose']!, exact: true });
+    t.truthy('the arrow opens it whole', opened.shown >= opened.whole - 1 && (await close.getAttribute('aria-expanded')) === 'true' && (await first.locator('.cs-fold-blur').count()) === 0, opened);
+    await close.click();
+    t.check('and folds it again', await first.getByRole('button', { name: en['chat.foldOpen']!, exact: true }).getAttribute('aria-expanded'), 'false');
+    t.check('a short message: no arrow, nothing hidden', [await turns.nth(1).locator('.cs-fold-toggle').count(), await turns.nth(1).locator('.cs-fold.folded').count()], [0, 0]);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    await first.getByRole('button', { name: en['chat.copyMessage']!, exact: true }).click();
+    // The Windows clipboard hands the lines back with CRLF; the text is what counts.
+    t.check('folded, "Copy" still copies all of it', (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), long);
+  });
+
+  /*
    * The workbench (2026-10-14): the home screen as an IDE with the chat beside it, and no dead end — a task that
    * blocked is carried on from the chat box and started from where it is offered, then undone; the palette finds a
    * task by a few letters.
