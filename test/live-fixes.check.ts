@@ -878,7 +878,9 @@ for (const late of [0, 1]) {
     const conv = v.chat ? h.chat.conversations.get(v.chat.chatId) : undefined;
     const asked = buildChatName(chatCode(s!.id), 'Създай калкулатор с тестове и документация');
     const when = late ? 'named later' : 'named at once';
-    t.truthy(`${when}: the name asked for was too long for that dialog`, Buffer.byteLength(asked, 'utf8') > 50, asked);
+    // In Latin letters from the start (2026-10-19): a dialog that counts bytes takes it at the first try.
+    t.truthy(`${when}: the name asked for is in Latin letters, transliterated, 50 at most`, /^[\x20-\x7e]+$/.test(asked) && /^op\/[a-z0-9]+\/Sazday-kalkulator-s-testove-i-dok/.test(asked) && asked.length <= 50, asked);
+    t.check(`${when}: taken as asked, one try (one more while the sidebar had no row)`, [takes(asked) === asked, h.chat.nameTries], [true, 1 + late]);
     t.check(`${when}: the name on record is the one Copilot took, and the chat has it`, [v.chat?.name, conv?.name, v.chat?.named ?? null], [takes(asked), takes(asked), null]);
     const pointer = JSON.parse(readFileSync(join(h.runsDir, v.tasks[0]!.runId!, 'chat.json'), 'utf8')) as { name: string };
     t.check(`${when}: and so is the task's record of its conversation`, pointer.name, takes(asked));

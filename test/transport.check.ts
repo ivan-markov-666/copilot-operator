@@ -766,8 +766,11 @@ try {
      * Copilot's dialog refused it and stayed open over the chat. Here the dialog counts UTF-8 bytes, so a Bulgarian
      * session's name of 50 letters is too long for it. The next, shorter form is taken, and that is the name returned.
      */
-    const asked = buildChatName('ab', 'Създай калкулатор с тестове и документация за потребителя');
+    // A name with Cyrillic in it, as one was made before names were put in Latin letters (see `buildChatName`).
+    const asked = 'op/ab/' + 'Създай-калкулатор-с-тестове-и-документация-за-потребителя'.slice(0, 44);
     const forms = chatNameForms(asked);
+    const made = buildChatName('ab', 'Създай калкулатор с тестове и документация за потребителя');
+    t.check('the bot\'s own name for a Bulgarian session: Latin letters, 50 at most', [made, /^[\x20-\x7e]+$/.test(made), made.length <= 50], ['op/ab/Sazday-kalkulator-s-testove-i-dokumentatsiya', true, true]);
     t.truthy('the name asked for is 50 characters, and more than 50 bytes', asked.length <= 50 && Buffer.byteLength(asked, 'utf8') > 50, { asked, letters: asked.length, bytes: Buffer.byteLength(asked, 'utf8') });
     const bytes = await fixture('name-bytes', SIDEBAR(true, 'escape', "(n) => new TextEncoder().encode(n).length > 50"));
     const took = await bytes.transport.nameChat('ID-42', asked);

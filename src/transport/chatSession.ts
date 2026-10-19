@@ -48,6 +48,25 @@ export function chatCode(sessionId: string): string {
   return (tail ?? sessionId.replace(/[^a-z0-9]/gi, '').slice(-6)).toLowerCase();
 }
 
+/** Cyrillic letters in Latin ones: the Bulgarian streamlined system, with the Russian and Ukrainian letters it lacks. */
+const CYRILLIC: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n',
+  о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sht', ъ: 'a', ь: 'y',
+  ю: 'yu', я: 'ya', ё: 'yo', ы: 'y', э: 'e', є: 'ye', і: 'i', ї: 'yi', ґ: 'g',
+};
+
+/** A text in Latin letters: Cyrillic transliterated, accents taken off; what is left of other scripts is kept. */
+export function latin(text: string): string {
+  let out = '';
+  for (const ch of text) {
+    const lower = ch.toLowerCase();
+    const mapped = CYRILLIC[lower];
+    if (mapped === undefined) out += ch;
+    else out += ch === lower ? mapped : mapped.charAt(0).toUpperCase() + mapped.slice(1);
+  }
+  return out.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+}
+
 /**
  * Builds the chat name. Shape:
  *
@@ -67,11 +86,16 @@ export function buildChatName(runId: string, label: string): string {
     return `op/${runId}`.slice(0, MAX_CHAT_NAME);
   }
   const room = MAX_CHAT_NAME - prefix.length;
-  // Unicode-aware on purpose: `\w` is ASCII-only in JavaScript, so a Cyrillic label would
-  // be stripped down to a row of dashes.
-  const clean = label
+  /*
+   * In Latin letters, Cyrillic transliterated ("Създай калкулатор" gives "Sazday-kalkulator"). Copilot's rename dialog
+   * refused a Bulgarian name of 50 letters, and then the same cut to 50 bytes, and took only a short Latin one: two
+   * refusals before every first message of a new chat (operator, 2026-10-19: "why two attempts — should it not be
+   * one?"). An ASCII name is the same length by any count, so the first name offered is the one it takes; the shorter
+   * forms of `chatNameForms` stay for a refusal nobody expects.
+   */
+  const clean = latin(label)
     .replace(/\s+/g, '-')
-    .replace(/[^\p{L}\p{N}._-]/gu, '')
+    .replace(/[^A-Za-z0-9._-]/g, '')
     .replace(/-{2,}/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, room);

@@ -152,9 +152,15 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
           <button className="primary" disabled={busy} onClick={() => void decide('run')}>
             {t(m.manual ? 'approval.manualReady' : 'approval.modelChosen')}
           </button>
-          <button disabled={busy} onClick={() => void decide('skip')}>
-            {t('approval.modelAsItIs')}
-          </button>
+          {/*
+            Not for a model chosen by hand (2026-10-19, "why two buttons?"): there both went on, on the model the chat is
+            on, and only the record differed. Kept where the bot could not choose it, where they are different answers.
+          */}
+          {!m.manual && (
+            <button disabled={busy} onClick={() => void decide('skip')}>
+              {t('approval.modelAsItIs')}
+            </button>
+          )}
           <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
             {t('approval.modelStop')}
           </button>

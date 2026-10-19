@@ -1167,6 +1167,8 @@ try {
     const banner = page.locator('.approval-banner');
     await banner.getByText(en['approval.manualTitle']!).waitFor({ timeout: 30_000 });
     t.check('signed in, it waits on the card at the top of the workbench, with nothing sent', h.chat.sent.length, 0);
+    // One way on, not two that did the same (2026-10-19), and Stop.
+    t.check('the card offers "Ready — continue" and "Stop", nothing else', await banner.locator('.approval').last().getByRole('button').allTextContents(), [en['approval.manualReady'], en['approval.modelStop']]);
     h.chat.currentModel = 'GPT 5.6 Sol Think deeper';
     await banner.getByRole('button', { name: en['approval.manualReady']!, exact: true }).click();
     await chat.getByText('I wrote hi.txt holding the word hi').waitFor({ timeout: 30_000 });
@@ -1185,7 +1187,8 @@ try {
     t.check('"Copy" on your message: the message on the clipboard, and "Copied" on the button', [await page.evaluate(() => navigator.clipboard.readText()), ((await copyMine.textContent()) ?? '').trim()], ['Create hi.txt holding the word hi.', en['copy.copied']]);
     const copyCommand = chat.locator('.cs-cmd').first().getByRole('button', { name: en['chat.copyCommand']!, exact: true });
     await copyCommand.click();
-    t.truthy('and on a command: the command, as a terminal shows it', (await page.evaluate(() => navigator.clipboard.readText())).startsWith(`$ ${write('hi.txt', 'hi')}`), await page.evaluate(() => navigator.clipboard.readText()));
+    // A command that printed nothing is copied as the command alone, ready to paste into a terminal.
+    t.check('and on a command that printed nothing: the command itself', await page.evaluate(() => navigator.clipboard.readText()), write('hi.txt', 'hi'));
 
     // The message's whole exchange with Copilot, as a file of its own (2026-10-18).
     const [exchangeFile] = await Promise.all([page.waitForEvent('download'), chat.locator('.cs-turn').first().getByRole('link', { name: en['chat.exchange']! }).click()]);
