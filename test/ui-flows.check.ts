@@ -1178,6 +1178,15 @@ try {
     // The command's card comes with the task's story, read on a poll of its own: it can follow the summary by a moment.
     await chat.locator('.cs-cmd').first().waitFor({ timeout: 10_000 }).catch(() => undefined);
     t.truthy('the message, its command and the summary are in the conversation', ((await chat.textContent()) ?? '').includes('Create hi.txt holding the word hi.') && (await chat.locator('.cs-cmd').count()) === 1 && ((await chat.locator('.cs-cmd').textContent()) ?? '').includes('Set-Content -Path hi.txt'), await chat.textContent());
+    // Copy on a message (2026-10-19): the message itself on the clipboard, and the button says so.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    const copyMine = chat.locator('.cs-turn').first().getByRole('button', { name: en['chat.copyMessage']!, exact: true });
+    await copyMine.click();
+    t.check('"Copy" on your message: the message on the clipboard, and "Copied" on the button', [await page.evaluate(() => navigator.clipboard.readText()), ((await copyMine.textContent()) ?? '').trim()], ['Create hi.txt holding the word hi.', en['copy.copied']]);
+    const copyCommand = chat.locator('.cs-cmd').first().getByRole('button', { name: en['chat.copyCommand']!, exact: true });
+    await copyCommand.click();
+    t.truthy('and on a command: the command, as a terminal shows it', (await page.evaluate(() => navigator.clipboard.readText())).startsWith(`$ ${write('hi.txt', 'hi')}`), await page.evaluate(() => navigator.clipboard.readText()));
+
     // The message's whole exchange with Copilot, as a file of its own (2026-10-18).
     const [exchangeFile] = await Promise.all([page.waitForEvent('download'), chat.locator('.cs-turn').first().getByRole('link', { name: en['chat.exchange']! }).click()]);
     const exchange = JSON.parse(readFileSync((await exchangeFile.path())!, 'utf8')) as { task: { message: string }; attempts: Array<{ entries: Array<{ kind: string; command?: string; exitCode?: number }> }> };
@@ -1215,13 +1224,66 @@ try {
     t.check('back to before it: one message left, its file gone, the first one\'s kept', [await chat.locator('.cs-turn').count(), existsSync(join(h.repo, 'bye.txt')), existsSync(join(h.repo, 'hi.txt'))], [1, false, true]);
     t.check('and the message is back in the box, to send again or change', await input.inputValue(), 'Now bye.txt holding bye.');
 
+    // The panel under the editor shows this chat's commands; a new chat clears it (2026-10-19).
+    const panelTab = (key: string) => page.getByRole('tablist', { name: en['wb.panel']! }).getByRole('tab', { name: en[key]! });
+    const panelBody = page.locator('.wb-bottom-body');
+    await panelTab('wb.terminal').click();
+    await panelBody.getByText('Set-Content -Path hi.txt', { exact: false }).first().waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.truthy('before: the terminal shows this chat\'s command', ((await panelBody.textContent()) ?? '').includes('Set-Content -Path hi.txt'), await panelBody.textContent());
+
     // "New chat", by its name (it was a bare "+"): an empty conversation, the one before kept in the list.
     const newChat = page.getByRole('button', { name: en['chat.newChat']!, exact: true });
     await newChat.click();
+    await panelBody.getByText(en['wb.newChatTerminal']!).waitFor({ timeout: 10_000 }).catch(() => undefined);
+    const terminalNow = (await panelBody.textContent()) ?? '';
+    await panelTab('wb.problems').click();
+    const problemsNow = (await panelBody.textContent()) ?? '';
+    t.check('"New chat" clears the terminal and the problems of the chat before', [terminalNow.includes(en['wb.newChatTerminal']!), terminalNow.includes('hi.txt'), problemsNow.includes(en['wb.newChatProblems']!)], [true, false, true]);
+    await panelTab('wb.terminal').click();
     await page.locator('.cs-welcome').waitFor();
     const threadPicker = page.getByRole('combobox', { name: en['chat.thread']! });
     t.check('"New chat": a new, empty conversation, the one before still in the list', [await threadPicker.inputValue(), await chat.locator('.cs-turn').count(), (await threadPicker.locator('option').allTextContents()).includes('Create hi.txt holding the word hi.')], ['', 0, true]);
     t.check('and, already on a new one, it has nothing more to do', await newChat.isDisabled(), true);
+  });
+
+  /*
+   * The Git view (2026-10-19: "let the Commits button show Git as VS Code does"): the open folder's changes, each file
+   * with its letter, opening its two versions side by side in the editor; and the branch's commits, each opening to
+   * its files, which open the same way.
+   */
+  await scenario('the Git view: the changes and the commits, each file opening its two versions in the editor', {}, async (h, page, url) => {
+    writeFileSync(join(h.repo, 'README.md'), '# fixture\nmore\n', 'utf8');
+    writeFileSync(join(h.repo, 'new.txt'), 'brand new\n', 'utf8');
+    await page.goto(url('/'));
+    await page.getByRole('button', { name: en['wb.viewCommits']!, exact: true }).click();
+    const side = page.locator('.wb-side');
+    await side.getByRole('button', { name: new RegExp(`^${en['git.changes']!}`) }).waitFor();
+    const rows = side.locator('.wb-git-files li');
+    await rows.nth(1).waitFor({ timeout: 10_000 }).catch(() => undefined);
+    const listed = await rows.evaluateAll((els) => els.map((li) => [li.querySelector('.wb-row-name')?.textContent ?? '', li.querySelector('.wb-git-status')?.textContent ?? '']));
+    t.check('the changes: the file changed (M) and the one git does not track (U)', listed, [['README.md', 'M'], ['new.txt', 'U']]);
+    t.truthy('on the branch it is on', ((await side.locator('.wb-git-branch').textContent()) ?? '').includes('main'), await side.locator('.wb-git-branch').textContent());
+
+    await rows.first().getByRole('button').click();
+    const tab = page.getByRole('tablist', { name: en['wb.openTabs']! }).getByRole('tab', { name: `README.md (${en['git.workingTree']})` });
+    await tab.waitFor();
+    const editor = page.locator('.wb-gitdiff');
+    await editor.locator('.diff-row').first().waitFor();
+    const sides = await editor.locator('.diff-row').evaluateAll((trs) => trs.map((tr) => [tr.querySelector('.code.l')?.textContent ?? '', tr.querySelector('.code.r')?.textContent ?? '']));
+    t.check('a changed file opens in the editor: as it was on the left, as it is on the right', sides, [['# fixture', '# fixture'], ['', 'more']]);
+
+    const commits = side.locator('.wb-commits > li');
+    t.check('the commits of the branch', await commits.locator('.wb-row-name').allTextContents(), ['initial']);
+    await commits.first().getByRole('button', { name: /initial/ }).click();
+    const files = commits.first().locator('.wb-git-files li');
+    await files.first().waitFor();
+    t.check('a commit opens to its files', await files.evaluateAll((els) => els.map((li) => [li.querySelector('.wb-row-name')?.textContent ?? '', li.querySelector('.wb-git-status')?.textContent ?? ''])), [['README.md', 'A']]);
+    await files.first().getByRole('button').click();
+    const short = h.git('rev-parse', '--short=7', 'HEAD');
+    await page.getByRole('tablist', { name: en['wb.openTabs']! }).getByRole('tab', { name: `README.md (${short})` }).waitFor();
+    await page.locator('.wb-gitdiff .diff-row').first().waitFor();
+    t.check('and its file opens the same way: nothing before, the commit\'s version after', await page.locator('.wb-gitdiff .diff-row').evaluateAll((trs) => trs.map((tr) => [tr.querySelector('.code.l')?.textContent ?? '', tr.querySelector('.code.r')?.textContent ?? ''])), [['', '# fixture']]);
+    t.check('reading it changed nothing in the repository', h.git('status', '--porcelain').split('\n').map((l) => l.trim()).sort(), ['?? new.txt', 'M README.md']);
   });
 
   /*
@@ -1245,6 +1307,25 @@ try {
     t.check('the address names the task, so a reload opens it', new URL(page.url()).searchParams.get('t'), ran.tasks[1]!.id);
     const ways = editor.getByRole('toolbar', { name: en['wb.waysOn']! });
     t.check('a blocked task offers every way on', await ways.getByRole('button').allTextContents(), [en['wb.continueWithPrompt'], en['wb.runAgain'], en['wb.accept'], en['wb.undo'], en['wb.askKerrigan']]);
+
+    // A problem marked "Seen" leaves the list and the count, comes back on "Show the seen", and stays seen (2026-10-19).
+    const problemsTab = page.getByRole('tablist', { name: en['wb.panel']! }).getByRole('tab', { name: new RegExp(`^${en['wb.problems']!}`) });
+    await problemsTab.click();
+    const problemRows = page.locator('.wb-problems li');
+    await problemRows.first().waitFor();
+    const before = { rows: await problemRows.count(), badge: ((await problemsTab.locator('.wb-badge').textContent().catch(() => '')) ?? '').trim() };
+    t.truthy('the blocked task is a problem, counted on the tab', before.rows >= 1 && before.badge === String(before.rows), before);
+    await problemRows.first().getByRole('button', { name: en['wb.problemSeen']!, exact: true }).click();
+    const after = { rows: await problemRows.count(), badge: ((await problemsTab.locator('.wb-badge').count()) > 0 ? ((await problemsTab.locator('.wb-badge').textContent()) ?? '') : '').trim() };
+    t.check('"Seen": off the list and the count', after, { rows: before.rows - 1, badge: before.rows - 1 > 0 ? String(before.rows - 1) : '' });
+    const showSeen = page.getByRole('button', { name: en['wb.problemsShowSeen']!.replace('{n}', '1'), exact: true });
+    await showSeen.click();
+    t.check('"Show the 1 seen": back, faded, with no "Seen" on it', [await problemRows.count(), await page.locator('.wb-problems li.seen').count(), await page.locator('.wb-problems li.seen').getByRole('button', { name: en['wb.problemSeen']!, exact: true }).count()], [before.rows, 1, 0]);
+    await page.reload();
+    await editor.getByRole('heading', { name: 'bench-second' }).waitFor();
+    await problemsTab.click();
+    await page.getByRole('button', { name: en['wb.problemsShowSeen']!.replace('{n}', '1'), exact: true }).waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.check('and still seen after a reload', [await page.locator('.wb-problems li').count(), await page.getByRole('button', { name: en['wb.problemsShowSeen']!.replace('{n}', '1'), exact: true }).count()], [before.rows - 1, 1]);
 
     await ways.getByRole('button', { name: en['wb.continueWithPrompt']!, exact: true }).click();
     const box = page.locator('#wb-compose');

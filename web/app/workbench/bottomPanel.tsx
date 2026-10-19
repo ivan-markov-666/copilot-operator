@@ -3,7 +3,8 @@
 /**
  * The panel under the editor: the terminal — the commands the chosen task ran and what each printed, following the
  * newest while it runs; the problems — what did not pass across the session, each a link to its task; and the
- * output — the session's events as they come. Ctrl+J opens and closes it.
+ * output — the session's events as they come. Ctrl+J opens and closes it. On a new chat it is empty until that chat
+ * runs (2026-10-19), and a problem can be marked "Seen", which takes it off the list and the count.
  */
 import { useEffect, useState } from 'react';
 import { api, type Session, type SessionEvent, type Story, type StoryEntry, type Task } from '../../lib/api';
@@ -19,6 +20,7 @@ export function BottomPanel({
   onTab,
   session,
   task,
+  newChat = false,
   onOpenTask,
 }: {
   open: boolean;
@@ -27,17 +29,26 @@ export function BottomPanel({
   onTab: (t: BottomTab) => void;
   session?: Session;
   task?: Task;
+  /** The chat is on a new chat with nothing in it: the panel shows nothing of another conversation. */
+  newChat?: boolean;
   onOpenTask: (sessionId: string, taskId: string) => void;
 }) {
   const { t } = useT();
   const problems = session ? problemsOf(session) : [];
+  const [seen, setSeen] = useState<Set<string>>(() => new Set());
+  const [showSeen, setShowSeen] = useState(false);
+  useEffect(() => setSeen(readSeen()), []);
+  const markSeen = (keys: string[]): void => setSeen(writeSeen(keys));
+  const unseen = problems.filter((p) => !seen.has(p.key));
+  const shown = showSeen ? problems : unseen;
+  const seenHere = problems.length - unseen.length;
   return (
     <section className="wb-bottom" aria-label={t('wb.panel')}>
       <div className="wb-bottom-tabs" role="tablist" aria-label={t('wb.panel')}>
         {(['terminal', 'problems', 'output'] as BottomTab[]).map((b) => (
           <button key={b} type="button" role="tab" aria-selected={open && tab === b} className={open && tab === b ? 'on' : ''} onClick={() => onTab(b)}>
             {t(b === 'terminal' ? 'wb.terminal' : b === 'problems' ? 'wb.problems' : 'wb.output')}
-            {b === 'problems' && problems.length > 0 && <span className="wb-badge">{problems.length}</span>}
+            {b === 'problems' && unseen.length > 0 && <span className="wb-badge">{unseen.length}</span>}
           </button>
         ))}
         <span className="grow" />
@@ -48,23 +59,50 @@ export function BottomPanel({
       {open && (
         <div className="wb-bottom-body" role="tabpanel">
           {tab === 'terminal' ? (
-            <Terminal session={session} task={task} />
+            newChat ? <p className="muted small wb-pad">{t('wb.newChatTerminal')}</p> : <Terminal session={session} task={task} />
           ) : tab === 'problems' ? (
             problems.length === 0 ? (
-              <p className="muted small wb-pad">{session ? t('wb.noProblems') : t('wb.pickSession')}</p>
+              <p className="muted small wb-pad">{newChat ? t('wb.newChatProblems') : session ? t('wb.noProblems') : t('wb.pickSession')}</p>
             ) : (
-              <ul className="wb-problems">
-                {problems.map((p, i) => (
-                  <li key={i}>
-                    <button type="button" className="wb-row" onClick={() => onOpenTask(p.sessionId, p.taskId)}>
-                      <span className={`wb-sev ${p.kind}`} aria-hidden="true">{p.kind === 'error' ? '✗' : '⚠'}</span>
-                      <span className="wb-row-name">{p.text}</span>
-                      <span className="muted">{p.where}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                {shown.length === 0 ? (
+                  <p className="muted small wb-pad">{t('wb.problemsNoneNew')}</p>
+                ) : (
+                  <ul className="wb-problems">
+                    {shown.map((p) => (
+                      <li key={p.key} className={seen.has(p.key) ? 'seen' : undefined}>
+                        <button type="button" className="wb-row" onClick={() => onOpenTask(p.sessionId, p.taskId)}>
+                          <span className={`wb-sev ${p.kind}`} aria-hidden="true">{p.kind === 'error' ? '✗' : '⚠'}</span>
+                          <span className="wb-row-name">{p.text}</span>
+                          <span className="muted">{p.where}</span>
+                        </button>
+                        {!seen.has(p.key) && (
+                          <button type="button" className="quiet small wb-seen" onClick={() => markSeen([p.key])} title={t('wb.problemSeenWhy')}>
+                            {t('wb.problemSeen')}
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {(unseen.length > 1 || seenHere > 0) && (
+                  <div className="row wb-pad">
+                    {unseen.length > 1 && (
+                      <button type="button" className="quiet small" onClick={() => markSeen(unseen.map((p) => p.key))} title={t('wb.problemSeenWhy')}>
+                        {t('wb.problemsAllSeen')}
+                      </button>
+                    )}
+                    {seenHere > 0 && (
+                      <button type="button" className="quiet small" onClick={() => setShowSeen(!showSeen)}>
+                        {showSeen ? t('wb.problemsHideSeen') : t('wb.problemsShowSeen', { n: seenHere })}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </>
             )
+          ) : newChat ? (
+            <p className="muted small wb-pad">{t('wb.newChatOutput')}</p>
           ) : (
             <Output session={session} />
           )}
@@ -74,19 +112,53 @@ export function BottomPanel({
   );
 }
 
-type Problem = { sessionId: string; taskId: string; kind: 'error' | 'warn'; text: string; where: string };
+type Problem = { key: string; sessionId: string; taskId: string; kind: 'error' | 'warn'; text: string; where: string };
 
 /** What did not pass, task by task: checks, review findings, and why a task stopped. */
 function problemsOf(session: Session): Problem[] {
   const out: Problem[] = [];
   session.tasks.forEach((x, i) => {
     const where = `${i + 1}. ${x.title}`;
-    for (const c of x.checkResults ?? []) if (!c.passed) out.push({ sessionId: session.id, taskId: x.id, kind: 'error', text: `${c.name}: ${c.detail.slice(0, 160)}`, where });
-    if (x.review?.verdict === 'fail') for (const f of x.review.findings ?? []) out.push({ sessionId: session.id, taskId: x.id, kind: 'error', text: f.what.slice(0, 200), where: f.where ? `${where} · ${f.where}` : where });
-    if (['failed', 'blocked', 'limit-reached', 'aborted'].includes(x.status) && x.reason) out.push({ sessionId: session.id, taskId: x.id, kind: 'warn', text: x.reason.slice(0, 200), where });
-    if (x.vcs?.problem) out.push({ sessionId: session.id, taskId: x.id, kind: 'warn', text: x.vcs.problem.slice(0, 200), where });
+    /*
+     * What "Seen" remembers it by: the task, its attempt and what the problem says. The same problem on a later
+     * attempt of the task is a new one, and is shown again.
+     */
+    const add = (kind: Problem['kind'], text: string, at = where): void => {
+      out.push({ key: `${session.id}|${x.id}|a${x.attempt ?? 1}|${kind}|${text}`, sessionId: session.id, taskId: x.id, kind, text, where: at });
+    };
+    for (const c of x.checkResults ?? []) if (!c.passed) add('error', `${c.name}: ${c.detail.slice(0, 160)}`);
+    if (x.review?.verdict === 'fail') for (const f of x.review.findings ?? []) add('error', f.what.slice(0, 200), f.where ? `${where} · ${f.where}` : where);
+    if (['failed', 'blocked', 'limit-reached', 'aborted'].includes(x.status) && x.reason) add('warn', x.reason.slice(0, 200));
+    if (x.vcs?.problem) add('warn', x.vcs.problem.slice(0, 200));
   });
   return out;
+}
+
+/*
+ * The problems marked seen, in this browser. A convenience of the person reading them, as the panel's size is: the
+ * record of the task is not changed, and the problem is still there on its task. The newest few hundred are kept.
+ */
+const SEEN_KEY = 'cop.problems.seen';
+const SEEN_KEEP = 500;
+
+function readSeen(): Set<string> {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(SEEN_KEY) ?? '[]') as unknown;
+    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSeen(keys: string[]): Set<string> {
+  const all = [...readSeen(), ...keys.filter((k) => k)];
+  const kept = [...new Set(all)].slice(-SEEN_KEEP);
+  try {
+    window.localStorage.setItem(SEEN_KEY, JSON.stringify(kept));
+  } catch {
+    /* a browser that keeps nothing forgets them on the next visit */
+  }
+  return new Set(kept);
 }
 
 /** The commands the task ran, and their output, as a terminal: re-read every two seconds while it is live. */

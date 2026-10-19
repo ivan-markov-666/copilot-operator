@@ -6,7 +6,7 @@
  */
 import type { Session, Task, Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
-import { Cascade } from './cascade';
+import { Cascade, type ChatTurn } from './cascade';
 import { Kerrigan } from './kerrigan';
 import type { ChatTab } from './workbench';
 
@@ -33,7 +33,7 @@ export function ChatPanel({
   composeAsk: number;
   onOpenFile: (path: string) => void;
   onOpenFolder: () => void;
-  onTurn: (turn: { sessionId: string; taskId: string } | null) => void;
+  onTurn: (turn: ChatTurn) => void;
   onChange: () => void;
   onClose: () => void;
 }) {

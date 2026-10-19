@@ -743,6 +743,27 @@ export class OperatorController {
     return this.ops.workspaceFile(path).catch(fail);
   }
 
+  /** The open folder's git: the changes, staged and not, and the branch's commits. Read-only. */
+  @Get('workspace/git')
+  workspaceGit(): Promise<unknown> {
+    return this.ops.workspaceGit().catch(fail);
+  }
+
+  @Get('workspace/git/commit')
+  workspaceCommit(@Query('sha') sha?: string): Promise<unknown> {
+    if (!sha) throw new BadRequestException('sha is required');
+    return this.ops.workspaceCommit(sha).catch(fail);
+  }
+
+  /** A file of those lists, its two versions: `area` staged, changes or commit (with `commit`). */
+  @Get('workspace/git/file')
+  workspaceGitFile(@Query('area') area?: string, @Query('path') path?: string, @Query('commit') commit?: string): Promise<unknown> {
+    if (!path) throw new BadRequestException('path is required');
+    if (area !== 'staged' && area !== 'changes' && area !== 'commit') throw new BadRequestException('area must be staged, changes or commit');
+    if (area === 'commit' && !commit) throw new BadRequestException('commit is required');
+    return this.ops.workspaceGitFile(area, path, commit).catch(fail);
+  }
+
   /** The chat's conversations, newest first. */
   @Get('chat/threads')
   chatThreads(): Promise<unknown> {

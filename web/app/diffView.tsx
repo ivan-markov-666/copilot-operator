@@ -257,7 +257,7 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
 }
 
 /** One row: the old line and the new one, with the part of a changed line that differs marked. */
-function DiffLine({ row, index, current }: { row: DiffRow; index: number; current: boolean }) {
+export function DiffLine({ row, index, current }: { row: DiffRow; index: number; current: boolean }) {
   const span = row.kind === 'change' ? changedSpan(row.left!.text, row.right!.text) : null;
   const text = (side: 'left' | 'right'): React.ReactNode => {
     const s = row[side];

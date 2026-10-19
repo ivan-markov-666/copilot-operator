@@ -1,12 +1,12 @@
 'use client';
 
 /**
- * The explorer, on the workbench's left: the sessions with their tasks, as a tree; or the files of the chosen
- * session's repository at its branch; or the commits on that branch, each with the task that made it.
+ * The explorer, on the workbench's left: the sessions with their tasks, as a tree; or the files of the open project
+ * folder; or its git, as an IDE's Source Control view: the changes, staged and not, and the branch's commits.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, type RepoLog, type Session, type Workspace } from '../../lib/api';
+import { api, type GitArea, type GitFile, type Session, type Workspace, type WorkspaceGit } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
 import { StatusMark, type SideView, type Tab } from './workbench';
@@ -29,7 +29,7 @@ export function Explorer({
   onOpenFolder: () => void;
 }) {
   if (view === 'files') return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
-  if (view === 'commits') return <Commits sessions={sessions} selected={selected} onOpen={onOpen} />;
+  if (view === 'commits') return <GitView workspace={workspace} sessions={sessions} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
   // The chat's conversations are the chat's: the tree is the bot's sessions.
   return <Tree sessions={sessions ? sessions.filter((s) => s.kind !== 'chat') : null} selected={selected} onOpen={onOpen} onChange={onChange} />;
 }
@@ -237,51 +237,180 @@ function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | nul
   );
 }
 
-function Commits({ sessions, selected, onOpen }: { sessions: Session[] | null; selected: { sessionId?: string }; onOpen: (tab: Tab) => void }) {
+/**
+ * The open folder's git, as an IDE's Source Control view shows it (2026-10-19: "let the Commits button show Git as
+ * VS Code does"): the branch and how far it is from the one it follows; the changes, staged and not, each file with
+ * its letter and its lines, opening its two versions side by side in the editor; and the branch's commits, each
+ * opening to the files it changed, which open the same way. A commit a task made says which task. Read-only: it
+ * stages, commits and checks out nothing. Read again every five seconds, as the chat changes the folder.
+ */
+function GitView({ workspace, sessions, onOpen, onOpenFolder }: { workspace: Workspace | null; sessions: Session[] | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void }) {
   const { t } = useT();
   const fmt = useFmtTime();
-  const session = useRepoSession(sessions, selected);
-  const [log, setLog] = useState<RepoLog | null>(null);
+  const [state, setState] = useState<WorkspaceGit | null>(null);
   const [err, setErr] = useState('');
+  const [shut, setShut] = useState<Set<string>>(new Set());
+  const [opened, setOpened] = useState('');
+  const [commitFiles, setCommitFiles] = useState<Map<string, GitFile[] | string>>(new Map());
+  const read = useCallback(
+    () =>
+      api
+        .workspaceGit()
+        .then((g) => {
+          setState(g);
+          setErr('');
+        })
+        .catch((e: unknown) => setErr((e as Error).message)),
+    [],
+  );
   useEffect(() => {
-    setLog(null);
-    setErr('');
-    if (!session) return;
-    api.repoLog(session.id).then(setLog).catch((e: unknown) => setErr((e as Error).message));
-  }, [session?.id, session?.tasks.map((x) => x.vcs?.commit ?? '').join()]);
+    setState(null);
+    if (workspace?.ok) void read();
+  }, [read, workspace?.ok, workspace?.dir]);
+  usePoll(read, 5_000, !!workspace?.ok);
+
+  const toggle = (id: string): void => setShut((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
+  const openCommit = (sha: string): void => {
+    if (opened === sha) {
+      setOpened('');
+      return;
+    }
+    setOpened(sha);
+    if (!commitFiles.has(sha)) {
+      api
+        .workspaceCommit(sha)
+        .then((c) => setCommitFiles((m) => new Map(m).set(sha, c.files)))
+        .catch((e: unknown) => setCommitFiles((m) => new Map(m).set(sha, (e as Error).message)));
+    }
+  };
+  // The task that made a commit, when a task did.
+  const madeBy = (sha: string): { sessionId: string; taskId: string; title: string } | null => {
+    for (const s of sessions ?? []) {
+      for (const x of s.tasks) {
+        const c = x.vcs?.commit;
+        if (c && (c === sha || sha.startsWith(c) || c.startsWith(sha))) return { sessionId: s.id, taskId: x.id, title: x.title };
+      }
+    }
+    return null;
+  };
+  const statusName = (status: string): string => t(`git.status.${status === '!' ? 'conflict' : status}` as 'git.status.M');
+  const fileRow = (f: GitFile, area: GitArea, commit?: string) => {
+    const cut = f.path.lastIndexOf('/');
+    return (
+      <li key={`${area}:${commit ?? ''}:${f.path}`}>
+        <button
+          type="button"
+          className="wb-row wb-git-file"
+          onClick={() => onOpen({ kind: 'diff', sessionId: '', area, path: f.path, ...(commit ? { commit } : {}) })}
+          title={`${f.oldPath ? `${f.oldPath} → ` : ''}${f.path} · ${statusName(f.status)}`}
+        >
+          <span className="wb-row-name">{f.path.slice(cut + 1)}</span>
+          {cut >= 0 && <span className="muted wb-git-dir">{f.path.slice(0, cut)}</span>}
+          <span className="grow" />
+          <span className="wb-git-counts">
+            {f.added < 0 ? (
+              t('diff.binaryShort')
+            ) : (
+              <>
+                <span className="plus">+{f.added}</span> <span className="minus">−{f.removed}</span>
+              </>
+            )}
+          </span>
+          <span className={`wb-git-status s-${f.status === '!' ? 'conflict' : f.status}`} aria-hidden="true">
+            {f.status}
+          </span>
+        </button>
+      </li>
+    );
+  };
+  const section = (id: string, title: string, count: number | null, body: React.ReactNode) => (
+    <div className="wb-git-section">
+      <button type="button" className="wb-git-head" aria-expanded={!shut.has(id)} onClick={() => toggle(id)}>
+        <span aria-hidden="true">{shut.has(id) ? '▸' : '▾'}</span> {title}
+        {count !== null && <span className="wb-badge">{count}</span>}
+      </button>
+      {!shut.has(id) && body}
+    </div>
+  );
+
   return (
     <div className="wb-tree">
-      <Head title={t('wb.commits')} />
-      {!session ? (
-        <p className="muted small wb-pad">{t('wb.noRepo')}</p>
+      <Head title={t('git.title')}>
+        <button type="button" className="wb-icon-btn" onClick={() => void read()} title={t('git.refresh')} aria-label={t('git.refresh')} disabled={!workspace?.ok}>
+          ↻
+        </button>
+      </Head>
+      {!workspace?.ok ? (
+        <div className="wb-pad">
+          <p className="muted small">{t('git.noFolder')}</p>
+          <button type="button" onClick={onOpenFolder}>{t('chat.openFolder')}</button>
+        </div>
       ) : err ? (
         <p className="err small wb-pad">{err}</p>
-      ) : !log ? (
+      ) : !state ? (
         <p className="muted small wb-pad">{t('wb.loading')}</p>
+      ) : !state.isRepo ? (
+        <p className="muted small wb-pad">{t('git.notRepo')}</p>
       ) : (
         <>
-          <p className="muted small wb-pad">{t('wb.commitsOf', { name: session.name, ref: log.label })}</p>
-          <ul className="wb-commits">
-            {log.commits.map((c) => (
-              <li key={c.sha}>
-                {c.taskId ? (
-                  <button type="button" className="wb-row" onClick={() => onOpen({ kind: 'task', sessionId: session.id, taskId: c.taskId! })} title={c.subject}>
-                    <code>{c.sha.slice(0, 7)}</code>
-                    <span className="wb-row-name">{c.subject}</span>
-                  </button>
-                ) : (
-                  <div className="wb-row plain" title={c.subject}>
-                    <code>{c.sha.slice(0, 7)}</code>
-                    <span className="wb-row-name">{c.subject}</span>
-                  </div>
-                )}
-                <div className="muted wb-commit-meta">
-                  {c.author} · {fmt(c.at)}
-                  {c.taskTitle ? ` · ${t('wb.byTask', { title: c.taskTitle })}` : ''}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <p className="small wb-pad wb-git-branch">
+            <span aria-hidden="true">⎇ </span>
+            <strong>{state.branch ?? 'HEAD'}</strong>
+            {state.upstream && <span className="muted"> · {t('git.upstream', { name: state.upstream.name, ahead: state.upstream.ahead, behind: state.upstream.behind })}</span>}
+          </p>
+          {state.staged.length > 0 && section('staged', t('git.staged'), state.staged.length, <ul className="wb-git-files">{state.staged.map((f) => fileRow(f, 'staged'))}</ul>)}
+          {section(
+            'changes',
+            t('git.changes'),
+            state.changes.length,
+            state.changes.length === 0 ? <p className="muted small wb-pad">{t('git.noChanges')}</p> : <ul className="wb-git-files">{state.changes.map((f) => fileRow(f, 'changes'))}</ul>,
+          )}
+          {section(
+            'commits',
+            t('git.commits'),
+            null,
+            state.commits.length === 0 ? (
+              <p className="muted small wb-pad">{t('git.noCommits')}</p>
+            ) : (
+              <ul className="wb-commits">
+                {state.commits.map((c) => {
+                  const by = madeBy(c.sha);
+                  const files = commitFiles.get(c.sha);
+                  return (
+                    <li key={c.sha}>
+                      <button type="button" className="wb-row" aria-expanded={opened === c.sha} onClick={() => openCommit(c.sha)} title={c.subject}>
+                        <span aria-hidden="true">{opened === c.sha ? '▾' : '▸'}</span>
+                        <code>{c.short}</code>
+                        <span className="wb-row-name">{c.subject}</span>
+                      </button>
+                      <div className="muted wb-commit-meta">
+                        {c.author} · {fmt(c.at)}
+                        {by && (
+                          <>
+                            {' · '}
+                            <button type="button" className="linkish" onClick={() => onOpen({ kind: 'task', sessionId: by.sessionId, taskId: by.taskId })}>
+                              {t('wb.byTask', { title: by.title })}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      {opened === c.sha &&
+                        (files === undefined ? (
+                          <p className="muted small wb-pad">{t('wb.loading')}</p>
+                        ) : typeof files === 'string' ? (
+                          <p className="err small wb-pad">{files}</p>
+                        ) : (
+                          <ul className="wb-git-files nested" aria-label={t('git.commitFiles', { sha: c.short })}>
+                            {files.map((f) => fileRow(f, 'commit', c.sha))}
+                          </ul>
+                        ))}
+                    </li>
+                  );
+                })}
+              </ul>
+            ),
+          )}
+          {state.moreCommits && <p className="muted small wb-pad">{t('git.more', { n: state.commits.length })}</p>}
         </>
       )}
     </div>

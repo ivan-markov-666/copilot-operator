@@ -24,6 +24,7 @@ import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking
 import { confirmDialog } from '../dialog';
 import { BY_HAND, ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
+import { CopyButton } from '../copyButton';
 import { RichText } from '../richText';
 import { StatusMark } from './workbench';
 
@@ -45,7 +46,10 @@ const kept = (key: string): string => {
   }
 };
 
-export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFolder, onTurn }: { workspace: Workspace | null; composeAsk: number; onOpenFile: (path: string) => void; onChange: () => void; onOpenFolder: () => void; onTurn: (turn: { sessionId: string; taskId: string } | null) => void }) {
+/** What the chat shows: its latest message, `'new'` while it is on a new chat with nothing in it, or null. */
+export type ChatTurn = { sessionId: string; taskId: string } | 'new' | null;
+
+export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFolder, onTurn }: { workspace: Workspace | null; composeAsk: number; onOpenFile: (path: string) => void; onChange: () => void; onOpenFolder: () => void; onTurn: (turn: ChatTurn) => void }) {
   const { t } = useT();
   const quietStart = useUnattendedWithoutAsking();
   const [threads, setThreads] = useState<ChatThread[]>([]);
@@ -205,9 +209,10 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
 
   const last = session?.tasks.at(-1);
   useEffect(() => {
-    onTurn(session && last ? { sessionId: session.id, taskId: last.id } : null);
+    // A new chat is said as such: the panel under the editor then shows nothing of another conversation (2026-10-19).
+    onTurn(!threadId ? 'new' : session && last ? { sessionId: session.id, taskId: last.id } : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.id, last?.id]);
+  }, [threadId, session?.id, last?.id]);
   const { ref: scrollRef } = useFollowBottom<HTMLDivElement>(true, `${session?.tasks.length ?? 0}:${last?.status ?? ''}:${last?.iterations ?? 0}`);
 
   return (
@@ -351,6 +356,9 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
         )}
         <div className="cs-user">
           <RichText text={task.prompt} />
+          <div className="cs-copy-row">
+            <CopyButton text={task.prompt} what="chat.copyMessage" />
+          </div>
         </div>
       </div>
       {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
@@ -359,6 +367,9 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
           e.notes?.trim() ? (
             <div key={i} className="cs-bot">
               <RichText text={e.notes} />
+              <div className="cs-copy-row">
+                <CopyButton text={e.notes} what="chat.copyReply" />
+              </div>
             </div>
           ) : null
         ) : e.kind === 'step' ? (
@@ -380,6 +391,9 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
             {task.summary ? <RichText text={task.summary} /> : null}
             {task.status !== 'done' && task.reason ? <p className="small">{task.reason}</p> : null}
           </div>
+          {(task.summary || task.reason) && (
+            <CopyButton text={[task.summary, task.status !== 'done' ? task.reason : ''].filter(Boolean).join('\n\n')} what="chat.copySummary" />
+          )}
         </div>
       )}
       {/*
@@ -416,11 +430,15 @@ function Command({ step }: { step: Extract<StoryEntry, { kind: 'step' }> }) {
   const shown = open ?? (running || step.failed);
   return (
     <div className={`cs-cmd${step.failed ? ' bad' : ''}`}>
-      <button type="button" className="cs-cmd-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>
-        <span className="cs-cmd-ico" aria-hidden="true">{running ? '⟳' : step.failed ? '✗' : '✓'}</span>
-        <code className="wb-row-name">{step.command}</code>
-        <span className="muted small">{running ? t('chat.running') : step.exitCode !== undefined ? t('chat.exit', { code: step.exitCode }) : step.outcome}</span>
-      </button>
+      <div className="cs-cmd-row">
+        <button type="button" className="cs-cmd-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>
+          <span className="cs-cmd-ico" aria-hidden="true">{running ? '⟳' : step.failed ? '✗' : '✓'}</span>
+          <code className="wb-row-name">{step.command}</code>
+          <span className="muted small">{running ? t('chat.running') : step.exitCode !== undefined ? t('chat.exit', { code: step.exitCode }) : step.outcome}</span>
+        </button>
+        {/* The command and what it printed, as a terminal shows them. */}
+        <CopyButton text={step.output ? `$ ${step.command}\n${step.output}` : step.command} what="chat.copyCommand" />
+      </div>
       {shown && step.output && <pre className="cs-out">{step.output}</pre>}
     </div>
   );

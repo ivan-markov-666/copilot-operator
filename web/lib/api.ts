@@ -804,6 +804,22 @@ export type ChangedFileContent = {
   tooLarge: boolean;
 };
 
+/** One file of the open folder's git, as the Source Control view lists it. */
+export type GitFile = { path: string; oldPath?: string; status: string; added: number; removed: number };
+export type GitCommit = { sha: string; short: string; author: string; at: string; subject: string };
+export type WorkspaceGit = {
+  dir: string;
+  isRepo: boolean;
+  branch?: string;
+  head?: string;
+  upstream?: { name: string; ahead: number; behind: number };
+  staged: GitFile[];
+  changes: GitFile[];
+  commits: GitCommit[];
+  moreCommits: boolean;
+};
+export type GitArea = 'staged' | 'changes' | 'commit';
+
 export type Story = {
   runId: string;
   title: string;
@@ -1204,6 +1220,12 @@ export const api = {
   workspace: () => call<Workspace>('/workspace'),
   workspaceFiles: () => call<{ dir: string; files: string[]; truncated: boolean }>('/workspace/files'),
   workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
+  /** The open folder's git: what changed, staged and not, and the branch's commits. Read-only. */
+  workspaceGit: () => call<WorkspaceGit>('/workspace/git'),
+  workspaceCommit: (sha: string) => call<GitCommit & { body: string; files: GitFile[] }>(`/workspace/git/commit?sha=${encodeURIComponent(sha)}`),
+  /** A file of those lists, as it was before and after: for the side-by-side view. */
+  workspaceGitFile: (area: GitArea, path: string, commit?: string) =>
+    call<ChangedFileContent>(`/workspace/git/file?area=${area}&path=${encodeURIComponent(path)}${commit ? `&commit=${encodeURIComponent(commit)}` : ''}`),
   /** The chat: its conversations, and a message — a task of the conversation, or a note while it works. */
   chatThreads: () => call<ChatThread[]>('/chat/threads'),
   chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean) =>

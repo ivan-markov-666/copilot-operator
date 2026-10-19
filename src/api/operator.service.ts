@@ -35,6 +35,7 @@ import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, 
 import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
 import { buildTaskExchange } from '../session/taskExchange.js';
+import { workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
 import { chatCode } from '../transport/chatSession.js';
 import type { ContextKind } from '../session/store.js';
 import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSession, type PlanSummary } from '../plan/schema.js';
@@ -2743,6 +2744,25 @@ export class OperatorService {
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
     return await workspaceFile(ws.dir, path);
+  }
+
+  /** The open folder's git, as an IDE's Source Control view shows it (see `workspaceGit.ts`). Read-only. */
+  async workspaceGit(): Promise<Awaited<ReturnType<typeof workspaceGit>>> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await workspaceGit(ws.dir);
+  }
+
+  async workspaceCommit(sha: string): Promise<Awaited<ReturnType<typeof workspaceCommit>>> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await workspaceCommit(ws.dir, sha);
+  }
+
+  async workspaceGitFile(area: GitArea, path: string, commit?: string): Promise<Awaited<ReturnType<typeof workspaceGitVersions>>> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await workspaceGitVersions(ws.dir, area, path, commit);
   }
 
   /** The chat's conversations, newest first. */
