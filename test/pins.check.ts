@@ -580,7 +580,8 @@ try {
     t.truthy(`"${label.slice(0, 30)}": within 50 and under op/<code>/`, n.length <= MAX_CHAT_NAME && n.startsWith(`op/${runId}/`), n);
   }
   t.check('an empty label: just op/<code>', buildChatName(runId, ''), `op/${runId}`);
-  t.check('Cyrillic is kept, spaces become dashes', buildChatName('abcd', 'тест на кирилица'), 'op/abcd/тест-на-кирилица');
+  // In Latin letters since 2026-10-19: Copilot refused Bulgarian names of 50 letters and took only a short Latin one.
+  t.check('Cyrillic is transliterated, spaces become dashes', buildChatName('abcd', 'тест на кирилица'), 'op/abcd/test-na-kirilitsa');
   t.check('no label, no trailing slash', buildChatName('abcd', ''), 'op/abcd');
   t.check('a pathological code is still cut to 50', buildChatName('x'.repeat(60), 'y').length, 50);
   t.check("a session id's random tail is its code", chatCode('20260928-073140-ujdt'), 'ujdt');
