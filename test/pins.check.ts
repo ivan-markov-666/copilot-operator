@@ -14,7 +14,7 @@
  * - the damaged-command detector;
  * - the covering message and the report files that travel to the chat, and what is redacted from them;
  * - the chat's name, its id, how a sent message is recognised as landed, the reply-timeout error;
- * - Edge's crash report, the pacer and the clock of the UI;
+ * - Edge's crash report and the pacer;
  * - branch names, the commit message, what a task is told about the repository, and the hygiene,
  *   integrity and scope rules that decide what a commit may carry.
  *
@@ -44,7 +44,6 @@ import { isReplyTimeout, surfaceOfUrl } from '../src/transport/copilotTransport.
 import { Url } from '../src/transport/locators.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
-import { elapsedMs, isLive, runSpanMs, latestRun } from '../web/lib/clock.js';
 import { branchNameFrom, plannedBranchName, porcelainPaths } from '../src/vcs/git.js';
 import { commitMessage, noteFor, restorePreview, updateWarns } from '../src/vcs/taskVcs.js';
 import { looksGenerated, findSuspicious } from '../src/vcs/commitHygiene.js';
@@ -726,35 +725,6 @@ try {
   } finally {
     Date.now = realNow;
   }
-
-  /*
-   * The clock of the UI: durations from the two instants the record keeps, nothing stored.
-   */
-  console.log('\n--- the clock ---');
-  const t0 = Date.parse('2026-09-20T09:00:00.000Z');
-  const at = (s: number): string => new Date(t0 + s * 1000).toISOString();
-  t.check('a finished task', elapsedMs(at(0), at(272)), 272_000);
-  t.check('a task still running, now=+61 s', elapsedMs(at(0), undefined, t0 + 61_000), 61_000);
-  t.check('not started', elapsedMs(undefined), undefined);
-  t.check('never negative', elapsedMs(at(10), at(0)), 0);
-  t.check('live: running, finished, queued', [isLive({ startedAt: at(0), status: 'running' }), isLive({ startedAt: at(0), finishedAt: at(5), status: 'done' }), isLive({ status: 'queued' })], [true, false, false]);
-  const run = { id: 'r-1', startedAt: at(0) };
-  const done = [
-    { startedAt: at(1), finishedAt: at(300), status: 'done', runGroup: run },
-    { startedAt: at(301), finishedAt: at(900), status: 'done', runGroup: run },
-    { startedAt: at(901), finishedAt: at(1500), status: 'failed', runGroup: run },
-  ];
-  t.check('a finished run spans to its last finish', runSpanMs(run, done, t0 + 99_999_000), { ms: 1_500_000, live: false, tasks: 3 });
-  const inFlight = [done[0]!, done[1]!, { startedAt: at(901), status: 'running', runGroup: run }];
-  const going = runSpanMs(run, inFlight, t0 + 1_000_000);
-  t.check('a run still going spans to now', [going.ms, going.live], [1_000_000, true]);
-  const withQueued = [done[0]!, { status: 'queued', runGroup: run }];
-  const notYet = runSpanMs(run, withQueued, t0 + 400_000);
-  t.check('a queued task is not live; the span ends at the last finish', [notYet.live, notYet.ms], [false, 300_000]);
-  const older = { id: 'r-0', startedAt: at(-5000) };
-  const latest = latestRun([{ startedAt: at(-4999), finishedAt: at(-4000), status: 'done', runGroup: older }, ...done, { status: 'queued' }]);
-  t.check('the latest run is the newest, with its tasks', [latest?.run.id, latest?.tasks.length], ['r-1', 3]);
-  t.check('no run at all: null', latestRun([{ status: 'queued' }]), null);
 
   /*
    * Branch names.

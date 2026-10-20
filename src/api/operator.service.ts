@@ -8,12 +8,11 @@
  */
 import { pageModelFor, sameModel } from '../transport/modelMatch.js';
 import { Injectable } from '@nestjs/common';
-import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { installLayout } from '../config/layout.js';
 
-import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, applyDefaultProject, applyTaskPatch } from '../session/store.js';
+import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW } from '../session/store.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -27,19 +26,18 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { freshRetriesOfLatestRun, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type PlanMode, type TaskPatch, type TaskPlan } from '../session/model.js';
-import { runSession, openBrowser, queuedToRun } from '../orchestrator/taskRunner.js';
-import { buildExport, type ExportVariant } from '../session/exportRecord.js';
-import { buildDebugExport } from '../session/debugExport.js';
-import { buildPlanExport, buildDomainExport, buildBotExport, buildBundleExport, exportFileName, exportMachine, runScope, taskAtAttempt, taskInRun, withTask, writeAttemptRecord, type ExportKind, type ExportScope } from '../session/exports.js';
+import { MAX_INSTRUCTION_CHARS, newId, type PlanMode, type TaskPlan } from '../session/model.js';
+import { runSession, queuedToRun, failedWhileOpening } from '../orchestrator/taskRunner.js';
+import { Hold } from '../orchestrator/hold.js';
+import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
 import { buildTaskExchange } from '../session/taskExchange.js';
+import { chatNotice } from '../session/chatNotice.js';
+import { kerriganFileName, kerriganPersona } from '../plan/kerrigan.js';
 import { workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
 import { chatCode } from '../transport/chatSession.js';
-import type { ContextKind } from '../session/store.js';
-import { checkPlan, type Plan, type PlanCheck, type PlanIssue, type PlanSession, type PlanSummary } from '../plan/schema.js';
-import { planBrief, type BriefOptions, type UnattendedBlock } from '../plan/brief.js';
+import { type PlanCheck } from '../plan/schema.js';
 
 /** The folders the operator works in: the default new sessions start on, and the rest by name. */
 export type ProjectDefault = {
@@ -69,42 +67,36 @@ function sameFolder(a: string, b: string): boolean {
   const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
   return a.trim() !== '' && norm(a) === norm(b);
 }
-import { composeLevel2, composePrompt, importPlan, personaBlock, plannedSessionSignature, taskSignature, type ImportResult } from '../plan/importPlan.js';
-import { checkChanges, kerriganReport, type ChangesCheck } from '../plan/changes.js';
-import { workspaceFile, workspaceFiles, workspaceInfo, type WorkspaceInfo } from '../session/workspace.js';
+import { saveWorkspaceFile, workspaceFile, workspaceFiles, workspaceInfo, type WorkspaceInfo } from '../session/workspace.js';
 import { restoreCheckpoint } from '../session/checkpoint.js';
 import { readInterruption } from '../session/interruption.js';
-import { baseRefOf, branchAt, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, vcsPreflight, restorePoint, restorePreview, restoreToBase, revertTaskWork, undoThisPreview, type UndoThisPreview, sessionBranches, sessionBranchName, type RestorePreview, type SessionBranches } from '../vcs/taskVcs.js';
-import { branchExists, branchNameFrom, changedFilesBetween, commitsBetween, fileAt, freeBranchName, git, gitAvailable, localBranches, looksLikeRepo, plannedBranchName, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
+import { baseRefOf, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, sessionBranchName } from '../vcs/taskVcs.js';
+import { changedFilesBetween, fileAt, git, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
 import { findEdgeUsingProfile } from '../transport/profileLock.js';
-import { assessIsolation, readIsolationSignals, unattendedIsolationRefusal } from '../exec/isolation.js';
+import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { composeHandoff } from '../session/handoff.js';
-import { planSync, type SyncPlan } from '../vcs/syncCommand.js';
 import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } from '../vcs/prepareFromRemote.js';
 import { askpassProgram } from '../vcs/remoteAuth.js';
 import { appendRunLog, appendSessionLog, readRunLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
-import { applyStartChoice, fetchForStart, startOptions, withChoice, type AppliedChoice, type RepoBranches, type StartChoice, type StartFetch, type StartOptionSession } from '../vcs/startChoice.js';
 import { StartFailures, failureReport, refOf, type StartFailureRef, type StartStage } from '../session/startFailure.js';
 import { formatTerminal, localTime, terminalLines, terminalLogFile } from '../log/terminal.js';
 import { redactSecrets } from '../exec/redaction.js';
 import { workingDirFor, isWorkingDirProblem } from '../exec/workDir.js';
-import { contractConflictsWithFixes, contractFixPatch, describeContractChange, type ContractConflict, type ContractTree } from '../orchestrator/contract.js';
+import { contractConflictsWithFixes, type ContractConflict, type ContractTree } from '../orchestrator/contract.js';
 import { checkRefusalForOperator, lineRefusal } from '../orchestrator/taskRunner.js';
 import { preferredShell } from '../exec/shells.js';
 import { sessionRoots } from '../exec/confinement.js';
-import { dirtyPolicy, takeSnapshot, type SnapshotChoice } from '../vcs/snapshot.js';
-import { runVcsPreflight, runVcsPrepare, type RunVcsActionId, type RunVcsGroup } from '../vcs/runPreflight.js';
+import { dirtyPolicy } from '../vcs/snapshot.js';
+import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
-import { computeMetrics, type Metrics } from '../session/metrics.js';
 import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
-import { saveAndReveal, type LogNaming, type SavedLog } from './saveToDesktop.js';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
@@ -121,6 +113,8 @@ type Running = {
   mode: 'confirm' | 'unattended';
   /** The policy this run started under, so "run the rest without asking" can be judged against it. */
   policy: PolicyConfig;
+  /** "Pause" and "Continue" on the chat: see `Hold`. */
+  hold: Hold;
 };
 
 /**
@@ -134,17 +128,17 @@ type Waiting = {
   resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
 };
 
-/** Who has the browser profile: a session's run of its own, a batch, or a read of the model list. */
-type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'batch' } | { kind: 'models' } | { kind: 'login' };
+/** Who has the browser profile: a conversation's run, a read of the model list, or the sign-in. */
+type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'models' } | { kind: 'login' };
 
 /** Who is asking for the browser, so a refusal can be said in terms of what they pressed. */
-type BrowserAsk = { kind: 'run'; sessionId: string } | { kind: 'batch'; sessionIds: string[] } | { kind: 'models' } | { kind: 'login' };
+type BrowserAsk = BrowserHolder;
 
 /**
  * The answer to a start: started, or why not — with the failure on record when it did not, so the page
  * can offer what happened as a file (see `session/startFailure.ts`).
  */
-export type StartReply = { started: boolean; reason?: string; batch?: BatchState; failure?: StartFailureRef };
+export type StartReply = { started: boolean; reason?: string; failure?: StartFailureRef };
 
 /** How one finished run went, counted over the tasks that were queued when it started. */
 export type RunTally = {
@@ -164,56 +158,6 @@ export type RunTally = {
   paused?: boolean;
   /** Why the session was refused at its turn before anything of it ran (see `RunDeps.vcsGate`); its tasks stay queued. */
   refused?: string;
-};
-
-/**
- * One session's place in a batch.
- *
- * `skipped` is not a failure: a session with nothing queued, or one the operator stopped the
- * batch before reaching, has not been judged. Keeping that apart from `failed` is the
- * difference between a report that can be read at a glance and one that has to be decoded.
- */
-export type BatchSession = {
-  sessionId: string;
-  name: string;
-  state: 'waiting' | 'running' | 'done' | 'failed' | 'stopped' | 'skipped';
-  ran: number;
-  failed: number;
-  reason?: string;
-};
-
-/**
- * A run across several sessions, one after another.
- *
- * There is at most one, and it is held in memory rather than on disk: a batch is a decision
- * about what to do next, and after a restart there is no browser, no conversation and no
- * consent to carry on, so resuming one silently would be the wrong thing to do.
- */
-export type BatchState = {
-  id: string;
-  startedAt: string;
-  /** When its start was asked for: where the console lines of a failed start begin. */
-  pressedAt?: string;
-  /** What the operator called the run. See `TaskRunGroup.name`. */
-  name?: string;
-  /** The tasks this run was limited to, when the operator chose some. See `startBatch`. */
-  onlyTasks?: string[];
-  finishedAt?: string;
-  mode: 'confirm' | 'unattended';
-  /** `stop` gives up on the rest when a session fails; `continue` works through them all. */
-  onFailure: 'stop' | 'continue';
-  stopping: boolean;
-  /**
-   * Asked to hold after the task that is running, rather than after its current step.
-   *
-   * Kept apart from `stopping` because the two do different things to the work in flight: a stop
-   * cuts in and leaves the task `aborted` halfway through whatever it was doing, while a pause
-   * lets it finish, check itself, be reviewed and commit, and only then holds. Both leave the
-   * rest of the queue alone; it is the task in the middle that tells them apart.
-   */
-  pausing: boolean;
-  running: boolean;
-  sessions: BatchSession[];
 };
 
 /**
@@ -286,21 +230,6 @@ export type RestartPlan = {
   /** A session it would run is set aside on the Sessions page: refused before anything moves, whatever is asked. */
   inactive?: boolean;
 };
-
-/** Why a session set aside on the Sessions page does not run: one sentence for every start that refuses it. */
-/** The id of the task a change names by id, number or title; see `plan/changes.ts`. */
-function checkTaskRef(session: Session, ref: string | number): string | undefined {
-  if (typeof ref === 'number' || /^\d+$/.test(String(ref))) return session.tasks[Number(ref) - 1]?.id;
-  return (session.tasks.find((t) => t.id === ref) ?? session.tasks.find((t) => t.title === ref) ?? session.tasks.find((t) => t.title.toLowerCase() === String(ref).toLowerCase()))?.id;
-}
-
-/** Why this task cannot be undone now, or null: only a task that ran and is not running or queued. */
-function undoRefusalOf(task: Task): string | null {
-  if (task.status === 'queued') return 'This task is queued and has not run since; there is nothing of it to undo.';
-  if (task.status === 'running' || task.status === 'waiting-approval') return 'This task is running. Stop it first.';
-  if (!task.startedAt) return 'This task has not run; there is nothing of it to undo.';
-  return null;
-}
 
 const INACTIVE_REASON = 'the session is inactive; make it active on the Sessions page to run it';
 
@@ -410,25 +339,16 @@ function browserRefusal(held: BrowserHolder, ask: BrowserAsk): string {
       : 'the sign-in window is open and has the browser profile; finish signing in first';
   }
   if (ask.kind === 'login') return loginWhileBusy;
-  if (held.kind === 'batch') {
-    if (ask.kind === 'models') return modelsWhileRunning;
-    return ask.kind === 'batch' ? 'a batch is already running' : 'a batch of sessions is running';
-  }
   if (held.kind === 'models') {
     return ask.kind === 'models'
       ? 'The model list is already being read.'
       : 'the model list is being read from the chat, which has the browser; start this once it has finished';
   }
-  // A session running on its own.
+  // A conversation running.
   if (ask.kind === 'models') return modelsWhileRunning;
-  if (ask.kind === 'run') {
-    return ask.sessionId === held.sessionId
-      ? 'already running'
-      : 'another session is running, and the browser takes one run at a time; start this one once it has finished';
-  }
-  return ask.sessionIds.includes(held.sessionId)
-    ? 'one of the selected sessions is already running on its own'
-    : 'a session is running on its own, and the browser takes one run at a time; start the batch once it has finished';
+  return ask.sessionId === held.sessionId
+    ? 'already running'
+    : 'another conversation is running, and the browser takes one run at a time; start this one once it has finished';
 }
 
 /** A folder as compared: absolute, forward slashes, no trailing slash, and case folded as Windows does. */
@@ -437,86 +357,9 @@ function normaliseDir(dir: string): string {
   return resolve(dir.trim()).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-/** The repository a planned session will work in, read the way `repoDirOf` reads an imported one. */
-function plannedRepoDir(session: PlanSession): string {
-  return session.vcs?.repoDir?.trim() || session.projectDir?.trim() || session.mirror?.rootDir?.trim() || '';
-}
-
-/**
- * The branches a planned session will make by name when it runs, as `prepareForTask` names them.
- *
- * None with version control off, and none when it carries on an existing branch, which makes
- * nothing. In per-session mode the one `branchName`; in per-task mode the branch each task names,
- * since `branchName` is ignored there. A branch named for the session's id is not known before the
- * import, and is not one a plan can ask to carry on.
- */
-function branchesMadeBy(session: PlanSession): string[] {
-  const vcs = session.vcs;
-  if (!vcs || vcs.enabled === false || vcs.startFrom === 'existing-branch' || vcs.existingBranch?.trim()) return [];
-  const prefix = vcs.branchPrefix?.trim() || 'cop/';
-  if (vcs.branchMode === 'per-session') return vcs.branchName?.trim() ? [plannedBranchName(vcs.branchName, prefix)] : [];
-  return session.tasks.flatMap((t) => (t.vcs?.branch?.trim() ? [plannedBranchName(t.vcs.branch, prefix)] : []));
-}
-
-/** One repository "Run again from here" takes back, the task that decides where to, and why it cannot. */
-type RestoreTarget = { dir: string; session: Session; task: Task; problem?: string };
-
-/**
- * The one restore each repository gets when a run starts again from a task: the rule, in one place,
- * for the preview and for the restore itself, which used to keep a copy each and drifted apart.
- *
- * One per repository, keyed on the folder as compared rather than on the path as written or on the
- * session: three sessions working in one repository must not take it back three times to three
- * different commits. The earliest affected task that ran is the one that decides, because that is
- * the state the whole re-run starts from.
- *
- * A repository whose affected tasks never ran has nothing to go back to: the run never touched it.
- * Taking "no base commit recorded" as a refusal blocked "run again from here" for every plan whose
- * later sessions had not started yet — which is the usual shape of a run that stopped in the middle.
- *
- * A session that carries on an existing branch cannot be taken back: its run checks that branch out
- * again before the first task, so a restore branch would be left the moment it was made, and going
- * back on the branch itself would take a reset, which this tool never does. That holds for every
- * session of the repository the run reached, not only the one that decides where it goes back to:
- * a later one carrying on a branch would run its tasks again on top of what they did the first
- * time, which is not "the code goes back first" either. So the repository's restore carries the
- * problem of the first such session, and the preview and the restart refuse before anything moves.
- */
-function restoreTargets(tasks: Array<{ session: Session; task: Task }>): RestoreTarget[] {
-  const byRepo = new Map<string, RestoreTarget>();
-  for (const { session, task } of tasks) {
-    if (!session.vcs?.enabled || !task.startedAt) continue;
-    const dir = repoDirOf(session);
-    const key = normaliseDir(dir);
-    if (!key) continue;
-    const target = byRepo.get(key) ?? { dir, session, task };
-    byRepo.set(key, target);
-    const existing = session.vcs.startFrom === 'existing-branch' ? (session.vcs.existingBranch ?? '').trim() : '';
-    if (existing && !target.problem) {
-      target.problem =
-        `"${session.name}" carries on the existing branch ${existing}, and its run checks that branch out again, so the code ` +
-        `would not stay back; going back on ${existing} itself would take a reset, which this tool never does. ` +
-        `Queue its tasks again with "Run again" on each, which carries on ${existing} as it is, or move that branch yourself first.`;
-    }
-  }
-  return [...byRepo.values()];
-}
-
 /** Whether two folders, as `normaliseDir` gives them, are one folder or one is inside the other. */
 function overlaps(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-}
-
-/**
- * The reason a restart stopped, with what it had already done by then.
- *
- * A repository taken back and tasks queued again stay so when a later step refuses — nothing here
- * undoes them — and the reason is the one thing the page shows. Said only in the result, they were
- * left for the operator to find in git and in the queue.
- */
-function afterMoves(reason: string, restored: string[], requeued: number): string {
-  const done = [...restored.map((r) => `taken back ${r}`), ...(requeued > 0 ? [`${requeued} task(s) queued again`] : [])];
-  return done.length > 0 ? `${reason} Already done, and left as it is: ${done.join('; ')}.` : reason;
 }
 
 @Injectable()
@@ -533,8 +376,6 @@ export class OperatorService {
 
   private readonly running = new Map<string, Running>();
   private readonly waiting = new Map<string, Waiting>();
-  /** The batch in progress, or the last one that finished. At most one ever exists. */
-  private batch: BatchState | null = null;
   private ready: Promise<void> | null = null;
   /**
    * What has the browser now: one session's run, a batch, or a read of the model list.
@@ -551,6 +392,17 @@ export class OperatorService {
    * refused. See `claimBrowser`.
    */
   private browser: BrowserHolder | null = null;
+  /**
+   * The workbench chat's window, left open when the work on a message has ended (2026-10-19: "when the work on one
+   * chat message is done, the browser is not to close, so that if the work goes on with another message it is open
+   * already"). Given to the chat's next message, in this conversation or a new one, so it does not open again.
+   *
+   * Not a claim on the browser (`browser`): nothing is using it. Whatever takes the browser next and is not a message
+   * of the chat — a session's run, a batch, signing in, reading the models — closes it first (`closeChatWindow`),
+   * since the profile takes one window. The operator closes it with its X whenever they like; that is found when it
+   * is next wanted (`keptChatWindow`), and it is closed when the program is.
+   */
+  private chatWindow: ChatTransport | null = null;
 
   /**
    * One-time startup work, run lazily on the first request that needs the store.
@@ -642,22 +494,6 @@ export class OperatorService {
 
   // --- the organisation's part of the plan persona -------------------------------------
 
-  async getContext(kind: ContextKind, lang: string): Promise<{ content: string; customised: boolean; example: string }> {
-    await this.init();
-    return await this.store.getContext(kind, lang === 'bg' ? 'bg' : 'en');
-  }
-
-  async setContext(kind: ContextKind, content: string): Promise<void> {
-    await this.init();
-    await this.store.setContext(kind, content);
-  }
-
-  async resetContext(kind: ContextKind, lang: string): Promise<{ content: string; customised: boolean; example: string }> {
-    await this.init();
-    await this.store.resetContext(kind);
-    return await this.store.getContext(kind, lang === 'bg' ? 'bg' : 'en');
-  }
-
   // --- level 2 presets ------------------------------------------------------------------
 
   async listPresets(): Promise<Level2Preset[]> {
@@ -677,74 +513,22 @@ export class OperatorService {
 
   // --- named personas for the import page -----------------------------------------------
 
-  async listPersonas(): Promise<Level2Preset[]> {
-    await this.init();
-    return await this.store.listPersonas();
-  }
-
-  async savePersona(name: string, content: string): Promise<Level2Preset> {
-    await this.init();
-    return await this.store.savePersona(name, content);
-  }
-
-  async deletePersona(name: string): Promise<void> {
-    await this.init();
-    await this.store.deletePersona(name);
-  }
-
   // --- sessions and tasks ---------------------------------------------------------------
 
-  /** The operator's order for the sessions list, top to bottom. See `SessionStore.reorderSessions`. */
-  async reorderSessions(ids: unknown): Promise<Array<Session & { running: boolean }>> {
-    await this.init();
-    if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string')) throw new Error('ids must be a list of session ids.');
-    await this.store.reorderSessions(ids as string[]);
-    return await this.listSessions();
-  }
-
-  async listSessions(): Promise<Array<Session & { running: boolean }>> {
+  async listSessions(): Promise<Array<Session & { running: boolean; paused: boolean }>> {
     await this.init();
     const all = await this.store.listSessions();
-    return all.map((s) => ({ ...s, running: this.running.has(s.id) }));
+    return all.map((s) => ({ ...s, running: this.running.has(s.id), paused: this.running.get(s.id)?.hold.held ?? false }));
   }
 
   async getSession(
     id: string,
-  ): Promise<(Session & { running: boolean; pending: PendingApproval[]; runMode?: 'confirm' | 'unattended' }) | null> {
+  ): Promise<(Session & { running: boolean; paused: boolean; pending: PendingApproval[]; runMode?: 'confirm' | 'unattended' }) | null> {
     await this.init();
     const s = await this.store.getSession(id);
     if (!s) return null;
     const pending = [...this.waiting.values()].filter((w) => w.approval.sessionId === id).map((w) => w.approval);
-    return { ...s, running: this.running.has(id), pending, runMode: this.running.get(id)?.mode };
-  }
-
-  async createSession(name: string, folder?: string): Promise<Session> {
-    await this.init();
-    // Read before the session is made: a settings file that cannot be read refuses the request,
-    // and a refusal must leave nothing behind, or each retry adds a session with no project.
-    const cfg = await this.settings.load();
-    const session = await this.store.createSession(name, folder ?? '');
-
-    /*
-     * The models are not written onto a new session. A session with no model of its own uses the
-     * one chosen in Settings at the time it runs (see `effectiveModels` in taskRunner.ts), so
-     * choosing a model there reaches every such session, the ones created before it included.
-     * It used to be copied here, which meant a model chosen after an import reached nothing.
-     */
-    const projectDir = (cfg.project?.rootDir ?? '').trim();
-    return await this.store.updateSession(session.id, (s) => {
-      /*
-       * A folder given here is the session's repository too, in the shape a session made on the
-       * Project page's folder has: both fields, one folder. Left empty, every reader that follows
-       * `repoDirOf` found the folder, but the review read `vcs.repoDir` itself, and was told there
-       * was no repository and no changed files for work committed in that folder. The review asks
-       * `trackedRepoOf` now, so a session saved with `repoDir` empty is read right as well; this
-       * keeps the record saying what the session works in.
-       */
-      if (s.projectDir.trim() && s.vcs && !s.vcs.repoDir.trim()) s.vcs.repoDir = s.projectDir;
-      // The same rule an import applies, for a session given no folder; see `applyDefaultProject`.
-      applyDefaultProject(s, projectDir);
-    });
+    return { ...s, running: this.running.has(id), paused: this.running.get(id)?.hold.held ?? false, pending, runMode: this.running.get(id)?.mode };
   }
 
   async updateSession(
@@ -878,58 +662,6 @@ export class OperatorService {
     });
   }
 
-  async deleteSession(id: string): Promise<void> {
-    await this.init();
-    if (this.running.has(id)) throw new Error('Stop the session before deleting it.');
-    await this.store.deleteSession(id);
-  }
-
-  async addTask(sessionId: string, input: { title: string; level2: string; prompt: string }): Promise<Task> {
-    await this.init();
-    if (!input.prompt?.trim()) throw new Error('A task needs a prompt.');
-    return await this.store.addTask(sessionId, input);
-  }
-
-  /**
-   * Edits a queued task, including the names it carries into git.
-   *
-   * Everything an imported plan can set, the form can change: a task that arrived as JSON is
-   * the same object as one typed in by hand, and the moment the two diverge is the moment an
-   * import becomes a thing you cannot correct without editing a file.
-   */
-  async updateTask(
-    sessionId: string,
-    taskId: string,
-    patch: TaskPatch,
-  ): Promise<Task> {
-    await this.init();
-    let before: Task | undefined;
-    const task = await this.store.updateTask(sessionId, taskId, (t) => {
-      if (t.status !== 'queued') throw new Error('Only a queued task can be edited.');
-      before = structuredClone(t);
-      applyTaskPatch(t, patch);
-    });
-    /*
-     * On record with the operator's other actions: a check or the prompt changed after the import is a
-     * different contract from the plan's, and the export showed only the new one (live run 2026-10-04).
-     */
-    const changed = (Object.keys(patch) as Array<keyof Task>).filter((k) => JSON.stringify(before?.[k]) !== JSON.stringify(task[k]));
-    if (changed.length > 0) {
-      const cfg = await this.settings.load();
-      await appendSessionLog(cfg.resolved.runsDir, sessionId, {
-        type: 'task-edited',
-        message: `"${task.title}" edited while queued: ${changed.join(', ')} changed`,
-        data: { taskId, changed, before: Object.fromEntries(changed.map((k) => [k, before?.[k] ?? null])) },
-      }).catch(() => undefined);
-    }
-    return task;
-  }
-
-  async deleteTask(sessionId: string, taskId: string): Promise<void> {
-    await this.init();
-    await this.store.deleteTask(sessionId, taskId);
-  }
-
   /**
    * A note to the chat about a task (2026-10-14): queued, running or waiting, it goes out with the task's
    * next message — at once, in effect, for a task that is running. See `Task.notes`.
@@ -942,125 +674,6 @@ export class OperatorService {
       message: running ? 'a note from the operator; it goes to the chat with the next report' : 'a note from the operator; it goes to the chat when the task runs next',
       data: { length: text.trim().length, running } });
     return task;
-  }
-
-  /** The operator accepts a task as done that did not end so (2026-10-14). */
-  async acceptTask(sessionId: string, taskId: string, note?: string): Promise<Task> {
-    await this.init();
-    if (this.running.has(sessionId)) {
-      const now = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
-      if (now && ['running', 'waiting-approval'].includes(now.status)) throw new Error('This task is running. Stop it first.');
-    }
-    const task = await this.store.acceptTask(sessionId, taskId, note);
-    const message = `"${task.title}" accepted as done by the operator (it had ended ${task.accepted?.was})${task.accepted?.note ? `: ${task.accepted.note}` : ''}`;
-    this.bus.publish({ sessionId, taskId, type: 'task-accepted', level: 'info', message, data: { was: task.accepted?.was } });
-    const cfg = await this.settings.load();
-    await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'accept', message, data: { taskId, was: task.accepted?.was } }).catch(() => undefined);
-    return task;
-  }
-
-  /**
-   * Puts a finished task back in the queue, keeping the record of what it already did.
-   *
-   * An optional patch is how a finished task is edited: the attempt that ran is archived with
-   * the text it ran with, and only then is the new text applied. Editing in place would leave
-   * the old attempt's summary sitting under a question that was never asked.
-   */
-  /** "Continue" on a task that stopped before it finished — a limit from the settings, the bot stopping, the operator: same chat, same branch, fresh count. */
-  async continueTask(
-    sessionId: string,
-    taskId: string,
-    /**
-     * The operator's new prompt: what carries a task that failed on from where it got to, in its chat and
-     * on its branch (2026-10-13); optional with any other Continue. See `TaskContinuation.instruction`.
-     */
-    instruction?: string,
-  ): Promise<Task> {
-    await this.init();
-    /*
-     * An attempt the operator stopped: which of its last steps ran, and what they printed, read from its
-     * run folder, so "Continue" can tell the chat. Without it the chat was told only that it had been
-     * stopped, and ran its inspection steps again (live run 2026-10-03).
-     */
-    const before = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
-    const cfg = await this.settings.load();
-    const stoppedAt = before?.status === 'aborted' && !before.interruption && before.runId ? await readInterruption(join(cfg.resolved.runsDir, before.runId)).catch(() => null) : null;
-    const task = await this.store.continueTask(sessionId, taskId, stoppedAt, instruction);
-    const after = task.continuing?.how === 'failed' ? ` after it ended ${task.continuing.ended?.status ?? 'failed'}` : '';
-    const withPrompt = task.continuing?.instruction ? ', with a new prompt' : '';
-    await appendSessionLog(cfg.resolved.runsDir, sessionId, {
-      type: 'continue',
-      message: `"${task.title}" queued to continue as attempt ${task.attempt ?? 1}${after}${withPrompt}`,
-      data: { taskId, attempt: task.attempt, ...(task.continuing?.instruction ? { instruction: task.continuing.instruction } : {}) },
-    }).catch(() => undefined);
-    this.bus.publish({
-      sessionId,
-      taskId,
-      type: 'task-requeued',
-      level: 'info',
-      message: `"${task.title}" is queued to continue where it ${after ? 'ended' : 'stopped'}${after}${withPrompt} (attempt ${task.attempt ?? 1})`,
-      data: { attempt: task.attempt, continuing: true, ...(task.continuing?.instruction ? { instruction: true } : {}) },
-    });
-    return task;
-  }
-
-  async rerunTask(
-    sessionId: string,
-    taskId: string,
-    patch: TaskPatch = {},
-    /**
-     * A new prompt for a task that ended done builds on what it did: the next attempt works on
-     * that attempt's branch. Only for a done task — a failed attempt's work is what is being
-     * replaced, so a re-run of one starts again from where the task first started.
-     */
-    opts: { buildOnFinished?: boolean } = {},
-  ): Promise<Task> {
-    await this.init();
-    const before = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
-    const buildsOn = opts.buildOnFinished && before?.status === 'done' ? { fromAttempt: before.attempt ?? 1 } : undefined;
-    /*
-     * A new prompt is a new change: the plan's commit subject was written for the old one, and two
-     * different commits went out under it (live run 2026-10-03). Dropped unless the edit names one.
-     */
-    // A correction added to the old prompt is not a new change, and keeps the subject (live run 2026-10-04).
-    const appended = !!before && !!patch.prompt && patch.prompt.trim().startsWith(before.prompt.trim().split('\n### Expected result')[0]!.trim());
-    if (patch.prompt?.trim() && before && patch.prompt.trim() !== before.prompt.trim() && !appended && before.vcsPlan?.commitMessage && !patch.vcsPlan?.commitMessage) {
-      patch = { ...patch, vcsPlan: { ...before.vcsPlan, ...(patch.vcsPlan ?? {}), commitMessage: undefined } };
-    }
-    const task = await this.store.rerunTask(sessionId, taskId, patch, undefined, buildsOn);
-    {
-      const cfg = await this.settings.load();
-      const changed = Object.keys(patch).filter((k) => (patch as Record<string, unknown>)[k] !== undefined);
-      await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'rerun', message: `"${task.title}" queued again as attempt ${task.attempt ?? 1}${buildsOn ? `, building on attempt ${buildsOn.fromAttempt}` : ''}${changed.length > 0 ? `, with ${changed.join(', ')} changed` : ''}`, data: { taskId, attempt: task.attempt, changed, ...(buildsOn ? { buildsOn } : {}) } }).catch(() => undefined);
-    }
-    this.bus.publish({
-      sessionId,
-      taskId,
-      type: 'task-requeued',
-      level: 'info',
-      message: buildsOn
-        ? `"${task.title}" is queued again with a new prompt that builds on attempt ${buildsOn.fromAttempt} (attempt ${task.attempt ?? 1})`
-        : `"${task.title}" is queued again (attempt ${task.attempt ?? 1})`,
-      data: { attempt: task.attempt, ...(buildsOn ? { buildsOn } : {}) },
-    });
-    return task;
-  }
-
-  /**
-   * The consolidated text log of a task, or null when it has not produced one.
-   *
-   * `runId` asks for one particular attempt. It is checked against the run ids this task
-   * actually owns, so the parameter cannot be used to read another task's folder, or any
-   * other folder on the machine.
-   */
-  async taskLog(sessionId: string, taskId: string, runId?: string): Promise<string | null> {
-    const cfg = await this.settings.load();
-    const s = await this.store.getSession(sessionId);
-    const t = s?.tasks.find((x) => x.id === taskId);
-    const chosen = resolveRunId(t, runId);
-    if (!chosen) return null;
-    const path = join(cfg.resolved.runsDir, chosen, 'task-log.txt');
-    return existsSync(path) ? await readFile(path, 'utf8') : null;
   }
 
   /**
@@ -1164,195 +777,6 @@ export class OperatorService {
     return { dir, base: vcs.baseCommit, commit: vcs.commit, branch: vcs.branch };
   }
 
-  async taskFiles(
-    sessionId: string,
-    taskId: string,
-    runId?: string,
-  ): Promise<{ reports: string[]; artifacts: string[]; replies: string[] }> {
-    const cfg = await this.settings.load();
-    const s = await this.store.getSession(sessionId);
-    const t = s?.tasks.find((x) => x.id === taskId);
-    const empty = { reports: [], artifacts: [], replies: [] };
-    const chosen = resolveRunId(t, runId);
-    if (!chosen) return empty;
-    const base = join(cfg.resolved.runsDir, chosen);
-    const ls = async (sub: string): Promise<string[]> =>
-      (await readdir(join(base, sub)).catch(() => [] as string[])).filter((n) => !n.startsWith('_')).sort();
-    return { reports: await ls('reports'), artifacts: await ls('artifacts'), replies: await ls('replies') };
-  }
-
-  async taskFile(
-    sessionId: string,
-    taskId: string,
-    kind: 'reports' | 'artifacts' | 'replies',
-    name: string,
-    runId?: string,
-  ): Promise<string | null> {
-    if (name.includes('..') || name.includes('/') || name.includes('\\')) return null;
-    const cfg = await this.settings.load();
-    const s = await this.store.getSession(sessionId);
-    const t = s?.tasks.find((x) => x.id === taskId);
-    const chosen = resolveRunId(t, runId);
-    if (!chosen) return null;
-    const path = join(cfg.resolved.runsDir, chosen, kind, name);
-    return existsSync(path) ? await readFile(path, 'utf8') : null;
-  }
-
-  /**
-   * The same log, written to the Desktop and shown in Explorer instead of to the browser.
-   *
-   * What the operator does with a log is hand it to the chat that orchestrates the effort, so
-   * the useful end of the journey is a file under the cursor, not a page in a tab. The reading
-   * is delegated to `taskLog` rather than repeated here: that method already decides which run
-   * folder this task is allowed to open, and a second copy of that decision is a second place
-   * for it to be got wrong.
-   */
-  async saveTaskLog(sessionId: string, taskId: string, runId?: string): Promise<SavedLog | null> {
-    const text = await this.taskLog(sessionId, taskId, runId);
-    if (text === null) return null;
-    return await saveAndReveal(text, await this.namingFor(sessionId, taskId, runId));
-  }
-
-  /** One of a task's own files, saved and revealed the same way. They are logs by another name. */
-  async saveTaskFile(
-    sessionId: string,
-    taskId: string,
-    kind: 'reports' | 'artifacts' | 'replies',
-    name: string,
-    runId?: string,
-  ): Promise<SavedLog | null> {
-    const text = await this.taskFile(sessionId, taskId, kind, name, runId);
-    if (text === null) return null;
-    return await saveAndReveal(text, { ...(await this.namingFor(sessionId, taskId, runId)), file: name });
-  }
-
-  /**
-   * What a saved file is named after.
-   *
-   * An earlier attempt is named from its own snapshot rather than from the task as it stands
-   * now: a task can be edited between attempts, and a file called after today's title would
-   * claim the old log answered a question it was never asked.
-   */
-  private async namingFor(sessionId: string, taskId: string, runId?: string): Promise<LogNaming> {
-    const s = await this.store.getSession(sessionId);
-    const t = s?.tasks.find((x) => x.id === taskId);
-    const chosen = resolveRunId(t, runId);
-    const earlier = chosen && t && chosen !== t.runId ? (t.attempts ?? []).findIndex((a) => a.runId === chosen) : -1;
-    const attempt = earlier >= 0 ? earlier + 1 : (t?.attempt ?? 1);
-    return {
-      session: s?.name ?? sessionId,
-      task: (earlier >= 0 ? t?.attempts?.[earlier]?.title : t?.title) ?? taskId,
-      // A task that has only ever run once has nothing to be told apart from.
-      attempt: attempt > 1 ? attempt : undefined,
-    };
-  }
-
-  /**
-   * The record of selected tasks as one downloadable document.
-   *
-   * `taskIds` empty means every task of the session that has actually run. A queued task has
-   * nothing to say yet, and silently including it would put an empty section in a document
-   * someone is about to send to a colleague.
-   */
-  async exportTasks(
-    sessionId: string,
-    taskIds: string[],
-    variant: ExportVariant,
-  ): Promise<{ fileName: string; content: string }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-
-    const wanted = taskIds.length > 0 ? session.tasks.filter((t) => taskIds.includes(t.id)) : session.tasks;
-    const tasks = wanted.filter((t) => t.status !== 'queued');
-    if (tasks.length === 0) {
-      throw new Error('None of the selected tasks has run yet, so there is nothing to export.');
-    }
-
-    const cfg = await this.settings.load();
-    return await buildExport({ session, tasks, variant, runsDir: cfg.resolved.runsDir });
-  }
-
-  /**
-   * Everything that happened across a set of sessions, as one JSON document.
-   *
-   * Given no ids it exports the sessions of the last batch, because the commonest moment for
-   * wanting this is right after a run of several went wrong and the operator wants to hand the
-   * whole thing to somebody who was not watching.
-   */
-  async debugExport(sessionIds: string[]): Promise<{ fileName: string; content: string }> {
-    await this.init();
-    const wanted = sessionIds.map((x) => x.trim()).filter(Boolean);
-    const ids = wanted.length > 0 ? wanted : (this.batch?.sessions ?? []).map((s) => s.sessionId);
-    if (ids.length === 0) {
-      throw new Error('No sessions were named, and no batch has run in this process to fall back on.');
-    }
-
-    const sessions = [];
-    for (const id of ids) {
-      const session = await this.store.getSession(id);
-      if (session) sessions.push(session);
-    }
-    if (sessions.length === 0) throw new Error('None of those sessions exists any more.');
-
-    const cfg = await this.settings.load();
-    return await buildDebugExport({ sessions, runsDir: cfg.resolved.runsDir, cwd: cfg.resolved.cwd });
-  }
-
-  /**
-   * One of the three JSON views (plan, domain, bot) of one task, one session or one run.
-   *
-   * A run is everything that one press of a start button set off, across sessions: the tasks
-   * stamped with its id, and the sessions that were part of it even where a task never got its
-   * turn. The file is named after the run's own name when it has one, because a file called
-   * `run-r-abc123` is not something anyone can find again.
-   */
-  async exportView(kind: ExportKind, where: { sessionId?: string; taskId?: string; runId?: string }): Promise<{ fileName: string; content: string }> {
-    await this.init();
-    let scope: ExportScope;
-    if (where.runId) {
-      const runId = where.runId;
-      const all = await this.store.listSessions();
-      const sessions = all
-        .filter((s) => s.runGroup?.id === runId || s.tasks.some((t) => t.runGroup?.id === runId || t.attempts?.some((a) => a.runGroup?.id === runId)))
-        .sort((a, b) => (a.runGroup?.id === runId ? (a.runGroup.order ?? 0) : 0) - (b.runGroup?.id === runId ? (b.runGroup.order ?? 0) : 0));
-      if (sessions.length === 0) throw new Error(`No session took part in run ${runId}.`);
-      /*
-       * The run's name and start, from a session's own record of the run — or, once a later run has
-       * replaced that record, from a task that ran in it, which carries both. Without the second,
-       * the earlier run's file was called "run-" with nothing after it, the kind of name nobody
-       * finds again.
-       */
-      const group =
-        sessions.map((s) => s.runGroup).find((g) => g?.id === runId) ??
-        sessions.flatMap((s) => s.tasks.map((t) => taskInRun(t, runId)?.runGroup)).find((g) => g?.id === runId);
-      const name = group?.name?.trim() || `run-${(group?.startedAt ?? '').slice(0, 16).replace(/[:T]/g, '-')}`;
-      // Each task as it ended in this run, not as it is now; see `runScope`.
-      scope = runScope(sessions, runId, name);
-    } else if (where.sessionId) {
-      const session = await this.store.getSession(where.sessionId);
-      if (!session) throw new Error('No such session.');
-      if (where.taskId) {
-        const task = session.tasks.find((t) => t.id === where.taskId);
-        if (!task) throw new Error('No such task.');
-        scope = { sessions: [session], taskFilter: (_s, t) => t.id === task.id, label: `${session.name}-${task.title}` };
-      } else {
-        scope = { sessions: [session], label: session.name };
-      }
-    } else {
-      throw new Error('Name a run, a session or a task.');
-    }
-
-    const cfg = await this.settings.load();
-    const document =
-      kind === 'plan'
-        ? buildPlanExport(scope)
-        : kind === 'domain'
-          ? await buildDomainExport(scope, cfg.resolved.runsDir)
-          : await buildBotExport(scope, cfg.resolved.runsDir, exportMachine(cfg));
-    return { fileName: exportFileName(kind, scope.label), content: JSON.stringify(document, null, 2) };
-  }
-
   /**
    * Everything that passed between the bot and Copilot for one task — every message sent, every reply, every
    * command with its whole output — every attempt of it and nothing of the tasks around it (2026-10-18: one JSON per
@@ -1368,65 +792,6 @@ export class OperatorService {
     // The conversation's code and the message's place in it, then its first words: findable among a day's files.
     const label = `${chatCode(session.id)}-${String(session.tasks.indexOf(task) + 1).padStart(2, '0')}-${task.title}`;
     return { fileName: exportFileName('exchange', label), content: JSON.stringify(document, null, 2) };
-  }
-
-  /**
-   * All three views of a set of tasks the operator picked by hand, in one file.
-   *
-   * The pairs carry their session because a selection spans runs and sessions — that is the
-   * point of it — so a task id on its own would not say which session's task it is. Unknown
-   * pairs are dropped rather than refused: a register left open while a session is deleted
-   * elsewhere should still hand over the tasks that are still there, and the document says
-   * which ones it holds.
-   */
-  async exportBundle(pairs: Array<{ sessionId: string; taskId: string; attempt?: number }>): Promise<{ fileName: string; content: string }> {
-    await this.init();
-    if (pairs.length === 0) throw new Error('Choose at least one task.');
-
-    const wanted = new Map<string, Set<string>>();
-    for (const { sessionId, taskId } of pairs) {
-      const set = wanted.get(sessionId) ?? new Set<string>();
-      set.add(taskId);
-      wanted.set(sessionId, set);
-    }
-
-    /*
-     * A pair may name one attempt of its task — the button beside an earlier attempt does. That
-     * task is then exported as it stood for that attempt (`taskAtAttempt`): its text, its outcome,
-     * its run folder, and only the attempts before it.
-     */
-    const sessions: Session[] = [];
-    for (const sessionId of wanted.keys()) {
-      let session = await this.store.getSession(sessionId);
-      if (!session) continue;
-      for (const pair of pairs.filter((x) => x.sessionId === sessionId && x.attempt !== undefined)) {
-        const task = session.tasks.find((t) => t.id === pair.taskId);
-        const asItWas = task ? taskAtAttempt(task, pair.attempt as number) : null;
-        if (task && !asItWas) throw new Error(`"${task.title}" has no attempt ${pair.attempt}.`);
-        if (asItWas) session = withTask(session, asItWas);
-      }
-      sessions.push(session);
-    }
-    const found = sessions.flatMap((s) => s.tasks.filter((t) => wanted.get(s.id)?.has(t.id)));
-    if (found.length === 0) throw new Error('None of the chosen tasks still exists.');
-
-    // Named after what was chosen rather than after a run, because a selection is not a run: it
-    // may be one task of one, or a task from each of three.
-    const one = pairs.length === 1 ? pairs[0] : undefined;
-    const label =
-      found.length === 1 && sessions.length === 1
-        ? `${sessions[0].name}-${found[0].title}${one?.attempt !== undefined ? `-attempt-${one.attempt}` : ''}`
-        : sessions.length === 1
-          ? `${sessions[0].name}-${found.length}-tasks`
-          : `${found.length}-tasks-${sessions.length}-sessions`;
-
-    const cfg = await this.settings.load();
-    const document = await buildBundleExport(
-      { sessions, taskFilter: (s, t) => !!wanted.get(s.id)?.has(t.id), label },
-      cfg.resolved.runsDir,
-      exportMachine(cfg),
-    );
-    return { fileName: exportFileName('bundle', label), content: JSON.stringify(document, null, 2) };
   }
 
   // --- running --------------------------------------------------------------------------
@@ -1451,6 +816,50 @@ export class OperatorService {
     if (this.browser === holder) this.browser = null;
   }
 
+  /** The window the chat left open, if it is still there; one the operator closed with its X is let go of. */
+  private async keptChatWindow(): Promise<ChatTransport | undefined> {
+    const window = this.chatWindow;
+    if (!window) return undefined;
+    if (window.isOpen()) return window;
+    this.chatWindow = null;
+    await window.close().catch(() => undefined);
+    return undefined;
+  }
+
+  private keepChatWindow(window: ChatTransport): void {
+    // One at a time, as the profile allows: an earlier one still held is closed rather than lost open.
+    const earlier = this.chatWindow;
+    this.chatWindow = window;
+    if (earlier && earlier !== window) void earlier.close().catch(() => undefined);
+  }
+
+  /** Closes the window the chat left open, before something else takes the browser. Said on the console. */
+  private async closeChatWindow(why: string): Promise<void> {
+    const window = this.chatWindow;
+    if (!window) return;
+    this.chatWindow = null;
+    if (window.isOpen()) console.log(`[chat] the window the chat left open is closed: ${why}`);
+    await window.close().catch(() => undefined);
+  }
+
+  /** The card in the chat's window once the work on a message has ended (see `session/chatNotice.ts`). */
+  private async chatWindowNotice(sessionId: string, tally: RunTally): Promise<void> {
+    const window = this.chatWindow;
+    if (!window?.isOpen()) return;
+    const s = await this.store.getSession(sessionId);
+    if (!s) return;
+    const ids = new Set(s.runGroup?.taskIds ?? []);
+    const tasks = s.tasks.filter((t) => ids.has(t.id)).map((t) => ({ title: t.title, status: t.status, reason: t.reason, summary: t.summary }));
+    if (tasks.length === 0) return;
+    // Refused at its turn, nothing of it began: said as a start that could not happen, not as a stop.
+    await window.showNotice(chatNotice(s.lang === 'bg' ? 'bg' : 'en', tasks, tally.error ?? tally.refused)).catch(() => undefined);
+  }
+
+  /** The program is closing: so is the window the chat left open. */
+  async onModuleDestroy(): Promise<void> {
+    await this.closeChatWindow('the program is closing');
+  }
+
   /**
    * Starts the session's queued tasks in the background. Returns immediately; progress
    * arrives on the event stream. One run at a time, of this session or any other.
@@ -1458,34 +867,25 @@ export class OperatorService {
   async start(
     sessionId: string,
     mode: 'confirm' | 'unattended' = 'confirm',
-    name?: string,
-    /** Where the session starts, as chosen in the start window: see `vcs/startChoice.ts`. Absent keeps its settings. */
-    starts?: Record<string, StartChoice>,
   ): Promise<StartReply> {
     const pressedAt = new Date().toISOString();
     // One conversation at a time is not a policy, it is the browser profile: a second run
     // does not get a second browser, it gets an error about a closed one. Whatever has the
-    // browser now — a batch, another session, a read of the models — the start is refused where
+    // browser now — another conversation, a read of the models, the sign-in — the start is refused where
     // the reason can still be read, rather than three minutes later in a stack trace.
     const claim = this.claimBrowser({ kind: 'run', sessionId });
     if ('refused' in claim) return await this.notStarted({ stage: 'refused', message: claim.refused, sessionIds: [sessionId], pressedAt });
     let runId: string | undefined;
     try {
-      // A run nobody named is named after what it is a run of, rather than left to show up in the
-      // register as "Unnamed run" beside five others of the same description.
-      // Set aside on the Sessions page: said first, before the preflight judges a session that will not run.
+      // Set aside: said first, before the preflight judges a session that will not run.
       if ((await this.store.getSession(sessionId))?.active === false) {
         this.releaseBrowser(claim.holder);
         return await this.notStarted({ stage: 'refused', message: INACTIVE_REASON, sessionIds: [sessionId], pressedAt });
       }
-      const chosenName = name?.trim() || (await this.suggestRunName([sessionId]));
+      // Named after what it is a run of.
+      const chosenName = await this.suggestRunName([sessionId]);
       const runGroup: TaskRunGroup = { id: newId('r-'), startedAt: new Date().toISOString(), sessions: 1, name: chosenName };
       runId = runGroup.id;
-      /*
-       * What refuses this start whatever branch is chosen, asked before the choice moves anything: a local
-       * branch made or brought up to its remote, and the session's settings, stayed changed after a start
-       * refused for an unattended run this machine does not allow (review of 2026-10-13).
-       */
       const before = await this.store.getSession(sessionId);
       const earlyRefusal = !before ? 'no such session' : queuedToRun(before).length === 0 ? 'no queued tasks' : await this.unattendedRefusal(mode);
       if (earlyRefusal) {
@@ -1493,14 +893,6 @@ export class OperatorService {
         // No run log for a session that does not exist: the id is the caller's, and may be anything.
         return await this.notStarted({ stage: 'refused', message: earlyRefusal, sessionIds: [sessionId], pressedAt, ...(before ? { runId } : {}) });
       }
-      // The branch the session starts from, as the start window chose it, before the preflight judges it.
-      const unusable = await this.applyStartChoices(runGroup.id, [sessionId], starts);
-      if (unusable) {
-        this.releaseBrowser(claim.holder);
-        return await this.notStarted({ stage: 'branch', message: unusable, sessionIds: [sessionId], pressedAt, runId });
-      }
-      // A run of one is still a run, and it records the same thing a batch does, so that going
-      // back and starting again from a task works the same whether one session was started or six.
       // Recorded by `beginRun` once the start is accepted, not here: see `recordOnSession`.
       // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
       const notReady = await this.runPreflight(runGroup.id, [sessionId]);
@@ -1508,14 +900,20 @@ export class OperatorService {
         this.releaseBrowser(claim.holder);
         return await this.notStarted({ stage: 'preflight', message: notReady, sessionIds: [sessionId], pressedAt, runId });
       }
-      const begun = await this.beginRun(sessionId, mode, undefined, runGroup, undefined, { recordOnSession: true, pressedAt });
+      // A message of the chat is given the window the last one left open, while it is still there (see `chatWindow`).
+      const chat = before?.kind === 'chat';
+      const lent = chat ? await this.keptChatWindow() : undefined;
+      const begun = await this.beginRun(sessionId, mode, lent, runGroup, undefined, { recordOnSession: true, pressedAt, chatWindow: chat });
       if (!begun.started) {
         this.releaseBrowser(claim.holder);
         return await this.notStarted({ stage: 'refused', message: begun.reason ?? 'not started', sessionIds: [sessionId], pressedAt, runId });
       }
       // The window closes before the run's promise settles (see `runSession`), so the browser is
-      // free again exactly when it is.
-      void begun.done.finally(() => this.releaseBrowser(claim.holder));
+      // free again exactly when it is. The chat's stays open, and says in it that the work has ended.
+      void begun.done
+        .then((tally) => (chat ? this.chatWindowNotice(sessionId, tally) : undefined))
+        .catch(() => undefined)
+        .finally(() => this.releaseBrowser(claim.holder));
       return { started: true };
     } catch (e) {
       this.releaseBrowser(claim.holder);
@@ -1564,81 +962,6 @@ export class OperatorService {
     return { started: false, reason: f.message, failure: refOf(recorded) };
   }
 
-  /**
-   * Writes the start window's choices onto the sessions of a run, or says why one cannot be used.
-   *
-   * Every choice is checked first, with nothing moved (`dry`), so a choice that cannot be used for one
-   * session leaves every other session and every branch as it was; then each is written, and a local
-   * branch made from, or brought up to, its remote one where the choice was to work on it. A session
-   * whose start is fixed keeps it. Recorded in the run's log and the session's.
-   */
-  private async applyStartChoices(runId: string, sessionIds: string[], starts?: Record<string, StartChoice>): Promise<string | null> {
-    if (!starts || typeof starts !== 'object') return null;
-    const wanted = sessionIds.filter((id) => starts[id]);
-    if (wanted.length === 0) return null;
-    for (const id of wanted) {
-      const s = await this.store.getSession(id);
-      if (!s) continue;
-      if (this.running.has(id)) return `"${s.name}" is running; its start cannot be changed now.`;
-      const checked = await applyStartChoice(s, starts[id] as StartChoice, { dry: true });
-      if (!checked.ok) return `"${s.name}": ${checked.problem}`;
-    }
-    const cfg = await this.settings.load();
-    const entries: RunLogEntry[] = [];
-    for (const id of wanted) {
-      const s = await this.store.getSession(id);
-      if (!s) continue;
-      const done = await applyStartChoice(s, starts[id] as StartChoice);
-      if (!done.ok) return `"${s.name}": ${done.problem}`;
-      if (!done.applied) continue;
-      const applied: AppliedChoice = done.applied;
-      await this.store.updateSession(id, (x) => {
-        if (!x.vcs) return;
-        x.vcs = withChoice(x.vcs, applied.vcs);
-        if (applied.clearStart) {
-          x.vcsBaseCommit = undefined;
-          x.vcsStart = undefined;
-        }
-        // Chosen again after the session ran: a re-run starts from it too, and a per-session line goes on under a new name.
-        if (applied.restart) {
-          x.startRechosenAt = new Date().toISOString();
-          if (applied.restart.freshBranch) {
-            x.vcs.branchName = applied.restart.freshBranch;
-            x.vcs.branchNameExact = true;
-          }
-        }
-      });
-      const message = `${applied.said}${applied.note ? `; ${applied.note}` : ''}${applied.clearStart && !applied.restart ? '; the start prepared before (a starting snapshot) no longer applies' : ''}`;
-      entries.push({ at: new Date().toISOString(), type: 'start-chosen', message, data: { session: id, choice: starts[id], ...(applied.note ? { note: applied.note } : {}) } });
-      this.bus.publish({ sessionId: id, type: 'start-chosen', level: 'info', message, data: { runId, choice: starts[id] } });
-      await appendSessionLog(cfg.resolved.runsDir, id, { type: 'start-chosen', message, data: { runId, choice: starts[id] } }).catch(() => undefined);
-    }
-    await appendRunLog(cfg.resolved.runsDir, runId, entries).catch(() => undefined);
-    return null;
-  }
-
-  /** The start window's question for these sessions: their starts and the branches of their repositories. */
-  async startChoices(sessionIds: string[]): Promise<{ repos: RepoBranches[]; sessions: StartOptionSession[] }> {
-    await this.init();
-    const sessions: Session[] = [];
-    for (const id of [...new Set(sessionIds.map((x) => x.trim()).filter(Boolean))]) {
-      const s = await this.store.getSession(id);
-      if (s) sessions.push(s);
-    }
-    return await startOptions(sessions);
-  }
-
-  /**
-   * Fetches branches of a remote for the start window, where the operator is looking — so through Git's
-   * own password window when the remote asks (see `vcs/remoteAuth.ts`). Only for a folder this bot works
-   * in; only remote-tracking branches move.
-   */
-  async startFetch(dir: string, remote: string, branches: string[] | null): Promise<StartFetch> {
-    await this.init();
-    await this.knownProjectFolder(dir, 'it is not fetched from here');
-    return await fetchForStart(resolve(dir.trim()), remote.trim(), branches, await askpassProgram());
-  }
-
   /** The starts that did not get as far as a first task, newest first: see `session/startFailure.ts`. */
   recentStartFailures(unansweredOnly: boolean): StartFailureRef[] {
     return this.startFailures.recent({ unansweredOnly }).slice(0, 10).map(refOf);
@@ -1682,18 +1005,14 @@ export class OperatorService {
   }
 
   /**
-   * The same thing `start` does, but it also hands back a promise that settles when the run
-   * is over and says how it went.
-   *
-   * A batch needs that promise and a single session does not, which is the only difference
-   * between the two callers. The sessions of a batch still run one at a time through here,
-   * and they have to: the browser profile is single-writer, so two conversations at once is
-   * not slower, it is a failure with a message about a closed browser.
+   * Begins the run `start` asked for, and hands back a promise that settles when it is over and says how it went.
+   * One at a time: the browser profile is single-writer, so two conversations at once is not slower, it is a
+   * failure with a message about a closed browser.
    */
   private async beginRun(
     sessionId: string,
     mode: 'confirm' | 'unattended',
-    /** A browser that is already open. A batch passes its own; a single run opens one. */
+    /** A browser that is already open: the one the chat left open (see `chatWindow`); otherwise the run opens one. */
     transport?: ChatTransport,
     /** The press of a start button this belongs to, stamped onto every task it reaches. */
     runGroup?: TaskRunGroup,
@@ -1706,26 +1025,14 @@ export class OperatorService {
        *
        * A single start wrote it before anything was checked, so a start refused for having nothing
        * queued, for an unattended precondition, or for running already left a run on the session
-       * that never happened: it replaced the record of a batch the session belonged to, which
-       * "start again from here" reads, or of the run actually in progress; and for a session that
-       * does not exist, the write threw and the start answered 500. A batch records its runs itself,
-       * on every session it selected, before it starts (see `runBatch`), and does not ask for this.
+       * that never happened: it replaced the record of the run actually in progress; and for a session that
+       * does not exist, the write threw and the start answered 500.
        */
       recordOnSession?: boolean;
-      /**
-       * Whether to hold the queue between tasks. Only a batch has a pause, so only a batch passes
-       * one, and it answers for itself: a run of its own reads nobody's pause. It used to read the
-       * batch record, which outlives the batch, so a pause left on when a batch ended held every
-       * later run of any session before its first task.
-       */
-      shouldPause?: () => boolean;
       /** When the start was asked for; a run that fails before its first task is recorded from then. */
       pressedAt?: string;
-      /**
-       * An earlier session of the same batch began already: a failure before this one's first task is a
-       * session that did not begin at its turn, not a run that could not begin.
-       */
-      laterInRun?: boolean;
+      /** A message of the workbench's chat: the window it opens is kept for the next one (see `chatWindow`). */
+      chatWindow?: boolean;
     } = {},
   ): Promise<{ started: boolean; reason?: string; done: Promise<RunTally> }> {
     await this.init();
@@ -1777,7 +1084,8 @@ export class OperatorService {
     const authorizer: StepAuthorizer = this.webAuthorizer(policy, controller.signal);
 
     const startedAt = new Date().toISOString();
-    this.running.set(sessionId, { controller, startedAt, mode, policy });
+    const hold = new Hold();
+    this.running.set(sessionId, { controller, startedAt, mode, policy, hold });
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
     // Said at the start of every run, in both modes, because it is the one fact about this tool a
     // data-protection team needs and the one an operator forgets: the reports leave the machine.
@@ -1798,9 +1106,6 @@ export class OperatorService {
       bus: this.bus,
       authorizer,
       signal: controller.signal,
-      // Read between tasks, so the one in flight finishes properly first. The batch that owns
-      // this run answers it, because a pause is about the whole run and not about this session.
-      shouldPause: how.shouldPause,
       // The mode as it is now, not as it was: "run the rest without asking" changes it mid-run,
       // and the policy.json of a later task must say so.
       currentMode: () => this.running.get(sessionId)?.mode ?? mode,
@@ -1820,7 +1125,16 @@ export class OperatorService {
         }
         return refused;
       },
-      ...(transport || !runGroup ? {} : { beforeBrowser: () => this.browserRequested(runGroup.id, [sessionId]) }),
+      // Opening a window of its own: the one the chat left open goes first, since the profile takes one.
+      ...(transport
+        ? {}
+        : {
+            beforeBrowser: async () => {
+              await this.closeChatWindow('another run needs the browser');
+              if (runGroup) await this.browserRequested(runGroup.id, [sessionId]);
+            },
+          }),
+      ...(how.chatWindow ? { chatWindow: { keep: (window: ChatTransport) => this.keepChatWindow(window) } } : {}),
       // The page is the source of the model names: Settings and the saved list follow it (see `ModelHooks`).
       models: {
         locate: async (name) => (await this.store.getModels())?.options.find((o) => sameModel(o.name, name))?.locator,
@@ -1836,6 +1150,7 @@ export class OperatorService {
       },
       // Plan mode `approve`: the plan is put to the operator on the approvals card.
       approvePlan: (ask) => this.askPlanApproval(ask, controller.signal),
+      hold,
     })
       .then(async (outcome) => {
         const tally = { ...(await this.tally(sessionId, queuedIds)), paused: outcome.paused, ...(outcome.refused ? { refused: outcome.refused } : {}) };
@@ -1855,7 +1170,7 @@ export class OperatorService {
         // Not when the operator stopped it: that is an answer, not a failure to show.
         if (tally.ran === 0 && !controller.signal.aborted) {
           console.error('[start] the run ended before its first task:', (e as Error).stack ?? (e as Error).message);
-          await this.notStarted({ stage: how.laterInRun ? 'at-turn' : 'run', message: (e as Error).message, sessionIds: [sessionId], pressedAt: how.pressedAt ?? startedAt, ...(runGroup ? { runId: runGroup.id } : {}), answered: false });
+          await this.notStarted({ stage: failedWhileOpening(e) ? 'browser' : 'run', message: (e as Error).message, sessionIds: [sessionId], pressedAt: how.pressedAt ?? startedAt, ...(runGroup ? { runId: runGroup.id } : {}), answered: false });
         }
         return tally;
       })
@@ -1903,6 +1218,26 @@ export class OperatorService {
   }
 
   /** Asks the run to stop after the current step. Pending approvals are aborted at once. */
+  /**
+   * "Pause" on the chat (operator, 2026-10-20): the running work holds at its next message to Copilot or its next
+   * command, and the button becomes "Continue". A reply being written and a command running are let finish.
+   */
+  pause(sessionId: string): { paused: boolean } {
+    const r = this.running.get(sessionId);
+    if (!r) throw new Error('Nothing of this conversation is running, so there is nothing to pause.');
+    if (r.hold.pause()) {
+      this.bus.publish({ sessionId, type: 'pause-asked', level: 'info', message: 'paused by the operator: the work holds at its next message or command, until Continue' });
+    }
+    return { paused: true };
+  }
+
+  /** "Continue": the paused work goes on from where it held. A run that has ended meanwhile has nothing to go on with. */
+  resume(sessionId: string): { paused: boolean } {
+    const r = this.running.get(sessionId);
+    if (r?.hold.resume()) this.bus.publish({ sessionId, type: 'resume-asked', level: 'info', message: 'continued by the operator' });
+    return { paused: false };
+  }
+
   async stop(sessionId: string): Promise<{ stopping: boolean }> {
     const r = this.running.get(sessionId);
     if (!r) return { stopping: false };
@@ -1932,18 +1267,13 @@ export class OperatorService {
    * answer a question this one answers from two fields already in memory. A poll that costs a
    * directory walk every few seconds, on every page, to light up a dot would be a bad trade.
    */
-  activity(): { running: boolean; sessions: number; batch: boolean; starting: boolean } {
+  activity(): { running: boolean; sessions: number; starting: boolean } {
     /*
      * A run being started — its version control checked before the browser opens — is not running yet
      * and not idle either: `starting` says so, so "nothing is happening" is not read in that moment.
      */
-    const starting = this.running.size === 0 && !this.batch?.running && (this.browser?.kind === 'run' || this.browser?.kind === 'batch');
-    return { running: this.running.size > 0, sessions: this.running.size, batch: this.batch?.running === true, starting };
-  }
-
-  /** The batch in progress, or the last one that ran, or null if none ever has. */
-  batchState(): BatchState | null {
-    return this.batch ? { ...this.batch, sessions: this.batch.sessions.map((s) => ({ ...s })) } : null;
+    const starting = this.running.size === 0 && this.browser?.kind === 'run';
+    return { running: this.running.size > 0, sessions: this.running.size, starting };
   }
 
   /**
@@ -1962,114 +1292,6 @@ export class OperatorService {
     return suggestRunName(await this.store.listSessions(), sessionIds, about);
   }
 
-  async startBatch(
-    sessionIds: string[],
-    mode: 'confirm' | 'unattended' = 'confirm',
-    onFailure: 'stop' | 'continue' = 'stop',
-    model?: string,
-    /**
-     * The model the independent review runs on, for every session in this run.
-     *
-     * Separate from `model` because they are separate decisions, and the interesting case is
-     * precisely when they differ: a review is worth most when it is not the same mind that did
-     * the work, and a run panel that could only set one model made that the hard path.
-     */
-    reviewModel?: string,
-    /** What to call the run. Offered from the plan's name; empty means it goes by its id. */
-    name?: string,
-    /**
-     * The queued tasks to run, when not every queued task of those sessions: what the operator
-     * ticked in the register. A session none of whose chosen tasks is queued is skipped; the
-     * tasks nobody chose stay queued exactly as they were. Absent means every queued task.
-     */
-    taskIds?: string[],
-    /** Where each session starts, as chosen in the start window: see `vcs/startChoice.ts`. Absent keeps their settings. */
-    starts?: Record<string, StartChoice>,
-  ): Promise<StartReply> {
-    const pressedAt = new Date().toISOString();
-    const wanted = [...new Set(sessionIds.map((s) => s.trim()).filter(Boolean))];
-    // Before anything is waited for (see `browser`): a second batch, a session running on its own
-    // — one of these or any other — and a read of the models all have the browser already.
-    const claim = this.claimBrowser({ kind: 'batch', sessionIds: wanted });
-    if ('refused' in claim) return await this.notStarted({ stage: 'refused', message: claim.refused, sessionIds: wanted, pressedAt });
-    return await this.startBatchHolding(claim.holder, wanted, mode, onFailure, model, reviewModel, name, taskIds, { starts, pressedAt });
-  }
-
-  /**
-   * `startBatch` for a caller that has claimed the browser already, and the claim with it: handed on
-   * to the batch once it is under way (`runBatch` gives it back), and given back here on every
-   * refusal. "Run again from here" claims it before it moves anything and starts through this, so
-   * one claim covers the restore, the requeue and the run.
-   */
-  private async startBatchHolding(
-    holder: BrowserHolder,
-    wanted: string[],
-    mode: 'confirm' | 'unattended',
-    onFailure: 'stop' | 'continue',
-    model: string | undefined,
-    reviewModel: string | undefined,
-    name: string | undefined,
-    taskIds: string[] | undefined,
-    how: { starts?: Record<string, StartChoice>; pressedAt?: string } = {},
-  ): Promise<StartReply> {
-    const onlyTasks = taskIds && taskIds.length > 0 ? new Set(taskIds.map((t) => t.trim()).filter(Boolean)) : undefined;
-    const pressedAt = how.pressedAt ?? new Date().toISOString();
-    let handedOn = false;
-    // The batch's id first, so the preflight is recorded under the run it decides about.
-    const batchId = newId('b-');
-    const refuse = (stage: StartStage, message: string, runId?: string) => this.notStarted({ stage, message, sessionIds: wanted, pressedAt, ...(runId ? { runId } : {}) });
-    try {
-      await this.init();
-      if (wanted.length === 0) return await refuse('refused', 'no sessions were selected');
-      // Version control first, before anything opens the browser: see `vcs/runPreflight.ts`.
-      /*
-       * Sessions set aside on the Sessions page are left out before the preflight: judged there, an inactive
-       * session's contradiction or version-control problem was the answer to the press — and could refuse
-       * the whole batch — although it would never have run (review of 2026-10-09). `prepareBatch` records
-       * them as skipped, with the reason.
-       */
-      const active: string[] = [];
-      const inactive: string[] = [];
-      for (const id of wanted) {
-        const s = await this.store.getSession(id);
-        if (s?.active === false) inactive.push(s.name);
-        else active.push(id);
-      }
-      if (active.length === 0) return await refuse('refused', `${inactive.map((n) => `"${n}"`).join(', ')}: ${INACTIVE_REASON}`);
-      /*
-       * What refuses the batch whatever branch is chosen, asked before the choices move anything (review of
-       * 2026-10-13): nothing queued among the chosen tasks, an unattended run this machine does not allow.
-       */
-      let anyQueued = false;
-      for (const id of active) {
-        const s = await this.store.getSession(id);
-        if (s && queuedToRun(s, onlyTasks).length > 0) anyQueued = true;
-      }
-      if (!anyQueued) return await refuse('refused', 'none of the selected sessions has a queued task', batchId);
-      const blockedEarly = await this.unattendedRefusal(mode);
-      if (blockedEarly) return await refuse('refused', blockedEarly, batchId);
-      // The branch each session starts from, as the start window chose it, before the preflight judges it.
-      const unusable = await this.applyStartChoices(batchId, active, how.starts);
-      if (unusable) return await refuse('branch', unusable, batchId);
-      const notReady = await this.runPreflight(batchId, active, onlyTasks);
-      if (notReady) return await refuse('preflight', notReady, batchId);
-      const begun = await this.prepareBatch(wanted, onlyTasks, mode, onFailure, model, reviewModel, name, batchId);
-      if (!begun.batch) return await refuse('refused', begun.reason, batchId);
-      begun.batch.pressedAt = pressedAt;
-      this.batch = begun.batch;
-      handedOn = true;
-      void this.runBatch(begun.batch, holder);
-      return { started: true, batch: this.batchState() as BatchState };
-    } catch (e) {
-      if (unusableConfig(e)) throw e;
-      // Said with the error itself, and on record with the console of those moments, rather than as a bare 400.
-      console.error('[start] the run could not be started:', (e as Error).stack ?? (e as Error).message);
-      return await refuse('error', (e as Error).message, batchId);
-    } finally {
-      if (!handedOn) this.releaseBrowser(holder);
-    }
-  }
-
   /**
    * Why a batch in this mode may not begin on this machine now, or null when it may: the entrance
    * rule (`unattendedPrecondition`) asked of the settings as they are at this moment. One place, for
@@ -2085,645 +1307,7 @@ export class OperatorService {
     });
   }
 
-  /**
-   * Everything `startBatch` decides before the batch exists: which sessions it has work in, whether
-   * an unattended run may begin, and the models the run panel chose. A refusal comes back as the
-   * reason; nothing is started here.
-   */
-  private async prepareBatch(
-    wanted: string[],
-    onlyTasks: Set<string> | undefined,
-    mode: 'confirm' | 'unattended',
-    onFailure: 'stop' | 'continue',
-    model: string | undefined,
-    reviewModel: string | undefined,
-    name: string | undefined,
-    /** The id its preflight was recorded under; a new one when there was none. */
-    id: string = newId('b-'),
-  ): Promise<{ batch: BatchState; reason?: undefined } | { batch?: undefined; reason: string }> {
-    // Worked out here rather than asked of the operator again: every way into this — the run
-    // panel, continuing after a failure, "Run again from here" — either has a field they may
-    // have left empty or has no field at all.
-    const chosenName = name?.trim() || (await this.suggestRunName(wanted));
-
-    const sessions: BatchSession[] = [];
-    for (const id of wanted) {
-      const s = await this.store.getSession(id);
-      if (!s) {
-        sessions.push({ sessionId: id, name: id, state: 'skipped', ran: 0, failed: 0, reason: 'no such session' });
-        continue;
-      }
-      /*
-       * Set aside on the Sessions page: left out here, before the browser opens, with the reason `start`
-       * gives. Let through, the batch said "started", opened the browser, and only then skipped it — a
-       * "Run" that reported success and ran nothing.
-       */
-      if (s.active === false) {
-        sessions.push({ sessionId: id, name: s.name, state: 'skipped', ran: 0, failed: 0, reason: INACTIVE_REASON });
-        continue;
-      }
-      const queued = queuedToRun(s, onlyTasks).length;
-      sessions.push(
-        queued === 0
-          ? { sessionId: id, name: s.name, state: 'skipped', ran: 0, failed: 0, reason: onlyTasks ? 'none of its chosen tasks is queued' : 'nothing queued' }
-          : { sessionId: id, name: s.name, state: 'waiting', ran: 0, failed: 0 },
-      );
-    }
-
-    if (!sessions.some((s) => s.state === 'waiting')) {
-      const inactive = sessions.filter((s) => s.reason === INACTIVE_REASON);
-      return {
-        reason: inactive.length > 0 ? `${inactive.map((s) => `"${s.name}"`).join(', ')}: ${INACTIVE_REASON}` : 'none of the selected sessions has a queued task',
-      };
-    }
-
-    /*
-     * The same entrance rule `start` has, asked here too and for the same reason: before a browser
-     * is opened. It was missing, and the rule was only met inside the loop, per session, after the
-     * window was already up — so on a machine with no isolation the operator pressed the run
-     * button, watched Edge open, begin loading the chat and close again, and was told nothing: the
-     * session was quietly skipped with the reason held in a batch state nobody was looking at. Asked
-     * here, the refusal is the answer to the press, shown under the button that caused it.
-     */
-    const blocked = await this.unattendedRefusal(mode);
-    if (blocked) return { reason: blocked };
-
-    // One model for the whole run, chosen here rather than opened on every session first. It
-    // is written onto the sessions instead of being held for the run, so what the session says
-    // it will use and what it used are the same thing afterwards — including for anyone who
-    // opens one of them tomorrow and wonders which model produced that summary.
-    const wantedModel = model?.trim();
-    const wantedReviewModel = reviewModel?.trim();
-    if (wantedModel || wantedReviewModel) {
-      /*
-       * The panel starts on the models chosen in Settings. A session that follows Settings and is
-       * run on exactly that model is left following it, so choosing another model in Settings
-       * later still reaches it; only a different choice, or a session with a model of its own,
-       * is written.
-       */
-      const settingsNow = await this.settings.load();
-      const followModel = (settingsNow.copilot.defaultModel ?? '').trim();
-      const followReview = (settingsNow.copilot.defaultReviewModel ?? '').trim();
-      for (const entry of sessions) {
-        if (entry.state !== 'waiting') continue;
-        await this.store.updateSession(entry.sessionId, (s) => {
-          if (wantedModel && (s.model?.trim() || wantedModel !== followModel)) {
-            s.model = wantedModel;
-            s.modelSource = 'operator';
-          }
-          // Only the model is set here, never whether the review happens: a run panel is about
-          // this run, and silently switching a session's review on or off from it would be a
-          // change to the session that outlives the run.
-          if (wantedReviewModel && (s.review?.model?.trim() || wantedReviewModel !== followReview)) {
-            s.review = { ...DEFAULT_REVIEW, ...s.review, model: wantedReviewModel };
-            s.reviewModelSource = 'operator';
-          }
-        });
-      }
-    }
-
-    return {
-      batch: {
-        id,
-        startedAt: new Date().toISOString(),
-        name: chosenName,
-        ...(onlyTasks ? { onlyTasks: [...onlyTasks] } : {}),
-        mode,
-        onFailure,
-        stopping: false,
-        pausing: false,
-        running: true,
-        sessions,
-      },
-    };
-  }
-
-  /** Stops the session that is running now and leaves the rest of the batch unstarted. */
-  /**
-   * Holds the run after the task that is running, and lets that task finish first.
-   *
-   * Not a stop: the task in flight runs its checks, is reviewed and commits, exactly as it would
-   * have. What is held is the queue behind it, and the sessions after this one, both of which
-   * stay as they are — so continuing is the same act it always was, and the button for it is the
-   * one already on the register.
-   *
-   * It does not release the browser early either. The run ends when the current task does, and
-   * the window closes with it, because the Edge profile is single-writer and a run that sat
-   * holding it would stop every other session from doing anything at all.
-   */
-  async pauseBatch(): Promise<{ pausing: boolean }> {
-    const batch = this.batch;
-    if (!batch?.running || batch.stopping) return { pausing: false };
-    batch.pausing = true;
-    this.bus.publish({
-      sessionId: batch.sessions.find((s) => s.state === 'running')?.sessionId ?? batch.id,
-      type: 'batch-pausing',
-      level: 'info',
-      message: 'pausing: the task that is running will finish, and the rest of the queue stays as it is',
-      data: { batchId: batch.id },
-    });
-    return { pausing: true };
-  }
-
-  /** Takes the hold off a run that has not ended yet, so the queue carries on where it was. */
-  async resumeBatch(): Promise<{ pausing: boolean }> {
-    const batch = this.batch;
-    if (!batch?.running || !batch.pausing) return { pausing: false };
-    batch.pausing = false;
-    this.bus.publish({
-      sessionId: batch.sessions.find((s) => s.state === 'running')?.sessionId ?? batch.id,
-      type: 'batch-resumed',
-      level: 'info',
-      message: 'the hold is off; the queue carries on',
-      data: { batchId: batch.id },
-    });
-    return { pausing: false };
-  }
-
-  async stopBatch(): Promise<{ stopping: boolean }> {
-    const batch = this.batch;
-    if (!batch?.running) return { stopping: false };
-    batch.stopping = true;
-    const current = batch.sessions.find((s) => s.state === 'running');
-    if (current) await this.stop(current.sessionId);
-    return { stopping: true };
-  }
-
-  /**
-   * Runs a batch that has just been started, and ends what only the batch may end: its hold and
-   * its claim on the browser. Both are let go here, once, however the loop came out — finished,
-   * stopped, failed, or never able to open its window.
-   */
-  private async runBatch(batch: BatchState, holder: BrowserHolder): Promise<void> {
-    try {
-      await this.batchLoop(batch);
-    } finally {
-      // A pause holds this batch's queue and nothing after it. Left on, it read as "pausing" on a
-      // batch that had ended, and it was what every later run read, so each stopped before its
-      // first task (see `shouldPause` in `beginRun`).
-      batch.pausing = false;
-      // The batch's window is closed by now, in the loop's own ending.
-      this.releaseBrowser(holder);
-    }
-  }
-
-  /**
-   * The batch loop. Nothing here runs in parallel, on purpose: see `beginRun`.
-   *
-   * Each session is judged by the tasks it was given. A session that ran everything without a
-   * failure is `done`; one with a failed task is `failed`; one the operator stopped, or one
-   * whose chain stopped early with no failure of its own, is `stopped`.
-   */
-  private async batchLoop(batch: BatchState): Promise<void> {
-    /*
-     * One browser for the whole batch.
-     *
-     * Every session used to open its own window and close it again: a fresh launch, a fresh
-     * sign-in check and a fresh grab at the profile lock, several times over, for a machine
-     * that can only have one of them open at a time anyway. The window is opened here, handed
-     * to each session in turn, and closed when the last one is done — so between sessions the
-     * only thing that changes is which conversation is on screen.
-     */
-    let browser: ChatTransport | null = null;
-    try {
-      const cfg = await this.settings.load();
-      await this.browserRequested(batch.id, batch.sessions.filter((x) => x.state === 'waiting').map((x) => x.sessionId));
-      browser = await openBrowser(cfg, this.bus, join(cfg.resolved.runsDir, '_browser'), batch.id);
-      this.bus.publish({
-        sessionId: batch.sessions[0]?.sessionId ?? batch.id,
-        type: 'batch-browser-open',
-        level: 'info',
-        message: `one browser window for all ${batch.sessions.length} session(s) in this run`,
-        data: { batchId: batch.id },
-      });
-    } catch (e) {
-      // Without a window nothing can run, and saying so once is better than failing every
-      // session in turn with the same message.
-      for (const entry of batch.sessions) {
-        if (entry.state === 'waiting') {
-          entry.state = 'failed';
-          entry.reason = `the browser could not be opened: ${(e as Error).message}`;
-        }
-      }
-      batch.running = false;
-      batch.finishedAt = new Date().toISOString();
-      this.bus.publish({
-        sessionId: batch.id,
-        type: 'batch-error',
-        level: 'error',
-        message: `the browser could not be opened: ${(e as Error).message}`,
-      });
-      /*
-       * The run had been accepted, so the press was answered "started": this is shown on every page
-       * until it is closed, with what the console printed (2026-10-13). The stack is printed for it.
-       */
-      console.error('[start] the browser could not be opened:', (e as Error).stack ?? (e as Error).message);
-      await this.notStarted({
-        stage: 'browser',
-        message: `the browser could not be opened: ${(e as Error).message}`,
-        sessionIds: batch.sessions.map((x) => x.sessionId),
-        pressedAt: batch.pressedAt ?? batch.startedAt,
-        runId: batch.id,
-        answered: false,
-      });
-      return;
-    }
-
-    try {
-      /*
-       * One group for the whole batch, made before the loop rather than per session.
-       *
-       * That is the entire point of it: the register can then draw one line around everything
-       * this press of the button set off, across sessions, which is the question a list of
-       * tasks sorted by time cannot answer.
-       */
-      const runGroup: TaskRunGroup = {
-        id: batch.id,
-        startedAt: batch.startedAt,
-        sessions: batch.sessions.filter((s) => s.state === 'waiting').length,
-        ...(batch.name ? { name: batch.name } : {}),
-      };
-
-      /*
-       * The same run, recorded on each session, with what it was asked to do.
-       *
-       * Written before the first session starts and for every session including the ones the
-       * run may never reach, because that is precisely the case it exists for: a failure in
-       * session one leaves sessions two and three with no tasks stamped and no way to know
-       * they were ever part of this. Going back afterwards and running the rest again needs
-       * the whole list, and this is the only place it is still true.
-       */
-      let order = 0;
-      for (const entry of batch.sessions) {
-        if (entry.state !== 'waiting') continue;
-        const at = order;
-        order += 1;
-        await this.store.updateSession(entry.sessionId, (s) => {
-          s.runGroup = {
-            ...runGroup,
-            order: at,
-            // What this run was asked to do: the chosen tasks, when some were chosen.
-            taskIds: queuedToRun(s, batch.onlyTasks).map((t) => t.id),
-            mode: batch.mode,
-            onFailure: batch.onFailure,
-          };
-        });
-      }
-
-      for (const entry of batch.sessions) {
-        if (entry.state !== 'waiting') continue;
-        if (batch.stopping) {
-          entry.state = 'skipped';
-          entry.reason = 'the batch was stopped before this session started';
-          continue;
-        }
-        // A hold applies to the sessions that have not started as well as to the queue inside
-        // the one that has. They are left exactly as they were, which is what makes continuing
-        // afterwards the same act as continuing after anything else.
-        if (batch.pausing) {
-          entry.state = 'skipped';
-          entry.reason = 'the run was paused before this session started; its tasks are still queued';
-          continue;
-        }
-
-        entry.state = 'running';
-        this.bus.publish({
-          sessionId: entry.sessionId,
-          type: 'batch-session-started',
-          level: 'info',
-          message: `starting as part of a batch of ${batch.sessions.length} session(s), in ${batch.mode} mode`,
-          data: { batchId: batch.id },
-        });
-
-        // In the batch's mode as it is now: "run the rest without asking" in an earlier session
-        // switched the batch with it (see `setRunMode`). The hold is this batch's own.
-        const begun = await this.beginRun(entry.sessionId, batch.mode, browser, runGroup, batch.onlyTasks ? new Set(batch.onlyTasks) : undefined, {
-          shouldPause: () => batch.pausing,
-          laterInRun: batch.sessions.some((x) => x.ran > 0),
-        });
-        if (!begun.started) {
-          entry.state = 'skipped';
-          entry.reason = begun.reason;
-          continue;
-        }
-
-        const tally = await begun.done;
-        entry.ran = tally.ran;
-        entry.failed = tally.failed;
-
-        if (tally.refused) {
-          // Refused at its turn, before anything of it ran: not a failure of its tasks, which stay queued.
-          entry.state = 'skipped';
-          entry.reason = tally.refused;
-        } else if (tally.error) {
-          entry.state = 'failed';
-          entry.reason = tally.error;
-        } else if (tally.failed > 0) {
-          entry.state = 'failed';
-          entry.reason = `${tally.failed} task(s) did not finish: ${tally.failedTitles.join(', ')}`;
-        } else if ((tally.stopped ?? 0) > 0) {
-          entry.state = 'stopped';
-          // The task cut short is counted as what it is: "after 0 task(s)" beside ran 1 read as if nothing ran (live run 2026-10-04).
-          const finished = tally.ran - (tally.stopped ?? 0);
-          entry.reason = `stopped by the operator: ${tally.stopped} task(s) cut short${finished > 0 ? `, after ${finished} that finished` : ''}; ${tally.leftQueued} still queued`;
-        } else if (tally.paused) {
-          entry.state = 'stopped';
-          entry.reason = `paused after ${tally.ran} task(s); ${tally.leftQueued} still queued`;
-        } else if (batch.stopping || tally.leftQueued > 0) {
-          entry.state = 'stopped';
-          entry.reason = `${tally.leftQueued} task(s) never started`;
-        } else {
-          entry.state = 'done';
-        }
-
-        this.bus.publish({
-          sessionId: entry.sessionId,
-          type: 'batch-session-finished',
-          level: entry.state === 'failed' || tally.refused ? 'warn' : 'info',
-          message: tally.refused ? 'this session was refused at its turn inside the batch; its tasks stay queued' : `this session ended ${entry.state} inside the batch`,
-          data: { batchId: batch.id, ran: entry.ran, failed: entry.failed },
-        });
-
-        // A session refused at its turn breaks a chain as a failed one does.
-        if ((entry.state === 'failed' || tally.refused) && batch.onFailure === 'stop') {
-          batch.stopping = true;
-          this.bus.publish({
-            sessionId: entry.sessionId,
-            type: 'batch-stopped-early',
-            level: 'warn',
-            message: 'the batch is set to stop on a failure, so the sessions after this one stay as they are',
-            data: { batchId: batch.id },
-          });
-        }
-      }
-    } catch (e) {
-      // Nothing above is expected to throw: a failing run resolves rather than rejects. If
-      // something does, the batch has to end here and say so, because this promise is not
-      // awaited anywhere and an escaping rejection would take the whole API process down.
-      const current = batch.sessions.find((s) => s.state === 'running');
-      if (current) {
-        current.state = 'failed';
-        current.reason = (e as Error).message;
-      }
-      this.bus.publish({
-        sessionId: current?.sessionId ?? batch.id,
-        type: 'batch-error',
-        level: 'error',
-        message: (e as Error).message,
-      });
-    } finally {
-      for (const entry of batch.sessions) {
-        if (entry.state === 'waiting' || entry.state === 'running') {
-          entry.state = 'skipped';
-          entry.reason ??= 'the batch ended before this session ran';
-        }
-      }
-      // The window outlived every session in the batch; it does not outlive the batch.
-      await browser?.close().catch(() => undefined);
-      batch.running = false;
-      batch.finishedAt = new Date().toISOString();
-    }
-  }
-
   // --- plans ----------------------------------------------------------------------------
-
-  /** The brief the operator hands to a chat model, in the language the interface is in. */
-  /**
-   * The persona, assembled: the software part (fixed, this project's), the machine's projects
-   * by path, and the organisation's part (the operator's, edited on the plan page). Returned
-   * whole for copying and in parts for showing, so the page can say which is which.
-   */
-  async planBrief(opts: BriefOptions): Promise<{
-    text: string;
-    software: string;
-    organisation: string;
-    customised: boolean;
-    example: string;
-    persona: string;
-    personaCustomised: boolean;
-    personaExample: string;
-    work: string;
-    workCustomised: boolean;
-    workExample: string;
-  }> {
-    // The machine's projects go into the brief by absolute path, so a plan across a front
-    // end, a back end and a test suite is written with the folders that exist rather than
-    // with three paths the chat model had to ask for and the operator typed from memory.
-    const lang = opts.lang === 'bg' ? 'bg' : 'en';
-    const project = await this.project();
-    const projects = [
-      ...(project.rootDir ? [{ name: project.name, rootDir: project.rootDir, repo: project.repoOk, isDefault: true }] : []),
-      ...project.others.map((o) => ({ name: o.name, rootDir: o.rootDir, repo: o.repoOk, isDefault: false })),
-    ];
-    const [organisation, persona, work] = await Promise.all([
-      this.getContext('organisation', lang),
-      this.getContext('persona', lang),
-      this.getContext('work', lang),
-    ]);
-    /*
-     * Whether a run with nobody watching can start here, asked of the same rule the runner applies
-     * at the entrance — so the brief cannot tell Kerrigan the unattended button works while the run
-     * refuses it, which is exactly what the first test of her did.
-     */
-    const cfg = await this.settings.load();
-    const unattendedRule = { mode: 'unattended' as const, allowedPrograms: cfg.execution.allowedPrograms, isolation: cfg.execution.isolation, lockedToConfirm: cfg.policyLock?.maxMode === 'confirm' };
-    /*
-     * Which of its refusals it is, asked in the order the rule asks them: the lock, then isolation,
-     * then the allowlist. Anything that was not isolation used to be told as an empty allowlist, so
-     * under a policy lock the brief sent the operator to fill in a list that was already full.
-     */
-    const unattendedBlocked: UnattendedBlock | undefined = !unattendedPrecondition(unattendedRule)
-      ? undefined
-      : unattendedRule.lockedToConfirm
-        ? 'lock'
-        : unattendedIsolationRefusal('unattended', cfg.execution.isolation)
-          ? 'isolation'
-          : 'allowlist';
-    return {
-      text: planBrief({
-        lang,
-        projects,
-        organisation: organisation.content,
-        organisationExample: organisation.example,
-        persona: persona.content,
-        personaExample: persona.example,
-        work: work.content,
-        workExample: work.example,
-        unattendedBlocked,
-      }),
-      software: planBrief({ lang, projects }),
-      organisation: organisation.content,
-      customised: organisation.customised,
-      example: organisation.example,
-      persona: persona.content,
-      personaCustomised: persona.customised,
-      personaExample: persona.example,
-      work: work.content,
-      workCustomised: work.customised,
-      workExample: work.example,
-    };
-  }
-
-  /**
-   * Reads a pasted plan and says what it means, or what is wrong with it.
-   *
-   * A valid plan is also checked against what the store already holds, because the most
-   * likely mistake with this page is not a malformed document: it is pressing the button
-   * twice, or pasting the plan that is already imported instead of the corrected one. That is
-   * reported, not refused — importing the same work twice is a thing people legitimately do.
-   */
-  async checkPlan(text: string): Promise<PlanCheckResult> {
-    await this.init();
-    const check = checkPlan(text ?? '');
-    if (!check.ok) return { ...check, duplicates: [] };
-
-    /*
-     * A plan can ask for version control in a folder that is not a repository on this machine.
-     * The document is not wrong; this machine is not ready for it. It is refused all the same,
-     * and the message says which of the two it is, because importing it would create sessions
-     * that claim a way back they do not have.
-     */
-    const repoIssues: PlanIssue[] = [];
-    check.plan.sessions.forEach((session, i) => {
-      if (session.vcs?.enabled === false) {
-        // Without version control the project folder must still be there (live run 2026-10-03: not looked at).
-        const folder = (session.projectDir ?? '').trim();
-        if (folder && !existsSync(folder)) repoIssues.push({ path: `sessions[${i}].projectDir`, message: `${folder} does not exist. Name the session's project folder, or create it.` });
-        return;
-      }
-      const dir = plannedRepoDir(session);
-      const reason = repoUnusableReason(dir);
-      if (reason) repoIssues.push({ path: `sessions[${i}].vcs.repoDir`, message: reason });
-      else if (!dir) {
-        repoIssues.push({
-          path: `sessions[${i}].vcs.repoDir`,
-          message:
-            'This session asks for version control but names no repository. Give it the absolute path of a git ' +
-            'repository, or set "enabled": false for it.',
-        });
-      }
-    });
-    if (repoIssues.length > 0) return { ok: false, issues: repoIssues, warnings: check.warnings, duplicates: [] };
-
-    /*
-     * A branch to carry on must be there to carry on — unless a session before it in this same plan
-     * is the one that makes it, in this same repository. Refused now, with the branches that are
-     * there, rather than at the first run with a task refused.
-     *
-     * The repository is part of the question. A branch is a branch of one repository, and the name
-     * alone let a branch an earlier session makes somewhere else count here: the plan was accepted,
-     * and the session failed at its first task with "no such local branch" — the failure this check
-     * exists to bring forward.
-     */
-    for (const [i, session] of check.plan.sessions.entries()) {
-      const wanted = session.vcs?.enabled === false ? '' : (session.vcs?.existingBranch ?? '').trim();
-      if (!wanted) continue;
-      const dir = plannedRepoDir(session);
-      const here = normaliseDir(dir);
-      const madeEarlier = check.plan.sessions
-        .slice(0, i)
-        .some((e) => normaliseDir(plannedRepoDir(e)) === here && branchesMadeBy(e).includes(wanted));
-      if (madeEarlier || (await branchExists(dir, wanted))) continue;
-      const have = await localBranches(dir);
-      repoIssues.push({
-        path: `sessions[${i}].vcs.existingBranch`,
-        message:
-          `${dir} has no local branch "${wanted}" to carry on. ` +
-          (have.length > 0 ? `Its branches: ${have.slice(0, 20).join(', ')}.` : 'It has no branches yet.') +
-          ' Give the exact name, or use startFrom "branch" to start a new one.',
-      });
-    }
-    if (repoIssues.length > 0) return { ok: false, issues: repoIssues, warnings: check.warnings, duplicates: [] };
-
-    /*
-     * A check the runner refuses for its own command line under these Settings: every start of its task
-     * is refused for it, so it is said here, at the check, and not only at the start (live run 2026-10-04:
-     * "check" said ok and the first start was refused). A warning, since the Settings may be changed.
-     */
-    const cfg = await this.settings.load();
-    const shell = preferredShell(cfg.execution.defaultShell);
-    const others = [cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)];
-    const lineWarnings: string[] = [];
-    check.plan.sessions.forEach((session, i) => {
-      const cwd = (session.vcs?.enabled === false ? '' : plannedRepoDir(session)) || (session.projectDir ?? '').trim() || cfg.resolved.cwd;
-      const roots = sessionRoots(cwd, others);
-      session.tasks.forEach((task, j) => {
-        for (const c of task.checks ?? []) {
-          const run = c.run?.trim();
-          if (!run) continue;
-          const why = lineRefusal(run, c.shell ?? shell, c.cwd ? resolve(cwd, c.cwd) : cwd, cfg.execution, roots);
-          if (why) lineWarnings.push(`sessions[${i}].tasks[${j}] ("${task.title}"): the check "${c.name}" is refused by the runner for its own command line, so the task cannot start until it is changed: ${checkRefusalForOperator(why)}.`);
-        }
-      });
-    });
-
-    return { ...check, warnings: [...check.warnings, ...lineWarnings], duplicates: await this.findDuplicates(check.plan) };
-  }
-
-  /**
-   * Sessions the store already holds that this plan would create again, task for task.
-   *
-   * Matched on the name and on the text that would actually be sent, in order. Not on the
-   * level 2, the model or the branch names: those are edited on a session after an import, and
-   * a session whose instructions were tightened by hand is still the same session this plan
-   * describes.
-   */
-  private async findDuplicates(plan: Plan): Promise<PlanDuplicate[]> {
-    const existing = await this.store.listSessions();
-    const out: PlanDuplicate[] = [];
-
-    for (const planned of plan.sessions) {
-      const wanted = plannedSessionSignature(planned);
-      const match = existing.find(
-        (s) =>
-          s.name.trim().toLowerCase() === planned.name.trim().toLowerCase() &&
-          s.tasks.length === planned.tasks.length &&
-          s.tasks.map((t) => taskSignature(t)).join('\u0001') === wanted,
-      );
-      if (match) {
-        out.push({ name: match.name, sessionId: match.id, createdAt: match.createdAt, tasks: match.tasks.length });
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Validates a plan and creates everything in it. Nothing is started.
-   *
-   * A plan that does not validate is refused as a whole rather than imported in part: half a
-   * plan in the session list is harder to recognise, and harder to undo, than none of it.
-   */
-  async importPlan(
-    text: string,
-  ): Promise<
-    | { ok: true; result: ImportResult; summary: PlanSummary; duplicates: PlanDuplicate[] }
-    | { ok: false; check: PlanCheckResult }
-  > {
-    await this.init();
-    const check = await this.checkPlan(text);
-    if (!check.ok) return { ok: false, check };
-
-    const cfg = await this.settings.load();
-    /*
-     * The persona in force right now is the one this import carries. Read here, once, and written
-     * into every task, so a session keeps the approach it was created with: changing the field
-     * afterwards changes the next import, not work already queued. The content does not depend on
-     * the language asked for; only the shipped example does.
-     */
-    const persona = (await this.getContext('persona', 'en')).content;
-    // No default models passed: a session the plan gives no model follows Settings at run time.
-    // The default project is passed, so a session the plan gives no folder works where one made
-    // on the Sessions page would, and not in execution.cwd.
-    const result = await importPlan(this.store, check.plan, '', '', persona, (cfg.project?.rootDir ?? '').trim());
-    return {
-      ok: true,
-      result: { ...result, warnings: [...check.warnings, ...result.warnings] },
-      summary: check.summary,
-      // The sessions this import has just made a second copy of, reported after the fact for
-      // the same reason it is reported before: so nobody has to notice it in a list.
-      duplicates: check.duplicates,
-    };
-  }
 
   // --- the workspace and its chat (2026-10-17, "like Windsurf") ------------------------------
 
@@ -2740,10 +1324,19 @@ export class OperatorService {
     return { dir: ws.dir, ...(await workspaceFiles(ws.dir)) };
   }
 
-  async workspaceFile(path: string): Promise<{ path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number }> {
+  async workspaceFile(path: string): Promise<{ path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string }> {
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
     return await workspaceFile(ws.dir, path);
+  }
+
+  /** The editor's text saved over a file of the open folder, over the version it was made on (see `saveWorkspaceFile`). */
+  async saveWorkspaceFile(path: string, text: string, base?: string): Promise<{ path: string; version: string; size: number }> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    const saved = await saveWorkspaceFile(ws.dir, path, text, base);
+    console.log(`[editor] saved ${saved.path} (${saved.size} bytes)`);
+    return saved;
   }
 
   /** The open folder's git, as an IDE's Source Control view shows it (see `workspaceGit.ts`). Read-only. */
@@ -2765,6 +1358,21 @@ export class OperatorService {
     return await workspaceGitVersions(ws.dir, area, path, commit);
   }
 
+  /**
+   * Kerrigan (2026-10-20): the persona the operator may give to a chat of their own, in the language asked for, with
+   * this machine's limits in it. Nothing is sent anywhere: the page saves it or copies it. See `plan/kerrigan.ts`.
+   */
+  async kerrigan(lang: 'en' | 'bg'): Promise<{ lang: 'en' | 'bg'; fileName: string; text: string }> {
+    const cfg = await this.settings.load();
+    const text = kerriganPersona(lang, {
+      version: botVersion(),
+      maxIterations: cfg.limits.maxIterations,
+      maxRunMinutes: cfg.limits.maxRunMinutes,
+      autoContinue: cfg.limits.autoContinue ?? 0,
+    });
+    return { lang, fileName: kerriganFileName(lang), text };
+  }
+
   /** The chat's conversations, newest first. */
   async chatThreads(): Promise<Array<{ id: string; name: string; createdAt: string; status: Session['status']; turns: number; running: boolean; repoDir: string }>> {
     await this.init();
@@ -2781,7 +1389,7 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: 'en' | 'bg'; planMode?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -2803,7 +1411,8 @@ export class OperatorService {
         s.kind = 'chat';
         s.onFailure = 'continue';
         s.review = { enabled: false, model: '' };
-        s.planMode = 'off';
+        // Plan mode as chosen under the box (2026-10-20, "as in Claude Code"): the plan first, approved by the operator.
+        s.planMode = input.planMode ? 'approve' : 'off';
         /*
          * No version control of the bot's own (2026-10-17): no branch, no commit, no question about where the work
          * starts. The chat works on the branch the folder is on, with what is in it, as an IDE's chat does; each
@@ -2825,6 +1434,12 @@ export class OperatorService {
       level2: '',
       prompt: text,
     });
+    // The language the workbench is in, for what the chat's window says when the work has ended (`chatWindowNotice`).
+    if (input.lang && session.lang !== input.lang) {
+      await this.store.updateSession(session.id, (s) => {
+        s.lang = input.lang;
+      });
+    }
     // After going back, the conversation is told with this message: it still holds what was undone.
     const pending = (await this.store.getSession(session.id))?.rewindNote;
     if (pending) {
@@ -2882,185 +1497,7 @@ export class OperatorService {
 
   // --- the repository, read-only, for the workbench (2026-10-14) ------------------------------
 
-  /**
-   * Where a session's work is in its repository: the session's branch in per-session mode, the task's own
-   * branch when one is named, else what is checked out. Read-only; nothing here moves anything.
-   */
-  private async repoRefOf(sessionId: string, taskId?: string): Promise<{ dir: string; ref: string; label: string }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const dir = repoDirOf(session);
-    if (!dir || !looksLikeRepo(dir)) throw new Error('This session has no repository to show.');
-    const task = taskId ? session.tasks.find((t) => t.id === taskId) : undefined;
-    const candidates = [
-      ...(task?.vcs?.commit ? [task.vcs.commit] : []),
-      ...(session.vcs?.enabled && session.vcs.branchMode === 'per-session' ? [sessionBranchName(session)] : []),
-      'HEAD',
-    ];
-    for (const ref of candidates) {
-      const r = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
-      if (r.ok && r.stdout) return { dir, ref: r.stdout, label: ref === 'HEAD' ? 'HEAD' : ref.length >= 40 ? ref.slice(0, 8) : ref };
-    }
-    throw new Error('The repository has no commit to show yet.');
-  }
-
-  /** One folder of the repository at that point: its folders and files, folders first. */
-  async repoTree(sessionId: string, path = '', taskId?: string): Promise<{ ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> }> {
-    const clean = path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-    if (clean.split('/').some((p) => p === '..')) throw new Error('That path is not inside the repository.');
-    const { dir, ref, label } = await this.repoRefOf(sessionId, taskId);
-    const r = await git(dir, ['ls-tree', '-l', clean ? `${ref}:${clean}` : ref]);
-    if (!r.ok) throw new Error(clean ? `There is no folder ${clean} there.` : 'The repository could not be read.');
-    const entries = r.stdout
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        const [meta, name] = line.split('\t');
-        const [, type, , size] = (meta ?? '').split(/\s+/);
-        return { name: name ?? '', path: clean ? `${clean}/${name}` : (name ?? ''), type: type === 'tree' ? ('dir' as const) : ('file' as const), ...(type === 'blob' && size && size !== '-' ? { size: Number(size) } : {}) };
-      })
-      .filter((e) => e.name)
-      .sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
-    return { ref, label, path: clean, entries };
-  }
-
-  /** One file of the repository at that point, as text; a binary or very large file is said to be one. */
-  async repoFile(sessionId: string, path: string, taskId?: string): Promise<{ ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean }> {
-    const clean = path.replace(/\\/g, '/').replace(/^\/+/, '');
-    if (!clean || clean.split('/').some((p) => p === '..')) throw new Error('That path is not inside the repository.');
-    const { dir, ref, label } = await this.repoRefOf(sessionId, taskId);
-    const got = await fileAt(dir, ref, clean, 2 * 1024 * 1024);
-    if (!got.bytes && !got.tooLarge) throw new Error(`There is no file ${clean} there.`);
-    const binary = !!got.bytes && got.bytes.subarray(0, 8000).includes(0);
-    return { ref, label, path: clean, text: got.bytes && !binary ? got.bytes.toString('utf8').replace(/^﻿/, '') : null, binary, tooLarge: got.tooLarge };
-  }
-
-  /** The commits on the session's line, newest first, each with the task that made it when one did. */
-  async repoLog(sessionId: string, limit = 60): Promise<{ ref: string; label: string; commits: Array<{ sha: string; subject: string; author: string; at: string; taskId?: string; taskTitle?: string }> }> {
-    const { dir, ref, label } = await this.repoRefOf(sessionId);
-    const session = (await this.store.getSession(sessionId))!;
-    const r = await git(dir, ['log', `-${Math.max(1, Math.min(limit, 300))}`, '--format=%H%x09%an%x09%aI%x09%s', ref]);
-    const byCommit = new Map<string, Task>();
-    for (const t of session.tasks) {
-      for (const v of [t.vcs, ...(t.attempts ?? []).map((a) => a.vcs)]) if (v?.commit) byCommit.set(v.commit, t);
-    }
-    const commits = (r.ok ? r.stdout.split('\n').filter(Boolean) : []).map((line) => {
-      const [sha = '', author = '', at = '', subject = ''] = line.split('\t');
-      const task = byCommit.get(sha);
-      return { sha, subject, author, at, ...(task ? { taskId: task.id, taskTitle: task.title } : {}) };
-    });
-    return { ref, label, commits };
-  }
-
   // --- Kerrigan: what happened, and her changes to existing work (2026-10-14) ---------------------
-
-  /** What happened in these sessions (all, when none are named), for Kerrigan, with the operator's note. */
-  async kerriganReport(opts: { sessionIds?: string[]; taskIds?: string[]; note?: string } = {}): Promise<{ text: string; sessions: number }> {
-    await this.init();
-    const all = await this.store.listSessions();
-    const wanted = (opts.sessionIds ?? []).filter(Boolean);
-    const taskIds = (opts.taskIds ?? []).filter(Boolean);
-    const sessions = all.filter((s) => (wanted.length > 0 ? wanted.includes(s.id) : taskIds.length > 0 ? s.tasks.some((t) => taskIds.includes(t.id)) : true));
-    if (sessions.length === 0) throw new Error('None of these sessions exists.');
-    if ((opts.note ?? '').length > MAX_INSTRUCTION_CHARS) throw new Error(`The note is ${(opts.note ?? '').length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
-    return { text: kerriganReport(sessions, { note: opts.note, taskIds }), sessions: sessions.length };
-  }
-
-  /** Kerrigan's answer read against the sessions as they are now; nothing is changed. */
-  async checkChanges(text: string): Promise<ChangesCheck> {
-    await this.init();
-    return checkChanges(text ?? '', await this.store.listSessions());
-  }
-
-  /**
-   * Applies Kerrigan's changes one by one, through the paths the buttons use, and stops at the first that is
-   * refused, saying which were done. Nothing is started.
-   */
-  async applyChanges(text: string): Promise<{ ok: boolean; check?: ChangesCheck; applied: Array<{ index: number; says: string }>; problem?: string; failedAt?: number }> {
-    const check = await this.checkChanges(text);
-    if (!check.ok) return { ok: false, check, applied: [] };
-    const cfg = await this.settings.load();
-    const persona = (await this.getContext('persona', 'en')).content;
-    const applied: Array<{ index: number; says: string }> = [];
-    for (const r of check.changes) {
-      const c = r.change;
-      try {
-        switch (c.op) {
-          case 'addTask': {
-            const session = await this.store.getSession(r.sessionId);
-            if (!session) throw new Error('The session is gone.');
-            const afterId = c.after !== undefined ? checkTaskRef(session, c.after) : undefined;
-            const reference = afterId ? session.tasks.find((t) => t.id === afterId) : session.tasks.at(-1);
-            const level2 = c.task.level2.trim()
-              ? composeLevel2({ level2: '', goal: '' } as PlanSession, c.task, persona)
-              : (reference?.level2 ?? personaBlock(persona));
-            const added = await this.store.addTask(r.sessionId, {
-              title: c.task.title,
-              level2,
-              prompt: composePrompt(c.task),
-              vcsPlan: c.task.vcs,
-              checks: c.task.checks,
-              reviewEnabled: c.task.review,
-              readOnly: c.task.readOnly || undefined,
-              scope: c.task.scope.length > 0 ? c.task.scope : undefined,
-              outputs: c.task.outputs.length > 0 ? c.task.outputs : undefined,
-            });
-            if (afterId) {
-              await this.store.updateSession(r.sessionId, (s) => {
-                const from = s.tasks.findIndex((t) => t.id === added.id);
-                const [moved] = s.tasks.splice(from, 1);
-                s.tasks.splice(s.tasks.findIndex((t) => t.id === afterId) + 1, 0, moved!);
-              });
-            }
-            break;
-          }
-          case 'editTask':
-            await this.updateTask(r.sessionId, r.taskId!, {
-              ...(c.title ? { title: c.title } : {}),
-              ...(c.prompt ? { prompt: c.prompt } : {}),
-              ...(c.checks ? { checks: c.checks as Task['checks'] } : {}),
-              ...(c.scope ? { scope: c.scope } : {}),
-            });
-            break;
-          case 'removeTask':
-            await this.deleteTask(r.sessionId, r.taskId!);
-            break;
-          case 'continue':
-            await this.continueTask(r.sessionId, r.taskId!, c.instruction);
-            break;
-          case 'newPrompt':
-            await this.rerunTask(r.sessionId, r.taskId!, { prompt: c.prompt }, { buildOnFinished: true });
-            break;
-          case 'runAgain':
-            await this.rerunTask(r.sessionId, r.taskId!, c.prompt ? { prompt: c.prompt } : {});
-            break;
-          case 'undo': {
-            const done = await this.undoTask(r.sessionId, r.taskId!, c.how);
-            if (!done.ok) throw new Error(done.problem ?? 'it could not be undone');
-            break;
-          }
-          case 'accept':
-            await this.acceptTask(r.sessionId, r.taskId!, c.note);
-            break;
-          case 'note':
-            await this.addTaskNote(r.sessionId, r.taskId!, c.text);
-            break;
-        }
-        applied.push({ index: r.index, says: r.says });
-        await appendSessionLog(cfg.resolved.runsDir, r.sessionId, { type: 'kerrigan-change', message: r.says, data: { op: c.op, ...(r.taskId ? { taskId: r.taskId } : {}) } }).catch(() => undefined);
-        this.bus.publish({ sessionId: r.sessionId, ...(r.taskId ? { taskId: r.taskId } : {}), type: 'kerrigan-change', level: 'info', message: `from Kerrigan's answer: ${r.says}` });
-      } catch (e) {
-        return {
-          ok: false,
-          applied,
-          failedAt: r.index,
-          problem: `Change ${r.index + 1} (${r.says}) was refused: ${(e as Error).message}${applied.length > 0 ? ` The ${applied.length} before it were made.` : ' Nothing was changed.'}`,
-        };
-      }
-    }
-    return { ok: true, applied };
-  }
 
   // --- approvals ------------------------------------------------------------------------
 
@@ -3205,26 +1642,15 @@ export class OperatorService {
      * one would read.
      */
     run.policy.mode = mode;
-    /*
-     * A batch is one run. The dialog behind "run the rest without asking" says "until this run
-     * ends", and the run the operator started is the batch: the switch used to reach only the
-     * session on screen, and the next session started in the batch's old mode and asked again. So
-     * the sessions the batch has not reached yet start in the mode it is switched to — and back,
-     * when the asking is switched on again. Each still meets the unattended precondition as it
-     * starts (see `beginRun`), under the settings of that moment, and the run recorded on it
-     * (`Session.runGroup`) keeps the mode it was started in.
-     */
-    const batch = this.batch?.running && this.batch.sessions.some((e) => e.sessionId === sessionId && e.state === 'running') ? this.batch : null;
-    if (batch) batch.mode = mode;
     this.bus.publish({
       sessionId,
       type: 'run-mode-changed',
       level: mode === 'unattended' ? 'warn' : 'info',
       message:
         mode === 'unattended'
-          ? `the rest of this run${batch ? ', the sessions of the batch after this one included,' : ''} will execute without asking; denied patterns are still refused`
-          : `every further step${batch ? ', in this session and the ones of the batch after it,' : ''} will be shown for approval again`,
-      data: { mode, ...(batch ? { batchId: batch.id } : {}) },
+          ? 'the rest of this run will execute without asking; denied patterns are still refused'
+          : 'every further step will be shown for approval again',
+      data: { mode },
     });
 
     if (mode === 'unattended') {
@@ -3288,25 +1714,7 @@ export class OperatorService {
     return this.bus.recent(sessionId);
   }
 
-  subscribe(sessionId: string, handler: (e: SessionEvent) => void): () => void {
-    return this.bus.subscribe(sessionId, handler);
-  }
-
   // --- version control ----------------------------------------------------------------------
-
-  /**
-   * Version control for the sessions of a run, one group per repository, with what can be done about
-   * it from the run screen. See `vcs/runPreflight.ts`. Only sessions that have something queued count.
-   */
-  async runVcs(sessionIds: string[], onlyTasks?: ReadonlySet<string>): Promise<RunVcsGroup[]> {
-    await this.init();
-    const sessions: Session[] = [];
-    for (const id of sessionIds) {
-      const s = await this.store.getSession(id);
-      if (s && queuedToRun(s, onlyTasks).length > 0) sessions.push(s);
-    }
-    return await runVcsPreflight(sessions, () => this.store.listSessions());
-  }
 
   /**
    * The run's version control preflight: why the run may not start, said before anything opens the
@@ -3402,6 +1810,20 @@ export class OperatorService {
   }
 
   /**
+   * Version control for the sessions of a run, one group per repository, with what can be done about
+   * it from the run screen. See `vcs/runPreflight.ts`. Only sessions that have something queued count.
+   */
+  async runVcs(sessionIds: string[], onlyTasks?: ReadonlySet<string>): Promise<RunVcsGroup[]> {
+    await this.init();
+    const sessions: Session[] = [];
+    for (const id of sessionIds) {
+      const s = await this.store.getSession(id);
+      if (s && queuedToRun(s, onlyTasks).length > 0) sessions.push(s);
+    }
+    return await runVcsPreflight(sessions, () => this.store.listSessions());
+  }
+
+  /**
    * Why the session's next task cannot start because it contradicts itself — read-only and scoped, or
    * a file check that needs a change the task may not make — or null. The part of the contract that
    * depends on the branch the runner will choose is checked at the task's start, once that is known.
@@ -3456,85 +1878,6 @@ export class OperatorService {
       }
     }
     return conflicts;
-  }
-
-  /**
-   * How a task contradicts itself, asked by a page: a task that ended `contract-conflict`, or a queued
-   * one a run refused to start for it. Changes nothing.
-   */
-  async contractCheck(sessionId: string, taskId: string): Promise<{ conflicts: ContractConflict[] }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-    return { conflicts: await this.contractFor(session, task) };
-  }
-
-  /**
-   * Applies the chosen way out of each contradiction and puts the task back in the queue.
-   *
-   * `choices` holds one entry per contradiction `contractCheck` names, in its order: the index of the
-   * fix taken, or -1 to leave that one as it is. Judged again here rather than trusted from the page,
-   * and refused when the contradictions are no longer the ones the operator chose from — an edit in
-   * another tab, a check that passes now. A queued task is edited in place; one that has run is queued
-   * again with the change, its attempt kept on the record as any re-run keeps it. Nothing starts.
-   */
-  async applyContractFix(
-    sessionId: string,
-    taskId: string,
-    choices: number[],
-    /** The contradictions the choices were made from, as the page was shown them. */
-    expect?: string[],
-  ): Promise<{ task: Task; applied: string[]; remaining: ContractConflict[] }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-    if (task.status === 'running' || task.status === 'waiting-approval') throw new Error('This task is running. Stop the session first.');
-    const conflicts = await this.contractFor(session, task);
-    // The same ones, not only as many: a fix chosen for one contradiction must not be applied to another.
-    const same = Array.isArray(expect) ? expect.length === conflicts.length && expect.every((x, i) => x === conflicts[i]!.text) : true;
-    if (!Array.isArray(choices) || choices.length !== conflicts.length || !same) {
-      throw new Error(`The task's contradictions are not the ones shown (${conflicts.length} now). Look again before applying a fix.`);
-    }
-    const chosen = conflicts.flatMap((c, i) => {
-      const at = choices[i] ?? -1;
-      if (at === -1) return [];
-      const fix = Number.isInteger(at) ? c.fixes[at] : undefined;
-      if (!fix) throw new Error(`There is no fix number ${at} for "${c.text}".`);
-      return [fix];
-    });
-    if (chosen.length === 0) throw new Error('No fix was chosen.');
-    const patch = contractFixPatch(task, chosen);
-    const applied = describeContractChange(task, patch);
-    // Judged on the task as it was read: one edited meanwhile, in another tab, is not overwritten with a patch made from the old one.
-    const contract = (t?: Task) => JSON.stringify([t?.status, !!t?.readOnly, t?.scope ?? [], t?.checks ?? []]);
-    const meanwhile = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
-    if (contract(meanwhile) !== contract(task)) throw new Error('The task was changed while its contradictions were being judged. Look again before applying a fix.');
-    const updated = task.status === 'queued' ? await this.updateTask(sessionId, taskId, patch) : await this.rerunTask(sessionId, taskId, patch);
-    const after = await this.store.getSession(sessionId);
-    const now = after?.tasks.find((t) => t.id === taskId) ?? updated;
-    const remaining = after ? await this.contractFor(after, now) : [];
-    const cfg = await this.settings.load();
-    await appendSessionLog(cfg.resolved.runsDir, sessionId, {
-      type: 'contract-fixed',
-      message: `"${now.title}": ${applied.join('; ')}${remaining.length > 0 ? `; ${remaining.length} contradiction(s) left` : ''}`,
-      data: { taskId, applied: chosen, remaining: remaining.map((c) => c.text) },
-    }).catch(() => undefined);
-    this.bus.publish({
-      sessionId,
-      taskId,
-      type: 'contract-fixed',
-      level: 'info',
-      message:
-        remaining.length === 0
-          ? `"${now.title}" changed so it no longer contradicts itself: ${applied.join('; ')}`
-          : `"${now.title}" changed (${applied.join('; ')}), and it still contradicts itself in ${remaining.length} way(s)`,
-      data: { applied: chosen, remaining: remaining.length },
-    });
-    return { task: now, applied, remaining };
   }
 
   /**
@@ -3594,239 +1937,6 @@ export class OperatorService {
     await appendRunLog(cfg.resolved.runsDir, runId, [entry]).catch(() => undefined);
   }
 
-  /** One action of "Prepare version control for this run". Refused while anything runs in that repository. */
-  async runVcsPrepare(sessionIds: string[], repoDir: string, action: RunVcsActionId, choices: Record<string, SnapshotChoice>): Promise<{ ok: boolean; problem?: string; result?: string }> {
-    await this.init();
-    if (this.batch?.running) return { ok: false, problem: 'A run is going. Stop it before preparing version control.' };
-    const other = await this.runningIn(repoDir);
-    if (other) return { ok: false, problem: `Session "${other.name}" is running in this repository. Stop it first.` };
-    const sessions: Session[] = [];
-    for (const id of sessionIds) {
-      const s = await this.store.getSession(id);
-      if (s && queuedToRun(s).length > 0) sessions.push(s);
-    }
-    const done = await runVcsPrepare(
-      sessions,
-      repoDir,
-      action,
-      choices && typeof choices === 'object' ? choices : {},
-      this.bus,
-      async (id, mutate) => void (await this.store.updateSession(id, mutate)),
-      () => this.store.listSessions(),
-    );
-    // Kept on every session the action was for, with what it did: see `appendSessionLog`.
-    if (done.ok && action !== 'review-inputs') {
-      const cfg = await this.settings.load();
-      for (const s of sessions.filter((x) => normaliseDir(repoDirOf(x)) === normaliseDir(repoDir))) {
-        const message = `run screen: "${action}" in ${repoDir}: ${done.result}`;
-        await appendSessionLog(cfg.resolved.runsDir, s.id, { type: 'run-screen-action', message, data: { action, repoDir, before: { startFrom: s.vcs?.startFrom, baseBranch: s.vcs?.baseBranch } } }).catch(() => undefined);
-        this.bus.publish({ sessionId: s.id, type: 'run-screen-action', level: 'info', message, data: { action, repoDir } });
-      }
-    }
-    return done.ok ? { ok: true, result: done.result } : { ok: false, problem: done.problem };
-  }
-
-  /** Whether version control can do its job in this session, asked before a run. */
-  async vcsStatus(
-    sessionId: string,
-  ): Promise<{ ok: boolean; repoDir: string; branch?: string; problem?: string; git?: string | null; work?: SessionBranches; branches?: string[] }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const git = await gitAvailable();
-    if (!git) return { ok: false, repoDir: '', problem: "git is not installed, or not on this machine's PATH.", git: null };
-    // `branch` is where HEAD is; `work` is where the session's work is. After a per-task run
-    // those differ, and the second is the one the operator is asking about.
-    const preflight = await vcsPreflight(session, () => this.store.listSessions());
-    // The local branches, so "carry on an existing branch" can offer them rather than be typed blind.
-    const branches = preflight.repoDir ? await localBranches(preflight.repoDir) : [];
-    return { ...preflight, git, work: sessionBranches(session), branches };
-  }
-
-  /**
-   * The operator's approval of the starting snapshot: their uncommitted changes become the commit the
-   * session starts from, each file taken or left out as they chose on the list. See `vcs/snapshot.ts`.
-   * Refused while anything could be working in the repository, as a restore is: it changes branches.
-   */
-  async vcsSnapshot(sessionId: string, choices: Record<string, SnapshotChoice>): Promise<{ ok: boolean; problem?: string; branch?: string; commit?: string }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const refused = await this.restoreRefusal(session);
-    if (refused) return { ok: false, problem: refused };
-    const taken = await takeSnapshot(
-      session,
-      { approved: true, choices: choices && typeof choices === 'object' ? choices : {} },
-      this.bus,
-      async (mutate) => void (await this.store.updateSession(sessionId, mutate)),
-      () => this.store.listSessions(),
-    );
-    return taken.ok ? { ok: true, branch: taken.start.branch, commit: taken.start.commit } : { ok: false, problem: taken.problem };
-  }
-
-  /**
-   * What going back to before a task would do, and then doing it.
-   *
-   * Two calls rather than one because the operator has to read the consequence before they
-   * agree to it: which commits the restored branch will not have, and which branch keeps them.
-   */
-  async restorePreview(sessionId: string, taskId: string): Promise<RestorePreview> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-    const preview = await restorePreview(session, task);
-    // Said in the preview too, so the dialog refuses before the operator agrees to anything,
-    // rather than showing what would happen and refusing when they say yes.
-    const refused = await this.restoreRefusal(session);
-    return refused ? { ...preview, ok: false, problem: refused } : preview;
-  }
-
-  /**
-   * What undoing this task would do, both ways (operator's request, 2026-10-14): "Undo only this task" — its
-   * work taken out of the session's line, what came after it kept — and "Go back to before this task" — the
-   * line put back at its start, it and the tasks after it queued again, nothing started. See `undoTask`.
-   */
-  async undoPreview(sessionId: string, taskId: string): Promise<{ this: UndoThisPreview; back: RestartPlan; problem?: string }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-    const notYet = undoRefusalOf(task);
-    const refused = notYet ?? (await this.restoreRefusal(session));
-    const own = await undoThisPreview(session, task);
-    const back = await this.restartPlan(sessionId, taskId);
-    return {
-      this: refused ? { ...own, ok: false, problem: refused } : own,
-      back: refused ? { ...back, ok: false, problem: refused } : back,
-      ...(refused ? { problem: refused } : {}),
-    };
-  }
-
-  /**
-   * Undoes a task that ran. `this`: its work is taken out of the session's line by a revert (per-session),
-   * or the folder is put back at its start (per-task); the task goes back to the queue. `back`: "Run again
-   * from here" without the run — the line goes back to the task's start and it and the tasks after it are
-   * queued. Nothing is started and nothing in git is deleted: the old branch or the reverted commits stay.
-   */
-  async undoTask(sessionId: string, taskId: string, how: 'this' | 'back'): Promise<{ ok: boolean; problem?: string; message?: string; requeued?: number }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-    const notYet = undoRefusalOf(task);
-    if (notYet) return { ok: false, problem: notYet };
-    const refused = await this.restoreRefusal(session);
-    if (refused) return { ok: false, problem: refused };
-    const cfg = await this.settings.load();
-    const at = new Date().toISOString();
-
-    if (how === 'back') {
-      const plan = await this.restartPlan(sessionId, taskId);
-      const r = await this.restartFrom(sessionId, taskId, { restore: true, start: false });
-      if (r.reason && r.requeued === 0) return { ok: false, problem: r.reason };
-      for (const t of plan.tasks.filter((x) => !x.alreadyQueued)) {
-        await this.store
-          .updateSession(t.sessionId, (s) => {
-            const last = s.tasks.find((x) => x.id === t.taskId)?.attempts?.at(-1);
-            if (last) last.undone = { how: 'back', at, ...(r.restored[0] ? { branch: r.restored[0] } : {}), ...(t.taskId !== taskId ? { byTask: taskId } : {}) };
-          })
-          .catch(() => undefined);
-      }
-      const message = `went back to before "${task.title}": ${r.requeued} task(s) queued again${r.restored.length > 0 ? `, the code on ${r.restored.join(', ')}` : ''}; nothing was started`;
-      await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'undo', message, data: { taskId, how, requeued: r.requeued, restored: r.restored } }).catch(() => undefined);
-      this.bus.publish({ sessionId, taskId, type: 'task-undone', level: 'info', message, data: { how, requeued: r.requeued } });
-      return { ok: true, message, requeued: r.requeued };
-    }
-
-    let done: { commit?: string; branch?: string; nothing?: string } = {};
-    if (session.vcs?.enabled && session.vcs.branchMode === 'per-task') {
-      const preview = await undoThisPreview(session, task);
-      if (!preview.ok) return { ok: false, problem: preview.problem };
-      if (!preview.nothing) {
-        const back = await restoreToBase(session, task, this.bus);
-        if (!back.ok) return { ok: false, problem: back.problem };
-        done = { branch: back.branch };
-      } else done = { nothing: preview.nothing };
-    } else {
-      const r = await revertTaskWork(session, task, this.bus);
-      if (!r.ok) return { ok: false, problem: r.problem };
-      done = { commit: r.commit, branch: r.branch, nothing: r.nothing };
-    }
-    await this.store.rerunTask(sessionId, taskId, {});
-    await this.store.updateSession(sessionId, (s) => {
-      const last = s.tasks.find((x) => x.id === taskId)?.attempts?.at(-1);
-      if (last) last.undone = { how: 'this', at, ...(done.commit ? { commit: done.commit } : {}), ...(done.branch ? { branch: done.branch } : {}) };
-    });
-    const message = done.commit
-      ? `took the work of "${task.title}" out of ${done.branch} in ${done.commit.slice(0, 8)}; the task is queued again, nothing was started`
-      : done.branch
-        ? `put the folder back as it was before "${task.title}", on ${done.branch}; its own branch is kept, the task is queued again`
-        : `${done.nothing ?? 'nothing in git to take out'} The task is queued again.`;
-    await appendSessionLog(cfg.resolved.runsDir, sessionId, { type: 'undo', message, data: { taskId, how, ...done } }).catch(() => undefined);
-    this.bus.publish({ sessionId, taskId, type: 'task-undone', level: 'info', message, data: { how, ...done } });
-    return { ok: true, message, requeued: 1 };
-  }
-
-  async restore(
-    sessionId: string,
-    taskId: string,
-  ): Promise<{ ok: boolean; problem?: string; branch?: string; commit?: string; leftBehind?: string[]; keptOn?: string }> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-    const refused = await this.restoreRefusal(session);
-    if (refused) return { ok: false, problem: refused };
-    const done = await restoreToBase(session, task, this.bus);
-    // On record with the operator's other actions: it made a branch and moved the checkout (live run 2026-10-04).
-    if (done.ok) {
-      const cfg = await this.settings.load();
-      await appendSessionLog(cfg.resolved.runsDir, session.id, { type: 'restore', message: `restored the code as it was before "${task.title}" on ${done.branch} at ${(done.commit ?? '').slice(0, 8)}`, data: { taskId, branch: done.branch, commit: done.commit, leftBehind: done.leftBehind, keptOn: done.keptOn } }).catch(() => undefined);
-    }
-    /*
-     * In per-session mode the session's one branch is where its next task goes, so a Restore moves the
-     * session onto the restore branch, as "Run again from here" does. Without that the next run checked
-     * the old session branch out again and the restore did not hold (live run 2026-10-03).
-     */
-    if (done.ok && done.branch && session.vcs?.branchMode === 'per-session' && session.vcs.startFrom !== 'existing-branch') {
-      const left = sessionBranchName(session);
-      await this.store.updateSession(session.id, (s) => {
-        if (s.vcs) {
-          s.vcs.branchName = done.branch;
-          s.vcs.branchNameExact = true;
-        }
-      });
-      this.bus.publish({ sessionId: session.id, taskId: task.id, type: 'vcs-session-branch', level: 'info',
-        message: `the session carries on from ${done.branch}, the code as it was before "${task.title}"; ${left} keeps the work that came after`,
-        data: { branch: done.branch, left } });
-    }
-    return done;
-  }
-
-  /**
-   * Why the repository of this session cannot be moved to another branch now, or null when it can.
-   *
-   * Anything that may be working in that folder at this moment: the session itself, a batch (which
-   * may reach a session in it next), and any other session running there on its own. Only the first
-   * two used to be asked, so a restore checked out a branch under another session in the middle of
-   * its task — and that session then found its repository moved, and left its work uncommitted.
-   * Version control being off for the other session does not make it safe: its commands still run
-   * in that folder.
-   */
-  private async restoreRefusal(session: Session): Promise<string | null> {
-    if (this.running.has(session.id)) return 'This session is running. Stop it before moving the repository to another branch.';
-    if (this.batch?.running) return 'A batch is running. Stop it before moving the repository to another branch.';
-    const other = await this.runningIn(repoDirOf(session));
-    return other
-      ? `Session "${other.name}" is running in this repository. Stop it before moving the repository to another branch.`
-      : null;
-  }
-
   /**
    * A session running right now whose commands run in this folder, inside it, or in a folder around it.
    *
@@ -3846,435 +1956,6 @@ export class OperatorService {
       if (there && overlaps(here, there)) return s;
     }
     return undefined;
-  }
-
-  /**
-   * Everything one run was asked to do, from a given task onward, in the order it would run.
-   *
-   * The run's own record on each session is what makes this answerable. Tasks are stamped when
-   * they start, so after a failure the tasks that never ran carry nothing and the sessions that
-   * were never reached carry nothing either — asking the tasks would return the half of the run
-   * that already happened, which is the opposite of what is wanted.
-   */
-  private async affectedByRestart(
-    session: Session,
-    task: Task,
-  ): Promise<{ sessions: Session[]; tasks: Array<{ session: Session; task: Task }>; group?: Session['runGroup'] }> {
-    const group = session.runGroup;
-
-    /** The tasks a session was asked to do in that run, in its own order, falling back to all. */
-    const askedOf = (s: Session): Task[] => {
-      const ids = s.runGroup?.id === group?.id ? (s.runGroup?.taskIds ?? []) : [];
-      return ids.length > 0 ? s.tasks.filter((t) => ids.includes(t.id)) : s.tasks;
-    };
-
-    if (!group) {
-      // No run on record — an older session, or one whose tasks were started by hand. Then the
-      // honest scope is this session alone, from this task onward.
-      const from = session.tasks.findIndex((t) => t.id === task.id);
-      return { sessions: [session], tasks: session.tasks.slice(Math.max(0, from)).map((t) => ({ session, task: t })) };
-    }
-
-    const all = await this.store.listSessions();
-    const inRun = all.filter((s) => s.runGroup?.id === group.id).sort((a, b) => (a.runGroup?.order ?? 0) - (b.runGroup?.order ?? 0));
-
-    const out: Array<{ session: Session; task: Task }> = [];
-    const sessions: Session[] = [];
-    for (const s of inRun) {
-      // Sessions the run had already finished with are none of this restart's business.
-      if ((s.runGroup?.order ?? 0) < (group.order ?? 0)) continue;
-
-      const mine = s.id === session.id;
-      /*
-       * The session the task is in starts from that task; every session after it starts from
-       * the top, because it was either never reached or its work is downstream of this one.
-       *
-       * The pivot is looked for in what the run was asked to do, and then in the session's own
-       * list. The second lookup is not redundant: a task added since the run is not in the
-       * run's list, and skipping its session because of that would quietly drop the very
-       * session the operator pressed the button on.
-       */
-      let scope = askedOf(s);
-      let start = 0;
-      if (mine) {
-        start = scope.findIndex((t) => t.id === task.id);
-        if (start < 0) {
-          scope = s.tasks;
-          start = scope.findIndex((t) => t.id === task.id);
-          if (start < 0) continue;
-        }
-      }
-
-      const slice = scope.slice(start);
-      if (slice.length === 0) continue;
-      sessions.push(s);
-      for (const t of slice) out.push({ session: s, task: t });
-    }
-
-    return { sessions, tasks: out, group };
-  }
-
-  /** What starting again from this task would re-queue, and what it would do to the code. */
-  async restartPlan(sessionId: string, taskId: string): Promise<RestartPlan> {
-    await this.init();
-    const session = await this.store.getSession(sessionId);
-    if (!session) throw new Error('No such session.');
-    const task = session.tasks.find((t) => t.id === taskId);
-    if (!task) throw new Error('No such task.');
-
-    const { sessions, tasks, group } = await this.affectedByRestart(session, task);
-    const from = { sessionId: session.id, sessionName: session.name, taskId: task.id, title: task.title, status: task.status };
-
-    const plan: RestartPlan = {
-      ok: tasks.length > 0,
-      problem: tasks.length === 0 ? 'There is nothing to run again from this task.' : undefined,
-      runId: group?.id,
-      runStartedAt: group?.startedAt,
-      from,
-      tasks: tasks.map(({ session: s, task: t }) => ({
-        sessionId: s.id,
-        sessionName: s.name,
-        taskId: t.id,
-        title: t.title,
-        status: t.status,
-        alreadyQueued: t.status === 'queued',
-      })),
-      sessions: sessions.map((s) => ({ id: s.id, name: s.name, tasks: tasks.filter((x) => x.session.id === s.id).length })),
-      restores: [],
-      /*
-       * Nothing on record says a run with no record of its own ever went unattended, and taken for
-       * one, it was refused on every machine that refuses unattended runs, the default among them:
-       * the dialog has no other mode to offer, so its button could never do anything for such a task.
-       */
-      mode: group?.mode ?? 'confirm',
-      onFailure: group?.onFailure ?? session.onFailure ?? 'stop',
-    };
-    // Asked of the machine as it is now, as `restartFrom` will ask it; see `unattendedRefused`.
-    if (plan.mode === 'unattended') plan.unattendedRefused = (await this.unattendedRefusal('unattended')) ?? undefined;
-
-    // The sessions in the order the run had them: the order `rerunFromRestore` moves them in.
-    const inOrder = [...new Map(tasks.map(({ session: s }) => [s.id, s])).values()];
-    for (const target of restoreTargets(tasks)) {
-      const preview = await restorePreview(target.session, target.task);
-      // What would stop the restore itself, asked here as well, so the dialog says it before the
-      // operator agrees rather than after.
-      const refused = target.problem ?? (await this.restoreRefusal(target.session));
-      /*
-       * What the restart moves besides the first session's line: each later per-session session in this
-       * repository that ran goes onto a new branch, and its own commits stay on the branch it leaves. By
-       * the conditions `rerunFromRestore` applies when it does it, so the list is what will happen.
-       */
-      const listed = new Set(preview.leftBehind);
-      const here = normaliseDir(target.dir);
-      const laterSessions: NonNullable<RestartPlan['restores'][number]['laterSessions']> = [];
-      for (const s of inOrder.slice(inOrder.findIndex((x) => x.id === target.session.id) + 1)) {
-        if (!s.vcs?.enabled || s.vcs.branchMode !== 'per-session' || s.vcs.startFrom === 'existing-branch') continue;
-        if (!s.vcsBaseCommit || normaliseDir(repoDirOf(s)) !== here) continue;
-        const first = tasks.find((x) => x.session.id === s.id && x.task.startedAt)?.task;
-        if (!first) continue;
-        const branch = sessionBranchName(s);
-        const from = (s.vcsStart?.kind === 'branch' ? restorePoint(s, first) : undefined) ?? s.vcsBaseCommit;
-        const commits = (await commitsBetween(target.dir, from, branch).catch(() => [] as string[])).filter((c) => !listed.has(c));
-        commits.forEach((c) => listed.add(c));
-        laterSessions.push({ sessionName: s.name, branch, commits });
-      }
-      plan.restores.push({
-        repoDir: preview.repoDir || target.dir,
-        ok: preview.ok && !refused,
-        problem: refused ?? preview.problem,
-        forTask: target.task.title,
-        baseCommit: preview.baseCommit,
-        branchName: preview.branchName,
-        leftBehind: preview.leftBehind,
-        keptOn: preview.keptOn,
-        ...(laterSessions.length > 0 ? { laterSessions } : {}),
-      });
-    }
-    /*
-     * The plan is "ok" only when the restart it describes can happen: a refused restore refuses the
-     * restart, as `restartFrom` does and the dialog says, so a caller reading only `ok` is not told
-     * otherwise (live run 2026-10-04: ok true beside its only restore refused).
-     */
-    const refusedRestores = plan.restores.filter((r) => !r.ok);
-    if (plan.ok && refusedRestores.length > 0) {
-      plan.ok = false;
-      plan.problem = refusedRestores.map((r) => `${r.repoDir}: ${r.problem ?? 'the restore cannot be made'}`).join(' ');
-    }
-    /*
-     * A session set aside on the Sessions page would not run, and the run is refused at its start for it:
-     * said here, before anything moves, as the other entrance rules are (review of 2026-10-09: the
-     * repositories were taken back and the tasks queued, and only then was the run refused).
-     */
-    const inactive = sessions.filter((s) => s.active === false);
-    if (inactive.length > 0) {
-      plan.ok = false;
-      plan.inactive = true;
-      plan.problem = `${inactive.map((s) => `"${s.name}"`).join(', ')}: ${INACTIVE_REASON}`;
-    }
-
-    return plan;
-  }
-
-  /**
-   * Put the code back, queue the task and everything after it, and start the run again.
-   *
-   * The order matters and is not negotiable: restore first, then queue, then start. Queueing
-   * before restoring would leave a window in which a run could pick up a task against a tree
-   * that has not moved yet, and starting before queueing would run an empty batch.
-   *
-   * `restore` can be turned off, for the case where the repository is already where it should
-   * be, or where version control was never on. `start` can be turned off to do the first two
-   * and stop there, leaving a queue and an untouched Start button — the same shape an import
-   * has, and the same reason: the moment before a run is the one worth being able to stop at.
-   */
-  async restartFrom(
-    sessionId: string,
-    taskId: string,
-    opts: { restore?: boolean; start?: boolean; mode?: 'confirm' | 'unattended'; onFailure?: 'stop' | 'continue' } = {},
-  ): Promise<{ started: boolean; reason?: string; requeued: number; restored: string[]; batch?: BatchState }> {
-    await this.init();
-    const idle = { started: false, requeued: 0, restored: [] as string[] };
-    if (this.batch?.running) return { ...idle, reason: 'A run is in progress. Stop it first.' };
-
-    const plan = await this.restartPlan(sessionId, taskId);
-    // A session set aside stops it whatever is asked: its run would be refused after everything moved.
-    if (plan.inactive) return { ...idle, reason: plan.problem };
-    // A refused restore stops the restart only when the restore is asked for: `restore: false` queues without one.
-    const onlyRestoreRefused = plan.tasks.length > 0 && plan.restores.some((r) => !r.ok);
-    if (!plan.ok && !(opts.restore === false && onlyRestoreRefused)) return { ...idle, reason: plan.problem };
-    if (plan.sessions.some((s) => this.running.has(s.id))) {
-      return { ...idle, reason: 'One of these sessions is running on its own. Stop it first.' };
-    }
-    /*
-     * Claimed before anything is moved, and held until the run it ends in has the browser: that run
-     * needs it, and another session running on its own, or a read of the models, may have it. Found
-     * out only at the start, the repositories were already taken back and the tasks queued, with
-     * nothing to run them; and only looked at here, the browser could still be taken by a start that
-     * came in while the repositories were being taken back, to the same end. Given back on every way
-     * out that does not start the run.
-     */
-    const ids = plan.sessions.map((s) => s.id);
-    if (opts.start === false) return await this.restartMoves(sessionId, taskId, plan, opts);
-    /*
-     * The run's entrance rule, asked before anything moves, for the same reason as the browser
-     * below. Asked only when the batch began, a machine that no longer lets this run go unattended
-     * (a policy lock added since, isolation no longer accepted) took the repositories back and
-     * queued the tasks, and only then refused the run they were moved for. The plan says so first
-     * (`unattendedRefused`), so the dialog asks for the run step by step instead.
-     */
-    const blocked = await this.unattendedRefusal(opts.mode ?? plan.mode);
-    if (blocked) return { ...idle, reason: blocked };
-    const claim = this.claimBrowser({ kind: 'batch', sessionIds: ids });
-    if ('refused' in claim) return { ...idle, reason: claim.refused };
-    let handedOn = false;
-    try {
-      const moved = await this.restartMoves(sessionId, taskId, plan, opts);
-      if (moved.reason !== undefined) return moved;
-      // Named after the task it goes back to, which is the one thing this run is about and the
-      // only thing a heading could usefully say. There is no field to type into on a task card,
-      // so leaving it to the operator meant leaving it blank every time.
-      const runName = await this.suggestRunName(ids, plan.from.title);
-      // From here the claim is the batch's to give back, whichever way its start goes.
-      handedOn = true;
-      /*
-       * Exactly the tasks the preview listed, which are the tasks the run was asked to do from this
-       * one on. Started with none named, the batch took every queued task of these sessions, so a
-       * task the run never chose — queued beside it, or added since — was sent to the chat as well.
-       */
-      const taskIds = plan.tasks.map((x) => x.taskId);
-      const started = await this.startBatchHolding(claim.holder, ids, opts.mode ?? plan.mode, opts.onFailure ?? plan.onFailure, undefined, undefined, runName, taskIds);
-      // A start refused now leaves the moves in place, and says so with its reason.
-      const reason = started.started || started.reason === undefined ? started.reason : afterMoves(started.reason, moved.restored, moved.requeued);
-      return { started: started.started, reason, requeued: moved.requeued, restored: moved.restored, batch: started.batch };
-    } finally {
-      if (!handedOn) this.releaseBrowser(claim.holder);
-    }
-  }
-
-  /**
-   * What `restartFrom` moves before its run starts: the repositories taken back, then the tasks
-   * queued again. A refusal, and "prepared, not started", come back with their reason; with none,
-   * everything is in place for the run.
-   */
-  private async restartMoves(
-    sessionId: string,
-    taskId: string,
-    plan: RestartPlan,
-    opts: { restore?: boolean; start?: boolean },
-  ): Promise<{ started: boolean; reason?: string; requeued: number; restored: string[] }> {
-    const idle = { started: false, requeued: 0, restored: [] as string[] };
-    const restored: string[] = [];
-    if (opts.restore !== false) {
-      for (const entry of plan.restores) {
-        if (!entry.ok) return { ...idle, reason: `${entry.repoDir}: ${entry.problem ?? 'the restore could not be prepared.'}` };
-      }
-      /*
-       * Re-read each repository's own pivot and do it for real. The preview above is what the
-       * operator agreed to; this is the same choice (`restoreTargets`), one step further. It was
-       * worked out a second time here, by a copy of the rule that had not been given the preview's
-       * "never started" skip, so a run whose later repository was never reached failed on it after
-       * the first repository had already been moved — and queued nothing.
-       *
-       * A refusal part-way still says what was already moved, in the result and in its reason (the
-       * one thing the page shows): a repository taken back is the operator's to know about, whatever
-       * happened after it.
-       */
-      const session = (await this.store.getSession(sessionId)) as Session;
-      const task = session.tasks.find((t) => t.id === taskId) as Task;
-      const { tasks } = await this.affectedByRestart(session, task);
-      for (const target of restoreTargets(tasks)) {
-        // Asked again at the moment of moving: a session may have started in this folder since.
-        const refused = target.problem ?? (await this.restoreRefusal(target.session));
-        if (refused) return { ...idle, restored, reason: afterMoves(`${target.dir}: ${refused}`, restored, 0) };
-        const done = await restoreToBase(target.session, target.task, this.bus);
-        if (!done.ok || !done.branch) {
-          return { ...idle, restored, reason: afterMoves(`${target.dir}: ${done.problem ?? 'the restore failed.'}`, restored, 0) };
-        }
-        restored.push(`${target.dir} -> ${done.branch}`);
-        await this.rerunFromRestore(target, done.branch, tasks);
-      }
-    }
-
-    let requeued = 0;
-    for (const t of plan.tasks) {
-      if (t.alreadyQueued) continue;
-      try {
-        await this.store.rerunTask(t.sessionId, t.taskId);
-        requeued += 1;
-      } catch (e) {
-        // One task refusing to be queued again must not leave the rest half-reset with no
-        // explanation, so it stops here and says which one and why — and what was done before it.
-        return { ...idle, restored, requeued, reason: afterMoves(`"${t.title}" could not be queued again: ${(e as Error).message}`, restored, requeued) };
-      }
-    }
-
-    this.bus.publish({
-      sessionId,
-      taskId,
-      type: 'run-restarted',
-      level: 'info',
-      message:
-        `${opts.start === false ? 'prepared to start again' : 'starting again'} from "${plan.from.title}": ${plan.tasks.length} task(s) in ${plan.sessions.length} session(s)` +
-        (restored.length > 0 ? `, after taking ${restored.length} repository(ies) back` : '') +
-        (opts.start === false ? '; press a run button to start' : ''),
-      data: { requeued, restored },
-    });
-
-    if (opts.start === false) return { started: false, reason: 'prepared, not started', requeued, restored };
-    return { started: false, requeued, restored };
-  }
-
-  /**
-   * Makes a restore hold for the run that follows it.
-   *
-   * The restore puts the repository on a new branch at the pivot task's starting commit, and the
-   * re-run then puts each session on its own branch. In per-task mode that is right: a re-run cuts
-   * a fresh branch from where the task first started, which is the restore commit. In per-session
-   * mode it undid the restore: the session's one branch was checked out again, with the failed
-   * attempt's commit still on it, so the attempt that was to start from the code as it was began on
-   * the work it was meant to replace, and committed it a second time. So the pivot's session now
-   * works on the restore branch — the code as it was before that task, with the tasks before it —
-   * and its old branch keeps the attempt that failed, as the confirmation says.
-   *
-   * A per-session session after it in the same repository that this run reached has the same
-   * problem whatever it started from: its one branch carries what its tasks did in this run, and
-   * checked out again it would start them over on their own first attempt. So it gets a branch of
-   * its own, and the old one keeps what it did. Where that branch starts depends on where the
-   * session began. From a named branch: where its first task in this run began, as a restore of
-   * that task would go back to, and the session's start stays as recorded. From where the
-   * repository was, or from the session before it: that start was work this run is now redoing, so
-   * it is forgotten, to be worked out again when the session is reached (for a `previous-session`
-   * chain, from the work done again), and the branch is cut from that. A session the run never
-   * reached holds nothing of this run and is left alone.
-   *
-   * A later per-task session is left as it is. From a named branch that is right: each re-run is
-   * cut from where its task first started, that branch's commit. Chained on this run's work it is
-   * not, and is not solved here: its tasks first started on the work being redone, so their re-runs
-   * are cut from it again. Telling that apart from an operator's new "Start from", whose re-runs go
-   * back to where each task first started on purpose (see `updateSession`), needs the restart
-   * written on the session, and the session's record has no field for it.
-   */
-  private async rerunFromRestore(target: RestoreTarget, branch: string, tasks: Array<{ session: Session; task: Task }>): Promise<void> {
-    if (target.session.vcs?.branchMode === 'per-session') {
-      const left = sessionBranchName(target.session);
-      // The restore branch exists by this name, so the name is kept as it is (see `branchNameExact`).
-      await this.store.updateSession(target.session.id, (s) => {
-        if (s.vcs) {
-          s.vcs.branchName = branch;
-          s.vcs.branchNameExact = true;
-        }
-      });
-      this.bus.publish({
-        sessionId: target.session.id,
-        taskId: target.task.id,
-        type: 'vcs-session-branch',
-        level: 'info',
-        message: `the session carries on from ${branch}, the code as it was before "${target.task.title}"; ${left} keeps the work that came after`,
-        data: { branch, left },
-      });
-    }
-
-    const here = normaliseDir(target.dir);
-    const inOrder = [...new Map(tasks.map(({ session }) => [session.id, session])).values()];
-    const later = inOrder.slice(inOrder.findIndex((s) => s.id === target.session.id) + 1);
-    for (const s of later) {
-      // One that carries on an existing branch never gets here: `restoreTargets` refuses the restart.
-      if (!s.vcs?.enabled || s.vcs.branchMode !== 'per-session' || s.vcs.startFrom === 'existing-branch') continue;
-      // No base recorded: version control never got as far as making its branch.
-      if (!s.vcsBaseCommit || normaliseDir(repoDirOf(s)) !== here) continue;
-      const first = tasks.find((x) => x.session.id === s.id && x.task.startedAt)?.task;
-      if (!first) continue;
-      const left = sessionBranchName(s);
-      const fresh = await freeBranchName(target.dir, left);
-      // No record of the start is read as chained, the reading that cannot bring undone work back.
-      const chained = s.vcsStart?.kind !== 'branch';
-      const at = chained ? undefined : restorePoint(s, first);
-      if (at) {
-        const made = await branchAt(target.dir, fresh, at);
-        // Not made: left to the run, which cuts it from the session's start when it is reached.
-        if (!made.ok) {
-          this.bus.publish({ sessionId: s.id, type: 'vcs-problem', level: 'warn', message: `${fresh} could not be made at ${at.slice(0, 8)}: ${made.problem}` });
-        }
-      }
-      await this.store.updateSession(s.id, (x) => {
-        if (chained) {
-          x.vcsBaseCommit = undefined;
-          x.vcsStart = undefined;
-        }
-        if (x.vcs) {
-          x.vcs.branchName = fresh;
-          x.vcs.branchNameExact = true;
-        }
-      });
-      this.bus.publish({
-        sessionId: s.id,
-        type: 'vcs-session-branch',
-        level: 'info',
-        message: chained
-          ? `the session began from work this run is doing again, so it starts again when it is reached, on a new branch ${fresh}; ${left} keeps what it did before`
-          : `the session starts its tasks again on a new branch ${fresh}, from where "${first.title}" began; ${left} keeps what it did before`,
-        data: { branch: fresh, left },
-      });
-    }
-  }
-
-  /** Why a folder cannot be used for version control, or null when it can. */
-  repoProblem(dir: string): string | null {
-    return repoUnusableReason(dir);
-  }
-
-  /**
-   * What bringing a project back to its remote's main branch would lose, and the command that does
-   * it — for the operator to run. See `vcs/syncCommand.ts`; nothing here writes.
-   *
-   * Only for a folder this bot already works in: a project in Settings or the repository of a
-   * session. The answer lists file names and commit subjects, and a local page asking about any
-   * folder on the disk is not a question this API should answer.
-   */
-  async syncPlan(dir: string): Promise<SyncPlan> {
-    await this.init();
-    await this.knownProjectFolder(dir, 'no command is offered for it');
-    return await planSync(resolve(dir.trim()));
   }
 
   /** Throws unless the folder is a project in Settings or the repository of a session. */
@@ -4309,8 +1990,8 @@ export class OperatorService {
   async prepareProject(dir: string, fingerprint: string, names: { savedBranch?: string; savedMainBranch?: string } = {}): Promise<PrepareResult> {
     await this.init();
     await this.knownProjectFolder(dir, 'it is not prepared from here');
-    if (this.batch?.running) return { ok: false, problem: 'A run is going. Stop it before preparing the folder; nothing was changed.' };
-    if (this.browser?.kind === 'run' || this.browser?.kind === 'batch') return { ok: false, problem: 'A run is being started. Wait for it, or stop it, before preparing the folder; nothing was changed.' };
+    if (this.running.size > 0) return { ok: false, problem: 'A run is going. Stop it before preparing the folder; nothing was changed.' };
+    if (this.browser?.kind === 'run') return { ok: false, problem: 'A run is being started. Wait for it, or stop it, before preparing the folder; nothing was changed.' };
     const other = await this.runningIn(dir);
     if (other) return { ok: false, problem: `Session "${other.name}" is running in this folder. Stop it before preparing the folder; nothing was changed.` };
     const done = await prepareFromRemote(resolve(dir.trim()), String(fingerprint ?? ''), { names });
@@ -4504,6 +2185,7 @@ export class OperatorService {
         humanWaitMs: cfg.copilot.signInTimeoutSec * 1000,
         keepFailurePage: cfg.copilot.keepFailurePage,
       });
+      await this.closeChatWindow('signing in needs the browser');
       await transport.open();
       if (upn) {
         await transport.signOut();
@@ -4558,6 +2240,7 @@ export class OperatorService {
         humanWaitMs: cfg.copilot.humanWaitSec * 1000,
         keepFailurePage: cfg.copilot.keepFailurePage,
       });
+      await this.closeChatWindow('reading the models needs the browser');
       await transport.open();
       await transport.ensureSignedIn();
       const { options, current, note } = await transport.listModels();
@@ -4579,96 +2262,6 @@ export class OperatorService {
   }
 
   // --- the registry ---------------------------------------------------------------------
-
-  /**
-   * Every task of every session in one flat list, newest session first and, inside a session,
-   * in the order the tasks run. The page splits it into what is done, what is running and
-   * what is still ahead; doing the flattening here keeps that split honest, because the
-   * queue position is only knowable from the session's own list.
-   */
-  /** How well the bot is doing, added up from every task on record. See `session/metrics.ts`. */
-  async metrics(): Promise<Metrics> {
-    await this.init();
-    return computeMetrics(await this.store.listSessions());
-  }
-
-  async taskRegistry(): Promise<RegistryEntry[]> {
-    await this.init();
-    const sessions = await this.store.listSessions();
-    const out: RegistryEntry[] = [];
-
-    for (const s of sessions) {
-      let queueSeen = 0;
-      s.tasks.forEach((t, i) => {
-        if (t.status === 'queued') queueSeen += 1;
-        const started = t.startedAt ? Date.parse(t.startedAt) : undefined;
-        const finished = t.finishedAt ? Date.parse(t.finishedAt) : undefined;
-        out.push({
-          sessionId: s.id,
-          sessionName: s.name,
-          sessionStatus: s.status,
-          sessionOnFailure: s.onFailure === 'continue' ? 'continue' : 'stop',
-          sessionRunOrder: s.runGroup?.order,
-          sessionRunning: this.running.has(s.id),
-          chatUrl: s.chat?.url,
-          taskId: t.id,
-          title: t.title,
-          status: t.status,
-          position: i + 1,
-          queuePosition: t.status === 'queued' ? queueSeen : undefined,
-          createdAt: t.createdAt,
-          startedAt: t.startedAt,
-          finishedAt: t.finishedAt,
-          durationMs: started && finished ? finished - started : undefined,
-          iterations: t.iterations,
-          summary: t.summary,
-          reason: t.reason,
-          runId: t.runId,
-          runGroup: t.runGroup,
-          review: t.review
-            ? { verdict: t.review.verdict, findings: t.review.findings?.length ?? 0, stepsRun: t.review.stepsRun }
-            : undefined,
-          deviations: t.deviations?.length || undefined,
-          disputes: t.disputes?.length || undefined,
-          readOnly: t.readOnly || undefined,
-          scope: t.scope?.length ? t.scope : undefined,
-          stopCode: t.stopCode,
-          limit: t.limit,
-          continuable: isContinuable(t) || undefined,
-          branch: t.vcs?.branch,
-          commit: t.vcs?.commit,
-          vcsProblem: t.vcs?.problem,
-          sessionInactive: s.active === false || undefined,
-          autoRetries: freshRetriesOfLatestRun(t) || undefined,
-          attempt: t.attempt,
-          changedFiles: t.vcs?.commit && t.vcs.baseCommit ? (t.vcs.files?.length ?? 0) : undefined,
-          interrupted: t.status === 'aborted' && !!t.interruption ? true : undefined,
-          attempts: (t.attempts ?? []).map((a, n) => {
-            const from = a.startedAt ? Date.parse(a.startedAt) : undefined;
-            const to = a.finishedAt ? Date.parse(a.finishedAt) : undefined;
-            return {
-              attempt: n + 1,
-              status: a.status,
-              startedAt: a.startedAt,
-              finishedAt: a.finishedAt,
-              durationMs: from && to ? to - from : undefined,
-              iterations: a.iterations,
-              summary: a.summary,
-              reason: a.reason,
-              runId: a.runId,
-              branch: a.vcs?.branch,
-              // Why the runner stopped this attempt, whether it was a fresh-chat retry, and its commit (live run 2026-10-03).
-              stopCode: a.stopCode,
-              freshRetry: a.freshRetry,
-              commit: a.vcs?.commit,
-              changedFiles: a.vcs?.commit && a.vcs.baseCommit ? (a.vcs.files?.length ?? 0) : undefined,
-            };
-          }),
-        });
-      });
-    }
-    return out;
-  }
 
   // --- environment ----------------------------------------------------------------------
 
@@ -4694,7 +2287,7 @@ export class OperatorService {
        * on that profile *by the runner*, and the warning "close this Edge window, a run would
        * fail" was shown in exactly the moment it was false. The page says which it is.
        */
-      botRunning: this.running.size > 0 || this.batch?.running === true,
+      botRunning: this.running.size > 0,
       desktop: resolveDesktopDir(),
       desktopSynced: desktopIsSynced(),
       cwd: cfg.resolved.cwd,

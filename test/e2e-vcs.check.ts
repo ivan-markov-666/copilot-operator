@@ -192,18 +192,6 @@ await scenario('new tasks on an existing branch: that branch, exactly, task afte
   t.check('the session records where the branch was when it began', [record.vcsStart?.kind, record.vcsStart?.branch, record.vcsStart?.commit], ['existing-branch', 'develop', tip]);
 });
 
-await scenario('a branch that is not there: refused at import, naming the branches that are', {}, async (h) => {
-  const r = await h.call<{ ok: boolean; check?: { issues?: Array<{ path: string; message: string }> } }>('POST', '/plan/import', {
-    text: JSON.stringify(onExisting(h, 'nowhere', 'recovery/missing', [fileTask('lost', 'x.txt', 'x')])),
-  });
-  const issue = r.check?.issues?.[0];
-  t.truthy('refused, on existingBranch, listing main', !r.ok && issue?.path === 'sessions[0].vcs.existingBranch' && /no local branch "recovery\/missing"/.test(issue.message) && /main/.test(issue.message), r);
-  const plain = await h.call<{ ok: boolean; check?: { issues?: Array<{ message: string }> } }>('POST', '/plan/check', {
-    text: JSON.stringify({ ...onExisting(h, 'both', 'main', []), sessions: [{ ...(onExisting(h, 'both', 'main', [fileTask('t', 'x.txt', 'x')]).sessions as Array<Record<string, unknown>>)[0], vcs: { enabled: true, repoDir: h.repo, startFrom: 'branch', existingBranch: 'main' } }] }),
-  });
-  t.truthy('existingBranch with another startFrom is refused as contradictory', plain.ok === false, plain);
-});
-
 await scenario('before the browser opens: a branch gone, or uncommitted changes, refuse the run', {}, async (h) => {
   // Since 2026-10-02 these are found before anything opens the browser: the start itself is refused.
   const start = async (id: string): Promise<{ started: boolean; reason?: string }> => await h.call('POST', `/sessions/${id}/start`, { mode: 'unattended' });

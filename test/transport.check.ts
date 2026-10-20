@@ -46,7 +46,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import {
   CLIPBOARD_GUARD,
   CopilotTransport,
@@ -83,6 +83,8 @@ type Fixture = { page: Page; transport: CopilotTransport; events: Seen[]; failur
 /** The private parts a check reaches into. `open()` would set `page`; here the fixture does. */
 type Internals = {
   page: Page | null;
+  context: BrowserContext | null;
+  watchWindow(): void;
   clearBlockers(): Promise<void>;
   copyLastReply(): Promise<{ markdown: string; degraded: boolean }>;
 };
@@ -1102,6 +1104,76 @@ try {
     t.check('with powershell unreachable, the Edge query answers "unknown"', unknown, 'unknown');
     t.check('and "unknown" does not stop the lock being taken (pinned)', [d.error, holder(unknownProfile)], ['', process.pid]);
     d.handle?.release();
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('the chat\'s window: a card that says the work has ended, its OK, and a window closed by hand told apart', async () => {
+    /*
+     * The workbench chat's window is left open between messages (2026-10-19), and says in it, over the page, that
+     * the work on a message has ended, with an OK under it. The operator may close the window with its X at any
+     * moment; that is told apart from this code closing it, so a run in it stops as a stop rather than an error.
+     */
+    const f = await fixture('notice', '<!doctype html><body><div id="app" style="height:100vh">chat</div></body>');
+    internals(f.transport).context = f.page.context();
+    internals(f.transport).watchWindow();
+    t.check('a window it holds is open, and not closed by hand', [f.transport.isOpen(), f.transport.closedOutside()], [true, false]);
+
+    const card = { tone: 'done' as const, title: 'Заданието е изпълнено', subject: '„<b>hi.txt</b>“', lines: ['Copilot го завърши.', 'Прозорецът остава отворен.'], button: 'ОК' };
+    await f.transport.showNotice(card);
+    type Shown = { title?: string | null; subject?: string | null; lines: Array<string | null>; button?: string | null; focused?: string; marked: boolean; atCentre?: string; role?: string | null };
+    const shown = async (): Promise<Shown | null> =>
+      await f.page.evaluate(() => {
+        const host = document.getElementById('copilot-operator-notice');
+        const root = host?.shadowRoot;
+        if (!root) return null;
+        return {
+          title: root.querySelector('h2')?.textContent,
+          subject: root.querySelector('.subject')?.textContent,
+          lines: [...root.querySelectorAll('p:not(.subject)')].map((p) => p.textContent),
+          button: root.querySelector('button')?.textContent,
+          focused: root.activeElement?.tagName,
+          // Text, never markup: a message's title is the operator's own words, shown as they wrote them.
+          marked: !!root.querySelector('b'),
+          atCentre: document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.id,
+          role: root.querySelector('.card')?.getAttribute('role'),
+        };
+      });
+    t.check('the card: its heading with a tick, the message as text, its lines, the OK focused, over the page', await shown(), {
+      title: '✓Заданието е изпълнено',
+      subject: '„<b>hi.txt</b>“',
+      lines: ['Copilot го завърши.', 'Прозорецът остава отворен.'],
+      button: 'ОК',
+      focused: 'BUTTON',
+      marked: false,
+      atCentre: 'copilot-operator-notice',
+      role: 'alertdialog',
+    });
+    t.check('the page under it is left as it was', await f.page.locator('#app').textContent(), 'chat');
+    await f.page.getByRole('button', { name: 'ОК' }).click();
+    t.check('its OK takes it away', await shown(), null);
+
+    await f.transport.showNotice({ ...card, tone: 'failed', title: 'one' });
+    await f.transport.showNotice({ ...card, tone: 'stopped', title: 'two' });
+    t.check('a card shown again replaces the one up: one at a time', [await f.page.evaluate(() => document.querySelectorAll('#copilot-operator-notice').length), (await shown())?.title], [1, '■two']);
+    await f.page.keyboard.press('Escape');
+    t.check('Escape takes it away as well', await shown(), null);
+    await f.transport.showNotice(card);
+    await f.transport.clearNotice();
+    t.check('one left up is taken away by the next run', await shown(), null);
+    await f.transport.clearNotice();
+    t.check('and with none up, that does nothing', await shown(), null);
+
+    // The operator's X: the window's page closes without `close`.
+    await f.page.close();
+    t.check('closed by hand: not open, closed outside, and said once', [f.transport.isOpen(), f.transport.closedOutside(), named(f.events, 'window-closed').length], [false, true, 1]);
+    t.check('a card asked for in a closed window is refused, and taking one away does nothing', [!!(await rejection(f.transport.showNotice(card))), await rejection(f.transport.clearNotice())], [true, null]);
+
+    // This code closing it is not the operator's X.
+    const g = await fixture('notice-close', '<!doctype html><body>chat</body>');
+    internals(g.transport).context = g.page.context();
+    internals(g.transport).watchWindow();
+    await g.transport.close();
+    t.check('closed by close(): not open, not closed outside, nothing said', [g.transport.isOpen(), g.transport.closedOutside(), named(g.events, 'window-closed').length], [false, false, 0]);
   });
 } catch (e) {
   t.truthy('setup: a temp dir, a loopback server and a headless Chromium', false, (e as Error).stack ?? String(e));

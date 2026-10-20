@@ -1074,15 +1074,6 @@ function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing
         <li>{t('def.reviewAffectsExisting')}</li>
         <li>{t('def.reviewAffectsBatch')}</li>
       </ul>
-
-      <div className="row" style={{ marginTop: 12 }}>
-        <Link href="/sessions" className="button-link plain">
-          {t('proj.toSessions')}
-        </Link>
-        <Link href="/import" className="button-link quiet">
-          {t('proj.toImport')}
-        </Link>
-      </div>
     </div>
   );
 }

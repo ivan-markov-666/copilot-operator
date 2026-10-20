@@ -5,8 +5,12 @@
  *
  * Everything the operator's interface does goes through the same HTTP routes here, with the same
  * token and the same guard in front of them, so a check drives the program exactly as the UI does:
- * import a plan, start a run, answer the approval, continue a task, read the changes. Only the chat
- * is scripted. The steps the scripted chat sends are run for real, in the real shells, inside the
+ * start a run, answer the approval, read the changes. Only the chat is scripted.
+ *
+ * Sessions are made from a plan in this process (`importPlan`), straight into the server's own store:
+ * the page and the route that imported plans went on 2026-10-20, and a plan is now only the checks' way
+ * of writing down the sessions and tasks they run. `ops` is the server's service, for the few checks
+ * that set a state up the interface no longer offers. The steps the scripted chat sends are run for real, in the real shells, inside the
  * throwaway repository — which is the point: a check that faked the runner as well would prove
  * nothing about the runner.
  *
@@ -22,6 +26,10 @@ import { execFileSync } from 'node:child_process';
 import { setTransportFactory } from '../../src/transport/chatTransport.js';
 import { FakeCopilot } from './fakeChat.js';
 import type { StartedApi } from '../../src/api/server.js';
+import { OperatorService } from '../../src/api/operator.service.js';
+import { checkPlan, describeIssues } from '../../src/plan/schema.js';
+import { importPlan as importPlanInto } from '../../src/plan/importPlan.js';
+import { readInterruption } from '../../src/session/interruption.js';
 
 export type Harness = {
   chat: FakeCopilot;
@@ -35,8 +43,10 @@ export type Harness = {
   /** Same, but returns the status and body instead of throwing. */
   raw: (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<{ status: number; body: unknown }>;
   git: (...args: string[]) => string;
-  /** Imports a plan through the import page's route and returns the new sessions, in plan order. */
+  /** Makes the sessions and tasks of a plan in the server's store and returns them, in plan order. */
   importPlan: (plan: unknown) => Promise<SessionView[]>;
+  /** The server's own service, in this process. */
+  ops: OperatorService;
   session: (id: string) => Promise<SessionView>;
   /** Starts one session and waits until nothing is running any more. */
   run: (sessionId: string, mode?: 'confirm' | 'unattended') => Promise<SessionView>;
@@ -142,6 +152,19 @@ export async function makeDirs(settings: Record<string, unknown> = {}): Promise<
 }
 
 /**
+ * The sessions and tasks of a plan, written into the store of a data folder no server has open yet — for a check that
+ * starts its server in another process. Returns their ids, in plan order.
+ */
+export async function seedPlan(dataDir: string, plan: unknown, projectDir = ''): Promise<string[]> {
+  const check = checkPlan(JSON.stringify(plan));
+  if (!check.ok) throw new Error(`the plan does not check: ${describeIssues(check.issues)}`);
+  const { SessionStore } = await import('../../src/session/store.js');
+  const store = new SessionStore(dataDir, join(import.meta.dirname, '..', '..', 'prompts', 'level1.md'));
+  await store.init();
+  return (await importPlanInto(store, check.plan, '', '', '', projectDir)).sessions.map((s) => s.id);
+}
+
+/**
  * Starts the API with a scripted chat. With `dirs`, on folders an earlier server already used —
  * which is how a check restarts the program after killing it — and those are left in place on
  * `stop` unless `own` makes this harness the one that cleans them up.
@@ -160,7 +183,42 @@ export async function startHarness(opts: { settings?: Record<string, unknown>; d
   const api = await startApi({ port, quiet: true, webDir: opts.webDir });
   const origin = `http://127.0.0.1:${port}`;
 
+  const ops = api.app.get(OperatorService);
+  /*
+   * Three ways of setting a task up that the interface had and no longer has (2026-10-20): adding a task to a
+   * session, "Run again" and "Continue". The checks of the runner set their tasks up with them, and the runner still
+   * does both itself — a fresh conversation for a blocked task, a task stopped at a limit carried on. So they are done
+   * here, in this process, with the store's own methods the runner uses, under the paths the checks always used.
+   */
+  const shim = async (method: string, path: string, body: unknown): Promise<{ status: number; body: unknown } | null> => {
+    if (method !== 'POST') return null;
+    const b = (body ?? {}) as Record<string, unknown>;
+    const fail = (e: unknown) => ({ status: 400, body: { message: (e as Error).message } });
+    let m = /^\/sessions\/([^/]+)\/tasks$/.exec(path);
+    if (m) {
+      return await ops.store
+        .addTask(m[1]!, { title: String(b.title ?? ''), level2: String(b.level2 ?? ''), prompt: String(b.prompt ?? '') })
+        .then((task) => ({ status: 201, body: task as unknown }), fail);
+    }
+    m = /^\/sessions\/([^/]+)\/tasks\/([^/]+)\/(continue|rerun)$/.exec(path);
+    if (!m) return null;
+    const [, sessionId, taskId, what] = m;
+    try {
+      if (what === 'rerun') {
+        const { buildOnFinished: _built, ...patch } = b;
+        return { status: 201, body: await ops.store.rerunTask(sessionId!, taskId!, patch) };
+      }
+      // Where an attempt the operator stopped had got to, as "Continue" read it from its run folder.
+      const before = (await ops.store.getSession(sessionId!))?.tasks.find((x) => x.id === taskId);
+      const stoppedAt = before?.status === 'aborted' && !before.interruption && before.runId ? await readInterruption(join(runsDir, before.runId)).catch(() => null) : null;
+      return { status: 201, body: await ops.store.continueTask(sessionId!, taskId!, stoppedAt, typeof b.instruction === 'string' ? b.instruction : undefined) };
+    } catch (e) {
+      return fail(e);
+    }
+  };
   const raw = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: unknown }> => {
+    const done = await shim(method, path, body);
+    if (done) return done;
     const res = await fetch(`${origin}/api${path}`, {
       method,
       headers: { 'x-cop-token': api.token, ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -187,21 +245,24 @@ export async function startHarness(opts: { settings?: Record<string, unknown>; d
   const session = (id: string): Promise<SessionView> => call<SessionView>('GET', `/sessions/${id}`);
   const idle = async (): Promise<void> => {
     await waitFor('the run to end', async () => {
-      const a = await call<{ running: boolean; batch: boolean; starting?: boolean }>('GET', '/activity');
-      return !a.running && !a.batch && !a.starting;
+      const a = await call<{ running: boolean; starting?: boolean }>('GET', '/activity');
+      return !a.running && !a.starting;
     });
   };
 
   return {
     chat,
     api,
+    ops,
     importPlan: async (plan: unknown) => {
-      const before = new Set((await call<SessionView[]>('GET', '/sessions')).map((s) => s.id));
-      await call('POST', '/plan/import', { text: JSON.stringify(plan) });
-      const after = await call<Array<SessionView & { createdAt?: string }>>('GET', '/sessions');
-      const fresh = after.filter((s) => !before.has(s.id));
-      const names = (plan as { sessions: Array<{ name: string }> }).sessions.map((s) => s.name);
-      return await Promise.all(names.map((n) => session(fresh.find((s) => s.name === n)!.id)));
+      const check = checkPlan(JSON.stringify(plan));
+      if (!check.ok) throw new Error(`the plan does not check: ${describeIssues(check.issues)}`);
+      // The sessions a plan names no folder for work in the project folder, as the import page had them.
+      const settings = await call<{ raw: { project?: { rootDir?: string } } }>('GET', '/settings');
+      // Read once, so the server has opened its store (and recovered what a crash left) before this writes to it.
+      await call('GET', '/sessions');
+      const result = await importPlanInto(ops.store, check.plan, '', '', '', (settings.raw.project?.rootDir ?? '').trim());
+      return await Promise.all(result.sessions.map((s) => session(s.id)));
     },
     session,
     run: async (sessionId, mode = 'unattended') => {

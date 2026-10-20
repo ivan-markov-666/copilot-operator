@@ -1,9 +1,9 @@
 /**
  * The pin that keeps the persona's script and the interface saying the same words.
  *
- * `src/plan/systemGuide.ts` tells the Kerrigan persona what every screen and every control of
- * this application is called, so it can say press "Create the sessions and tasks" rather than
- * "import the plan". Those labels are written out there a second time instead of being imported
+ * `src/plan/systemGuide.ts` tells the Kerrigan persona (`src/plan/kerrigan.ts`) what every screen and
+ * every control of this application is called, so it can say press "New chat" rather than "start
+ * over". Those labels are written out there a second time instead of being imported
  * from `web/lib/strings.ts`, because the server build has no bundler and cannot reach into the
  * Next workspace at runtime. A second copy of a string is a promise that somebody will remember
  * to change both, and nobody does — so this check is the memory. It holds every label and every
@@ -30,7 +30,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { planBrief } from '../src/plan/brief.js';
+import { kerriganPersona } from '../src/plan/kerrigan.js';
 import { SYSTEM_GUIDE, systemGuideSection } from '../src/plan/systemGuide.js';
 import { dict } from '../web/lib/strings.js';
 
@@ -196,17 +196,14 @@ console.log('keys the guide quotes     :', claims.length);
 console.log('keys no page renders      :', orphaned, '(expect 0)');
 
 /*
- * Every label the brief quotes in its own prose, against what is on a screen right now.
- *
- * The persona is told to name a control by its exact text, so the brief writes `**"Check it"**`
- * and `**„Провери“**`. Those are the sentences an operator follows, and a wrong one sends them
- * looking for a button that is not there — the whole failure this file exists to prevent, just
- * arriving through prose instead of through the guide. The brief wraps its lines, so a label can
- * be split across two of them and the whitespace is flattened before anything is compared.
+ * Every label Kerrigan quotes in her own prose, against what is on a screen right now: she writes
+ * `**"New chat"**` and `**„Нов чат“**`, and a wrong one sends the operator looking for a button that is
+ * not there. Her lines are flattened before anything is compared, since a label may wrap.
  */
-console.log('\n--- every label the brief quotes in prose, against the screens ---');
+console.log('\n--- every label Kerrigan quotes in prose, against the screens ---');
 
 const flatten = (text: string): string => text.replace(/\s+/g, ' ').trim();
+const facts = { version: '0.0.0', maxIterations: 60, maxRunMinutes: 240, autoContinue: 3 };
 let invented = 0;
 
 for (const [lang, pattern] of [['en', /\*\*"([^"]+)"\*\*/g], ['bg', /\*\*„([^“]+)“\*\*/g]] as const) {
@@ -216,40 +213,12 @@ for (const [lang, pattern] of [['en', /\*\*"([^"]+)"\*\*/g], ['bg', /\*\*„([^�
     const value = table[key];
     if (value !== undefined) onScreen.set(flatten(value), key);
   }
-
-  /*
-   * Both states of the brief, because they do not carry the same text.
-   *
-   * With the operator's own organisation and work texts present, the brief is what somebody who
-   * has already been through phase 0 copies. With them absent it carries the phase 0 interview
-   * instead, and that interview quotes labels of its own — the fields the two documents are
-   * pasted into, the button that copies the brief again — which appear nowhere else. Checking
-   * only the settled version left exactly those labels unpinned, which is the version a first-time
-   * operator never sees and every first-time operator gets.
-   */
-  const settled = planBrief({ lang, organisation: 'the organisation', persona: 'the persona', work: 'this work' });
-  const firstRun = planBrief({ lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' });
-  /*
-   * The third state, and the reason it is here is the same as the second's. With the organisation
-   * written but no persona yet, the brief carries a short step of its own asking for one — and that
-   * step quotes the persona field and the copy button, which neither of the other two states do.
-   */
-  const personaMissing = planBrief({ lang, organisation: 'the organisation', personaExample: '{}', work: 'this work' });
-  /*
-   * And the machine's own state: on a machine where a run with nobody watching is refused, the brief
-   * tells Kerrigan which button to recommend instead, by its label — labels that appear in no other
-   * state of the brief.
-   */
-  const unattendedRefused = planBrief({ lang, organisation: 'the organisation', persona: 'the persona', work: 'this work', unattendedBlocked: 'isolation' });
-  const brief = `${settled}
-${firstRun}
-${personaMissing}
-${unattendedRefused}`;
-  const quoted = [...new Set([...brief.matchAll(pattern)].map((m) => flatten(m[1])))];
+  const persona = kerriganPersona(lang, facts);
+  const quoted = [...new Set([...persona.matchAll(pattern)].map((m) => flatten(m[1])))];
   const unknown = quoted.filter((q) => !onScreen.has(q));
   for (const q of unknown) {
     invented += 1;
-    console.log(`!! the ${lang} brief quotes ${JSON.stringify(q)}, which is not on any screen`);
+    console.log(`!! Kerrigan (${lang}) quotes ${JSON.stringify(q)}, which is not on any screen`);
   }
   console.log(`${lang} labels quoted in prose  :`, quoted.length, '| not on any screen:', unknown.length, '(expect 0)');
 }
@@ -277,13 +246,9 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^ap\.example(Link)?$/, why: 'sample text on the Appearance page, there to show the chosen style' },
   { pattern: /^model\.(notInList|unavailable)$/, why: 'a marker added to a model option, not an option of its own' },
   { pattern: /^checks\.(n|passed)$/, why: 'the count on the checks fold, whose controls are guided' },
-  { pattern: /^task\.editAll$/, why: 'the tooltip of "Edit"' },
-  { pattern: /^reg\.newTaskIn$/, why: 'the second half of the "New task" label' },
   { pattern: /^diff\.(before|after)$/, why: 'the two column headings of the changes view' },
   { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
   { pattern: /^proj\.desktopMasterOff$/, why: 'the greyed-out note beside "Keep a copy of this project on the Desktop", which is guided' },
-  { pattern: /^plan\.briefFileMessage$/, why: 'the text "Copy the message for the file" copies, also shown beside it; the button is guided' },
-  { pattern: /^batch\.move(Up|Down)$/, why: 'only the screen-reader name of the ↑ and ↓ that reorder the sessions of a run; the buttons show an arrow, not this text' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
 const guided = new Set(claims.map((c) => c.key));
@@ -311,31 +276,22 @@ if (uncovered.size > 0) {
 }
 
 /*
- * The brief's size, against how it reaches the chat.
- *
- * Copilot's composer refuses a message beyond roughly 120 000 characters. That used to be a hard
- * limit on the brief, and every new control in the guide had to be paid for with a cut. It is not
- * one: over the line the import page hands the brief out as a file to attach, with a one-line
- * message (see PASTE_LIMIT in web/app/import/page.tsx), and a file has room. So the paste limit is
- * reported, not enforced; what still fails is a brief so long it is surely a mistake — a runaway
- * loop in the guide, a document pasted into itself — which no chat would read to the end anyway.
+ * Kerrigan's size: she is pasted into a chat, whose box has a limit (Copilot's refuses roughly 120 000
+ * characters), or saved as a file and attached. A persona near that size is surely a mistake.
  */
-console.log('\n--- the brief, and how it reaches the chat ---');
-const PASTE_LIMIT = 116_000;
-const SANITY_LIMIT = 400_000;
+console.log('\n--- Kerrigan, and how she reaches a chat ---');
+const PASTE_LIMIT = 100_000;
 let oversized = 0;
 for (const lang of ['en', 'bg'] as const) {
-  const example = (name: string): string => readFileSync(join('prompts', `${name}.${lang}.md`), 'utf8');
-  const longest = planBrief({ lang, organisationExample: example('organisation'), personaExample: example('persona'), workExample: example('work') });
-  if (longest.length > SANITY_LIMIT) oversized += 1;
-  const how = longest.length > PASTE_LIMIT ? `over ${PASTE_LIMIT}: the import page offers it as a file` : `pasted (the file is offered past ${PASTE_LIMIT})`;
-  console.log(`${lang} first-run brief         :`, longest.length, `chars — ${how}; fails only past ${SANITY_LIMIT}`);
+  const persona = kerriganPersona(lang, facts);
+  if (persona.length > PASTE_LIMIT) oversized += 1;
+  console.log(`${lang} Kerrigan                :`, persona.length, `chars; fails past ${PASTE_LIMIT}`);
 }
 
 const failures = gone + drifted + unrendered + orphaned + invented + uncovered.size + oversized;
 console.log('\nfailures:', failures, '(expect 0)');
 if (failures > 0) {
-  console.log('The interface, the guide and the brief disagree.');
-  console.log('web/lib/strings.ts is the authority: fix src/plan/systemGuide.ts and src/plan/brief.ts to match it.');
+  console.log('The interface, the guide and Kerrigan disagree.');
+  console.log('web/lib/strings.ts is the authority: fix src/plan/systemGuide.ts and src/plan/kerrigan.ts to match it.');
   process.exit(1);
 }

@@ -89,9 +89,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
     nameEn: 'The header and the navigation',
     nameBg: 'Заглавната лента и навигацията',
     purposeEn:
-      'The links down the side of every page, the language switch, the round to-the-top and to-the-bottom buttons of a long page, the box that asks before anything irreversible, the start window every start button opens first (where the work starts), the notice of a start that did not happen, and the banner of steps waiting for a decision, which appears on every page.',
+      'The links down the side of every page, the language switch, the round to-the-top and to-the-bottom buttons of a long page, the box that asks before anything irreversible, the notice of a start that did not happen, and the banner of steps waiting for a decision, which appears on every page.',
     purposeBg:
-      'Връзките отстрани на всяка страница, смяната на езика, кръглите бутони към началото и края на дълга страница, прозорецът, който пита преди нещо необратимо, прозорецът за старт, който всеки бутон за пускане отваря първо (откъде тръгва работата), съобщението за пускане, което не е започнало, и лентата със стъпки, чакащи решение, която се появява на всяка страница.',
+      'Връзките отстрани на всяка страница, смяната на езика, кръглите бутони към началото и края на дълга страница, прозорецът, който пита преди нещо необратимо, съобщението за пускане, което не е започнало, и лентата със стъпки, чакащи решение, която се появява на всяка страница.',
     sections: [
       {
         headingKey: 'nav.label',
@@ -107,30 +107,6 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'For keyboard users: the first Tab on a page jumps past the navigation to the content.',
             doesBg:
               'За клавиатура: първото Tab на страницата прескача навигацията към съдържанието.',
-          },
-          {
-            key: 'nav.sessions',
-            kind: 'link',
-            en: 'Sessions',
-            bg: 'Сесии',
-            doesEn: 'Opens the sessions list at /, where sessions are created and a run is started.',
-            doesBg: 'Отваря списъка със сесии на /, откъдето се създават сесии и се пуска изпълнение.',
-          },
-          {
-            key: 'nav.import',
-            kind: 'link',
-            en: 'Plan from JSON',
-            bg: 'План от JSON',
-            doesEn: 'Opens the page that hands out the brief and turns the JSON back into sessions and tasks.',
-            doesBg: 'Отваря страницата, която дава заданието и превръща JSON-а обратно в сесии и задачи.',
-          },
-          {
-            key: 'nav.history',
-            kind: 'link',
-            en: 'Task register',
-            bg: 'Регистър на задачите',
-            doesEn: 'Opens the register of every task, where a run is watched and continued.',
-            doesBg: 'Отваря регистъра на всички задачи, откъдето се следи и продължава едно изпълнение.',
           },
           {
             key: 'nav.defaults',
@@ -228,183 +204,6 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'The title of a box that only informs; its one button is "OK".',
             doesBg:
               'Заглавието на прозорец, който само съобщава; единственият му бутон е „Добре“.',
-          },
-        ],
-      },
-      {
-        headingKey: 'startdlg.title',
-        en: 'Where the work starts',
-        bg: 'Откъде да тръгне работата',
-        controls: [
-          {
-            key: 'startdlg.keep',
-            kind: 'radio',
-            en: 'Keep the start prepared before this run',
-            bg: 'Запази началото, подготвено преди това пускане',
-            doesEn:
-              'Only for a session whose start was prepared before the run — a starting snapshot approved on the run panel — and chosen first then: the run starts from it as approved. Any other choice below drops it.',
-            doesBg:
-              'Само за сесия, чието начало е подготвено преди пускането — стартова снимка, одобрена в панела за пускане — и тогава е избрано първо: пускането тръгва от нея, както е одобрена. Всеки друг избор по-долу я отменя.',
-          },
-          {
-            key: 'startdlg.refresh',
-            kind: 'button',
-            en: 'Read the branches again',
-            bg: 'Прочети клоновете отново',
-            doesEn:
-              'Beside the window\'s first line: reads the repository again — the branch checked out, the branches and their commits — after a checkout or a pull made outside the bot; what was chosen stays chosen.',
-            doesBg:
-              'До първия ред на прозореца: прочита хранилището отново — избрания клон, клоновете и комитите им — след checkout или pull, направени извън бота; избраното остава избрано.',
-          },
-          {
-            key: 'startdlg.keepStarted',
-            kind: 'radio',
-            en: 'Keep: carry on {branch}',
-            bg: 'Запази: продължи на {branch}',
-            doesEn:
-              'For a session that has run already, chosen first: it carries on its own branch (named in the label). Above it the window says where that branch is now, where the session started, the branch on the remote, and warns when the repository is on another branch.',
-            doesBg:
-              'За сесия, която вече е вървяла, избрано първо: продължава на собствения си клон (името е в надписа). Над него прозорецът казва къде е клонът сега, откъде е тръгнала сесията, клона в remote, и предупреждава, когато хранилището е на друг клон.',
-          },
-          {
-            key: 'startdlg.useCurrent',
-            kind: 'radio',
-            en: 'The branch checked out now: {branch} ({commit})',
-            bg: 'Клонът, избран в момента: {branch} ({commit})',
-            doesEn:
-              'For a session that has run, when the repository is on another branch: the work starts from the branch checked out now. Like any other branch chosen for it, the tasks that run next start from it — a task run again too — and what already ran stays on its branches.',
-            doesBg:
-              'За сесия, която вече е вървяла, когато хранилището е на друг клон: работата тръгва от клона, избран в момента. Както при всеки друг избран клон, задачите, които тръгнат оттук нататък, тръгват от него — и пуснатата отново задача — а изпълненото остава в своите клонове.',
-          },
-          {
-            key: 'startdlg.goUnattendedOn',
-            kind: 'button',
-            en: 'Start without asking — on {where}',
-            bg: 'Започни без питане — на {where}',
-            doesEn:
-              'The window\'s start button when the run has one session: says the branch and commit the work starts on.',
-            doesBg:
-              'Бутонът за старт на прозореца, когато пускането е на една сесия: казва клона и комита, от които тръгва работата.',
-          },
-          {
-            key: 'startdlg.goStepOn',
-            kind: 'button',
-            en: 'Start, asking before each command — on {where}',
-            bg: 'Започни, с питане преди всяка команда — на {where}',
-            doesEn:
-              'The same, for a run that asks before each command.',
-            doesBg:
-              'Същото, за пускане с питане преди всяка команда.',
-          },
-          {
-            key: 'startdlg.local',
-            kind: 'radio',
-            en: 'Local branch',
-            bg: 'Локален клон',
-            doesEn:
-              'The start window opens on every start button — the run buttons on /, a session\'s Start, "Run this task", the register\'s Continue and "Run only this one again" — and nothing starts until its own button is pressed. This choice: the work starts from the local branch picked in the list beside it, as it is in the folder; nothing is fetched.',
-            doesBg:
-              'Прозорецът за старт се отваря от всеки бутон за пускане — бутоните за пускане на /, „Старт“ на сесия, „Пусни тази задача“, „Продължи“ и „Пусни само тази отново“ в регистъра — и нищо не тръгва, преди да се натисне неговият бутон. Този избор: работата тръгва от локалния клон, избран в списъка до него, какъвто е в папката; нищо не се изтегля.',
-          },
-          {
-            key: 'startdlg.remote',
-            kind: 'radio',
-            en: 'Remote branch (fetched now)',
-            bg: 'Remote клон (изтегля се сега)',
-            doesEn:
-              'The work starts from the branch as it is on the server: type its name (feature/…) or pick it from the list. It is fetched when the window\'s start button is pressed; if the SSH key has a passphrase, Git\'s own window asks for it (it may be behind the browser) — the operator types it there, the bot never sees it. The local branch of that name is not touched.',
-            doesBg:
-              'Работата тръгва от клона, какъвто е на сървъра: напиши името му (feature/…) или го избери от списъка. Изтегля се при натискане на бутона за старт на прозореца; ако SSH ключът има passphrase, собственият прозорец на Git я иска (може да е зад браузъра) — операторът я въвежда там, ботът не я вижда. Локалният клон със същото име не се пипа.',
-          },
-          {
-            key: 'startdlg.refreshRemote',
-            kind: 'button',
-            en: 'Get the list of branches from the remote',
-            bg: 'Вземи списъка с клонове от remote',
-            doesEn:
-              'Fetches the whole remote (the password window may open) so the list of remote branches to pick from is current.',
-            doesBg:
-              'Изтегля целия remote (може да се отвори прозорецът за парола), за да е актуален списъкът с remote клонове за избор.',
-          },
-          {
-            key: 'startdlg.previous',
-            kind: 'radio',
-            en: 'Carry on from the session before it',
-            bg: 'Продължи от предната сесия',
-            doesEn:
-              'Offered for a session that follows another in the same repository: carries on from the end of that session\'s branch.',
-            doesBg:
-              'Предлага се за сесия след друга в същото хранилище: продължава от края на клона на онази сесия.',
-          },
-          {
-            key: 'startdlg.onBranch',
-            kind: 'checkbox',
-            en: 'Work directly on this branch, without a new branch',
-            bg: 'Работи направо на този клон, без нов клон',
-            doesEn:
-              'Off, as usual: the bot cuts a branch of its own from the chosen one. On: the tasks commit on the chosen branch itself; a remote branch is first made locally, or the local one brought up to it (fast-forward only). A local branch that has gone its own way from the remote one is refused, with nothing changed.',
-            doesBg:
-              'Изключено, както обикновено: ботът прави свой клон от избрания. Включено: задачите комитват направо на избрания клон; при remote клон първо се прави локален или локалният се довежда до него (само fast-forward). Локален клон, тръгнал по свой път спрямо remote, се отказва, без да се променя нищо.',
-          },
-          {
-            key: 'startdlg.goStep',
-            kind: 'button',
-            en: 'Start, asking before each command',
-            bg: 'Започни, с питане преди всяка команда',
-            doesEn:
-              'The window\'s own start button, for a run that asks before each command: fetches what was chosen from the remote, writes the choice on the sessions and starts.',
-            doesBg:
-              'Собственият бутон за старт на прозореца, за пускане с питане преди всяка команда: изтегля избраното от remote, записва избора в сесиите и стартира.',
-          },
-          {
-            key: 'startdlg.goUnattended',
-            kind: 'button',
-            en: 'Start without asking',
-            bg: 'Започни без питане',
-            doesEn:
-              'The same, for a run without asking.',
-            doesBg:
-              'Същото, за пускане без питане.',
-          },
-          {
-            key: 'startdlg.retryFetch',
-            kind: 'button',
-            en: 'Fetch again',
-            bg: 'Изтегли отново',
-            doesEn:
-              'After a fetch that did not get through — a passphrase not typed, a branch name the remote does not have: fetches again.',
-            doesBg:
-              'След изтегляне, което не е минало — непопълнен passphrase, име на клон, което remote няма: изтегля отново.',
-          },
-          {
-            key: 'startdlg.useFetched',
-            kind: 'button',
-            en: 'Go on with what was last fetched',
-            bg: 'Продължи с последно изтегленото',
-            doesEn:
-              'After such a fetch, when that branch was fetched here before: starts from that older copy instead.',
-            doesBg:
-              'След такова изтегляне, ако клонът е бил изтеглян тук преди: тръгва от онова по-старо копие.',
-          },
-          {
-            key: 'startdlg.back',
-            kind: 'button',
-            en: 'Back to the choice',
-            bg: 'Обратно към избора',
-            doesEn:
-              'Back to the choice of branches, after a fetch or a start that did not go through.',
-            doesBg:
-              'Обратно към избора на клонове след изтегляне или старт, които не са минали.',
-          },
-          {
-            key: 'startdlg.tryAgain',
-            kind: 'button',
-            en: 'Try to start again',
-            bg: 'Опитай пак да започнеш',
-            doesEn:
-              'After a start that did not happen — for instance once the version control fixes shown in the window are done: starts again with the same choice, without fetching again.',
-            doesBg:
-              'След старт, който не се е случил — например след като поправките на контрола на версиите, показани в прозореца, са направени: стартира пак със същия избор, без ново изтегляне.',
           },
         ],
       },
@@ -592,771 +391,168 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
   },
 
   {
-    route: '/import',
-    nameEn: 'Plan from JSON',
-    nameBg: 'План от JSON',
-    purposeEn:
-      'Where the brief is copied out to a chat and the JSON it writes is brought back, checked and turned into sessions and tasks. Nothing is started from here.',
-    purposeBg:
-      'Оттук се копира заданието към чата и тук се връща JSON-ът, който той е написал: проверява се и става сесии и задачи. Нищо не се стартира от тази страница.',
-    sections: [
-      {
-        headingKey: 'plan.step1',
-        en: '1. Take this to the chat',
-        bg: '1. Занесете това в чата',
-        controls: [
-          {
-            key: 'plan.title',
-            kind: 'note',
-            en: 'A plan written by a chat model',
-            bg: 'План, написан от чат модел',
-            doesEn:
-              'The heading of the page.',
-            doesBg:
-              'Заглавието на страницата.',
-          },
-          {
-            key: 'plan.briefAsks',
-            kind: 'note',
-            en: 'The brief does the asking',
-            bg: 'Заданието пита вместо вас',
-            doesEn:
-              'Says the brief itself asks the questions; the operator only copies it into a chat.',
-            doesBg:
-              'Казва, че заданието само задава въпросите; операторът само го копира в чат.',
-          },
-          {
-            key: 'plan.persona',
-            kind: 'note',
-            en: 'Kerrigan, the persona: two levels',
-            bg: 'Kerrigan, персоната: две нива',
-            doesEn:
-              'The heading above "Software level (fixed)" and the three editable boxes below it.',
-            doesBg:
-              'Заглавието над „Софтуерно ниво (фиксирано)“ и трите полета за редакция под него.',
-          },
-          {
-            key: 'plan.copyBrief',
-            kind: 'button',
-            en: 'Copy the brief',
-            bg: 'Копирай заданието',
-            doesEn: 'Puts the whole brief on the clipboard; paste it into a fresh chat conversation.',
-            doesBg: 'Слага цялото задание в клипборда; поставете го в нов разговор с чат модел.',
-          },
-          {
-            key: 'plan.saveBrief',
-            kind: 'button',
-            en: 'Save the brief as a file',
-            bg: 'Запази заданието като файл',
-            doesEn: 'Saves the brief as a .txt to attach to a fresh chat; the way when it is over about 116 000 characters.',
-            doesBg: 'Запазва заданието като .txt за прикачване в нов разговор; начинът, когато е над около 116 000 знака.',
-          },
-          {
-            key: 'plan.copyBriefNote',
-            kind: 'button',
-            en: 'Copy the message for the file',
-            bg: 'Копирай съобщението към файла',
-            doesEn: 'Only when the brief is too long to paste: the one line to send with the attached file.',
-            doesBg: 'Само когато заданието е твърде дълго за поставяне: едното изречение, което се праща с прикачения файл.',
-          },
-          {
-            key: 'plan.softwarePart',
-            kind: 'disclosure',
-            en: 'Software level (fixed)',
-            bg: 'Софтуерно ниво (фиксирано)',
-            doesEn: 'Unfolds the fixed part of the brief, the part that belongs to this project; read-only.',
-            doesBg: 'Разгъва фиксираната част на заданието — тази на самия проект; само за четене.',
-          },
-          {
-            key: 'plan.briefLang',
-            kind: 'note',
-            en: 'The brief is in the language this interface is in.',
-            bg: 'Заданието е на езика, на който е този интерфейс.',
-            doesEn: 'Switch the language in the header first if the brief should come out in the other one.',
-            doesBg: 'Ако заданието трябва да излезе на другия език, първо сменете езика в заглавната лента.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.orgPart',
-        en: 'How work is done here: the organisation and the projects',
-        bg: 'Как се работи тук: организацията и проектите',
-        controls: [
-          {
-            key: 'plan.ctxEmpty',
-            kind: 'badge',
-            en: 'empty — Kerrigan will ask',
-            bg: 'празно — Kerrigan ще пита',
-            doesEn: 'Beside the heading while the box is blank: the brief will interview the operator about it.',
-            doesBg: 'До заглавието, докато полето е празно: заданието ще разпита оператора за него.',
-          },
-          {
-            key: 'plan.ctxWritten',
-            kind: 'badge',
-            en: 'written',
-            bg: 'написано',
-            doesEn: 'Beside the heading once something is saved: every copy of the brief carries it and the questions stop.',
-            doesBg: 'До заглавието, щом има запазен текст: всяко копие на заданието го носи и въпросите спират.',
-          },
-          {
-            key: 'plan.ctxClear',
-            kind: 'button',
-            en: 'Empty this',
-            bg: 'Изпразни',
-            doesEn: 'Wipes the saved text after one confirmation, so the brief asks about it again.',
-            doesBg: 'Изтрива запазения текст след едно потвърждение, за да пита заданието пак за него.',
-          },
-          {
-            key: 'def.savedAutomatically',
-            kind: 'note',
-            en: 'saved as you type',
-            bg: 'запазва се, докато пишете',
-            doesEn: 'The box writes itself; there is no save button to look for.',
-            doesBg: 'Полето се запазва само; няма бутон за запазване, който да търсите.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.personaPart',
-        en: 'How the tasks are carried out: the agent\'s persona',
-        bg: 'Как се изпълняват задачите: персоната на агента',
-        controls: [
-          {
-            key: 'plan.personaPick',
-            kind: 'select',
-            en: 'choose one to put it in the box',
-            bg: 'изберете, за да я поставите в полето',
-            doesEn:
-              'The empty choice of the saved-persona menu; picking a persona puts its text in the box (after a question if the box has text).',
-            doesBg:
-              'Празният избор в менюто със запазени персони; изборът на персона слага текста ѝ в полето (след въпрос, ако полето има текст).',
-          },
-          {
-            key: 'plan.personaNone',
-            kind: 'select',
-            en: 'none saved yet',
-            bg: 'още няма запазени',
-            doesEn:
-              'Shown in that menu while no persona has been saved.',
-            doesBg:
-              'Показва се в менюто, докато няма запазена персона.',
-          },
-          {
-            key: 'plan.personaSaved',
-            kind: 'select',
-            en: 'Saved personas',
-            bg: 'Запазени персони',
-            doesEn: 'Chooses a saved persona and puts it in the box below, which is saved at once; the choice shows which saved persona the box matches.',
-            doesBg: 'Избира запазена персона и я поставя в полето отдолу, което се запазва веднага; изборът показва на коя запазена персона отговаря полето.',
-          },
-          {
-            key: 'plan.personaNamePlaceholder',
-            kind: 'field',
-            en: 'a name for the persona in the box, e.g. playwright-tests',
-            bg: 'име за персоната в полето, напр. playwright-tests',
-            doesEn: 'The name to keep the persona in the box under.',
-            doesBg: 'Името, под което да се запази персоната от полето.',
-          },
-          {
-            key: 'plan.personaSaveAs',
-            kind: 'button',
-            en: 'Save under this name',
-            bg: 'Запази под това име',
-            doesEn: 'Keeps a copy of the persona in the box under that name, replacing one of the same name after asking.',
-            doesBg: 'Запазва копие на персоната от полето под това име, като пита, преди да замени персона със същото име.',
-          },
-          {
-            key: 'plan.personaDelete',
-            kind: 'button',
-            en: 'Delete the chosen one',
-            bg: 'Изтрий избраната',
-            doesEn: 'Deletes the saved persona the box matches; the box itself is not changed.',
-            doesBg: 'Изтрива запазената персона, на която отговаря полето; самото поле не се променя.',
-          },
-          {
-            key: 'plan.ctxClear',
-            kind: 'button',
-            en: 'Empty this',
-            bg: 'Изпразни',
-            doesEn:
-              'The same button under the second box: wipes the persona, so the brief asks for one again before any plan is written. A session already imported keeps the persona it was created with.',
-            doesBg:
-              'Същият бутон под второто поле: изтрива персоната, за да поиска заданието нова, преди да се пише план. Вече импортирана сесия пази персоната, с която е създадена.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.workPart',
-        en: 'This work',
-        bg: 'Тази работа',
-        controls: [
-          {
-            key: 'plan.ctxClear',
-            kind: 'button',
-            en: 'Empty this',
-            bg: 'Изпразни',
-            doesEn: 'The same button under the third box: wipes the description of the work in hand.',
-            doesBg: 'Същият бутон под третото поле: изтрива описанието на текущата работа.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.step2',
-        en: '2. Bring the answer back',
-        bg: '2. Върнете отговора тук',
-        controls: [
-          {
-            key: 'plan.placeholder',
-            kind: 'field',
-            en: 'Paste the JSON the chat model wrote…',
-            bg: 'Поставете JSON-а, който чат моделът е написал…',
-            doesEn: 'The large box. Prose and code fences around the JSON are stripped, so paste the reply whole.',
-            doesBg: 'Голямото поле. Текстът и ограждащите блокове около JSON-а се махат, така че поставете отговора цял.',
-          },
-          {
-            key: 'plan.browse',
-            kind: 'button',
-            en: 'Choose a file…',
-            bg: 'Изберете файл…',
-            doesEn: 'Reads a .json or text file into that box instead of pasting.',
-            doesBg: 'Прочита .json или текстов файл в полето, вместо да поставяте текст.',
-          },
-          {
-            key: 'plan.check',
-            kind: 'button',
-            en: 'Check it',
-            bg: 'Провери',
-            doesEn: 'Validates the JSON and creates nothing: it reports either the errors or what would be created.',
-            doesBg: 'Проверява JSON-а, без да създава нищо: показва или грешките, или какво би било създадено.',
-          },
-          {
-            key: 'plan.import',
-            kind: 'button',
-            en: 'Create the sessions and tasks',
-            bg: 'Създай сесиите и задачите',
-            doesEn: 'Creates the sessions and their tasks. Nothing is started, and the box is emptied afterwards.',
-            doesBg: 'Създава сесиите и задачите им. Нищо не се стартира, а полето се изпразва накрая.',
-          },
-          {
-            key: 'plan.drop',
-            kind: 'field',
-            en: 'Drop a .json file here',
-            bg: 'Пуснете .json файл тук',
-            doesEn:
-              'The answer box also takes a .json file dropped onto it.',
-            doesBg:
-              'Полето за отговора приема и .json файл, пуснат върху него.',
-          },
-          {
-            key: 'plan.clear',
-            kind: 'button',
-            en: 'Clear',
-            bg: 'Изчисти',
-            doesEn: 'Empties the box and drops the check result, without creating or deleting anything.',
-            doesBg: 'Изпразва полето и маха резултата от проверката, без да създава или изтрива нищо.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.issues',
-        en: 'What is wrong',
-        bg: 'Какво не е наред',
-        controls: [
-          {
-            key: 'plan.copyIssues',
-            kind: 'button',
-            en: 'Copy the errors',
-            bg: 'Копирай грешките',
-            doesEn: 'Copies every error with the path of the field it is about, to paste back into the same conversation.',
-            doesBg: 'Копира всяка грешка с пътя до полето, за което е, за да я върнете в същия разговор.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.preview',
-        en: 'What will be created',
-        bg: 'Какво ще бъде създадено',
-        controls: [
-          {
-            key: 'plan.notes',
-            kind: 'note',
-            en: 'Notes from the model',
-            bg: 'Бележки от модела',
-            doesEn:
-              'After "Check it": what the chat model wrote for the operator in the plan.',
-            doesBg:
-              'След „Провери“: какво е написал чат моделът за оператора в плана.',
-          },
-          {
-            key: 'plan.warnings',
-            kind: 'note',
-            en: 'Worth knowing',
-            bg: 'Добре е да знаете',
-            doesEn:
-              'After "Check it": things that do not stop the import but are worth reading.',
-            doesBg:
-              'След „Провери“: неща, които не спират внасянето, но е добре да се прочетат.',
-          },
-          {
-            key: 'plan.duplicates',
-            kind: 'note',
-            en: 'This is already here',
-            bg: 'Това вече го има',
-            doesEn:
-              'After "Check it": the same sessions were imported before; "Create the sessions and tasks" then asks before creating copies. Each row links to the earlier session.',
-            doesBg:
-              'След „Провери“: същите сесии вече са внасяни; „Създай сесиите и задачите“ тогава пита, преди да създаде копия. Всеки ред води към по-ранната сесия.',
-          },
-          {
-            key: 'plan.duplicateRow',
-            kind: 'link',
-            en: '{name} — {tasks} identical task(s), imported {when}',
-            bg: '{name} — {tasks} еднакви задачи, внесени {when}',
-            doesEn:
-              'One row per earlier copy: opens that session.',
-            doesBg:
-              'По един ред за всяко по-ранно копие: отваря тази сесия.',
-          },
-          {
-            key: 'plan.valid',
-            kind: 'note',
-            en: 'This is a plan this system can read: {sessions} session(s), {tasks} task(s).',
-            bg: 'Това е план, който системата разбира: {sessions} сесия(и), {tasks} задача(и).',
-            doesEn: 'The line that says the check passed, with the table of sessions and tasks below it.',
-            doesBg: 'Редът, който казва, че проверката е минала, с таблицата на сесиите и задачите отдолу.',
-          },
-        ],
-      },
-      {
-        headingKey: 'plan.step3',
-        en: '3. Check it, then start it yourself',
-        bg: '3. Прегледайте и стартирайте сами',
-        controls: [
-          {
-            key: 'plan.runThese',
-            kind: 'button',
-            en: 'Run these sessions',
-            bg: 'Пусни тези сесии',
-            doesEn: 'Opens the sessions list with exactly the new sessions ticked; the run still has to be started there.',
-            doesBg: 'Отваря списъка със сесии с отметнати точно новите; пускането пак се стартира оттам.',
-          },
-          {
-            key: 'plan.imported',
-            kind: 'note',
-            en: 'Created {sessions} session(s) with {tasks} task(s). Nothing has started.',
-            bg: 'Създадени са {sessions} сесия(и) с {tasks} задача(и). Нищо не е стартирано.',
-            doesEn:
-              'After creating: how many sessions and tasks were made. Nothing has started — the operator starts them.',
-            doesBg:
-              'След създаването: колко сесии и задачи са направени. Нищо не е пуснато — операторът ги пуска.',
-          },
-          {
-            key: 'plan.toSessions',
-            kind: 'button',
-            en: 'To the sessions list',
-            bg: 'Към списъка със сесии',
-            doesEn: 'Opens the sessions list with nothing ticked.',
-            doesBg: 'Отваря списъка със сесии, без нищо отметнато.',
-          },
-        ],
-      },
-    ],
-  },
-
-  {
     route: '/',
     nameEn: 'Workbench',
     nameBg: 'Работно място',
     purposeEn:
-      'The home screen, laid out as an IDE: the sessions and tasks (or the repository\'s files and commits) on the left, the open task with every way on from it in the middle, the commands it ran and the problems below, its chat on the right, where a note, a continuation or a new prompt is written, and Kerrigan beside it. The status bar says what runs; Ctrl+K finds anything.',
+      'The home screen, laid out as an IDE: the open folder\'s files or its git on the left, the open files and diffs in the middle with Kerrigan when nothing is open, the terminal, the problems and the output of the chat\'s conversation below, and the chat on the right, which works in the open folder. The status bar says what runs; Ctrl+K finds anything.',
     purposeBg:
-      'Началният екран, подреден като IDE: сесиите и задачите (или файловете и комитите на хранилището) отляво, отворената задача с всички пътища напред в средата, изпълнените команди и проблемите отдолу, чатът ѝ отдясно, където се пише бележка, продължение или нов prompt, и Кериган до него. Лентата най-долу казва какво върви; Ctrl+K намира всичко.',
+      'Началният екран, подреден като IDE: файловете или git на отворената папка отляво, отворените файлове и разлики в средата, с Кериган, когато нищо не е отворено, терминалът, проблемите и изходът на разговора в чата отдолу и чатът отдясно, който работи в отворената папка. Лентата най-долу казва какво върви; Ctrl+K намира всичко.',
     sections: [
       {
         headingKey: null,
-        en: 'The bar on top',
-        bg: 'Лентата горе',
+        en: 'The bar on top, the editor and the bar below',
+        bg: 'Лентата горе, редакторът и лентата долу',
         controls: [
           {
             key: 'wb.palette',
             kind: 'button',
-            en: 'Find a task, a session, a page or a command',
-            bg: 'Намери задача, сесия, страница или команда',
-            doesEn: 'Opens the command palette (also Ctrl+K): any task, session, page or command, found by a few letters.',
-            doesBg: 'Отваря палитрата с команди (и с Ctrl+K): всяка задача, сесия, страница или команда, по няколко букви.',
+            en: 'Find a command, a page or a conversation',
+            bg: 'Намери команда, страница или разговор',
+            doesEn: 'Opens the command palette (also Ctrl+K): a command, a page or a conversation of the chat, found by a few letters.',
+            doesBg: 'Отваря палитрата с команди (и с Ctrl+K): команда, страница или разговор на чата, по няколко букви.',
           },
           {
-            key: 'wb.startChat',
-            kind: 'button',
-            en: 'Write in the chat',
-            bg: 'Пиши в чата',
-            doesEn: 'On the welcome: puts the keyboard in the chat on the right.',
-            doesBg: 'В поздрава: слага курсора в чата вдясно.',
+            key: 'nav.defaults',
+            kind: 'link',
+            en: 'Settings',
+            bg: 'Настройки',
+            doesEn: 'In the bar on top: opens Settings.',
+            doesBg: 'В лентата горе: отваря Настройки.',
           },
           {
             key: 'wb.welcome',
             kind: 'note',
             en: 'Welcome',
             bg: 'Добре дошъл',
-            doesEn: 'The editor with nothing open: where to begin, and the tasks waiting for you.',
-            doesBg: 'Редакторът, когато нищо не е отворено: откъде да се започне и задачите, които чакат теб.',
-          },
-          {
-            key: 'wb.needsYou',
-            kind: 'note',
-            en: 'Waiting for you ({n})',
-            bg: 'Чакат теб ({n})',
-            doesEn: 'Under the welcome: the tasks that failed, blocked, stopped or wait for an answer, each opening its task.',
-            doesBg: 'Под поздрава: задачите, които се провалиха, блокираха, спряха или чакат отговор; всяка отваря задачата си.',
+            doesEn: 'The editor with nothing open: the folder the chat works in, and Kerrigan.',
+            doesBg: 'Редакторът, когато нищо не е отворено: папката, в която работи чатът, и Кериган.',
           },
           {
             key: 'wb.closeTab',
             kind: 'button',
             en: 'Close {name}',
             bg: 'Затвори {name}',
-            doesEn: 'The × on a tab: closes it.',
-            doesBg: 'Хиксът на раздел: затваря го.',
+            doesEn: 'The × on a tab of the editor (a file, or a file\'s two versions): closes it.',
+            doesBg: 'Хиксът на раздел в редактора (файл или двете версии на файл): затваря го.',
           },
           {
             key: 'wb.openRunning',
             kind: 'button',
-            en: 'Open the task that is running',
-            bg: 'Отвори задачата, която върви',
-            doesEn: 'In the status bar while something runs: opens the task that is running (session, task, message n of the limit, minutes).',
-            doesBg: 'В лентата най-долу, докато нещо върви: отваря задачата, която върви (сесия, задача, съобщение n от лимита, минути).',
+            en: 'Show the conversation that is running in the chat',
+            bg: 'Покажи в чата разговора, който върви',
+            doesEn: 'In the status bar while the chat works: shows that conversation in the chat (conversation, message, message n of the limit, minutes).',
+            doesBg: 'В лентата най-долу, докато чатът работи: показва този разговор в чата (разговор, съобщение, съобщение n от лимита, минути).',
           },
           {
             key: 'wb.waiting',
             kind: 'button',
             en: '{n} waiting for you',
             bg: 'чакат теб: {n}',
-            doesEn: 'In the status bar: how many steps or plans wait for an answer; brings the card on top into view.',
-            doesBg: 'В лентата най-долу: колко стъпки или планове чакат отговор; показва картата горе.',
+            doesEn: 'In the status bar: how many commands or plans wait for an answer; brings the card on top into view.',
+            doesBg: 'В лентата най-долу: колко команди или планове чакат отговор; показва картата горе.',
           },
         ],
       },
       {
-        headingKey: 'wb.sessions',
-        en: 'Sessions',
-        bg: 'Сесии',
+        headingKey: null,
+        en: 'Kerrigan, on the home screen',
+        bg: 'Кериган, на началния екран',
         controls: [
           {
-            key: 'wb.filter',
-            kind: 'field',
-            en: 'Filter tasks',
-            bg: 'Филтрирай задачите',
-            doesEn: 'Shows only the tasks (and sessions) whose name has these letters.',
-            doesBg: 'Показва само задачите (и сесиите), чието име съдържа тези букви.',
+            key: 'kerrigan.button',
+            kind: 'button',
+            en: 'Kerrigan',
+            bg: 'Кериган',
+            doesEn: 'Opens a menu with two ways to take Kerrigan away: a persona to give to a chat of your own (Copilot, ChatGPT, another), so it knows what copilot-operator is and helps you write a task for it. Optional: the chat here works without her.',
+            doesBg: 'Отваря меню с два начина да вземете Кериган: персона, която давате на чат по ваш избор (Copilot, ChatGPT или друг), за да знае какво е copilot-operator и да ви помогне да напишете задание за него. По желание: чатът тук работи и без нея.',
           },
           {
-            key: 'wb.collapse',
+            key: 'kerrigan.save',
             kind: 'button',
-            en: 'Fold {name}',
-            bg: 'Сгъни {name}',
-            doesEn: 'The ▾ beside a session: folds its tasks away.',
-            doesBg: 'Стрелката до сесия: сгъва задачите ѝ.',
+            en: 'Save as a file',
+            bg: 'Свали като файл',
+            doesEn: 'In that menu: saves her as a Markdown file, in the language of the page.',
+            doesBg: 'В това меню: сваля я като Markdown файл, на езика на страницата.',
           },
           {
-            key: 'wb.expand',
+            key: 'kerrigan.copy',
             kind: 'button',
-            en: 'Unfold {name}',
-            bg: 'Разгъни {name}',
-            doesEn: 'The ▸ beside a folded session: shows its tasks.',
-            doesBg: 'Стрелката до сгъната сесия: показва задачите ѝ.',
+            en: 'Copy to the clipboard',
+            bg: 'Копирай в клипборда',
+            doesEn: 'In that menu: copies her to the clipboard, to paste at the start of a conversation.',
+            doesBg: 'В това меню: копира я в клипборда, за поставяне в началото на разговор.',
+          },
+          {
+            key: 'kerrigan.infoLabel',
+            kind: 'button',
+            en: 'What is Kerrigan?',
+            bg: 'Какво е Кериган?',
+            doesEn: 'The "i" beside the button: says what Kerrigan is and how she helps.',
+            doesBg: '„i“ до бутона: казва какво е Кериган и как помага.',
+          },
+        ],
+      },
+      {
+        headingKey: null,
+        en: 'The column of icons on the left, and the explorer',
+        bg: 'Колоната с икони вляво и изследователят',
+        controls: [
+          {
+            key: 'wb.viewFiles',
+            kind: 'button',
+            en: 'Files',
+            bg: 'Файлове',
+            doesEn: 'Shows the open folder\'s files beside it; a file opens in the editor.',
+            doesBg: 'Показва файловете на отворената папка до нея; файл се отваря в редактора.',
+          },
+          {
+            key: 'wb.viewCommits',
+            kind: 'button',
+            en: 'Git',
+            bg: 'Git',
+            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes, each file with its letter (M modified, A added, D deleted, R renamed, U untracked, ! in conflict) and its lines, and the branch\'s commits; a file opens its two versions side by side, a commit opens to its files. Read-only.',
+            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените — всеки файл с буквата си (M променен, A добавен, D изтрит, R преименуван, U непроследен, ! в конфликт) и редовете си — и комитите на клона; файл отваря двете си версии една до друга, комит се разгъва до файловете си. Само чете.',
           },
           {
             key: 'wb.refresh',
             kind: 'button',
             en: 'Read again',
             bg: 'Прочети отново',
-            doesEn: 'Reads the sessions again at once (they are read every few seconds anyway).',
-            doesBg: 'Прочита сесиите веднага (те се четат на всеки няколко секунди и без това).',
+            doesEn: 'The ↻ of the files: reads the folder again at once (it is read every few seconds anyway).',
+            doesBg: '↻ на файловете: прочита папката веднага (тя се чете на всеки няколко секунди и без това).',
           },
           {
             key: 'git.refresh',
             kind: 'button',
             en: 'Read the folder\'s git again',
             bg: 'Прочети отново git на папката',
-            doesEn: 'The ↻ of the Git view (the activity bar\'s "Git"): reads the open folder\'s git again at once. The view shows, as an IDE\'s Source Control does, the branch, the staged changes and the changes, each file with its letter (M modified, A added, D deleted, R renamed, U untracked, ! in conflict) and its lines, and the branch\'s commits; a file opens its two versions side by side in the editor, a commit opens to its files. Read-only: it stages and commits nothing.',
-            doesBg: '↻ на изгледа Git („Git“ в лентата вляво): прочита веднага git на отворената папка. Изгледът показва, както Source Control в IDE, клона, подготвените промени и промените — всеки файл с буквата си (M променен, A добавен, D изтрит, R преименуван, U непроследен, ! в конфликт) и редовете си — и комитите на клона; файл отваря двете си версии една до друга в редактора, комит се разгъва до файловете си. Само чете: не подготвя и не комитва нищо.',
+            doesEn: 'The ↻ of the git view: reads the folder\'s git again at once.',
+            doesBg: '↻ на изгледа git: прочита git на папката веднага.',
           },
           {
-            key: 'wb.byTask',
-            kind: 'link',
-            en: 'by “{title}”',
-            bg: 'от „{title}“',
-            doesEn: 'Under a commit of the Git view that a task made: opens that task.',
-            doesBg: 'Под комит в изгледа Git, направен от задача: отваря задачата.',
-          },
-          {
-            key: 'wb.newSession',
-            kind: 'link',
-            en: 'New session',
-            bg: 'Нова сесия',
-            doesEn: 'Goes to the Sessions page, to the form that makes a new session.',
-            doesBg: 'Отива на страницата „Сесии“, на формата за нова сесия.',
-          },
-          {
-            key: 'wb.startPlan',
-            kind: 'link',
-            en: 'Import a plan',
-            bg: 'Импортирай план',
-            doesEn: 'Goes to the import page: Kerrigan\'s brief, and the place to paste her plan.',
-            doesBg: 'Отива на страницата за импорт: брифингът на Кериган и мястото за плана ѝ.',
-          },
-        ],
-      },
-      {
-        headingKey: null,
-        en: 'A task opened in the editor: what can be done with it',
-        bg: 'Задача, отворена в редактора: какво може да се направи с нея',
-        controls: [
-          {
-            key: 'wb.runThis',
+            key: 'wb.appearance',
             kind: 'button',
-            en: 'Run this task',
-            bg: 'Пусни тази задача',
-            doesEn: 'Queued task: offers to run it alone or with the queued ones after it, then opens the start window.',
-            doesBg: 'Чакаща задача: предлага да се пусне сама или с чакащите след нея, после отваря прозореца за начало.',
+            en: 'Appearance: theme and text',
+            bg: 'Изглед: тема и текст',
+            doesEn: 'The last icon: how the page looks, here and now — the theme (System, the default, follows the machine\'s light or dark; Light; Dark), the text size a step at a time (A− and A+), and the reading aids (underline links, less motion, higher contrast, thick focus outline, night light). Kept in this browser; the same as the Appearance page.',
+            doesBg: 'Последната икона: как изглежда страницата, тук и веднага — темата (Системна, по подразбиране, следва светлото или тъмното на машината; Светла; Тъмна), размерът на текста стъпка по стъпка (A− и A+) и помощните средства за четене (подчертани връзки, по-малко движение, по-висок контраст, дебела рамка на фокуса, нощна светлина). Пазят се в този браузър; същите като на страницата Изглед.',
           },
           {
-            key: 'wb.addNote',
+            key: 'ap.smaller',
             kind: 'button',
-            en: 'Add information',
-            bg: 'Добави информация',
-            doesEn: 'Queued task: puts the keyboard in the chat box, where what is written goes to the chat with the task when it runs.',
-            doesBg: 'Чакаща задача: слага курсора в полето на чата; написаното отива при чата заедно със задачата, когато тръгне.',
+            en: 'Smaller text',
+            bg: 'По-малък текст',
+            doesEn: 'In that menu, the A−: the text a step smaller.',
+            doesBg: 'В това меню, A−: текстът една стъпка по-малък.',
           },
           {
-            key: 'wb.editTask',
-            kind: 'link',
-            en: 'Edit the task',
-            bg: 'Редактирай задачата',
-            doesEn: 'Opens the task on its session\'s page, where its prompt, checks and scope are edited.',
-            doesBg: 'Отваря задачата на страницата на сесията ѝ, където се редактират prompt, проверки и обхват.',
-          },
-          {
-            key: 'wb.remove',
+            key: 'ap.larger',
             kind: 'button',
-            en: 'Remove',
-            bg: 'Премахни',
-            doesEn: 'Queued task: removes it, after a confirmation.',
-            doesBg: 'Чакаща задача: премахва я след потвърждение.',
-          },
-          {
-            key: 'wb.writeToChat',
-            kind: 'button',
-            en: 'Write to the chat',
-            bg: 'Пиши в чата',
-            doesEn: 'Running task: puts the keyboard in the chat box; what is sent goes to the chat with the next report, while it works.',
-            doesBg: 'Задача, която върви: слага курсора в полето на чата; изпратеното отива при чата със следващия отчет, докато работи.',
-          },
-          {
-            key: 'wb.stopSession',
-            kind: 'button',
-            en: 'Stop the session',
-            bg: 'Спри сесията',
-            doesEn: 'Stops the session that is running; the task in flight ends aborted and can be continued.',
-            doesBg: 'Спира сесията, която върви; текущата задача завършва като прекъсната и може да продължи.',
-          },
-          {
-            key: 'wb.fixContradiction',
-            kind: 'link',
-            en: 'Fix the contradiction',
-            bg: 'Поправи противоречието',
-            doesEn: 'A task refused for contradicting itself: opens its session\'s page with the smallest fix offered.',
-            doesBg: 'Задача, отказана заради противоречие: отваря страницата на сесията с предложена най-малката поправка.',
-          },
-          {
-            key: 'wb.continue',
-            kind: 'button',
-            en: 'Continue',
-            bg: 'Продължи',
-            doesEn: 'A task a limit or a stop ended: queues it to carry on in its own chat and branch, from where it got to, and offers to run it.',
-            doesBg: 'Задача, спряна от лимит или спиране: слага я да продължи в своя чат и клон, от където е стигнала, и предлага да се пусне.',
-          },
-          {
-            key: 'wb.continueWithPrompt',
-            kind: 'button',
-            en: 'Continue with a new prompt',
-            bg: 'Продължи с нов prompt',
-            doesEn: 'A task that failed, blocked or stopped: puts the keyboard in the chat box, where the prompt it carries on with is written.',
-            doesBg: 'Задача, която се провали, блокира или спря: слага курсора в полето на чата, където се пише prompt-ът, с който продължава.',
-          },
-          {
-            key: 'wb.newPrompt',
-            kind: 'button',
-            en: 'Give it a new prompt',
-            bg: 'Дай ѝ нов prompt',
-            doesEn: 'A done task: puts the keyboard in the chat box, where a new prompt that builds on its work is written.',
-            doesBg: 'Готова задача: слага курсора в полето на чата, където се пише нов prompt, който надгражда работата ѝ.',
-          },
-          {
-            key: 'wb.runAgain',
-            kind: 'button',
-            en: 'Run again',
-            bg: 'Пусни отново',
-            doesEn: 'Queues the task again from where it first started, after a confirmation; its earlier work is not used.',
-            doesBg: 'Слага задачата отново на опашката от където е започнала първия път, след потвърждение; по-ранната ѝ работа не се използва.',
-          },
-          {
-            key: 'wb.accept',
-            kind: 'button',
-            en: 'Accept as done',
-            bg: 'Приеми като готова',
-            doesEn: 'A task that did not end done: opens a field for why, then accepts it as done; what it was is kept beside it.',
-            doesBg: 'Задача, която не е завършила като готова: отваря поле за причината и я приема като готова; какво е била, се пази до нея.',
-          },
-          {
-            key: 'wb.acceptNote',
-            kind: 'field',
-            en: 'Why it is done (optional), e.g. finished by hand on its branch',
-            bg: 'Защо е готова (по желание), напр. довършена ръчно в нейния клон',
-            doesEn: 'Why the task is done although it did not end so; kept on the task.',
-            doesBg: 'Защо задачата е готова, макар да не е завършила така; пази се на задачата.',
-          },
-          {
-            key: 'wb.acceptGo',
-            kind: 'button',
-            en: 'Accept it as done',
-            bg: 'Приеми я като готова',
-            doesEn: 'Accepts the task as done.',
-            doesBg: 'Приема задачата като готова.',
-          },
-          {
-            key: 'wb.undo',
-            kind: 'button',
-            en: 'Undo…',
-            bg: 'Отмени…',
-            doesEn: 'Opens the two ways to undo a task that ran, each said before it is done.',
-            doesBg: 'Отваря двата начина да се отмени задача, която е пускана, всеки казан преди да се направи.',
-          },
-          {
-            key: 'wb.undoThisGo',
-            kind: 'button',
-            en: 'Undo this task',
-            bg: 'Отмени задачата',
-            doesEn: 'Takes only this task\'s work out of the session\'s branch, in one new commit, keeps what came after it, and queues it again (per-task branches: the folder goes back to its start). Refused, with nothing changed, when later tasks changed the same lines.',
-            doesBg: 'Изважда само работата на тази задача от клона на сесията с един нов комит, пази каквото е след нея и я слага отново на опашката (при клон на задача: папката се връща в началото ѝ). Отказва се, без нищо да се промени, ако по-късни задачи са променили същите редове.',
-          },
-          {
-            key: 'wb.undoBackGo',
-            kind: 'button',
-            en: 'Go back',
-            bg: 'Върни',
-            doesEn: 'Puts the code back as it was before this task, on a branch of its own, and queues it and the tasks after it again; nothing is started and the old branch keeps the work.',
-            doesBg: 'Връща кода както беше преди тази задача, на отделен клон, и слага нея и задачите след нея отново на опашката; нищо не се пуска, а старият клон пази работата.',
-          },
-          {
-            key: 'wb.askKerrigan',
-            kind: 'button',
-            en: 'Ask Kerrigan',
-            bg: 'Попитай Кериган',
-            doesEn: 'Opens Kerrigan\'s tab in the right panel, set to this task.',
-            doesBg: 'Отваря раздела на Кериган в десния панел, настроен на тази задача.',
-          },
-          {
-            key: 'wb.onSessionPage',
-            kind: 'link',
-            en: 'On its session’s page',
-            bg: 'На страницата на сесията',
-            doesEn: 'Opens the task on its session\'s page, with every detail and setting.',
-            doesBg: 'Отваря задачата на страницата на сесията ѝ, с всички подробности и настройки.',
-          },
-          {
-            key: 'wb.result',
-            kind: 'note',
-            en: 'How it stands',
-            bg: 'Как стои',
-            doesEn: 'How the task stands: its summary, why it stopped, whether it was accepted or undone.',
-            doesBg: 'Как стои задачата: обобщението ѝ, защо е спряла, дали е приета или отменена.',
-          },
-          {
-            key: 'wb.checks',
-            kind: 'note',
-            en: 'Checks',
-            bg: 'Проверки',
-            doesEn: 'The checks of its last attempt, each passed or not.',
-            doesBg: 'Проверките на последния ѝ опит, всяка минала или не.',
-          },
-          {
-            key: 'wb.review',
-            kind: 'note',
-            en: 'Review: {verdict}',
-            bg: 'Преглед: {verdict}',
-            doesEn: 'What the independent review concluded, with its findings.',
-            doesBg: 'Какво е заключил независимият преглед, с находките му.',
-          },
-          {
-            key: 'wb.changedFiles',
-            kind: 'note',
-            en: 'Files it changed ({n})',
-            bg: 'Файлове, които промени ({n})',
-            doesEn: 'The files the task changed; each opens at the task\'s commit.',
-            doesBg: 'Файловете, които задачата е променила; всеки се отваря при комита на задачата.',
-          },
-          {
-            key: 'wb.notes',
-            kind: 'note',
-            en: 'Your notes to the chat',
-            bg: 'Твоите бележки към чата',
-            doesEn: 'What you wrote to the chat about this task, and whether it has gone out yet.',
-            doesBg: 'Какво си писал на чата за тази задача и дали вече е изпратено.',
-          },
-          {
-            key: 'wb.prompt',
-            kind: 'disclosure',
-            en: 'Prompt',
-            bg: 'Prompt',
-            doesEn: 'The task\'s prompt, as the chat gets it.',
-            doesBg: 'Prompt-ът на задачата, както го получава чатът.',
-          },
-          {
-            key: 'wb.plan',
-            kind: 'disclosure',
-            en: 'Plan (version {n})',
-            bg: 'План (версия {n})',
-            doesEn: 'The plan the task made before changing anything (plan first).',
-            doesBg: 'Планът, който задачата е направила, преди да промени нещо („Първо план“).',
-          },
-          {
-            key: 'wb.attempts',
-            kind: 'disclosure',
-            en: 'Earlier attempts ({n})',
-            bg: 'По-ранни опити ({n})',
-            doesEn: 'The task\'s earlier attempts, with how each ended and whether it was undone.',
-            doesBg: 'По-ранните опити на задачата, с това как е завършил всеки и дали е отменен.',
-          },
-          {
-            key: 'wb.conversation',
-            kind: 'disclosure',
-            en: 'Its conversation',
-            bg: 'Разговорът ѝ',
-            doesEn: 'The task\'s exchange with Copilot: every message, reply and command with its output; open while it runs.',
-            doesBg: 'Обменът на задачата с Copilot: всяко съобщение, отговор и команда с изхода ѝ; отворено, докато върви.',
-          },
-        ],
-      },
-      {
-        headingKey: null,
-        en: 'A session opened in the editor',
-        bg: 'Сесия, отворена в редактора',
-        controls: [
-          {
-            key: 'wb.sessionSettings',
-            kind: 'link',
-            en: 'Session settings',
-            bg: 'Настройки на сесията',
-            doesEn: 'Opens the session\'s page, with all its settings.',
-            doesBg: 'Отваря страницата на сесията с всичките ѝ настройки.',
-          },
-          {
-            key: 'wb.addTask',
-            kind: 'link',
-            en: 'Add a task',
-            bg: 'Добави задача',
-            doesEn: 'Opens the session\'s page at the form that adds a task.',
-            doesBg: 'Отваря страницата на сесията при формата за нова задача.',
+            en: 'Larger text',
+            bg: 'По-голям текст',
+            doesEn: 'In that menu, the A+: the text a step larger.',
+            doesBg: 'В това меню, A+: текстът една стъпка по-голям.',
           },
         ],
       },
@@ -1372,14 +568,6 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Чат',
             doesEn: 'The chat of the open project folder, as in an IDE: a message is sent to Copilot, the commands it answers with run in the folder and their output goes back, until it is done; shown as the conversation.',
             doesBg: 'Чатът на отворената папка, както в IDE: съобщението отива при Copilot, командите, с които отговаря, се изпълняват в папката и изходът им се връща, докато свърши; показва се като разговор.',
-          },
-          {
-            key: 'wb.kerriganTab',
-            kind: 'tab',
-            en: 'Kerrigan',
-            bg: 'Кериган',
-            doesEn: 'Tell Kerrigan what happened and apply the changes she answers with.',
-            doesBg: 'Кажи на Кериган какво се случи и приложи промените, с които отговори.',
           },
           {
             key: 'chat.thread',
@@ -1442,8 +630,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Read the latest models from Copilot',
             bg: 'Прочети последните модели от Copilot',
-            doesEn: 'The ↻ beside the model: reads the models Copilot\'s own picker offers now (the browser opens for a moment; not while a conversation works).',
-            doesBg: '↻ до модела: прочита моделите, които изборът в Copilot предлага сега (браузърът се отваря за момент; не и докато разговор работи).',
+            doesEn: 'The ↻ beside the model: reads the models Copilot\'s own picker offers now (the browser opens for a moment, and a Copilot window the chat left open is closed first; not while a conversation works).',
+            doesBg: '↻ до модела: прочита моделите, които изборът в Copilot предлага сега (браузърът се отваря за момент, а прозорец на Copilot, оставен отворен от чата, първо се затваря; не и докато разговор работи).',
           },
           {
             key: 'copy.copy',
@@ -1514,8 +702,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Send',
             bg: 'Изпрати',
-            doesEn: 'Sends the message and starts it on the branch the folder is on; nothing is asked about branches.',
-            doesBg: 'Изпраща съобщението и го пуска на клона, на който е папката; нищо не се пита за клонове.',
+            doesEn: 'Sends the message and starts it on the branch the folder is on; nothing is asked about branches. The Copilot window stays open when the work on it has ended, says so with an OK, and the next message works in it; close it with its X whenever you like (a message it is working on then stops, and the next one opens a new window).',
+            doesBg: 'Изпраща съобщението и го пуска на клона, на който е папката; нищо не се пита за клонове. Прозорецът на Copilot остава отворен, когато работата по него свърши, казва го с бутон „ОК“, и следващото съобщение работи в него; затворете го с X, когато пожелаете (съобщение, по което работи, тогава спира, а следващото отваря нов прозорец).',
           },
           {
             key: 'chat.sendNote',
@@ -1526,12 +714,44 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Докато работи: добавя съобщението към това, което прави; получава го със следващия си отчет.',
           },
           {
+            key: 'chat.pause',
+            kind: 'button',
+            en: 'Pause',
+            bg: 'Пауза',
+            doesEn: 'While it works: holds the work where it is — a reply being written and a command running are let finish — and then nothing more is sent and nothing runs; the button becomes "Continue". The time paused does not count against the time limit.',
+            doesBg: 'Докато работи: задържа работата там, където е — отговор, който се пише, и команда, която тече, се оставят да свършат — и после нищо повече не се изпраща и нищо не се изпълнява; бутонът става „Продължи“. Времето на пауза не се брои към ограничението за време.',
+          },
+          {
+            key: 'chat.resume',
+            kind: 'button',
+            en: 'Continue',
+            bg: 'Продължи',
+            doesEn: 'While it is paused: goes on with the work from where it held.',
+            doesBg: 'Докато е на пауза: продължава работата оттам, където е задържана.',
+          },
+          {
             key: 'chat.stop',
             kind: 'button',
             en: 'Stop',
             bg: 'Спри',
-            doesEn: 'While it works: stops it; the message in flight ends stopped and can be carried on.',
-            doesBg: 'Докато работи: спира го; текущото съобщение завършва спряно и може да продължи.',
+            doesEn: 'While it works: stops it; the message in flight ends stopped and can be carried on. The Copilot window stays open for the next message.',
+            doesBg: 'Докато работи: спира го; текущото съобщение завършва спряно и може да продължи. Прозорецът на Copilot остава отворен за следващото съобщение.',
+          },
+          {
+            key: 'chat.planMode',
+            kind: 'checkbox',
+            en: 'Plan mode',
+            bg: 'Режим на план',
+            doesEn: 'Plan mode, as in Claude Code: Copilot first looks at the project with commands that only read, and proposes a plan — what is there, how, the stages, the files, how it will show it works; the plan is shown in the conversation to approve, to ask for another or to stop, and nothing changes before. Of this conversation, or of the next one.',
+            doesBg: 'Режим на план, както в Claude Code: Copilot първо разглежда проекта с команди, които само четат, и предлага план — какво има, как, етапите, файловете, как ще покаже, че работи; планът се показва в разговора, за да го одобрите, да поискате друг или да спрете, и нищо не се променя преди това. На този разговор или на следващия.',
+          },
+          {
+            key: 'chat.planShown',
+            kind: 'disclosure',
+            en: 'The approved plan (version {v})',
+            bg: 'Одобреният план (версия {v})',
+            doesEn: 'Under a message worked in plan mode: the plan that was approved, folded.',
+            doesBg: 'Под съобщение, изпълнено в режим на план: одобреният план, сгънат.',
           },
           {
             key: 'chat.askRun',
@@ -1565,147 +785,155 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesEn: 'The × on the right panel (and the chat icon on the far left): hides or shows it (Ctrl+L brings it back with the keyboard in the box).',
             doesBg: 'Хиксът на десния панел (и иконата на чата най-вляво): скрива го или го показва (Ctrl+L го връща с курсора в полето).',
           },
+        ],
+      },
+      {
+        headingKey: null,
+        en: 'The editor',
+        bg: 'Редакторът',
+        controls: [
           {
-            key: 'wb.sendNote',
+            key: 'ed.save',
             kind: 'button',
-            en: 'Send to the chat',
-            bg: 'Изпрати на чата',
-            doesEn: 'Queued or running task: sends what is written as a note, with its next message (Ctrl+Enter).',
-            doesBg: 'Чакаща задача или такава, която върви: изпраща написаното като бележка със следващото ѝ съобщение (Ctrl+Enter).',
+            en: 'Save',
+            bg: 'Запази',
+            doesEn: 'Saves the file (also Ctrl+S), over the version that was opened: a file changed on disk meanwhile is not overwritten without asking. A tab with changes not saved has a dot; closing it asks first.',
+            doesBg: 'Запазва файла (и с Ctrl+S), върху версията, която е била отворена: файл, променен на диска междувременно, не се презаписва без питане. Раздел с незапазени промени има точка; затварянето му пита първо.',
           },
           {
-            key: 'wb.sendContinue',
+            key: 'ed.revert',
             kind: 'button',
-            en: 'Continue with this',
-            bg: 'Продължи с това',
-            doesEn: 'Failed, blocked or stopped task: queues it to carry on from where it got to with this prompt, and offers to run it.',
-            doesBg: 'Провалена, блокирала или спряна задача: слага я да продължи от където е стигнала с този prompt и предлага да се пусне.',
+            en: 'Undo my changes',
+            bg: 'Отмени промените ми',
+            doesEn: 'Puts the text back as it was last read or saved.',
+            doesBg: 'Връща текста, какъвто е бил при последното четене или запазване.',
           },
           {
-            key: 'wb.sendNewPrompt',
-            kind: 'button',
-            en: 'Queue with this new prompt',
-            bg: 'На опашката с този нов prompt',
-            doesEn: 'Done task: queues it with this new prompt, building on its work, and offers to run it.',
-            doesBg: 'Готова задача: слага я на опашката с този нов prompt, надграждайки работата ѝ, и предлага да се пусне.',
+            key: 'ed.language',
+            kind: 'select',
+            en: 'Language',
+            bg: 'Език',
+            doesEn: 'The language the text is coloured in: "Automatic" (found from the file\'s name and extension, its first line and what it starts with) or one chosen by hand.',
+            doesBg: 'Езикът, в който се оцветява текстът: „Автоматично“ (по името и разширението на файла, първия му ред и с какво започва) или избран ръчно.',
           },
           {
-            key: 'wb.sendNone',
+            key: 'ed.langAuto',
+            kind: 'select',
+            en: 'Automatic ({name})',
+            bg: 'Автоматично ({name})',
+            doesEn: 'In that list: the language found by itself, named in brackets.',
+            doesBg: 'В този списък: езикът, разпознат сам, посочен в скобите.',
+          },
+          {
+            key: 'ed.reload',
             kind: 'button',
-            en: 'Send',
-            bg: 'Изпрати',
-            doesEn: 'Shown when nothing can be sent to the task now (its session runs another task).',
-            doesBg: 'Показва се, когато сега нищо не може да се изпрати на задачата (сесията ѝ изпълнява друга).',
+            en: 'Read it again (my changes are lost)',
+            bg: 'Прочети го отново (промените ми се губят)',
+            doesEn: 'When the file changed on disk under an edit: reads it again; the edit is lost.',
+            doesBg: 'Когато файлът се е променил на диска под редакция: прочита го отново; редакцията се губи.',
+          },
+          {
+            key: 'ed.saveOver',
+            kind: 'button',
+            en: 'Save over it',
+            bg: 'Запази върху него',
+            doesEn: 'When the file changed on disk under an edit: saves the edit over it.',
+            doesBg: 'Когато файлът се е променил на диска под редакция: записва редакцията върху него.',
           },
         ],
       },
       {
-        headingKey: 'wb.kTell',
-        en: 'Tell Kerrigan what happened',
-        bg: 'Кажи на Кериган какво се случи',
+        headingKey: null,
+        en: 'The changes of a message, and a file\'s two versions',
+        bg: 'Промените на съобщение и двете версии на файл',
         controls: [
           {
-            key: 'wb.kScopeTask',
-            kind: 'radio',
-            en: 'This task',
-            bg: 'Тази задача',
-            doesEn: 'The report covers the chosen task.',
-            doesBg: 'Отчетът е за избраната задача.',
+            key: 'diff.open',
+            kind: 'button',
+            en: 'See the changes ({n} file(s))',
+            bg: 'Виж промените ({n} файла)',
+            doesEn: 'Under a message that changed files: opens what it changed, file by file, before on the left and after on the right.',
+            doesBg: 'Под съобщение, което е променило файлове: отваря какво е променило, файл по файл, преди отляво и след отдясно.',
           },
           {
-            key: 'wb.kScopeSession',
-            kind: 'radio',
-            en: 'This session',
-            bg: 'Тази сесия',
-            doesEn: 'The report covers every task of the chosen session.',
-            doesBg: 'Отчетът е за всички задачи на избраната сесия.',
-          },
-          {
-            key: 'wb.kScopeAll',
-            kind: 'radio',
-            en: 'All sessions',
-            bg: 'Всички сесии',
-            doesEn: 'The report covers every session.',
-            doesBg: 'Отчетът е за всички сесии.',
-          },
-          {
-            key: 'wb.kScope',
+            key: 'diff.title',
             kind: 'note',
-            en: 'What to tell her about',
-            bg: 'За какво да ѝ кажеш',
-            doesEn: 'The choice above the note: which tasks the report covers.',
-            doesBg: 'Изборът над бележката: за кои задачи е отчетът.',
+            en: 'Changes in "{title}"',
+            bg: 'Промени в „{title}“',
+            doesEn: 'The heading of that view.',
+            doesBg: 'Заглавието на този изглед.',
           },
           {
-            key: 'wb.kNote',
-            kind: 'field',
-            en: 'What happened, and what you want now',
-            bg: 'Какво се случи и какво искаш сега',
-            doesEn: 'What you tell Kerrigan: what went wrong, what you want now; it goes into the report.',
-            doesBg: 'Какво казваш на Кериган: какво се обърка, какво искаш сега; влиза в отчета.',
-          },
-          {
-            key: 'wb.kCopy',
+            key: 'diff.close',
             kind: 'button',
-            en: 'Copy for Kerrigan',
-            bg: 'Копирай за Кериган',
-            doesEn: 'Copies the report — every task with how it ended and why, what it changed, your words, and how to answer — for Kerrigan\'s chat.',
-            doesBg: 'Копира отчета — всяка задача с това как е завършила и защо, какво е променила, твоите думи и как да отговори — за чата на Кериган.',
+            en: 'Close',
+            bg: 'Затвори',
+            doesEn: 'Closes it (Escape too).',
+            doesBg: 'Затваря го (и Escape).',
           },
           {
-            key: 'wb.kSave',
+            key: 'diff.prevChange',
             kind: 'button',
-            en: 'Save as a file',
-            bg: 'Запази като файл',
-            doesEn: 'Saves the same report as a text file, for a chat that takes a file.',
-            doesBg: 'Запазва същия отчет като текстов файл, за чат, който приема файл.',
+            en: 'Previous change',
+            bg: 'Предишна промяна',
+            doesEn: 'Goes to the change before (also p). With "Next change" on one line, two only when there is no room.',
+            doesBg: 'Отива на предишната промяна (и с p). Заедно с „Следваща промяна“ на един ред, на два само когато няма място.',
           },
           {
-            key: 'wb.kBrief',
-            kind: 'link',
-            en: 'Kerrigan’s brief',
-            bg: 'Брифингът на Кериган',
-            doesEn: 'Opens the import page, where Kerrigan\'s brief is copied.',
-            doesBg: 'Отваря страницата за импорт, откъдето се копира брифингът на Кериган.',
-          },
-        ],
-      },
-      {
-        headingKey: 'wb.kAnswer',
-        en: 'Her answer',
-        bg: 'Нейният отговор',
-        controls: [
-          {
-            key: 'wb.kPaste',
-            kind: 'field',
-            en: 'Paste her whole answer here, words and JSON together',
-            bg: 'Постави целия ѝ отговор тук, думи и JSON заедно',
-            doesEn: 'Her whole answer, words and the JSON with "changes" together.',
-            doesBg: 'Целият ѝ отговор, думите и JSON-ът с "changes" заедно.',
-          },
-          {
-            key: 'wb.kCheck',
+            key: 'diff.nextChange',
             kind: 'button',
-            en: 'Check her answer',
-            bg: 'Провери отговора ѝ',
-            doesEn: 'Reads her changes against the sessions as they are now and says each in words; nothing is changed.',
-            doesBg: 'Прочита промените ѝ спрямо сесиите, както са сега, и казва всяка с думи; нищо не се променя.',
+            en: 'Next change',
+            bg: 'Следваща промяна',
+            doesEn: 'Goes to the next change (also n).',
+            doesBg: 'Отива на следващата промяна (и с n).',
           },
           {
-            key: 'wb.kApply',
+            key: 'diff.changeN',
+            kind: 'note',
+            en: 'change {i} of {n}',
+            bg: 'промяна {i} от {n}',
+            doesEn: 'Right above "Before" and "After": which change is chosen, of how many.',
+            doesBg: 'Точно над „Преди“ и „След“: коя промяна е избрана, от колко.',
+          },
+          {
+            key: 'diff.prevFile',
             kind: 'button',
-            en: 'Make the {n} change(s)',
-            bg: 'Направи промените ({n})',
-            doesEn: 'Makes the changes one by one, as the buttons would — a task carried on, added, edited, undone, accepted — and stops at the first refused; nothing is started.',
-            doesBg: 'Прави промените една по една, както биха бутоните — задача продължена, добавена, редактирана, отменена, приета — и спира при първата отказана; нищо не се пуска.',
+            en: 'Previous file',
+            bg: 'Предишен файл',
+            doesEn: 'In the changes of a message with several files: the file before (also [).',
+            doesBg: 'В промените на съобщение с няколко файла: предишният файл (и с [).',
           },
           {
-            key: 'wb.kImportPage',
-            kind: 'link',
-            en: 'Open the import page',
-            bg: 'Отвори страницата за импорт',
-            doesEn: 'Shown when her answer is a plan of new sessions: opens the import page for it.',
-            doesBg: 'Показва се, когато отговорът ѝ е план за нови сесии: отваря страницата за импорт.',
+            key: 'diff.nextFile',
+            kind: 'button',
+            en: 'Next file',
+            bg: 'Следващ файл',
+            doesEn: 'The next file (also ]).',
+            doesBg: 'Следващият файл (и с ]).',
+          },
+          {
+            key: 'diff.whole',
+            kind: 'checkbox',
+            en: 'Show the whole file',
+            bg: 'Покажи целия файл',
+            doesEn: 'Shows the whole file, not only the changes with three lines around them. With "Wrap long lines" on one line.',
+            doesBg: 'Показва целия файл, не само промените с по три реда около тях. Заедно с „Пренасяй дългите редове“ на един ред.',
+          },
+          {
+            key: 'diff.wrap',
+            kind: 'checkbox',
+            en: 'Wrap long lines',
+            bg: 'Пренасяй дългите редове',
+            doesEn: 'Wraps a long line instead of scrolling it sideways.',
+            doesBg: 'Пренася дълъг ред, вместо да се превърта настрани.',
+          },
+          {
+            key: 'diff.gap',
+            kind: 'button',
+            en: '⋯ {n} unchanged line(s) — show them',
+            bg: '⋯ {n} непроменени реда — покажи ги',
+            doesEn: 'Opens a run of unchanged lines that is folded.',
+            doesBg: 'Разгъва сгънат участък от непроменени редове.',
           },
         ],
       },
@@ -1719,24 +947,48 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'tab',
             en: 'Terminal',
             bg: 'Терминал',
-            doesEn: 'The commands the chosen task ran and what each printed, following the newest while it runs. After "New chat" it is empty until the new chat runs, until a task is opened in the editor.',
-            doesBg: 'Командите, които избраната задача е изпълнила, и какво е изписала всяка, като следва най-новата, докато върви. След „Нов чат“ е празен, докато новият чат не тръгне, освен ако не отвориш задача в редактора.',
+            doesEn: 'The commands the latest message of the conversation open in the chat ran, and what each printed, following the newest while it works. Empty on a new chat until it runs.',
+            doesBg: 'Командите, които последното съобщение на отворения в чата разговор е изпълнило, и какво е изписала всяка, като следва най-новата, докато работи. Празен при нов чат, докато не тръгне.',
+          },
+          {
+            key: 'wb.terminalInfoLabel',
+            kind: 'button',
+            en: 'What the Terminal shows',
+            bg: 'Какво показва „Терминал“',
+            doesEn: 'The "i" beside "Terminal": says what it shows.',
+            doesBg: '„i“ до „Терминал“: казва какво показва.',
           },
           {
             key: 'wb.problems',
             kind: 'tab',
             en: 'Problems',
             bg: 'Проблеми',
-            doesEn: 'What did not pass in the chosen session — checks, review findings, why a task stopped — each opening its task; the count is of the ones not marked seen. Empty on a new chat.',
-            doesBg: 'Какво не е минало в избраната сесия — проверки, находки от прегледа, защо е спряла задача — всяко отваря задачата си; броят е на тези, които не са отбелязани като видени. Празно при нов чат.',
+            doesEn: 'What did not go well in the conversation open in the chat — a message that ended unfinished, stopped or at a limit, and why; a check that failed. Each brings its message into view in the chat; the count is of the ones not marked seen. Empty on a new chat.',
+            doesBg: 'Какво не е минало добре в отворения в чата разговор — съобщение, завършило незавършено, спряно или при ограничение, и защо; проверка, която не е минала. Всяко показва съобщението си в чата; броят е на тези, които не са отбелязани като видени. Празно при нов чат.',
+          },
+          {
+            key: 'wb.problemsInfoLabel',
+            kind: 'button',
+            en: 'What the Problems show',
+            bg: 'Какво показва „Проблеми“',
+            doesEn: 'The "i" beside "Problems": says what they show.',
+            doesBg: '„i“ до „Проблеми“: казва какво показват.',
+          },
+          {
+            key: 'wb.problemShow',
+            kind: 'button',
+            en: 'Show its message in the chat',
+            bg: 'Покажи съобщението му в чата',
+            doesEn: 'A problem itself: brings its message into view in the chat.',
+            doesBg: 'Самият проблем: показва съобщението му в чата.',
           },
           {
             key: 'wb.problemSeen',
             kind: 'button',
             en: 'Seen',
             bg: 'Видях',
-            doesEn: 'Beside a problem: takes it off the list and the count, in this browser. It is still on its task, and shows again if a later run of that task has it again.',
-            doesBg: 'До проблем: маха го от списъка и от броя, в този браузър. Остава записан към задачата си и се показва пак, ако следващо пускане на задачата има същия проблем.',
+            doesEn: 'Beside a problem: takes it off the list and the count, in this browser. Its message still has it, and it shows again if a later run of that message has it again.',
+            doesBg: 'До проблем: маха го от списъка и от броя, в този браузър. Съобщението му си го пази и се показва пак, ако следващо изпълнение на съобщението има същия проблем.',
           },
           {
             key: 'wb.problemsAllSeen',
@@ -1767,8 +1019,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'tab',
             en: 'Output',
             bg: 'Изход',
-            doesEn: 'The chosen session\'s events, newest at the bottom.',
-            doesBg: 'Събитията на избраната сесия, най-новите отдолу.',
+            doesEn: 'The bot\'s own log of the conversation open in the chat, newest at the bottom, each line with its time; errors in red, warnings in yellow.',
+            doesBg: 'Собственият дневник на бота за отворения в чата разговор, най-новото отдолу, всеки ред с часа си; грешките в червено, предупрежденията в жълто.',
+          },
+          {
+            key: 'wb.outputInfoLabel',
+            kind: 'button',
+            en: 'What the Output shows',
+            bg: 'Какво показва „Изход“',
+            doesEn: 'The "i" beside "Output": says what it shows.',
+            doesBg: '„i“ до „Изход“: казва какво показва.',
           },
           {
             key: 'wb.cmdPanel',
@@ -1779,2602 +1039,6 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Стрелката вдясно на панела: свива го до разделите му или го показва отново (Ctrl+J).',
           },
         ],
-      },
-    ],
-  },
-
-  {
-    route: '/sessions',
-    nameEn: 'Sessions',
-    nameBg: 'Сесии',
-    purposeEn:
-      'The list of every session on this machine: where one is created, where several are ticked and started one after another, and where a stopped step waits for a decision.',
-    purposeBg:
-      'Списъкът с всички сесии на машината: тук се създава сесия, тук се отмятат няколко и тръгват една след друга, и тук спряна стъпка чака решение.',
-    sections: [
-      {
-        headingKey: null,
-        en: 'Shown only when this browser has not been given the API key',
-        bg: 'Показва се само когато този браузър още няма ключа за API-то',
-        controls: [
-          {
-            key: 'home.noToken',
-            kind: 'note',
-            en: 'This browser does not have the key to the API yet.',
-            bg: 'Този браузър още няма ключа за API-то.',
-            doesEn: 'The page was started without the API key; start it with npm start, which hands the key over.',
-            doesBg: 'Страницата е пусната без ключа за API-то; пуснете я с npm start, който го предава.',
-          },
-        ],
-      },
-      {
-        headingKey: 'home.new',
-        en: 'New session',
-        bg: 'Нова сесия',
-        controls: [
-          {
-            key: 'home.namePlaceholder',
-            kind: 'field',
-            en: 'Session name, e.g. payments-service',
-            bg: 'Име на сесията, напр. payments-service',
-            doesEn: 'The name of the session to create; Enter creates it just as the button does.',
-            doesBg: 'Името на сесията, която ще се създаде; Enter я създава също като бутона.',
-          },
-          {
-            key: 'home.create',
-            kind: 'button',
-            en: 'Create',
-            bg: 'Създай',
-            doesEn: 'Creates the session under that name and opens its own page.',
-            doesBg: 'Създава сесията с това име и отваря нейната страница.',
-          },
-        ],
-      },
-      {
-        headingKey: 'batch.title',
-        en: 'Run several sessions',
-        bg: 'Пускане на няколко сесии',
-        controls: [
-          {
-            key: 'batch.selectQueued',
-            kind: 'button',
-            en: 'Select every session with something queued',
-            bg: 'Избери всички сесии с нещо в опашката',
-            doesEn: 'Ticks every session that still has a queued task, oldest first, replacing whatever was ticked.',
-            doesBg: 'Отмята всяка сесия с чакаща задача, от най-старата нататък, и заменя досегашния избор.',
-          },
-          {
-            key: 'batch.selectNone',
-            kind: 'button',
-            en: 'Select none',
-            bg: 'Изчисти избора',
-            doesEn:
-              'Clears every tick.',
-            doesBg:
-              'Маха всички отметки.',
-          },
-          {
-            key: 'batch.modelKeep',
-            kind: 'select',
-            en: 'Each session keeps its own',
-            bg: 'Всяка сесия със своя',
-            doesEn:
-              'The empty choice of both model menus: every session keeps the model it has.',
-            doesBg:
-              'Празният избор в двете менюта за модел: всяка сесия запазва модела си.',
-          },
-          {
-            key: 'batch.reviewModelKeep',
-            kind: 'select',
-            en: 'Each session keeps its own',
-            bg: 'Всяка сесия си остава със своя',
-            doesEn:
-              'The same empty choice in the review model menu.',
-            doesBg:
-              'Същият празен избор в менюто за модела на рецензията.',
-          },
-          {
-            key: 'batch.runName',
-            kind: 'field',
-            en: 'Name of this run',
-            bg: 'Име на това пускане',
-            doesEn: 'Names the run: the register groups its tasks under this name and the exports are named after it.',
-            doesBg: 'Дава име на пускането: под него регистърът групира задачите му и по него се именуват изтеглянията.',
-          },
-          {
-            key: 'batch.model',
-            kind: 'select',
-            en: 'Model for this run',
-            bg: 'Модел за това изпълнение',
-            doesEn: 'The Copilot model this run works on; the choice is written onto every ticked session before it starts.',
-            doesBg: 'Моделът на Copilot за това пускане; изборът се записва върху всяка отметната сесия преди старта.',
-          },
-          {
-            key: 'batch.reviewModel',
-            kind: 'select',
-            en: 'Model that reviews the work',
-            bg: 'Модел, който проверява работата',
-            doesEn: 'The model that reviews each task afterwards, chosen separately from the one doing the work.',
-            doesBg: 'Моделът, който проверява всяка задача после, избран отделно от този, който върши работата.',
-          },
-          {
-            key: 'runvcs.title',
-            kind: 'note',
-            en: 'Prepare version control for this run',
-            bg: 'Подготви контрола на версиите за това пускане',
-            doesEn: 'Shown under the run settings when a repository of the ticked sessions is not ready: one box per repository, with the fixes. The run buttons stay off until every box is ready — unless all that is wrong is where a session starts (a branch that is not here), which the start window settles — and a start is refused before the browser opens.',
-            doesBg: 'Показва се под настройките на пускането, когато хранилище на отметнатите сесии не е готово: по една кутия на хранилище, с решенията. Бутоните за пускане остават изключени, докато всяка кутия не е готова — освен ако единственият проблем е откъде тръгва сесия (клон, който го няма тук), което се решава в прозореца за старт — а старт се отказва преди да се отвори браузърът.',
-          },
-          {
-            key: 'runvcs.repo',
-            kind: 'note',
-            en: 'Repository',
-            bg: 'Хранилище',
-            doesEn: 'The repository the box is about.',
-            doesBg: 'Хранилището, за което е кутията.',
-          },
-          {
-            key: 'runvcs.current',
-            kind: 'note',
-            en: 'Current branch and HEAD',
-            bg: 'Текущ клон и HEAD',
-            doesEn: 'Where the repository is now.',
-            doesBg: 'Къде е хранилището сега.',
-          },
-          {
-            key: 'runvcs.base',
-            kind: 'note',
-            en: 'Requested base branch and HEAD',
-            bg: 'Поискан базов клон и HEAD',
-            doesEn: 'The branch the plan asked the sessions to start from, and its tip.',
-            doesBg: 'Клонът, от който планът иска сесиите да тръгнат, и върхът му.',
-          },
-          {
-            key: 'runvcs.workBranch',
-            kind: 'note',
-            en: 'Branch the run works on',
-            bg: 'Клон, на който ще се работи',
-            doesEn: 'Shown when it is not the branch the repository is on: the session’s own branch (after a Restore, the restore branch) or the existing branch it carries on, and its tip.',
-            doesBg: 'Показва се, когато не е клонът, на който е хранилището: собственият клон на сесията (след Restore — клонът от възстановяването) или съществуващият клон, който продължава, и върхът му.',
-          },
-          {
-            key: 'runvcs.sessions',
-            kind: 'note',
-            en: 'Sessions',
-            bg: 'Сесии',
-            doesEn: 'The ticked sessions in this repository and how each starts: first, from the same base, or carrying on the one before.',
-            doesBg: 'Отметнатите сесии в това хранилище и как тръгва всяка: първа, от същата база или продължава предната.',
-          },
-          {
-            key: 'runvcs.patterns',
-            kind: 'note',
-            en: 'Input file patterns',
-            bg: 'Шаблони за входни файлове',
-            doesEn: 'The "Input files" of the first session.',
-            doesBg: '„Входни файлове“ на първата сесия.',
-          },
-          {
-            key: 'runvcs.review',
-            kind: 'button',
-            en: 'Review input files',
-            bg: 'Прегледай входните файлове',
-            doesEn: 'Lists the matched input files with git status and size. Changes nothing.',
-            doesBg: 'Показва съвпадналите входни файлове с git статус и размер. Нищо не променя.',
-          },
-          {
-            key: 'runvcs.snapshotOnBase',
-            kind: 'button',
-            en: 'Create starting snapshot on {branch}',
-            bg: 'Създай начална снимка върху {branch}',
-            doesEn: 'Commits the approved input files on top of the base branch, on a new cop/baseline/ branch, without switching branches; when the session updates from the remote, the base branch is first fast-forwarded to it, which moves the checkout too if that branch is checked out. Every session of the run starting from that branch starts from it, chained ones carry it on. Recommended when the plan names that branch. Not offered while other files are uncommitted.',
-            doesBg: 'Комитва одобрените входни файлове върху базовия клон, на нов клон cop/baseline/, без да сменя клона; когато сесията се обновява от remote, базовият клон първо се придвижва напред до него, което мести и работното копие, ако този клон е изтеглен. Всяка сесия от пускането, тръгваща от този клон, тръгва от снимката, а свързаните във верига я продължават. Препоръчано, когато планът посочва този клон. Не се предлага, докато има други некомитнати файлове.',
-          },
-          {
-            key: 'runvcs.snapshotHere',
-            kind: 'button',
-            en: 'Create starting snapshot on {current}',
-            bg: 'Създай начална снимка върху {current}',
-            doesEn: 'Takes the listed files as the starting snapshot where the repository is, as the session page does: one commit on a new branch, the current branch not moved.',
-            doesBg: 'Взема изброените файлове като начална снимка там, където е хранилището, както страницата на сесията: един комит на нов клон, текущият клон не се мести.',
-          },
-          {
-            key: 'runvcs.useCurrent',
-            kind: 'button',
-            en: 'Use the current branch instead of {branch}',
-            bg: 'Използвай текущия branch вместо {branch}',
-            doesEn: 'The sessions start from the branch the repository is on instead of the base branch: that branch becomes their base branch, so each starts from it even after HEAD has moved. Nothing is committed.',
-            doesBg: 'Сесиите тръгват от клона, на който е хранилището, вместо от базовия: той им става базов клон, така че всяка тръгва от него, дори HEAD да се е преместил. Нищо не се комитва.',
-          },
-          {
-            key: 'runvcs.allowSnapshot',
-            kind: 'button',
-            en: 'Take uncommitted changes as a starting snapshot',
-            bg: 'Вземи некомитнатите промени като начална снимка',
-            doesEn: 'Sets "Uncommitted changes" of the first session to "Take them as a starting snapshot", so the files are listed to approve. Nothing is committed.',
-            doesBg: 'Задава „Некомитнати промени“ на първата сесия на „Запази ги като начална снимка“, за да се изброят файловете за одобрение. Нищо не се комитва.',
-          },
-          {
-            key: 'runvcs.cancel',
-            kind: 'button',
-            en: 'Cancel',
-            bg: 'Отказ',
-            doesEn: 'Hides the fixes; nothing is changed and the run stays off.',
-            doesBg: 'Скрива решенията; нищо не се променя и пускането остава изключено.',
-          },
-          {
-            key: 'runvcs.showAgain',
-            kind: 'button',
-            en: 'Show the fixes again',
-            bg: 'Покажи решенията отново',
-            doesEn: 'Brings the fixes back after Cancel.',
-            doesBg: 'Връща решенията след „Отказ“.',
-          },
-          {
-            key: 'batch.run',
-            kind: 'button',
-            en: 'Run {n} session(s)',
-            bg: 'Пусни {n} сесия(и)',
-            doesEn:
-              'Starts the ticked sessions one after another and runs every command without asking. It asks "are you sure" first, unless Settings → Execution → "Starting a run without supervision" is "Start it without asking". The start window opens first ("Where the work starts"), where the branch of each session is chosen.',
-            doesBg:
-              'Пуска отметнатите сесии една след друга и изпълнява всяка команда без питане. Първо пита „сигурен ли си“, освен ако Настройки → Изпълнение → „Пускане без надзор“ е „Пускай, без да питаш“. Първо се отваря прозорецът за старт („Откъде да тръгне работата“), където се избира клонът на всяка сесия.',
-          },
-          {
-            key: 'batch.runStep',
-            kind: 'button',
-            en: 'Step by step',
-            bg: 'Стъпка по стъпка',
-            doesEn: 'Starts the same sessions but stops before every command and waits for a decision. The start window opens first, as for the other button.',
-            doesBg: 'Пуска същите сесии, но спира преди всяка команда и чака решение. Първо се отваря прозорецът за старт, както при другия бутон.',
-          },
-          {
-            key: 'batch.notStartedIsolation',
-            kind: 'link',
-            en: 'Settings → "Where the bot runs": choose where the bot runs, or accept unattended runs without isolation',
-            bg: 'Настройки → „Къде върви ботът“: изберете къде върви ботът или приемете пускане без надзор без изолация',
-            doesEn:
-              'Under that box when the refusal is about isolation: opens /defaults, where "Where the bot runs" decides whether a run with nobody watching may start here.',
-            doesBg:
-              'Под това каре, когато отказът е заради изолацията: отваря /defaults, където „Къде върви ботът“ решава дали тук може да тръгне пускане без надзор.',
-          },
-          {
-            key: 'batch.stop',
-            kind: 'button',
-            en: 'Stop after the current step',
-            bg: 'Спри след текущата стъпка',
-            doesEn:
-              'While a run is going: ends it after the current step. The task it interrupts ends aborted, part-done — offer the pause instead when the operator only wants to think.',
-            doesBg:
-              'Докато върви пускане: спира го след текущата стъпка. Прекъснатата задача завършва прекратена, наполовина — предложи паузата, ако операторът само иска да помисли.',
-          },
-          {
-            key: 'batch.pause',
-            kind: 'button',
-            en: 'Pause after this task',
-            bg: 'Пауза след тази задача',
-            doesEn: 'Holds the run without losing anything: the task that is running finishes properly — its checks, its review, its commit — and the rest stays queued. This is what to press after a failure, before deciding anything.',
-            doesBg: 'Спира пускането, без да се губи нищо: задачата, която върви, приключва както трябва — проверките ѝ, рецензията ѝ, комитът ѝ — а останалото си стои в опашката. Това се натиска след провал, преди каквото и да е решение.',
-          },
-          {
-            key: 'batch.resume',
-            kind: 'button',
-            en: 'Take the hold off',
-            bg: 'Махни паузата',
-            doesEn: 'Replaces the pause button once it is pressed. Carries on with the queue, if the paused task is still running.',
-            doesBg: 'Заменя бутона за пауза, след като е натиснат. Продължава с опашката, ако паузираната задача още върви.',
-          },
-          {
-            key: 'batch.debug',
-            kind: 'link',
-            en: 'Download everything as JSON',
-            bg: 'Изтегли всичко като JSON',
-            doesEn: 'One JSON file with every step, exit code, summary, review and commit of those sessions.',
-            doesBg: 'Един JSON файл с всяка стъпка, код на изход, обяснение, рецензия и комит на тези сесии.',
-          },
-          {
-            key: 'batch.finished',
-            kind: 'note',
-            en: 'Finished: {done} done, {failed} failed, {skipped} not run.',
-            bg: 'Приключи: {done} успешни, {failed} провалени, {skipped} неизпълнени.',
-            doesEn: 'The line that appears when a run ends; it is the first thing to read back after one.',
-            doesBg: 'Редът, който се появява в края на пускането; той се чете пръв след него.',
-          },
-        ],
-      },
-      {
-        headingKey: 'batch.onFailure',
-        en: 'If a session fails',
-        bg: 'Ако сесия се провали',
-        controls: [
-          {
-            key: 'batch.chain',
-            kind: 'radio',
-            en: 'Stop, and leave the rest as they are',
-            bg: 'Спри и остави останалите както са',
-            doesEn: 'A failed session stops the run; the sessions queued after it are never started.',
-            doesBg: 'Провалена сесия спира пускането; сесиите след нея изобщо не тръгват.',
-          },
-          {
-            key: 'batch.independent',
-            kind: 'radio',
-            en: 'Carry on with the next session',
-            bg: 'Продължи със следващата сесия',
-            doesEn: 'The run goes on to the next session even after one fails.',
-            doesBg: 'Пускането продължава със следващата сесия дори след провал.',
-          },
-        ],
-      },
-      {
-        headingKey: 'home.sessions',
-        en: 'Sessions',
-        bg: 'Сесии',
-        controls: [
-          {
-            key: 'home.selectAll',
-            kind: 'checkbox',
-            en: 'Select every session',
-            bg: 'Избери всички сесии',
-            doesEn:
-              'The tick box in the table heading: ticks every session that is not running. Each row has its own tick box, and the session name is a link to its page.',
-            doesBg:
-              'Отметката в заглавието на таблицата: отметва всички сесии, които не вървят. Всеки ред има своя отметка, а името на сесията е връзка към страницата ѝ.',
-          },
-          {
-            key: 'home.tickForBoth',
-            kind: 'note',
-            en: 'The first column of ticks manages the list — status and delete — and works while a run is going, except on the session running now. The second chooses what to run; only active sessions with something queued can be run.',
-            bg: 'Първата колона отметки управлява списъка — статус и изтриване — и работи и докато тече пускане, освен за сесията, която работи в момента. Втората избира какво да се пусне; пускат се само активни сесии с нещо в опашката.',
-            doesEn: 'Two sets of tick boxes: the first for status and delete, the second for the run panel above.',
-            doesBg: 'Два набора отметки: първият за статус и изтриване, вторият за панела за пускане горе.',
-          },
-          {
-            key: 'home.makeActive',
-            kind: 'button',
-            en: 'Make active',
-            bg: 'Направи активни',
-            doesEn: 'Every session ticked in the first column can be run again. New and imported sessions are active.',
-            doesBg: 'Всички отметнати в първата колона сесии отново могат да се пускат. Новите и импортираните са активни.',
-          },
-          {
-            key: 'home.makeInactive',
-            kind: 'button',
-            en: 'Make inactive',
-            bg: 'Направи неактивни',
-            doesEn: 'Sets them aside: nothing starts them — not a run of several, not "Continue" — until made active. Not for a running session.',
-            doesBg: 'Оставя ги настрана: нищо не ги пуска — нито пускане на няколко, нито „Продължи“ — докато не станат активни. Не и за работеща сесия.',
-          },
-          {
-            key: 'home.deleteSelected',
-            kind: 'button',
-            en: 'Delete the {n} selected',
-            bg: 'Изтрий избраните {n}',
-            doesEn: 'Deletes every session ticked in the first column after one question, also during a run; never the one running. Run folders and chats survive.',
-            doesBg: 'Изтрива всички отметнати в първата колона сесии след един въпрос, и по време на пускане; никога работещата. Папките и разговорите остават.',
-          },
-          {
-            key: 'home.moveUp',
-            kind: 'button',
-            en: 'Move {name} up in the list',
-            bg: 'Премести {name} нагоре в списъка',
-            doesEn: 'The ↑ arrow in the Order column: one place up. ↓ is one place down. Dragging a row onto another moves it there. An imported plan comes in on top in its own order.',
-            doesBg: 'Стрелката ↑ в колона „Ред“: едно място нагоре. ↓ е едно надолу. Плъзгане на ред върху друг го мести там. Импортиран план идва най-отгоре в своя ред.',
-          },
-          {
-            key: 'home.moveDown',
-            kind: 'button',
-            en: 'Move {name} down in the list',
-            bg: 'Премести {name} надолу в списъка',
-            doesEn: 'The ↓ arrow in the Order column: one place down. A run of several takes the ticked sessions top to bottom.',
-            doesBg: 'Стрелката ↓ в колона „Ред“: едно място надолу. Пускане на няколко взима отметнатите сесии отгоре надолу.',
-          },
-          {
-            key: 'home.delete',
-            kind: 'button',
-            en: 'Delete',
-            bg: 'Изтрий',
-            doesEn: 'Removes that one session from the list; a running session has to be stopped first.',
-            doesBg: 'Маха точно тази сесия от списъка; работеща сесия първо трябва да се спре.',
-          },
-          {
-            key: 'state.running',
-            kind: 'badge',
-            en: 'running',
-            bg: 'работи',
-            doesEn: 'That session is working right now, so it cannot be ticked, deleted or added to a run.',
-            doesBg: 'Сесията работи в момента, затова не може да се отмята, изтрива или включва в пускане.',
-          },
-          {
-            key: 'state.idle',
-            kind: 'badge',
-            en: 'idle',
-            bg: 'свободна',
-            doesEn: 'Not working: it either has tasks waiting in its queue or has never been run.',
-            doesBg: 'Не работи: или има задачи в опашката си, или изобщо не е пускана.',
-          },
-          {
-            key: 'state.completed',
-            kind: 'badge',
-            en: 'completed',
-            bg: 'завършена',
-            doesEn: 'Every task of that session ended done and nothing is queued.',
-            doesBg: 'Всяка задача на сесията е приключила готова и нищо не чака в опашката.',
-          },
-          {
-            key: 'state.ended',
-            kind: 'badge',
-            en: 'ended, with failures',
-            bg: 'приключила, с провали',
-            doesEn: 'Every task ended, but some did not end done; nothing is queued.',
-            doesBg: 'Всички задачи са приключили, но някои не са готови; нищо не чака в опашката.',
-          },
-        ],
-      },
-    ],
-  },
-
-  {
-    route: '/sessions/view?id=…',
-    nameEn: 'One session',
-    nameBg: 'Една сесия',
-    purposeEn:
-      'Everything about one session: how it is configured, the queue of tasks with what each of them did, and the buttons that start, stop, edit and re-run the work.',
-    purposeBg:
-      'Всичко за една сесия: как е настроена, опашката със задачите и какво е свършила всяка от тях, плюс бутоните, с които работата тръгва, спира, се редактира и се пуска отново.',
-    sections: [
-      {
-        headingKey: null,
-        en: 'The strip beside the session name, at the top of the page',
-        bg: 'Лентата до името на сесията, в началото на страницата',
-        controls: [
-          {
-            key: 'session.crumb',
-            kind: 'link',
-            en: 'Sessions',
-            bg: 'Сесии',
-            doesEn:
-              'Above the name, back to the sessions list on `/sessions`.',
-            doesBg:
-              'Над името, обратно към списъка със сесии на `/sessions`.',
-          },
-          {
-            key: 'session.group',
-            kind: 'field',
-            en: 'Share a conversation',
-            bg: 'Споделяне на разговор',
-            doesEn:
-              'Sessions with the same name here share one Copilot conversation; empty gives this one its own.',
-            doesBg:
-              'Сесиите с едно и също име тук споделят един разговор в Copilot; празно дава на тази собствен.',
-          },
-          {
-            key: 'pm.sessionSetting',
-            kind: 'select',
-            en: 'Plan first, for this session',
-            bg: 'Първо план, за тази сесия',
-            doesEn:
-              'Plan first for this session\'s tasks: "As in Settings", off, approved without asking, or approved by the operator; overrides Settings → Execution → Plan first.',
-            doesBg:
-              '„Първо план“ за задачите на тази сесия: „Както е в Настройки“, изключено, одобрява се без питане или от оператора; отменя Настройки → Изпълнение → Първо план.',
-          },
-          {
-            key: 'pm.followSettings',
-            kind: 'select',
-            en: 'As in Settings',
-            bg: 'Както е в Настройки',
-            doesEn: 'The session follows Settings → Execution → Plan first.',
-            doesBg: 'Сесията следва Настройки → Изпълнение → Първо план.',
-          },
-          {
-            key: 'session.run',
-            kind: 'button',
-            en: 'Run {n} task(s)',
-            bg: 'Пусни {n} задача(и)',
-            doesEn:
-              'Starts the queued tasks and runs every command without asking. It asks "are you sure" first, unless Settings → Execution → "Starting a run without supervision" is "Start it without asking".',
-            doesBg:
-              'Пуска чакащите задачи и изпълнява всяка команда без питане. Първо пита „сигурен ли си“, освен ако Настройки → Изпълнение → „Пускане без надзор“ е „Пускай, без да питаш“.',
-          },
-          {
-            key: 'session.runStep',
-            kind: 'button',
-            en: 'Step by step',
-            bg: 'Стъпка по стъпка',
-            doesEn: 'Starts the same queue but stops before every command and waits for a decision.',
-            doesBg: 'Пуска същата опашка, но спира преди всяка команда и чака решение.',
-          },
-          {
-            key: 'session.stop',
-            kind: 'button',
-            en: 'Stop after current step',
-            bg: 'Спри след текущата стъпка',
-            doesEn: 'Stops the run as soon as the command now executing finishes; the rest stay queued.',
-            doesBg: 'Спира пускането, щом текущата команда приключи; останалите задачи остават да чакат.',
-          },
-          {
-            key: 'session.askAgain',
-            kind: 'button',
-            en: 'Ask me again on every step',
-            bg: 'Питай ме пак на всяка стъпка',
-            doesEn: 'Puts a running session back to asking for approval before every further command.',
-            doesBg: 'Връща работеща сесия към питане за одобрение преди всяка следваща команда.',
-          },
-          {
-            key: 'session.modeUnattended',
-            kind: 'badge',
-            en: 'not asking any more',
-            bg: 'вече не пита',
-            doesEn:
-              'Beside "Stop after current step" while this run no longer asks before each command.',
-            doesBg:
-              'До „Спри след текущата стъпка“, докато това пускане вече не пита преди всяка команда.',
-          },
-          {
-            key: 'home.delete',
-            kind: 'button',
-            en: 'Delete',
-            bg: 'Изтрий',
-            doesEn:
-              'Deletes this session after one question; not while it runs. The run folders and the chats stay.',
-            doesBg:
-              'Изтрива тази сесия след един въпрос; не докато върви. Папките на пусканията и чатовете остават.',
-          },
-          {
-            key: 'session.openChat',
-            kind: 'link',
-            en: 'open chat: {name}',
-            bg: 'отвори чата: {name}',
-            doesEn: "Opens this session's Copilot conversation in a new browser tab.",
-            doesBg: 'Отваря разговора на сесията в Copilot в нов таб на браузъра.',
-          },
-        ],
-      },
-      {
-        headingKey: 'model.title',
-        en: 'Copilot model',
-        bg: 'Модел на Copilot',
-        controls: [
-          {
-            key: 'model.followsDefault',
-            kind: 'select',
-            en: 'from Settings: {name}',
-            bg: 'от Настройки: {name}',
-            doesEn:
-              'The first choice of the model menu: this session follows the model chosen in Settings, whatever it is at run time.',
-            doesBg:
-              'Първият избор в менюто за модел: сесията следва модела, избран в Настройки, какъвто е при пускането.',
-          },
-          {
-            key: 'model.default',
-            kind: 'select',
-            en: 'whatever the chat is set to (default)',
-            bg: 'каквото е настроено в чата (по подразбиране)',
-            doesEn:
-              'Leaves the chat on whatever model it is already set to.',
-            doesBg:
-              'Оставя чата на модела, на който вече е.',
-          },
-          {
-            key: 'model.makeDefault',
-            kind: 'button',
-            en: 'Start new sessions on {name}',
-            bg: 'Новите сесии да тръгват с {name}',
-            doesEn:
-              'Makes the model chosen here the one every new session starts on (Settings → "Model for new sessions").',
-            doesBg:
-              'Прави избрания тук модел този, с който тръгва всяка нова сесия (Настройки → „Модел за новите сесии“).',
-          },
-          {
-            key: 'model.clearDefault',
-            kind: 'button',
-            en: 'Stop setting a model on new sessions',
-            bg: 'Да не се задава модел на новите сесии',
-            doesEn:
-              'Stops Settings from setting a model on new sessions.',
-            doesBg:
-              'Спира Настройки да задават модел на новите сесии.',
-          },
-          {
-            key: 'model.showDetails',
-            kind: 'disclosure',
-            en: 'show what the picker said',
-            bg: 'покажи какво каза изборът',
-            doesEn:
-              'Unfolds what Copilot\'s model picker showed when it was last read.',
-            doesBg:
-              'Разгъва какво е показал изборът на модел в Copilot при последното четене.',
-          },
-          {
-            key: 'model.refresh',
-            kind: 'button',
-            en: 'Read the list from Copilot',
-            bg: 'Прочети списъка от Copilot',
-            doesEn: "Opens the bot's Edge window, reads the chat's own model list and fills this picker with it.",
-            doesBg: 'Отваря прозореца на Edge на бота, прочита списъка с модели от чата и попълва с него избора.',
-          },
-        ],
-      },
-      {
-        headingKey: 'l1.title',
-        en: 'Level 1: the base prompt',
-        bg: 'Ниво 1: основен prompt',
-        controls: [
-          {
-            key: 'l1.show',
-            kind: 'disclosure',
-            en: 'show the prompt',
-            bg: 'покажи prompt-а',
-            doesEn:
-              'Unfolds the base prompt this session sends first.',
-            doesBg:
-              'Разгъва основния prompt, който тази сесия изпраща първи.',
-          },
-          {
-            key: 'l1.edit',
-            kind: 'link',
-            en: 'edit',
-            bg: 'редактирай',
-            doesEn: 'Opens the page where the base prompt itself is changed.',
-            doesBg: 'Отваря страницата, на която се променя самият основен prompt.',
-          },
-        ],
-      },
-      {
-        headingKey: 'vcs.title',
-        en: 'Version control',
-        bg: 'Контрол на версиите',
-        controls: [
-          {
-            key: 'vcs.repoField',
-            kind: 'field',
-            en: 'Project folder',
-            bg: 'Папка на проекта',
-            doesEn: 'The git repository the tasks work in; it is saved when the field loses focus.',
-            doesBg: 'Git хранилището, в което работят задачите; запазва се, щом излезете от полето.',
-          },
-          {
-            key: 'mirror.browse',
-            kind: 'button',
-            en: 'Browse…',
-            bg: 'Избери папка…',
-            doesEn: "Opens the machine's folder dialog and saves whichever folder is picked.",
-            doesBg: 'Отваря диалога за папки на машината и запазва избраната папка.',
-          },
-          {
-            key: 'vcs.enable',
-            kind: 'checkbox',
-            en: 'Work on branches and commit what was changed',
-            bg: 'Работи по клонове и комитвай промененото',
-            doesEn: 'Makes the runner branch before each task and commit what changed; it needs a real git repository above.',
-            doesBg: 'Кара изпълнителя да прави клон преди всяка задача и да комитва промененото; иска истинско git хранилище горе.',
-          },
-          {
-            key: 'vcs.branches',
-            kind: 'note',
-            en: 'How branches are made',
-            bg: 'Как се правят клоновете',
-            doesEn:
-              'The heading above the two branch radios; they, "Where this session starts" and "Commit when a task finishes" appear only once "Work on branches and commit what was changed" is ticked.',
-            doesBg:
-              'Заглавието над двата радио бутона за клони; те, „Откъде тръгва тази сесия“ и „Комит при приключване на задача“ се появяват само след отметка на „Работи по клонове…“.',
-          },
-          {
-            key: 'vcs.perTask',
-            kind: 'radio',
-            en: 'A branch of its own for every task',
-            bg: 'Отделен клон за всяка задача',
-            doesEn: 'Every task branches from the same starting point, so none of them sees the previous one’s changes.',
-            doesBg: 'Всяка задача тръгва от една и съща точка и не вижда промените на предишната.',
-          },
-          {
-            key: 'vcs.perSession',
-            kind: 'radio',
-            en: 'One branch for the whole session',
-            bg: 'Един клон за цялата сесия',
-            doesEn: 'Every task continues on the branch the task before it left, so later work builds on earlier work.',
-            doesBg: 'Всяка задача продължава на клона от предишната, така че по-късната работа стъпва на по-ранната.',
-          },
-          {
-            key: 'vcs.branchName',
-            kind: 'field',
-            en: 'Name of that one branch',
-            bg: 'Име на този един клон',
-            doesEn:
-              'Only with "One branch for the whole session": the name of that branch, without the prefix; empty builds it from the session name.',
-            doesBg:
-              'Само с „Един клон за цялата сесия“: името на този клон, без представката; празно го сглобява от името на сесията.',
-          },
-          {
-            key: 'vcs.startFrom',
-            kind: 'note',
-            en: 'Where this session starts',
-            bg: 'Откъде тръгва тази сесия',
-            doesEn:
-              'The heading above the three start radios.',
-            doesBg:
-              'Заглавието над трите радио бутона за начало.',
-          },
-          {
-            key: 'vcs.startBranch',
-            kind: 'radio',
-            en: 'From a local branch (main)',
-            bg: 'От локален клон (main)',
-            doesEn:
-              'The session starts from the local branch in "Local branch to start from" (main when empty). In a plan: "startFrom": "branch" with "baseBranch".',
-            doesBg:
-              'Сесията тръгва от локалния клон в „Локален клон, от който да тръгне“ (main, ако е празно). В план: "startFrom": "branch" с "baseBranch".',
-          },
-          {
-            key: 'vcs.startPrevious',
-            kind: 'radio',
-            en: 'From the previous session’s branch',
-            bg: 'От клона на предната сесия',
-            doesEn:
-              'The session carries on from the end of the branch of the session that last committed work in the same repository — in a run, the one before it. In a plan: "startFrom": "previous-session".',
-            doesBg:
-              'Сесията продължава от края на клона на сесията, която последна е комитнала работа в същото хранилище — при пускане, предната. В план: "startFrom": "previous-session".',
-          },
-          {
-            key: 'vcs.startHead',
-            kind: 'radio',
-            en: 'From wherever the repository is (as until now)',
-            bg: 'Откъдето е хранилището (както досега)',
-            doesEn: 'The old behaviour, and what a session without a choice does: whatever branch is checked out at its first run, often the one the previous session left.',
-            doesBg: 'Старото поведение и това, което прави сесия без избор: какъвто клон е избран при първото ѝ пускане, често оставеният от предната сесия.',
-          },
-          {
-            key: 'vcs.startExisting',
-            kind: 'radio',
-            en: 'Carry on an existing branch',
-            bg: 'Продължи съществуващ клон',
-            doesEn: 'No new branch: every task works on the branch named under it, exactly as in git. A missing branch or uncommitted changes refuse the task; nothing runs.',
-            doesBg: 'Без нов клон: всяка задача работи на клона, посочен под него, точно както е в git. Липсващ клон или незакомитнати промени отказват задачата; нищо не се изпълнява.',
-          },
-          {
-            key: 'vcs.existingBranch',
-            kind: 'field',
-            en: 'The branch to carry on',
-            bg: 'Клонът, който да продължи',
-            doesEn: 'The exact name of the branch "Carry on an existing branch" works on; the repository\'s local branches are offered as you type.',
-            doesBg: 'Точното име на клона, на който работи „Продължи съществуващ клон“; докато пишеш, се предлагат локалните клонове.',
-          },
-          {
-            key: 'vcs.updateFromRemote',
-            kind: 'checkbox',
-            en: 'Bring the starting branch up to date from the remote first',
-            bg: 'Първо обнови началния клон от отдалеченото хранилище',
-            doesEn: 'On by default. Before the session\'s first branch: git fetch, then a fast-forward of the starting branch only; a branch with its own commits is left and said.',
-            doesBg: 'Включено по подразбиране. Преди първия клон на сесията: git fetch и само fast-forward на началния клон; клон със свои commit-и се оставя и се казва.',
-          },
-          {
-            key: 'vcs.baseBranch',
-            kind: 'field',
-            en: 'Local branch to start from',
-            bg: 'Локален клон, от който да тръгне',
-            doesEn:
-              'The branch "From a local branch (main)" starts from, and where a chain begins with no earlier session; main when empty. Hidden with "From wherever the repository is (as until now)".',
-            doesBg:
-              'Клонът, от който тръгва „От локален клон (main)“, и откъдето започва верига без по-ранна сесия; main, ако е празно. Скрит при „Откъдето е хранилището (както досега)“.',
-          },
-          {
-            key: 'vcs.startedPrevious',
-            kind: 'note',
-            en: 'Started from the end of {branch} ({commit}), the branch of the session “{name}”.',
-            bg: 'Тръгна от края на {branch} ({commit}) — клона на сесията „{name}“.',
-            doesEn:
-              'After the first run: where the session actually started — the end of the previous session\'s branch.',
-            doesBg:
-              'След първото пускане: откъде сесията реално е тръгнала — от края на клона на предната сесия.',
-          },
-          {
-            key: 'vcs.startedBranch',
-            kind: 'note',
-            en: 'Started from the local branch {branch} ({commit}).',
-            bg: 'Тръгна от локалния клон {branch} ({commit}).',
-            doesEn:
-              'After the first run: it started from that local branch.',
-            doesBg:
-              'След първото пускане: тръгнала е от този локален клон.',
-          },
-          {
-            key: 'vcs.startedHead',
-            kind: 'note',
-            en: 'Started from where the repository was ({commit}).',
-            bg: 'Тръгна оттам, където беше хранилището ({commit}).',
-            doesEn:
-              'After the first run: it started from wherever the repository was.',
-            doesBg:
-              'След първото пускане: тръгнала е оттам, където е било хранилището.',
-          },
-          {
-            key: 'vcs.commit',
-            kind: 'checkbox',
-            en: 'Commit when a task finishes',
-            bg: 'Комит при приключване на задача',
-            doesEn: 'One local commit per task whatever the outcome; unticked leaves the changes loose in the working tree.',
-            doesBg: 'По един локален комит на задача, независимо от изхода; без отметка промените остават свободни в работното дърво.',
-          },
-          {
-            key: 'vcs.dirty',
-            kind: 'note',
-            en: 'Uncommitted changes',
-            bg: 'Некомитнати промени',
-            doesEn:
-              'What the first task does when the repository has uncommitted changes: refuse to start until they are committed, or take them — all, or tracked only — as a starting snapshot: one commit on a branch of its own that the session starts from. In a plan: "dirtyWorktree": { "policy": "snapshot" }. Not shown for "Carry on an existing branch".',
-            doesBg:
-              'Какво прави първата задача, когато хранилището има некомитнати промени: отказва старта, докато не са комитнати, или ги взема — всички или само tracked — като начална снимка: един комит на отделен клон, от който сесията тръгва. В план: "dirtyWorktree": { "policy": "snapshot" }. Не се показва при „Продължи съществуващ клон“.',
-          },
-          {
-            key: 'vcs.snapshotTake',
-            kind: 'button',
-            en: 'Take the starting snapshot',
-            bg: 'Направи началната снимка',
-            doesEn:
-              'Under the list of uncommitted files, each set to "Include in the starting snapshot" or "Leave out of the run": commits the included ones on the snapshot branch; left-out files go to the repository\'s .git/info/exclude. Until it is pressed a run of the session is refused and nothing changes.',
-            doesBg:
-              'Под списъка с некомитнати файлове, всеки с „Включи в началната снимка“ или „Остави извън изпълнението“: комитва включените на клона на снимката; оставените извън отиват в .git/info/exclude на хранилището. Докато не е натиснат, пускане на сесията се отказва и нищо не се променя.',
-          },
-          {
-            key: 'vcs.inputs',
-            kind: 'note',
-            en: 'Input files',
-            bg: 'Входни файлове',
-            doesEn: 'The heading over the operator\'s input files and whether they are read-only.',
-            doesBg: 'Заглавието над входните файлове на оператора и дали са само за четене.',
-          },
-          {
-            key: 'vcs.inputsField',
-            kind: 'field',
-            en: 'Your input files, one pattern per line (repository-relative)',
-            bg: 'Твоите входни файлове, по един шаблон на ред (спрямо хранилището)',
-            doesEn:
-              'Files the operator provides — schemas, test data. They go into the commit every session of the run starts from (new or ignored ones in the starting snapshot, listed for approval); a later session whose start lacks them has them committed on top of it; their SHA-256 sums are recorded. In a plan: "userInputs": { "paths": [...] }.',
-            doesBg:
-              'Файлове, които операторът дава — схеми, тестови данни. Влизат в комита, от който тръгва всяка сесия на пускането (новите или ignored — в началната снимка, със списък за одобрение); следваща сесия, чието начало ги няма, ги получава комитнати върху него; SHA-256 сумите им се записват. В план: "userInputs": { "paths": [...] }.',
-          },
-          {
-            key: 'vcs.inputsReadOnly',
-            kind: 'checkbox',
-            en: 'Read-only while the tasks run',
-            bg: 'Само за четене, докато задачите работят',
-            doesEn: 'On by default. A changed, deleted or added input file is put back after every round and the chat told; one that cannot be put back fails the task.',
-            doesBg: 'Включено по подразбиране. Променен, изтрит или добавен входен файл се връща след всеки рунд и чатът научава; такъв, който не може да се върне, проваля задачата.',
-          },
-          {
-            key: 'vcs.artifacts',
-            kind: 'note',
-            en: 'Artifacts',
-            bg: 'Artifacts',
-            doesEn: 'The heading over the evidence files the work writes.',
-            doesBg: 'Заглавието над файловете с доказателства, които работата пише.',
-          },
-          {
-            key: 'vcs.artifactsField',
-            kind: 'field',
-            en: 'Evidence the work writes, one pattern per line (repository-relative)',
-            bg: 'Доказателства, които работата пише, по един шаблон на ред (спрямо хранилището)',
-            doesEn:
-              'Reports, ZIP archives, test results: never committed (kept out through .git/info/exclude, .gitignore untouched) and copied into each attempt\'s record with their sums. In a plan: "artifacts": { "paths": [...] }.',
-            doesBg:
-              'Отчети, ZIP архиви, резултати от тестове: никога не се комитват (стоят извън git чрез .git/info/exclude, .gitignore не се пипа) и се копират към записа на всеки опит със сумите си. В план: "artifacts": { "paths": [...] }.',
-          },
-          {
-            key: 'vcs.ready',
-            kind: 'note',
-            en: 'Ready: {dir}, currently on {branch}.',
-            bg: 'Готово: {dir}, в момента на {branch}.',
-            doesEn:
-              'Version control can work: the folder and the branch HEAD is on.',
-            doesBg:
-              'Контролът на версиите може да работи: папката и клонът, на който е HEAD.',
-          },
-          {
-            key: 'vcs.notReady',
-            kind: 'note',
-            en: 'Version control is on, but it cannot work yet.',
-            bg: 'Контролът на версиите е включен, но още не може да работи.',
-            doesEn:
-              'It is on but cannot work yet; the reason follows (for example uncommitted changes, or no such branch).',
-            doesBg:
-              'Включен е, но още не може да работи; следва причината (например некомитнати промени или липсващ клон).',
-          },
-        ],
-      },
-      {
-        headingKey: 'review.title',
-        en: 'Independent review',
-        bg: 'Независима рецензия',
-        controls: [
-          {
-            key: 'review.enable',
-            kind: 'checkbox',
-            en: 'Check every task with a second conversation',
-            bg: 'Проверявай всяка задача с втори разговор',
-            doesEn: 'Opens a separate reviewing conversation after each task; it takes effect only after Save below.',
-            doesBg: 'Отваря отделен рецензиращ разговор след всяка задача; влиза в сила чак след Запази отдолу.',
-          },
-          {
-            key: 'review.modelField',
-            kind: 'select',
-            en: 'Model for the review',
-            bg: 'Модел за рецензията',
-            doesEn: 'Which model does the reviewing; it takes effect only after Save below.',
-            doesBg: 'Кой модел прави рецензията; влиза в сила чак след Запази отдолу.',
-          },
-          {
-            key: 'review.save',
-            kind: 'button',
-            en: 'Save',
-            bg: 'Запази',
-            doesEn: 'Stores the review switch and the review model onto this session.',
-            doesBg: 'Записва отметката за рецензия и модела за нея върху тази сесия.',
-          },
-        ],
-      },
-      {
-        headingKey: 'tasks.title',
-        en: 'Tasks',
-        bg: 'Задачи',
-        controls: [
-          {
-            key: 'chain.title',
-            kind: 'note',
-            en: 'What happens when a task does not finish',
-            bg: 'Какво става, когато задача не приключи успешно',
-            doesEn:
-              'The heading above the two radios that decide whether a failed task stops the queue.',
-            doesBg:
-              'Заглавието над двата радио бутона, които решават дали провалена задача спира опашката.',
-          },
-          {
-            key: 'chain.stop',
-            kind: 'radio',
-            en: 'Stop the queue at the first failure',
-            bg: 'Спри опашката при първата провалена',
-            doesEn: 'The first task that does not finish stops the queue and leaves the rest waiting.',
-            doesBg: 'Първата задача, която не приключи, спира опашката и оставя останалите да чакат.',
-          },
-          {
-            key: 'chain.continue',
-            kind: 'radio',
-            en: 'Carry on with the next task',
-            bg: 'Продължи със следващата задача',
-            doesEn: 'A failure is passed over and the next task starts anyway.',
-            doesBg: 'Провалът се подминава и следващата задача тръгва въпреки него.',
-          },
-          {
-            key: 'story.show',
-            kind: 'button',
-            en: 'What happened',
-            bg: 'Какво се случи',
-            doesEn: 'Opens the whole run of that task under its card: every message, every command and its output, live while it runs.',
-            doesBg: 'Отваря под картата цялото изпълнение на задачата: всяко съобщение, всяка команда с изхода ѝ, на живо докато върви.',
-          },
-          {
-            key: 'story.showLive',
-            kind: 'button',
-            en: 'What is happening now',
-            bg: 'Какво се случва в момента',
-            doesEn: 'The same button while the task is still running — it says this instead, and pulses. Tell the operator to watch here.',
-            doesBg: 'Същият бутон, докато задачата още върви — пише това и пулсира. Кажи на оператора да гледа тук.',
-          },
-          {
-            key: 'story.hide',
-            kind: 'button',
-            en: 'Hide what happened',
-            bg: 'Скрий какво се случи',
-            doesEn:
-              'The same button once the story is open: folds it away again.',
-            doesBg:
-              'Същият бутон, когато историята е отворена: сгъва я обратно.',
-          },
-          {
-            key: 'task.edit',
-            kind: 'button',
-            en: 'Edit',
-            bg: 'Редактирай',
-            doesEn: "Opens the form for that task's title, level 2, task text, git names and checks.",
-            doesBg: 'Отваря формата за заглавието, ниво 2, текста, git имената и проверките на задачата.',
-          },
-          {
-            key: 'task.cancel',
-            kind: 'button',
-            en: 'Cancel',
-            bg: 'Отказ',
-            doesEn:
-              'Leaves the edit without saving.',
-            doesBg:
-              'Излиза от редакцията, без да записва.',
-          },
-          {
-            key: 'task.save',
-            kind: 'button',
-            en: 'Save',
-            bg: 'Запази',
-            doesEn:
-              'On a task that has not run yet: stores the edit.',
-            doesBg:
-              'При задача, която още не е вървяла: записва промяната.',
-          },
-          {
-            key: 'task.saveAndRerun',
-            kind: 'button',
-            en: 'Save and queue it again',
-            bg: 'Запази и върни в опашката',
-            doesEn:
-              'On a task that has already run: stores the edit and queues it again; the earlier attempt is kept. On a done task the new attempt builds on its work. It does not start it.',
-            doesBg:
-              'При вече изпълнена задача: записва промяната и я връща в опашката; предишният опит се пази. При готова задача новият опит стъпва върху свършеното. Не я пуска.',
-          },
-          {
-            key: 'task.readOnlyEdit',
-            kind: 'checkbox',
-            en: 'Read-only: this task must not change any file',
-            bg: 'Само за четене: задачата не бива да променя нито един файл',
-            doesEn: 'Also in the new-prompt dialog of the register. For an audit: every change a round makes is put back.',
-            doesBg: 'Има го и в диалога за нов prompt в регистъра. За одит: всяка промяна от кръг се връща.',
-          },
-          {
-            key: 'task.scopeEdit',
-            kind: 'field',
-            en: 'Files this task may change',
-            bg: 'Файлове, които задачата може да променя',
-            doesEn: 'One path or pattern per line; changes elsewhere are put back. Also in the new-prompt dialog, which lists the old checks to keep or drop.',
-            doesBg: 'По един път или шаблон на ред; промени другаде се връщат. Има го и в диалога за нов prompt, който изброява старите проверки за запазване или махане.',
-          },
-          {
-            key: 'task.branch',
-            kind: 'field',
-            en: 'Branch for this task',
-            bg: 'Клон за тази задача',
-            doesEn:
-              'In the edit, with version control on: the branch for this task.',
-            doesBg:
-              'В редакцията, с включен контрол на версиите: клонът на тази задача.',
-          },
-          {
-            key: 'task.commitMessage',
-            kind: 'field',
-            en: 'Commit message',
-            bg: 'Текст на комита',
-            doesEn:
-              'In the edit, with version control on: the commit message\'s subject and body.',
-            doesBg:
-              'В редакцията, с включен контрол на версиите: заглавието и тялото на комита.',
-          },
-          {
-            key: 'fup.button',
-            kind: 'button',
-            en: 'Continue with a new prompt',
-            bg: 'Продължи с нов prompt',
-            doesEn:
-              'On a task card that failed or blocked on its work: the same dialog as on the register\'s row — how it ended, a new prompt, and the task carries on from where it got to in its chat and on its branch.',
-            doesBg:
-              'На карта на задача, провалена или блокирана по работата: същият прозорец като на реда в регистъра — как е завършила, нов prompt, и задачата продължава оттам, докъдето е стигнала, в чата и на клона си.',
-          },
-          {
-            key: 'task.continue',
-            kind: 'button',
-            en: 'Continue in the same chat',
-            bg: 'Продължи в същия чат',
-            doesEn:
-              'On a task that stopped before it finished (a limit from the settings, the bot stopping, the operator): queues it to carry on in the same chat and branch. Then "Run {n} task(s)".',
-            doesBg:
-              'На задача, спряла преди да приключи (лимит от настройките, спрял бот, оператор): нарежда я да продължи в същия чат и клон. После „Пусни {n} задача(и)“.',
-          },
-          {
-            key: 'task.rerun',
-            kind: 'button',
-            en: 'Run again',
-            bg: 'Пусни отново',
-            doesEn:
-              'Puts a finished task back in the queue unchanged, to start afresh; the earlier attempt is kept with its own log. It only queues, then offers "Run this task" on the card.',
-            doesBg:
-              'Връща приключила задача в опашката без промяна, да тръгне отначало; предишният опит се пази със собствен дневник. Само я нарежда, после предлага „Пусни тази задача“ на картата.',
-          },
-          {
-            key: 'restore.button',
-            kind: 'button',
-            en: 'Restore',
-            bg: 'Върни',
-            doesEn:
-              'With version control on and a recorded start: puts the repository back to the code as it was before that task, on a new branch. Nothing is deleted.',
-            doesBg:
-              'С включен контрол на версиите и записано начало: връща хранилището към кода отпреди тази задача, на нов клон. Нищо не се изтрива.',
-          },
-          {
-            key: 'restart.button',
-            kind: 'button',
-            en: 'Run again from here',
-            bg: 'Пусни отново оттук',
-            doesEn:
-              'Puts the code back, queues that task and every task after it — later sessions of its run included — and starts at once, in the mode that run had: step by step when that run left no record of its own, or went on its own and this machine no longer allows that.',
-            doesBg:
-              'Връща кода, нарежда отново тази задача и всички след нея — включително следващите сесии от пускането ѝ — и тръгва веднага, в режима на онова пускане: стъпка по стъпка, когато то не е оставило запис за себе си или е вървяло самостоятелно, а тази машина вече не го позволява.',
-          },
-          {
-            key: 'task.delete',
-            kind: 'button',
-            en: 'Delete',
-            bg: 'Изтрий',
-            doesEn: 'Takes that task out of the session; what it already executed stays on disk under runs/.',
-            doesBg: 'Маха задачата от сесията; вече изпълненото остава на диска под runs/.',
-          },
-          {
-            key: 'save.log',
-            kind: 'button',
-            en: 'save the log',
-            bg: 'запази log-а',
-            doesEn:
-              'Inside the "everything executed, and the files" fold: the whole run of that task as plain text, saved to copilot-operator-logs on the Desktop, Explorer open on it. The file to ask for.',
-            doesBg:
-              'В раздела „всичко изпълнено и файловете“: цялото изпълнение на задачата като чист текст, записано в copilot-operator-logs на десктопа, с отворен Explorer. Файлът, който да поискаш.',
-          },
-          {
-            key: 'task.files',
-            kind: 'disclosure',
-            en: 'everything executed, and the files',
-            bg: 'всичко изпълнено и файловете',
-            doesEn:
-              'The fold on the task card that holds "save the log" and the saved reports, files and replies of the run.',
-            doesBg:
-              'Сгъваемият раздел на картата на задачата, в който са „запази log-а“ и записаните отчети, файлове и отговори.',
-          },
-          {
-            key: 'task.attempts',
-            kind: 'disclosure',
-            en: 'earlier attempts ({n})',
-            bg: 'предишни опити ({n})',
-            doesEn:
-              'On a task run more than once: the earlier attempts, each with "save this attempt\'s log" and "download plan, work and runner of this attempt".',
-            doesBg:
-              'На задача, пускана повече от веднъж: по-ранните опити, всеки със „запази log-а на този опит“ и „изтегли план, работа и runner на този опит“.',
-          },
-          {
-            key: 'task.attemptText',
-            kind: 'disclosure',
-            en: 'the task as this attempt ran it',
-            bg: 'задачата, както е изпълнена в този опит',
-            doesEn:
-              'Inside an earlier attempt: the task text as that attempt ran it.',
-            doesBg:
-              'В по-ранен опит: текстът на задачата, както го е изпълнил.',
-          },
-          {
-            key: 'task.promptAndL2',
-            kind: 'disclosure',
-            en: 'task prompt and level 2',
-            bg: 'задачата и ниво 2',
-            doesEn:
-              'The task\'s prompt and its level 2.',
-            doesBg:
-              'Prompt-ът на задачата и ниво 2 за нея.',
-          },
-          {
-            key: 'task.l2Show',
-            kind: 'disclosure',
-            en: 'level 2 for this task ({n} line(s))',
-            bg: 'ниво 2 за тази задача ({n} реда)',
-            doesEn:
-              'On a queued task: unfolds the level 2 text it will be sent with.',
-            doesBg:
-              'На чакаща задача: разгъва текста на ниво 2, с който ще бъде изпратена.',
-          },
-          {
-            key: 'task.firstMessage',
-            kind: 'disclosure',
-            en: 'the exact first message that opened this task',
-            bg: 'точното първо съобщение, с което започна задачата',
-            doesEn:
-              'The exact first message that opened the task.',
-            doesBg:
-              'Точното първо съобщение, с което е започнала задачата.',
-          },
-          {
-            key: 'pm.taskApproved',
-            kind: 'disclosure',
-            en: 'Plan (version {n}, approved)',
-            bg: 'План (версия {n}, одобрен)',
-            doesEn:
-              'The plan the work follows (plan first): what was already there, the approach, steps, files, how it shows the work is done, risks; who approved it and the comments that asked for earlier versions to change.',
-            doesBg:
-              'Планът, който работата следва („Първо план“): какво вече има, подход, стъпки, файлове, как ще покаже, че е готово, рискове; кой го е одобрил и коментарите, поискали промени в по-ранни версии.',
-          },
-          {
-            key: 'pm.taskWaiting',
-            kind: 'disclosure',
-            en: 'Plan (version {n}, waiting for approval)',
-            bg: 'План (версия {n}, чака одобрение)',
-            doesEn: 'The same, open while the plan waits on its approval card at the top of every page.',
-            doesBg: 'Същото, отворено, докато планът чака на картата си за одобрение най-горе на всяка страница.',
-          },
-          {
-            key: 'task.finalReply',
-            kind: 'disclosure',
-            en: 'the last message Copilot sent',
-            bg: 'последното съобщение от Copilot',
-            doesEn:
-              'The last message Copilot sent.',
-            doesBg:
-              'Последното съобщение от Copilot.',
-          },
-          {
-            key: 'vcs.taskFiles',
-            kind: 'disclosure',
-            en: '{n} file(s) changed',
-            bg: '{n} променени файла',
-            doesEn:
-              'The files the task\'s commit changed.',
-            doesBg:
-              'Файловете, които комитът на задачата е променил.',
-          },
-          {
-            key: 'diff.open',
-            kind: 'button',
-            en: 'See the changes ({n} file(s))',
-            bg: 'Виж промените ({n} файла)',
-            doesEn:
-              'Where the attempt committed: every file it changed, before on the left and after on the right, scrolling together. Also under each earlier attempt.',
-            doesBg:
-              'Където опитът е комитнал: всеки променен файл, преди вляво и след вдясно, превъртани заедно. И под всеки по-ранен опит.',
-          },
-          {
-            key: 'task.deviations',
-            kind: 'disclosure',
-            en: 'Not as the task said ({n})',
-            bg: 'Не както задачата казва ({n})',
-            doesEn:
-              'What the model says it did not do as the task said, and why.',
-            doesBg:
-              'Какво моделът казва, че не е направил както е казано в задачата, и защо.',
-          },
-          {
-            key: 'review.findings',
-            kind: 'disclosure',
-            en: 'what it found ({n})',
-            bg: 'какво намери ({n})',
-            doesEn:
-              'What the independent review found.',
-            doesBg:
-              'Какво е намерила независимата рецензия.',
-          },
-          {
-            key: 'task.disputes',
-            kind: 'disclosure',
-            en: 'Review findings the model disputed ({n})',
-            bg: 'Оспорени находки на рецензията ({n})',
-            doesEn:
-              'Review findings the model disputed, with its evidence.',
-            doesBg:
-              'Находки на рецензията, които моделът е оспорил, с доказателствата си.',
-          },
-          {
-            key: 'status.queued',
-            kind: 'badge',
-            en: 'queued',
-            bg: 'чака',
-            doesEn: 'The task is waiting its turn and has not started.',
-            doesBg: 'Задачата чака реда си и още не е започнала.',
-          },
-          {
-            key: 'status.running',
-            kind: 'badge',
-            en: 'running',
-            bg: 'работи',
-            doesEn: 'The task is being executed right now.',
-            doesBg: 'Задачата се изпълнява в момента.',
-          },
-          {
-            key: 'status.waiting-approval',
-            kind: 'badge',
-            en: 'waiting for approval',
-            bg: 'чака одобрение',
-            doesEn: 'The task has stopped and a command is waiting for a decision.',
-            doesBg: 'Задачата е спряла и команда чака решение.',
-          },
-          {
-            key: 'status.done',
-            kind: 'badge',
-            en: 'done',
-            bg: 'готова',
-            doesEn: 'The task finished with a summary and its checks passed. This is the only ending that counts as success.',
-            doesBg: 'Задачата е приключила с обяснение и проверките ѝ са минали. Това е единственият край, който значи успех.',
-          },
-          {
-            key: 'status.blocked',
-            kind: 'badge',
-            en: 'not done',
-            bg: 'неизпълнена',
-            doesEn: 'The task ended without the work being done and says what stood in the way; read that reason first.',
-            doesBg: 'Задачата е приключила, без работата да е свършена, и казва какво е попречило; тази причина се чете първа.',
-          },
-          {
-            key: 'status.failed',
-            kind: 'badge',
-            en: 'failed',
-            bg: 'провалена',
-            doesEn: 'The task broke down and never reached an ending of its own.',
-            doesBg: 'Задачата се е счупила и не е стигнала до собствен край.',
-          },
-          {
-            key: 'status.aborted',
-            kind: 'badge',
-            en: 'aborted',
-            bg: 'прекратена',
-            doesEn:
-              'Stopped before it finished: by "Stop", by "Abort task" on a waiting step, or because the bot was stopped mid-task (then its work is committed on its branch at the next start).',
-            doesBg:
-              'Спряна преди да приключи: със „Спри“, с „Прекрати задачата“ на чакаща стъпка или защото ботът е спрян посред задача (тогава работата ѝ се комитва на клона ѝ при следващото пускане).',
-          },
-          {
-            key: 'status.limit-reached',
-            kind: 'badge',
-            en: 'limit reached',
-            bg: 'достигнат лимит',
-            doesEn:
-              'The task ran out of its allowed messages or minutes (Settings → Execution) before it could close. "Continue in the same chat" carries it on.',
-            doesBg:
-              'Задачата е изчерпала позволените си съобщения или минути (Настройки → Изпълнение), преди да приключи. „Продължи в същия чат“ я продължава.',
-          },
-          {
-            key: 'review.verdict.pass',
-            kind: 'badge',
-            en: 'review passed',
-            bg: 'рецензията мина',
-            doesEn: 'The second, independent conversation ran the work and found nothing wrong.',
-            doesBg: 'Вторият, независим разговор е изпълнил работата и не е намерил проблем.',
-          },
-          {
-            key: 'review.verdict.fail',
-            kind: 'badge',
-            en: 'review found problems',
-            bg: 'рецензията намери проблеми',
-            doesEn: 'The review found problems; the number beside it says how many and the task card lists them.',
-            doesBg: 'Рецензията е намерила проблеми; числото до нея казва колко, а картата на задачата ги изброява.',
-          },
-          {
-            key: 'review.verdict.error',
-            kind: 'badge',
-            en: 'review did not run',
-            bg: 'рецензията не се проведе',
-            doesEn: 'The review could not be carried out, so the work was accepted unreviewed.',
-            doesBg: 'Рецензията не е могла да се проведе и работата е приета без нея.',
-          },
-        ],
-      },
-      {
-        headingKey: 'form.title',
-        en: 'Add a task',
-        bg: 'Добави задача',
-        controls: [
-          {
-            key: 'form.titleLabel',
-            kind: 'field',
-            en: 'Title',
-            bg: 'Заглавие',
-            doesEn: 'The short name the task is listed under.',
-            doesBg: 'Краткото име, под което задачата стои в списъка.',
-          },
-          {
-            key: 'l2.label',
-            kind: 'field',
-            en: 'Level 2: project, domain and team instructions for this task',
-            bg: 'Ниво 2: инструкции за проекта, домейна и екипа за тази задача',
-            doesEn: 'What the operator knows and the runner does not; it is sent with this one task.',
-            doesBg: 'Това, което операторът знае, а изпълнителят не; изпраща се с точно тази задача.',
-          },
-          {
-            key: 'l2.loadPreset',
-            kind: 'select',
-            en: 'load a preset…',
-            bg: 'зареди шаблон…',
-            doesEn: 'Replaces that text with a preset saved earlier.',
-            doesBg: 'Заменя този текст с по-рано запазен шаблон.',
-          },
-          {
-            key: 'l2.saveAs',
-            kind: 'button',
-            en: 'Save as preset',
-            bg: 'Запази като шаблон',
-            doesEn:
-              'Saves the level 2 text as a preset under a name it asks for.',
-            doesBg:
-              'Запазва текста на ниво 2 като шаблон под име, което пита.',
-          },
-          {
-            key: 'form.taskLabel',
-            kind: 'field',
-            en: 'Task',
-            bg: 'Задача',
-            doesEn: 'The task text itself: what to do, what the result should be, what is out of bounds.',
-            doesBg: 'Самият текст на задачата: какво да се направи, какъв да е резултатът, какво е извън обхвата.',
-          },
-          {
-            key: 'form.add',
-            kind: 'button',
-            en: 'Add to queue',
-            bg: 'Добави в опашката',
-            doesEn: "Puts the new task at the end of this session's queue; it starts nothing.",
-            doesBg: 'Слага новата задача в края на опашката на сесията; не пуска нищо.',
-          },
-        ],
-      },
-      {
-        headingKey: 'checks.title',
-        en: 'Checks',
-        bg: 'Проверки',
-        controls: [
-          {
-            key: 'checks.name',
-            kind: 'field',
-            en: 'What it checks',
-            bg: 'Какво проверява',
-            doesEn: 'What this check is called, in the words a person would use.',
-            doesBg: 'Как се казва проверката, с човешки думи.',
-          },
-          {
-            key: 'checks.kind',
-            kind: 'select',
-            en: 'Must be',
-            bg: 'Трябва',
-            doesEn: 'What has to be true: a command succeeding or failing, its output, or a file existing or containing something.',
-            doesBg: 'Какво трябва да е вярно: командата да успее или да се провали, изходът ѝ, или файл да съществува или да съдържа нещо.',
-          },
-          {
-            key: 'checks.run',
-            kind: 'field',
-            en: 'Command',
-            bg: 'Команда',
-            doesEn: 'The command the runner executes for this check.',
-            doesBg: 'Командата, която изпълнителят пуска за тази проверка.',
-          },
-          {
-            key: 'checks.add',
-            kind: 'button',
-            en: 'Add a check',
-            bg: 'Добави проверка',
-            doesEn: 'Adds one more empty check to the task. A task with no check has nothing gating it.',
-            doesBg: 'Добавя още една празна проверка към задачата. Задача без проверка няма какво да я спре.',
-          },
-          {
-            key: 'checks.remove',
-            kind: 'button',
-            en: 'Remove',
-            bg: 'Махни',
-            doesEn:
-              'Removes that check.',
-            doesBg:
-              'Премахва тази проверка.',
-          },
-          {
-            key: 'checks.cwd',
-            kind: 'field',
-            en: 'In folder',
-            bg: 'В папка',
-            doesEn:
-              'The folder the check\'s command runs in; empty is the project.',
-            doesBg:
-              'Папката, в която върви командата на проверката; празно е проектът.',
-          },
-          {
-            key: 'checks.file',
-            kind: 'field',
-            en: 'File',
-            bg: 'Файл',
-            doesEn:
-              'For a file check: the file.',
-            doesBg:
-              'За проверка на файл: файлът.',
-          },
-          {
-            key: 'checks.value',
-            kind: 'field',
-            en: 'Text',
-            bg: 'Текст',
-            doesEn:
-              'For an output or file-content check: the text to look for.',
-            doesBg:
-              'За проверка на изход или съдържание: текстът, който се търси.',
-          },
-          {
-            key: 'checks.fromReview',
-            kind: 'disclosure',
-            en: 'From reviews ({n})',
-            bg: 'От рецензии ({n})',
-            doesEn:
-              'Checks the reviewers suggested; they defer to the next review rather than failing the task alone.',
-            doesBg:
-              'Проверки, предложени от рецензентите; не провалят задачата сами, а оставят решението на следващата рецензия.',
-          },
-        ],
-      },
-      {
-        headingKey: 'export.title',
-        en: 'Download the work',
-        bg: 'Изтегли свършената работа',
-        controls: [
-          {
-            key: 'export.outcome',
-            kind: 'link',
-            en: 'Expected and actual ({n})',
-            bg: 'Очаквано и получено ({n})',
-            doesEn: 'The short record: for each chosen task, the message that opened it and the answer that closed it.',
-            doesBg: 'Краткият запис: за всяка избрана задача първото съобщение и отговорът, с който приключва.',
-          },
-          {
-            key: 'export.full',
-            kind: 'link',
-            en: 'The whole conversation ({n})',
-            bg: 'Целият разговор ({n})',
-            doesEn: 'The whole conversation of the chosen tasks, with every report and reply in between.',
-            doesBg: 'Целият разговор на избраните задачи, с всички отчети и отговори помежду им.',
-          },
-          {
-            key: 'export.all',
-            kind: 'button',
-            en: 'Select all',
-            bg: 'Избери всички',
-            doesEn:
-              'Ticks every task for the download.',
-            doesBg:
-              'Отметва всички задачи за изтеглянето.',
-          },
-          {
-            key: 'export.none',
-            kind: 'button',
-            en: 'Clear the selection',
-            bg: 'Изчисти избора',
-            doesEn:
-              'Clears the ticks.',
-            doesBg:
-              'Маха отметките.',
-          },
-        ],
-      },
-      {
-        headingKey: 'live.title',
-        en: 'Live',
-        bg: 'На живо',
-        controls: [
-          {
-            key: 'live.title',
-            kind: 'note',
-            en: 'Live',
-            bg: 'На живо',
-            doesEn:
-              'The panel at the bottom: the session\'s events as they happen — steps, approvals, commits, warnings.',
-            doesBg:
-              'Панелът най-долу: събитията на сесията, както стават — стъпки, одобрения, комити, предупреждения.',
-          },
-        ],
-      },
-    ],
-  },
-
-  {
-    route: '/history',
-    nameEn: 'Task register',
-    nameBg: 'Регистър на задачите',
-    purposeEn:
-      'Every task of every session in one place — running now, queued next, already done — with the filters, the downloads, and the panel that continues the queue with exactly the tasks the operator ticks. "Continue" and "Choose tasks" exist only in the "Flow" view; tell the operator to be on it first.',
-    purposeBg:
-      'Всички задачи от всички сесии на едно място — какво върви сега, какво чака и какво е направено — с филтрите, изтеглянията и панела, който продължава опашката с точно отметнатите от оператора задачи. „Продължи“ и „Избери задачи“ има само в изгледа „Поток“; кажи на оператора първо да е на него.',
-    sections: [
-      {
-        headingKey: 'reg.title',
-        en: 'Task register',
-        bg: 'Регистър на задачите',
-        controls: [
-          {
-            key: 'reg.refresh',
-            kind: 'button',
-            en: 'Refresh',
-            bg: 'Обнови',
-            doesEn:
-              'Reads the task list from the server at once; the page also re-reads it by itself every few seconds.',
-            doesBg:
-              'Прочита списъка със задачи от сървъра веднага; страницата и без това се обновява сама на няколко секунди.',
-          },
-          {
-            key: 'reg.newSession',
-            kind: 'button',
-            en: 'New session',
-            bg: 'Нова сесия',
-            doesEn:
-              'Goes to the "New session" form on `/sessions`.',
-            doesBg:
-              'Отива на формата „Нова сесия“ на `/sessions`.',
-          },
-          {
-            key: 'reg.newTask',
-            kind: 'select',
-            en: 'New task',
-            bg: 'Нова задача',
-            doesEn:
-              'With "choose a session…" open, picking a session opens that session\'s page at its "Add a task" form.',
-            doesBg:
-              'С отворено „изберете сесия…“, изборът на сесия отваря страницата ѝ на формата „Добави задача“.',
-          },
-          {
-            key: 'reg.newTaskPick',
-            kind: 'select',
-            en: 'choose a session…',
-            bg: 'изберете сесия…',
-            doesEn:
-              'The empty choice of "New task"; pick a session instead of it.',
-            doesBg:
-              'Празният избор на „Нова задача“; изберете сесия вместо него.',
-          },
-          {
-            key: 'reg.total',
-            kind: 'badge',
-            en: 'tasks',
-            bg: 'задачи',
-            doesEn:
-              'The counter for every task in the register, whatever the filters are set to.',
-            doesBg:
-              'Броячът на всички задачи в регистъра, независимо какво са филтрите.',
-          },
-          {
-            key: 'reg.done',
-            kind: 'badge',
-            en: 'done',
-            bg: 'готови',
-            doesEn:
-              'The counter for the tasks that ended with the work actually done.',
-            doesBg:
-              'Броячът на задачите, приключили с наистина свършена работа.',
-          },
-          {
-            key: 'reg.runningCount',
-            kind: 'badge',
-            en: 'running now',
-            bg: 'в момента',
-            doesEn:
-              'The counter for the tasks being worked on, including one stopped for approval.',
-            doesBg:
-              'Броячът на задачите, по които се работи, включително спряна за одобрение.',
-          },
-          {
-            key: 'reg.open',
-            kind: 'badge',
-            en: 'ahead',
-            bg: 'предстоят',
-            doesEn:
-              'The counter for the tasks that have not started and are still waiting in a queue.',
-            doesBg:
-              'Броячът на задачите, които още не са започнали и чакат в опашка.',
-          },
-          {
-            key: 'reg.failedCount',
-            kind: 'badge',
-            en: 'did not finish',
-            bg: 'не са приключили',
-            doesEn:
-              'The counter for every ending that is not done: not done, failed, aborted or out of limit.',
-            doesBg:
-              'Броячът на всички краища, различни от готова: неизпълнени, провалени, прекратени или с достигнат лимит.',
-          },
-        ],
-      },
-      {
-        headingKey: 'reg.filterSession',
-        en: 'Session',
-        bg: 'Сесия',
-        controls: [
-          {
-            key: 'reg.allSessions',
-            kind: 'select',
-            en: 'all sessions',
-            bg: 'всички сесии',
-            doesEn:
-              'The "Session" filter\'s empty choice: every session. Pick one session to narrow the page to it.',
-            doesBg:
-              'Празният избор на филтъра „Сесия“: всички сесии. Изберете една сесия, за да свиете страницата до нея.',
-          },
-          {
-            key: 'reg.filterStatus',
-            kind: 'select',
-            en: 'Status',
-            bg: 'Състояние',
-            doesEn:
-              'Narrows the page to the tasks in one state, using the same words as the badges.',
-            doesBg:
-              'Свива страницата до задачите в едно състояние, със същите думи като етикетите.',
-          },
-          {
-            key: 'reg.allStatuses',
-            kind: 'select',
-            en: 'all statuses',
-            bg: 'всички състояния',
-            doesEn:
-              'The "Status" filter\'s empty choice: every state.',
-            doesBg:
-              'Празният избор на филтъра „Състояние“: всички състояния.',
-          },
-          {
-            key: 'reg.search',
-            kind: 'field',
-            en: 'Search in the titles and the summaries',
-            bg: 'Търсене в заглавията и обясненията',
-            doesEn:
-              'Keeps only the rows whose title, summary, stop reason or session name contains what is typed.',
-            doesBg:
-              'Оставя само редовете, в чието заглавие, обяснение, причина за спиране или име на сесия се среща написаното.',
-          },
-          {
-            key: 'reg.clear',
-            kind: 'button',
-            en: 'Clear the filters',
-            bg: 'Изчисти филтрите',
-            doesEn:
-              'Empties the session, status and search filters in one press.',
-            doesBg:
-              'Изчиства наведнъж филтрите по сесия, по състояние и търсенето.',
-          },
-        ],
-      },
-      {
-        headingKey: 'reg.viewLabel',
-        en: 'View',
-        bg: 'Изглед',
-        controls: [
-          {
-            key: 'reg.viewFlow',
-            kind: 'tab',
-            en: 'Flow',
-            bg: 'Поток',
-            doesEn:
-              'Shows the register as three threads — "Running now", "What is next", "What has been done" — and is the only view with "Continue", the run controls and "Choose tasks".',
-            doesBg:
-              'Показва регистъра като три нишки — „В момента“, „Какво следва“, „Какво е направено“ — и е единственият изглед с „Продължи“, бутоните за пускането и „Избери задачи“.',
-          },
-          {
-            key: 'reg.groupBy',
-            kind: 'tab',
-            en: 'By run',
-            bg: 'По изпълнение',
-            doesEn:
-              'Groups the same tasks under the run that started them, newest first, each with its own plan · work · runner links.',
-            doesBg:
-              'Групира същите задачи под пускането, което ги е стартирало, най-новото отгоре, всяко със свои връзки план · работа · runner.',
-          },
-          {
-            key: 'reg.viewList',
-            kind: 'tab',
-            en: 'List',
-            bg: 'Списък',
-            doesEn:
-              'Shows the same tasks as one table, for scanning many of them at once; the title opens the task.',
-            doesBg:
-              'Показва същите задачи като една таблица, за да се преглеждат много наведнъж; заглавието отваря задачата.',
-          },
-          {
-            key: 'reg.runGroup',
-            kind: 'note',
-            en: 'Started together',
-            bg: 'Пуснати заедно',
-            doesEn:
-              'In "By run": the heading above the runs.',
-            doesBg:
-              'В „По изпълнение“: заглавието над пусканията.',
-          },
-          {
-            key: 'reg.notInARun',
-            kind: 'note',
-            en: 'Not part of a run',
-            bg: 'Извън изпълнение',
-            doesEn:
-              'In "By run": the tasks that were started on their own, not as part of a run.',
-            doesBg:
-              'В „По изпълнение“: задачите, пуснати сами, не като част от пускане.',
-          },
-        ],
-      },
-      {
-        headingKey: 'fup.title',
-        en: 'Continue “{title}” with a new prompt',
-        bg: 'Продължи „{title}“ с нов prompt',
-        controls: [
-          {
-            key: 'fup.original',
-            kind: 'disclosure',
-            en: 'The task’s prompt as it stands',
-            bg: 'Prompt-ът на задачата, какъвто е',
-            doesEn:
-              'Shows the task\'s own prompt, which stays as it is: the new one is added to it.',
-            doesBg:
-              'Показва собствения prompt на задачата, който остава какъвто е: новият се добавя към него.',
-          },
-          {
-            key: 'fup.prompt',
-            kind: 'field',
-            en: 'New prompt',
-            bg: 'Нов prompt',
-            doesEn:
-              'What to do now, in the operator\'s words: what was wrong and what to do instead. Required. It wins where it and the task\'s prompt disagree.',
-            doesBg:
-              'Какво да направи сега, с думите на оператора: какво е било грешно и какво да направи вместо това. Задължително. Надделява, където то и prompt-ът на задачата си противоречат.',
-          },
-          {
-            key: 'fup.save',
-            kind: 'button',
-            en: 'Queue it to continue with this prompt',
-            bg: 'Върни в опашката да продължи с този prompt',
-            doesEn:
-              'Queues the task to carry on with the prompt, in its chat and on its branch; the dialog then offers "Run this task".',
-            doesBg:
-              'Връща задачата в опашката да продължи с prompt-а, в чата и на клона ѝ; после прозорецът предлага „Пусни тази задача“.',
-          },
-        ],
-      },
-      {
-        headingKey: null,
-        en: 'On every task row, in every view',
-        bg: 'На всеки ред със задача, във всеки изглед',
-        controls: [
-          {
-            key: 'reg.openTask',
-            kind: 'link',
-            en: 'task details',
-            bg: 'детайли на задачата',
-            doesEn:
-              'Opens that task\'s card on its session page, where it can be edited, run again or continued.',
-            doesBg:
-              'Отваря картата на задачата на страницата на сесията ѝ, където може да се редактира, пусне отново или продължи.',
-          },
-          {
-            key: 'home.col.chat',
-            kind: 'link',
-            en: 'Chat',
-            bg: 'Чат',
-            doesEn:
-              'Opens the Copilot conversation the task ran in.',
-            doesBg:
-              'Отваря разговора в Copilot, в който е вървяла задачата.',
-          },
-          {
-            key: 'reg.activeNow',
-            kind: 'note',
-            en: 'Running now',
-            bg: 'В момента',
-            doesEn:
-              'In the "Flow" view: the thread of what is running this minute.',
-            doesBg:
-              'В изгледа „Поток“: нишката на това, което върви в момента.',
-          },
-          {
-            key: 'save.log',
-            kind: 'button',
-            en: 'save the log',
-            bg: 'запази log-а',
-            doesEn:
-              'Saves the runner\'s log of that task\'s latest attempt to the Desktop and opens Explorer on it.',
-            doesBg:
-              'Запазва log-а на runner-а от последния опит на задачата на десктопа и отваря Explorer върху него.',
-          },
-          {
-            key: 'reg.exportTitle',
-            kind: 'note',
-            en: 'Download as JSON',
-            bg: 'Изтегли като JSON',
-            doesEn:
-              'The words in front of the three downloads "plan", "work" and "runner" of the row (and of a run, on its heading in "By run").',
-            doesBg:
-              'Думите пред трите изтегляния „план“, „работа“ и „runner“ на реда (и на пускане, на заглавието му в „По изпълнение“).',
-          },
-          {
-            key: 'reg.exportPlan',
-            kind: 'link',
-            en: 'plan',
-            bg: 'план',
-            doesEn:
-              'Downloads what was asked: the task in the plan format, with the edits made in the interface and its earlier attempts\' text. Imports again.',
-            doesBg:
-              'Изтегля какво е поискано: задачата във формата на плана, с редакциите от интерфейса и текста на по-ранните опити. Внася се отново.',
-          },
-          {
-            key: 'reg.exportDomain',
-            kind: 'link',
-            en: 'work',
-            bg: 'работа',
-            doesEn:
-              'Downloads what happened to the work: what the chat tried, what was done, and why it did not end done — earlier attempts included.',
-            doesBg:
-              'Изтегля какво се случи с работата: какво е пробвал чатът, какво е направено и защо не е завършила готова — с по-ранните опити.',
-          },
-          {
-            key: 'reg.exportBot',
-            kind: 'link',
-            en: 'runner',
-            bg: 'runner',
-            doesEn:
-              'Downloads what the runner did: the environment, every event and step with its exit code, the review machinery.',
-            doesBg:
-              'Изтегля какво е направил runner-ът: средата, всяко събитие и стъпка с кода на изход, механиката на рецензията.',
-          },
-          {
-            key: 'diff.open',
-            kind: 'button',
-            en: 'See the changes ({n} file(s))',
-            bg: 'Виж промените ({n} файла)',
-            doesEn:
-              'Where the attempt committed: every file it changed, before on the left and after on the right, scrolling together.',
-            doesBg:
-              'Където опитът е комитнал: всеки променен файл, преди вляво и след вдясно, превъртани заедно.',
-          },
-          {
-            key: 'story.show',
-            kind: 'button',
-            en: 'What happened',
-            bg: 'Какво се случи',
-            doesEn:
-              'Unfolds the task\'s whole story under the row.',
-            doesBg:
-              'Разгъва цялата история на задачата под реда.',
-          },
-          {
-            key: 'story.showLive',
-            kind: 'button',
-            en: 'What is happening now',
-            bg: 'Какво се случва в момента',
-            doesEn:
-              'While the task runs: the same, live — it follows the newest entry and shows the running command like a terminal. Tell the operator to watch here.',
-            doesBg:
-              'Докато задачата върви: същото, на живо — следва най-новото и показва текущата команда като терминал. Кажи на оператора да гледа тук.',
-          },
-          {
-            key: 'story.hide',
-            kind: 'button',
-            en: 'Hide what happened',
-            bg: 'Скрий какво се случи',
-            doesEn:
-              'The same button once the story is open: folds it away again.',
-            doesBg:
-              'Същият бутон, когато историята е отворена: сгъва я обратно.',
-          },
-          {
-            key: 'reg.rerunHere',
-            kind: 'button',
-            en: 'Run only this one again',
-            bg: 'Пусни само тази отново',
-            doesEn:
-              'On a row that failed or blocked on its work: says what happens to the chat, branch and record, then starts a new attempt of that task alone; the rest of the queue stays.',
-            doesBg:
-              'На ред, провален или блокиран по работата: казва какво става с чата, клона и записа, после пуска нов опит само за тази задача; останалите в опашката остават.',
-          },
-          {
-            key: 'fup.button',
-            kind: 'button',
-            en: 'Continue with a new prompt',
-            bg: 'Продължи с нов prompt',
-            doesEn:
-              'The way on after a task failed or blocked on its work: opens a dialog that shows how it ended (the reason, the checks that did not pass, what the review found) and takes a new prompt. Queued with it, the task carries on from where it got to — its own chat and branch, the failed attempt\'s work in the tree — and the chat is told how it ended and why, then given the prompt, which is added to the task\'s own. Saving does not start it; the dialog then offers "Run this task". Recommend this when the operator wants to keep the work and correct it.',
-            doesBg:
-              'Пътят напред, когато задача се е провалила или блокирала по работата: отваря прозорец, който показва как е завършила (причината, проверките, които не минаха, какво откри рецензията) и приема нов prompt. Върната с него в опашката, задачата продължава оттам, докъдето е стигнала — собственият ѝ чат и клон, с работата на неуспешния опит в дървото — а чатът научава как и защо е завършила и получава prompt-а, който се добавя към собствения на задачата. Запазването не я пуска; после прозорецът предлага „Пусни тази задача“. Препоръчвай го, когато операторът иска да запази работата и да я поправи.',
-          },
-          {
-            key: 'reg.continueHere',
-            kind: 'button',
-            en: 'Continue where it stopped',
-            bg: 'Продължи откъдето спря',
-            doesEn:
-              'On a row stopped by a limit from the settings (minutes, messages, reply wait, rounds of fixing), by the bot stopping or by the operator: says what happens to the chat, branch and files, then starts that task alone in its chat.',
-            doesBg:
-              'На ред, спрян от лимит в настройките (минути, съобщения, чакане на отговор, кръгове поправки), от спрял бот или от оператора: казва какво става с чата, клона и файловете, после пуска само тази задача в чата ѝ.',
-          },
-          {
-            key: 'reg.continueHerePrompt',
-            kind: 'field',
-            en: 'New prompt (optional)',
-            bg: 'Нов prompt (по желание)',
-            doesEn:
-              'In the "Continue where it stopped" panel: a new prompt to carry on with, optional — added to the task, and the chat does it as it carries on.',
-            doesBg:
-              'В панела „Продължи откъдето спря“: нов prompt, с който да продължи, по желание — добавя се към задачата и чатът го изпълнява, докато продължава.',
-          },
-          {
-            key: 'reg.fixPrompt',
-            kind: 'button',
-            en: 'Fix the prompt and queue it again',
-            bg: 'Поправи prompt-а и върни в опашката',
-            doesEn:
-              'On a row that did not end done, its session idle: rewrite the task\'s text and queue it again — it starts over from where the task first began, the failed attempt\'s work set aside on its branch (to keep that work and go on from it: "Continue with a new prompt"). Saving does not start it; the same dialog then asks "Run it now?" with the "Run this task" choices and buttons.',
-            doesBg:
-              'На ред, който не е завършил готов, при спряна сесия: пренапишете текста на задачата и я върнете в опашката — тя започва отначало оттам, откъдето е тръгнала първия път, а работата на неуспешния опит остава в неговия клон (за да я запазите и да продължите от нея: „Продължи с нов prompt“). Запазването не я пуска; после същият прозорец пита „Да я пусна ли сега?“ с изборите и бутоните на „Пусни тази задача“.',
-          },
-          {
-            key: 'runq.later',
-            kind: 'button',
-            en: 'Later',
-            bg: 'По-късно',
-            doesEn:
-              'On a "Run this task" panel that was offered rather than asked for — after a prompt was saved, a contradiction fixed, or a task queued again on its card: leaves the task waiting in the queue.',
-            doesBg:
-              'В панела „Пусни тази задача“, когато е предложен, а не поискан — след запазен prompt, поправено противоречие или задача, върната в опашката от картата ѝ: оставя задачата да чака в опашката.',
-          },
-          {
-            key: 'runq.button',
-            kind: 'button',
-            en: 'Run this task',
-            bg: 'Пусни тази задача',
-            doesEn:
-              'On a waiting (queued) row, its session idle and active: a panel to start that task now — "Only this task", or "This one and the N queued after it" in its session. It lists what runs, says the tasks that already ran are not touched, and names an earlier task of a chain that did not succeed (a warning, not a refusal). Also on a queued task card on the session page.',
-            doesBg:
-              'На чакащ ред, при спряна и активна сесия: панел за пускане на задачата сега — „Само тази задача“ или „Тази и N чакащи след нея“ в сесията ѝ. Изброява какво ще тръгне, казва, че вече изпълнените задачи не се пипат, и назовава по-ранна задача от верига, която не е минала (предупреждение, не отказ). Има го и на картата на чакаща задача в страницата на сесията.',
-          },
-          {
-            key: 'runq.go',
-            kind: 'button',
-            en: 'Run, asking before each command',
-            bg: 'Пусни, с питане преди всяка команда',
-            doesEn:
-              'In "Run this task": starts what the panel lists, step by step. A refusal is said in the panel; if the task contradicts itself, its fixes open right there.',
-            doesBg:
-              'В „Пусни тази задача“: пуска изброеното в панела, стъпка по стъпка. Отказът се казва в панела; ако задачата си противоречи, поправките ѝ се отварят там.',
-          },
-          {
-            key: 'runq.unattended',
-            kind: 'button',
-            en: 'Run without asking',
-            bg: 'Пусни без да пита',
-            doesEn:
-              'In "Run this task": the same, on its own, without stopping to ask; asks "are you sure" first unless Settings say not to.',
-            doesBg:
-              'В „Пусни тази задача“: същото, самостоятелно, без да спира да пита; първо пита „сигурни ли сте“, освен ако настройките не казват друго.',
-          },
-          {
-            key: 'cfix.button',
-            kind: 'button',
-            en: 'Fix the contradiction',
-            bg: 'Поправи противоречието',
-            doesEn:
-              'On a row (a dialog) or task card blocked because it contradicts itself (the chip "task contradicts itself"): lists each contradiction with the ways out, the least change chosen — add the file to the scope, let a read-only task change only that file, drop the scope, or drop one of its own checks. Never changes the prompt. A task a run refused to start for this stays queued: its fixes open inside "Run this task".',
-            doesBg:
-              'На ред (или карта), блокиран с „задачата си противоречи“: изброява всяко противоречие с изходите от него, като е избрана най-малката промяна — файлът в обхвата, задача само за четене да променя само този файл, без обхват, или без една от собствените ѝ проверки. Prompt-ът никога не се променя.',
-          },
-          {
-            key: 'cfix.apply',
-            kind: 'button',
-            en: 'Apply and queue it again',
-            bg: 'Приложи и върни в опашката',
-            doesEn:
-              'Applies the chosen fixes, queues the task as a new attempt and offers "Run this task". Nothing starts by itself.',
-            doesBg:
-              'Прилага избраните поправки, връща задачата в опашката като нов опит и предлага „Пусни тази задача“. Нищо не тръгва само.',
-          },
-          {
-            key: 'cfix.applyQueued',
-            kind: 'button',
-            en: 'Apply',
-            bg: 'Приложи',
-            doesEn:
-              'The same for a task still waiting (a run refused to start it): edits it where it waits; then start it again from the same panel.',
-            doesBg:
-              'Същото за задача, която още чака (пускането е отказано): променя я на място; после я пуснете отново от същия панел.',
-          },
-          {
-            key: 'reg.newPrompt',
-            kind: 'button',
-            en: 'Give it a new prompt and queue it again',
-            bg: 'Нов prompt и върни в опашката',
-            doesEn:
-              'On a row that ended done, its session idle: a new instruction for the task, built on its finished work (same branch). It does not start it.',
-            doesBg:
-              'На ред, завършил готов, при спряна сесия: нова инструкция за задачата, върху свършената работа (същия клон). Не я пуска.',
-          },
-          {
-            key: 'restore.button',
-            kind: 'button',
-            en: 'Restore',
-            bg: 'Върни',
-            doesEn:
-              'As on a task card: back to the code before this task, on a new branch. On a row that ran, when its session is idle.',
-            doesBg:
-              'Както на картата на задача: връща кода отпреди задачата, на нов клон. На ред, който е вървял, когато сесията му стои.',
-          },
-          {
-            key: 'restart.button',
-            kind: 'button',
-            en: 'Run again from here',
-            bg: 'Пусни отново оттук',
-            doesEn:
-              'As on a task card: puts the code back, queues this task and the rest of its run, and starts at once in that run\'s mode.',
-            doesBg:
-              'Както на картата на задача: връща кода, нарежда задачата и останалото от пускането ѝ и тръгва веднага в режима на онова пускане.',
-          },
-          {
-            key: 'row.info',
-            kind: 'button',
-            en: 'What are these?',
-            bg: 'Какво са тези?',
-            doesEn:
-              'A small round i at the end of the row. Opens a panel saying what each of the row\'s links gives you, and which of the three JSON files to reach for first.',
-            doesBg:
-              'Малко кръгло i в края на реда. Отваря панел, който казва какво дава всяка от връзките на реда и кой от трите JSON файла да се вземе първи.',
-          },
-          {
-            key: 'reg.attempts',
-            kind: 'disclosure',
-            en: 'this is attempt {n} — see the {m} before it',
-            bg: 'това е опит {n} — виж {m}-те преди него',
-            doesEn:
-              'On a task run more than once: unfolds the earlier attempts, each with its status, its reason, "save this attempt\'s log" and "download plan, work and runner of this attempt".',
-            doesBg:
-              'На задача, пускана повече от веднъж: разгъва по-ранните опити, всеки със състоянието, причината, „запази log-а на този опит“ и „изтегли план, работа и runner на този опит“.',
-          },
-          {
-            key: 'reg.attemptsOne',
-            kind: 'disclosure',
-            en: 'this is attempt {n} — see the one before it',
-            bg: 'това е опит {n} — виж този преди него',
-            doesEn:
-              'The same fold when there is one earlier attempt.',
-            doesBg:
-              'Същият сгъваем раздел, когато има един по-ранен опит.',
-          },
-          {
-            key: 'save.attemptLog',
-            kind: 'button',
-            en: 'save this attempt\'s log',
-            bg: 'запази log-а на този опит',
-            doesEn:
-              'Inside the earlier attempts: saves the log of that attempt, rather than of the latest one, to the Desktop.',
-            doesBg:
-              'В по-ранните опити: запазва на десктопа log-а на този опит, а не на последния.',
-          },
-          {
-            key: 'save.attemptRecord',
-            kind: 'button',
-            en: 'download plan, work and runner of this attempt',
-            bg: 'изтегли план, работа и runner на този опит',
-            doesEn:
-              'Inside the earlier attempts: that attempt as it ran — plan, work, runner — as one file. A failed attempt also keeps them as plan.json, work.json and runner.json in its run folder.',
-            doesBg:
-              'В по-ранните опити: този опит, както е вървял — план, работа, runner — в един файл. Провален опит ги пази и като plan.json, work.json и runner.json в папката на пускането си.',
-          },
-          {
-            key: 'reg.stopped',
-            kind: 'note',
-            en: 'stopped: {reason}',
-            bg: 'спряна: {reason}',
-            doesEn:
-              'In red on the row: why that task or attempt stopped without the work being done.',
-            doesBg:
-              'В червено на реда: защо задачата или опитът е спрял, без работата да е свършена.',
-          },
-          {
-            key: 'reg.retriedFreshDone',
-            kind: 'badge',
-            en: 'blocked, then done in a fresh chat ({n}×)',
-            bg: 'блокира, после готова в нов чат ({n}×)',
-            doesEn:
-              'The task was blocked and then finished in a new conversation, so the chat was the cause, not the task.',
-            doesBg:
-              'Задачата е блокирала и после е станала готова в нов разговор — значи чатът е бил причината, не задачата.',
-          },
-          {
-            key: 'reg.retriedFreshStill',
-            kind: 'badge',
-            en: 'still blocked after {n} fresh chat(s)',
-            bg: 'още блокирана след {n} нови чата',
-            doesEn:
-              'Fresh conversations did not help, so the cause is in the task text, the checks or the machine.',
-            doesBg:
-              'Новите разговори не са помогнали — причината е в текста на задачата, в проверките или в машината.',
-          },
-        ],
-      },
-      {
-        headingKey: 'story.prompt',
-        en: 'The task, as given',
-        bg: 'Заданието, както е дадено',
-        controls: [
-          {
-            key: 'story.showChat',
-            kind: 'checkbox',
-            en: 'the conversation',
-            bg: 'разговорът',
-            doesEn:
-              'Shows or hides the messages sent and the replies.',
-            doesBg:
-              'Показва или скрива изпратените съобщения и отговорите.',
-          },
-          {
-            key: 'story.showCommands',
-            kind: 'checkbox',
-            en: 'the commands and their output',
-            bg: 'командите и изходът им',
-            doesEn:
-              'Shows or hides the commands that ran and their output.',
-            doesBg:
-              'Показва или скрива изпълнените команди и изхода им.',
-          },
-          {
-            key: 'story.live',
-            kind: 'badge',
-            en: 'live',
-            bg: 'на живо',
-            doesEn:
-              'Pulsing while the task runs. The list then stays at the newest entry, and the running command is shown open with its output following its last line, like a terminal.',
-            doesBg:
-              'Пулсира, докато задачата върви. Списъкът тогава стои на най-новото, а текущата команда е отворена и изходът ѝ следва последния ред, като терминал.',
-          },
-          {
-            key: 'story.follow',
-            kind: 'button',
-            en: '↓ follow the newest',
-            bg: '↓ следвай най-новото',
-            doesEn:
-              'Appears when the operator scrolled up in a live story: goes back to the newest line and follows it again.',
-            doesBg:
-              'Появява се, когато операторът е превъртял нагоре в история на живо: връща на най-новия ред и следва отново.',
-          },
-          {
-            key: 'story.showOutput',
-            kind: 'button',
-            en: 'show output ({n} chars)',
-            bg: 'покажи изхода ({n} знака)',
-            doesEn:
-              'Under a command: unfolds its output (the end of it, for a very long one).',
-            doesBg:
-              'Под команда: разгъва изхода ѝ (края му, ако е много дълъг).',
-          },
-          {
-            key: 'story.hideOutput',
-            kind: 'button',
-            en: 'hide output',
-            bg: 'скрий изхода',
-            doesEn:
-              'Folds that output away again.',
-            doesBg:
-              'Сгъва този изход обратно.',
-          },
-          {
-            key: 'story.showText',
-            kind: 'button',
-            en: 'show text ({n} chars)',
-            bg: 'покажи текста ({n} знака)',
-            doesEn:
-              'Under a message or a reply: unfolds its full text.',
-            doesBg:
-              'Под съобщение или отговор: разгъва пълния текст.',
-          },
-          {
-            key: 'story.hideText',
-            kind: 'button',
-            en: 'hide text',
-            bg: 'скрий текста',
-            doesEn:
-              'Folds that text away again.',
-            doesBg:
-              'Сгъва този текст обратно.',
-          },
-        ],
-      },
-      {
-        headingKey: 'reg.upcoming',
-        en: 'What is next',
-        bg: 'Какво следва',
-        controls: [
-          {
-            key: 'reg.interruptedTitle',
-            kind: 'note',
-            en: 'The bot stopped in the middle of the work.',
-            bg: 'Ботът спря посред работата.',
-            doesEn:
-              'After the bot stopped under a run (power, Ctrl+C, a crash): the stopped tasks\' work is kept, and "Continue" carries them on where they stopped.',
-            doesBg:
-              'След като ботът е спрял посред пускане (ток, Ctrl+C, срив): свършеното е запазено, а „Продължи“ продължава спрелите задачи оттам, където са спрели.',
-          },
-          {
-            key: 'batch.pause',
-            kind: 'button',
-            en: 'Pause after this task',
-            bg: 'Пауза след тази задача',
-            doesEn:
-              'As on `/sessions`: holds the run after the task in flight finishes properly. Press it first after a failure you want to think about.',
-            doesBg:
-              'Както на `/sessions`: задържа пускането, след като текущата задача приключи както трябва. Натиснете го първо след провал, над който искате да помислите.',
-          },
-          {
-            key: 'batch.resume',
-            kind: 'button',
-            en: 'Take the hold off',
-            bg: 'Махни паузата',
-            doesEn:
-              'As on `/sessions`: the queue carries on.',
-            doesBg:
-              'Както на `/sessions`: опашката продължава.',
-          },
-          {
-            key: 'batch.stop',
-            kind: 'button',
-            en: 'Stop after the current step',
-            bg: 'Спри след текущата стъпка',
-            doesEn:
-              'As on `/sessions`: stops after the current step; the task in flight ends aborted.',
-            doesBg:
-              'Както на `/sessions`: спира след текущата стъпка; текущата задача завършва прекратена.',
-          },
-          {
-            key: 'reg.continue',
-            kind: 'button',
-            en: 'Continue: run the {n} queued task(s) in {s} session(s)',
-            bg: 'Продължи: пусни {n} чакащи задачи в {s} сесии',
-            doesEn:
-              'Opens the "Before it continues" panel. It starts nothing yet.',
-            doesBg:
-              'Отваря панела „Преди да продължи“. Още нищо не пуска.',
-          },
-          {
-            key: 'reg.continueWithFailed',
-            kind: 'button',
-            en: 'Continue: run {f} unfinished and {n} queued task(s) in {s} session(s)',
-            bg: 'Продължи: пусни {f} недовършени и {n} чакащи задачи в {s} сесии',
-            doesEn:
-              'The same button when a failed task of a chained session would go back into the queue with the queued ones.',
-            doesBg:
-              'Същият бутон, когато провалена задача от сесия-верига би се върнала в опашката заедно с чакащите.',
-          },
-          {
-            key: 'reg.continuePanelTitle',
-            kind: 'note',
-            en: 'Before it continues',
-            bg: 'Преди да продължи',
-            doesEn:
-              'The panel\'s heading. Every candidate has a tick box — failed tasks of chains, failed independent ones, the queued — all ticked at first; the run takes exactly the ticked, the rest stay where they are.',
-            doesBg:
-              'Заглавието на панела. Всеки кандидат има отметка — провалени от вериги, провалени независими, чакащите — отначало всички отметнати; пускането взима точно отметнатите, останалите остават, където са.',
-          },
-          {
-            key: 'reg.pickOnly',
-            kind: 'button',
-            en: 'only this one',
-            bg: 'само тази',
-            doesEn:
-              'Beside each task in that panel: unticks everything else, so the run takes this task alone — the way to run only the task whose prompt was just fixed.',
-            doesBg:
-              'До всяка задача в панела: маха отметките от всички други, така че пускането взима само нея — начинът да се пусне само задачата, чийто prompt току-що е поправен.',
-          },
-          {
-            key: 'reg.pickAll',
-            kind: 'button',
-            en: 'Tick all',
-            bg: 'Маркирай всички',
-            doesEn:
-              'In that panel: ticks every task.',
-            doesBg:
-              'В панела: отметва всички задачи.',
-          },
-          {
-            key: 'reg.pickNone',
-            kind: 'button',
-            en: 'Untick all',
-            bg: 'Размаркирай всички',
-            doesEn:
-              'In that panel: unticks every task, beside the count of ticked ones (the start buttons then do nothing until one is ticked).',
-            doesBg:
-              'В панела: маха всички отметки (бутоните за пускане тогава не действат, докато не се отметне поне една).',
-          },
-          {
-            key: 'reg.fixPrompt',
-            kind: 'button',
-            en: 'Fix the prompt and queue it again',
-            bg: 'Поправи prompt-а и върни в опашката',
-            doesEn:
-              'Beside a failed task in that panel: rewrite its text first; it comes back ticked and queued.',
-            doesBg:
-              'До провалена задача в панела: първо пренапишете текста ѝ; тя се връща отметната и в опашката.',
-          },
-          {
-            key: 'reg.continueGap',
-            kind: 'note',
-            en: '“{task}” ({session}) is part of a chain and runs without “{before}”, which comes before it. Run it alone only if it does not need that task’s work.',
-            bg: '„{task}“ ({session}) е част от верига и тръгва без „{before}“, която е преди нея. Пуснете я сама, само ако не ѝ трябва работата на онази задача.',
-            doesEn:
-              'Said in that panel when a ticked task of a chain runs without an earlier task of its session. A warning, not a refusal.',
-            doesBg:
-              'Казва се в панела, когато отметната задача от верига тръгва без по-ранна задача от сесията си. Предупреждение, не отказ.',
-          },
-          {
-            key: 'batch.runName',
-            kind: 'field',
-            en: 'Name of this run',
-            bg: 'Име на това пускане',
-            doesEn:
-              'In that panel: the name of this run, suggested; the register groups by it and the downloads are named after it.',
-            doesBg:
-              'В панела: името на това пускане, предложено; регистърът групира по него и изтеглянията се именуват по него.',
-          },
-          {
-            key: 'reg.continueUnattended',
-            kind: 'button',
-            en: 'Continue without asking',
-            bg: 'Продължи без да пита',
-            doesEn:
-              'Starts exactly the ticked tasks without asking (after "are you sure" unless Settings say otherwise). Stopped ones (aborted, limit reached) continue where they stopped; failed or blocked ones start afresh.',
-            doesBg:
-              'Пуска точно отметнатите задачи без питане (след „сигурен ли си“, освен ако Настройките казват друго). Спрелите (прекратени, с лимит) продължават откъдето спряха; провалените и блокираните тръгват отначало.',
-          },
-          {
-            key: 'reg.continueGo',
-            kind: 'button',
-            en: 'Continue, asking before each command',
-            bg: 'Продължи, с питане преди всяка команда',
-            doesEn:
-              'Starts exactly the ticked tasks but stops for approval before every command.',
-            doesBg:
-              'Пуска точно отметнатите задачи, но спира за одобрение преди всяка команда.',
-          },
-          {
-            key: 'dialog.cancel',
-            kind: 'button',
-            en: 'Cancel',
-            bg: 'Отказ',
-            doesEn:
-              'Closes the panel without starting anything.',
-            doesBg:
-              'Затваря панела, без да пуска нищо.',
-          },
-        ],
-      },
-      {
-        headingKey: 'reg.past',
-        en: 'What has been done',
-        bg: 'Какво е направено',
-        controls: [
-          {
-            key: 'reg.pick',
-            kind: 'button',
-            en: 'Choose tasks',
-            bg: 'Избери задачи',
-            doesEn:
-              'Above the finished tasks, in the "Flow" view. Puts a tick box on every task that ran, across every run, so several can be picked at once.',
-            doesBg:
-              'Над свършените задачи, в изгледа „Поток“. Слага отметка на всяка изпълнена задача, през всички пускания, за да могат да се изберат няколко наведнъж.',
-          },
-          {
-            key: 'reg.bundle',
-            kind: 'button',
-            en: 'Download plan, work and runner for the {n} chosen, as one file',
-            bg: 'Изтегли план, работа и runner за избраните {n}, в един файл',
-            doesEn:
-              'Once something is ticked: one JSON with all three views of exactly the ticked tasks — the file to ask for when working out why something went as it did. Say how many to tick.',
-            doesBg:
-              'Щом има отметнато: един JSON с трите изгледа на точно отметнатите задачи — файлът, който се иска, когато се търси защо нещо е тръгнало така. Кажи колко да се отметнат.',
-          },
-          {
-            key: 'reg.pickDone',
-            kind: 'button',
-            en: 'Done choosing',
-            bg: 'Готово с избора',
-            doesEn:
-              'Leaves the choosing mode and clears the ticks.',
-            doesBg:
-              'Излиза от режима на избор и маха отметките.',
-          },
-        ],
-      },
-      {
-        headingKey: 'reg.fixPromptTitle',
-        en: 'The prompt of "{title}"',
-        bg: 'Prompt-ът на „{title}"',
-        controls: [
-          {
-            key: 'reg.fixPromptSave',
-            kind: 'button',
-            en: 'Save and queue again',
-            bg: 'Запази и върни в опашката',
-            doesEn:
-              'Saves the rewritten task text and puts the task back into its queue with it; the failed attempt stays on its record. Level 2, the checks and the git names are untouched. Then "Continue" with "only this one" runs it alone.',
-            doesBg:
-              'Запазва пренаписания текст и връща задачата в опашката с него; провалилият се опит остава в историята ѝ. Ниво 2, проверките и git имената остават каквито са. После „Продължи“ със „само тази“ я пуска сама.',
-          },
-          {
-            key: 'dialog.cancel',
-            kind: 'button',
-            en: 'Cancel',
-            bg: 'Отказ',
-            doesEn:
-              'Closes the box and changes nothing.',
-            doesBg:
-              'Затваря прозореца и не променя нищо.',
-          },
-        ],
-      },
-      {
-        headingKey: 'diff.title',
-        en: 'Changes in "{title}"',
-        bg: 'Промени в „{title}“',
-        controls: [
-          {
-            key: 'diff.nextChange',
-            kind: 'button',
-            en: 'Next change',
-            bg: 'Следваща промяна',
-            doesEn:
-              'Jumps to the next edit (key n).',
-            doesBg:
-              'Отива на следващата промяна (клавиш n).',
-          },
-          {
-            key: 'diff.prevChange',
-            kind: 'button',
-            en: 'Previous change',
-            bg: 'Предишна промяна',
-            doesEn:
-              'The one before (key p).',
-            doesBg:
-              'Предишната (клавиш p).',
-          },
-          {
-            key: 'diff.nextFile',
-            kind: 'button',
-            en: 'Next file',
-            bg: 'Следващ файл',
-            doesEn:
-              'The next file in the list on the left (key ]).',
-            doesBg:
-              'Следващият файл от списъка вляво (клавиш ]).',
-          },
-          {
-            key: 'diff.prevFile',
-            kind: 'button',
-            en: 'Previous file',
-            bg: 'Предишен файл',
-            doesEn:
-              'The file before (key [).',
-            doesBg:
-              'Предишният файл (клавиш [).',
-          },
-          {
-            key: 'diff.gap',
-            kind: 'button',
-            en: '⋯ {n} unchanged line(s) — show them',
-            bg: '⋯ {n} непроменени реда — покажи ги',
-            doesEn:
-              'Opens a folded stretch of unchanged lines.',
-            doesBg:
-              'Отваря сгънат участък непроменени редове.',
-          },
-          {
-            key: 'diff.whole',
-            kind: 'checkbox',
-            en: 'Show the whole file',
-            bg: 'Покажи целия файл',
-            doesEn:
-              'Every line, nothing folded.',
-            doesBg:
-              'Всички редове, нищо сгънато.',
-          },
-          {
-            key: 'diff.wrap',
-            kind: 'checkbox',
-            en: 'Wrap long lines',
-            bg: 'Пренасяй дългите редове',
-            doesEn:
-              'Off: long lines stay on one line and the table scrolls sideways.',
-            doesBg:
-              'Изключено: дългите редове остават на един ред и таблицата се превърта настрани.',
-          },
-          {
-            key: 'diff.close',
-            kind: 'button',
-            en: 'Close',
-            bg: 'Затвори',
-            doesEn:
-              'Closes the view (Esc).',
-            doesBg:
-              'Затваря изгледа (Esc).',
-          },
-        ],
-      },
-      {
-        headingKey: 'metrics.title',
-        en: 'How the bot is doing',
-        bg: 'Как се справя ботът',
-        // A table of figures at the foot of the register, read-only; the heading says what it is.
-        controls: [],
       },
     ],
   },
@@ -4503,26 +1167,6 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'On an extra project: removes it from the list (nothing on disk is touched).',
             doesBg:
               'На допълнителен проект: маха го от списъка (нищо на диска не се пипа).',
-          },
-          {
-            key: 'proj.toSessions',
-            kind: 'button',
-            en: 'To the sessions',
-            bg: 'Към сесиите',
-            doesEn:
-              'Goes to the sessions list on `/sessions`.',
-            doesBg:
-              'Отива на списъка със сесии на `/sessions`.',
-          },
-          {
-            key: 'proj.toImport',
-            kind: 'button',
-            en: 'To the plan import',
-            bg: 'Към внасянето на план',
-            doesEn:
-              'Goes to the plan import on `/import`.',
-            doesBg:
-              'Отива на внасянето на план на `/import`.',
           },
         ],
       },
@@ -5046,6 +1690,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Заглавието над двата бутона за тема.',
           },
           {
+            key: 'theme.system',
+            kind: 'button',
+            en: 'System',
+            bg: 'Системна',
+            doesEn: 'The default: the light or dark this machine is set to, changing with it. Also from the last icon on the workbench\'s left.',
+            doesBg: 'По подразбиране: светлото или тъмното, на което е машината, и се сменя с него. Също от последната икона вляво на работното място.',
+          },
+          {
             key: 'theme.light',
             kind: 'radio',
             en: 'Light',
@@ -5115,6 +1767,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         en: 'Accessibility',
         bg: 'Достъпност',
         controls: [
+          {
+            key: 'ap.night',
+            kind: 'checkbox',
+            en: 'Night light',
+            bg: 'Нощна светлина',
+            doesEn: 'A warm tint over the page, with less blue light, for the evening; with either theme.',
+            doesBg: 'Топъл оттенък върху страницата, с по-малко синя светлина, за вечерта; и с двете теми.',
+          },
           {
             key: 'ap.contrast',
             kind: 'checkbox',

@@ -13,11 +13,8 @@ import { LanguageSwitcher, useT, type Key } from '../lib/i18n';
  * the label is what stays readable.
  */
 const ICONS: Record<string, ReactNode> = {
-  sessions: <path d="M4 5h16v4H4zM4 11h16v4H4zM4 17h10v2H4z" />,
   workbench: <path d="M3 4h18v16H3zM9 4v16M3 15h6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
   defaults: <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.5 4 1.5 1-1.6 2.8-1.8-.4a7 7 0 0 1-1.5 1.5l.4 1.8L14.7 21l-1-1.5a7 7 0 0 1-3.4 0l-1 1.5-2.8-1.6.4-1.8A7 7 0 0 1 5.4 16l-1.8.4L2 13.6 3.5 12.6V11.4L2 10.4l1.6-2.8 1.8.4A7 7 0 0 1 6.9 6.5l-.4-1.8L9.3 3l1 1.5a7 7 0 0 1 3.4 0l1-1.5 2.8 1.6-.4 1.8a7 7 0 0 1 1.5 1.5l1.8-.4L22 10.4l-1.5 1z" />,
-  import: <path d="M12 3v10m0 0 4-4m-4 4-4-4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
-  history: <path d="M12 3a9 9 0 1 0 8.5 6M12 7v5l3 2M3 4v5h5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
   level1: <path d="M6 3h9l5 5v13H6zM14 3v6h6M9 13h7M9 17h7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
   presets: <path d="M5 4h14v4H5zM5 10h14v4H5zM5 16h9v4H5z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
   appearance: <path d="M12 3a9 9 0 0 0 0 18c1.5 0 2-1 2-2s-1-1.5-1-2.5S14 15 15.5 15H17a4 4 0 0 0 4-4 8 8 0 0 0-9-8zM8 9a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm4-3a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm4 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2z" />,
@@ -26,10 +23,7 @@ const ICONS: Record<string, ReactNode> = {
 
 const LINKS: Array<{ href: string; label: Key; icon: keyof typeof ICONS }> = [
   { href: '/', label: 'nav.workbench', icon: 'workbench' },
-  { href: '/sessions', label: 'nav.sessions', icon: 'sessions' },
   { href: '/defaults', label: 'nav.defaults', icon: 'defaults' },
-  { href: '/import', label: 'nav.import', icon: 'import' },
-  { href: '/history', label: 'nav.history', icon: 'history' },
   { href: '/level1', label: 'nav.level1', icon: 'level1' },
   { href: '/presets', label: 'nav.presets', icon: 'presets' },
   { href: '/appearance', label: 'nav.appearance', icon: 'appearance' },
@@ -59,12 +53,11 @@ export function Nav() {
           </svg>
           <span>{t(l.label)}</span>
           {/*
-           * The one place in the app that says "something is happening" without being asked.
-           * It sits on the register because the register is where you go to watch it, and it
-           * is on the nav rather than the page because the whole point is to be visible from
-           * wherever you happen to be standing.
+           * The one place in the app that says "something is happening" without being asked. It sits on the workbench,
+           * where the chat is watched (the task register it sat on went on 2026-10-20), and it is on the nav rather
+           * than the page because the whole point is to be visible from wherever you happen to be standing.
            */}
-          {l.href === '/history' && running > 0 && (
+          {l.href === '/' && running > 0 && (
             <span className="live" title={t('nav.liveTitle', { n: running })}>
               <span className="dot" aria-hidden="true" />
               {t('nav.live')}

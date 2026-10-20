@@ -12,7 +12,7 @@ import { api, type ChangedFileContent, type GitArea } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { foldRows, linesOf, sideBySide, type DiffRow } from '../../lib/lineDiff';
-import { DiffLine } from '../diffView';
+import { DiffHead, DiffLine, DiffTools } from '../diffView';
 
 export function GitDiff({ area, path, commit }: { area: GitArea; path: string; commit?: string }) {
   const { t } = useT();
@@ -63,25 +63,14 @@ export function GitDiff({ area, path, commit }: { area: GitArea; path: string; c
   return (
     <div className="wb-gitdiff">
       <div className="diff-toolbar">
-        <strong className="diff-name">{content?.oldPath ? `${content.oldPath} → ${path}` : path}</strong>
-        <span className="muted small">
-          {where}
-          {status ? ` · ${t(`git.status.${status === '!' ? 'conflict' : status}` as 'git.status.M')}` : ''}
-        </span>
-        <span className="grow" />
-        <button type="button" className="quiet" onClick={() => go(-1)} disabled={blocks.length === 0}>
-          {t('diff.prevChange')}
-        </button>
-        <button type="button" className="quiet" onClick={() => go(1)} disabled={blocks.length === 0}>
-          {t('diff.nextChange')}
-        </button>
-        <span className="muted small">{blocks.length > 0 ? t('diff.changeN', { i: block < 0 ? '–' : block + 1, n: blocks.length }) : ''}</span>
-        <label className="option-inline">
-          <input type="checkbox" checked={whole} onChange={(e) => setWhole(e.target.checked)} /> {t('diff.whole')}
-        </label>
-        <label className="option-inline">
-          <input type="checkbox" checked={wrap} onChange={(e) => setWrap(e.target.checked)} /> {t('diff.wrap')}
-        </label>
+        <div className="diff-title-row">
+          <strong className="diff-name">{content?.oldPath ? `${content.oldPath} → ${path}` : path}</strong>
+          <span className="muted small">
+            {where}
+            {status ? ` · ${t(`git.status.${status === '!' ? 'conflict' : status}` as 'git.status.M')}` : ''}
+          </span>
+        </div>
+        <DiffTools changes={blocks.length} onChange={go} whole={whole} onWhole={setWhole} wrap={wrap} onWrap={setWrap} />
       </div>
       <div className="diff-scroll" ref={scroller}>
         {err && <div className="err" style={{ padding: 12 }}>{err}</div>}
@@ -98,12 +87,7 @@ export function GitDiff({ area, path, commit }: { area: GitArea; path: string; c
                 <col className="num" />
                 <col />
               </colgroup>
-              <thead>
-                <tr>
-                  <th colSpan={2}>{t('diff.before')}</th>
-                  <th colSpan={2}>{t('diff.after')}</th>
-                </tr>
-              </thead>
+              <DiffHead changes={blocks.length} at={block} />
               <tbody>
                 {items.map((item) =>
                   item.type === 'gap' ? (

@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { api, sessionHref, type Approval } from '../lib/api';
+import { api, type Approval } from '../lib/api';
 import { useT, useFmtTime } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { usePoll } from '../lib/usePoll';
@@ -74,11 +74,12 @@ export function GlobalApprovals() {
    * banner would say it a second time over the whole window. Every other page still shows them here. A session not
    * read yet is held back for the moment it takes, rather than flashing the banner up and away. A chat's model or plan
    * card is not a command and is not asked about in the conversation, which points up here for it ("the card at the
-   * top"): hidden too, it left a chat waiting with nothing to answer (2026-10-17).
+   * top"): hidden too, it left a chat waiting with nothing to answer (2026-10-17). A chat's plan is asked about in the
+   * conversation since 2026-10-20 (plan mode, "as in Claude Code"), so only its model card is left up here.
    */
   const shown =
     pathname === '/'
-      ? approvals.filter((a) => a.sessionId in known.current && (!chats.current.has(a.sessionId) || !!a.model || !!a.plan))
+      ? approvals.filter((a) => a.sessionId in known.current && (!chats.current.has(a.sessionId) || !!a.model))
       : approvals;
   if (shown.length === 0) return null;
 
@@ -137,7 +138,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
       <div className="approval">
         <div className="row">
           <strong>{t(m.manual ? 'approval.manualTitle' : 'approval.modelTitle')}</strong>
-          <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
+          <Link href="/">{sessionName}</Link>
           <span className="muted small">{fmtTime(approval.createdAt)}</span>
         </div>
         <p>{m.manual ? (m.asked ? t('approval.manualAsk', { model: m.asked }) : t('approval.manualAskAny')) : t('approval.modelAsk', { model: m.asked })}</p>
@@ -173,7 +174,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
     <div className="approval">
       <div className="row">
         <strong>{t('approval.title', { n: approval.stepId })}</strong>
-        <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
+        <Link href="/">{sessionName}</Link>
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
@@ -206,9 +207,9 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
 /**
  * A task's plan, waiting before the work starts: the plan in full, a note the chat gets with the
  * answer, and three answers — approve it, ask for another (the note says what to change, so it is
- * required), or stop the task.
+ * required), or stop the task. In the chat's conversation it is shown where it was asked for, with no session name.
  */
-function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName: string; onDecided: () => void }) {
+export function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName?: string; onDecided: () => void }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
   const [note, setNote] = useState('');
@@ -242,7 +243,7 @@ function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; se
     <div className="approval">
       <div className="row">
         <strong>{t('pm.cardTitle', { title: p.title })}</strong>
-        <Link href={sessionHref(approval.sessionId)}>{sessionName}</Link>
+        {sessionName !== undefined && <Link href="/">{sessionName}</Link>}
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <p className="small">{t('pm.cardWhy')}</p>

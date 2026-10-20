@@ -3,18 +3,16 @@
  *
  * Bound to localhost only (see main.ts). There is no authentication because there is no
  * network: this API runs on the operator's own machine and drives that machine's browser.
+ *
+ * What is here is what the chat and its workbench use, with Settings and Kerrigan (2026-10-20: the sessions, the task
+ * register and the plan from JSON were removed, and their routes with them).
  */
-import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Res, Sse, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Res, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import type { Response } from 'express';
-import { Observable } from 'rxjs';
 import { OperatorService } from './operator.service.js';
-import type { TaskCheck } from '../session/model.js';
-import type { ContextKind } from '../session/store.js';
-import type { StartChoice } from '../vcs/startChoice.js';
 import { SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
-
-type Msg = { data: string; type?: string; id?: string };
+import { CHANGED_ON_DISK } from '../session/workspace.js';
 
 function fail(e: unknown): never {
   // A settings file or a policy lock that cannot be used is not the request's fault, and every route
@@ -43,35 +41,6 @@ function failText(res: Response, e: unknown): void {
  * nothing about names. The fix is the standard pair: an ASCII fallback for anything old, and
  * `filename*` with the real name percent-encoded for every current browser.
  */
-/** The three kinds, checked here so a path cannot name a file of its own choosing. */
-function asContextKind(kind: string): ContextKind {
-  if (kind !== 'organisation' && kind !== 'persona' && kind !== 'work') {
-    throw new BadRequestException('kind must be organisation, persona or work');
-  }
-  return kind;
-}
-
-/**
- * The start window's choices as the service takes them: one per session id, each of a known shape, and
- * nothing else. A choice of any other shape is dropped, which leaves that session on its settings.
- */
-function startsFrom(raw: unknown): Record<string, StartChoice> | undefined {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const out: Record<string, StartChoice> = {};
-  for (const [id, c] of Object.entries(raw as Record<string, unknown>)) {
-    if (!c || typeof c !== 'object') continue;
-    const x = c as Record<string, unknown>;
-    const branch = typeof x.branch === 'string' ? x.branch : '';
-    const onBranch = x.onBranch === true ? { onBranch: true } : {};
-    // Another start for a session that has run: see `StartChoice.rechoose`.
-    const rechoose = x.rechoose === true ? { rechoose: true } : {};
-    if (x.from === 'previous-session') out[id] = { from: 'previous-session', ...rechoose };
-    else if (x.from === 'local' && branch) out[id] = { from: 'local', branch, ...onBranch, ...rechoose };
-    else if (x.from === 'remote' && branch && typeof x.remote === 'string' && x.remote) out[id] = { from: 'remote', remote: x.remote, branch, ...onBranch, ...rechoose };
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 function contentDisposition(fileName: string): string {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
@@ -151,40 +120,19 @@ export class OperatorController {
     return { ok: true };
   }
 
-  // --- named personas (the import page's second box, saved under a name) -----------------
+  // --- Kerrigan -------------------------------------------------------------------------------
 
-  @Get('personas')
-  personas(): Promise<unknown> {
-    return this.ops.listPersonas();
+  /** Kerrigan, the persona to give another chat: what copilot-operator is and how a task is best written for it. */
+  @Get('kerrigan')
+  kerrigan(@Query('lang') lang?: string): Promise<unknown> {
+    return this.ops.kerrigan(lang === 'bg' ? 'bg' : 'en').catch(fail);
   }
 
-  @Put('personas/:name')
-  savePersona(@Param('name') name: string, @Body() body: { content: string }): Promise<unknown> {
-    return this.ops.savePersona(name, body?.content ?? '').catch(fail);
-  }
-
-  @Delete('personas/:name')
-  async deletePersona(@Param('name') name: string): Promise<{ ok: true }> {
-    await this.ops.deletePersona(name).catch(fail);
-    return { ok: true };
-  }
-
-  // --- sessions ---------------------------------------------------------------------------
+  // --- the chat's conversations (sessions of kind `chat`) -------------------------------------
 
   @Get('sessions')
   sessions(): Promise<unknown> {
     return this.ops.listSessions();
-  }
-
-  /** The sessions list in the operator's order: every session id, top to bottom. */
-  @Put('sessions-order')
-  reorderSessions(@Body() body: { ids?: unknown }): Promise<unknown> {
-    return this.ops.reorderSessions(body?.ids).catch(fail);
-  }
-
-  @Post('sessions')
-  createSession(@Body() body: { name: string; projectDir?: string }): Promise<unknown> {
-    return this.ops.createSession(body?.name ?? '', body?.projectDir).catch(fail);
   }
 
   @Get('sessions/:id')
@@ -194,168 +142,10 @@ export class OperatorController {
     return s;
   }
 
-  /** Name, model, queue behaviour, files, version control and the independent review. */
+  /** The conversation's model, chosen in the chat (and the rest of a session's settings). */
   @Put('sessions/:id')
   updateSession(@Param('id') id: string, @Body() body: Record<string, unknown>): Promise<unknown> {
     return this.ops.updateSession(id, body as never).catch(fail);
-  }
-
-  @Delete('sessions/:id')
-  async deleteSession(@Param('id') id: string): Promise<{ ok: true }> {
-    await this.ops.deleteSession(id).catch(fail);
-    return { ok: true };
-  }
-
-  @Post('sessions/:id/tasks')
-  addTask(@Param('id') id: string, @Body() body: { title?: string; level2?: string; prompt: string }): Promise<unknown> {
-    return this.ops.addTask(id, { title: body?.title ?? '', level2: body?.level2 ?? '', prompt: body?.prompt ?? '' }).catch(fail);
-  }
-
-  @Put('sessions/:id/tasks/:taskId')
-  updateTask(
-    @Param('id') id: string,
-    @Param('taskId') taskId: string,
-    @Body() body: { title?: string; level2?: string; prompt?: string; vcsPlan?: { branch?: string; commitMessage?: string }; checks?: TaskCheck[]; readOnly?: boolean; scope?: string[] },
-  ): Promise<unknown> {
-    return this.ops.updateTask(id, taskId, body).catch(fail);
-  }
-
-  @Delete('sessions/:id/tasks/:taskId')
-  async deleteTask(@Param('id') id: string, @Param('taskId') taskId: string): Promise<{ ok: true }> {
-    await this.ops.deleteTask(id, taskId).catch(fail);
-    return { ok: true };
-  }
-
-  /**
-   * Puts a finished task back in the queue, keeping the earlier attempt on the record.
-   *
-   * A body with `title`, `prompt` or `level2` edits the task on the way: the attempt that
-   * already ran keeps the text it ran with, and the next one uses the new text.
-   */
-  /** A note to the chat about this task: sent with its next message, at once while it runs. */
-  @Post('sessions/:id/tasks/:taskId/notes')
-  addTaskNote(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { text?: unknown } = {}): Promise<unknown> {
-    if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
-    return this.ops.addTaskNote(id, taskId, body.text).catch(fail);
-  }
-
-  /** The operator accepts a task as done that did not end so. */
-  @Post('sessions/:id/tasks/:taskId/accept')
-  acceptTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { note?: unknown } = {}): Promise<unknown> {
-    return this.ops.acceptTask(id, taskId, typeof body?.note === 'string' ? body.note : undefined).catch(fail);
-  }
-
-  /** A task that stopped at the runner's limit carries on in its own conversation and branch. */
-  @Post('sessions/:id/tasks/:taskId/continue')
-  continueTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { instruction?: unknown } = {}): Promise<unknown> {
-    // The operator's new prompt, when one is given: see `TaskContinuation.instruction`.
-    const instruction = typeof body?.instruction === 'string' ? body.instruction : undefined;
-    return this.ops.continueTask(id, taskId, instruction).catch(fail);
-  }
-
-  @Post('sessions/:id/tasks/:taskId/rerun')
-  rerunTask(
-    @Param('id') id: string,
-    @Param('taskId') taskId: string,
-    @Body()
-    body?: {
-      title?: string;
-      level2?: string;
-      prompt?: string;
-      vcsPlan?: { branch?: string; commitMessage?: string };
-      checks?: TaskCheck[];
-      /** Whether the task may change files, and which: an audit is `readOnly`, or scoped to its report. */
-      readOnly?: boolean;
-      scope?: string[];
-      /** A new prompt for a done task that builds on its work; see `rerunTask` in the service. */
-      buildOnFinished?: boolean;
-    },
-  ): Promise<unknown> {
-    const { buildOnFinished, ...patch } = body ?? {};
-    return this.ops.rerunTask(id, taskId, patch, { buildOnFinished: buildOnFinished === true }).catch(fail);
-  }
-
-  /** How the task contradicts itself, with the ways out of each contradiction. Changes nothing. */
-  @Get('sessions/:id/tasks/:taskId/contract')
-  contractCheck(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
-    return this.ops.contractCheck(id, taskId).catch(fail);
-  }
-
-  /** Applies one chosen fix per contradiction (-1 = none) and queues the task; starts nothing. */
-  @Post('sessions/:id/tasks/:taskId/contract-fix')
-  applyContractFix(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { choices?: number[]; expect?: string[] }): Promise<unknown> {
-    if (body?.expect !== undefined && (!Array.isArray(body.expect) || body.expect.some((x) => typeof x !== 'string'))) throw new BadRequestException('expect must be a list of the contradictions shown');
-    return this.ops.applyContractFix(id, taskId, body?.choices ?? [], body?.expect).catch(fail);
-  }
-
-  /** What going back to before this task would do. Changes nothing. */
-  @Get('sessions/:id/tasks/:taskId/restore')
-  restorePreview(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
-    return this.ops.restorePreview(id, taskId).catch(fail);
-  }
-
-  /** Does it: a new branch at the commit that task started from, checked out. */
-  @Post('sessions/:id/tasks/:taskId/restore')
-  restore(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
-    return this.ops.restore(id, taskId).catch(fail);
-  }
-
-  /** What undoing this task would do, both ways: only this task, or back to before it. */
-  @Get('sessions/:id/tasks/:taskId/undo')
-  undoPreview(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
-    return this.ops.undoPreview(id, taskId).catch(fail);
-  }
-
-  /** Does it: `this` takes the task's work out (queued again); `back` goes back to before it (it and the later ones queued). */
-  @Post('sessions/:id/tasks/:taskId/undo')
-  async undoTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { how?: string }): Promise<unknown> {
-    if (body?.how !== 'this' && body?.how !== 'back') throw new BadRequestException('how must be "this" or "back"');
-    const r = await this.ops.undoTask(id, taskId, body.how).catch(fail);
-    if (!r.ok) throw new BadRequestException(r.problem);
-    return r;
-  }
-
-  /** What starting the run again from this task would re-queue, and do to the code. */
-  @Get('sessions/:id/tasks/:taskId/restart')
-  restartPlan(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
-    return this.ops.restartPlan(id, taskId).catch(fail);
-  }
-
-  /** Restores the code, queues this task and everything after it, and starts the run again. */
-  @Post('sessions/:id/tasks/:taskId/restart')
-  restartFrom(
-    @Param('id') id: string,
-    @Param('taskId') taskId: string,
-    @Body() body: { restore?: boolean; start?: boolean; mode?: 'confirm' | 'unattended'; onFailure?: 'stop' | 'continue' },
-  ): Promise<unknown> {
-    return this.ops.restartFrom(id, taskId, body ?? {}).catch(fail);
-  }
-
-  @Get('sessions/:id/tasks/:taskId/log')
-  async taskLog(
-    @Param('id') id: string,
-    @Param('taskId') taskId: string,
-    @Res() res: Response,
-    @Query('run') run?: string,
-  ): Promise<void> {
-    const text = await this.ops.taskLog(id, taskId, run);
-    if (text === null) {
-      res.status(404).send('no log yet');
-      return;
-    }
-    res.type('text/plain; charset=utf-8').send(text);
-  }
-
-  /**
-   * The same log, saved to the Desktop and shown in Explorer, which is what the operator
-   * actually wants it for. The GET above stays as it is: it is where this falls back to when
-   * the machine refuses to write the file, or when there is no Desktop to write it to.
-   */
-  @Post('sessions/:id/tasks/:taskId/log')
-  async saveTaskLog(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
-    const saved = await this.ops.saveTaskLog(id, taskId, run).catch(fail);
-    if (!saved) throw new NotFoundException('This task has not produced a log yet.');
-    return saved;
   }
 
   /** The attempt as a story: what was sent, answered, run and how it ended. `run` picks an earlier attempt. */
@@ -387,127 +177,6 @@ export class OperatorController {
     return this.ops.taskChangeFile(id, taskId, path, run?.trim() || undefined).catch(fail);
   }
 
-  @Get('sessions/:id/tasks/:taskId/files')
-  taskFiles(@Param('id') id: string, @Param('taskId') taskId: string, @Query('run') run?: string): Promise<unknown> {
-    return this.ops.taskFiles(id, taskId, run);
-  }
-
-  @Get('sessions/:id/tasks/:taskId/files/:kind/:name')
-  async taskFile(
-    @Param('id') id: string,
-    @Param('taskId') taskId: string,
-    @Param('kind') kind: 'reports' | 'artifacts' | 'replies',
-    @Param('name') name: string,
-    @Res() res: Response,
-    @Query('run') run?: string,
-  ): Promise<void> {
-    if (!['reports', 'artifacts', 'replies'].includes(kind)) {
-      res.status(400).send('bad kind');
-      return;
-    }
-    const text = await this.ops.taskFile(id, taskId, kind, name, run);
-    if (text === null) {
-      res.status(404).send('not found');
-      return;
-    }
-    res.type('text/plain; charset=utf-8').send(text);
-  }
-
-  /** A task's own file, saved to the Desktop and shown in Explorer, exactly as its log is. */
-  @Post('sessions/:id/tasks/:taskId/files/:kind/:name')
-  async saveTaskFile(
-    @Param('id') id: string,
-    @Param('taskId') taskId: string,
-    @Param('kind') kind: 'reports' | 'artifacts' | 'replies',
-    @Param('name') name: string,
-    @Query('run') run?: string,
-  ): Promise<unknown> {
-    if (!['reports', 'artifacts', 'replies'].includes(kind)) throw new BadRequestException('kind must be reports, artifacts or replies');
-    const saved = await this.ops.saveTaskFile(id, taskId, kind, name, run).catch(fail);
-    if (!saved) throw new NotFoundException('That file is not there.');
-    return saved;
-  }
-
-  /**
-   * Downloads the record of selected tasks.
-   *
-   * `tasks` is a comma-separated list of task ids, or absent for every task that has run.
-   * `variant` is `full` for the whole conversation, or `outcome` for the first and the last
-   * message only, which is the expected-and-actual pair.
-   */
-  @Get('sessions/:id/export')
-  async exportTasks(
-    @Param('id') id: string,
-    @Res() res: Response,
-    @Query('tasks') tasks?: string,
-    @Query('variant') variant?: string,
-  ): Promise<void> {
-    const ids = (tasks ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-    const kind = variant === 'full' ? 'full' : 'outcome';
-    try {
-      const { fileName, content } = await this.ops.exportTasks(id, ids, kind);
-      res.type('text/plain; charset=utf-8');
-      res.setHeader('content-disposition', contentDisposition(fileName));
-      res.send(content);
-    } catch (e) {
-      failText(res, e);
-    }
-  }
-
-  /**
-   * Everything that happened across several sessions, as one JSON file.
-   *
-   * `sessions` is a comma-separated list of ids; leaving it out means the sessions of the last
-   * batch. Meant for handing to somebody — or something — that has to work out why a run went
-   * the way it did.
-   */
-  @Get('debug/export')
-  async debugExport(@Res() res: Response, @Query('sessions') sessions?: string): Promise<void> {
-    const ids = (sessions ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-    try {
-      const { fileName, content } = await this.ops.debugExport(ids);
-      res.type('application/json; charset=utf-8');
-      res.setHeader('content-disposition', contentDisposition(fileName));
-      res.send(content);
-    } catch (e) {
-      failText(res, e);
-    }
-  }
-
-  /**
-   * All three views of a set of tasks the operator ticked, as one file.
-   *
-   * A POST rather than a GET, which makes it the odd one out among the exports and is the right
-   * odd one out: the others name a run, a session or a task and fit in a query string, while this
-   * names every task that was chosen, and a register with sixty finished tasks in it would put a
-   * selection past what a URL can carry. The browser saves the body with a download link made
-   * from a blob, so nothing about the operator's side of it changes.
-   */
-  @Post('export/bundle')
-  async exportBundle(@Res() res: Response, @Body() body: { tasks?: Array<{ sessionId?: string; taskId?: string; attempt?: number }> }): Promise<void> {
-    const pairs = (body?.tasks ?? [])
-      .map((x) => ({
-        sessionId: (x?.sessionId ?? '').trim(),
-        taskId: (x?.taskId ?? '').trim(),
-        // One attempt of the task rather than the task as it is now; see `exportBundle`.
-        ...(Number.isInteger(x?.attempt) ? { attempt: x.attempt as number } : {}),
-      }))
-      .filter((x) => x.sessionId && x.taskId);
-    try {
-      const { fileName, content } = await this.ops.exportBundle(pairs);
-      res.type('application/json; charset=utf-8');
-      res.setHeader('content-disposition', contentDisposition(fileName));
-      res.send(content);
-    } catch (e) {
-      failText(res, e);
-    }
-  }
-
-  /**
-   * One of the three JSON views of a task, a session or a run: `plan` (what was asked, in the
-   * format that imports again), `domain` (what happened to the work) or `bot` (what the runner
-   * did). Exactly one of `run`, `session` or `session`+`task` names the scope.
-   */
   /** One task's whole exchange with Copilot, as a JSON file (see `taskExchange.ts`). */
   @Get('sessions/:id/tasks/:taskId/exchange')
   async taskExchange(@Param('id') id: string, @Param('taskId') taskId: string, @Res() res: Response): Promise<void> {
@@ -521,49 +190,16 @@ export class OperatorController {
     }
   }
 
-  @Get('export/:kind')
-  async exportView(
-    @Param('kind') kind: string,
-    @Res() res: Response,
-    @Query('run') run?: string,
-    @Query('session') session?: string,
-    @Query('task') task?: string,
-  ): Promise<void> {
-    if (kind !== 'plan' && kind !== 'domain' && kind !== 'bot') {
-      res.status(400).send('kind must be plan, domain or bot');
-      return;
-    }
-    try {
-      const { fileName, content } = await this.ops.exportView(kind, { runId: run?.trim() || undefined, sessionId: session?.trim() || undefined, taskId: task?.trim() || undefined });
-      res.type('application/json; charset=utf-8');
-      res.setHeader('content-disposition', contentDisposition(fileName));
-      res.send(content);
-    } catch (e) {
-      failText(res, e);
-    }
+  @Get('sessions/:id/events')
+  events(@Param('id') id: string): unknown {
+    return this.ops.recentEvents(id);
   }
 
   // --- run control ------------------------------------------------------------------------
 
   @Post('sessions/:id/start')
-  start(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended'; name?: string; starts?: Record<string, StartChoice> }): Promise<unknown> {
-    return this.ops.start(id, body?.mode === 'unattended' ? 'unattended' : 'confirm', body?.name, startsFrom(body?.starts));
-  }
-
-  /**
-   * The start window's question: where each of these sessions starts, and the branches of their
-   * repositories as they are here (nothing fetched). See `vcs/startChoice.ts`.
-   */
-  @Get('start/options')
-  startOptions(@Query('sessions') sessions?: string): Promise<unknown> {
-    return this.ops.startChoices((sessions ?? '').split(',').map((x) => x.trim()).filter(Boolean)).catch(fail);
-  }
-
-  /** Fetches branches of a remote for the start window — through Git's password window when it asks. */
-  @Post('start/fetch')
-  startFetch(@Body() body: { dir?: string; remote?: string; branches?: string[] }): Promise<unknown> {
-    const branches = Array.isArray(body?.branches) ? body.branches.filter((b): b is string => typeof b === 'string') : null;
-    return this.ops.startFetch(body?.dir ?? '', body?.remote ?? '', branches).catch(fail);
+  start(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended' }): Promise<unknown> {
+    return this.ops.start(id, body?.mode === 'unattended' ? 'unattended' : 'confirm');
   }
 
   /** Starts that did not get as far as a first task, newest first; `unanswered=1` only those no press was answered with. */
@@ -603,130 +239,25 @@ export class OperatorController {
     return this.ops.stop(id);
   }
 
-  // --- running several sessions in turn ------------------------------------------------------
-
-  /** The batch in progress, or the last one that ran. Null when none ever has. */
-  @Get('batch')
-  batch(): unknown {
-    return this.ops.batchState();
+  /** "Pause": the running work holds at its next message or command. */
+  @Post('sessions/:id/pause')
+  pause(@Param('id') id: string): unknown {
+    try {
+      return this.ops.pause(id);
+    } catch (e) {
+      throw new BadRequestException((e as Error).message);
+    }
   }
 
-  /**
-   * Runs the queued tasks of several sessions, one after another, in the order given.
-   *
-   * `onFailure` is about the sessions, not the tasks inside them: `stop` gives up on the rest
-   * once a session fails, `continue` works through all of them.
-   */
-  /**
-   * What this run would be called if nobody typed anything, so the page can show it first.
-   *
-   * The same answer `startBatch` would reach on its own, asked before the fact rather than after,
-   * because a name the operator can see and correct is worth more than a name that appears in the
-   * register once it is too late to argue with.
-   */
-  @Get('batch/name')
-  suggestRunName(@Query('sessions') sessions?: string): Promise<{ name: string }> {
-    const ids = (sessions ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-    return this.ops.suggestRunName(ids).then((name) => ({ name }));
+  /** "Continue": the paused work goes on. */
+  @Post('sessions/:id/resume')
+  resume(@Param('id') id: string): unknown {
+    return this.ops.resume(id);
   }
 
-  @Post('batch/start')
-  startBatch(
-    @Body()
-    body: {
-      sessionIds?: string[];
-      mode?: 'confirm' | 'unattended';
-      onFailure?: 'stop' | 'continue';
-      model?: string;
-      /** The model the independent review runs on, for every session in this run. */
-      reviewModel?: string;
-      /** What to call the run; the register groups by it and the exports are named after it. */
-      name?: string;
-      /** Only these queued tasks; absent means every queued task of the sessions. */
-      taskIds?: string[];
-      /** Where each session starts, by session id, as the start window chose it. */
-      starts?: Record<string, StartChoice>;
-    },
-  ): Promise<unknown> {
-    if (!Array.isArray(body?.sessionIds)) throw new BadRequestException('sessionIds must be a list of session ids');
-    if (body?.taskIds !== undefined && !Array.isArray(body.taskIds)) throw new BadRequestException('taskIds must be a list of task ids');
-    return this.ops
-      .startBatch(
-        body.sessionIds,
-        body?.mode === 'unattended' ? 'unattended' : 'confirm',
-        body?.onFailure === 'continue' ? 'continue' : 'stop',
-        // Absent or empty means every session keeps the model it already has, which is not the
-        // same as "no model": an empty string on a session means "leave the chat alone".
-        body?.model,
-        // The same for the review: absent means each session keeps whatever it is set to.
-        body?.reviewModel,
-        body?.name,
-        body?.taskIds,
-        startsFrom(body?.starts),
-      )
-      .catch(fail);
-  }
+  // --- the workspace and its chat ---------------------------------------------------------------
 
-  @Post('batch/stop')
-  stopBatch(): Promise<unknown> {
-    return this.ops.stopBatch();
-  }
-
-  /**
-   * Holds the run after the task that is running finishes, rather than after its current step.
-   *
-   * The pair of them are one switch from the page's point of view, so they are one route each
-   * rather than one route with a flag: a request that says what it wants cannot be misread.
-   */
-  @Post('batch/pause')
-  pauseBatch(): Promise<unknown> {
-    return this.ops.pauseBatch();
-  }
-
-  @Post('batch/resume')
-  resumeBatch(): Promise<unknown> {
-    return this.ops.resumeBatch();
-  }
-
-  // --- plans ---------------------------------------------------------------------------------
-
-  /**
-   * The text the operator pastes into a chat model to have a plan written.
-   *
-   * One text per language and nothing else to choose. It used to be assembled from answers
-   * given on the import page — version control on or off, which folder — and those are now
-   * questions the brief tells the model to ask, because the model is the one in the
-   * conversation and the answers belong to a session rather than to the whole document.
-   */
-  @Get('plan/brief')
-  async planBrief(@Query('lang') lang?: string): Promise<unknown> {
-    return await this.ops.planBrief({ lang: lang ?? 'en' });
-  }
-
-  // --- the operator's own two texts for the plan persona -------------------------------
-
-  /**
-   * `organisation` is how the company works and where the projects are, which changes rarely;
-   * `work` is what this group of tasks is about, which changes whenever the work does.
-   */
-  @Get('context/:kind')
-  context(@Param('kind') kind: string, @Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
-    return this.ops.getContext(asContextKind(kind), lang ?? 'en');
-  }
-
-  @Put('context/:kind')
-  async setContext(@Param('kind') kind: string, @Body() body: { content: string }): Promise<{ ok: true }> {
-    if (typeof body?.content !== 'string') throw new BadRequestException('content must be text');
-    await this.ops.setContext(asContextKind(kind), body.content);
-    return { ok: true };
-  }
-
-  @Delete('context/:kind')
-  resetContext(@Param('kind') kind: string, @Query('lang') lang?: string): Promise<{ content: string; customised: boolean; example: string }> {
-    return this.ops.resetContext(asContextKind(kind), lang ?? 'en');
-  }
-
-  /** The project folder the workbench has open, its files on disk, and one of them. Read-only. */
+  /** The project folder the workbench has open, its files on disk, and one of them. */
   @Get('workspace')
   workspace(): Promise<unknown> {
     return this.ops.workspace().catch(fail);
@@ -741,6 +272,22 @@ export class OperatorController {
   workspaceFile(@Query('path') path?: string): Promise<unknown> {
     if (!path) throw new BadRequestException('path is required');
     return this.ops.workspaceFile(path).catch(fail);
+  }
+
+  /**
+   * The editor saving a file of the open folder. `base` is the version it was opened at; a file changed on disk since
+   * is refused with 409, so the page can offer to read it again or to save over it (by sending no `base`).
+   */
+  @Put('workspace/file')
+  async saveWorkspaceFile(@Body() body: { path?: unknown; text?: unknown; base?: unknown } = {}): Promise<unknown> {
+    if (typeof body?.path !== 'string' || !body.path) throw new BadRequestException('path is required');
+    if (typeof body.text !== 'string') throw new BadRequestException('text is required');
+    try {
+      return await this.ops.saveWorkspaceFile(body.path, body.text, typeof body.base === 'string' && body.base ? body.base : undefined);
+    } catch (e) {
+      if ((e as { code?: string }).code === CHANGED_ON_DISK) throw new ConflictException((e as Error).message);
+      fail(e);
+    }
   }
 
   /** The open folder's git: the changes, staged and not, and the branch's commits. Read-only. */
@@ -772,7 +319,7 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
@@ -780,6 +327,8 @@ export class OperatorController {
         ...(typeof body.threadId === 'string' && body.threadId ? { threadId: body.threadId } : {}),
         ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model } : {}),
         ...(body.manualModel === true ? { manualModel: true } : {}),
+        ...(body.lang === 'bg' || body.lang === 'en' ? { lang: body.lang } : {}),
+        ...(body.planMode === true ? { planMode: true } : {}),
       })
       .catch(fail);
   }
@@ -791,81 +340,6 @@ export class OperatorController {
     const r = await this.ops.chatRewind(id, body.taskId).catch(fail);
     if (!r.ok) throw new BadRequestException(r.problem);
     return r;
-  }
-
-  /** One folder of the session's repository at its branch (or the task's commit): read-only, for the workbench. */
-  @Get('sessions/:id/repo/tree')
-  repoTree(@Param('id') id: string, @Query('path') path?: string, @Query('task') task?: string): Promise<unknown> {
-    return this.ops.repoTree(id, path ?? '', task?.trim() || undefined).catch(fail);
-  }
-
-  /** One file of it, as text. */
-  @Get('sessions/:id/repo/file')
-  repoFile(@Param('id') id: string, @Query('path') path?: string, @Query('task') task?: string): Promise<unknown> {
-    if (!path) throw new BadRequestException('path is required');
-    return this.ops.repoFile(id, path, task?.trim() || undefined).catch(fail);
-  }
-
-  /** The commits on the session's line, each with the task that made it. */
-  @Get('sessions/:id/repo/log')
-  repoLog(@Param('id') id: string): Promise<unknown> {
-    return this.ops.repoLog(id).catch(fail);
-  }
-
-  /** What happened in these sessions, for Kerrigan, with the operator's note and the form of her answer. */
-  @Post('kerrigan/report')
-  kerriganReport(@Body() body: { sessionIds?: unknown; taskIds?: unknown; note?: unknown } = {}): Promise<unknown> {
-    const ids = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
-    return this.ops.kerriganReport({ sessionIds: ids(body?.sessionIds), taskIds: ids(body?.taskIds), note: typeof body?.note === 'string' ? body.note : undefined }).catch(fail);
-  }
-
-  /** Kerrigan's changes to existing work, read against it as it is now; nothing is changed. */
-  @Post('changes/check')
-  checkChanges(@Body() body: { text?: unknown } = {}): Promise<unknown> {
-    return this.ops.checkChanges(typeof body?.text === 'string' ? body.text : '').catch(fail);
-  }
-
-  /** Applies them one by one, stopping at the first refused; nothing is started. */
-  @Post('changes/apply')
-  applyChanges(@Body() body: { text?: unknown } = {}): Promise<unknown> {
-    return this.ops.applyChanges(typeof body?.text === 'string' ? body.text : '').catch(fail);
-  }
-
-  /** Checks a pasted plan without importing anything, and says what it would duplicate. */
-  @Post('plan/check')
-  checkPlan(@Body() body: { text?: string }): Promise<unknown> {
-    return this.ops.checkPlan(body?.text ?? '').catch(fail);
-  }
-
-  /**
-   * Creates the sessions and tasks a plan describes, and starts nothing.
-   *
-   * A plan that does not validate comes back as 200 with `ok: false` rather than as an error,
-   * because the list of what is wrong is the useful part of that answer and the UI shows it
-   * to the operator to hand back to the chat.
-   */
-  @Post('plan/import')
-  importPlan(@Body() body: { text?: string }): Promise<unknown> {
-    return this.ops.importPlan(body?.text ?? '').catch(fail);
-  }
-
-  @Get('sessions/:id/events')
-  events(@Param('id') id: string): unknown {
-    return this.ops.recentEvents(id);
-  }
-
-  /** Live events as server-sent events. The browser's EventSource reconnects on its own. */
-  @Sse('sessions/:id/stream')
-  stream(@Param('id') id: string): Observable<Msg> {
-    return new Observable<Msg>((subscriber) => {
-      for (const e of this.ops.recentEvents(id)) subscriber.next({ data: JSON.stringify(e) });
-      const off = this.ops.subscribe(id, (e) => subscriber.next({ data: JSON.stringify(e) }));
-      const keepAlive = setInterval(() => subscriber.next({ data: JSON.stringify({ type: 'ping', at: new Date().toISOString() }) }), 25_000);
-      return () => {
-        off();
-        clearInterval(keepAlive);
-      };
-    });
   }
 
   // --- approvals --------------------------------------------------------------------------
@@ -892,15 +366,6 @@ export class OperatorController {
     return result;
   }
 
-  /** Turns asking on or off in the middle of a run. */
-  @Post('sessions/:id/mode')
-  setMode(@Param('id') id: string, @Body() body: { mode?: 'confirm' | 'unattended' }): unknown {
-    if (body?.mode !== 'confirm' && body?.mode !== 'unattended') {
-      throw new BadRequestException('mode must be confirm or unattended');
-    }
-    return this.ops.setRunMode(id, body.mode);
-  }
-
   /**
    * Is anything running? Answered from memory, so it is safe to ask from every page.
    */
@@ -911,7 +376,7 @@ export class OperatorController {
 
   // --- the project being worked on -----------------------------------------------------------
 
-  /** The folder new sessions start pointed at, and whether it can carry version control. */
+  /** The folder the chat works in. */
   @Get('project')
   project(): Promise<unknown> {
     return this.ops.project();
@@ -930,18 +395,6 @@ export class OperatorController {
     return this.ops.setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others }).catch(fail);
   }
 
-  /**
-   * Whether a folder can be used for version control at all, asked before the choice is made.
-   *
-   * Separate from the session's own preflight because that one only speaks when version
-   * control is already on, and the question here is whether it may be turned on.
-   */
-  /** The command that brings a project's branch back to its remote's main — shown, never run. */
-  @Get('repo/sync')
-  repoSync(@Query('dir') dir?: string): Promise<unknown> {
-    return this.ops.syncPlan(dir ?? '').catch(fail);
-  }
-
   /** "Prepare the folder from the remote main branch": what it would do (fetches, changes nothing else). */
   @Post('repo/prepare/preview')
   repoPreparePreview(@Body() body: { dir?: string; fetch?: boolean }): Promise<unknown> {
@@ -954,39 +407,6 @@ export class OperatorController {
     return this.ops.prepareProject(body?.dir ?? '', body?.fingerprint ?? '', { savedBranch: body?.savedBranch, savedMainBranch: body?.savedMainBranch }).catch(fail);
   }
 
-  @Get('repo')
-  repo(@Query('dir') dir?: string): { ok: boolean; problem?: string } {
-    const problem = this.ops.repoProblem(dir ?? '');
-    return problem ? { ok: false, problem } : { ok: true };
-  }
-
-  /** Can version control do its job in this session right now? */
-  @Get('sessions/:id/vcs')
-  vcsStatus(@Param('id') id: string): Promise<unknown> {
-    return this.ops.vcsStatus(id).catch(fail);
-  }
-
-  /** "Prepare version control for this run": one group per repository of the sessions given. */
-  @Get('batch/vcs')
-  runVcs(@Query('ids') ids?: string, @Query('tasks') tasks?: string): Promise<unknown> {
-    const only = (tasks ?? '').split(',').map((t) => t.trim()).filter(Boolean);
-    return this.ops.runVcs((ids ?? '').split(',').map((s) => s.trim()).filter(Boolean), only.length > 0 ? new Set(only) : undefined).catch(fail);
-  }
-
-  /** One action of that panel, for one repository. */
-  @Post('batch/vcs/prepare')
-  runVcsPrepare(@Body() body: { sessionIds?: string[]; repoDir?: string; action?: string; choices?: Record<string, 'include' | 'leave-out'> }): Promise<unknown> {
-    const actions = ['review-inputs', 'snapshot-on-base', 'snapshot-here', 'use-current-branch', 'allow-snapshot'];
-    if (!actions.includes(body?.action ?? '')) return Promise.resolve({ ok: false, problem: 'unknown action' });
-    return this.ops.runVcsPrepare(body?.sessionIds ?? [], body?.repoDir ?? '', body.action as 'review-inputs', body?.choices ?? {}).catch(fail);
-  }
-
-  /** The operator's approval of the starting snapshot: one choice per file of the list they saw. */
-  @Post('sessions/:id/vcs/snapshot')
-  vcsSnapshot(@Param('id') id: string, @Body() body: { choices?: Record<string, 'include' | 'leave-out'> }): Promise<unknown> {
-    return this.ops.vcsSnapshot(id, body?.choices ?? {}).catch(fail);
-  }
-
   // --- the model picker ---------------------------------------------------------------------
 
   /** The cached list. Returns null when the picker has never been read on this machine. */
@@ -995,43 +415,31 @@ export class OperatorController {
     return this.ops.models();
   }
 
-  /**
-   * Re-reads the picker from the live chat. Slow on purpose: it opens the browser with the
-   * bot profile, so it cannot run while a session is running.
-   */
   /** "Sign in" from Settings: opens the bot's Edge and waits for the operator to sign in. See `OperatorService.login`. */
   @Post('login')
   login(@Body() body: { account?: string }): Promise<unknown> {
     return this.ops.login(body?.account).catch(fail);
   }
 
+  /**
+   * Re-reads the picker from the live chat. Slow on purpose: it opens the browser with the
+   * bot profile, so it cannot run while a session is running.
+   */
   @Post('models/refresh')
   refreshModels(): Promise<unknown> {
     return this.ops.refreshModels().catch(fail);
   }
 
-  /** The model new sessions start on. An empty name means "leave the chat alone". */
+  /** The model a new conversation starts on. An empty name means "leave the chat alone". */
   @Put('models/default')
   setDefaultModel(@Body() body: { model?: string }): Promise<unknown> {
     return this.ops.setDefaultModel(body?.model ?? '').catch(fail);
   }
 
-  /** The model a new session's independent review runs on. An empty name means "the session's own". */
+  /** The model of the independent review. An empty name means "the session's own". */
   @Put('models/review-default')
   setDefaultReviewModel(@Body() body: { model?: string }): Promise<unknown> {
     return this.ops.setDefaultReviewModel(body?.model ?? '').catch(fail);
-  }
-
-  // --- the registry of every task -----------------------------------------------------------
-
-  @Get('tasks')
-  tasks(): Promise<unknown> {
-    return this.ops.taskRegistry();
-  }
-
-  @Get('metrics')
-  metrics(): Promise<unknown> {
-    return this.ops.metrics();
   }
 
   // --- helpers for the UI -----------------------------------------------------------------

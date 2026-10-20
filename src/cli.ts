@@ -9,7 +9,7 @@
  */
 import { Command } from 'commander';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { installLayout } from './config/layout.js';
 import { spawn, spawnSync } from 'node:child_process';
@@ -26,7 +26,7 @@ import { PolicyLockUnusableError } from './config/lockedPolicy.js';
 import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
-import { botRootDir, isOwnCheckout } from './exec/workDir.js';
+import { isOwnCheckout } from './exec/workDir.js';
 import { desktopIsSynced, resolveDesktopDir } from './context/desktopDir.js';
 import { Url } from './transport/locators.js';
 import { botVersion } from './config/version.js';

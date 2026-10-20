@@ -177,30 +177,13 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
           <div className="diff-main">
             {file && (
               <div className="diff-toolbar">
-                <strong className="diff-name">{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</strong>
-                <span className="muted small">
-                  {file.status === 'A' ? t('diff.added') : file.status === 'D' ? t('diff.deleted') : file.status === 'R' ? t('diff.renamed') : ''}
-                </span>
-                <span className="grow" />
-                <button type="button" className="quiet" onClick={() => goBlock(-1)} disabled={blocks.length === 0}>
-                  {t('diff.prevChange')}
-                </button>
-                <button type="button" className="quiet" onClick={() => goBlock(1)} disabled={blocks.length === 0}>
-                  {t('diff.nextChange')}
-                </button>
-                <span className="muted small">{blocks.length > 0 ? t('diff.changeN', { i: block < 0 ? '–' : block + 1, n: blocks.length }) : ''}</span>
-                <button type="button" className="quiet" onClick={() => goFile(-1)} disabled={selected === 0}>
-                  {t('diff.prevFile')}
-                </button>
-                <button type="button" className="quiet" onClick={() => goFile(1)} disabled={selected >= files.length - 1}>
-                  {t('diff.nextFile')}
-                </button>
-                <label className="option-inline">
-                  <input type="checkbox" checked={whole} onChange={(e) => setWhole(e.target.checked)} /> {t('diff.whole')}
-                </label>
-                <label className="option-inline">
-                  <input type="checkbox" checked={wrap} onChange={(e) => setWrap(e.target.checked)} /> {t('diff.wrap')}
-                </label>
+                <div className="diff-title-row">
+                  <strong className="diff-name">{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</strong>
+                  <span className="muted small">
+                    {file.status === 'A' ? t('diff.added') : file.status === 'D' ? t('diff.deleted') : file.status === 'R' ? t('diff.renamed') : ''}
+                  </span>
+                </div>
+                <DiffTools changes={blocks.length} onChange={goBlock} files={{ at: selected, count: files.length, onFile: goFile }} whole={whole} onWhole={setWhole} wrap={wrap} onWrap={setWrap} />
               </div>
             )}
 
@@ -224,12 +207,7 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
                       <col className="num" />
                       <col />
                     </colgroup>
-                    <thead>
-                      <tr>
-                        <th colSpan={2}>{t('diff.before')}</th>
-                        <th colSpan={2}>{t('diff.after')}</th>
-                      </tr>
-                    </thead>
+                    <DiffHead changes={blocks.length} at={block} />
                     <tbody>
                       {items.map((item) =>
                         item.type === 'gap' ? (
@@ -253,6 +231,81 @@ export function DiffDialog({ sessionId, taskId, runId, title, onClose }: { sessi
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The controls of a file's changes, in pairs that keep together (2026-10-20: "Previous change and Next change on one
+ * line, and only when there is no room on two; Show the whole file and Wrap long lines on one line too"): a pair
+ * moves to the next line as a whole, and breaks in two only when it is wider than the view itself.
+ */
+export function DiffTools({
+  changes,
+  onChange,
+  files,
+  whole,
+  onWhole,
+  wrap,
+  onWrap,
+}: {
+  /** How many changes the file has; the two buttons step through them. */
+  changes: number;
+  onChange: (step: 1 | -1) => void;
+  /** The files, when the view has several: which one is shown, of how many, and a step to the next. */
+  files?: { at: number; count: number; onFile: (step: 1 | -1) => void };
+  whole: boolean;
+  onWhole: (v: boolean) => void;
+  wrap: boolean;
+  onWrap: (v: boolean) => void;
+}) {
+  const { t } = useT();
+  return (
+    <div className="diff-tools">
+      <span className="diff-pair">
+        <button type="button" className="quiet" onClick={() => onChange(-1)} disabled={changes === 0}>
+          {t('diff.prevChange')}
+        </button>
+        <button type="button" className="quiet" onClick={() => onChange(1)} disabled={changes === 0}>
+          {t('diff.nextChange')}
+        </button>
+      </span>
+      {files && files.count > 1 && (
+        <span className="diff-pair">
+          <button type="button" className="quiet" onClick={() => files.onFile(-1)} disabled={files.at === 0}>
+            {t('diff.prevFile')}
+          </button>
+          <button type="button" className="quiet" onClick={() => files.onFile(1)} disabled={files.at >= files.count - 1}>
+            {t('diff.nextFile')}
+          </button>
+        </span>
+      )}
+      <span className="diff-pair">
+        <label className="option-inline">
+          <input type="checkbox" checked={whole} onChange={(e) => onWhole(e.target.checked)} /> {t('diff.whole')}
+        </label>
+        <label className="option-inline">
+          <input type="checkbox" checked={wrap} onChange={(e) => onWrap(e.target.checked)} /> {t('diff.wrap')}
+        </label>
+      </span>
+    </div>
+  );
+}
+
+/** The table's heading: which change is chosen, right above "Before" and "After" (2026-10-20), kept in view with them. */
+export function DiffHead({ changes, at }: { changes: number; at: number }) {
+  const { t } = useT();
+  return (
+    <thead>
+      {changes > 0 && (
+        <tr className="diff-where">
+          <th colSpan={4}>{t('diff.changeN', { i: at < 0 ? '–' : at + 1, n: changes })}</th>
+        </tr>
+      )}
+      <tr>
+        <th colSpan={2}>{t('diff.before')}</th>
+        <th colSpan={2}>{t('diff.after')}</th>
+      </tr>
+    </thead>
   );
 }
 

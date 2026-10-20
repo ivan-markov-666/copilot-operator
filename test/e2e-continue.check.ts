@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type SessionView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 import { SessionStore } from '../src/session/store.js';
+import { isContinuable, type Task } from '../src/session/model.js';
 import { ReplyTimeoutError } from '../src/transport/chatTransport.js';
 
 const t = new Tally();
@@ -126,15 +127,17 @@ await scenario('a task stopped at the message limit is continued in the same cha
   t.check('on the branch the first attempt used', after.vcs?.branch, 'cop/limited');
   t.check('the contract was sent only once', h.chat.sent.filter((m) => m.contract === 'task').length, 1);
 
-  type Ratio = { n: number; of: number };
-  const figures = (await h.call<{ rows: Array<{ group: string; firstPass: Ratio; doneInTheEnd: Ratio; resumed: Ratio; manualInterventions: number; attempts: number }> }>('GET', '/metrics')).rows[0]!;
-  t.check('the register\'s figures: not done first time, done in the end, resumed and finished, one person stepping in',
-    [figures.attempts, figures.firstPass, figures.doneInTheEnd, figures.resumed, figures.manualInterventions],
-    [2, { n: 0, of: 1 }, { n: 1, of: 1 }, { n: 1, of: 1 }, 1]);
 });
 
 type Row = { taskId: string; status: string; continuable?: boolean; limit?: { setting: string; value: number }; branch?: string; commit?: string };
-const row = async (h: Harness, taskId: string): Promise<Row> => (await h.call<Row[]>('GET', '/tasks')).find((r) => r.taskId === taskId)!;
+/** The task as the register showed it (the register went on 2026-10-20): whether it can be carried on, its limit, its branch. */
+const row = async (h: Harness, taskId: string): Promise<Row> => {
+  for (const s of await h.call<Array<{ tasks: Array<Task & { vcs?: { branch?: string; commit?: string } }> }>>('GET', '/sessions')) {
+    const x = s.tasks.find((y) => y.id === taskId);
+    if (x) return { taskId, status: x.status, continuable: isContinuable(x) || undefined, ...(x.limit ? { limit: x.limit } : {}), ...(x.vcs?.branch ? { branch: x.vcs.branch } : {}), ...(x.vcs?.commit ? { commit: x.vcs.commit } : {}) };
+  }
+  throw new Error(`no task ${taskId}`);
+};
 
 /*
  * Asked for on 2026-09-30: a task stopped by any limit from the settings must offer "Continue", with its
@@ -234,51 +237,6 @@ await scenario('keep going: out of rounds of fixing failed checks, carried on un
   );
   const after = (await h.run(s!.id)).tasks[0]!;
   t.check('done in the same run, the failed attempt kept', [after.status, after.attempts?.map((a) => a.status)], ['done', ['failed']]);
-});
-
-await scenario('"only this one": a run of one picked task leaves the rest queued', {}, async (h) => {
-  const [s] = await h.importPlan({
-    version: 1,
-    sessions: [session(h, 'picked', [task('first-file', 'one.txt', 'one'), task('second-file', 'two.txt', 'two'), task('third-file', 'three.txt', 'three')], {}, { onFailure: 'continue' })],
-  });
-  const second = s!.tasks[1]!;
-  h.chat.script(write('two.txt', 'two'), reply.done());
-  const r = await h.call<{ started?: boolean }>('POST', '/batch/start', { sessionIds: [s!.id], mode: 'unattended', taskIds: [second.id] });
-  t.truthy('the run of one task started', r && r.started !== false, r);
-  await h.idle();
-  const after = await h.session(s!.id);
-  t.check('only the picked task ran', after.tasks.map((x) => x.status), ['queued', 'done', 'queued']);
-  t.check('and only its file was written', [existsSync(join(h.repo, 'one.txt')), h.git('show', 'cop/picked:two.txt'), existsSync(join(h.repo, 'three.txt'))], [false, 'two', false]);
-});
-
-await scenario('a done task given a new prompt builds on its own work', {}, async (h) => {
-  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'builds', [task('greeting', 'hello.txt', 'hi')])] });
-  h.chat.script(write('hello.txt', 'hi'), reply.done());
-  const done = (await h.run(s!.id)).tasks[0]!;
-  const firstCommit = done.vcs?.commit;
-  t.check('the first attempt is done', done.status, 'done');
-
-  const newPrompt = 'Also create bye.txt in the repository root holding exactly the word bye, and keep hello.txt as it is.';
-  const queued = await h.call<{ status: string; buildsOn?: unknown; prompt: string }>('POST', `/sessions/${s!.id}/tasks/${done.id}/rerun`, {
-    prompt: newPrompt,
-    checks: [{ name: 'bye.txt written', expect: 'file-contains', file: 'bye.txt', value: 'bye' }],
-    buildOnFinished: true,
-  });
-  t.check('queued again with the new prompt, building on the finished work', [queued.status, queued.prompt, Boolean(queued.buildsOn)], ['queued', newPrompt, true]);
-
-  h.chat.script(
-    (m) => {
-      t.truthy('the chat gets the new instruction', m.text.includes(newPrompt), m.text.slice(0, 300));
-      t.truthy('and is told the earlier work is already in the tree', /build on/i.test(m.text), m.text.slice(0, 400));
-      return write('bye.txt', 'bye');
-    },
-    reply.done(),
-  );
-  const after = (await h.run(s!.id)).tasks[0]!;
-  t.check('the new attempt is done', after.status, 'done');
-  t.check('on the same branch', after.vcs?.branch, 'cop/builds');
-  t.check('its commit sits on top of the first attempt\'s', h.git('rev-parse', `${after.vcs?.commit}^`), firstCommit);
-  t.check('both files are there', [h.git('show', 'cop/builds:hello.txt'), h.git('show', 'cop/builds:bye.txt')], ['hi', 'bye']);
 });
 
 await scenario('stopping a run in the middle of a step ends the task as aborted', {}, async (h) => {
@@ -428,56 +386,6 @@ await scenario('a task that contradicts itself is stopped before anything is sen
   t.truthy('the reason names the contradiction', /"fix applied" fails now and can only pass if README\.md changes, but the task is read-only/.test(r.reason ?? ''), r.reason);
   t.check('the task stays queued', (await h.session(s!.id)).tasks[0]!.status, 'queued');
   t.check('nothing was sent to the chat', h.chat.sent.length, 0);
-});
-
-await scenario('sessions set aside while another runs: inactive ones are not started, a waiting one can be deleted, the running one cannot be touched', {}, async (h) => {
-  const [a, b, c] = await h.importPlan({
-    version: 1,
-    sessions: [
-      session(h, 'runner', [task('first', 'one.txt', 'one')], { branchMode: 'per-task' }, { onFailure: 'continue' }),
-      session(h, 'aside', [task('second', 'two.txt', 'two')], { branchMode: 'per-task' }, { onFailure: 'continue' }),
-      session(h, 'dropped', [task('third', 'three.txt', 'three')], { branchMode: 'per-task' }, { onFailure: 'continue' }),
-    ],
-  });
-  t.check('imported sessions are active (no flag stored)', [a!, b!, c!].map((x) => (x as unknown as { active?: boolean }).active), [undefined, undefined, undefined]);
-
-  // A run of all three, asking before each step, so the first one is held mid-run.
-  h.chat.script(write('one.txt', 'one'), reply.done());
-  await h.call('POST', '/batch/start', { sessionIds: [a!.id, b!.id, c!.id], mode: 'confirm', onFailure: 'continue' });
-  type Approval = { id: string; sessionId: string };
-  const waiting = await waitFor('the first session to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
-  t.check('the first session is the one running', waiting.sessionId, a!.id);
-
-  const runningStatus = await h.raw('PUT', `/sessions/${a!.id}`, { active: false });
-  t.truthy('the running session\'s status cannot be changed', runningStatus.status >= 400, runningStatus);
-  const runningDelete = await h.raw('DELETE', `/sessions/${a!.id}`);
-  t.truthy('nor can it be deleted', runningDelete.status >= 400, runningDelete);
-
-  await h.call('PUT', `/sessions/${b!.id}`, { active: false });
-  t.check('a waiting session is set aside while the run goes on', (await h.session(b!.id) as unknown as { active?: boolean }).active, false);
-  const register = await h.call<Array<{ sessionId: string; sessionInactive?: boolean }>>('GET', '/tasks');
-  t.check('the register marks its tasks as not on offer', register.filter((e) => e.sessionId === b!.id).map((e) => e.sessionInactive), [true]);
-  await h.call('DELETE', `/sessions/${c!.id}`);
-  t.check('and another waiting one is deleted', (await h.call<Array<{ id: string }>>('GET', '/sessions')).some((x) => x.id === c!.id), false);
-
-  await h.call('POST', `/approvals/${waiting.id}`, { action: 'run' });
-  await h.idle();
-  type Batch = { sessions: Array<{ sessionId: string; state: string; reason?: string }> };
-  const batch = await h.call<Batch>('GET', '/batch');
-  t.check('the running session finished', (await h.session(a!.id)).tasks[0]!.status, 'done');
-  const aside = batch.sessions.find((x) => x.sessionId === b!.id)!;
-  t.truthy('the inactive one was skipped, saying why', aside.state === 'skipped' && /inactive/.test(aside.reason ?? ''), aside);
-  t.check('its task is still queued, nothing lost', (await h.session(b!.id)).tasks[0]!.status, 'queued');
-  const gone = batch.sessions.find((x) => x.sessionId === c!.id)!;
-  t.truthy('the deleted one was skipped too', gone.state === 'skipped', gone);
-
-  const alone = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${b!.id}/start`, { mode: 'unattended' });
-  t.truthy('started on its own, an inactive session refuses and says why', !alone.started && /inactive/.test(alone.reason ?? ''), alone);
-  await h.call('PUT', `/sessions/${b!.id}`, { active: true });
-  t.check('made active again: the flag is gone', (await h.session(b!.id) as unknown as { active?: boolean }).active, undefined);
-  h.chat.script(write('two.txt', 'two'), reply.done());
-  const again = await h.run(b!.id);
-  t.check('and it runs', again.tasks[0]!.status, 'done');
 });
 
 t.finish();

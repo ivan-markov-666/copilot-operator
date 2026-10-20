@@ -21,7 +21,7 @@
  * index, `commit-tree`), so the operator's checkout is never disturbed to make it.
  */
 import { createHash } from 'node:crypto';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 

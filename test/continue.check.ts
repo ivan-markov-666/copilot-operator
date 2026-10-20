@@ -131,82 +131,6 @@ try {
 }
 
 /*
- * A new prompt for a task that ended done builds on its work (asked for on 2026-09-29): the next
- * attempt is on the finished attempt's branch with its files in place, and the chat is sent the new
- * instruction with a line saying it builds on work already there — unlike a continuation, whose
- * assignment has not changed and is not sent again. Only a done task: a failed one starts over.
- */
-console.log('\n--- a new prompt for a finished task builds on it ---');
-{
-  const { writeFile } = await import('node:fs/promises');
-  const { git, commitAll } = await import('../src/vcs/git.js');
-  const { prepareForTask, commitTaskResult } = await import('../src/vcs/taskVcs.js');
-  const { EventBus } = await import('../src/session/events.js');
-
-  const msg = composeOpening({ ...base, prompt: 'Now add a percentage key.', contractAlreadySent: true, buildsOn: { fromAttempt: 1 } });
-  const text = msg.messages.join('\n');
-  check('the new instruction is sent', text.includes('Now add a percentage key.'), true);
-  check('with a line saying it builds on work already there', /done once already \(attempt 1\)/.test(text) && /build on it/.test(text), true);
-  check('and not told to carry on an unchanged assignment', /Continue task 1/.test(text), false);
-
-  const repo = await mkdtemp(join(tmpdir(), 'cop-buildson-repo-'));
-  const data = await mkdtemp(join(tmpdir(), 'cop-buildson-data-'));
-  process.env.COP_DATA_DIR = data;
-  try {
-    await git(repo, ['init', '-b', 'main']);
-    await writeFile(join(repo, 'app.ts'), 'export const a = 1;\n');
-    await commitAll(repo, 'first');
-    const { OperatorService } = await import('../src/api/operator.service.js');
-    const ops = new OperatorService();
-    await ops.store.init();
-    const s = await ops.store.createSession('calc');
-    await ops.store.updateSession(s.id, (x) => {
-      x.vcs = { enabled: true, repoDir: repo, branchMode: 'per-task', commitOnFinish: true, branchPrefix: 'cop/' };
-    });
-    const t = await ops.store.addTask(s.id, { title: 'calculator', level2: '', prompt: 'Build the calculator.' });
-    const bus = new EventBus();
-    const save = async (m: (x: never) => void): Promise<void> => void (await ops.store.updateSession(s.id, m as never));
-
-    // The first attempt: its branch, its file, committed, done.
-    let session = (await ops.store.getSession(s.id))!;
-    const first = await prepareForTask(session, session.tasks[0]!, bus, save);
-    await writeFile(join(repo, 'calculator.ts'), 'export const add = (a: number, b: number) => a + b;\n');
-    await ops.store.updateTask(s.id, t.id, (x) => {
-      x.vcs = first.vcs;
-    });
-    session = (await ops.store.getSession(s.id))!;
-    const committed = await commitTaskResult(session, session.tasks[0]!, { status: 'done', summary: 'built' }, bus);
-    await ops.store.updateTask(s.id, t.id, (x) => {
-      x.vcs = committed;
-      x.status = 'done';
-    });
-
-    const requeued = await ops.rerunTask(s.id, t.id, { prompt: 'Now add a percentage key.' }, { buildOnFinished: true });
-    check('a done task is marked to build on its attempt', requeued.buildsOn, { fromAttempt: 1 });
-    session = (await ops.store.getSession(s.id))!;
-    const second = await prepareForTask(session, session.tasks[0]!, bus, save);
-    check('the new attempt is on the finished attempt\'s branch', second.vcs.branch, first.vcs.branch);
-    const files = (await git(repo, ['ls-tree', '--name-only', 'HEAD'])).stdout.split('\n');
-    check('with its work in the tree', files.includes('calculator.ts'), true);
-
-    // A failed task given a new prompt starts over, whatever the button asked.
-    await ops.store.updateTask(s.id, t.id, (x) => {
-      x.status = 'failed';
-    });
-    const failedAgain = await ops.rerunTask(s.id, t.id, { prompt: 'Try it differently.' }, { buildOnFinished: true });
-    check('a failed task is not built on', failedAgain.buildsOn ?? null, null);
-    await ops.store.updateTask(s.id, t.id, (x) => {
-      x.status = 'done';
-    });
-    const plainAgain = await ops.rerunTask(s.id, t.id);
-    check('an ordinary "Run again" does not build on it', plainAgain.buildsOn ?? null, null);
-  } finally {
-    await rm(repo, { recursive: true, force: true });
-    await rm(data, { recursive: true, force: true });
-  }
-}
-
-/*
  * The bot stopped under a task — the power went, Ctrl+C, a crash (asked for on 2026-09-29). At the
  * next start the task is closed as aborted, its work committed, and where it had got to is read
  * from its run folder; "Continue" then carries it on in its chat, and the chat is told which of the
@@ -273,10 +197,8 @@ console.log('\n--- after the bot stopped under a task ---');
     check('at the next start it is closed as aborted', after.status, 'aborted');
     check('with where it had got to', after.interruption?.steps.map((x) => x.state), ['finished', 'cut', 'not-run']);
     check('and the reason says it can be continued', /Continue in the same chat/.test(after.reason ?? ''), true);
-    const row = (await ops.taskRegistry()).find((e) => e.taskId === t.id);
-    check('the register marks it interrupted', row?.interrupted, true);
-
-    const next = await ops.continueTask(s.id, t.id);
+    // Carried on as the runner carries a task on by itself (`limits.autoContinue`): the store's own continuation.
+    const next = await ops.store.continueTask(s.id, t.id);
     check('"Continue" carries it on, as an interruption', [next.status, next.continuing?.how], ['queued', 'interrupted']);
     check('the new attempt starts with no interruption of its own', next.interruption ?? null, null);
     const msg = composeOpening({ ...base, contractAlreadySent: true, continuing: next.continuing });
@@ -290,15 +212,8 @@ console.log('\n--- after the bot stopped under a task ---');
       x.status = 'aborted';
       x.interruption = undefined;
     });
-    const stopped = await ops.continueTask(s.id, t.id);
+    const stopped = await ops.store.continueTask(s.id, t.id);
     check('a task the operator stopped is continued as stopped', stopped.continuing?.how, 'stopped');
-    // A verdict is not continued.
-    await ops.store.updateTask(s.id, t.id, (x) => {
-      x.status = 'failed';
-    });
-    let refusedFailed = false;
-    await ops.continueTask(s.id, t.id).catch(() => (refusedFailed = true));
-    check('a failed task is not continued', refusedFailed, true);
   } finally {
     await rm(runs, { recursive: true, force: true });
     await rm(data, { recursive: true, force: true });

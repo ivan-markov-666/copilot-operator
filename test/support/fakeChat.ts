@@ -23,7 +23,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChatTransport, TransportFactory } from '../../src/transport/chatTransport.js';
-import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions } from '../../src/transport/copilotTransport.js';
+import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions, WindowNotice } from '../../src/transport/copilotTransport.js';
 import { pageModelFor, sameModel } from '../../src/transport/modelMatch.js';
 
 /** One message the runner sent, with the text of every file it attached. */
@@ -60,6 +60,13 @@ export class FakeCopilot {
   /** How many chat windows were opened and closed, to show a run cleans up after itself. */
   opened = 0;
   closed = 0;
+  /** Every card shown in a window when the work on a message ended (`showNotice`), and how many were taken away. */
+  readonly notices: WindowNotice[] = [];
+  noticesCleared = 0;
+  /** The windows open now, the newest last: what `closeByHand` closes. */
+  readonly windows: FakeChat[] = [];
+  /** How many of the next sign-in waits the operator ends by closing the window with its X. */
+  closeOnSignIn = 0;
   /** Whether the window reports each reply as a browser event, as the real one reports what it sees. */
   emitEvents = false;
   /** How many naming tries find the conversation not yet in the sidebar (as live, 2026-10-05). */
@@ -116,6 +123,19 @@ export class FakeCopilot {
     return (opts) => new FakeChat(this, opts);
   }
 
+  /** The operator closes the newest open window with its X: every call on it after that fails as the real page does. */
+  closeByHand(): boolean {
+    const w = this.windows.at(-1);
+    if (!w) return false;
+    w.closedByHand();
+    return true;
+  }
+
+  /** Whether a card is up in the newest open window, not taken away yet. */
+  get noticeUp(): WindowNotice | null {
+    return this.windows.at(-1)?.notice ?? null;
+  }
+
   /** Messages that were not contracts: the ones the scripted replies answered. */
   get exchanged(): Sent[] {
     return this.sent.filter((m) => !m.contract);
@@ -161,7 +181,10 @@ export class FakeCopilot {
 class FakeChat implements ChatTransport {
   private current: FakeConversation | null = null;
   private waiting: Promise<string> | null = null;
-  private isOpen = false;
+  private live = false;
+  private gone = false;
+  /** The card up in this window, if any (see `showNotice`). */
+  notice: WindowNotice | null = null;
 
   constructor(
     private readonly world: FakeCopilot,
@@ -170,26 +193,75 @@ class FakeChat implements ChatTransport {
 
   async open(): Promise<void> {
     this.world.opened += 1;
-    this.isOpen = true;
+    this.live = true;
+    this.gone = false;
+    this.world.windows.push(this);
   }
 
   async close(): Promise<void> {
-    if (this.isOpen) this.world.closed += 1;
-    this.isOpen = false;
+    if (this.live) this.world.closed += 1;
+    this.shut();
+  }
+
+  /** As the operator's X: the window is closed, and counted closed, without `close`. */
+  closedByHand(): void {
+    if (!this.live) return;
+    this.world.closed += 1;
+    this.gone = true;
+    this.shut();
+    this.opts.onEvent?.('window-closed');
+  }
+
+  private shut(): void {
+    this.live = false;
+    this.notice = null;
+    const at = this.world.windows.indexOf(this);
+    if (at >= 0) this.world.windows.splice(at, 1);
+  }
+
+  /** What every call on a closed page says, as Playwright's. */
+  private alive(what: string): void {
+    if (this.gone) throw new Error(`${what}: Target page, context or browser has been closed`);
+    if (!this.live) throw new Error(`${what} on a closed chat`);
+  }
+
+  isOpen(): boolean {
+    return this.live;
+  }
+
+  closedOutside(): boolean {
+    return this.gone;
+  }
+
+  async showNotice(notice: WindowNotice): Promise<void> {
+    this.alive('showNotice');
+    this.notice = notice;
+    this.world.notices.push(notice);
+  }
+
+  async clearNotice(): Promise<void> {
+    if (!this.live || !this.notice) return;
+    this.notice = null;
+    this.world.noticesCleared += 1;
   }
 
   async ensureSignedIn(): Promise<void> {
-    if (!this.isOpen) throw new Error('ensureSignedIn before open');
+    if (!this.live && !this.gone) throw new Error('ensureSignedIn before open');
     this.world.signIns += 1;
+    if (this.live && this.world.closeOnSignIn > 0) {
+      this.world.closeOnSignIn -= 1;
+      this.closedByHand();
+    }
+    this.alive('ensureSignedIn');
   }
 
   async signOut(): Promise<void> {
-    if (!this.isOpen) throw new Error('signOut before open');
+    if (!this.live) throw new Error('signOut before open');
     this.world.signOuts += 1;
   }
 
   async gotoChatAs(upn: string | undefined): Promise<void> {
-    if (!this.isOpen) throw new Error('gotoChatAs before open');
+    if (!this.live) throw new Error('gotoChatAs before open');
     this.world.askedAccounts.push(upn ?? '');
   }
 
@@ -198,10 +270,12 @@ class FakeChat implements ChatTransport {
   }
 
   async newChat(): Promise<void> {
+    this.alive('newChat');
     this.current = this.world.newConversation();
   }
 
   async openConversation(chatId: string): Promise<boolean> {
+    this.alive('openConversation');
     const c = this.world.conversations.get(chatId);
     if (!c) return false;
     this.current = c;
@@ -282,7 +356,7 @@ class FakeChat implements ChatTransport {
   }
 
   async sendAndConfirm(text: string, attachments: string[] = []): Promise<number> {
-    if (!this.isOpen) throw new Error('send on a closed chat');
+    this.alive('send');
     if (this.waiting) this.world.problems.push('a message was sent before the reply to the previous one was read');
     if (!this.current) this.current = this.world.newConversation();
     const chat = this.current;
@@ -304,6 +378,8 @@ class FakeChat implements ChatTransport {
     const pending = this.waiting;
     this.waiting = null;
     const markdown = await pending;
+    // Closed while the reply was being written: the real wait ends on the closed page, not with the reply.
+    this.alive('waitForReply');
     return { markdown, degraded: false, attachments: [], codeBlocksDom: [] };
   }
 

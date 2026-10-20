@@ -121,7 +121,8 @@ export type ChangesCheck =
 
 /** The project folder the workbench has open; see `session/workspace.ts`. */
 export type Workspace = { dir: string; name: string; ok: boolean; isRepo: boolean; branch?: string; problem?: string };
-export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number };
+/** `version` is a fingerprint of the file as read; saving over it is refused once the file changed on disk. */
+export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string };
 export type ChatThread = { id: string; name: string; createdAt: string; status: 'idle' | 'running' | 'stopping'; turns: number; running: boolean; repoDir: string };
 export type ChatSent = { threadId: string; taskId: string; noted?: boolean; needsStart: boolean };
 
@@ -678,6 +679,8 @@ export type Session = {
   projectDir: string;
   tasks: Task[];
   running: boolean;
+  /** Paused by the operator ("Pause"): the run holds at its next message or command until "Continue". */
+  paused?: boolean;
   /** How the run in progress is answering approvals right now. Absent when nothing runs. */
   runMode?: 'confirm' | 'unattended';
   pending?: Approval[];
@@ -1055,14 +1058,17 @@ async function call<T>(path: string, init?: RequestInit, opts: { timeoutMs?: num
     } catch {
       /* not json */
     }
-    throw new Error(message);
+    // The status goes with it, for a caller that answers one differently: the editor's "changed on disk" is a 409.
+    throw Object.assign(new Error(message), { status: res.status });
   }
   const text = await res.text();
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/** Kerrigan's text, as `GET /kerrigan` gives it. */
+export type KerriganText = { lang: string; fileName: string; text: string };
+
 export const api = {
-  health: () => call<{ ok: boolean }>('/health'),
   doctor: () => call<Record<string, unknown>>('/doctor'),
   settings: () => call<{ raw: Record<string, unknown>; defaults: unknown; resolved: Record<string, unknown> }>('/settings'),
   /** Writes the whole raw settings object back; the API validates it before saving. */
@@ -1077,16 +1083,7 @@ export const api = {
     call<Preset>(`/presets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
   deletePreset: (name: string) => call<{ ok: true }>(`/presets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
-  /** Named copies of the persona box on the import page. Same shape as a level 2 preset. */
-  personas: () => call<Preset[]>('/personas'),
-  savePersona: (name: string, content: string) =>
-    call<Preset>(`/personas/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
-  deletePersona: (name: string) => call<{ ok: true }>(`/personas/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-
   sessions: () => call<Session[]>('/sessions'),
-  /** The sessions list in this order: every session id, top to bottom. Returns the list as stored. */
-  reorderSessions: (ids: string[]) => call<Session[]>('/sessions-order', { method: 'PUT', body: JSON.stringify({ ids }) }),
-  metrics: () => call<Metrics>('/metrics'),
   /** "Prepare the folder from the remote main branch": fetches and says what it would do. */
   // The fetch may wait up to five minutes for the operator to type a password in Git's window (src/vcs/remoteAuth.ts).
   preparePreview: (dir: string, fetch = true) =>
@@ -1095,8 +1092,6 @@ export const api = {
   prepareProject: (dir: string, fingerprint: string, names: { savedBranch?: string; savedMainBranch?: string } = {}) =>
     call<{ ok: boolean; problem?: string; result?: string }>('/repo/prepare', { method: 'POST', body: JSON.stringify({ dir, fingerprint, ...names }) }),
   session: (id: string) => call<Session>(`/sessions/${id}`),
-  createSession: (name: string, projectDir?: string) =>
-    call<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name, projectDir }) }),
   updateSession: (
     id: string,
     patch: {
@@ -1115,33 +1110,7 @@ export const api = {
     },
   ) =>
     call<Session>(`/sessions/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
-  deleteSession: (id: string) => call<{ ok: true }>(`/sessions/${id}`, { method: 'DELETE' }),
-
-  addTask: (id: string, task: { title: string; level2: string; prompt: string }) =>
-    call<Task>(`/sessions/${id}/tasks`, { method: 'POST', body: JSON.stringify(task) }),
-  updateTask: (id: string, taskId: string, patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks' | 'readOnly' | 'scope'>>) =>
-    call<Task>(`/sessions/${id}/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(patch) }),
-  deleteTask: (id: string, taskId: string) => call<{ ok: true }>(`/sessions/${id}/tasks/${taskId}`, { method: 'DELETE' }),
-  /** Queues a finished task again, keeping the earlier attempt on the record. */
-  /**
-   * Queues a task to carry on where it stopped — or, with a new prompt, where a failed one ended: the same
-   * chat and branch, the chat told how it ended and given the prompt.
-   */
-  continueTask: (id: string, taskId: string, instruction?: string) =>
-    call<Task>(`/sessions/${id}/tasks/${taskId}/continue`, { method: 'POST', body: JSON.stringify(instruction?.trim() ? { instruction } : {}) }),
-  rerunTask: (
-    id: string,
-    taskId: string,
-    patch: Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks' | 'readOnly' | 'scope'>> = {},
-    /** For a task that ended done: the new attempt builds on its work, on its branch. */
-    opts: { buildOnFinished?: boolean } = {},
-  ) =>
-    call<Task>(`/sessions/${id}/tasks/${taskId}/rerun`, {
-      method: 'POST',
-      body: JSON.stringify({ ...patch, ...(opts.buildOnFinished ? { buildOnFinished: true } : {}) }),
-    }),
-  /** `runId` asks for one earlier attempt instead of the current one. */
-  /** What an attempt changed in the repository: the files between its start and its commit. */
+  /** What an attempt changed in the repository: the files between its start and its commit. `runId` asks for an earlier attempt. */
   taskChanges: (id: string, taskId: string, runId?: string) =>
     call<{ ok: boolean; problem?: string; repoDir?: string; branch?: string; base?: string; commit?: string; files: ChangedFile[] }>(
       `/sessions/${id}/tasks/${taskId}/changes${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
@@ -1154,39 +1123,8 @@ export const api = {
   /** The attempt as a story: sent, answered, run, ended. Polled while live. */
   taskStory: (id: string, taskId: string, runId?: string) =>
     call<Story>(`/sessions/${id}/tasks/${taskId}/story${runId ? `?run=${encodeURIComponent(runId)}` : ''}`),
-  taskFiles: (id: string, taskId: string, runId?: string) =>
-    call<{ reports: string[]; artifacts: string[]; replies: string[] }>(
-      `/sessions/${id}/tasks/${taskId}/files${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
-    ),
-  taskLogUrl: (id: string, taskId: string, runId?: string) =>
-    `${API}/sessions/${id}/tasks/${taskId}/log${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
-  taskFileUrl: (id: string, taskId: string, kind: string, name: string, runId?: string) =>
-    `${API}/sessions/${id}/tasks/${taskId}/files/${kind}/${encodeURIComponent(name)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
-  /*
-   * The same two things, saved to the Desktop and shown in Explorer instead of opened in a
-   * tab. The URLs above are what the UI falls back to when this refuses, so both stay.
-   */
-  saveTaskLog: (id: string, taskId: string, runId?: string) =>
-    call<SavedLog>(`/sessions/${id}/tasks/${taskId}/log${runId ? `?run=${encodeURIComponent(runId)}` : ''}`, {
-      method: 'POST',
-      body: '{}',
-    }),
-  saveTaskFile: (id: string, taskId: string, kind: string, name: string, runId?: string) =>
-    call<SavedLog>(
-      `/sessions/${id}/tasks/${taskId}/files/${kind}/${encodeURIComponent(name)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`,
-      { method: 'POST', body: '{}' },
-    ),
-
-  start: (id: string, mode: 'confirm' | 'unattended', name?: string, starts?: Record<string, StartChoice>) =>
-    call<StartReply>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode, name, starts }) }, { timeoutMs: 120_000 }),
-  /** The start window's question: where each session starts, and the branches of their repositories. */
-  startOptions: (sessionIds: string[]) => call<StartOptions>(`/start/options?sessions=${encodeURIComponent(sessionIds.join(','))}`),
-  /**
-   * Fetches branches of a remote for the start window; without names, the whole remote. It may wait up
-   * to five minutes for the operator to type a passphrase in Git's own window (src/vcs/remoteAuth.ts).
-   */
-  startFetch: (dir: string, remote: string, branches?: string[]) =>
-    call<StartFetch>('/start/fetch', { method: 'POST', body: JSON.stringify({ dir, remote, ...(branches ? { branches } : {}) }) }, { timeoutMs: 330_000 }),
+  start: (id: string, mode: 'confirm' | 'unattended') =>
+    call<StartReply>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode }) }, { timeoutMs: 120_000 }),
   /** Starts that did not get as far as a first task, newest first. */
   startFailures: (unansweredOnly = false) => call<StartFailureRef[]>(`/start/failures${unansweredOnly ? '?unanswered=1' : ''}`),
   /** One of them as a text file: the error, the run's record, the events and the console of those moments. */
@@ -1194,32 +1132,20 @@ export const api = {
   /** What the bot's console showed, the latest lines, as a text file. */
   terminalUrl: () => withToken(`${API}/terminal`),
   stop: (id: string) => call<{ stopping: boolean }>(`/sessions/${id}/stop`, { method: 'POST', body: '{}' }),
+  /** "Pause": the running work holds at its next message to Copilot or its next command. */
+  pause: (id: string) => call<{ paused: boolean }>(`/sessions/${id}/pause`, { method: 'POST', body: '{}' }),
+  /** "Continue": the paused work goes on from where it held. */
+  resume: (id: string) => call<{ paused: boolean }>(`/sessions/${id}/resume`, { method: 'POST', body: '{}' }),
   /** Every step waiting for a decision right now, or only one session's. */
   approvals: (sessionId?: string) =>
     call<Approval[]>(`/approvals${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''}`),
-  /** Undo, both ways: what each would do, then doing one. Nothing is started. */
-  undoPreview: (id: string, taskId: string) => call<{ this: UndoThisPreview; back: RestartPlan; problem?: string }>(`/sessions/${id}/tasks/${taskId}/undo`),
-  undoTask: (id: string, taskId: string, how: 'this' | 'back') =>
-    call<{ ok: boolean; message: string; requeued: number }>(`/sessions/${id}/tasks/${taskId}/undo`, { method: 'POST', body: JSON.stringify({ how }) }),
-  /** A task that did not end done, accepted as done by the operator. */
-  acceptTask: (id: string, taskId: string, note?: string) =>
-    call<Task>(`/sessions/${id}/tasks/${taskId}/accept`, { method: 'POST', body: JSON.stringify(note?.trim() ? { note } : {}) }),
-  /** A note to the chat about a task, sent with its next message (at once, in effect, while it runs). */
-  addTaskNote: (id: string, taskId: string, text: string) =>
-    call<Task>(`/sessions/${id}/tasks/${taskId}/notes`, { method: 'POST', body: JSON.stringify({ text }) }),
-  /** What happened, for Kerrigan, with the operator's note. */
-  kerriganReport: (body: { sessionIds?: string[]; taskIds?: string[]; note?: string }) =>
-    call<{ text: string; sessions: number }>('/kerrigan/report', { method: 'POST', body: JSON.stringify(body) }),
-  checkChanges: (text: string) => call<ChangesCheck>('/changes/check', { method: 'POST', body: JSON.stringify({ text }) }),
-  applyChanges: (text: string) =>
-    call<{ ok: boolean; check?: ChangesCheck; applied: Array<{ index: number; says: string }>; problem?: string; failedAt?: number }>('/changes/apply', {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    }),
   /** The open project folder, as it is on disk: what it is, its files, one of them. */
   workspace: () => call<Workspace>('/workspace'),
   workspaceFiles: () => call<{ dir: string; files: string[]; truncated: boolean }>('/workspace/files'),
   workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
+  /** The editor's text over a file of the folder, over `base`, the version it was opened at (409 when it changed since). */
+  saveWorkspaceFile: (path: string, text: string, base?: string) =>
+    call<{ path: string; version: string; size: number }>('/workspace/file', { method: 'PUT', body: JSON.stringify({ path, text, ...(base ? { base } : {}) }) }),
   /** The open folder's git: what changed, staged and not, and the branch's commits. Read-only. */
   workspaceGit: () => call<WorkspaceGit>('/workspace/git'),
   workspaceCommit: (sha: string) => call<GitCommit & { body: string; files: GitFile[] }>(`/workspace/git/commit?sha=${encodeURIComponent(sha)}`),
@@ -1228,17 +1154,12 @@ export const api = {
     call<ChangedFileContent>(`/workspace/git/file?area=${area}&path=${encodeURIComponent(path)}${commit ? `&commit=${encodeURIComponent(commit)}` : ''}`),
   /** The chat: its conversations, and a message — a task of the conversation, or a note while it works. */
   chatThreads: () => call<ChatThread[]>('/chat/threads'),
-  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean) =>
-    call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}), ...(model ? { model } : {}), ...(manualModel ? { manualModel: true } : {}) }) }),
+  /** `planMode` for a new conversation: the plan first, approved in the chat (an existing one's is set with `updateSession`). */
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean) =>
+    call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}), ...(model ? { model } : {}), ...(manualModel ? { manualModel: true } : {}), ...(lang ? { lang } : {}), ...(planMode ? { planMode: true } : {}) }) }),
   /** Back to before a message: the folder as it was then; that message and the ones after it taken out. */
   chatRewind: (threadId: string, taskId: string) =>
     call<{ ok: boolean; message: string; text: string; safety?: string }>(`/chat/${threadId}/rewind`, { method: 'POST', body: JSON.stringify({ taskId }) }),
-  /** The session's repository, read-only: a folder, a file, the commits on its line. */
-  repoTree: (id: string, path = '', taskId?: string) =>
-    call<RepoTree>(`/sessions/${id}/repo/tree?path=${encodeURIComponent(path)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}`),
-  repoFile: (id: string, path: string, taskId?: string) =>
-    call<RepoFile>(`/sessions/${id}/repo/file?path=${encodeURIComponent(path)}${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}`),
-  repoLog: (id: string) => call<RepoLog>(`/sessions/${id}/repo/log`),
   /** The session's recent events, newest last. */
   sessionEvents: (id: string) => call<SessionEvent[]>(`/sessions/${id}/events`),
   /** A plan waiting for approval: approve (with a note), ask for another (saying what to change), or stop the task. */
@@ -1250,185 +1171,20 @@ export const api = {
   /** `run-all` runs this step and stops asking for the rest of the run. */
   decide: (approvalId: string, action: 'run' | 'skip' | 'abort' | 'run-all') =>
     call<{ ok: boolean }>(`/approvals/${approvalId}`, { method: 'POST', body: JSON.stringify({ action }) }),
-  setRunMode: (id: string, mode: 'confirm' | 'unattended') =>
-    call<{ ok: boolean; mode?: string }>(`/sessions/${id}/mode`, { method: 'POST', body: JSON.stringify({ mode }) }),
-  streamUrl: (id: string) => withToken(`${API}/sessions/${id}/stream`),
-
-  /** The batch in progress, or the last one that ran. Null when none ever has. */
-  batch: () => call<BatchState | null>('/batch').then((b) => b ?? null),
-  /** Runs the queued tasks of several sessions, one session after another, in this order. */
-  startBatch: (
-    sessionIds: string[],
-    mode: 'confirm' | 'unattended',
-    onFailure: 'stop' | 'continue',
-    model?: string,
-    /** The model the independent review runs on, written onto every selected session. */
-    reviewModel?: string,
-    /** What to call the run; the register groups by it and the exports are named after it. */
-    name?: string,
-    /** Only these queued tasks; the rest of the sessions' queues stay as they are. */
-    taskIds?: string[],
-    /** Where each session starts, by id, as the start window chose it. */
-    starts?: Record<string, StartChoice>,
-  ) =>
-    call<StartReply>(
-      '/batch/start',
-      {
-        method: 'POST',
-        // An absent model leaves every session on the one it already has; a name is written
-        // onto all of them before the run starts.
-        body: JSON.stringify({ sessionIds, mode, onFailure, model, reviewModel, name, taskIds, starts }),
-      },
-      // The version control check and a local branch brought up to its remote can take a while on a big repository.
-      { timeoutMs: 120_000 },
-    ),
-  /** What the run would be called if nothing is typed, so the field can start there. */
-  suggestedRunName: (sessionIds: string[]) =>
-    call<{ name: string }>(`/batch/name?sessions=${encodeURIComponent(sessionIds.join(','))}`),
-  stopBatch: () => call<{ stopping: boolean }>('/batch/stop', { method: 'POST', body: '{}' }),
-  /** Holds the run after the task that is running finishes. The rest of the queue stays as it is. */
-  pauseBatch: () => call<{ pausing: boolean }>('/batch/pause', { method: 'POST', body: '{}' }),
-  resumeBatch: () => call<{ pausing: boolean }>('/batch/resume', { method: 'POST', body: '{}' }),
-
-  /**
-   * The text to hand to a chat model so it writes a plan.
-   *
-   * The language is the only thing that varies. Version control and the folder used to be
-   * chosen here and baked in; the brief now tells the model to ask about them, because they
-   * belong to a session rather than to the whole document.
-   */
-  /** The persona whole (`text`), and in its two parts: the software's (fixed) and the organisation's (editable). */
-  planBrief: (lang: string) =>
-    call<{
-      text: string;
-      software: string;
-      organisation: string;
-      customised: boolean;
-      example: string;
-      work: string;
-      workCustomised: boolean;
-      workExample: string;
-    }>(`/plan/brief?lang=${encodeURIComponent(lang)}`),
-  /** One of the operator's two standing texts for the plan persona. */
-  context: (kind: ContextKind, lang: string) =>
-    call<ContextText>(`/context/${kind}?lang=${encodeURIComponent(lang)}`),
-  setContext: (kind: ContextKind, content: string) =>
-    call<{ ok: true }>(`/context/${kind}`, { method: 'PUT', body: JSON.stringify({ content }) }),
-  resetContext: (kind: ContextKind, lang: string) =>
-    call<ContextText>(`/context/${kind}?lang=${encodeURIComponent(lang)}`, { method: 'DELETE' }),
-  /** Checks a pasted plan and imports nothing. */
-  checkPlan: (text: string) => call<PlanCheck>('/plan/check', { method: 'POST', body: JSON.stringify({ text }) }),
-  /** Creates everything the plan describes, and starts none of it. */
-  importPlan: (text: string) => call<PlanImport>('/plan/import', { method: 'POST', body: JSON.stringify({ text }) }),
-
   /** Opens the machine's own folder dialog. Resolves when the operator picks or cancels. */
   // Open until the operator closes the folder picker.
   browseFolder: (start?: string) => call<FolderPick>('/browse-folder', { method: 'POST', body: JSON.stringify({ start }) }, { timeoutMs: null }),
-
-  tasks: () => call<RegistryEntry[]>('/tasks'),
 
   /** Is anything running right now? Answered from memory, so polling it is fine. */
   activity: () => call<Activity>('/activity'),
 
   /**
-   * A link to one JSON file holding everything that happened across these sessions.
-   *
-   * A URL rather than a call, because the browser downloading it is the whole point: the file
-   * is then on disk, ready to be handed to whoever has to work out what went wrong.
+   * Kerrigan, the persona to give another chat (2026-10-20): what copilot-operator is and how a task is best written
+   * for its chat, in the page's language, with the name to save it under.
    */
-  /**
-   * One of the three JSON views: `plan` (what was asked, importable again), `domain` (what
-   * happened to the work), `bot` (what the runner did) — of a task, a session or a whole run.
-   */
-  /**
-   * All three views of the tasks that were ticked, saved as one file.
-   *
-   * Fetched rather than linked, because the selection travels in a body: the response is turned
-   * into a blob and handed to a link that clicks itself, which is what a download link would
-   * have done anyway. The name the API chose is kept — it says what is in the file and when it
-   * was taken, and a browser's "export (3).json" says neither.
-   */
-  downloadBundle: async (tasks: Array<{ sessionId: string; taskId: string; attempt?: number }>): Promise<string> => {
-    const res = await fetch(`${API}/export/bundle`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(apiToken() ? { 'x-cop-token': apiToken() } : {}) },
-      body: JSON.stringify({ tasks }),
-    });
-    if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
-    // The header carries both forms. The encoded one is the accurate one and is tried first; the
-    // plain one has had everything outside ASCII replaced and is the fallback, used as-is,
-    // because running decodeURIComponent over a name that was never encoded is how a stray %
-    // turns a filename into an exception.
-    const disposition = res.headers.get('content-disposition') ?? '';
-    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
-    const plain = /filename="([^"]+)"/i.exec(disposition)?.[1];
-    let fileName = plain ?? 'copilot-operator-bundle.json';
-    if (encoded) {
-      try {
-        fileName = decodeURIComponent(encoded);
-      } catch {
-        /* keep the plain one */
-      }
-    }
-    const url = URL.createObjectURL(await res.blob());
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    // Revoked on the next tick: revoking it in the same one has been known to cancel the save.
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    return fileName;
-  },
-
-  exportUrl: (kind: 'plan' | 'domain' | 'bot', where: { run?: string; session?: string; task?: string }) => {
-    const q = new URLSearchParams();
-    if (where.run) q.set('run', where.run);
-    if (where.session) q.set('session', where.session);
-    if (where.task) q.set('task', where.task);
-    return withToken(`${API}/export/${kind}?${q.toString()}`);
-  },
+  kerrigan: (lang: string) => call<KerriganText>(`/kerrigan?lang=${encodeURIComponent(lang)}`),
   /** One task's whole exchange with Copilot — messages, replies, commands and their output — as a JSON file. */
   taskExchangeUrl: (id: string, taskId: string) => withToken(`${API}/sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/exchange`),
-  debugExportUrl: (sessionIds: string[]) =>
-    withToken(`${API}/debug/export${sessionIds.length > 0 ? `?sessions=${encodeURIComponent(sessionIds.join(','))}` : ''}`),
-
-  /** Can version control do its job in this session right now? */
-  vcsStatus: (id: string) => call<VcsStatus>(`/sessions/${id}/vcs`),
-  /** "Prepare version control for this run": one group per repository of these sessions. */
-  runVcs: (ids: string[]) => call<RunVcsGroup[]>(`/batch/vcs?ids=${encodeURIComponent(ids.join(','))}`),
-  /** One action of that panel, for one repository. */
-  runVcsPrepare: (sessionIds: string[], repoDir: string, action: RunVcsActionId, choices: Record<string, 'include' | 'leave-out'> = {}) =>
-    call<{ ok: boolean; problem?: string; result?: string }>('/batch/vcs/prepare', { method: 'POST', body: JSON.stringify({ sessionIds, repoDir, action, choices }) }),
-  /** Takes the starting snapshot, one choice per file of the list that was shown. */
-  vcsSnapshot: (id: string, choices: Record<string, 'include' | 'leave-out'>) =>
-    call<{ ok: boolean; problem?: string; branch?: string; commit?: string }>(`/sessions/${id}/vcs/snapshot`, { method: 'POST', body: JSON.stringify({ choices }) }),
-
-  /** What going back to before this task would do. Changes nothing. */
-  restorePreview: (id: string, taskId: string) => call<RestorePreview>(`/sessions/${id}/tasks/${taskId}/restore`),
-  /** Does it: a new branch at the commit that task started from, checked out. */
-  restore: (id: string, taskId: string) =>
-    call<RestoreResult>(`/sessions/${id}/tasks/${taskId}/restore`, { method: 'POST', body: '{}' }),
-
-  /** How a task contradicts itself, with the ways out. Changes nothing. */
-  contractCheck: (id: string, taskId: string) => call<{ conflicts: ContractConflict[] }>(`/sessions/${id}/tasks/${taskId}/contract`),
-  /** One chosen fix per contradiction (-1 = none); the task is queued with them, nothing starts. */
-  /** `expect`: the contradictions the choices were made from; refused when the task's are not those any more. */
-  applyContractFix: (id: string, taskId: string, choices: number[], expect: string[]) =>
-    call<{ task: Task; applied: string[]; remaining: ContractConflict[] }>(`/sessions/${id}/tasks/${taskId}/contract-fix`, {
-      method: 'POST',
-      body: JSON.stringify({ choices, expect }),
-    }),
-
-  /** What starting the whole run again from this task would re-queue, and do to the code. */
-  restartPlan: (id: string, taskId: string) => call<RestartPlan>(`/sessions/${id}/tasks/${taskId}/restart`),
-  /** Restores the code, queues this task and everything after it, and starts them. */
-  restartFrom: (id: string, taskId: string, opts: { restore?: boolean; mode?: RunMode; onFailure?: OnFailure } = {}) =>
-    call<RestartResult>(`/sessions/${id}/tasks/${taskId}/restart`, { method: 'POST', body: JSON.stringify(opts) }),
-  /** Whether a folder could be used for version control at all, asked before turning it on. */
-  repoCheck: (dir: string) => call<{ ok: boolean; problem?: string }>(`/repo?dir=${encodeURIComponent(dir)}`),
-
   /** The folder new sessions start pointed at. */
   project: () => call<ProjectDefault>('/project'),
   /** Stores it; an empty path clears it. */

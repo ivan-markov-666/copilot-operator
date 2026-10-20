@@ -16,6 +16,8 @@ export default function AppearancePage() {
   const { appearance, set, reset, loaded } = useAppearance();
 
   const themes: Array<{ value: Theme; label: Key }> = [
+    // The machine's own light or dark, the default (2026-10-20).
+    { value: 'system', label: 'theme.system' },
     { value: 'light', label: 'theme.light' },
     { value: 'dark', label: 'theme.dark' },
   ];
@@ -61,6 +63,7 @@ export default function AppearancePage() {
           {t('ap.sizeWhy')}
         </p>
 
+        <Toggle name="nightLight" label="ap.night" why="ap.nightWhy" />
         <Toggle name="highContrast" label="ap.contrast" why="ap.contrastWhy" />
         <Toggle name="reduceMotion" label="ap.motion" why="ap.motionWhy" />
         <Toggle name="underlineLinks" label="ap.links" why="ap.linksWhy" />
@@ -96,7 +99,7 @@ export default function AppearancePage() {
   );
 }
 
-function Toggle({ name, label, why }: { name: 'highContrast' | 'reduceMotion' | 'underlineLinks' | 'strongFocus'; label: Key; why: Key }) {
+function Toggle({ name, label, why }: { name: 'highContrast' | 'reduceMotion' | 'underlineLinks' | 'strongFocus' | 'nightLight'; label: Key; why: Key }) {
   const { t } = useT();
   const { appearance, set } = useAppearance();
   return (

@@ -37,12 +37,14 @@ export const themeScript = `
     var raw = localStorage.getItem('${APPEARANCE_STORAGE_KEY}');
     var a = raw ? JSON.parse(raw) : {};
     if (!a || typeof a !== 'object') a = {};
-    d.dataset.theme = a.theme === 'dark' ? 'dark' : 'light';
+    // "system", the default: whatever the machine is set to, light or dark (2026-10-20).
+    d.dataset.theme = a.theme === 'dark' || a.theme === 'light' ? a.theme : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     d.dataset.textsize = ${JSON.stringify(TEXT_SIZES)}.indexOf(a.textSize) >= 0 ? a.textSize : 'normal';
     d.dataset.contrast = a.highContrast ? 'high' : 'normal';
     d.dataset.motion = a.reduceMotion ? 'reduced' : 'normal';
     d.dataset.links = a.underlineLinks ? 'underline' : 'plain';
     d.dataset.focus = a.strongFocus ? 'strong' : 'normal';
+    d.dataset.night = a.nightLight ? 'on' : 'off';
   } catch (e) {}
 })();
 `;

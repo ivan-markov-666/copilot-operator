@@ -9,7 +9,6 @@ import { SkipLink } from './nav';
 import { Shell } from './shell';
 import { DialogHost } from './dialog';
 import { ScrollJump } from './scrollJump';
-import { StartDialogHost } from './startDialog';
 
 export const metadata = {
   title: 'copilot-operator',
@@ -32,6 +31,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       data-motion="normal"
       data-links="plain"
       data-focus="normal"
+      data-night="off"
     >
       <head>
         {/* Applies the stored theme before the first paint, so there is no flash of the wrong one. */}
@@ -45,8 +45,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               {/* The page's frame: the workbench at / takes the whole window, the other pages their column. */}
               <Shell>{children}</Shell>
               <ScrollJump />
-              {/* The start window every start button opens first: where the work starts. */}
-              <StartDialogHost />
             </DialogHost>
           </LanguageProvider>
         </AppearanceProvider>

@@ -21,12 +21,16 @@
  */
 import { CopilotTransport, type TransportOptions } from './copilotTransport.js';
 
-export { ReplyTimeoutError, isReplyTimeout } from './copilotTransport.js';
+export { ReplyTimeoutError, isReplyTimeout, WindowClosed } from './copilotTransport.js';
 
 export type ChatTransport = Pick<
   CopilotTransport,
   | 'open'
   | 'close'
+  | 'isOpen'
+  | 'closedOutside'
+  | 'showNotice'
+  | 'clearNotice'
   | 'ensureSignedIn'
   | 'newChat'
   | 'openConversation'

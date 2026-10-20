@@ -11,7 +11,11 @@
  * - the next message goes into the same Copilot conversation; one written while it works is a note;
  * - going back to before a message puts the folder exactly as it was then — branch, files, uncommitted work —
  *   takes it and the messages after it out of the conversation, keeps the folder as it was in a safety record,
- *   and tells the next message what was undone.
+ *   and tells the next message what was undone;
+ * - the browser window stays open when the work on a message has ended, says so in it with an OK, and is the one
+ *   the next message works in, in this conversation or a new one (2026-10-19); closed with its X between messages,
+ *   the next one opens a new window; closed while a message is worked, that message is stopped, not failed; Stop
+ *   leaves it open; a run that is not the chat's, reading the models, and closing the program close it.
  *
  *   npm run check:e2e-chat
  */
@@ -19,6 +23,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { chatNotice } from '../src/session/chatNotice.js';
 
 const t = new Tally();
 const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
@@ -53,6 +58,16 @@ try {
   const one = (await h.run(first.threadId)).tasks[0] as Full;
   t.check('it ran on main, in the folder with the operator\'s uncommitted work, and committed nothing', [one.status, h.git('rev-parse', '--abbrev-ref', 'HEAD'), h.git('rev-parse', 'HEAD'), file('hi.txt'), file('notes.md')], ['done', 'main', headBefore, 'hi', 'draft']);
   t.check('the folder before it is kept, and what it changed is on the record', [one.checkpoint?.branch, !!one.checkpoint?.commit, one.vcs?.files?.map((f) => f.path)], ['main', true, ['hi.txt']]);
+  t.check('the browser window stays open when the work on the message has ended', [h.chat.opened, h.chat.closed, h.chat.windows.length], [1, 0, 1]);
+  const card = h.chat.noticeUp;
+  t.check('and says so in it, with the message, that it stays open, and an OK', [card?.tone, card?.title, card?.subject, card?.lines, card?.button], [
+    'done',
+    'The task is done',
+    '“Create hi.txt holding exactly the word hi.”',
+    ['Copilot finished it. What was done is in the copilot-operator chat.', 'This window stays open for your next message. You can close it at any time.'],
+    'OK',
+  ]);
+  const signInsAfterOne = h.chat.signIns;
   const chatId = (await h.call<ChatSession>('GET', `/sessions/${first.threadId}`)).chat?.chatId;
 
   // The second message changes the first's file, adds one, and makes a branch: the git is the operator's here.
@@ -71,6 +86,7 @@ try {
   );
   const two = (await h.run(first.threadId)).tasks[1] as Full;
   t.check('done, on the new branch, with its changes', [two.status, h.git('rev-parse', '--abbrev-ref', 'HEAD'), file('hi.txt'), file('bye.txt')], ['done', 'feature/greet', 'hello', 'bye']);
+  t.check('worked in the window the first left open: not opened again, the sign-in looked at again, the card taken away first', [h.chat.opened, h.chat.closed, h.chat.signIns - signInsAfterOne, h.chat.noticesCleared, h.chat.notices.length], [1, 0, 1, 1, 2]);
   t.check('its changed files on the record', two.vcs?.files?.map((f) => f.path).sort(), ['bye.txt', 'hi.txt']);
 
   // Back to before the second message.
@@ -131,6 +147,7 @@ try {
   const otherRan = (await h.run(other.threadId)).tasks[0] as Full;
   const otherChat = (await h.call<ChatSession>('GET', `/sessions/${other.threadId}`)).chat?.chatId;
   t.check('it ran in a Copilot conversation of its own', [otherRan.status, !!otherChat && otherChat !== chatId], ['done', true]);
+  t.check('in the same browser window, still open', [h.chat.opened, h.chat.closed, h.chat.windows.length], [1, 0, 1]);
   t.truthy('which was not told anything of the first', !h.chat.sent.filter((m) => m.chatId === otherChat).some((m) => m.text.includes('hi.txt')), h.chat.sent.filter((m) => m.chatId === otherChat).map((m) => m.text.slice(0, 120)));
 
   /*
@@ -157,6 +174,38 @@ try {
   t.truthy('nothing of the other conversation\'s messages in it', !JSON.stringify(exchange).includes('hi.txt'), 'hi.txt found in the other message\'s JSON');
   t.check('a task that is not there: refused', (await h.raw('GET', `/sessions/${other.threadId}/tasks/nope/exchange`)).status, 400);
 
+  // In the language the workbench was in when the message was written.
+  await h.call<Sent>('POST', '/chat', { text: 'Покажи файловете.', threadId: other.threadId, lang: 'bg' });
+  h.chat.script(reply.steps('Get-ChildItem -Name'), reply.done());
+  await h.run(other.threadId);
+  const bg = h.chat.noticeUp;
+  t.check('the card in Bulgarian, for a message written with the workbench in Bulgarian', [bg?.title, bg?.subject, bg?.lines.at(-1), bg?.button], ['Заданието е изпълнено', '„Покажи файловете.“', 'Прозорецът остава отворен за следващото ви съобщение. Можете да го затворите по всяко време.', 'ОК']);
+
+  // Closed with its X between two messages: the next one opens a new window.
+  t.check('the operator closes the window with its X', [h.chat.closeByHand(), h.chat.windows.length], [true, 0]);
+  await h.call<Sent>('POST', '/chat', { text: 'List the files again.', threadId: other.threadId });
+  h.chat.script(reply.steps('Get-ChildItem -Name'), reply.done());
+  const openedBefore = h.chat.opened;
+  const relisted = (await h.run(other.threadId)).tasks.at(-1) as Full;
+  t.check('the next message opens a new window, works in it, and leaves it open', [relisted.status, h.chat.opened - openedBefore, h.chat.windows.length, h.chat.noticeUp?.tone], ['done', 1, 1, 'done']);
+
+  // Closed with its X while a message is worked: that message is stopped, as the operator stopping it, and nothing more is sent.
+  await h.call<Sent>('POST', '/chat', { text: 'Write four.txt holding exactly four.', threadId: other.threadId });
+  const sentBefore = h.chat.sent.length;
+  h.chat.script((m) => {
+    m.world.closeByHand();
+    return reply.steps(write('four.txt', 'four'));
+  });
+  const cut = (await h.run(other.threadId)).tasks.at(-1) as Full;
+  t.check('closed while it works: the message ends stopped, said so, its steps not run, nothing more sent', [cut.status, cut.reason, file('four.txt'), h.chat.sent.length - sentBefore], ['aborted', 'the browser window was closed; nothing more was sent', null, 1]);
+  t.check('no window is left, and none was opened again for it', [h.chat.windows.length, h.chat.opened - openedBefore], [0, 1]);
+  const cutEvents = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${other.threadId}/events`).catch(() => [] as Array<{ type: string; message: string }>);
+  t.truthy('not said as an error', !cutEvents.some((e) => e.type === 'session-error' || e.type === 'task-error'), cutEvents.filter((e) => /error/.test(e.type)).map((e) => e.message));
+  await h.call<Sent>('POST', '/chat', { text: 'Write four.txt holding exactly four, again.', threadId: other.threadId });
+  h.chat.script(reply.steps(write('four.txt', 'four')), reply.done());
+  const again = (await h.run(other.threadId)).tasks.at(-1) as Full;
+  t.check('the message after it opens a window again and works', [again.status, file('four.txt'), h.chat.windows.length, h.chat.opened - openedBefore], ['done', 'four', 1, 2]);
+
   const threads = await h.call<Thread[]>('GET', '/chat/threads');
   t.check('the conversations, newest first', threads.map((x) => x.name), ['chat: A different question in a new conversation.', 'chat: Create hi.txt holding exactly the word hi.']);
   t.check('a message to a conversation that is not there is refused', (await h.raw('POST', '/chat', { text: 'hello', threadId: 'nope' })).status >= 400, true);
@@ -167,5 +216,238 @@ try {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
   await h?.stop();
+}
+
+console.log('\n--- the window the chat leaves open: Stop leaves it, anything else that needs the browser closes it first ---');
+h = null;
+try {
+  h = await startHarness();
+  const looked = 'Get-ChildItem -Name';
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Look at the files.', model: 'Think deeper' });
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  h.chat.script(async () => {
+    await gate;
+    return reply.steps(looked);
+  });
+  t.check('a message runs', (await h.call<{ started: boolean }>('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' })).started, true);
+  await waitFor('the message to reach the chat', async () => h!.chat.sent.some((m) => m.text.includes('Look at the files.')), 20_000);
+  t.check('Stop is pressed while it works', (await h.call<{ stopping: boolean }>('POST', `/sessions/${sent.threadId}/stop`)).stopping, true);
+  release();
+  await h.idle();
+  const stopped = (await h.session(sent.threadId)).tasks[0];
+  t.check('stopped, and the window is left open, saying it was stopped', [stopped?.status, h.chat.windows.length, h.chat.noticeUp?.tone, h.chat.noticeUp?.title], ['aborted', 1, 'stopped', 'The task was stopped']);
+  // Its photograph after it is not a commit: it was said as one, "committed … on undefined", for every message not done.
+  t.truthy('its reason claims no commit the chat never makes', !/committed/.test(stopped?.reason ?? ''), stopped?.reason);
+
+  // Reading the models needs the browser: the chat's window is closed first, then the models' own.
+  const [opened, closed] = [h.chat.opened, h.chat.closed];
+  await h.call('POST', '/models/refresh');
+  t.check('reading the models closes the window the chat left open, and its own after it', [h.chat.opened - opened, h.chat.closed - closed, h.chat.windows.length], [1, 2, 0]);
+
+  // A session's run that is not the chat's: the chat's window is closed before its own opens, and its own closed at its end.
+  await h.call<Sent>('POST', '/chat', { text: 'Look at the files again.', threadId: sent.threadId });
+  h.chat.script(reply.steps(looked), reply.done());
+  await h.run(sent.threadId);
+  t.check('the next message opens a window and leaves it open', h.chat.windows.length, 1);
+  const [plain] = await h.importPlan({
+    version: 1,
+    sessions: [{ name: 'plain-session', onFailure: 'stop', vcs: { enabled: false }, review: { enabled: false }, tasks: [{ title: 'look', prompt: 'List the files in the repository root.' }] }],
+  });
+  h.chat.script(reply.steps(looked), reply.done());
+  const [opened2, closed2] = [h.chat.opened, h.chat.closed];
+  const ran = await h.run(plain!.id);
+  t.check('a run that is not the chat\'s: the chat\'s window closed first, its own opened and closed at its end', [ran.tasks[0]?.status, h.chat.opened - opened2, h.chat.closed - closed2, h.chat.windows.length], ['done', 1, 2, 0]);
+  t.check('and it said nothing in a window of its own', h.chat.notices.length, 2);
+
+  await h.call<Sent>('POST', '/chat', { text: 'One more look.', threadId: sent.threadId });
+  h.chat.script(reply.steps(looked), reply.done());
+  await h.run(sent.threadId);
+  t.check('a window kept open again', h.chat.windows.length, 1);
+
+  // Closed with its X while the sign-in is looked at: in the window kept open, and in one being opened.
+  type Failure = { message: string; sessions: Array<{ id: string }> };
+  const failuresBefore = (await h.call<Failure[]>('GET', '/start/failures')).length;
+  await h.call<Sent>('POST', '/chat', { text: 'Look once more.', threadId: sent.threadId });
+  h.chat.closeOnSignIn = 1;
+  let thread = await h.run(sent.threadId);
+  t.check('closed while the kept window\'s sign-in is looked at: stopped, the message still queued, no window left', [thread.tasks.at(-1)?.status, h.chat.windows.length, h.chat.sent.some((m) => m.text.includes('Look once more.'))], ['queued', 0, false]);
+  h.chat.closeOnSignIn = 1;
+  const opened3 = h.chat.opened;
+  thread = await h.run(sent.threadId);
+  t.check('closed while a new window waits for the sign-in: stopped the same way, the window let go of', [thread.tasks.at(-1)?.status, h.chat.windows.length, h.chat.opened - opened3], ['queued', 0, 1]);
+  const stops = (await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${sent.threadId}/events`)).filter((e) => e.type === 'session-stopped' || e.type === 'session-error').slice(-2);
+  t.check('both said as stops, neither as an error', stops.map((e) => [e.type, e.message]), [
+    ['session-stopped', 'the browser window was closed before the first task was sent; the tasks stay queued'],
+    ['session-stopped', 'the browser window was closed before the first task was sent; the tasks stay queued'],
+  ]);
+  t.check('and neither recorded as a start that failed', (await h.call<Failure[]>('GET', '/start/failures')).length, failuresBefore);
+  h.chat.script(reply.steps(looked), reply.done());
+  thread = await h.run(sent.threadId);
+  t.check('started again, it opens a window and works', [thread.tasks.at(-1)?.status, h.chat.windows.length], ['done', 1]);
+  await h.stop();
+  t.check('closed with the program, so every window opened was closed', [h.chat.windows.length, h.chat.opened, h.chat.closed], [0, h.chat.opened, h.chat.opened]);
+  t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  t.check('every scripted reply was used', h.chat.pending, 0);
+  h = null;
+} catch (e) {
+  t.truthy('the window scenarios ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h?.stop();
+}
+
+console.log('\n--- Kerrigan, the editor saving a file, and plan mode in the chat (2026-10-20) ---');
+h = null;
+try {
+  h = await startHarness({ settings: { limits: { maxIterations: 33, maxRunMinutes: 44 }, execution: { mode: 'unattended', isolation: 'none-accepted' } } });
+  // Kerrigan: the persona, in the language asked for, with this machine's limits.
+  type Kerrigan = { lang: string; fileName: string; text: string };
+  const k = await h.call<Kerrigan>('GET', '/kerrigan?lang=en');
+  t.check('Kerrigan in English: her name, the file to save her as', [k.lang, k.fileName, k.text.split('\n')[0]], ['en', 'kerrigan-copilot-operator.en.md', '# Kerrigan — a helper for writing tasks for copilot-operator']);
+  t.truthy('with the limits Settings give', k.text.includes('at most 33 messages to Copilot and 44 minutes per task'), k.text.slice(0, 1500));
+  t.truthy('and the chat\'s screen, named as it is', k.text.includes('"New chat"') && k.text.includes('"Plan mode"') && k.text.includes('## The chat\'s screen'), '');
+  const kb = await h.call<Kerrigan>('GET', '/kerrigan?lang=bg');
+  t.check('in Bulgarian: in Bulgarian', [kb.lang, kb.fileName, kb.text.split('\n')[0]], ['bg', 'kerrigan-copilot-operator.bg.md', '# Кериган — помощник за писане на задания за copilot-operator']);
+  t.check('any other language: English', (await h.call<Kerrigan>('GET', '/kerrigan?lang=de')).lang, 'en');
+
+  // The editor saving a file of the open folder.
+  type Opened = { text: string | null; version?: string };
+  writeFileSync(join(h.repo, 'crlf.txt'), '\ufeffone\r\ntwo\r\n', 'utf8');
+  const opened = await h.call<Opened>('GET', '/workspace/file?path=crlf.txt');
+  t.check('read: the text without its mark, and a version', [opened.text, typeof opened.version === 'string' && opened.version.length > 8], ['one\r\ntwo\r\n', true]);
+  const saved = await h.call<{ version: string; size: number }>('PUT', '/workspace/file', { path: 'crlf.txt', text: 'one\ntwo\nthree\n', base: opened.version });
+  t.check('saved over the version it was opened at: the file keeps its CRLF and its byte-order mark', readFileSync(join(h.repo, 'crlf.txt'), 'utf8'), '\ufeffone\r\ntwo\r\nthree\r\n');
+  const stale = await h.raw('PUT', '/workspace/file', { path: 'crlf.txt', text: 'mine\n', base: opened.version });
+  t.check('saved over a version that is no longer on disk: refused with 409, nothing written', [stale.status, readFileSync(join(h.repo, 'crlf.txt'), 'utf8')], [409, '\ufeffone\r\ntwo\r\nthree\r\n']);
+  await h.call('PUT', '/workspace/file', { path: 'crlf.txt', text: 'mine\n' });
+  t.check('saved with no version: over whatever is there', readFileSync(join(h.repo, 'crlf.txt'), 'utf8'), '\ufeffmine\r\n');
+  t.truthy('and the version it answered with is the new one', saved.version !== opened.version, saved);
+  writeFileSync(join(h.repo, 'lf.txt'), 'a\nb\n', 'utf8');
+  await h.call('PUT', '/workspace/file', { path: 'lf.txt', text: 'a\r\nb\r\nc\r\n' });
+  t.check('an LF file stays LF, whatever the text sent', readFileSync(join(h.repo, 'lf.txt'), 'utf8'), 'a\nb\nc\n');
+  const outside = await h.raw('PUT', '/workspace/file', { path: '../outside.txt', text: 'x' });
+  const inGit = await h.raw('PUT', '/workspace/file', { path: '.git/config', text: 'x' });
+  const missing = await h.raw('PUT', '/workspace/file', { path: 'not-there.txt', text: 'x' });
+  writeFileSync(join(h.repo, 'bin.dat'), Buffer.from([1, 0, 2, 0]));
+  const binary = await h.raw('PUT', '/workspace/file', { path: 'bin.dat', text: 'x' });
+  t.check('refused: a path out of the folder, git\'s own folder, a file not there, a binary file', [outside.status, inGit.status, missing.status, binary.status], [400, 400, 400, 400]);
+  t.check('and nothing was made out of the folder', existsSync(join(h.repo, '..', 'outside.txt')), false);
+
+  // Plan mode, chosen for a new conversation: the plan asked of the operator though commands run without asking.
+  const repo = h.repo;
+  const file = (p: string): string | null => (existsSync(join(repo, p)) ? readFileSync(join(repo, p), 'utf8').trim() : null);
+  const planned = await h.call<Sent>('POST', '/chat', { text: 'Create plan.txt holding exactly plan.', model: 'Think deeper', planMode: true });
+  t.check('a conversation started in plan mode', (await h.call<ChatSession & { planMode?: string }>('GET', `/sessions/${planned.threadId}`)).planMode, 'approve');
+  h.chat.script(
+    reply.plan({ files: ['plan.txt'] }),
+    (m) => {
+      t.truthy('the approval reaches the chat', m.text.startsWith('The operator approved your plan.'), m.text.slice(0, 200));
+      return reply.steps(write('plan.txt', 'plan'));
+    },
+    reply.done(),
+  );
+  t.check('it starts without asking about commands', (await h.call<{ started: boolean }>('POST', `/sessions/${planned.threadId}/start`, { mode: 'unattended' })).started, true);
+  type PlanAsk = { id: string; plan?: { title: string } };
+  const ask = await waitFor('the plan to be asked about', async () => (await h!.call<PlanAsk[]>('GET', `/approvals?session=${planned.threadId}`)).find((a) => a.plan), 20_000);
+  t.check('the plan waits for the operator, though the commands run without asking', ask.plan?.title, 'Create plan.txt holding exactly plan.');
+  t.check('and nothing was changed yet', file('plan.txt'), null);
+  await h.call('POST', `/approvals/${ask.id}/plan`, { action: 'approve' });
+  await h.idle();
+  const after = (await h.call<ChatSession>('GET', `/sessions/${planned.threadId}`)).tasks[0] as Full & { plan?: { approved?: { by: string } } };
+  t.check('approved, the work is done, the plan on its record approved by the operator', [after.status, file('plan.txt'), after.plan?.approved?.by], ['done', 'plan', 'operator']);
+  t.check('a conversation without plan mode is off', (await h.call<ChatSession & { planMode?: string }>('GET', `/sessions/${(await h.call<Sent>('POST', '/chat', { text: 'Another.', model: 'Think deeper' })).threadId}`)).planMode, 'off');
+  t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+} catch (e) {
+  t.truthy('the Kerrigan, editor and plan-mode scenarios ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h?.stop();
+}
+
+/*
+ * "Pause" and "Continue" (operator, 2026-10-20): the work on a message holds at its next message to Copilot or its next
+ * command, and goes on when the operator continues; the time held does not count against maxRunMinutes; Stop while
+ * held sends nothing more and runs nothing more.
+ */
+console.log('\n--- Pause holds the work at its next message or command, Continue goes on, Stop while paused sends nothing ---');
+{
+  let hp: Harness | undefined;
+  const realNow = Date.now;
+  try {
+    // A limit of one minute, and a clock moved two minutes on while the task is held: only the pause took them.
+    hp = await startHarness({ settings: { limits: { maxRunMinutes: 1 } } });
+    const h = hp;
+    type Ev = { type: string; message: string };
+    type View = { paused?: boolean; running: boolean; tasks: Array<{ status: string; reason?: string }> };
+    const view = async (id: string): Promise<View> => await h.call<View>('GET', `/sessions/${id}`);
+    const exists = (p: string): boolean => existsSync(join(h.repo, p));
+    const quiet = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+    t.check('nothing running: there is nothing to pause', (await h.raw('POST', '/sessions/nothing-here/pause', {})).status, 400);
+
+    // Held before a message: paused while a command runs, the report of it waits.
+    const one = await h.call<Sent>('POST', '/chat', { text: 'Create slow.txt holding slow, slowly.', model: 'Think deeper' });
+    h.chat.script(reply.steps(`Start-Sleep -Seconds 2; ${write('slow.txt', 'slow')}`), reply.done());
+    await h.call('POST', `/sessions/${one.threadId}/start`, { mode: 'unattended' });
+    await waitFor('the command to be running', async () => (await h.call<Ev[]>('GET', `/sessions/${one.threadId}/events`)).some((e) => e.type === 'step-started'), 20_000);
+    t.check('"Pause" while a command runs', await h.call<{ paused: boolean }>('POST', `/sessions/${one.threadId}/pause`, {}), { paused: true });
+    t.check('the conversation says it is paused', (await view(one.threadId)).paused, true);
+    await waitFor('the command to end', async () => exists('slow.txt'), 20_000);
+    const sentBefore = h.chat.exchanged.length;
+    await quiet(1500);
+    t.check('the command running was let finish, and its report is not sent while paused', [exists('slow.txt'), h.chat.exchanged.length, h.chat.pending], [true, sentBefore, 1]);
+    t.check('the task is still the same task, running', (await view(one.threadId)).tasks[0]?.status, 'running');
+    Date.now = () => realNow() + 2 * 60_000;
+    t.check('"Continue"', await h.call<{ paused: boolean }>('POST', `/sessions/${one.threadId}/resume`, {}), { paused: false });
+    await h.idle();
+    const done = await view(one.threadId);
+    t.check('it went on, and two minutes paused did not use up its one-minute limit', [done.tasks[0]?.status, done.paused, h.chat.pending], ['done', false, 0]);
+    const said = (await h.call<Ev[]>('GET', `/sessions/${one.threadId}/events`)).map((e) => e.type);
+    t.truthy('paused and continued are on its record', ['pause-asked', 'task-paused', 'resume-asked', 'task-resumed'].every((x) => said.includes(x)), said);
+    Date.now = realNow;
+
+    // Held before a command, then stopped: the command is not run and nothing more is sent.
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const two = await h.call<Sent>('POST', '/chat', { text: 'Create held.txt holding held.', model: 'Think deeper' });
+    h.chat.script(async () => {
+      await answered;
+      return reply.steps(write('held.txt', 'held'));
+    });
+    await h.call('POST', `/sessions/${two.threadId}/start`, { mode: 'unattended' });
+    await waitFor('Copilot to be answering', async () => h.chat.pending === 0, 20_000);
+    await h.call('POST', `/sessions/${two.threadId}/pause`, {});
+    answer();
+    await waitFor('the reply to be held before its command', async () => (await h.call<Ev[]>('GET', `/sessions/${two.threadId}/events`)).some((e) => e.type === 'task-paused'), 20_000);
+    await quiet(1000);
+    t.check('the reply came while paused: its command is not run', exists('held.txt'), false);
+    const sentHeld = h.chat.exchanged.length;
+    await h.call('POST', `/sessions/${two.threadId}/stop`, {});
+    await h.idle();
+    const stopped = await view(two.threadId);
+    t.check('Stop while paused: the task stopped, its command never ran, nothing more was sent', [stopped.tasks[0]?.status, exists('held.txt'), h.chat.exchanged.length], ['aborted', false, sentHeld]);
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('the Pause scenarios ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    Date.now = realNow;
+    await hp?.stop();
+  }
+}
+
+console.log('\n--- what the card in the window says, for each way the work on a message ends ---');
+{
+  const keepBg = 'Прозорецът остава отворен за следващото ви съобщение. Можете да го затворите по всяко време.';
+  const blocked = chatNotice('bg', [{ title: 'Промени README', status: 'blocked', summary: 'Файлът README.md го няма.', reason: 'blocked by the chat' }]);
+  t.check('blocked: unfinished, with what Copilot said', [blocked.tone, blocked.title, blocked.subject, blocked.lines], ['failed', 'Заданието приключи незавършено', '„Промени README“', ['Copilot не успя да го завърши: Файлът README.md го няма.', keepBg]]);
+  const limit = chatNotice('en', [{ title: 'Big job', status: 'limit-reached', reason: 'maxIterations (12) reached' }]);
+  t.check('at a limit: unfinished, with the limit', [limit.tone, limit.title, limit.lines[0]], ['failed', 'The task ended unfinished', 'It stopped at a limit from the settings: maxIterations (12) reached']);
+  const failed = chatNotice('en', [{ title: 'x', status: 'failed', reason: `a command died: ${'very long '.repeat(40)}` }]);
+  t.truthy('failed: the reason, cut to a line', failed.lines[0]!.startsWith('It ended with an error: a command died: very long') && failed.lines[0]!.length <= 260 && failed.lines[0]!.endsWith('…'), failed.lines[0]);
+  const notStarted = chatNotice('bg', [{ title: 'x', status: 'queued' }], 'The sign-in was not completed within 900 s.');
+  t.check('nothing began: could not start, and why', [notStarted.tone, notStarted.title, notStarted.lines[0]], ['failed', 'Заданието не можа да започне', 'Нищо не беше изпратено: The sign-in was not completed within 900 s.']);
+  const stoppedFirst = chatNotice('en', [{ title: 'x', status: 'queued' }]);
+  t.check('stopped before it was sent: stopped', [stoppedFirst.tone, stoppedFirst.title], ['stopped', 'The task was stopped']);
+  const two = chatNotice('en', [{ title: 'one', status: 'done' }, { title: 'two', status: 'aborted' }]);
+  t.check('two messages: each with how it ended, no single subject', [two.tone, two.title, two.subject, two.lines], ['stopped', 'The task was stopped', undefined, ['“one” — done', '“two” — stopped', 'This window stays open for your next message. You can close it at any time.']]);
 }
 t.finish();

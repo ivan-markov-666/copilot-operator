@@ -11,7 +11,7 @@
  *   - `rerunTask` against `TASK_FIELD_ON_RERUN`, field by field: archived fields move onto the
  *     attempt's record and leave the task, cleared ones leave it, kept ones stay. The table is a
  *     record over every key of `Task`, so a new field without a decision does not compile.
- *   - the register's fresh-chat count end to end, with the real runner and the scripted chat: 2 after
+ *   - the fresh-chat count end to end, with the real runner and the scripted chat: 2 after
  *     every run that retried twice, through Run again and Continue, and nothing after a run that did
  *     not retry.
  *
@@ -102,8 +102,13 @@ console.log('\n--- the fresh-chat count, from the marks ---');
 
 type Reg = { taskId: string; status: string; autoRetries?: number };
 
+/** The task as the register counted it (the register went on 2026-10-20; the count is `freshRetriesOfLatestRun`). */
 async function register(h: Harness, taskId: string): Promise<Reg | undefined> {
-  return (await h.call<Reg[]>('GET', '/tasks')).find((r) => r.taskId === taskId);
+  for (const s of await h.call<Array<{ tasks: Task[] }>>('GET', '/sessions')) {
+    const task = s.tasks.find((x) => x.id === taskId);
+    if (task) return { taskId, status: task.status, autoRetries: freshRetriesOfLatestRun(task) || undefined };
+  }
+  return undefined;
 }
 
 console.log('\n--- the register, run after run ---');

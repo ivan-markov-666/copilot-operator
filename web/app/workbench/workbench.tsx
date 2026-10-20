@@ -2,15 +2,13 @@
 
 /**
  * The workbench: the home screen, laid out as an IDE with a chat beside it (operator's request, 2026-10-14: "make it
- * look like VS Code with a chat bot at the side, like Windsurf — our own design, their way of showing what there
- * is"). Explorer of sessions and tasks (or the repository's files, or its commits) on the left; the open tabs in
- * the middle, with the terminal, the problems and the session's output below them; the chat of the task chosen on
- * the right, where the operator writes to it — a note while it works, a new prompt once it ended; a status bar at
- * the bottom; and a command palette on Ctrl+K. Every page there was before is one click away, and nothing here
- * replaces it: a task's every detail and setting is still on its session's page.
+ * look like VS Code with a chat bot at the side, like Windsurf"). The open project folder's files, or its git, on the
+ * left; the open files and diffs in the middle, with the terminal, the problems and the output of the chat's
+ * conversation below them; the chat on the right; a status bar at the bottom; and a command palette on Ctrl+K.
  *
- * What is chosen is kept in the address (`?s=&t=`), so a link or a reload opens the same task; the panels' sizes
- * and which are open are kept in this browser.
+ * Only the chat and Kerrigan are left (2026-10-20: "remove Sessions, the task register and the plan from JSON — not
+ * only from the UI, we do not need them; we keep the chat, and Kerrigan, who helps with using it"). The panels'
+ * sizes and which are open are kept in this browser.
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -18,8 +16,6 @@ import { api, type GitArea, type Session, type Task, type Workspace } from '../.
 import { usePoll } from '../../lib/usePoll';
 import { LanguageSwitcher, useT } from '../../lib/i18n';
 import { Explorer } from './explorer';
-import { TaskView } from './taskView';
-import { SessionView } from './sessionView';
 import { FileView } from './fileView';
 import { GitDiff } from './gitDiff';
 import { ChatPanel } from './chatPanel';
@@ -27,19 +23,19 @@ import type { ChatTurn } from './cascade';
 import { BottomPanel } from './bottomPanel';
 import { StatusBar } from './statusBar';
 import { Palette, type PaletteCommand } from './palette';
+import { AppearanceMenu } from './appearanceMenu';
+import { KerriganButton } from './kerriganButton';
+import { FileIcon } from './fileIcon';
+import { confirmDialog } from '../dialog';
 
 export type Tab =
-  | { kind: 'task'; sessionId: string; taskId: string }
-  | { kind: 'session'; sessionId: string }
-  | { kind: 'file'; sessionId: string; path: string; taskId?: string }
+  | { kind: 'file'; path: string }
   /** A file of the open folder's git, its two versions side by side (see gitDiff.tsx). */
-  | { kind: 'diff'; sessionId: ''; area: GitArea; path: string; commit?: string };
-export type SideView = 'tasks' | 'files' | 'commits';
+  | { kind: 'diff'; area: GitArea; path: string; commit?: string };
+export type SideView = 'files' | 'commits';
 export type BottomTab = 'terminal' | 'problems' | 'output';
-export type ChatTab = 'chat' | 'kerrigan';
 
-const tabKey = (t: Tab): string =>
-  t.kind === 'task' ? `t:${t.taskId}` : t.kind === 'session' ? `s:${t.sessionId}` : t.kind === 'diff' ? `d:${t.area}:${t.commit ?? ''}:${t.path}` : `f:${t.sessionId}:${t.path}`;
+const tabKey = (t: Tab): string => (t.kind === 'diff' ? `d:${t.area}:${t.commit ?? ''}:${t.path}` : `f:${t.path}`);
 
 /** Kept in this browser: which panels are open and how big they are. Read with care: storage may be refused. */
 type Layout = { side: number; chat: number; bottom: number; sideOpen: boolean; chatOpen: boolean; bottomOpen: boolean };
@@ -65,46 +61,40 @@ export function Workbench() {
 function WorkbenchInner() {
   const { t } = useT();
   const [sessions, setSessions] = useState<Array<Session & { running?: boolean }> | null>(null);
-  const [loadErr, setLoadErr] = useState('');
-  const [sel, setSel] = useState<{ sessionId?: string; taskId?: string }>({});
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string>('');
   const [side, setSide] = useState<SideView>('files');
+  const [problem, setProblem] = useState('');
   /** The open project folder: what the chat works on and the Files view shows. */
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  /** The chat's latest message, shown in the terminal when no task tab is in front; 'new' on a new chat. */
+  /** The chat's latest message, which the panel under the editor follows; 'new' on a new chat. */
   const [chatTurn, setChatTurn] = useState<ChatTurn>(null);
-  /*
-   * After "New chat" the panel under the editor follows the chat — empty until the new one runs — whatever tab is in
-   * front, until a task is opened in the editor (2026-10-19: "when I start a new chat, the Terminal and Problems should
-   * be cleared of the old records of the other chats"). They used to fall back on the session last chosen, which was
-   * often a chat from before.
-   */
-  const [panelFollowsChat, setPanelFollowsChat] = useState(false);
-  const lastTurn = useRef<ChatTurn>(null);
-  const onTurn = useCallback((turn: ChatTurn) => {
-    setChatTurn(turn);
-    // From a conversation to a new chat, which is "New chat" pressed: not the moment the chat opens on none.
-    if (turn === 'new' && lastTurn.current !== null && lastTurn.current !== 'new') setPanelFollowsChat(true);
-    lastTurn.current = turn;
-  }, []);
   const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
-  const [chatTab, setChatTab] = useState<ChatTab>('chat');
   const [layout, setLayout] = useState<Layout>(DEFAULT_LAYOUT);
   const [palette, setPalette] = useState(false);
-  /** Asks the chat composer for the keyboard, with what its button will do. */
+  /** Asks the chat composer for the keyboard. */
   const [composeAsk, setComposeAsk] = useState(0);
-  const restored = useRef(false);
+  /** Asks the chat to show a conversation: the one running, from the status bar. */
+  const [showThread, setShowThread] = useState<{ id: string; n: number } | null>(null);
+  /** The files open in the editor with edits not saved yet: marked on their tab, and asked about on closing. */
+  const [unsaved, setUnsaved] = useState<Set<string>>(new Set());
+  const onDirty = useCallback((path: string, dirty: boolean) => {
+    setUnsaved((u) => {
+      if (u.has(path) === dirty) return u;
+      const n = new Set(u);
+      if (dirty) n.add(path);
+      else n.delete(path);
+      return n;
+    });
+  }, []);
 
+  // Only the chat's conversations: sessions of any other kind, made before 2026-10-20, are not shown anywhere.
   const load = useCallback(
     () =>
       api
         .sessions()
-        .then((s) => {
-          setSessions(s);
-          setLoadErr('');
-        })
-        .catch((e: unknown) => setLoadErr((e as Error).message)),
+        .then((s) => setSessions(s.filter((x) => x.kind === 'chat')))
+        .catch(() => undefined),
     [],
   );
   usePoll(load, 3000);
@@ -119,19 +109,11 @@ function WorkbenchInner() {
       await api.saveSettings({ ...st.raw, project: { ...((st.raw.project as Record<string, unknown> | undefined) ?? {}), rootDir: pick.path } });
       await readWorkspace();
     } catch (e) {
-      setLoadErr((e as Error).message);
+      setProblem((e as Error).message);
     }
   }, [workspace?.dir, readWorkspace]);
 
-  // Layout and selection, read once in the browser.
-  useEffect(() => {
-    setLayout(readLayout());
-    const q = new URLSearchParams(window.location.search);
-    const s = q.get('s') ?? undefined;
-    const tk = q.get('t') ?? undefined;
-    if (s) setSel({ sessionId: s, taskId: tk });
-    restored.current = true;
-  }, []);
+  useEffect(() => setLayout(readLayout()), []);
   useEffect(() => {
     try {
       window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
@@ -139,25 +121,17 @@ function WorkbenchInner() {
       /* a browser that keeps nothing still works, at the default sizes */
     }
   }, [layout]);
-  // The chosen task in the address, so a reload or a link opens it.
-  useEffect(() => {
-    if (!restored.current) return;
-    const q = new URLSearchParams();
-    if (sel.sessionId) q.set('s', sel.sessionId);
-    if (sel.taskId) q.set('t', sel.taskId);
-    const next = q.toString() ? `/?${q.toString()}` : '/';
-    if (`${window.location.pathname}${window.location.search}` !== next) window.history.replaceState(null, '', next);
-  }, [sel]);
 
   const open = useCallback((tab: Tab) => {
     setTabs((all) => (all.some((x) => tabKey(x) === tabKey(tab)) ? all : [...all, tab]));
     setActive(tabKey(tab));
-    if (tab.kind === 'task') {
-      setSel({ sessionId: tab.sessionId, taskId: tab.taskId });
-      setPanelFollowsChat(false);
-    } else setSel((s) => ({ sessionId: tab.sessionId, taskId: s.sessionId === tab.sessionId ? s.taskId : undefined }));
   }, []);
-  const close = (key: string) => {
+  const close = async (key: string) => {
+    const tab = tabs.find((x) => tabKey(x) === key);
+    if (tab?.kind === 'file' && unsaved.has(tab.path)) {
+      if (!(await confirmDialog(t('ed.closeUnsaved', { name: tab.path.split('/').pop() ?? tab.path })))) return;
+      onDirty(tab.path, false);
+    }
     setTabs((all) => {
       const i = all.findIndex((x) => tabKey(x) === key);
       const rest = all.filter((x) => tabKey(x) !== key);
@@ -166,29 +140,21 @@ function WorkbenchInner() {
     });
   };
 
-  // The task chosen in the address opens its tab once the sessions are read.
-  const opened = useRef(false);
-  useEffect(() => {
-    if (opened.current || !sessions || !sel.sessionId) return;
-    const s = sessions.find((x) => x.id === sel.sessionId);
-    if (!s) return;
-    opened.current = true;
-    if (sel.taskId && s.tasks.some((x) => x.id === sel.taskId)) open({ kind: 'task', sessionId: s.id, taskId: sel.taskId });
-    else open({ kind: 'session', sessionId: s.id });
-  }, [sessions, sel, open]);
-
-  const session = sessions?.find((s) => s.id === sel.sessionId);
-  const task: Task | undefined = session?.tasks.find((x) => x.id === sel.taskId);
   const activeTab = tabs.find((x) => tabKey(x) === active);
-  // The terminal follows the task in front; with none, the chat's latest message; on a new chat, nothing yet.
+  // The panel follows the chat: its conversation's latest message; on a new chat, nothing yet (2026-10-19).
   const chatSession = chatTurn && chatTurn !== 'new' ? sessions?.find((x) => x.id === chatTurn.sessionId) : undefined;
   const chatTask = chatTurn && chatTurn !== 'new' ? chatSession?.tasks.find((x) => x.id === chatTurn.taskId) : undefined;
-  const editorFirst = activeTab?.kind === 'task' && !panelFollowsChat;
-  const chatIsNew = chatTurn === 'new' && !editorFirst;
-  const termSession = editorFirst ? session : chatIsNew ? undefined : (chatSession ?? (panelFollowsChat ? undefined : session));
-  const termTask = editorFirst ? task : chatIsNew ? undefined : chatSession ? chatTask : panelFollowsChat ? undefined : task;
 
   const setL = (patch: Partial<Layout>) => setLayout((l) => ({ ...l, ...patch }));
+  const toChat = () => {
+    setL({ chatOpen: true });
+    setComposeAsk((n) => n + 1);
+  };
+  /** A message of the conversation open in the chat, brought into view: from the problems. */
+  const showMessage = (taskId: string) => {
+    setL({ chatOpen: true });
+    window.setTimeout(() => document.getElementById(`cs-turn-${taskId}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50);
+  };
 
   // Keys an IDE has: the palette, the side bar, the panel, the chat.
   useEffect(() => {
@@ -207,41 +173,35 @@ function WorkbenchInner() {
         setL({ bottomOpen: !layout.bottomOpen });
       } else if (k === 'l') {
         e.preventDefault();
-        setL({ chatOpen: true });
-        setChatTab('chat');
-        setComposeAsk((n) => n + 1);
+        toChat();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [layout]);
 
-  const commands = useMemo<PaletteCommand[]>(() => {
-    const list: PaletteCommand[] = [
-      { id: 'kerrigan', label: t('wb.cmdKerrigan'), run: () => { setL({ chatOpen: true }); setChatTab('kerrigan'); } },
-      { id: 'chat', label: t('wb.cmdChat'), hint: 'Ctrl+L', run: () => { setL({ chatOpen: true }); setChatTab('chat'); setComposeAsk((n) => n + 1); } },
+  const commands = useMemo<PaletteCommand[]>(
+    () => [
+      { id: 'chat', label: t('wb.cmdChat'), hint: 'Ctrl+L', run: toChat },
       { id: 'side', label: t('wb.cmdSide'), hint: 'Ctrl+B', run: () => setL({ sideOpen: !layout.sideOpen }) },
       { id: 'panel', label: t('wb.cmdPanel'), hint: 'Ctrl+J', run: () => setL({ bottomOpen: !layout.bottomOpen }) },
       { id: 'files', label: t('wb.cmdFiles'), run: () => { setL({ sideOpen: true }); setSide('files'); } },
       { id: 'commits', label: t('wb.cmdCommits'), run: () => { setL({ sideOpen: true }); setSide('commits'); } },
       { id: 'problems', label: t('wb.cmdProblems'), run: () => { setL({ bottomOpen: true }); setBottomTab('problems'); } },
-      ...[
-        ['/sessions', 'nav.sessions'],
-        ['/history', 'nav.history'],
-        ['/import', 'nav.import'],
-        ['/defaults', 'nav.defaults'],
-        ['/level1', 'nav.level1'],
-        ['/presets', 'nav.presets'],
-        ['/appearance', 'nav.appearance'],
-        ['/system', 'nav.system'],
-      ].map(([href, key]) => ({ id: `go:${href}`, label: t('wb.cmdGo', { page: t(key as 'nav.sessions') }), href })),
-    ];
-    for (const s of sessions ?? []) {
-      list.push({ id: `s:${s.id}`, label: t('wb.cmdSession', { name: s.name }), run: () => open({ kind: 'session', sessionId: s.id }) });
-      s.tasks.forEach((x, i) => list.push({ id: `t:${x.id}`, label: `${s.name} › ${i + 1}. ${x.title}`, hint: t(`status.${x.status}` as 'status.done'), run: () => open({ kind: 'task', sessionId: s.id, taskId: x.id }) }));
-    }
-    return list;
-  }, [sessions, t, layout, open]);
+      ...(
+        [
+          ['/defaults', 'nav.defaults'],
+          ['/level1', 'nav.level1'],
+          ['/presets', 'nav.presets'],
+          ['/appearance', 'nav.appearance'],
+          ['/system', 'nav.system'],
+        ] as const
+      ).map(([href, key]) => ({ id: `go:${href}`, label: t('wb.cmdGo', { page: t(key) }), href })),
+      ...(sessions ?? []).map((s) => ({ id: `c:${s.id}`, label: t('wb.cmdThread', { name: s.name.replace(/^chat: /, '') }), run: () => { setL({ chatOpen: true }); setShowThread((v) => ({ id: s.id, n: (v?.n ?? 0) + 1 })); } })),
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, t, layout],
+  );
 
   const style = {
     '--wb-side': layout.sideOpen ? `${layout.side}px` : '0px',
@@ -258,9 +218,6 @@ function WorkbenchInner() {
           <kbd>Ctrl+K</kbd>
         </button>
         <nav className="wb-menu" aria-label={t('nav.label')}>
-          <Link href="/sessions">{t('nav.sessions')}</Link>
-          <Link href="/history">{t('nav.history')}</Link>
-          <Link href="/import">{t('nav.import')}</Link>
           <Link href="/defaults">{t('nav.defaults')}</Link>
           <LanguageSwitcher />
         </nav>
@@ -270,8 +227,7 @@ function WorkbenchInner() {
         <ActivityBar side={side} sideOpen={layout.sideOpen} onSide={(v) => { if (v === side && layout.sideOpen) setL({ sideOpen: false }); else { setSide(v); setL({ sideOpen: true }); } }} chatOpen={layout.chatOpen} onChat={() => setL({ chatOpen: !layout.chatOpen })} />
 
         <aside className="wb-side" aria-label={t('wb.explorer')} hidden={!layout.sideOpen}>
-          {loadErr && !sessions ? <p className="err small" style={{ padding: 10 }}>{loadErr}</p> : null}
-          <Explorer view={side} sessions={sessions} selected={sel} onOpen={open} onChange={() => void load()} workspace={workspace} onOpenFolder={() => void openFolder()} />
+          <Explorer view={side} onOpen={open} workspace={workspace} onOpenFolder={() => void openFolder()} />
         </aside>
         {layout.sideOpen && <Splitter axis="x" label={t('wb.resize')} onDrag={(d) => setL({ side: clamp(layout.side + d, 180, 560) })} />}
 
@@ -280,32 +236,20 @@ function WorkbenchInner() {
             {tabs.length === 0 && <span className="muted small wb-tabs-empty">{t('wb.noTabs')}</span>}
             {tabs.map((tab) => {
               const key = tabKey(tab);
-              const s = sessions?.find((x) => x.id === tab.sessionId);
-              const tk = tab.kind === 'task' ? s?.tasks.find((x) => x.id === tab.taskId) : undefined;
               const label =
-                tab.kind === 'task'
-                  ? (tk?.title ?? t('wb.goneTask'))
-                  : tab.kind === 'session'
-                    ? (s?.name ?? t('wb.goneSession'))
-                    : tab.kind === 'diff'
-                      ? `${tab.path.split('/').pop()} (${tab.area === 'commit' ? (tab.commit ?? '').slice(0, 7) : t(tab.area === 'staged' ? 'git.index' : 'git.workingTree')})`
-                      : tab.path.split('/').pop();
+                tab.kind === 'diff'
+                  ? `${tab.path.split('/').pop()} (${tab.area === 'commit' ? (tab.commit ?? '').slice(0, 7) : t(tab.area === 'staged' ? 'git.index' : 'git.workingTree')})`
+                  : (tab.path.split('/').pop() ?? tab.path);
               return (
                 <div key={key} className={`wb-tab${key === active ? ' active' : ''}`}>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={key === active}
-                    onClick={() => (tab.kind === 'task' ? open(tab) : (setActive(key), setSel({ sessionId: tab.sessionId, taskId: tab.kind === 'file' ? tab.taskId : undefined })))}
-                    title={tab.kind === 'file' || tab.kind === 'diff' ? tab.path : undefined}
-                  >
-                    {tk && <StatusMark status={tk.status} />}
-                    {tab.kind === 'file' && <span className="wb-ico" aria-hidden="true">≡</span>}
-                    {tab.kind === 'diff' && <span className="wb-ico" aria-hidden="true">±</span>}
-                    {tab.kind === 'session' && <span className="wb-ico" aria-hidden="true">▤</span>}
+                  <button type="button" role="tab" aria-selected={key === active} onClick={() => setActive(key)} title={tab.path}>
+                    {tab.kind === 'diff' ? <span className="wb-ico" aria-hidden="true">±</span> : <FileIcon path={tab.path} />}
                     <span className="wb-tab-label">{label}</span>
+                    {tab.kind === 'file' && unsaved.has(tab.path) && (
+                      <span className="wb-unsaved" title={t('ed.unsaved')} aria-label={t('ed.unsaved')}>●</span>
+                    )}
                   </button>
-                  <button type="button" className="wb-tab-close" aria-label={t('wb.closeTab', { name: label ?? '' })} onClick={() => close(key)}>
+                  <button type="button" className="wb-tab-close" aria-label={t('wb.closeTab', { name: label })} onClick={() => void close(key)}>
                     ×
                   </button>
                 </div>
@@ -314,28 +258,17 @@ function WorkbenchInner() {
           </div>
           <div className="wb-editor" role="tabpanel">
             {!activeTab ? (
-              <Welcome sessions={sessions} workspace={workspace} onOpen={open} onChat={() => { setL({ chatOpen: true }); setChatTab('chat'); setComposeAsk((n) => n + 1); }} onKerrigan={() => { setL({ chatOpen: true }); setChatTab('kerrigan'); }} />
-            ) : activeTab.kind === 'task' ? (
-              session && task ? (
-                <TaskView
-                  session={session}
-                  task={task}
-                  onChange={() => void load()}
-                  onKerrigan={() => { setL({ chatOpen: true }); setChatTab('kerrigan'); }}
-                  onOpenFile={(path) => open({ kind: 'file', sessionId: session.id, path, taskId: task.id })}
-                />
-              ) : (
-                <p className="muted">{t('wb.goneTask')}</p>
-              )
-            ) : activeTab.kind === 'session' ? (
-              (() => {
-                const s = sessions?.find((x) => x.id === activeTab.sessionId);
-                return s ? <SessionView session={s} onOpen={open} onChange={() => void load()} /> : <p className="muted">{t('wb.goneSession')}</p>;
-              })()
+              <Welcome workspace={workspace} problem={problem} />
             ) : activeTab.kind === 'diff' ? (
               <GitDiff key={tabKey(activeTab)} area={activeTab.area} path={activeTab.path} commit={activeTab.commit} />
-            ) : (
-              <FileView sessionId={activeTab.sessionId} path={activeTab.path} taskId={activeTab.taskId} />
+            ) : null}
+            {/* Every open file stays loaded, hidden when its tab is not in front: an edit not saved yet survives a change of tab. */}
+            {tabs.map((tab) =>
+              tab.kind === 'file' ? (
+                <div key={tabKey(tab)} className="wb-file-pane" hidden={tabKey(tab) !== active}>
+                  <FileView path={tab.path} onDirty={onDirty} />
+                </div>
+              ) : null,
             )}
           </div>
           {layout.bottomOpen && <Splitter axis="y" label={t('wb.resize')} onDrag={(d) => setL({ bottom: clamp(layout.bottom - d, 90, 700) })} />}
@@ -344,33 +277,29 @@ function WorkbenchInner() {
             onToggle={() => setL({ bottomOpen: !layout.bottomOpen })}
             tab={bottomTab}
             onTab={(b) => { setBottomTab(b); setL({ bottomOpen: true }); }}
-            session={termSession}
-            task={termTask}
-            newChat={chatIsNew}
-            onOpenTask={(sessionId, taskId) => open({ kind: 'task', sessionId, taskId })}
+            session={chatSession}
+            task={chatTask}
+            newChat={chatTurn === 'new'}
+            onShowMessage={showMessage}
           />
         </section>
 
         {layout.chatOpen && <Splitter axis="x" label={t('wb.resize')} onDrag={(d) => setL({ chat: clamp(layout.chat - d, 300, 820) })} />}
         <aside className="wb-chat" aria-label={t('wb.chatPanel')} hidden={!layout.chatOpen}>
           <ChatPanel
-            tab={chatTab}
-            onTab={setChatTab}
-            session={session}
-            task={task}
-            sessions={(sessions ?? []).filter((x) => x.kind !== 'chat')}
             workspace={workspace}
             composeAsk={composeAsk}
-            onOpenFile={(path) => open({ kind: 'file', sessionId: '', path })}
+            showThread={showThread}
+            onOpenFile={(path) => open({ kind: 'file', path })}
             onOpenFolder={() => void openFolder()}
-            onTurn={onTurn}
+            onTurn={setChatTurn}
             onChange={() => void load()}
             onClose={() => setL({ chatOpen: false })}
           />
         </aside>
       </div>
 
-      <StatusBar sessions={sessions ?? []} session={session} task={task} workspace={workspace} onOpenTask={(sessionId, taskId) => open({ kind: 'task', sessionId, taskId })} />
+      <StatusBar sessions={sessions ?? []} session={chatSession} workspace={workspace} onShowThread={(id) => { setL({ chatOpen: true }); setShowThread((v) => ({ id, n: (v?.n ?? 0) + 1 })); }} />
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
     </div>
   );
@@ -378,7 +307,7 @@ function WorkbenchInner() {
 
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
-/** The column of icons on the far left: the explorer's three views, and the chat beside the work. */
+/** The column of icons on the far left: the explorer's two views, the chat beside the work, and how the page looks. */
 function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat }: { side: SideView; sideOpen: boolean; onSide: (v: SideView) => void; chatOpen: boolean; onChat: () => void }) {
   const { t } = useT();
   const item = (v: SideView, label: string, icon: ReactNode) => (
@@ -390,7 +319,6 @@ function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat }: { side: SideV
   );
   return (
     <nav className="wb-activity" aria-label={t('wb.views')}>
-      {item('tasks', t('wb.viewTasks'), <path d="M4 6h16M4 12h16M4 18h10" />)}
       {item('files', t('wb.viewFiles'), <path d="M4 4h6l2 2h8v14H4z" />)}
       {item('commits', t('wb.viewCommits'), <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6" /></>)}
       <span className="grow" />
@@ -399,12 +327,8 @@ function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat }: { side: SideV
           <path d="M4 5h16v11H9l-5 4z" />
         </svg>
       </button>
-      <Link className="wb-act" href="/defaults" aria-label={t('nav.defaults')} title={t('nav.defaults')}>
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" />
-        </svg>
-      </Link>
+      {/* Light, dark or the machine's, the text size and the reading aids, here: it no longer leads to Settings. */}
+      <AppearanceMenu />
     </nav>
   );
 }
@@ -450,36 +374,15 @@ export function StatusMark({ status }: { status: Task['status'] }) {
   );
 }
 
-/** What the editor shows with nothing open: where to begin. */
-function Welcome({ sessions, workspace, onOpen, onChat, onKerrigan }: { sessions: Session[] | null; workspace: Workspace | null; onOpen: (t: Tab) => void; onChat: () => void; onKerrigan: () => void }) {
+/** What the editor shows with nothing open: the folder the chat works on, and Kerrigan to take away. */
+function Welcome({ workspace, problem }: { workspace: Workspace | null; problem: string }) {
   const { t } = useT();
-  const bot = (sessions ?? []).filter((s) => s.kind !== 'chat');
-  const needing = bot.flatMap((s) => s.tasks.filter((x) => ['failed', 'blocked', 'limit-reached', 'aborted', 'waiting-approval'].includes(x.status)).map((x) => ({ s, x })));
-  const queued = bot.reduce((n, s) => n + s.tasks.filter((x) => x.status === 'queued').length, 0);
   return (
     <div className="wb-welcome">
       <h2>{workspace?.ok ? workspace.name : t('wb.welcome')}</h2>
       <p className="muted">{workspace?.ok ? t('wb.welcomeChat', { dir: workspace.dir }) : t('wb.welcomeWhy')}</p>
-      <div className="row">
-        <button type="button" className="primary" onClick={onChat}>{t('wb.startChat')}</button>
-        <Link className="button-link" href="/import">{t('wb.startPlan')}</Link>
-        <button type="button" onClick={onKerrigan}>{t('wb.askKerrigan')}</button>
-      </div>
-      {needing.length > 0 && (
-        <>
-          <h3>{t('wb.needsYou', { n: needing.length })}</h3>
-          <ul className="wb-list">
-            {needing.slice(0, 12).map(({ s, x }) => (
-              <li key={x.id}>
-                <button type="button" className="linkish" onClick={() => onOpen({ kind: 'task', sessionId: s.id, taskId: x.id })}>
-                  <StatusMark status={x.status} /> {s.name} › {x.title}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {queued > 0 && <p className="small">{t('wb.queuedCount', { n: queued })}</p>}
+      {problem && <p className="err small">{problem}</p>}
+      <KerriganButton />
       <p className="muted small">{t('wb.keys')}</p>
     </div>
   );

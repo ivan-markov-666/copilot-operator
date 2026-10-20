@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { applyTaskPatch } from '../src/session/store.js';
 import { contractConflicts, contractConflictsWithFixes, contractFixPatch, describeContractChange } from '../src/orchestrator/contract.js';
 import { nextAttemptBranch } from '../src/vcs/taskVcs.js';
-import { runQueuedSelection } from '../web/lib/runSelection.js';
 import { checkPlan } from '../src/plan/schema.js';
 import type { Session, Task, TaskReviewCheck } from '../src/session/model.js';
 import { Tally } from './support/harness.js';
@@ -151,31 +150,6 @@ console.log('\n--- the branch the next attempt goes on ---');
   t.check('failed after committing: a new "-a2" branch', nextAttemptBranch(session, { ...base, status: 'failed', vcs: { branch: 'cop/web-login-form', baseCommit: 'abc', commit: 'def' } } as Task), 'cop/web-login-form-a2');
   t.check('queued to continue: the previous attempt\'s branch', nextAttemptBranch(session, { ...base, status: 'queued', attempt: 2, continuing: { fromAttempt: 1 }, attempts: [{ status: 'limit-reached', iterations: 3, title: 't', prompt: 'p', level2: '', vcs: { branch: 'cop/web-login-form', baseCommit: 'abc', commit: 'def' } }] } as unknown as Task), 'cop/web-login-form');
   t.check('a planned name keeps its "-aN" rule', nextAttemptBranch(session, { ...base, status: 'failed', vcsPlan: { branch: 'feature/login' }, vcs: { branch: 'feature/login', baseCommit: 'abc', commit: 'def' } } as Task), 'feature/login-a2');
-}
-
-/*
- * "Run this task" (web/app/runQueued.tsx): what "this one and the ones after it" takes, and what the
- * panel says about the rest. Never a task that has already run; a chain's task that did not succeed is
- * named, before the one started and between it and the last queued one after it.
- */
-console.log('\n--- what "Run this task" takes ---');
-{
-  const task = (id: string, status: string) => ({ id, title: id, status });
-  const chain = { onFailure: 'stop' as const, tasks: [task('t1', 'done'), task('t2', 'queued'), task('t3', 'failed'), task('t4', 'queued'), task('t5', 'done')] };
-  const s2 = runQueuedSelection(chain, 't2');
-  t.check('this and the ones after it: only the queued ones, in order', s2.followingQueued.map((x) => x.id), ['t4']);
-  t.check('what already ran after it is left as it is', s2.laterRan.map((x) => x.id), ['t3', 't5']);
-  t.check('and what ran before it is not touched', s2.earlierRan.map((x) => x.id), ['t1']);
-  t.check('a failed task between it and the last queued one is named', s2.chainGapLater?.id, 't3');
-  t.check('nothing before it failed: no earlier gap', s2.chainGap, undefined);
-  t.check('a chain says it stops at a failure', s2.chain, true);
-  const s4 = runQueuedSelection(chain, 't4');
-  t.check('started with an earlier task of the chain not done — here one still waiting — that one is named', s4.chainGap?.id, 't2');
-  t.check('and a failed one before it, when it is the first', runQueuedSelection({ ...chain, tasks: chain.tasks.filter((x) => x.id !== 't2') }, 't4').chainGap?.id, 't3');
-  t.check('nothing queued after it: no later gap', s4.chainGapLater, undefined);
-  const loose = runQueuedSelection({ ...chain, onFailure: 'continue' }, 't2');
-  t.check('independent tasks: no chain warnings', [loose.chain, loose.chainGap, loose.chainGapLater], [false, undefined, undefined]);
-  t.check('an unknown task takes nothing', runQueuedSelection(chain, 'nope').task, undefined);
 }
 
 console.log('\n--- the importer refuses it too ---');

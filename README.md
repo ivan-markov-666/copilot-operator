@@ -23,12 +23,12 @@ browser, so it needs no API licence and no admin consent.
    Commands are the only thing it runs: nothing the chat attaches is fetched, saved or executed.
 5. Writes the whole terminal output to a `.txt` file and attaches it to the chat.
 6. Repeats until Copilot finishes with a **summary** of what it did and what the result is.
-7. Runs the next queued task in the same conversation.
+7. The next message written in the chat goes on in the same conversation.
 
-A **session** is one conversation with a queue of tasks. No file of the project is attached to
-the chat: it reads the project by running commands in the project folder, like any other step.
-
-There is a web UI for all of this, and a terminal command for a single task.
+The web UI is a chat beside the project folder, laid out as an IDE: each message is a task, run in
+that folder until Copilot says it is done. No file of the project is attached to the chat: it reads
+the project by running commands in the project folder, like any other step. There is also a terminal
+command for a single task.
 
 ## Safety
 
@@ -408,8 +408,15 @@ Then open http://localhost:3210. `npm run dev` does the same and opens the brows
 The two can also run separately: `npm run api` (NestJS on 127.0.0.1:4000) and `npm run web`
 (Next.js on localhost:3210).
 
-Create a session, add tasks with their level 2 instructions, press Run, approve each step
-from the page, read the summary when it finishes. See [`docs/ui.md`](docs/ui.md).
+Open a project folder, write what to change in the chat on the right, approve each command in
+the conversation (or let them run without asking), and read the summary when it finishes. The
+files of the folder are on the left, with its git; a file opens in the editor, coloured by its
+language, and can be edited and saved. "Plan mode" under the chat's box asks Copilot for a plan
+first, shown in the conversation to approve. "Pause" holds the work at its next message or command
+and becomes "Continue". "Kerrigan" on the home screen hands out a persona to
+give another chat, which then helps you write tasks for this one (optional). See
+[`docs/ui.md`](docs/ui.md); the Sessions page, the task register and plans from JSON were removed
+on 2026-10-20.
 
 ### Removing it from a machine
 
@@ -517,17 +524,18 @@ Design and findings:
 - [`docs/tech-stack-research.md`](docs/tech-stack-research.md) — why Playwright and not the alternatives
 - [`docs/deferred.md`](docs/deferred.md) — designed, argued and deliberately not built yet, with the reasoning kept
 
-### What the planning persona knows
+### What Kerrigan knows
 
-The brief the UI hands to a chat model — the Kerrigan persona — carries the names of this
-application's own screens and controls, so it can tell the operator to press "Create the sessions
-and tasks" rather than "import the plan". They live in `src/plan/systemGuide.ts` and are embedded
-in the brief by `src/plan/brief.ts`, and `test/guide.check.ts` pins every one of them to
-`web/lib/strings.ts` in both languages. Renaming a control in the interface therefore breaks that
-check by name, and a new control the operator would ever be told to press has to be added to the
-guide as well, or the persona does not know it exists. The same check reads the pages themselves,
-so a label that is still in the dictionary but that nothing renders any more fails too, and it
-holds the labels the brief quotes in its own prose to the same standard.
+Kerrigan (`src/plan/kerrigan.ts`) is the persona the home screen hands out, saved as a file or
+copied, for a chat of the operator's own choosing: what copilot-operator is, how a task is best
+written for its chat, and the names of the chat's controls, so it can say press "New chat" rather
+than "start over". She is optional: the bot's chat does not need her. The names live in
+`src/plan/systemGuide.ts`, and `test/guide.check.ts` pins every one of them to `web/lib/strings.ts`
+in both languages. Renaming a control in the interface therefore breaks that check by name, and a
+new control the operator would ever be told to press has to be added to the guide as well, or the
+persona does not know it exists. The same check reads the pages themselves, so a label that is
+still in the dictionary but that nothing renders any more fails too, and it holds the labels
+Kerrigan quotes in her own prose to the same standard.
 
 ## Notable findings
 

@@ -56,32 +56,13 @@ try {
   await ops.store.init();
 
   console.log('\n--- a model chosen in Settings after the session was made still reaches it ---');
-  const s = await ops.createSession('made-first');
+  const s = await ops.store.createSession('made-first');
   check('a new session keeps no model of its own', s.model ?? null, null);
   await ops.setDefaultModel('GPT 5.6 Think deeper');
   const cfg = await ops.settings.load();
   const again = await ops.store.getSession(s.id);
   check('and so runs on the one chosen afterwards', effectiveModels(again!, cfg).model, 'GPT 5.6 Think deeper');
 
-  console.log('\n--- named personas ---');
-  const saved = await ops.savePersona('playwright тестове', '{"approach":"write the spec first"}');
-  check('saved under its name, Cyrillic kept', saved.name, 'playwright тестове');
-  await ops.savePersona('api-service', '{"approach":"contract first"}');
-  const list = await ops.listPersonas();
-  check('listed by name', list.map((p) => p.name), ['api-service', 'playwright тестове']);
-  check('with the content as given', list.find((p) => p.name === 'api-service')?.content, '{"approach":"contract first"}');
-  await ops.savePersona('api-service', '{"approach":"v2"}');
-  check('saving under the same name replaces it', (await ops.listPersonas()).find((p) => p.name === 'api-service')?.content, '{"approach":"v2"}');
-  await ops.deletePersona('api-service');
-  check('and deleting removes only that one', (await ops.listPersonas()).map((p) => p.name), ['playwright тестове']);
-  let refused = false;
-  try {
-    await ops.deletePersona('..\\..\\settings');
-  } catch {
-    refused = true;
-  }
-  check('a name that climbs out is refused', refused, true);
-  check('the box itself was never touched', (await ops.getContext('persona', 'en')).customised, false);
 } finally {
   await rm(data, { recursive: true, force: true });
 }

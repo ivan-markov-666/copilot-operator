@@ -19,7 +19,7 @@ import { existsSync } from 'node:fs';
 import { writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { makeDirs, startHarness, waitFor, Tally, type SessionView } from './support/harness.js';
+import { makeDirs, seedPlan, startHarness, waitFor, Tally, type SessionView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
 const t = new Tally();
@@ -51,6 +51,7 @@ const plan = {
 let child: ReturnType<typeof spawn> | null = null;
 try {
   console.log('--- the first server, killed in the middle of a step ---');
+  await seedPlan(dirs.dataDir, plan, dirs.repo);
   const repliesFile = join(dirs.base, 'replies.json');
   await writeFile(
     repliesFile,
@@ -79,7 +80,6 @@ try {
     return (await res.json()) as T;
   };
 
-  await call('POST', '/plan/import', { text: JSON.stringify(plan) });
   const [s] = await call<SessionView[]>('GET', '/sessions');
   const started = await call<{ started: boolean }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   t.check('the run started', started.started, true);

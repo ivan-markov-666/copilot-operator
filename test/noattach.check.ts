@@ -14,7 +14,9 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionStore } from '../src/session/store.js';
-import { planBrief } from '../src/plan/brief.js';
+import { kerriganPersona } from '../src/plan/kerrigan.js';
+import { checkPlan } from '../src/plan/schema.js';
+import { importPlan } from '../src/plan/importPlan.js';
 import { startHarness, Tally } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
@@ -62,8 +64,10 @@ console.log('\n--- a plan that still asks for project files ---');
         tasks: [{ title: 'write-here', prompt: 'Create here.txt in the project folder holding exactly here, and nothing else.' }],
       }],
     };
-    const imported = await h.call<{ ok: boolean; summary?: unknown; result?: { warnings: string[] } }>('POST', '/plan/import', { text: JSON.stringify(plan) });
-    t.truthy('it imports, warning that project files are no longer attached', imported.ok && (imported.result?.warnings ?? []).some((w) => /no longer exists/.test(w) && /running commands/.test(w)), imported);
+    const check = checkPlan(JSON.stringify(plan));
+    if (!check.ok) throw new Error('the plan does not check');
+    const imported = await importPlan(h.ops.store, check.plan, '', '', '', h.repo);
+    t.truthy('it imports, warning that project files are no longer attached', imported.warnings.some((w) => /no longer exists/.test(w) && /running commands/.test(w)), imported.warnings);
     const s = (await h.call<Array<{ id: string; name: string; projectDir?: string }>>('GET', '/sessions')).find((x) => x.name === 'old-plan')!;
     t.check('its root became the project folder', s.projectDir, h.repo);
 
@@ -86,26 +90,19 @@ console.log('\n--- what the chat is told ---');
   t.truthy('no file of the project is attached; it is read with commands', /No file of the project is attached/.test(level1) && /running commands in its folder/.test(level1), '');
 }
 
-console.log('\n--- what Kerrigan is told, and never asks ---');
+console.log('\n--- what Kerrigan says, and never asks ---');
 {
-  // Seen on 2026-10-01: Kerrigan still asked how the bot would get the project's files. The brief now
-  // says how — commands in the project folder — and that it is not a question; no scripted question
-  // asks it.
+  // Seen on 2026-10-01: Kerrigan asked how the bot would get the project's files. She says how — commands in the
+  // project folder — and asks nothing of the kind (since 2026-10-20 she is the persona of src/plan/kerrigan.ts).
+  const facts = { version: '0.0.0', maxIterations: 60, maxRunMinutes: 240, autoContinue: 3 };
   for (const lang of ['en', 'bg'] as const) {
-    for (const [which, opts] of [
-      ['first run', { lang, organisationExample: '{}', personaExample: '{}', workExample: '{}' }],
-      ['settled', { lang, organisation: 'the organisation', persona: 'the persona', work: 'this work' }],
-    ] as const) {
-      const brief = planBrief(opts);
-      const says = lang === 'en'
-        ? /How the working chat learns the project: by running commands/.test(brief) && /never ask the user how the chat will get the project's files/.test(brief)
-        : /Как работният чат опознава проекта: с команди/.test(brief) && /никога не питай потребителя как чатът ще получи файловете на проекта/.test(brief);
-      t.truthy(`${lang} ${which}: the brief says the chat reads the project with commands, and not to ask`, says, '');
-      const asks = lang === 'en'
-        ? /How do I read its code from this chat|Project files for the chat|Desktop mirror|copilot-operator-context|howToReachItFromTheChat/.test(brief)
-        : /Как да чета кода му от този чат|Файлове на проекта към чата|огледалото на Desktop|copilot-operator-context|howToReachItFromTheChat/.test(brief);
-      t.check(`${lang} ${which}: and nothing in it asks how the files reach the chat`, asks, false);
-    }
+    const persona = kerriganPersona(lang, facts);
+    const says = lang === 'en'
+      ? /Copilot learns the project only through those commands/.test(persona) && /It is not sent the files themselves/.test(persona)
+      : /Copilot опознава проекта само чрез тези команди/.test(persona) && /Самите файлове не му се изпращат/.test(persona);
+    t.truthy(`${lang}: Kerrigan says the chat reads the project with commands, and is not sent its files`, says, '');
+    const asks = /How do I read its code from this chat|Project files for the chat|Desktop mirror|copilot-operator-context|howToReachItFromTheChat|Как да чета кода му от този чат|Файлове на проекта към чата|огледалото на Desktop/.test(persona);
+    t.check(`${lang}: and nothing in her asks how the files reach the chat`, asks, false);
   }
 }
 

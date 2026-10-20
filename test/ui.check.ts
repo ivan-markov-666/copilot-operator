@@ -139,7 +139,8 @@ console.log('\n--- every built page hydrates <head> from what is in the page ---
     }
     if (heads === 0) noHead.push(p);
   }
-  t.truthy('the build has its pages', pages.length >= 9 && pages.includes('index.html'), pages);
+  // The workbench, Settings, Level 1, the presets, Appearance, System, and the 404 (the Sessions pages went on 2026-10-20).
+  t.truthy('the build has its pages', pages.length >= 7 && pages.includes('index.html') && pages.includes('defaults.html'), pages);
   // Without this the two checks below would pass on a page whose data they could not read at all.
   t.check('pages whose data has no <head> to look at', noHead, []);
   t.check('parts of <head> the browser must fetch before it can hydrate it', inHead, []);
@@ -183,7 +184,9 @@ try {
    * gave it, whatever React reports about it.
    */
   await scenario("every page keeps the markup of its HTML when the layout's script comes late", {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'late'));
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (late).', model: 'Think deeper' });
+    await page.goto(url('/appearance'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
     // Held on the network every time: while a route is set, Playwright fetches past the cache.
     await page.route('**/_next/static/chunks/app/layout-*.js', async (r) => {
       await new Promise((res) => setTimeout(res, 500));
@@ -203,7 +206,7 @@ try {
         }
       }).observe(document, { childList: true, subtree: true });
     });
-    const pages = ['/', '/sessions', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
     const redrawn: string[] = [];
     for (let round = 1; round <= 2; round++) {
       for (const p of pages) {
@@ -244,13 +247,38 @@ try {
     t.check('an unknown theme falls back to light', await page.evaluate(() => document.documentElement.dataset.theme), 'light');
   });
 
+  /*
+   * The theme before the first paint (2026-10-20): with nothing chosen, the machine's light or dark — "System", the
+   * default — and a theme chosen, that one; night light on from the start too. Read with the page's scripts held back,
+   * so it is the inline script in <head> that answers, not React after it.
+   */
+  await scenario('before the first paint: the machine\'s theme unless one was chosen, and night light', {}, async (_h, page, url) => {
+    await page.route('**/_next/static/chunks/**', (r) => r.abort());
+    const at = async (): Promise<Record<string, string | undefined>> => await page.evaluate(() => ({ theme: document.documentElement.dataset.theme, night: document.documentElement.dataset.night }));
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto(url('/appearance'), { waitUntil: 'domcontentloaded' });
+    t.check('nothing chosen, the machine dark: dark', (await at()).theme, 'dark');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    t.check('nothing chosen, the machine light: light', (await at()).theme, 'light');
+    await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ theme: 'dark', nightLight: true })));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    t.check('dark chosen, on a light machine: dark, and night light on', await at(), { theme: 'dark', night: 'on' });
+    await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ theme: 'system' })));
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    t.check('"system" stored: the machine\'s, dark; no night light', await at(), { theme: 'dark', night: 'off' });
+  });
+
   await scenario('on a phone, at the normal and the largest size, no page scrolls sideways', {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'phone'));
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (phone).', model: 'Think deeper' });
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await h.run(s!.id);
+    await h.run(threadId);
+    await page.goto(url('/appearance'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto(url('/appearance'));
-    const pages = ['/', '/sessions', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
     const wide: Record<string, number> = {};
     for (const size of ['normal', 'giant']) {
       await page.evaluate((textSize) => localStorage.setItem('cop.appearance', JSON.stringify({ textSize })), size);
@@ -265,13 +293,15 @@ try {
   });
 
   await scenario('on a tablet and a laptop at the largest size, no page scrolls sideways either', {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'wide'));
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (wide).', model: 'Think deeper' });
+    await page.goto(url('/appearance'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
     await page.goto(url('/appearance'));
     await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ textSize: 'giant' })));
     const wide: Record<string, number> = {};
     for (const [w, hgt] of [[768, 1024], [1280, 800]] as const) {
       await page.setViewportSize({ width: w, height: hgt });
-      for (const p of ['/', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults']) {
+      for (const p of ['/', '/defaults']) {
         await page.goto(url(p));
         await page.waitForLoadState('networkidle');
         const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -281,47 +311,13 @@ try {
     t.check('pages wider than the window (pixels too wide)', wide, {});
   });
 
-  await scenario('a double click adds one task, and a dialog keeps and returns the focus', {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'clicks'));
-    await page.goto(url(`/sessions/view?id=${s!.id}`));
-    await page.getByLabel('Task', { exact: true }).fill('Create extra.txt in the repository root holding exactly the word extra, and nothing else.');
-    await page.getByRole('button', { name: 'Add to queue', exact: true }).dblclick();
-    await waitFor('the task list to settle', async () => (await h.session(s!.id)).tasks.length >= 2);
-    await new Promise((r) => setTimeout(r, 800));
-    t.check('one task was added, not two', (await h.session(s!.id)).tasks.length, 2);
-
-    const del = page.getByRole('button', { name: 'Delete', exact: true }).first();
-    await del.click();
-    const dialog = page.getByRole('alertdialog');
-    await dialog.waitFor();
-    t.truthy('the dialog reads out its question, not only its title', ((await dialog.getAttribute('aria-describedby')) ?? '') !== '', await dialog.getAttribute('aria-describedby'));
-    for (let i = 0; i < 5; i++) await page.keyboard.press('Tab');
-    t.check('Tab stays inside the dialog', await page.evaluate(() => Boolean(document.activeElement?.closest('[role="alertdialog"]'))), true);
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached' });
-    t.check('Escape closes it and nothing was deleted', (await h.call<unknown[]>('GET', '/sessions')).length, 1);
-    t.check('and the focus is back on the button that opened it', await page.evaluate(() => document.activeElement?.textContent?.trim()), 'Delete');
-  });
-
-  await scenario('a brief too long to paste is offered as a file, with the message to send with it', {}, async (h, page, url) => {
-    // A long organisation text, as a big company's would be, pushes the brief past what Copilot takes in a message.
-    await h.call('PUT', '/context/organisation', { content: `# Our organisation\n\n${'We write every rule down. '.repeat(6000)}` });
-    await page.goto(url('/import'));
-    await page.getByText(/more than Copilot takes in one message/).waitFor();
-    t.truthy('the page says why', true);
-    const save = page.getByRole('button', { name: 'Save the brief as a file' });
-    t.check('saving the file is now the main button', await save.getAttribute('class'), 'primary');
-    const [download] = await Promise.all([page.waitForEvent('download'), save.click()]);
-    const saved = await download.path().then((p) => (p ? readFileSync(p, 'utf8') : ''));
-    t.truthy('the file holds the whole brief, organisation text included', saved.length > 120_000 && saved.includes('We write every rule down.'), saved.length);
-    t.truthy('and the one-line message for the chat can be copied', await page.getByRole('button', { name: 'Copy the message for the file' }).isVisible());
-  });
-
   await scenario('every form field on every page has a name a screen reader can say', {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'labels'));
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (labels).', model: 'Think deeper' });
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await h.run(s!.id);
-    const pages = ['/', '/sessions', `/sessions/view?id=${s!.id}`, '/history', '/import', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    await h.run(threadId);
+    await page.goto(url('/appearance'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
     const unnamed: Record<string, string[]> = {};
     for (const p of pages) {
       await page.goto(url(p));
@@ -343,254 +339,6 @@ try {
       if (found.length > 0) unnamed[p.split('?')[0]!] = found;
     }
     t.check('fields with no name, by page', unnamed, {});
-  });
-
-  await scenario('the import page turns pasted JSON into sessions', {}, async (h, page, url) => {
-    await page.goto(url('/import'));
-    await page.getByPlaceholder(/json/i).first().fill(JSON.stringify(planFor(h, 'imported')));
-    await page.getByRole('button', { name: 'Check it' }).click();
-    await page.getByRole('button', { name: 'Create the sessions and tasks' }).click();
-    await page.getByText(/Created 1 session\(s\) with 1 task\(s\)/).waitFor();
-    const sessions = await h.call<Array<{ name: string; tasks: Array<{ status: string }> }>>('GET', '/sessions');
-    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save the brief as a file' }).click()]);
-    t.check('the brief can be saved as a .txt file', download.suggestedFilename(), 'copilot-operator-brief.en.txt');
-    t.check('one session, its task queued, nothing started', sessions.map((s) => [s.name, s.tasks.map((x) => x.status)]), [['imported', ['queued']]]);
-    await page.goto(url('/sessions'));
-    await page.getByRole('link', { name: 'imported' }).first().waitFor();
-    t.truthy('the sessions page lists it', true);
-  });
-
-  await scenario('a supervised run, answered from the banner on another page, then its changes', {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'banner'));
-    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await page.goto(url(`/sessions/view?id=${s!.id}`));
-    await page.getByRole('button', { name: 'Step by step' }).click();
-    const confirm = page.getByRole('alertdialog');
-    if (await confirm.isVisible().catch(() => false)) await confirm.getByRole('button', { name: 'OK' }).click();
-    await throughStartWindow(page, 'step');
-
-    await page.goto(url('/appearance'));
-    const banner = page.locator('.approval-banner');
-    await banner.waitFor();
-    t.truthy('the waiting step is shown on a page that has nothing to do with the run', (await banner.textContent())?.includes('hello.txt'), await banner.textContent());
-    await waitFor('the tab title to say something is waiting', async () => /\(1\)/.test(await page.title()));
-    t.truthy('the tab title says one step is waiting', /\(1\)/.test(await page.title()), await page.title());
-    await banner.getByRole('button', { name: 'Run', exact: true }).click();
-    await banner.waitFor({ state: 'detached' });
-    await h.idle();
-    t.check('the task finished', (await h.session(s!.id)).tasks[0]!.status, 'done');
-
-    await page.goto(url(`/sessions/view?id=${s!.id}`));
-    await page.getByText("How it ended — from the runner's records").waitFor();
-    t.truthy('the card shows how it ended, from the runner records', (await page.locator('.handoff').textContent())?.includes('hello.txt'), await page.locator('.handoff').textContent());
-    await page.getByRole('button', { name: /See the changes \(1 file\(s\)\)/ }).first().click();
-    const diff = page.getByRole('dialog');
-    await diff.getByText('hello.txt').first().waitFor();
-    t.truthy('the changes view lists the file', (await diff.textContent())?.includes('hello.txt'), (await diff.textContent())?.slice(0, 300));
-    await diff.getByText('hi', { exact: true }).first().waitFor();
-    t.truthy('and shows what it now holds', true);
-    await page.keyboard.press('Escape');
-    await diff.waitFor({ state: 'detached' });
-    t.truthy('Escape closes it', true);
-  });
-
-  await scenario('the register continues a task stopped at the limit, in the same chat', { limits: { maxIterations: 5 } }, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'limit'));
-    for (let i = 1; i <= 6; i++) h.chat.script(reply.steps(`Write-Output 'round ${i}'`));
-    const stopped = await h.run(s!.id);
-    t.check('the task stopped at the limit', stopped.tasks[0]!.status, 'limit-reached');
-
-    await page.goto(url(`/sessions/view?id=${s!.id}`));
-    // "What happened" on the attempt that stopped: each entry says when it happened.
-    await page.getByRole('button', { name: /What happened/ }).first().click();
-    await page.locator('time.story-when').first().waitFor();
-    const times = await page.locator('time.story-when').evaluateAll((els) => els.map((e) => ({ text: e.textContent ?? '', iso: e.getAttribute('datetime') ?? '', title: e.getAttribute('title') ?? '' })));
-    t.truthy('every entry of the story shows when it happened', times.length >= 6 && times.every((x) => /\d{1,2}:\d{2}:\d{2}/.test(x.text) && !Number.isNaN(Date.parse(x.iso)) && x.title !== ''), times.slice(0, 4));
-    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await page.getByRole('button', { name: 'Continue in the same chat' }).first().click();
-    const confirm = page.getByRole('alertdialog');
-    await confirm.waitFor();
-    await confirm.getByRole('button', { name: 'OK' }).click();
-    await waitFor('the task to be queued again', async () => (await h.session(s!.id)).tasks[0]!.status === 'queued');
-    t.check('it is queued as a continuation', (await h.session(s!.id)).tasks[0]!.continuing?.how, 'limit');
-
-
-    await page.goto(url('/history'));
-    const figures = page.locator('.metrics');
-    await figures.getByText('How the bot is doing').waitFor();
-    const firstRow = await figures.locator('tr', { hasText: 'Done at the first attempt' }).textContent();
-    t.truthy('the register shows the figures: none done at the first attempt yet', /0 \/ 1 \(0%\)/.test(firstRow ?? ''), firstRow);
-  });
-
-  /*
-   * Asked for on 2026-09-30: a task stopped by a limit in the settings was shown in the register with no
-   * way on. Its row now carries "Continue where it stopped", says what happens to the branch and files,
-   * and starts that task alone in its chat.
-   */
-  await scenario('a task stopped at a limit is continued from its own row in the register', { limits: { maxIterations: 5 } }, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'rowcontinue'));
-    for (let i = 1; i <= 6; i++) h.chat.script(reply.steps(`Set-Content -Path partial.txt -Value 'round ${i}' -Encoding utf8`));
-    const stopped = (await h.run(s!.id)).tasks[0]!;
-    t.check('the task stopped at the limit, its work committed', [stopped.status, !!stopped.vcs?.commit], ['limit-reached', true]);
-    const firstChat = (await h.session(s!.id)).chat?.chatId;
-
-    await page.goto(url('/history'));
-    const row = page.locator('ol.flow > li', { hasText: 'write-greeting' }).first();
-    await row.getByText('stopped at a limit: 5 messages per task').waitFor();
-    t.truthy('the row says which limit stopped it', true);
-    await row.getByRole('button', { name: 'Continue where it stopped' }).click();
-    const panel = row.getByRole('group', { name: 'Continue “write-greeting” where it stopped' });
-    await panel.waitFor();
-    const text = (await panel.textContent()) ?? '';
-    t.truthy('the panel says the chat is the same one', /Chat: the same conversation/.test(text), text);
-    t.truthy('and names the branch and the commit the work is on', text.includes('Branch: cop/rowcontinue') && text.includes(stopped.vcs!.commit!.slice(0, 8)), text);
-
-    h.chat.script(
-      (m) => {
-        t.check('the continuation goes into the same conversation', m.chatId, firstChat);
-        return reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8");
-      },
-      reply.done(),
-    );
-    await panel.getByRole('button', { name: 'Continue without asking' }).click();
-    const confirm = page.getByRole('alertdialog');
-    // "Are you sure" before an unattended start, unless Settings say not to ask.
-    await confirm.waitFor({ timeout: 3_000 }).then(() => confirm.getByRole('button', { name: 'OK' }).click()).catch(() => undefined);
-    await throughStartWindow(page, 'unattended');
-    await waitFor('the continued task to finish', async () => (await h.session(s!.id)).tasks[0]!.status === 'done');
-    await h.idle();
-    const after = (await h.session(s!.id)).tasks[0]!;
-    t.check('it finished as attempt 2, on the same branch', [after.status, after.attempt, after.vcs?.branch], ['done', 2, 'cop/rowcontinue']);
-  });
-
-  await scenario('a session set to carry on an existing branch, from its version control panel', {}, async (h, page, url) => {
-    h.git('branch', 'recovery/apz-migration');
-    const [s] = await h.importPlan(planFor(h, 'existing'));
-    await page.goto(url(`/sessions/view?id=${s!.id}`));
-    // Checked once the API has saved it, so a click, then the field it brings.
-    await page.getByRole('radio', { name: 'Carry on an existing branch' }).click();
-    const field = page.getByLabel('The branch to carry on');
-    await field.waitFor();
-    const options = page.locator('#vcs-local-branches option');
-    await waitFor('the local branches to load', async () => (await options.count()) > 0);
-    const offered = await options.evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
-    t.truthy('the local branches are offered', offered.includes('recovery/apz-migration') && offered.includes('main'), offered);
-    await field.fill('recovery/apz-migration');
-    await field.blur();
-    await waitFor('the branch to be saved', async () => (await h.session(s!.id)).vcs?.existingBranch === 'recovery/apz-migration');
-    const saved = (await h.session(s!.id)).vcs;
-    t.check('saved: carry on that branch', [saved?.startFrom, saved?.existingBranch], ['existing-branch', 'recovery/apz-migration']);
-    await field.fill('recovery/typo');
-    await field.blur();
-    await page.getByText('The repository has no local branch "recovery/typo" right now').waitFor();
-    t.truthy('a branch that is not there is said before any run', true);
-  });
-
-  /*
-   * Asked for on 2026-09-30: a task that failed goes back on its own, from its row, without the rest of
-   * the queue; the continue panel unticks everything in one click; "What has been done" comes before
-   * "What is next", and "What is next" folds.
-   */
-  await scenario('the register: one failed task run again alone, the lists in order, the queue folding', { limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'alone', [greeting, { ...greeting, title: 'second-greeting' }]));
-    h.chat.script(...reply.triedThenBlocked());
-    const ran = await h.run(s!.id);
-    t.check('the first task blocked, the second is still queued', ran.tasks.map((x) => x.status), ['blocked', 'queued']);
-
-    await page.goto(url('/history'));
-    await page.locator('h2', { hasText: 'What is next' }).waitFor();
-    const headings = await page.locator('h2').allTextContents();
-    const done = headings.findIndex((x) => x.startsWith('What has been done'));
-    const next = headings.findIndex((x) => x.startsWith('What is next'));
-    t.truthy('"What has been done" comes before "What is next"', done >= 0 && next > done, headings);
-    // The blocked task is there too, marked to go back first: its session is a chain.
-    t.truthy('"What is next" says how many', headings.some((x) => x === 'What is next (2)'), headings);
-
-    // The queue folds, and stays as it was left.
-    const fold = page.locator('details', { has: page.locator('h2', { hasText: 'What is next' }) });
-    t.check('open while the queue is short', await fold.evaluate((d) => (d as HTMLDetailsElement).open), true);
-    await fold.locator('summary').click();
-    t.check('folded with one click', await fold.evaluate((d) => (d as HTMLDetailsElement).open), false);
-    await page.reload();
-    t.check('and still folded after a reload', await page.locator('details', { has: page.locator('h2', { hasText: 'What is next' }) }).evaluate((d) => (d as HTMLDetailsElement).open), false);
-
-    // The continue panel: everything ticked, untick all in one click.
-    await page.getByRole('button', { name: /^Continue: run/ }).click();
-    await page.getByText(/2 of 2 ticked/).waitFor();
-    await page.getByRole('button', { name: 'Untick all' }).click();
-    await page.getByText(/0 of 2 ticked/).waitFor();
-    t.truthy('"Untick all" leaves nothing ticked', true);
-
-    // The failed row: run only it again.
-    const row = page.locator('ol.flow > li', { hasText: 'write-greeting' }).filter({ has: page.locator('.badge.blocked') }).first();
-    await row.getByRole('button', { name: 'Run only this one again' }).click();
-    const panel = row.getByRole('group', { name: 'Run “write-greeting” again, on its own' });
-    await panel.waitFor();
-    t.truthy('it says only this task runs', /Only this task runs/.test((await panel.textContent()) ?? ''), await panel.textContent());
-    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await panel.getByRole('button', { name: 'Continue without asking' }).click();
-    const confirm = page.getByRole('alertdialog');
-    await confirm.waitFor({ timeout: 3_000 }).then(() => confirm.getByRole('button', { name: 'OK' }).click()).catch(() => undefined);
-    await throughStartWindow(page, 'unattended');
-    await waitFor('the task to run again', async () => (await h.session(s!.id)).tasks[0]!.status === 'done');
-    await h.idle();
-    t.check('it ran again and is done; the other stayed queued', (await h.session(s!.id)).tasks.map((x) => x.status), ['done', 'queued']);
-  });
-
-  /*
-   * Asked for on 2026-10-01: an imported plan used to show upside down, and the list could not be
-   * arranged. The plan now comes in on top in its own order; the arrows and dragging move a row,
-   * and the order is stored, so a reload shows it again.
-   */
-  await scenario('the sessions list: a plan in its own order, moved by the arrows and by dragging', {}, async (h, page, url) => {
-    await h.importPlan({
-      version: 1,
-      sessions: ['alpha', 'beta', 'gamma'].map((name) => ({
-        name,
-        onFailure: 'stop',
-        vcs: { enabled: false, repoDir: '' },
-        review: { enabled: false },
-        tasks: [{ title: `${name}-task`, prompt: 'Create here.txt in the project folder holding exactly here, and nothing else.' }],
-      })),
-    });
-    const order = async (): Promise<string[]> =>
-      (await page.locator('table tbody tr td:nth-child(4) a').allTextContents()).map((x) => x.trim());
-    await page.goto(url('/sessions'));
-    await page.getByRole('link', { name: 'gamma' }).waitFor();
-    t.check('the plan in its own order', await order(), ['alpha', 'beta', 'gamma']);
-
-    await page.getByRole('button', { name: 'Move alpha down in the list' }).click();
-    await waitFor('the arrow to move it', async () => (await order()).join() === 'beta,alpha,gamma');
-    t.check('↓ moves a row one place down', await order(), ['beta', 'alpha', 'gamma']);
-    t.check('the first row cannot go up, the last cannot go down', [await page.getByRole('button', { name: 'Move beta up in the list' }).isDisabled(), await page.getByRole('button', { name: 'Move gamma down in the list' }).isDisabled()], [true, true]);
-
-    await page.locator('tr', { hasText: 'gamma' }).dragTo(page.locator('tr', { hasText: 'beta' }));
-    await waitFor('the drop to move it', async () => (await order()).join() === 'gamma,beta,alpha');
-    t.check('dragging a row onto another puts it there', await order(), ['gamma', 'beta', 'alpha']);
-
-    await page.reload();
-    await page.getByRole('link', { name: 'gamma' }).waitFor();
-    t.check('and the order is kept after a reload', await order(), ['gamma', 'beta', 'alpha']);
-    t.check('the API holds the same order', (await h.call<Array<{ name: string }>>('GET', '/sessions')).map((x) => x.name), ['gamma', 'beta', 'alpha']);
-  });
-
-  await scenario('a new prompt for a done task: its old checks are offered, unticked, and it can be made read-only', {}, async (h, page, url) => {
-    const [s] = await h.importPlan(planFor(h, 'newprompt'));
-    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await h.run(s!.id);
-    await page.goto(url('/history'));
-    await page.getByRole('button', { name: 'Give it a new prompt and queue it again' }).first().click();
-    const dialog = page.getByRole('dialog');
-    await dialog.getByText('Checks that still apply to the new prompt').waitFor();
-    const oldCheck = dialog.getByRole('checkbox', { name: 'greeting written' });
-    t.check('the old check is listed, and unticked for a done task', await oldCheck.isChecked(), false);
-    await dialog.getByRole('textbox').first().fill('Audit hello.txt and say in your summary what it holds. Change nothing.');
-    t.truthy('a changed prompt says what happens to the old checks', await dialog.getByText(/A new prompt is a new question/).isVisible());
-    await dialog.getByRole('checkbox', { name: 'Read-only: this task must not change any file' }).check();
-    await dialog.getByRole('button', { name: 'Save and queue again' }).click();
-    await waitFor('the task to be queued again', async () => (await h.session(s!.id)).tasks[0]!.status === 'queued');
-    const queued = (await h.session(s!.id)).tasks[0]! as unknown as { checks?: unknown[]; readOnly?: boolean; prompt: string };
-    t.check('queued read-only, with no old checks and the new prompt', [queued.readOnly, queued.checks ?? [], queued.prompt.startsWith('Audit hello.txt')], [true, [], true]);
   });
 
   await scenario('a project in Settings is prepared from the remote main, keeping everything on a saved branch', {}, async (h, page, url) => {
@@ -615,41 +363,6 @@ try {
     t.check('the folder is on main at the remote, clean', [git('rev-parse', '--abbrev-ref', 'HEAD'), git('rev-parse', 'HEAD'), git('status', '--porcelain'), existsSync(join(h.repo, 'stray.txt'))], ['main', mainAt, '', false]);
     t.truthy('and the new file is kept on the saved branch', !!saved && git('show', `${saved}:stray.txt`) === 'stray', saved);
     t.truthy('the branch it was on is still there', git('branch', '--list', 'cop/work') !== '');
-  });
-
-  await scenario('the Sessions page manages the list while a session runs', {}, async (h, page, url) => {
-    const plan = planFor(h, 'busy') as { sessions: Array<Record<string, unknown>> };
-    plan.sessions.push({ ...plan.sessions[0]!, name: 'later', vcs: { enabled: false } }, { ...plan.sessions[0]!, name: 'scrap', vcs: { enabled: false } });
-    const [busy] = await h.importPlan(plan);
-    h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
-    await h.call('POST', `/sessions/${busy!.id}/start`, { mode: 'confirm' });
-    await waitFor('the step to wait', async () => (await h.call<unknown[]>('GET', '/approvals')).length > 0);
-
-    await page.goto(url('/sessions'));
-    const manage = (name: string) => page.getByRole('checkbox', { name: `Manage ${name}` });
-    await manage('busy').waitFor();
-    t.check('the running session cannot be ticked to manage', await manage('busy').isDisabled(), true);
-    t.check('the others can, during the run', [await manage('later').isDisabled(), await manage('scrap').isDisabled()], [false, false]);
-
-    await manage('later').check();
-    await page.getByRole('button', { name: 'Make inactive' }).click();
-    await page.getByText(/1 session\(s\) are inactive/).waitFor();
-    const laterRow = page.locator('tr', { has: page.getByRole('link', { name: 'later' }) });
-    t.truthy('its row says inactive', (await laterRow.textContent())?.includes('inactive'), await laterRow.textContent());
-    t.check('and it cannot be ticked to run', await page.getByRole('checkbox', { name: 'later', exact: true }).isDisabled(), true);
-
-    await manage('scrap').check();
-    await page.getByRole('button', { name: /^Delete the 1 selected$/ }).click();
-    const confirm = page.getByRole('alertdialog');
-    await confirm.waitFor();
-    await confirm.getByRole('button', { name: 'OK' }).click();
-    await waitFor('the session to be gone', async () => !(await h.call<Array<{ name: string }>>('GET', '/sessions')).some((s) => s.name === 'scrap'));
-    t.truthy('a session was deleted while another ran', true);
-
-    const approval = (await h.call<Array<{ id: string }>>('GET', '/approvals'))[0]!;
-    await h.call('POST', `/approvals/${approval.id}`, { action: 'run' });
-    await h.idle();
-    t.check('the running one finished undisturbed', (await h.session(busy!.id)).tasks[0]!.status, 'done');
   });
 
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {

@@ -1,15 +1,17 @@
 /**
- * "Bring this project back to the remote main branch" (src/vcs/syncCommand.ts): what the API says
- * would be lost, that it answers only for folders the bot works in, and that the command it hands
- * out does what it says when the operator runs it — here, in a throwaway repository with a bare
- * repository as its remote. The bot itself never runs the command; this check does, to prove it.
+ * "Bring this project back to the remote main branch" (src/vcs/syncCommand.ts): what it says would
+ * be lost, and that the command it hands out does what it says when the operator runs it — here, in
+ * a throwaway repository with a bare repository as its remote. The bot itself never runs the
+ * command; this check does, to prove it. Its API route (`GET /repo/sync`), which nothing on the
+ * pages called since "Prepare the folder" (0.1.22), was removed on 2026-10-20 with the rest the chat
+ * does not use; the plan is read here as the route read it.
  *
  *   npm run check:sync
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { psQuote, syncCommands } from '../src/vcs/syncCommand.js';
+import { planSync, psQuote, syncCommands } from '../src/vcs/syncCommand.js';
 import { startHarness, Tally } from './support/harness.js';
 
 const t = new Tally();
@@ -52,16 +54,13 @@ try {
   writeFileSync(join(h.repo, '.env'), 'SECRET=1\n');
 
   type Plan = { ok: boolean; branch?: string; target?: string; lastFetched?: string; willLose: { commits: string[]; changed: string[]; untracked: string[] }; preview: string; command: string };
-  const plan = await h.call<Plan>('GET', `/repo/sync?dir=${encodeURIComponent(h.repo)}`);
+  const plan = (await planSync(h.repo)) as Plan;
   t.check('on the task branch, going back to origin/main', [plan.ok, plan.branch, plan.target], [true, 'cop/task', 'origin/main']);
   t.truthy('the commit of its own is named', plan.willLose.commits.length === 1 && plan.willLose.commits[0]!.endsWith('task work'), plan.willLose.commits);
   t.check('the changed tracked file', plan.willLose.changed, ['README.md']);
   t.check('the new files and folder, and not the ignored ones', [...plan.willLose.untracked].sort(), ['newdir/', 'stray.txt']);
   t.truthy('with when it last fetched', !!plan.lastFetched, plan.lastFetched);
   t.check('nothing was touched by asking', [existsSync(join(h.repo, 'stray.txt')), git('rev-parse', '--abbrev-ref', 'HEAD')], [true, 'cop/task']);
-
-  const other = await h.raw('GET', `/repo/sync?dir=${encodeURIComponent(join(h.base, 'somewhere-else'))}`);
-  t.truthy('a folder that is not a project of the bot is refused', other.status >= 400, other);
 
   console.log('\n--- the command, run as the operator would ---');
   // The preview in PowerShell 7, the command in Windows PowerShell 5.1: it is written for both.
@@ -76,7 +75,7 @@ try {
   t.check('ignored files are left alone', [existsSync(join(h.repo, 'node_modules', 'pkg', 'index.js')), existsSync(join(h.repo, '.env'))], [true, true]);
   t.check('the tree is clean', git('status', '--porcelain'), '');
 
-  const after = await h.call<Plan>('GET', `/repo/sync?dir=${encodeURIComponent(h.repo)}`);
+  const after = (await planSync(h.repo)) as Plan;
   t.check('asked again: nothing would be lost', after.willLose, { commits: [], changed: [], untracked: [] });
 } finally {
   await h.stop();

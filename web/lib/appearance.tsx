@@ -18,7 +18,8 @@ import { APPEARANCE_STORAGE_KEY as STORAGE_KEY, TEXT_SIZES, type TextSize } from
 
 export { TEXT_SIZES, type TextSize } from './themeScript';
 
-export type Theme = 'light' | 'dark';
+/** "system", the default, is whatever the machine is set to, and follows it when it changes (2026-10-20). */
+export type Theme = 'system' | 'light' | 'dark';
 
 export type Appearance = {
   theme: Theme;
@@ -31,15 +32,18 @@ export type Appearance = {
   underlineLinks: boolean;
   /** A thick, always-visible outline on whatever has keyboard focus. */
   strongFocus: boolean;
+  /** A warm veil over the page, with less blue light, for the evening (2026-10-20). */
+  nightLight: boolean;
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {
-  theme: 'light',
+  theme: 'system',
   textSize: 'normal',
   highContrast: false,
   reduceMotion: false,
   underlineLinks: false,
   strongFocus: false,
+  nightLight: false,
 };
 
 /**
@@ -55,23 +59,35 @@ export function sanitiseAppearance(raw: unknown): Appearance {
   const a = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   const flag = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback);
   return {
-    theme: a.theme === 'dark' ? 'dark' : a.theme === 'light' ? 'light' : DEFAULT_APPEARANCE.theme,
+    theme: a.theme === 'dark' || a.theme === 'light' || a.theme === 'system' ? a.theme : DEFAULT_APPEARANCE.theme,
     textSize: (TEXT_SIZES as readonly unknown[]).includes(a.textSize) ? (a.textSize as TextSize) : DEFAULT_APPEARANCE.textSize,
     highContrast: flag(a.highContrast, DEFAULT_APPEARANCE.highContrast),
     reduceMotion: flag(a.reduceMotion, DEFAULT_APPEARANCE.reduceMotion),
     underlineLinks: flag(a.underlineLinks, DEFAULT_APPEARANCE.underlineLinks),
     strongFocus: flag(a.strongFocus, DEFAULT_APPEARANCE.strongFocus),
+    nightLight: flag(a.nightLight, DEFAULT_APPEARANCE.nightLight),
   };
+}
+
+/** Whether the machine is set to dark, for the "system" theme. */
+function systemIsDark(): boolean {
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  } catch {
+    return false;
+  }
 }
 
 function apply(a: Appearance): void {
   const d = document.documentElement;
-  d.dataset.theme = a.theme;
+  // The stylesheet knows light and dark; "system" is the one of the two the machine is on.
+  d.dataset.theme = a.theme === 'system' ? (systemIsDark() ? 'dark' : 'light') : a.theme;
   d.dataset.textsize = a.textSize;
   d.dataset.contrast = a.highContrast ? 'high' : 'normal';
   d.dataset.motion = a.reduceMotion ? 'reduced' : 'normal';
   d.dataset.links = a.underlineLinks ? 'underline' : 'plain';
   d.dataset.focus = a.strongFocus ? 'strong' : 'normal';
+  d.dataset.night = a.nightLight ? 'on' : 'off';
 }
 
 type Ctx = {
@@ -97,8 +113,8 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     let next = DEFAULT_APPEARANCE;
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
+      // With nothing stored the theme is "system": the machine's light or dark.
       if (raw) next = sanitiseAppearance(JSON.parse(raw));
-      else if (window.matchMedia('(prefers-color-scheme: dark)').matches) next = { ...next, theme: 'dark' };
       // A person who asked their system for less motion has already answered this question.
       if (window.matchMedia('(prefers-reduced-motion: reduce)').matches && !raw) next = { ...next, reduceMotion: true };
     } catch {
@@ -108,6 +124,20 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
     apply(next);
     setLoaded(true);
   }, []);
+
+  // On "system", a change of the machine's setting changes the page as it happens.
+  useEffect(() => {
+    if (appearance.theme !== 'system') return;
+    let media: MediaQueryList;
+    try {
+      media = window.matchMedia('(prefers-color-scheme: dark)');
+    } catch {
+      return;
+    }
+    const follow = (): void => apply(appearance);
+    media.addEventListener('change', follow);
+    return () => media.removeEventListener('change', follow);
+  }, [appearance]);
 
   const set = useCallback((patch: Partial<Appearance>) => {
     setAppearance((prev) => {

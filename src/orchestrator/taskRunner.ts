@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
 import { buttonShows, normModel } from '../transport/modelMatch.js';
-import { createTransport, isReplyTimeout, type ChatTransport } from '../transport/chatTransport.js';
+import { createTransport, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
@@ -38,7 +38,7 @@ import { describeStep, checkCommandRefusal, commandRefusal, type PolicyConfig } 
 import { networkFetchReason } from '../exec/network.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
-import { confinementRefusal, projectRoots, sessionRoots, type Confinement } from '../exec/confinement.js';
+import { confinementRefusal, sessionRoots, type Confinement } from '../exec/confinement.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
@@ -61,6 +61,7 @@ import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRe
 import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
+import type { Hold } from './hold.js';
 
 export type TaskOutcome = {
   status: Extract<TaskStatus, 'done' | 'blocked' | 'failed' | 'aborted' | 'limit-reached'>;
@@ -100,6 +101,11 @@ export type RunDeps = {
    * the other thing.
    */
   shouldPause?: () => boolean;
+  /**
+   * "Pause" on the chat (2026-10-20): while it is held, the task waits before its next message to the chat and
+   * before its next command, and goes on when the operator continues. Unlike `shouldPause`, nothing ends. See `Hold`.
+   */
+  hold?: Hold;
   /**
    * The press of a start button this run belongs to, written onto every task it reaches.
    *
@@ -371,7 +377,36 @@ function sendsUntilStopped(transport: ChatTransport, signal: AbortSignal | undef
     get(target, key) {
       if (key === 'sendAndConfirm') {
         return (...args: Parameters<ChatTransport['sendAndConfirm']>) =>
-          signal.aborted ? Promise.reject(new Error('the run was stopped; nothing more is sent')) : target.sendAndConfirm(...args);
+          signal.aborted ? Promise.reject(new StoppedSend()) : target.sendAndConfirm(...args);
+      }
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/** A message not sent because the run was stopped first; the task it belongs to ends `aborted`. */
+export class StoppedSend extends Error {
+  constructor() {
+    super('the run was stopped; nothing more is sent');
+    this.name = 'StoppedSend';
+  }
+}
+
+/**
+ * The same chat, whose every message waits while the operator has paused the task ("Pause", 2026-10-20). The
+ * runner sends from a dozen places — the task, each round's report, format repairs, the plan, the review, the
+ * checks — and holding here holds all of them, the ones added later included. `hold` resolves true when the run
+ * was stopped while held: then nothing is sent.
+ */
+function holdsWhilePaused(transport: ChatTransport, hold: () => Promise<boolean>): ChatTransport {
+  return new Proxy(transport, {
+    get(target, key) {
+      if (key === 'sendAndConfirm') {
+        return async (...args: Parameters<ChatTransport['sendAndConfirm']>) => {
+          if (await hold()) throw new StoppedSend();
+          return await target.sendAndConfirm(...args);
+        };
       }
       const value: unknown = Reflect.get(target, key, target);
       return typeof value === 'function' ? value.bind(target) : value;
@@ -421,11 +456,18 @@ class Sink {
  * under the batch's id, so the browser's events of a session in a batch were in no transcript of its own
  * (live run 2026-10-04). `speakFor` moves it; the id it was opened under still hears every event.
  */
-const speakers = new WeakMap<ChatTransport, { id: string }>();
+const speakers = new WeakMap<ChatTransport, { id: string; alone?: boolean }>();
 
-export function speakFor(transport: ChatTransport, sessionId: string): void {
+/**
+ * `alone`: only that session hears it from now on, not the one it was opened under as well. For the chat's window
+ * (2026-10-19), which goes from one conversation to the next and belongs to none of them: a batch's window is opened
+ * under the batch, whose log is the run's, but the chat's is opened by whichever message came first.
+ */
+export function speakFor(transport: ChatTransport, sessionId: string, opts: { alone?: boolean } = {}): void {
   const speaker = speakers.get(transport);
-  if (speaker) speaker.id = sessionId;
+  if (!speaker) return;
+  speaker.id = sessionId;
+  if (opts.alone) speaker.alone = true;
 }
 
 export async function openBrowser(
@@ -436,7 +478,7 @@ export async function openBrowser(
   /** The run's Stop: a sign-in still awaited ends with it. */
   signal?: AbortSignal,
 ): Promise<ChatTransport> {
-  const speaker = { id: sessionId };
+  const speaker: { id: string; alone?: boolean } = { id: sessionId };
   const transport = createTransport({
     profileDir: cfg.resolved.profileDir,
     transportDir,
@@ -459,8 +501,9 @@ export async function openBrowser(
           'The reply came with a file attached. It was not downloaded and will not be run: the runner takes only the text of a reply.',
         'model-menu-stuck':
           'The model menu would not close — Escape, the menu button and a click outside all left it open. Close it in the Edge window; the run goes on.',
+        'window-closed': 'The Edge window was closed. A run in it stops; the next message opens a new one.',
       };
-      for (const id of new Set([speaker.id, sessionId])) {
+      for (const id of new Set(speaker.alone ? [speaker.id] : [speaker.id, sessionId])) {
         bus.publish({
           sessionId: id,
           type: `browser:${event}`,
@@ -486,8 +529,10 @@ export async function openBrowser(
     await transport.open();
     await transport.ensureSignedIn(undefined, { signal });
   } catch (e) {
+    const byHand = transport.closedOutside();
     await transport.close().catch(() => undefined);
-    throw e;
+    // Closed with its X while it opened or the sign-in was awaited: a stop, not a failure to start (2026-10-19).
+    throw byHand ? new WindowClosed() : e;
   }
   return transport;
 }
@@ -631,6 +676,19 @@ async function joinGroupConversation(store: SessionStore, session: Session, bus:
   return updated;
 }
 
+/**
+ * Marks a run's failure as one of opening the browser, its profile, the sign-in or the conversation, so the notice of
+ * a start that could not begin says "opening the browser" rather than "the run" (2026-10-20: with the batch's own
+ * window gone, every chat start failed as "the run", the profile in use by another Edge included).
+ */
+export function failedOpening(e: unknown): unknown {
+  if (e instanceof Error) Object.assign(e, { openingBrowser: true });
+  return e;
+}
+
+/** Whether a run failed while opening the browser or entering the conversation (see `failedOpening`). */
+export const failedWhileOpening = (e: unknown): boolean => !!(e as { openingBrowser?: boolean } | null)?.openingBrowser;
+
 /** The old shape, kept for the terminal path: open a browser and enter the conversation. */
 export async function openSessionTransport(
   cfg: ResolvedConfig,
@@ -640,7 +698,17 @@ export async function openSessionTransport(
   signal?: AbortSignal,
 ): Promise<ChatTransport> {
   const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id, signal);
-  await enterSessionConversation(transport, session, { closeOnFailure: true });
+  /*
+   * Closed on any failure to enter the conversation, not only a conversation that will not reopen: the caller has no
+   * transport yet, so a page that would not load left the window open on the profile with nobody holding it.
+   */
+  try {
+    await enterSessionConversation(transport, session, { closeOnFailure: true });
+  } catch (e) {
+    const byHand = transport.closedOutside();
+    await transport.close().catch(() => undefined);
+    throw byHand ? new WindowClosed() : e;
+  }
   return transport;
 }
 
@@ -997,7 +1065,34 @@ export async function runTask(
   };
 
   const startedAt = Date.now();
-  const deadline = startedAt + cfg.limits.maxRunMinutes * 60_000;
+  /** Moved on by the time the operator held the task paused: the limit is on the work, not on the pause. */
+  let deadline = startedAt + cfg.limits.maxRunMinutes * 60_000;
+  /*
+   * "Pause" (operator, 2026-10-20; see `Hold`): every message to the chat waits here while the task is paused, and
+   * so does every command (the step loop below). True when the run was stopped while held.
+   */
+  const holdHere = async (before: 'message' | 'command'): Promise<boolean> => {
+    const hold = deps.hold;
+    if (!hold?.held || signal?.aborted) return false;
+    const from = Date.now();
+    sink.event(
+      'task-paused',
+      { before },
+      before === 'message' ? 'paused by the operator: nothing more is sent to the chat until Continue' : 'paused by the operator: no other command runs until Continue',
+    );
+    await hold.until(signal);
+    const heldMs = Date.now() - from;
+    deadline += heldMs;
+    const stopped = !!signal?.aborted;
+    const secs = Math.round(heldMs / 1000);
+    sink.event(
+      'task-resumed',
+      { before, heldMs, stopped },
+      stopped ? `stopped while paused, after ${secs} s` : `continued by the operator after ${secs} s paused; that time does not count against maxRunMinutes`,
+    );
+    return stopped;
+  };
+  transport = holdsWhilePaused(transport, () => holdHere('message'));
   let iterations = 0;
   /** What the model has declared it could not do as written, merged across every reply. */
   let deviations: Deviation[] = [];
@@ -1310,8 +1405,13 @@ export async function runTask(
      * What the task said about the repository was written before the commit. When it did not end
      * done and the runner then committed its changes, the reason says so, so "not committed, the
      * tree is dirty" is not left standing beside a commit on the record.
+     *
+     * Against the record `commitTaskResult` was given, not the task as it was when it started: a chat message's
+     * photograph after it is on the task by then (`vcs.commit`, on no branch), and every message of the chat that
+     * did not end done said "the runner committed the task's changes as … on undefined", having committed nothing
+     * (2026-10-19).
      */
-    if (status !== 'done' && vcsAfter?.commit && vcsAfter.commit !== task.vcs?.commit) {
+    if (status !== 'done' && vcsAfter?.commit && vcsAfter.commit !== (fresh ? fresh.vcs?.commit : task.vcs?.commit)) {
       reason = sentences(
         reason,
         `After that, the runner committed the task's changes as ${vcsAfter.commit.slice(0, 8)} on ${vcsAfter.branch}` +
@@ -1759,7 +1859,7 @@ export async function runTask(
           : undefined,
       shellNote: shellNote(shells, defaultShell),
       ...(planning && planMode !== 'off'
-        ? { planNote: planModeNote(planMode, planEnforced, planMode === 'approve' && !!deps.approvePlan && (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm') }
+        ? { planNote: planModeNote(planMode, planEnforced, planMode === 'approve' && !!deps.approvePlan && (session.kind === 'chat' || (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm')) }
         : {}),
       // The operator's notes about this task not sent yet: they go out with this opening (2026-10-14).
       ...(openingNotes.length > 0 ? { operatorNotes: operatorNotesSection(openingNotes, false) } : {}),
@@ -2719,8 +2819,12 @@ export async function runTask(
           await record(`PLAN ${planVersion}`, describePlan(plan));
           sink.event('plan-received', { version: planVersion, steps: plan.steps.length, files: plan.files },
             `plan ${planVersion} received: ${plan.steps.length} stage(s)${plan.files.length > 0 ? `, ${plan.files.length} file(s)` : ''}`);
-          // Asked of the operator only in a run that asks before each command: one that does not, approves it itself.
-          const asks = planMode === 'approve' && !!deps.approvePlan && (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm';
+          /*
+           * Asked of the operator in a run that asks before each command: one that does not approves it itself. In the
+           * workbench's chat always, as plan mode is there (2026-10-20: "a plan mode, as in Claude Code"): the operator
+           * turned it on to see the plan before anything changes, whether the commands are then asked about or not.
+           */
+          const asks = planMode === 'approve' && !!deps.approvePlan && (session.kind === 'chat' || (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm');
           let answer: { decision: 'approve' | 'revise' | 'stop'; note?: string } = { decision: 'approve' };
           if (asks) {
             sink.event('plan-waiting', { version: planVersion }, `plan ${planVersion} is waiting for the operator`, 'warn');
@@ -2859,6 +2963,8 @@ export async function runTask(
        */
       let refusedAt: number | null = null;
       for (const step of reply.steps) {
+        // Paused: no other command runs until Continue. Stopped while held, the Stop just below takes it.
+        await holdHere('command');
         if (signal?.aborted) {
           results.push(refusedResult(step, 'stopped by the operator', 'operator'));
           aborted = true;
@@ -3211,7 +3317,8 @@ export async function runTask(
            * second copy under a reply in progress; this is the reply wait from the settings running
            * out, which ends the task at that limit (see the catch at the end), not an upload to retry.
            */
-          if (isReplyTimeout(e)) throw e;
+          // Nor is a window the operator closed, which no retry reaches.
+          if (isReplyTimeout(e) || transport.closedOutside()) throw e;
           sink.event('report-send-failed', { attempt, error: String(e) }, `sending the report failed (attempt ${attempt + 1}): ${(e as Error).message}`, 'warn');
           if (attempt === cfg.report.uploadRetries) {
             const body = await readFile(report.paths[0], 'utf8');
@@ -3237,6 +3344,11 @@ export async function runTask(
     }
   } catch (e) {
     const message = (e as Error).message;
+    // Stopped before a message went out — while paused, or as the reviewer was about to send: nothing more was sent.
+    if (e instanceof StoppedSend) {
+      sink.event('task-stopped', {}, 'stopped by the operator; nothing more was sent');
+      return await finish('aborted', 'stopped by the operator; nothing more was sent');
+    }
     /*
      * The chat took longer than Settings allow for a reply. A limit, not a fault: the conversation
      * and the work are where they were, and "Continue" carries the task on in that chat.
@@ -3245,6 +3357,15 @@ export async function runTask(
       sink.event('reply-timeout', { seconds: e.seconds }, message, 'warn');
       limitHit = { setting: 'replyTimeoutSec', value: e.seconds };
       return await finish('limit-reached', `replyTimeoutSec (${e.seconds}) reached: ${message}`);
+    }
+    /*
+     * The operator closed the window with its X (2026-10-19: "the operator can close the browser with its X at any
+     * moment"): what they did, said as a stop rather than as the error every call on a closed page gives. Unless
+     * Edge left a crash report, which says it was not them.
+     */
+    if (transport.closedOutside() && !(await transport.recentCrash().catch(() => null))) {
+      sink.event('window-closed', { error: message }, 'the browser window was closed; nothing more is sent', 'warn');
+      return await finish('aborted', 'the browser window was closed; nothing more was sent');
     }
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     await transport.dumpFailure(log.path('failures'), 'crash').catch(() => undefined);
@@ -3285,6 +3406,14 @@ export async function runSession(
      * session has always done.
      */
     transport?: ChatTransport;
+    /**
+     * A message of the workbench's chat (2026-10-19: "when the work on one chat message is done, the browser is not
+     * to close, so that the next message finds it open"). A window this run opens is handed to `keep` at the end
+     * instead of being closed, while it is still open; a window it is given (`transport`) is the one an earlier
+     * message left, which may have sat for hours: the card it shows is taken away and the sign-in looked at again
+     * before it is used.
+     */
+    chatWindow?: { keep: (transport: ChatTransport) => void };
   },
 ): Promise<{ ran: number; lastStatus?: TaskOutcome['status']; paused: boolean; refused?: string }> {
   const { cfg, store, bus } = deps;
@@ -3322,13 +3451,23 @@ export async function runSession(
   try {
     session = await joinGroupConversation(store, session, bus);
 
-    if (borrowed) {
-      speakFor(borrowed, session.id);
-      bus.publish({ sessionId, type: 'browser-reused', level: 'info', message: 'using the browser window that is already open' });
-      await enterSessionConversation(borrowed, session, { closeOnFailure: false });
-    } else {
-      await deps.beforeBrowser?.();
-      transport = await openSessionTransport(cfg, session, bus, sessionRunsDir, deps.signal);
+    try {
+      if (borrowed) {
+        speakFor(borrowed, session.id, { alone: !!deps.chatWindow });
+        bus.publish({ sessionId, type: 'browser-reused', level: 'info', message: deps.chatWindow ? 'using the browser window the last message left open' : 'using the browser window that is already open' });
+        if (deps.chatWindow) {
+          await borrowed.clearNotice().catch(() => undefined);
+          await borrowed.ensureSignedIn(undefined, { signal: deps.signal });
+        }
+        await enterSessionConversation(borrowed, session, { closeOnFailure: false });
+      } else {
+        await deps.beforeBrowser?.();
+        // The chat's window outlives this message, so what it keeps goes where the batch's window keeps its own.
+        transport = await openSessionTransport(cfg, session, bus, deps.chatWindow ? cfg.resolved.runsDir : sessionRunsDir, deps.signal);
+        if (deps.chatWindow) speakFor(transport, session.id, { alone: true });
+      }
+    } catch (e) {
+      throw failedOpening(e);
     }
     const chat = transport as ChatTransport;
 
@@ -3372,6 +3511,11 @@ export async function runSession(
 
       let outcome = await runTask(chat, session, task, deps);
       ran += 1;
+      // The operator closed the window with its X: a stop, for the tasks after it too (2026-10-19).
+      if (chat.closedOutside()) {
+        bus.publish({ sessionId, type: 'session-stopped', level: 'info', message: 'the browser window was closed; the tasks after this one stay queued' });
+        break;
+      }
 
       /*
        * A blocked task is run again in a fresh conversation, up to the configured number of
@@ -3521,13 +3665,20 @@ export async function runSession(
      */
     if (deps.signal?.aborted && ran === 0) {
       bus.publish({ sessionId, type: 'session-stopped', level: 'info', message: `stopped by the operator before the first task was sent; the tasks stay queued (${(e as Error).message})` });
+    } else if ((e instanceof WindowClosed || transport?.closedOutside()) && ran === 0) {
+      // Closed with its X while the chat was being opened, the sign-in awaited or the model chosen: a stop as well.
+      bus.publish({ sessionId, type: 'session-stopped', level: 'info', message: 'the browser window was closed before the first task was sent; the tasks stay queued' });
     } else {
       bus.publish({ sessionId, type: 'session-error', level: 'error', message: (e as Error).message });
       throw e;
     }
   } finally {
     // A borrowed window belongs to whoever opened it and stays open for the next session.
-    if (!borrowed) await transport?.close();
+    if (!borrowed) {
+      // The chat's, still open, is kept for its next message; one the operator closed is let go of.
+      if (deps.chatWindow && transport?.isOpen()) deps.chatWindow.keep(transport);
+      else await transport?.close();
+    }
     await store.updateSession(sessionId, (s) => {
       s.status = 'idle';
     });

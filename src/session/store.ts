@@ -45,28 +45,6 @@ const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
 export const DEFAULT_REVIEW: ReviewSettings = { enabled: true, model: '' };
 
 /**
- * The three standing texts the operator gives the plan persona: the parts of Kerrigan that come
- * from the person using her rather than from this project. Kept apart because they change at
- * different rates and answer different questions.
- *
- * `organisation` is the slow one: what anybody doing a task here would need to know — how things
- * are built and tested, the conventions, where information lives, what must not be touched.
- * Written once and read for months. Deliberately not "who the company is": the name of an
- * organisation or a project helps with no task, and a field that asked for it filled up with it.
- *
- * `persona` is the approach: what the agent that carries out the tasks is responsible for, the
- * phases it works through, and what it hands back at the end. Nameless on purpose — it is a way of
- * working, not a character — and swappable, because a refactor, an audit and a test suite each
- * want a different one. It is the one text of the three that reaches execution directly: it is
- * written into every task's level 2 when a plan is imported (see `composeLevel2`).
- *
- * `work` is the fast one: what this group of tasks is about, which ticket, which constraints —
- * replaced whenever the work changes. Kept in one field with the others they were edited
- * together, and the parts that never change were rewritten every time the one that does did.
- */
-export type ContextKind = 'organisation' | 'persona' | 'work';
-
-/**
  * Where a session sits in the list: its position, or, for one saved before the list could be
  * arranged, minus the time it was created — which keeps those newest first, as they always were,
  * and above any arranged session only if they are newer than the list's top was.
@@ -222,8 +200,6 @@ export class SessionStore {
   readonly dir: string;
   private readonly sessionsDir: string;
   private readonly presetsDir: string;
-  /** Named personas the operator keeps for the import page, one file each. */
-  private readonly personasDir: string;
   private readonly level1Path: string;
   private readonly modelsPath: string;
 
@@ -231,7 +207,6 @@ export class SessionStore {
     this.dir = resolve(dataDir);
     this.sessionsDir = join(this.dir, 'sessions');
     this.presetsDir = join(this.dir, 'level2');
-    this.personasDir = join(this.dir, 'personas');
     this.level1Path = join(this.dir, 'level1.md');
     this.modelsPath = join(this.dir, 'models.json');
   }
@@ -257,31 +232,6 @@ export class SessionStore {
 
   async resetLevel1(): Promise<void> {
     await removeFile(this.level1Path);
-  }
-
-  // --- the organisation's part of the plan persona -------------------------------------
-
-  /**
-   * The operator's own part of the plan brief: where tickets come from, what to search, how
-   * the machine is laid out. One customised copy in `data/organisation.md`, whatever language
-   * it is written in; the shipped default comes per language from the prompts folder.
-   */
-  async getContext(kind: ContextKind, lang: 'en' | 'bg'): Promise<{ content: string; customised: boolean; example: string }> {
-    const custom = join(this.dir, `context-${kind}.md`);
-    const shipped = join(this.defaultLevel1Path, '..', `${kind}.${lang}.md`);
-    const example = await readFile(shipped, 'utf8').catch(() => '');
-    if (existsSync(custom)) return { content: await readFile(custom, 'utf8'), customised: true, example };
-    // Nothing until the operator writes it: an empty field is what makes the persona ask.
-    // The shipped text is the example it is shown, not the answer.
-    return { content: '', customised: false, example };
-  }
-
-  async setContext(kind: ContextKind, content: string): Promise<void> {
-    await writeFileAtomically(join(this.dir, `context-${kind}.md`), content);
-  }
-
-  async resetContext(kind: ContextKind): Promise<void> {
-    await removeFile(join(this.dir, `context-${kind}.md`));
   }
 
   // --- the model catalogue ----------------------------------------------------------------
@@ -320,8 +270,8 @@ export class SessionStore {
    *
    * Stripping the characters a file name cannot hold is not enough on its own: a leading dot and
    * ".." survive it, and `safePresetName` refuses both, so ".env" and "a..b" were saved and then
-   * could never be deleted. The name goes through the same rule as the delete, the way a persona's
-   * always has, so a name that could not be removed is refused here instead.
+   * could never be deleted. The name goes through the same rule as the delete, so a name that could
+   * not be removed is refused here instead.
    */
   async savePreset(name: string, content: string): Promise<Level2Preset> {
     const safe = name.replace(/[^\p{L}\p{N}._ -]/gu, '').trim();
@@ -332,39 +282,6 @@ export class SessionStore {
 
   async deletePreset(name: string): Promise<void> {
     await removeFile(await namedFile(this.presetsDir, name));
-  }
-
-  // --- named personas -------------------------------------------------------------------
-  //
-  // "How the tasks are carried out" is one box on the import page, and the persona in it depends
-  // on the kind of work: a Playwright suite wants a different agent from an API service. These
-  // are saved copies of that box under a name, so switching is one choice instead of pasting a
-  // JSON back in. The box itself (`context-persona.md`) stays the one that is in force.
-
-  async listPersonas(): Promise<Level2Preset[]> {
-    const names = (await readdir(this.personasDir).catch(() => [] as string[]))
-      .filter((n) => n.endsWith('.md'))
-      .sort((a, b) => a.localeCompare(b));
-    const out: Level2Preset[] = [];
-    for (const n of names) {
-      const path = join(this.personasDir, n);
-      const content = await readFile(path, 'utf8');
-      const { mtime } = await import('node:fs').then((fs) => fs.statSync(path));
-      out.push({ name: n.slice(0, -3), content, updatedAt: mtime.toISOString() });
-    }
-    return out;
-  }
-
-  async savePersona(name: string, content: string): Promise<Level2Preset> {
-    const safe = name.replace(/[^\p{L}\p{N}._ -]/gu, '').trim();
-    if (!safe) throw new Error('The persona name is empty after removing unsafe characters.');
-    await mkdir(this.personasDir, { recursive: true });
-    await writeFileAtomically(join(this.personasDir, `${safePresetName(safe)}.md`), content);
-    return { name: safe, content, updatedAt: new Date().toISOString() };
-  }
-
-  async deletePersona(name: string): Promise<void> {
-    await removeFile(await namedFile(this.personasDir, name));
   }
 
   // --- sessions -------------------------------------------------------------------------

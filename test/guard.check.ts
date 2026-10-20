@@ -195,8 +195,8 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
   t.check('and allows that origin', preflight.headers['access-control-allow-origin'], 'http://localhost:3210');
 
   // EventSource cannot send a header, so the stream takes the token as a query parameter — and a wrong one is a 401.
-  const stream = await wire(port, 'GET', `/api/sessions/${s!.id}/stream?token=${'0'.repeat(64)}`, {}, undefined, 15_000);
-  t.check('the event stream with a wrong token in the query is refused with 401 and an error field', [stream.status, typeof stream.json?.error], [401, 'string']);
+  const stream = await wire(port, 'GET', `/api/sessions/${s!.id}/events?token=${'0'.repeat(64)}`, {}, undefined, 15_000);
+  t.check('the events with a wrong token in the query are refused with 401 and an error field', [stream.status, typeof stream.json?.error], [401, 'string']);
 
   /*
    * The page reads the file name of a download from this header; across origins it must be exposed
@@ -206,7 +206,8 @@ await scenario('the guard on the wire: host, origin, the open health path, CORS'
   h.chat.script(write('hello.txt', 'hi'), reply.done());
   const ran = await h.run(s!.id);
   t.check('control: the session ran, so it has something to export', ran.tasks[0]!.status, 'done');
-  const exported = await wire(port, 'GET', `/api/sessions/${s!.id}/export`, { origin: 'http://localhost:3210', 'x-cop-token': token });
+  // The download left since 2026-10-20: a message's exchange with Copilot, as a JSON file.
+  const exported = await wire(port, 'GET', `/api/sessions/${s!.id}/tasks/${ran.tasks[0]!.id}/exchange`, { origin: 'http://localhost:3210', 'x-cop-token': token });
   t.check('the export to the dev UI is a download: 200', exported.status, 200);
   t.check('carrying a content-disposition header', typeof exported.headers['content-disposition'], 'string');
   const exposed = String(exported.headers['access-control-expose-headers'] ?? '');
@@ -431,11 +432,6 @@ await scenario('no isolation: every entrance refuses an unattended run', { setti
   // The run is written onto the session only once every reason to refuse it has been looked at.
   t.truthy('and no run was recorded on the session (runGroup still absent)', untouched.runGroup === undefined, untouched.runGroup);
 
-  const batch = await h.call<Refusal>('POST', '/batch/start', { sessionIds: [id], mode: 'unattended' });
-  t.check('batch start unattended is refused', batch.started, false);
-  t.truthy('with the same reason', (batch.reason ?? '').includes('execution.isolation'), batch.reason);
-  t.check('still no chat opened', h.chat.opened, 0);
-
   // A supervised run, then the two ways of turning it unattended while it runs.
   h.chat.script(
     reply.steps("Set-Content -Path one.txt -Value 'a' -Encoding utf8", "Set-Content -Path two.txt -Value 'b' -Encoding utf8"),
@@ -448,10 +444,6 @@ await scenario('no isolation: every entrance refuses an unattended run', { setti
     return list.length === 1 ? list[0] : undefined;
   });
   t.check('it waits on step 1', first.stepId, 1);
-
-  const switched = await h.call<{ ok: boolean; reason?: string }>('POST', `/sessions/${id}/mode`, { mode: 'unattended' });
-  t.check('"continue without asking" is refused', switched.ok, false);
-  t.truthy('naming the isolation', /isolation/.test(switched.reason ?? ''), switched.reason);
 
   await h.call('POST', `/approvals/${first.id}`, { action: 'run-all' });
   const second = await waitFor('step 2 to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals')).find((a) => a.stepId === 2));
@@ -470,8 +462,6 @@ await scenario('isolation claimed but no allowlist: an unattended start is refus
   const single = await h.call<Refusal>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   t.check('start unattended is refused', single.started, false);
   t.truthy('naming execution.allowedPrograms', (single.reason ?? '').includes('execution.allowedPrograms'), single.reason);
-  const batch = await h.call<Refusal>('POST', '/batch/start', { sessionIds: [s!.id], mode: 'unattended' });
-  t.truthy('and so is the batch, for the same reason', !batch.started && (batch.reason ?? '').includes('execution.allowedPrograms'), batch);
   t.check('no chat was opened', h.chat.opened, 0);
 });
 
@@ -500,33 +490,18 @@ await scenario('isolation claimed but no allowlist: an unattended start is refus
       const id = s!.id;
       const single = await h.call<Refusal>('POST', `/sessions/${id}/start`, { mode: 'unattended' });
       t.truthy('start unattended is refused, naming policy.lock.json', !single.started && /policy\.lock\.json/.test(single.reason ?? ''), single);
-      const batch = await h.call<Refusal>('POST', '/batch/start', { sessionIds: [id], mode: 'unattended' });
-      t.truthy('batch start unattended is refused the same way', !batch.started && /policy\.lock\.json/.test(batch.reason ?? ''), batch);
       t.check('no chat was opened', h.chat.opened, 0);
 
       h.chat.script(write('one.txt', 'a'), reply.done());
       const confirm = await h.call<Refusal>('POST', `/sessions/${id}/start`, { mode: 'confirm' });
       t.check('a supervised start is allowed', confirm.started, true);
       const step = await waitFor('the step to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
-      const switched = await h.call<{ ok: boolean; reason?: string }>('POST', `/sessions/${id}/mode`, { mode: 'unattended' });
-      t.truthy('switching the running session to unattended is refused, naming the lock', !switched.ok && /policy\.lock\.json/.test(switched.reason ?? ''), switched);
-      await h.call('POST', `/approvals/${step.id}`, { action: 'run' });
+      // "Run this and the rest" is the one way left to turn a running conversation unattended: under the lock it runs
+      // this step and goes on asking.
+      await h.call('POST', `/approvals/${step.id}`, { action: 'run-all' });
       await h.idle();
       t.check('the supervised run finishes', (await h.session(id)).tasks[0]!.status, 'done');
 
-      // The brief a chat model writes the plan from must not send the operator to a button that says no.
-      const brief = await h.call<{ text: string }>('GET', '/plan/brief?lang=en');
-      t.truthy('the plan brief says runs with nobody watching are refused here', brief.text.includes('runs with nobody watching are refused'), brief.text.slice(0, 300));
-      // The reason is the one the run gives, asked in the same order: a lock is a lock. Every refusal
-      // that was not isolation used to be told as an empty allowlist, which sent the operator to fill
-      // in a list that was already full.
-      t.truthy('and does not blame an allowlist that is not empty', !brief.text.includes('the list of allowed programs is empty'));
-      const why = brief.text.split('runs with nobody watching are refused')[1]?.slice(0, 600) ?? '';
-      t.truthy('it names the lock as the reason', why.includes('policy.lock.json'), why);
-      const briefBg = await h.call<{ text: string }>('GET', '/plan/brief?lang=bg');
-      const whyBg = briefBg.text.split('пускане без надзор се отказва')[1]?.slice(0, 600) ?? '';
-      t.truthy('and so does the Bulgarian brief, without blaming the allowlist',
-        whyBg.includes('policy.lock.json') && !whyBg.includes('списъкът с позволени програми е празен'), whyBg);
     });
   } finally {
     delete process.env.COP_PROJECT_ROOT;
@@ -638,7 +613,7 @@ console.log('\n--- a lock saved by Windows PowerShell is read ---');
         ['GET', '/doctor'],
         ['GET', '/project'],
         ['GET', '/models'],
-        ['GET', '/plan/brief?lang=en'],
+        ['GET', '/kerrigan?lang=en'],
         ['PUT', '/settings', {}],
         ['POST', `/sessions/${s!.id}/start`, { mode: 'confirm' }],
       ];
@@ -681,12 +656,8 @@ console.log('\n--- a lock saved by Windows PowerShell is read ---');
       await h.idle();
       t.check('control: the task ran, so its record can be downloaded', (await h.session(id)).tasks[0]!.status, 'done');
 
-      const downloads: Array<[string, string, unknown?]> = [
-        ['GET', `/sessions/${id}/export`],
-        ['GET', `/debug/export?sessions=${id}`],
-        ['POST', '/export/bundle', { tasks: [{ sessionId: id, taskId }] }],
-        ['GET', `/export/plan?session=${id}`],
-      ];
+      // The download left (2026-10-20): a message's whole exchange with Copilot, as a JSON file.
+      const downloads: Array<[string, string, unknown?]> = [['GET', `/sessions/${id}/tasks/${taskId}/exchange`]];
       const answers = async (): Promise<Array<{ status: number; message: string }>> => {
         const out: Array<{ status: number; message: string }> = [];
         for (const [method, path, body] of downloads) {
@@ -696,7 +667,7 @@ console.log('\n--- a lock saved by Windows PowerShell is read ---');
         }
         return out;
       };
-      t.check('control: with nothing broken, each download answers', (await answers()).map((a) => a.status >= 200 && a.status < 300), [true, true, true, true]);
+      t.check('control: with nothing broken, each download answers', (await answers()).map((a) => a.status >= 200 && a.status < 300), [true]);
 
       writeFileSync(lock, '{not json', 'utf8');
       for (const [i, a] of (await answers()).entries()) {
@@ -716,7 +687,8 @@ console.log('\n--- a lock saved by Windows PowerShell is read ---');
       } finally {
         writeFileSync(settingsFile, settingsText, 'utf8');
       }
-      t.check('and a request of their own that is wrong is still a 400 in plain text', [(await h.raw('GET', '/export/plan')).status, (await h.raw('GET', '/export/plan')).body], [400, 'Name a run, a session or a task.']);
+      const wrong = await h.raw('GET', `/sessions/${id}/tasks/nope/exchange`);
+      t.truthy('and a request of their own that is wrong is still a 400 in plain text', wrong.status === 400 && typeof wrong.body === 'string' && wrong.body.length > 0, wrong);
     });
   } finally {
     delete process.env.COP_PROJECT_ROOT;
@@ -785,41 +757,16 @@ await scenario('path and ownership guards on a task\'s files', {}, async (h) => 
   t.truthy('each has a run of its own', !!a.runId && !!b.runId && a.runId !== b.runId, [a.runId, b.runId]);
 
   const A = `/api/sessions/${s.id}/tasks/${a.id}`;
-  // Controls: the task's own records are there, so the 404s below are refusals and not absences.
-  t.check('control: A\'s own log', (await get(`${A}/log`)).status, 200);
+  // Controls: the task's own record is there, so the 404s below are refusals and not absences.
   t.check('control: A\'s own story by its own run id', (await get(`${A}/story?run=${a.runId}`)).status, 200);
-  /*
-   * A name starting with `_` is the bot's own bookkeeping and never listed. Nothing a run writes
-   * today puts one in a reports folder, so one is put there (in this harness's own runs folder),
-   * or the filter could go and the list would not change.
-   */
-  writeFileSync(join(h.runsDir, a.runId!, 'reports', '_internal.txt'), 'x', 'utf8');
-  const files = (await get(`${A}/files`)).json as { reports?: string[] } | undefined;
-  t.truthy('A\'s reports list its first iteration', (files?.reports ?? []).includes('iteration-1.txt'), files);
-  t.truthy('but not the _-prefixed file beside it', !(files?.reports ?? []).includes('_internal.txt'), files?.reports);
-  t.check('control: A\'s report by name', (await get(`${A}/files/reports/iteration-1.txt`)).status, 200);
-
-  t.check('A\'s log with B\'s run id: 404', (await get(`${A}/log?run=${b.runId}`)).status, 404);
+  t.check('A\'s story with B\'s run id: 404', (await get(`${A}/story?run=${b.runId}`)).status, 404);
   t.check('A\'s story with a path for a run id: 404', (await get(`${A}/story?run=..%5C..`)).status, 404);
-  /*
-   * A file name that climbs out of the run folder. Three levels up from <runs>/<runId>/reports is
-   * the harness's base folder, so the name lands on data/settings.json, which exists: without the
-   * name guard the route would answer 200 with the settings file, not a 404 for a missing file.
-   */
-  const climb = '..\\..\\..\\data\\settings.json';
-  t.truthy('control: that name would reach data/settings.json', existsSync(join(h.runsDir, a.runId!, 'reports', climb)), join(h.runsDir, a.runId!, 'reports', climb));
-  const escaped = await get(`${A}/files/reports/${encodeURIComponent(climb)}`);
-  t.check('A\'s file with a path for a name: 404', escaped.status, 404);
-  t.truthy('and the answer holds nothing of the settings file', !escaped.text.includes('pacing') && !escaped.text.includes(h.runsDir), escaped.text.slice(0, 200));
-  t.check('A\'s file of a kind that is not one: 400', (await get(`${A}/files/secrets/x`)).status, 400);
-
   const c = await h.call<{ id: string }>('POST', `/sessions/${s.id}/tasks`, {
     title: 'task-c',
     prompt: 'Create c.txt in the repository root holding exactly the word gamma, and nothing else.',
   });
   const C = `/api/sessions/${s.id}/tasks/${c.id}`;
-  t.check('a queued task has no log: 404', (await get(`${C}/log`)).status, 404);
-  t.check('and no story: 404', (await get(`${C}/story`)).status, 404);
+  t.check('a queued task has no story: 404', (await get(`${C}/story`)).status, 404);
 
   const pathGet = await get('/api/sessions/..%5C..%5Cx');
   // An id that could not be a session's file name names no session: the store answers it as missing.
@@ -828,9 +775,7 @@ await scenario('path and ownership guards on a task\'s files', {}, async (h) => 
   // well-formed id that names no session — a 404 for the log and the story, and for the list of a
   // task's files the empty lists any task it does not know gets.
   const answers: Record<string, { status: number; json?: unknown }> = {
-    'tasks/x/log': { status: 404 },
     'tasks/x/story': { status: 404 },
-    'tasks/x/files': { status: 200, json: { reports: [], artifacts: [], replies: [] } },
   };
   for (const [sub, want] of Object.entries(answers)) {
     const res = await get(`/api/sessions/..%5C..%5Cx/${sub}`);
@@ -839,15 +784,6 @@ await scenario('path and ownership guards on a task\'s files', {}, async (h) => 
     t.check(`GET /sessions/<a path>/${sub} answers ${want.status}`, shape(res), want);
     t.check(`as it answers an id that names no session`, shape(res), shape(missing));
   }
-  /*
-   * A session id that climbs one level out of data/sessions: the store deletes `<id>.json`, so
-   * `..\settings` names data/settings.json — a real file, so a missing guard would show as a
-   * deleted settings file and a 200, not as nothing happening.
-   */
-  t.truthy('control: that id would name data/settings.json', existsSync(join(h.dataDir, 'sessions', '..\\settings.json')));
-  const pathDelete = await wire(port, 'DELETE', `/api/sessions/${encodeURIComponent('..\\settings')}`, { 'x-cop-token': token });
-  t.truthy('DELETE /sessions/<a path> is 400 or 404, never 200 or 500', pathDelete.status === 400 || pathDelete.status === 404, pathDelete.status);
-  t.truthy('and data/settings.json is still there', existsSync(join(h.dataDir, 'settings.json')));
 });
 
 // --- the safe defaults ------------------------------------------------------------------------------

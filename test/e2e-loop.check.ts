@@ -36,6 +36,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { startHarness, waitFor, freePort, readJson, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply, type Incoming, type Sent } from './support/fakeChat.js';
+import { checkPlan } from '../src/plan/schema.js';
 import { detectShells, inventoryOf, type Shell } from '../src/exec/shells.js';
 import { setTransportFactory, type ChatTransport } from '../src/transport/chatTransport.js';
 import type { EdgeCrash } from '../src/transport/edgeCrash.js';
@@ -931,7 +932,8 @@ await scenario('what each run folder holds', { limits: { maxCheckRounds: 1 } }, 
   t.check('plan.json, work.json, runner.json', ['plan.json', 'work.json', 'runner.json'].map((x) => existsSync(join(fdir, x))), [true, true, true]);
   const work = await readJson<{ tasks: Array<{ outcome: { status: string }; whyItFailed?: { failingChecks: Array<{ name: string }> } }> }>(join(fdir, 'work.json'));
   t.check('work.json: failed, on the check', [work.tasks[0]?.outcome.status, work.tasks[0]?.whyItFailed?.failingChecks[0]?.name], ['failed', 'never.txt written']);
-  const checked = await h.call<{ ok: boolean }>('POST', '/plan/check', { text: readFileSync(join(fdir, 'plan.json'), 'utf8') });
+  // The plan schema, as the import page held a plan to it: the record is in a form that would import again.
+  const checked = checkPlan(readFileSync(join(fdir, 'plan.json'), 'utf8'));
   t.check('plan.json passes the plan check', checked.ok, true);
 
   // A supervised run switched to "run the rest without asking" on task 1 of two: each policy.json

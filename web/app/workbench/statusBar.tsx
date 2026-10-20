@@ -1,19 +1,18 @@
 'use client';
 
 /**
- * The line along the workbench's bottom, as an IDE has: where the chosen session's work is (its branch), the model,
- * what is running now and how far into its limits it is, and how many steps wait for an answer.
+ * The line along the workbench's bottom, as an IDE has: the open folder and its branch, the model of the conversation
+ * open in the chat, what is running now and how far into its limits it is, and how many steps wait for an answer.
  */
 import { useEffect, useState } from 'react';
-import { api, type Session, type Task, type Workspace } from '../../lib/api';
+import { api, type Session, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useNow } from '../../lib/useNow';
 
-export function StatusBar({ sessions, session, task, workspace, onOpenTask }: { sessions: Session[]; session?: Session; task?: Task; workspace: Workspace | null; onOpenTask: (sessionId: string, taskId: string) => void }) {
+export function StatusBar({ sessions, session, workspace, onShowThread }: { sessions: Session[]; session?: Session; workspace: Workspace | null; onShowThread: (sessionId: string) => void }) {
   const { t } = useT();
   const now = useNow(true, 5000);
-  const [branch, setBranch] = useState('');
   const [waiting, setWaiting] = useState(0);
   const [limits, setLimits] = useState<{ iterations: number; minutes: number }>({ iterations: 60, minutes: 240 });
 
@@ -26,11 +25,6 @@ export function StatusBar({ sessions, session, task, workspace, onOpenTask }: { 
       })
       .catch(() => undefined);
   }, []);
-  useEffect(() => {
-    setBranch('');
-    if (!session?.vcs?.enabled) return;
-    api.vcsStatus(session.id).then((v) => setBranch(v.branch ?? '')).catch(() => undefined);
-  }, [session?.id, session?.status, task?.status]);
   usePoll(() => api.approvals().then((a) => setWaiting(a.length)).catch(() => undefined), 3000);
 
   const runningSession = sessions.find((s) => s.status !== 'idle');
@@ -39,21 +33,16 @@ export function StatusBar({ sessions, session, task, workspace, onOpenTask }: { 
 
   return (
     <footer className="wb-statusbar" aria-label={t('wb.status')}>
-      {!session?.vcs?.enabled && workspace?.ok && (
+      {workspace?.ok && (
         <span title={workspace.dir}>
           <span aria-hidden="true">⎇ </span>
           {workspace.branch ? `${workspace.name} · ${workspace.branch}` : workspace.name}
         </span>
       )}
-      {session?.vcs?.enabled && (
-        <span title={t('wb.branchNow')}>
-          <span aria-hidden="true">⎇ </span>
-          {branch || '…'}
-        </span>
-      )}
       {runningSession && runningTask ? (
-        <button type="button" className="wb-status-btn" onClick={() => onOpenTask(runningSession.id, runningTask.id)} title={t('wb.openRunning')}>
-          <span className="wb-live" aria-hidden="true" /> {t('wb.runningLine', { session: runningSession.name, task: runningTask.title, n: runningTask.iterations, max: limits.iterations, m: minutes, maxm: limits.minutes })}
+        <button type="button" className="wb-status-btn" onClick={() => onShowThread(runningSession.id)} title={t('wb.openRunning')}>
+          <span className={runningSession.paused ? 'wb-live paused' : 'wb-live'} aria-hidden="true" /> {t('wb.runningLine', { session: runningSession.name.replace(/^chat: /, ''), task: runningTask.title, n: runningTask.iterations, max: limits.iterations, m: minutes, maxm: limits.minutes })}
+          {runningSession.paused && <strong className="wb-paused"> · {t('wb.pausedTag')}</strong>}
         </button>
       ) : (
         <span>{t('wb.idle')}</span>

@@ -26,10 +26,15 @@ import { BY_HAND, ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
 import { CopyButton } from '../copyButton';
 import { RichText } from '../richText';
+import { PlanCard } from '../approvals';
+import { PlanView } from '../planView';
 import { StatusMark } from './workbench';
+import { FileIcon } from './fileIcon';
 
 const THREAD_KEY = 'cop.chat.thread';
 const MODE_KEY = 'cop.chat.mode';
+/** Plan mode for the next new conversation, as last chosen in this browser. */
+const PLAN_KEY = 'cop.chat.plan';
 const keep = (key: string, value: string): void => {
   try {
     if (value) window.localStorage.setItem(key, value);
@@ -49,13 +54,15 @@ const kept = (key: string): string => {
 /** What the chat shows: its latest message, `'new'` while it is on a new chat with nothing in it, or null. */
 export type ChatTurn = { sessionId: string; taskId: string } | 'new' | null;
 
-export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFolder, onTurn }: { workspace: Workspace | null; composeAsk: number; onOpenFile: (path: string) => void; onChange: () => void; onOpenFolder: () => void; onTurn: (turn: ChatTurn) => void }) {
-  const { t } = useT();
+export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChange, onOpenFolder, onTurn }: { workspace: Workspace | null; composeAsk: number; /** A conversation to show, asked from outside the chat: the running one, from the status bar. */ showThread?: { id: string; n: number } | null; onOpenFile: (path: string) => void; onChange: () => void; onOpenFolder: () => void; onTurn: (turn: ChatTurn) => void }) {
+  const { t, locale } = useT();
   const quietStart = useUnattendedWithoutAsking();
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState('');
   const [session, setSession] = useState<Session | null>(null);
   const [mode, setMode] = useState<'confirm' | 'unattended'>('confirm');
+  /** Plan mode for a conversation not started yet; a started one has its own (`Session.planMode`). */
+  const [newPlan, setNewPlan] = useState(false);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState('');
@@ -77,6 +84,7 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
 
   useEffect(() => {
     setThreadId(kept(THREAD_KEY));
+    setNewPlan(kept(PLAN_KEY) === 'on');
     const m = kept(MODE_KEY);
     if (m === 'confirm' || m === 'unattended') setMode(m);
     else
@@ -89,6 +97,10 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
     if (composeAsk > 0) box.current?.focus();
   }, [composeAsk]);
   useEffect(() => {
+    if (showThread?.id) choose(showThread.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showThread?.n]);
+  useEffect(() => {
     api.models().then(setCatalogue).catch(() => undefined);
   }, []);
 
@@ -100,7 +112,11 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
         ? api
             .session(threadId)
             .then((s) => setSession(s.kind === 'chat' ? s : null))
-            .catch(() => {
+            .catch((e: unknown) => {
+              // Only a conversation the API no longer has is forgotten. A read that failed on the way — the bot
+              // restarting, a timeout, the page reloading under it — keeps it, and the next read opens it again
+              // (2026-10-20: a reload while the first read was out lost the conversation).
+              if ((e as { status?: number }).status !== 404) return;
               setSession(null);
               setThreadId('');
               keep(THREAD_KEY, '');
@@ -134,7 +150,8 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
       const fresh = !threadId;
       // Only when chosen: with no model anywhere the runner asks by hand anyway, and Settings may name one not read yet.
       const byHand = fresh && newModel === BY_HAND;
-      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand);
+      // The language of the page goes along: the Copilot window says in it when the work on the message has ended.
+      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan);
       setText('');
       choose(r.threadId);
       if (r.noted) {
@@ -177,18 +194,29 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
       onChange();
     }
   };
+  /**
+   * A choice of the open conversation's, under the box: shown at once and written after, and read back either way, so
+   * what the API refused goes back to what it holds. Shown only once the API had answered, a click on "Plan mode"
+   * looked like it did nothing for as long as the write and the next read took (2026-10-20).
+   */
+  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve' }) => {
+    if (!session) return;
+    setSession((s) => (s ? { ...s, ...patch } : s));
+    try {
+      await api.updateSession(session.id, patch);
+    } catch (e) {
+      setSaid((e as Error).message);
+    } finally {
+      void readSession();
+    }
+  };
   /** The model of this conversation (or of the next one), as in an IDE's chat: chosen under the box. */
   const chooseModel = async (name: string) => {
     if (!session) {
       setNewModel(name);
       return;
     }
-    try {
-      await api.updateSession(session.id, name === BY_HAND ? { model: '', manualModel: true } : { model: name, manualModel: false });
-      void readSession();
-    } catch (e) {
-      setSaid((e as Error).message);
-    }
+    await changeSession(name === BY_HAND ? { model: '', manualModel: true } : { model: name, manualModel: false });
   };
   /** The latest models, read from Copilot's own picker (it opens the browser for a moment). */
   const readModels = async () => {
@@ -201,6 +229,38 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
       setSaid((e as Error).message);
     } finally {
       setReading(false);
+    }
+  };
+  /**
+   * Plan mode, as in Claude Code (2026-10-20): Copilot first looks at the project with read-only commands and proposes a
+   * plan, which is shown in the conversation to approve, to ask for another, or to stop; nothing changes before. Of the
+   * conversation when there is one, else of the next one.
+   */
+  const planOn = session ? session.planMode === 'approve' : newPlan;
+  const choosePlan = async (on: boolean) => {
+    if (!session) {
+      setNewPlan(on);
+      keep(PLAN_KEY, on ? 'on' : '');
+      return;
+    }
+    await changeSession({ planMode: on ? 'approve' : 'off' });
+  };
+  /*
+   * "Pause" and "Continue" (operator, 2026-10-20): the work holds at its next message to Copilot or its next command —
+   * a reply being written and a command running are let finish — and goes on from there when asked. Shown at once,
+   * as the other choices under the box are.
+   */
+  const paused = running && !!session?.paused;
+  const togglePause = async () => {
+    if (!session) return;
+    const on = !session.paused;
+    setSession((s) => (s ? { ...s, paused: on } : s));
+    try {
+      await (on ? api.pause(session.id) : api.resume(session.id));
+    } catch (e) {
+      setSaid((e as Error).message);
+    } finally {
+      void readSession();
     }
   };
   const stop = () => {
@@ -244,6 +304,7 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
             <Turn key={task.id} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
           ))
         )}
+        {paused && <p className="cs-system cs-paused" role="status">{t('chat.pausedNote')}</p>}
         {said && <p className="cs-system" role="status">{said}</p>}
       </div>
 
@@ -285,7 +346,16 @@ export function Cascade({ workspace, composeAsk, onOpenFile, onChange, onOpenFol
             <option value="confirm">{t('chat.modeAsk')}</option>
             <option value="unattended">{t('chat.modeAuto')}</option>
           </select>
+          <label className="cs-plan-toggle" title={t('chat.planModeWhy')}>
+            <input type="checkbox" checked={planOn} disabled={running} onChange={(e) => void choosePlan(e.target.checked)} />
+            <span>{t('chat.planMode')}</span>
+          </label>
           <span className="grow" />
+          {running && (
+            <button type="button" className="cs-pause" onClick={() => void togglePause()} title={paused ? t('chat.resumeWhy') : t('chat.pauseWhy')}>
+              {paused ? t('chat.resume') : t('chat.pause')}
+            </button>
+          )}
           {running && (
             <button type="button" className="danger" onClick={stop}>
               {t('chat.stop')}
@@ -347,7 +417,7 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
   walk(story?.entries ?? []);
 
   return (
-    <section className="cs-turn" aria-label={t('chat.turn', { text: task.title })}>
+    <section className="cs-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
       <div className="cs-user-row">
         {onRewind && (task.checkpoint || task.status === 'queued') && (
           <button type="button" className="wb-icon-btn cs-rewind" onClick={onRewind} title={t('chat.rewind')} aria-label={t('chat.rewind')}>
@@ -378,6 +448,13 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
           <Command key={i} step={e} />
         ) : null,
       )}
+      {/* The plan, once approved: what the work follows, folded under its heading. */}
+      {task.plan?.approved && !approvals.some((a) => a.plan) && (
+        <details className="cs-plan">
+          <summary>{t('chat.planShown', { v: task.plan.version })}</summary>
+          <PlanView plan={task.plan} />
+        </details>
+      )}
       {approvals.map((a) => (
         <Ask key={a.id} approval={a} />
       ))}
@@ -386,18 +463,7 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
           <span className="wb-live" aria-hidden="true" /> {t('chat.working', { n: task.iterations })}
         </p>
       )}
-      {!live && task.status !== 'queued' && (
-        <div className={`cs-end s-${task.status}`}>
-          <StatusMark status={task.status} />
-          <div className="grow">
-            {task.summary ? <RichText text={task.summary} /> : null}
-            {task.status !== 'done' && task.reason ? <p className="small">{task.reason}</p> : null}
-          </div>
-          {(task.summary || task.reason) && (
-            <CopyButton text={[task.summary, task.status !== 'done' ? task.reason : ''].filter(Boolean).join('\n\n')} what="chat.copySummary" />
-          )}
-        </div>
-      )}
+      {!live && task.status !== 'queued' && <Ending task={task} />}
       {/*
         Everything that passed between the bot and Copilot for this message, and nothing of the others: every message
         sent, every reply, every command with its whole output, every attempt (2026-10-18). See taskExchange.ts.
@@ -414,7 +480,7 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
           <span className="small">{t('chat.changed', { n: task.vcs!.files!.length })}</span>
           {task.vcs!.files!.slice(0, 12).map((f) => (
             <button key={f.path} type="button" className="cs-file" onClick={() => onOpenFile(f.path)} title={f.path}>
-              {f.path.split('/').pop()} <span className="muted">{f.added >= 0 ? `+${f.added} −${f.removed}` : ''}</span>
+              <FileIcon path={f.path} /> {f.path.split('/').pop()} <span className="muted">{f.added >= 0 ? `+${f.added} −${f.removed}` : ''}</span>
             </button>
           ))}
           <ChangesButton sessionId={session.id} taskId={task.id} runId={task.runId} title={task.title} files={task.vcs!.files!.length} />
@@ -423,6 +489,48 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
     </section>
   );
 }
+
+/**
+ * How the message ended: the summary, and why when it did not end done, with "Copy" beside it — and under it too when
+ * it is long (2026-10-20: "the Copy button not only at the top of the last message, but at the bottom as well"), so a
+ * long summary is copied without scrolling back up.
+ */
+function Ending({ task }: { task: Task }) {
+  const body = useRef<HTMLDivElement | null>(null);
+  const [long, setLong] = useState(false);
+  const text = [task.summary, task.status !== 'done' ? task.reason : ''].filter(Boolean).join('\n\n');
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    const measure = (): void => {
+      const style = window.getComputedStyle(el);
+      const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.45;
+      setLong(el.scrollHeight > line * LONG_ENDING_LINES);
+    };
+    measure();
+    const seen = new ResizeObserver(measure);
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, []);
+  return (
+    <div className={`cs-end s-${task.status}`}>
+      <StatusMark status={task.status} />
+      <div className="grow" ref={body}>
+        {task.summary ? <RichText text={task.summary} /> : null}
+        {task.status !== 'done' && task.reason ? <p className="small">{task.reason}</p> : null}
+        {text && long && (
+          <div className="cs-copy-row cs-copy-bottom">
+            <CopyButton text={text} what="chat.copySummary" />
+          </div>
+        )}
+      </div>
+      {text && <CopyButton text={text} what="chat.copySummary" />}
+    </div>
+  );
+}
+
+/** From how many lines an ending is long enough for a second "Copy" under it. */
+const LONG_ENDING_LINES = 6;
 
 /** How many lines of a long message show while it is folded. */
 const FOLDED_LINES = 3;
@@ -511,7 +619,9 @@ function Ask({ approval }: { approval: Approval }) {
       setBusy(false);
     }
   };
-  if (approval.plan || approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
+  // The plan is asked about here, in the conversation (plan mode, 2026-10-20); the model card stays at the top.
+  if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={() => undefined} /></div>;
+  if (approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
   return (
     <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
       <p className="small"><strong>{t('chat.askTitle')}</strong></p>

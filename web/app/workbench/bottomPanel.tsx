@@ -1,17 +1,25 @@
 'use client';
 
 /**
- * The panel under the editor: the terminal — the commands the chosen task ran and what each printed, following the
- * newest while it runs; the problems — what did not pass across the session, each a link to its task; and the
- * output — the session's events as they come. Ctrl+J opens and closes it. On a new chat it is empty until that chat
- * runs (2026-10-19), and a problem can be marked "Seen", which takes it off the list and the count.
+ * The panel under the editor, for the conversation open in the chat: the terminal — the commands its latest message
+ * ran and what each printed, following the newest while it runs; the problems — what did not go well in it, each
+ * bringing its message into view in the chat; and the output — the bot's events for it as they come. Ctrl+J opens and
+ * closes it. On a new chat it is empty until that chat runs (2026-10-19), and a problem can be marked "Seen", which
+ * takes it off the list and the count. Each tab has an "i" that says what it shows (2026-10-20).
  */
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api, type Session, type SessionEvent, type Story, type StoryEntry, type Task } from '../../lib/api';
-import { useT, useFmtTime } from '../../lib/i18n';
+import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
+import { InfoTip } from '../popover';
 import type { BottomTab } from './workbench';
+
+const TABS: Array<{ tab: BottomTab; label: Key; infoLabel: Key; info: Key }> = [
+  { tab: 'terminal', label: 'wb.terminal', infoLabel: 'wb.terminalInfoLabel', info: 'wb.terminalInfo' },
+  { tab: 'problems', label: 'wb.problems', infoLabel: 'wb.problemsInfoLabel', info: 'wb.problemsInfo' },
+  { tab: 'output', label: 'wb.output', infoLabel: 'wb.outputInfoLabel', info: 'wb.outputInfo' },
+];
 
 export function BottomPanel({
   open,
@@ -21,7 +29,7 @@ export function BottomPanel({
   session,
   task,
   newChat = false,
-  onOpenTask,
+  onShowMessage,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -31,7 +39,8 @@ export function BottomPanel({
   task?: Task;
   /** The chat is on a new chat with nothing in it: the panel shows nothing of another conversation. */
   newChat?: boolean;
-  onOpenTask: (sessionId: string, taskId: string) => void;
+  /** Brings a message of the conversation into view in the chat. */
+  onShowMessage: (taskId: string) => void;
 }) {
   const { t } = useT();
   const problems = session ? problemsOf(session) : [];
@@ -45,11 +54,14 @@ export function BottomPanel({
   return (
     <section className="wb-bottom" aria-label={t('wb.panel')}>
       <div className="wb-bottom-tabs" role="tablist" aria-label={t('wb.panel')}>
-        {(['terminal', 'problems', 'output'] as BottomTab[]).map((b) => (
-          <button key={b} type="button" role="tab" aria-selected={open && tab === b} className={open && tab === b ? 'on' : ''} onClick={() => onTab(b)}>
-            {t(b === 'terminal' ? 'wb.terminal' : b === 'problems' ? 'wb.problems' : 'wb.output')}
-            {b === 'problems' && unseen.length > 0 && <span className="wb-badge">{unseen.length}</span>}
-          </button>
+        {TABS.map(({ tab: b, label, infoLabel, info }) => (
+          <Fragment key={b}>
+            <button type="button" role="tab" aria-selected={open && tab === b} className={open && tab === b ? 'on' : ''} onClick={() => onTab(b)}>
+              {t(label)}
+              {b === 'problems' && unseen.length > 0 && <span className="wb-badge">{unseen.length}</span>}
+            </button>
+            <InfoTip label={t(infoLabel)} text={t(info)} />
+          </Fragment>
         ))}
         <span className="grow" />
         <button type="button" className="wb-icon-btn" aria-label={t('wb.cmdPanel')} title={`${t('wb.cmdPanel')} (Ctrl+J)`} onClick={onToggle}>
@@ -62,7 +74,7 @@ export function BottomPanel({
             newChat ? <p className="muted small wb-pad">{t('wb.newChatTerminal')}</p> : <Terminal session={session} task={task} />
           ) : tab === 'problems' ? (
             problems.length === 0 ? (
-              <p className="muted small wb-pad">{newChat ? t('wb.newChatProblems') : session ? t('wb.noProblems') : t('wb.pickSession')}</p>
+              <p className="muted small wb-pad">{newChat ? t('wb.newChatProblems') : session ? t('wb.noProblems') : t('wb.pickChat')}</p>
             ) : (
               <>
                 {shown.length === 0 ? (
@@ -71,7 +83,7 @@ export function BottomPanel({
                   <ul className="wb-problems">
                     {shown.map((p) => (
                       <li key={p.key} className={seen.has(p.key) ? 'seen' : undefined}>
-                        <button type="button" className="wb-row" onClick={() => onOpenTask(p.sessionId, p.taskId)}>
+                        <button type="button" className="wb-row" onClick={() => onShowMessage(p.taskId)} title={t('wb.problemShow')}>
                           <span className={`wb-sev ${p.kind}`} aria-hidden="true">{p.kind === 'error' ? '✗' : '⚠'}</span>
                           <span className="wb-row-name">{p.text}</span>
                           <span className="muted">{p.where}</span>
@@ -112,7 +124,7 @@ export function BottomPanel({
   );
 }
 
-type Problem = { key: string; sessionId: string; taskId: string; kind: 'error' | 'warn'; text: string; where: string };
+type Problem = { key: string; taskId: string; kind: 'error' | 'warn'; text: string; where: string };
 
 /** What did not pass, task by task: checks, review findings, and why a task stopped. */
 function problemsOf(session: Session): Problem[] {
@@ -124,7 +136,7 @@ function problemsOf(session: Session): Problem[] {
      * attempt of the task is a new one, and is shown again.
      */
     const add = (kind: Problem['kind'], text: string, at = where): void => {
-      out.push({ key: `${session.id}|${x.id}|a${x.attempt ?? 1}|${kind}|${text}`, sessionId: session.id, taskId: x.id, kind, text, where: at });
+      out.push({ key: `${session.id}|${x.id}|a${x.attempt ?? 1}|${kind}|${text}`, taskId: x.id, kind, text, where: at });
     };
     for (const c of x.checkResults ?? []) if (!c.passed) add('error', `${c.name}: ${c.detail.slice(0, 160)}`);
     if (x.review?.verdict === 'fail') for (const f of x.review.findings ?? []) add('error', f.what.slice(0, 200), f.where ? `${where} · ${f.where}` : where);
@@ -175,7 +187,7 @@ function Terminal({ session, task }: { session?: Session; task?: Task }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task?.id, task?.runId]);
   usePoll(read, live ? 2000 : 15000, !!session && !!task);
-  if (!task) return <p className="muted small wb-pad">{t('wb.pickTask')}</p>;
+  if (!task) return <p className="muted small wb-pad">{t('wb.pickChat')}</p>;
   const steps: Array<Extract<StoryEntry, { kind: 'step' }>> = [];
   const walk = (es: StoryEntry[]): void => es.forEach((e) => (e.kind === 'step' ? steps.push(e) : e.kind === 'review' ? walk(e.entries) : undefined));
   walk(story?.entries ?? []);
@@ -209,7 +221,7 @@ function Output({ session }: { session?: Session }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
   usePoll(read, 3000, !!session);
-  if (!session) return <p className="muted small wb-pad">{t('wb.pickSession')}</p>;
+  if (!session) return <p className="muted small wb-pad">{t('wb.pickChat')}</p>;
   return (
     <div ref={ref} className="wb-terminal">
       {events.length === 0 ? (

@@ -263,6 +263,27 @@ export class StoppedByOperator extends Error {
 }
 
 /**
+ * The operator closed the window with its X (2026-10-19) before the run had it: while it opened, while the sign-in
+ * was awaited, while the conversation was entered. A stop, said as one, rather than the error every call on a
+ * closed page gives.
+ */
+export class WindowClosed extends Error {
+  constructor(message = 'the browser window was closed') {
+    super(message);
+    this.name = 'WindowClosed';
+  }
+}
+
+/**
+ * A card drawn over the chat's page (see `showNotice`): a heading, the message it is about, a few lines, one button.
+ * `tone` picks the mark beside the heading: a tick, a stop, or a warning.
+ */
+export type WindowNotice = { tone: 'done' | 'stopped' | 'failed'; title: string; subject?: string; lines: string[]; button: string };
+
+/** The id of the notice's element in the chat's page, so the next one, and `clearNotice`, find it. */
+const NOTICE_ID = 'copilot-operator-notice';
+
+/**
  * Takes the copy button off the operator's clipboard.
  *
  * Reading a reply means clicking Copilot's "Copy Response" and taking the raw markdown, which
@@ -367,6 +388,10 @@ export class CopilotTransport {
    * did nothing until they ended (2026-10-17: "the Stop button seems not to work").
    */
   private stop: AbortSignal | null = null;
+  /** Set while `close` closes the window, so a window this code closed is not taken for one the operator closed. */
+  private closing = false;
+  /** The window went away without `close`: its X pressed, or Edge ended (2026-10-19). */
+  private gone = false;
 
   constructor(private readonly opts: TransportOptions) {}
 
@@ -424,15 +449,133 @@ export class CopilotTransport {
 
     this.page = this.context.pages()[0] ?? (await this.context.newPage());
     this.page.setDefaultTimeout(60_000);
+    this.watchWindow();
     this.emit('browser-opened', { profileDir: this.opts.profileDir });
   }
 
+  /**
+   * The operator may close the window with its X at any moment (2026-10-19), and the chat's window is left open
+   * between messages for exactly that to be theirs to do. Noted when it happens, so a run in it stops as a run the
+   * operator stopped, and the next message opens a new one, rather than either failing on a closed page.
+   */
+  private watchWindow(): void {
+    const opened = this.context;
+    if (!opened || !this.page) return;
+    this.gone = false;
+    const went = (): void => {
+      // Not when `close` is closing it, and not for a window closed already and since let go of.
+      if (this.closing || this.gone || this.context !== opened) return;
+      this.gone = true;
+      this.emit('window-closed');
+    };
+    opened.on('close', went);
+    this.page.on('close', went);
+  }
+
   async close(): Promise<void> {
-    await this.context?.close().catch(() => undefined);
+    this.closing = true;
+    try {
+      await this.context?.close().catch(() => undefined);
+    } finally {
+      this.closing = false;
+    }
     this.context = null;
     this.page = null;
     this.lock?.release();
     this.lock = null;
+  }
+
+  /** Whether the window is there to be used: not before `open`, not after `close`, not once the operator closed it. */
+  isOpen(): boolean {
+    return !!this.context && !!this.page && !this.gone && !this.page.isClosed();
+  }
+
+  /** Whether the window went away without this code closing it: its X was pressed, or Edge ended. */
+  closedOutside(): boolean {
+    return this.gone;
+  }
+
+  /**
+   * A card over the chat's page with one button that takes it away (2026-10-19: "when the chat is done, let the
+   * browser show a message — the task has finished — and an OK under it"). The window of the workbench's chat is
+   * left open for the next message, and without it a window the work has finished in looks just like one it is still
+   * going on in. Drawn in a shadow root, so the page's styles do not reach it, and over everything; nothing of the
+   * page itself is touched, and the next run takes it away before anything else (`clearNotice`).
+   */
+  async showNotice(notice: WindowNotice): Promise<void> {
+    await this.p.evaluate(
+      ([id, n]) => {
+        document.getElementById(id)?.remove();
+        const host = document.createElement('div');
+        host.id = id;
+        const root = host.attachShadow({ mode: 'open' });
+        const style = document.createElement('style');
+        style.textContent = [
+          ':host{all:initial}',
+          '.back{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.38);font-family:"Segoe UI",system-ui,sans-serif}',
+          '.card{box-sizing:border-box;width:calc(100% - 48px);max-width:470px;background:#fff;color:#1f2937;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.28);padding:24px 28px 20px}',
+          'h2{display:flex;align-items:center;gap:12px;margin:0 0 14px;font-size:20px;font-weight:600;line-height:1.3}',
+          '.mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;color:#fff;font-size:16px;font-weight:700}',
+          '.done{background:#16a34a}.stopped{background:#64748b}.failed{background:#d97706}',
+          'p{margin:0 0 8px;font-size:14px;line-height:1.5;overflow-wrap:anywhere}',
+          'p.subject{font-weight:600}',
+          '.row{display:flex;justify-content:flex-end;margin-top:18px}',
+          'button{font:inherit;font-size:14px;font-weight:600;min-width:96px;padding:8px 24px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}',
+          'button:hover{background:#1d4ed8}button:focus-visible{outline:3px solid #93c5fd;outline-offset:2px}',
+          '@media (prefers-color-scheme:dark){.card{background:#1f2937;color:#f3f4f6}}',
+        ].join('\n');
+        const back = document.createElement('div');
+        back.className = 'back';
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.setAttribute('role', 'alertdialog');
+        card.setAttribute('aria-modal', 'true');
+        card.setAttribute('aria-labelledby', 'title');
+        const h = document.createElement('h2');
+        h.id = 'title';
+        const mark = document.createElement('span');
+        mark.className = `mark ${n.tone}`;
+        mark.setAttribute('aria-hidden', 'true');
+        mark.textContent = n.tone === 'done' ? '✓' : n.tone === 'stopped' ? '■' : '!';
+        h.append(mark, document.createTextNode(n.title));
+        card.append(h);
+        if (n.subject) {
+          const s = document.createElement('p');
+          s.className = 'subject';
+          s.textContent = n.subject;
+          card.append(s);
+        }
+        for (const line of n.lines) {
+          const p = document.createElement('p');
+          p.textContent = line;
+          card.append(p);
+        }
+        const row = document.createElement('div');
+        row.className = 'row';
+        const ok = document.createElement('button');
+        ok.type = 'button';
+        ok.textContent = n.button;
+        // No function given a name in here: run through tsx, a named one is wrapped in a helper the page has not got.
+        ok.addEventListener('click', () => host.remove());
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') host.remove();
+        });
+        row.append(ok);
+        card.append(row);
+        back.append(card);
+        root.append(style, back);
+        document.documentElement.append(host);
+        ok.focus();
+      },
+      [NOTICE_ID, notice] as const,
+    );
+    await this.p.bringToFront().catch(() => undefined);
+  }
+
+  /** Takes away a card `showNotice` left, if the operator has not pressed its button. Nothing when there is none. */
+  async clearNotice(): Promise<void> {
+    if (!this.isOpen()) return;
+    await this.p.evaluate((id) => document.getElementById(id)?.remove(), NOTICE_ID).catch(() => undefined);
   }
 
   /** True when the composer is visible, i.e. we are signed in and the chat is usable. */

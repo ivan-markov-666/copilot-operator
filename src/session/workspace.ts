@@ -1,10 +1,12 @@
 /**
  * The workspace: the project folder the workbench has open (Settings → project folder), read as it is on disk —
  * the working tree, not a commit — for the explorer and the editor, the way an IDE shows the folder it opened
- * (operator's request, 2026-10-17: "like Windsurf"). Read-only: nothing here writes to the folder.
+ * (operator's request, 2026-10-17: "like Windsurf"). One thing writes to it: the editor saving a file the operator
+ * changed (2026-10-20, `saveWorkspaceFile`), and only a file that is already there, as it was when it was opened.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { git, looksLikeRepo, repoState } from '../vcs/git.js';
 
@@ -52,16 +54,62 @@ export async function workspaceFiles(dir: string): Promise<{ files: string[]; tr
   return { files: files.sort(), truncated: files.length >= MAX_FILES };
 }
 
-/** One file of the folder as it is on disk, as text; a binary or very large one is said to be one. */
-export async function workspaceFile(dir: string, path: string, maxBytes = 2 * 1024 * 1024): Promise<{ path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number }> {
+/** The largest file the editor reads and writes. */
+const MAX_EDIT_BYTES = 2 * 1024 * 1024;
+
+/** A path of the folder, cleaned, and where it is on disk; anything outside it, or in git's own folder, is refused. */
+function insideFolder(dir: string, path: string): { clean: string; full: string } {
   const clean = path.replace(/\\/g, '/').replace(/^\/+/, '');
   const full = resolve(dir, clean);
   const rel = relative(resolve(dir), full);
   if (!clean || isAbsolute(clean) || rel.startsWith('..') || rel.split(sep).includes('.git')) throw new Error('That path is not inside the project folder.');
+  return { clean, full };
+}
+
+/** A file's bytes as a short fingerprint: which version of it an edit was made on (see `saveWorkspaceFile`). */
+function versionOf(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex').slice(0, 20);
+}
+
+/** One file of the folder as it is on disk, as text; a binary or very large one is said to be one. */
+export async function workspaceFile(dir: string, path: string, maxBytes = MAX_EDIT_BYTES): Promise<{ path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string }> {
+  const { clean, full } = insideFolder(dir, path);
   const st = await stat(full).catch(() => null);
   if (!st?.isFile()) throw new Error(`There is no file ${clean} in the project folder.`);
   if (st.size > maxBytes) return { path: clean, text: null, binary: false, tooLarge: true, size: st.size };
   const bytes = await readFile(full);
   const binary = bytes.subarray(0, 8000).includes(0);
-  return { path: clean, text: binary ? null : bytes.toString('utf8').replace(/^﻿/, ''), binary, tooLarge: false, size: st.size };
+  return { path: clean, text: binary ? null : bytes.toString('utf8').replace(/^\ufeff/, ''), binary, tooLarge: false, size: st.size, version: versionOf(bytes) };
+}
+
+/** Said when the file changed on disk after the editor read it; the page offers to read it again or to save anyway. */
+export const CHANGED_ON_DISK = 'changed-on-disk';
+
+/**
+ * Saves the editor's text over a file of the folder (2026-10-20: "clicking a file, it can be edited"). Only a file that
+ * is there already and is text; and only over the version the edit was made on (`base`), so a change the chat made to
+ * it meanwhile is not overwritten without the operator knowing — without `base` it is saved whatever is there. The
+ * file keeps its own line endings and its byte-order mark: the editor works in LF, and a CRLF file stays CRLF.
+ */
+export async function saveWorkspaceFile(dir: string, path: string, text: string, base?: string): Promise<{ path: string; version: string; size: number }> {
+  const { clean, full } = insideFolder(dir, path);
+  const st = await stat(full).catch(() => null);
+  if (!st?.isFile()) throw new Error(`There is no file ${clean} in the project folder.`);
+  if (st.size > MAX_EDIT_BYTES) throw new Error(`${clean} is too large to edit here.`);
+  const before = await readFile(full);
+  if (before.subarray(0, 8000).includes(0)) throw new Error(`${clean} is not a text file.`);
+  if (base && versionOf(before) !== base) {
+    throw Object.assign(new Error(`${clean} changed on disk after it was opened. Read it again to see the change, or save over it.`), { code: CHANGED_ON_DISK });
+  }
+  const old = before.toString('utf8');
+  const bom = old.startsWith('\ufeff') ? '\ufeff' : '';
+  const crlf = (old.match(/\r\n/g)?.length ?? 0) > (old.match(/(?<!\r)\n/g)?.length ?? 0);
+  const lf = text.replace(/\r\n/g, '\n');
+  const bytes = Buffer.from(bom + (crlf ? lf.replace(/\n/g, '\r\n') : lf), 'utf8');
+  if (bytes.length > MAX_EDIT_BYTES) throw new Error(`The text is too large to save (${bytes.length} bytes).`);
+  // Written beside it and moved over it, so a file is never left half written.
+  const temp = `${full}.cop-save-${process.pid}`;
+  await writeFile(temp, bytes);
+  await rename(temp, full);
+  return { path: clean, version: versionOf(bytes), size: bytes.length };
 }

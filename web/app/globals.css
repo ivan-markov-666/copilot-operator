@@ -6,30 +6,30 @@
  * `data-` attributes on `<html>`, set before the first paint by the script in the layout, and
  * everything they change is expressed here.
  *
- * The palette is deliberately warm. Orange on near-black, or orange on cream, instead of the
- * blue-grey a terminal tool reaches for by default: this is a window that stays open all day.
+ * The palette is sky blue (2026-10-20: "change the colours of the light and the dark version: let them be in a sky
+ * blue shade"). It was warm — orange on cream and amber on charcoal — until then.
  */
 
 :root {
-  /* Light: warm paper and a burnt orange dark enough to read as text on white. */
-  --bg: #fdf7f0;
-  --bg-tint: #f7ead9;
-  --panel: #fffdfb;
-  --ink: #241a13;
-  --muted: #7a6656;
-  --line: #ecdcc9;
-  --line-strong: #d8c3a9;
-  --accent: #b4500b;
-  --accent-ink: #fffaf5;
-  --accent-soft: #fbe9d8;
-  --ok: #2a6b45;
-  --ok-soft: #e4f1e7;
-  --warn: #8f5500;
-  --warn-soft: #fbedd6;
-  --bad: #a8271c;
-  --bad-soft: #fbe6e2;
-  --code: #f9efe3;
-  --shadow: 0 1px 2px rgba(74, 45, 20, 0.06), 0 6px 18px rgba(74, 45, 20, 0.05);
+  /* Light: a pale sky, and a blue deep enough to read as text on white. */
+  --bg: #f2f8fd;
+  --bg-tint: #e1eef9;
+  --panel: #fbfdff;
+  --ink: #0f2133;
+  --muted: #557089;
+  --line: #d3e3f1;
+  --line-strong: #adc8e1;
+  --accent: #1670b3;
+  --accent-ink: #ffffff;
+  --accent-soft: #ddedfa;
+  --ok: #1f6b47;
+  --ok-soft: #e2f3ea;
+  --warn: #855600;
+  --warn-soft: #fbf0d8;
+  --bad: #ac2a2a;
+  --bad-soft: #fbe7e7;
+  --code: #edf5fc;
+  --shadow: 0 1px 2px rgba(16, 56, 96, 0.07), 0 6px 18px rgba(16, 56, 96, 0.06);
 
   --radius: 12px;
   --scale: 1;
@@ -38,56 +38,72 @@
 }
 
 :root[data-theme='dark'] {
-  /* Dark: warm charcoal rather than blue-black, amber rather than a cold blue. */
-  --bg: #17120f;
-  --bg-tint: #221a15;
-  --panel: #221b16;
-  --ink: #f2e8df;
-  --muted: #b6a493;
-  --line: #3a2e26;
-  --line-strong: #52412f;
-  --accent: #ff9f45;
-  --accent-ink: #2b1705;
-  --accent-soft: #35251a;
-  --ok: #7ed39f;
-  --ok-soft: #1e2b22;
-  --warn: #f0b96e;
-  --warn-soft: #2f2417;
-  --bad: #ff9081;
-  --bad-soft: #33201d;
-  --code: #1d1713;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  /* Dark: a night sky rather than grey, and a clear light blue. */
+  --bg: #0c1622;
+  --bg-tint: #122030;
+  --panel: #152436;
+  --ink: #e3eef9;
+  --muted: #9bb2c8;
+  --line: #233850;
+  --line-strong: #33506e;
+  --accent: #5ab6f4;
+  --accent-ink: #05182a;
+  --accent-soft: #16324b;
+  --ok: #7dd5a4;
+  --ok-soft: #163126;
+  --warn: #f1c26e;
+  --warn-soft: #2f281a;
+  --bad: #ff8f8f;
+  --bad-soft: #3a1f25;
+  --code: #101c2a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
-/* Accessibility: more contrast, at the cost of some of the warmth. */
+/* Accessibility: more contrast, at the cost of some of the colour. */
 :root[data-contrast='high'] {
   --ink: #000000;
-  --muted: #4a3a2c;
-  --line: #a88d6c;
-  --line-strong: #6b5236;
-  --accent: #8f3c00;
+  --muted: #2c4157;
+  --line: #7d99b4;
+  --line-strong: #46637f;
+  --accent: #0a5590;
   --panel: #ffffff;
-  --bg: #fff9f2;
-  --ok: #17512f;
-  --warn: #6b3f00;
-  --bad: #8a1a11;
+  --bg: #f6fbff;
+  --ok: #14502f;
+  --warn: #663e00;
+  --bad: #8a1717;
   --shadow: none;
 }
 
 :root[data-theme='dark'][data-contrast='high'] {
   --ink: #ffffff;
-  --muted: #e0cfbd;
-  --line: #7d6650;
-  --line-strong: #a88a6a;
-  --accent: #ffc27a;
-  --panel: #100c09;
+  --muted: #cfe0f0;
+  --line: #5f7f9f;
+  --line-strong: #8fb0cf;
+  --accent: #8fd0ff;
+  --panel: #050b12;
   --bg: #000000;
-  --code: #0a0705;
+  --code: #03080e;
   --ok: #9ff0bd;
-  --warn: #ffd08f;
-  --bad: #ffb0a2;
+  --warn: #ffd58f;
+  --bad: #ffb3b3;
   --shadow: none;
 }
+
+/*
+ * Night light (2026-10-20: "a night mode to spare the eyes"): a warm veil over the whole page, which takes out much of
+ * the blue light, as a screen's own night light does. Over everything and through nothing: it is drawn on top and lets
+ * every click through. Works with either theme.
+ */
+:root[data-night='on']::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  pointer-events: none;
+  background: rgba(255, 150, 40, 0.16);
+  mix-blend-mode: multiply;
+}
+:root[data-night='on'][data-theme='dark']::after { background: rgba(255, 140, 30, 0.2); }
 
 /*
  * The text sizes (lib/appearance.tsx), one step below normal and three above. Each step is about an
@@ -766,12 +782,23 @@ tr.inactive td:first-child { opacity: 1; }
 .diff-status.s-M { color: var(--warn); }
 .diff-status.s-R, .diff-status.s-C { color: var(--accent); }
 .diff-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.diff-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+/*
+ * The file's name on a line of its own, and its controls under it in pairs that keep together: a pair goes to the next
+ * line as a whole, and breaks only when it is wider than the view (2026-10-20).
+ */
+.diff-toolbar { display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.diff-title-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.diff-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; }
+.diff-pair { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.diff-pair > * { white-space: nowrap; }
 .diff-name { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
 .diff-scroll { flex: 1; overflow: auto; overscroll-behavior: contain; }
 .diff-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--mono); font-size: calc(12px * var(--scale)); }
 .diff-table col.num { width: calc(52px * var(--scale)); }
-.diff-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--line); text-align: left; padding: 4px 8px; font-family: inherit; }
+/* The heading stays in view as a whole: which change is chosen, right above "Before" and "After". */
+.diff-table thead { position: sticky; top: 0; z-index: 1; }
+.diff-table thead th { background: var(--panel); border-bottom: 1px solid var(--line); text-align: left; padding: 4px 8px; font-family: inherit; }
+.diff-table thead tr.diff-where th { color: var(--muted); font-weight: 400; font-size: calc(12px * var(--scale)); padding: 3px 8px; border-bottom: 1px dashed var(--line); }
 .diff-table td { padding: 0 8px; vertical-align: top; line-height: 1.5; }
 .diff-table td.num { text-align: right; color: var(--muted); user-select: none; border-right: 1px solid var(--line); }
 .diff-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -924,6 +951,7 @@ button.linkish:hover { text-decoration: underline; }
 .wb-commits li { padding-bottom: 4px; }
 .wb-commit-meta { padding: 0 10px 0 52px; font-size: calc(11.5px * var(--scale)); }
 .wb-live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); flex: none; }
+.wb-live.paused { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
 
 .wb-status { display: inline-grid; place-items: center; width: 1.2em; flex: none; font-weight: 700; }
 .wb-status.s-done { color: var(--ok); }
@@ -1027,7 +1055,8 @@ button.linkish:hover { text-decoration: underline; }
 /* The workbench's chat (2026-10-17): a conversation that works in the open folder, as an IDE's chat does. */
 .cs { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .cs-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-.cs-head select { flex: 1; min-width: 0; padding: 4px 6px; font-size: calc(13px * var(--scale)); }
+/* Room on the right for the arrow: a padding of its own here took it away, and the arrow sat on the text (2026-10-20). */
+.cs-head select { flex: 1; min-width: 0; padding: 4px 26px 4px 8px; background-position: right 8px center; font-size: calc(13px * var(--scale)); }
 .cs-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .cs-turn { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .cs-turn:last-child { border-bottom: 0; }
@@ -1090,15 +1119,107 @@ button.linkish:hover { text-decoration: underline; }
 .cs-file { padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--panel); color: var(--ink); font: inherit; font-size: calc(12px * var(--scale)); cursor: pointer; }
 .cs-file:hover { border-color: var(--accent); }
 .cs-system { color: var(--muted); font-size: calc(12.5px * var(--scale)); margin: 0; }
+/* Paused (2026-10-20): said where the conversation ends, in the colour of a warning, so it is not taken for stuck. */
+.cs-paused { color: var(--warn, var(--muted)); font-weight: 600; }
 .cs-welcome h3 { margin: 4px 0; }
 .cs-examples { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
 .cs-examples button { display: block; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); text-align: left; text-decoration: none; }
 .cs-examples button:hover { border-color: var(--accent); text-decoration: none; }
 .cs-compose { padding: 8px 10px 10px; border-top: 1px solid var(--line); background: var(--bg); }
 .cs-compose textarea { width: 100%; min-height: 72px; max-height: 40vh; resize: vertical; }
-.cs-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.cs-bar select { width: auto; max-width: 60%; padding: 3px 6px; font-size: calc(12.5px * var(--scale)); }
+.cs-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.cs-plan-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0; color: var(--ink); font-size: calc(12.5px * var(--scale)); white-space: nowrap; cursor: pointer; }
+.cs-plan { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--panel); }
+.cs-plan > summary { cursor: pointer; font-size: calc(13px * var(--scale)); color: var(--muted); }
+.cs-plan-ask .approval { margin: 0; }
+.cs-copy-bottom { margin-top: 6px; }
+
+/* An icon per kind of file (fileIcon.tsx), the size of the text beside it. */
+.file-ico { flex: none; width: calc(15px * var(--scale)); height: calc(15px * var(--scale)); vertical-align: -2px; color: var(--muted); }
+.wb-unsaved { margin-left: 4px; color: var(--accent); font-size: calc(10px * var(--scale)); }
+
+/*
+ * The editor (fileView.tsx): the text in a textarea of its own, transparent, over the same text in colour; the two keep
+ * the same font, size, line height and padding to the pixel, and the coloured one scrolls with the other.
+ */
+.ed { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.wb-file-pane { height: 100%; min-height: 0; }
+.wb-file-pane[hidden] { display: none; }
+.ed-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 2px 6px; }
+.ed-path { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
+.ed-dirty { color: var(--accent); font-weight: 600; }
+.ed-lang { width: auto; max-width: 220px; padding: 3px 26px 3px 8px; background-position: right 8px center; font-size: calc(12.5px * var(--scale)); }
+.ed-conflict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
+.ed-body { flex: 1; min-height: 0; display: flex; border: 1px solid var(--line); border-radius: 8px; background: var(--code); overflow: hidden; }
+.ed-gutter, .ed-shown, .ed-input { margin: 0; font-family: var(--mono); font-size: calc(13px * var(--scale)); line-height: 1.5; tab-size: 4; letter-spacing: 0; }
+.ed-gutter { flex: none; min-width: 3.4em; padding: 8px 8px 8px 6px; overflow: hidden; text-align: right; color: var(--muted); opacity: 0.75; user-select: none; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: var(--bg-tint); white-space: pre; }
+.ed-area { position: relative; flex: 1; min-width: 0; }
+.ed-shown { position: absolute; inset: 0; padding: 8px 10px; overflow: hidden; white-space: pre; pointer-events: none; color: var(--ink); background: transparent; border: 0; border-radius: 0; }
+.ed-shown code { font: inherit; background: none; padding: 0; white-space: inherit; }
+.ed-input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; padding: 8px 10px; border: 0; border-radius: 0; resize: none; overflow: auto; white-space: pre; overflow-wrap: normal; background: transparent; color: transparent; caret-color: var(--ink); -webkit-text-fill-color: transparent; }
+.ed-input:focus { outline: none; border: 0; }
+.ed-body:focus-within { border-color: var(--accent); }
+.ed-input::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); -webkit-text-fill-color: transparent; }
+
+/* The colours of code (lib/highlight.ts), for each theme. */
+.hl-com { color: #6a8a6a; font-style: italic; }
+.hl-str { color: #a3410f; }
+.hl-num { color: #0b7a6e; }
+.hl-kw { color: #7b2fb5; font-weight: 600; }
+.hl-type { color: #0f6aa8; }
+.hl-lit { color: #b0186e; }
+.hl-fn { color: #6b5b00; }
+.hl-tag { color: #1b5fb4; }
+.hl-attr { color: #8a4d00; }
+.hl-prop { color: #0f6aa8; }
+.hl-meta { color: #8e5a9c; }
+.hl-var { color: #b0186e; }
+.hl-head { color: #1b5fb4; font-weight: 700; }
+.hl-em { font-style: italic; }
+.hl-code { color: #a3410f; }
+.hl-link { color: #0b7a6e; text-decoration: underline; }
+:root[data-theme='dark'] .hl-com { color: #7f9f86; }
+:root[data-theme='dark'] .hl-str { color: #f0b48a; }
+:root[data-theme='dark'] .hl-num { color: #7fd8c8; }
+:root[data-theme='dark'] .hl-kw { color: #d3a1ff; }
+:root[data-theme='dark'] .hl-type { color: #7cc6ff; }
+:root[data-theme='dark'] .hl-lit { color: #ff8fc8; }
+:root[data-theme='dark'] .hl-fn { color: #f2dc7d; }
+:root[data-theme='dark'] .hl-tag { color: #79b8ff; }
+:root[data-theme='dark'] .hl-attr { color: #ffc27a; }
+:root[data-theme='dark'] .hl-prop { color: #9fd3ff; }
+:root[data-theme='dark'] .hl-meta { color: #d6a8e6; }
+:root[data-theme='dark'] .hl-var { color: #ff9ed0; }
+:root[data-theme='dark'] .hl-head { color: #8fc9ff; }
+:root[data-theme='dark'] .hl-code { color: #f0b48a; }
+:root[data-theme='dark'] .hl-link { color: #7fd8c8; }
+.cs-bar select { width: auto; max-width: 60%; padding: 3px 26px 3px 8px; background-position: right 8px center; font-size: calc(12.5px * var(--scale)); text-overflow: ellipsis; }
 .wb-task-compose { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 10px; }
 .cs-user-row { display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; }
 .cs-rewind { margin-top: 4px; opacity: 0.55; }
 .cs-user-row:hover .cs-rewind, .cs-rewind:focus-visible { opacity: 1; }
+
+/*
+ * The panels that open beside their button (popover.tsx): an "i" with its explanation, Kerrigan's menu, the
+ * appearance of the page. Placed on the screen by the script, over everything but a dialog.
+ */
+.pop { position: fixed; z-index: 70; max-width: min(420px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); color: var(--ink); box-shadow: var(--shadow), 0 10px 30px rgba(0, 0, 0, 0.18); font-size: calc(13px * var(--scale)); text-transform: none; letter-spacing: normal; }
+.pop p { margin: 0 0 8px; line-height: 1.5; }
+.pop p:last-child { margin-bottom: 0; }
+.pop-title { font-weight: 600; }
+.pop.menu { display: flex; flex-direction: column; gap: 2px; padding: 4px; min-width: 200px; }
+.pop.menu > button { justify-content: flex-start; text-align: left; border-color: transparent; background: none; }
+.pop.menu > button:hover, .pop.menu > button:focus-visible { background: var(--accent-soft); border-color: var(--accent); }
+.info-btn { flex: none; display: inline-grid; place-items: center; width: calc(17px * var(--scale)); height: calc(17px * var(--scale)); min-width: 0; margin: 0 4px 0 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 50%; background: none; color: var(--muted); font: italic 600 calc(11px * var(--scale)) / 1 Georgia, serif; text-transform: none; cursor: pointer; }
+.info-btn:hover, .info-btn[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.kerrigan { margin: 14px 0; }
+.kerrigan .row { align-items: center; }
+.wb-appear { width: 290px; }
+.wb-appear-label { margin: 10px 0 4px !important; color: var(--muted); font-size: calc(12px * var(--scale)); text-transform: uppercase; letter-spacing: 0.04em; }
+.wb-appear .segmented { display: flex; }
+.wb-appear .segmented button { flex: 1; padding: 5px 8px; }
+.wb-appear-size { display: flex; align-items: center; gap: 8px; }
+.wb-appear-size button { min-width: 44px; font-weight: 600; }
+.wb-appear-size span { flex: 1; text-align: center; }
+.wb-appear-aid { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; color: var(--ink); font-size: calc(13px * var(--scale)); cursor: pointer; }
+.wb-appear .row { margin-top: 10px; }

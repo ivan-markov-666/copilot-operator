@@ -998,6 +998,8 @@ export type Session = {
    * writes is a task of it, run at once in the same Copilot conversation and on the same branch.
    */
   kind?: 'chat';
+  /** The language the workbench was in at the chat's last message, for what its window says at the end (2026-10-19). */
+  lang?: 'en' | 'bg';
   /**
    * The chat went back to before a message (2026-10-17): said to the conversation with the next message, then
    * cleared — the Copilot chat still holds what was undone, and must not build on it.

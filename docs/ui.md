@@ -14,18 +14,20 @@ takes an authorizer (who approves steps), a store (where sessions persist) and a
 
 ## The workbench
 
-The home screen (`/`, 2026-10-14) is laid out as an IDE with the chat beside it: the operator asked for the
-app to work like VS Code with a chat bot at its side, in this app's own design. `web/app/workbench/`.
+The home screen (`/`) is laid out as an IDE with the chat beside it: the operator asked for the app to work like
+VS Code with a chat bot at its side, in this app's own design. `web/app/workbench/`. Since 2026-10-20 it is the
+chat and Kerrigan only: the Sessions page, the task register and plans from JSON were removed, with their routes,
+and so were the explorer's tree of sessions and the task and session tabs. Much of what follows below describes
+them as they were, and is kept as the record of why the runner does what it does.
 
 | Part | What it shows | What it does |
 |---|---|---|
-| Activity bar (far left) | three views of the explorer; the chat; Settings | switches the explorer, hides or shows the chat |
-| Explorer | sessions and their tasks as a tree, with a filter; or the repository's files at the session's branch (the task's commit when a task is chosen); or the commits on that branch, each with the task that made it | opens a task, a session or a file in a tab |
-| Editor | tabs: a task — how it stands and **every way on from there**; a session — run, step by step, stop, its tasks; a file — read-only, with line numbers | the task's toolbar never offers nothing: run, note, edit, remove; write to the chat, stop; continue, continue with a new prompt; new prompt; run again; accept as done; undo (only this task / back to before it); see the changes; ask Kerrigan. Whatever queues the task offers to run it there |
-| Panel (below) | Terminal: the commands the chosen task ran and their output, following while live; Problems: failed checks, review findings, why tasks stopped, across the session; Output: the session's events | each problem opens its task |
-| Chat (right) | the chosen task's conversation as it happens | the box below it follows the task: queued or working — a note (sent with the next message); failed, blocked or stopped — the prompt it carries on with; done — a new prompt that builds on it. The button says which |
-| Kerrigan (right, second tab) | what happened, for her: this task, this session or all of them, with the operator's note | copy or save the report; paste her answer, check it (each change said in words), make the changes |
-| Status bar | the repository's branch, what is running (session › task, message n of the limit, minutes), steps waiting for an answer, the model | opens the running task; brings the waiting card into view |
+| Activity bar (far left) | the open folder's files; its git; the chat; how the page looks | switches the explorer, hides or shows the chat; the last icon opens the theme (System — the machine's, the default — Light, Dark), A− and A+, night light and the reading aids |
+| Explorer | the open folder's files, each with an icon of its kind; or its git: the changes, staged and not, and the branch's commits | opens a file, or a file's two versions, in a tab |
+| Editor | tabs: a file, coloured by its language (found from its name, its extension, its first line, or chosen), with line numbers, editable — saved with Ctrl+S over the version it was opened at, keeping its line endings; a file's two versions side by side | with nothing open: the folder the chat works in, and **Kerrigan** — a persona to save or copy for a chat of one's own, optional |
+| Panel (below) | Terminal: the commands of the chat's latest message and their output; Problems: what did not go well in the conversation; Output: its events — each with an "i" saying what it shows | a problem brings its message into view in the chat; "Seen" takes it off the list |
+| Chat (right) | the conversation, as it happens | a message is a task run in the open folder; "Plan mode" asks for a plan first, approved in the conversation; "Pause", which becomes "Continue" (the work holds at its next message or command; the time held does not count against the time limit); Stop; "New chat"; go back to before a message |
+| Status bar | the folder and its branch, what is running, commands or plans waiting for an answer, the model | shows the running conversation in the chat; brings the waiting card into view |
 
 **The chat** (2026-10-17, "like Windsurf"): the right panel is the chat of the open project folder (Settings →
 project folder; "Open a folder" in the explorer changes it), not of a task. A message is sent to Copilot; the

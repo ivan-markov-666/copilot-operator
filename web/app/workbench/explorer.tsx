@@ -1,37 +1,20 @@
 'use client';
 
 /**
- * The explorer, on the workbench's left: the sessions with their tasks, as a tree; or the files of the open project
- * folder; or its git, as an IDE's Source Control view: the changes, staged and not, and the branch's commits.
+ * The explorer, on the workbench's left: the files of the open project folder, or its git, as an IDE's Source Control
+ * view: the changes, staged and not, and the branch's commits. The tree of sessions and tasks went with the sessions
+ * (2026-10-20).
  */
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
-import { api, type GitArea, type GitFile, type Session, type Workspace, type WorkspaceGit } from '../../lib/api';
+import { api, type GitArea, type GitFile, type Workspace, type WorkspaceGit } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
-import { StatusMark, type SideView, type Tab } from './workbench';
+import type { SideView, Tab } from './workbench';
+import { FileIcon } from './fileIcon';
 
-export function Explorer({
-  view,
-  sessions,
-  selected,
-  onOpen,
-  onChange,
-  workspace,
-  onOpenFolder,
-}: {
-  view: SideView;
-  sessions: Array<Session & { running?: boolean }> | null;
-  selected: { sessionId?: string; taskId?: string };
-  onOpen: (tab: Tab) => void;
-  onChange: () => void;
-  workspace: Workspace | null;
-  onOpenFolder: () => void;
-}) {
-  if (view === 'files') return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
-  if (view === 'commits') return <GitView workspace={workspace} sessions={sessions} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
-  // The chat's conversations are the chat's: the tree is the bot's sessions.
-  return <Tree sessions={sessions ? sessions.filter((s) => s.kind !== 'chat') : null} selected={selected} onOpen={onOpen} onChange={onChange} />;
+export function Explorer({ view, onOpen, workspace, onOpenFolder }: { view: SideView; onOpen: (tab: Tab) => void; workspace: Workspace | null; onOpenFolder: () => void }) {
+  if (view === 'commits') return <GitView workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
+  return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
 }
 
 function Head({ title, children }: { title: string; children?: React.ReactNode }) {
@@ -42,91 +25,6 @@ function Head({ title, children }: { title: string; children?: React.ReactNode }
       {children}
     </div>
   );
-}
-
-function Tree({ sessions, selected, onOpen, onChange }: { sessions: Array<Session & { running?: boolean }> | null; selected: { sessionId?: string; taskId?: string }; onOpen: (tab: Tab) => void; onChange: () => void }) {
-  const { t } = useT();
-  const [closed, setClosed] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState('');
-  const q = filter.trim().toLowerCase();
-
-  return (
-    <div className="wb-tree">
-      <Head title={t('wb.sessions')}>
-        <Link className="wb-icon-btn" href="/sessions#new-session" title={t('wb.newSession')} aria-label={t('wb.newSession')}>+</Link>
-        <Link className="wb-icon-btn" href="/import" title={t('wb.startPlan')} aria-label={t('wb.startPlan')}>⇩</Link>
-        <button type="button" className="wb-icon-btn" onClick={onChange} title={t('wb.refresh')} aria-label={t('wb.refresh')}>↻</button>
-      </Head>
-      <div className="wb-filter">
-        <input type="search" aria-label={t('wb.filter')} placeholder={t('wb.filter')} value={filter} onChange={(e) => setFilter(e.target.value)} />
-      </div>
-      {!sessions ? (
-        <p className="muted small wb-pad">{t('wb.loading')}</p>
-      ) : sessions.length === 0 ? (
-        <p className="muted small wb-pad">
-          {t('wb.noSessions')} <Link href="/import">{t('wb.startPlan')}</Link>
-        </p>
-      ) : (
-        <ul className="wb-tree-list" role="tree" aria-label={t('wb.sessions')}>
-          {sessions.map((s) => {
-            const tasks = s.tasks.filter((x) => !q || x.title.toLowerCase().includes(q) || s.name.toLowerCase().includes(q));
-            if (q && tasks.length === 0) return null;
-            const isOpen = !closed.has(s.id) || !!q;
-            const done = s.tasks.filter((x) => x.status === 'done').length;
-            return (
-              <li key={s.id} role="treeitem" aria-expanded={isOpen} aria-selected={selected.sessionId === s.id && !selected.taskId}>
-                <div className={`wb-row session${selected.sessionId === s.id && !selected.taskId ? ' sel' : ''}`}>
-                  <button
-                    type="button"
-                    className="wb-chev"
-                    aria-label={isOpen ? t('wb.collapse', { name: s.name }) : t('wb.expand', { name: s.name })}
-                    onClick={() =>
-                      setClosed((c) => {
-                        const n = new Set(c);
-                        if (n.has(s.id)) n.delete(s.id);
-                        else n.add(s.id);
-                        return n;
-                      })
-                    }
-                  >
-                    {isOpen ? '▾' : '▸'}
-                  </button>
-                  <button type="button" className="wb-row-main" onClick={() => onOpen({ kind: 'session', sessionId: s.id })}>
-                    <span className="wb-row-name">{s.name}</span>
-                    {s.running && <span className="wb-live" title={t('wb.running')} aria-label={t('wb.running')} />}
-                    <span className="wb-count">{done}/{s.tasks.length}</span>
-                  </button>
-                </div>
-                {isOpen && (
-                  <ul role="group">
-                    {tasks.map((x) => {
-                      const n = s.tasks.indexOf(x) + 1;
-                      const sel = selected.taskId === x.id;
-                      return (
-                        <li key={x.id} role="treeitem" aria-selected={sel}>
-                          <button type="button" className={`wb-row task${sel ? ' sel' : ''}`} onClick={() => onOpen({ kind: 'task', sessionId: s.id, taskId: x.id })} title={x.title}>
-                            <StatusMark status={x.status} />
-                            <span className="wb-num">{n}.</span>
-                            <span className="wb-row-name">{x.title}</span>
-                            {(x.attempt ?? 1) > 1 && <span className="wb-count">a{x.attempt}</span>}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/** The session the files and commits views read: the chosen one, else the first with a repository. */
-function useRepoSession(sessions: Session[] | null, selected: { sessionId?: string }): Session | undefined {
-  return sessions?.find((s) => s.id === selected.sessionId) ?? sessions?.find((s) => s.vcs?.enabled && s.vcs.repoDir);
 }
 
 /** A folder of the open project, built from the flat list of its files. */
@@ -199,8 +97,8 @@ function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | nul
       })}
       {[...dir.files].sort((a, b) => byName(a.split('/').pop()!, b.split('/').pop()!)).map((f) => (
         <li key={`f:${f}`} role="treeitem">
-          <button type="button" className="wb-row file" onClick={() => onOpen({ kind: 'file', sessionId: '', path: f })} title={f}>
-            <span className="wb-ico" aria-hidden="true">≡</span>
+          <button type="button" className="wb-row file" onClick={() => onOpen({ kind: 'file', path: f })} title={f}>
+            <FileIcon path={f} />
             <span className="wb-row-name">{f.split('/').pop()}</span>
           </button>
         </li>
@@ -241,10 +139,10 @@ function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | nul
  * The open folder's git, as an IDE's Source Control view shows it (2026-10-19: "let the Commits button show Git as
  * VS Code does"): the branch and how far it is from the one it follows; the changes, staged and not, each file with
  * its letter and its lines, opening its two versions side by side in the editor; and the branch's commits, each
- * opening to the files it changed, which open the same way. A commit a task made says which task. Read-only: it
- * stages, commits and checks out nothing. Read again every five seconds, as the chat changes the folder.
+ * opening to the files it changed, which open the same way. Read-only: it stages, commits and checks out nothing.
+ * Read again every five seconds, as the chat changes the folder.
  */
-function GitView({ workspace, sessions, onOpen, onOpenFolder }: { workspace: Workspace | null; sessions: Session[] | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void }) {
+function GitView({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void }) {
   const { t } = useT();
   const fmt = useFmtTime();
   const [state, setState] = useState<WorkspaceGit | null>(null);
@@ -283,16 +181,6 @@ function GitView({ workspace, sessions, onOpen, onOpenFolder }: { workspace: Wor
         .catch((e: unknown) => setCommitFiles((m) => new Map(m).set(sha, (e as Error).message)));
     }
   };
-  // The task that made a commit, when a task did.
-  const madeBy = (sha: string): { sessionId: string; taskId: string; title: string } | null => {
-    for (const s of sessions ?? []) {
-      for (const x of s.tasks) {
-        const c = x.vcs?.commit;
-        if (c && (c === sha || sha.startsWith(c) || c.startsWith(sha))) return { sessionId: s.id, taskId: x.id, title: x.title };
-      }
-    }
-    return null;
-  };
   const statusName = (status: string): string => t(`git.status.${status === '!' ? 'conflict' : status}` as 'git.status.M');
   const fileRow = (f: GitFile, area: GitArea, commit?: string) => {
     const cut = f.path.lastIndexOf('/');
@@ -301,9 +189,10 @@ function GitView({ workspace, sessions, onOpen, onOpenFolder }: { workspace: Wor
         <button
           type="button"
           className="wb-row wb-git-file"
-          onClick={() => onOpen({ kind: 'diff', sessionId: '', area, path: f.path, ...(commit ? { commit } : {}) })}
+          onClick={() => onOpen({ kind: 'diff', area, path: f.path, ...(commit ? { commit } : {}) })}
           title={`${f.oldPath ? `${f.oldPath} → ` : ''}${f.path} · ${statusName(f.status)}`}
         >
+          <FileIcon path={f.path} />
           <span className="wb-row-name">{f.path.slice(cut + 1)}</span>
           {cut >= 0 && <span className="muted wb-git-dir">{f.path.slice(0, cut)}</span>}
           <span className="grow" />
@@ -374,7 +263,6 @@ function GitView({ workspace, sessions, onOpen, onOpenFolder }: { workspace: Wor
             ) : (
               <ul className="wb-commits">
                 {state.commits.map((c) => {
-                  const by = madeBy(c.sha);
                   const files = commitFiles.get(c.sha);
                   return (
                     <li key={c.sha}>
@@ -385,14 +273,6 @@ function GitView({ workspace, sessions, onOpen, onOpenFolder }: { workspace: Wor
                       </button>
                       <div className="muted wb-commit-meta">
                         {c.author} · {fmt(c.at)}
-                        {by && (
-                          <>
-                            {' · '}
-                            <button type="button" className="linkish" onClick={() => onOpen({ kind: 'task', sessionId: by.sessionId, taskId: by.taskId })}>
-                              {t('wb.byTask', { title: by.title })}
-                            </button>
-                          </>
-                        )}
                       </div>
                       {opened === c.sha &&
                         (files === undefined ? (
