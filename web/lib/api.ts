@@ -814,6 +814,15 @@ export type ProjectEntry = {
 };
 export type OtherProject = ProjectEntry;
 
+/** The folder's code searched (2026-10-21): see `workspaceSearch.ts` on the server. */
+export type SearchResult = {
+  files: Array<{ path: string; matches: Array<{ line: number; text: string; ranges: Array<[number, number]>; column?: number; length?: number }> }>;
+  total: number;
+  truncated: boolean;
+  ms: number;
+  problem?: string;
+};
+
 /** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
 export type Skill = { name: string; description: string; text: string; projectDir: string };
 export type SkillList = { skills: Skill[]; maxText: number; maxDescription: number };
@@ -1142,6 +1151,10 @@ export const api = {
   /** The open project folder, as it is on disk: what it is, its files, one of them. */
   workspace: () => call<Workspace>('/workspace'),
   workspaceFiles: () => call<{ dir: string; files: string[]; truncated: boolean }>('/workspace/files'),
+  workspaceSearch: (q: string, o: { matchCase: boolean; wholeWord: boolean; regex: boolean; include: string; exclude: string }) =>
+    call<SearchResult>(
+      `/workspace/search?${new URLSearchParams({ q, case: o.matchCase ? '1' : '', word: o.wholeWord ? '1' : '', regex: o.regex ? '1' : '', include: o.include, exclude: o.exclude }).toString()}`,
+    ),
   workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
   /** The editor's text over a file of the folder, over `base`, the version it was opened at (409 when it changed since). */
   saveWorkspaceFile: (path: string, text: string, base?: string) =>

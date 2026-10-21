@@ -1438,3 +1438,83 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 ::-webkit-scrollbar-corner { background: transparent; }
 /* Where the pseudo-elements are not known (Firefox), the standard properties give the same colours. */
 @supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) var(--sb-track); } }
+
+/*
+ * Go to File and the Search view (2026-10-21), as VS Code draws them: the box at the top of the screen with its list;
+ * the view's box with its three toggles inside it, the results by file with their counts, the matches marked.
+ */
+:root { --find-match: rgba(234, 92, 0, 0.28); --find-match-line: rgba(234, 92, 0, 0.6); }
+:root[data-theme='dark'] { --find-match: rgba(234, 92, 0, 0.38); --find-match-line: rgba(255, 160, 80, 0.8); }
+.qo-backdrop { align-items: flex-start; }
+.wb-palette.qo { margin-top: 8vh; width: min(640px, calc(100vw - 24px)); }
+.qo-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qo-name { white-space: nowrap; }
+.qo-dir { color: var(--muted); font-size: calc(12px * var(--scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.qo-tag { margin-inline-start: auto; color: var(--muted); font-size: calc(11.5px * var(--scale)); white-space: nowrap; }
+.qo-hit { background: none; color: var(--accent); font-weight: 700; padding: 0; }
+.qo-none { padding: 6px 10px; }
+.wb-side-view { height: 100%; }
+.wb-side-view[hidden] { display: none; }
+.sv { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.sv-form { padding: 2px 10px 6px; display: flex; flex-direction: column; gap: 4px; }
+.sv-row { display: flex; align-items: flex-start; gap: 2px; }
+.sv-details { border: 0; background: none; color: var(--muted); width: 18px; padding: 4px 0; line-height: 1; border-radius: 4px; }
+.sv-details.on, .sv-details:hover { color: var(--ink); background: var(--bg-tint); }
+.sv-box { flex: 1; display: flex; align-items: center; min-width: 0; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--bg); padding-inline-end: 2px; }
+.sv-box:focus-within { border-color: var(--accent); outline: 1px solid var(--accent); outline-offset: -1px; }
+.sv-box input { flex: 1; min-width: 0; border: 0; background: none; outline: none; padding: 4px 6px; font-size: calc(13px * var(--scale)); box-shadow: none; }
+.sv-toggle { border: 1px solid transparent; background: none; color: var(--muted); font: 600 calc(11.5px * var(--scale)) var(--mono); min-width: 22px; height: 20px; padding: 0 3px; border-radius: 3px; line-height: 1; }
+.sv-toggle:hover { background: var(--bg-tint); color: var(--ink); }
+.sv-toggle.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.sv-word { text-decoration: underline; text-underline-offset: 2px; }
+.sv-globs { display: flex; flex-direction: column; gap: 3px; padding-inline-start: 20px; }
+.sv-globs label { font-size: calc(11.5px * var(--scale)); color: var(--muted); }
+.sv-globs input { padding: 3px 6px; font-size: calc(12.5px * var(--scale)); }
+.sv-message { margin: 2px 0 0; padding-inline-start: 20px; font-size: calc(12px * var(--scale)); color: var(--muted); }
+.sv-message.bad { color: var(--bad); }
+.sv-results { flex: 1; overflow: auto; padding-bottom: 8px; }
+.sv-file-head { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; border: 0; border-radius: 0; background: none; color: var(--ink); text-align: start; padding: 2px 10px 2px 6px; font-size: calc(13px * var(--scale)); }
+.sv-file-head:hover, .sv-match:hover { background: var(--bg-tint); }
+.sv-chevron { display: inline-block; width: 12px; color: var(--muted); transition: transform 0.1s; }
+.sv-chevron.open { transform: rotate(90deg); }
+:root[data-motion='reduced'] .sv-chevron { transition: none; }
+.sv-name { white-space: nowrap; }
+.sv-dir { color: var(--muted); font-size: calc(12px * var(--scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.sv-count { margin-inline-start: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--bg-tint); border: 1px solid var(--line); color: var(--ink); font-size: calc(11px * var(--scale)); text-align: center; line-height: 16px; }
+.sv-match { display: block; width: 100%; border: 0; border-radius: 0; background: none; color: var(--ink); text-align: start; padding: 1px 10px 1px 40px; font: calc(12.5px * var(--scale)) var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.sv-hit, mark.sv-hit { background: var(--find-match); color: inherit; border-radius: 2px; outline: 1px solid var(--find-match-line); outline-offset: -1px; padding: 0; }
+
+/*
+ * A Markdown file as it reads (2026-10-21), styled as VS Code's preview; beside its text when both are shown.
+ */
+.ed-md-view { margin-inline-end: 6px; }
+.ed-md-view button { padding: 2px 8px; font-size: calc(12px * var(--scale)); }
+.ed-body.ed-show-preview > .ed-gutter, .ed-body.ed-show-preview > .ed-area { display: none; }
+.ed-body.ed-show-split > .ed-preview { order: 3; flex: 1 1 0; border-inline-start: 1px solid var(--line); }
+.ed-body.ed-show-split > .ed-area { flex: 1 1 0; }
+.ed-preview { flex: 1; overflow: auto; min-width: 0; min-height: 0; background: var(--bg); }
+.md { max-width: 880px; margin: 0 auto; padding: 18px 26px 40px; font-size: calc(14px * var(--scale)); line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.md h1, .md h2 { padding-bottom: 0.3em; border-bottom: 1px solid var(--line); }
+.md h1 { font-size: 2em; margin: 0.67em 0 0.5em; } .md h2 { font-size: 1.5em; margin: 1.2em 0 0.5em; }
+.md h3 { font-size: 1.25em; } .md h4 { font-size: 1em; } .md h5 { font-size: 0.875em; } .md h6 { font-size: 0.85em; color: var(--muted); }
+.md h3, .md h4, .md h5, .md h6 { margin: 1.1em 0 0.4em; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table { margin: 0 0 0.9em; }
+.md ul, .md ol { padding-inline-start: 2em; }
+.md li > ul, .md li > ol { margin: 0.2em 0; }
+.md li.md-task { list-style: none; margin-inline-start: -1.4em; }
+.md li.md-task > input { margin-inline-end: 0.4em; vertical-align: -1px; }
+.md code { font-family: var(--mono); font-size: 0.9em; padding: 0.15em 0.35em; border-radius: 4px; background: var(--bg-tint); }
+.md pre.md-code, .md pre.md-html { padding: 12px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); overflow: auto; line-height: 1.45; }
+.md pre code { padding: 0; background: none; font-size: calc(12.5px * var(--scale)); white-space: pre; }
+.md blockquote { padding: 0 1em; border-inline-start: 4px solid var(--line-strong); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line-strong); margin: 1.4em 0; }
+.md a { color: var(--accent); }
+.md img { max-width: 100%; }
+.md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; }
+.md th, .md td { border: 1px solid var(--line-strong); padding: 5px 12px; }
+.md th { background: var(--bg-tint); font-weight: 600; }
+.md tr:nth-child(2n) td { background: color-mix(in srgb, var(--bg-tint) 50%, transparent); }
+.md-mermaid { margin: 0 0 1em; text-align: center; overflow-x: auto; }
+.md-mermaid svg { max-width: 100%; height: auto; }
+.md-mermaid.bad { text-align: start; padding: 8px 12px; border: 1px solid var(--bad); border-radius: 6px; background: var(--bad-soft); }

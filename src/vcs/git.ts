@@ -36,7 +36,7 @@ export type GitResult = { ok: boolean; stdout: string; stderr: string; code: num
  * driver in the config, which the steps may no longer write — see `repositoryInternalsRefusal`).
  * `--no-optional-locks` keeps `status` from writing the index behind a step's back.
  */
-const SAFE_GIT = [
+export const SAFE_GIT = [
   '-c', `core.hooksPath=${noHooksDir()}`,
   '-c', 'core.fsmonitor=false',
   '-c', 'core.untrackedCache=false',

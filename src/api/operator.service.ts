@@ -86,7 +86,8 @@ function sameFolder(a: string, b: string): boolean {
   const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
   return a.trim() !== '' && norm(a) === norm(b);
 }
-import { saveWorkspaceFile, workspaceFile, workspaceFiles, workspaceInfo, type WorkspaceInfo } from '../session/workspace.js';
+import { saveWorkspaceFile, workspaceFile, workspaceFiles, workspaceInfo, workspaceRaw, type WorkspaceInfo } from '../session/workspace.js';
+import { searchWorkspace, type SearchOptions, type SearchResult } from '../session/workspaceSearch.js';
 import { restoreCheckpoint } from '../session/checkpoint.js';
 import { readInterruption } from '../session/interruption.js';
 import { baseRefOf, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, sessionBranchName } from '../vcs/taskVcs.js';
@@ -1342,6 +1343,20 @@ export class OperatorService {
     await this.init();
     const cfg = await this.settings.load();
     return await workspaceInfo(cfg.project?.rootDir ?? '', cfg.project?.name ?? '');
+  }
+
+  /** The open folder's code, searched as VS Code's Search view does (2026-10-21, see `workspaceSearch.ts`). */
+  async workspaceSearch(query: string, opts: SearchOptions): Promise<SearchResult> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await searchWorkspace(ws.dir, query, opts);
+  }
+
+  /** A file of the open folder as its bytes, with its type: an image a Markdown preview shows (2026-10-21). */
+  async workspaceRaw(path: string): Promise<{ bytes: Buffer; type: string }> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await workspaceRaw(ws.dir, path);
   }
 
   async workspaceFiles(): Promise<{ dir: string; files: string[]; truncated: boolean }> {

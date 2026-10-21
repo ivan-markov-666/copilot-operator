@@ -552,6 +552,17 @@ POST   /api/login                    POST /api/browse-folder
 
 ## Settings
 
+**Go to File, Search, Markdown (2026-10-21).** As in VS Code: Ctrl+P opens "Go to File" (`quickOpen.tsx`, the
+letters matched by `lib/fuzzy.ts`; `name:42` opens at line 42); Ctrl+Shift+F, or the magnifier in the column of icons,
+the Search view (`searchView.tsx`): Match Case, Match Whole Word, a regular expression (PCRE), the files to include and
+to exclude as globs, results by file with their counts and the matches marked; a result opens its file at the line
+with the match chosen. The server searches with `git grep` in a process of its own with a time limit
+(`session/workspaceSearch.ts`, `GET /api/workspace/search`): what .gitignore leaves out and files that are not text are
+not searched, files not committed yet are. A Markdown file opens as it reads (`markdownView.tsx`, our own renderer):
+"Code", "Side by side" and "Preview" above it, Ctrl+Shift+V; ```mermaid blocks are drawn by the `mermaid` package
+(12.2.0, bundled, loaded only by a page with a diagram, strict security). HTML in the file is shown as text; a picture
+of the folder comes through `GET /api/workspace/raw`, which serves only pictures; one from the internet is not fetched.
+
 **Skills (2026-10-21).** Settings → Skills keeps instructions for a kind of task that comes back — a new test, a
 new entity, a migration: a name to call it by (`new-test`, lowercase with hyphens), a line on what it is for, the
 project it is for or every project, and the instructions (`skills` in the settings, `GET`/`PUT /api/skills`). A

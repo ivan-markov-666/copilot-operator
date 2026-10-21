@@ -425,6 +425,8 @@ reference only": the bot reads it and runs what only reads it, and whatever a co
 [`docs/ui.md`](docs/ui.md); the Sessions page, the task register and plans from JSON were removed
 on 2026-10-20.
 
+As in VS Code, Ctrl+P finds a file by name and Ctrl+Shift+F searches the code (match case, whole word,
+regular expressions, files to include or exclude); a Markdown file opens as it reads, its mermaid diagrams drawn.
 Skills keep your instructions for a kind of task that comes back — a new test, a new entity, a migration — in
 Settings; a message starting with `/its-name` (or with the skill chosen under the chat's box) carries them to the
 chat. The three panels move as in VS Code: drag the grip ⠿ in a panel's head onto another. Settings can also make

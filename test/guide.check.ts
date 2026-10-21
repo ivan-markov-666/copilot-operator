@@ -253,6 +253,8 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^proj\.desktopMasterOff$/, why: 'the greyed-out note beside "Keep a copy of this project on the Desktop", which is guided' },
   { pattern: /^(skills\.allProjects|chat\.skillNone)$/, why: 'the first option of a list that is guided ("Project", "Skill"): every project, no skill' },
   { pattern: /^skills\.addTitle$/, why: 'the heading over the new skill\'s fields, which are guided with "Add the skill"' },
+  { pattern: /^search\.expand$/, why: '"Collapse All" pressed again, which the guide says of it' },
+  { pattern: /^md\.externalImage$/, why: 'the tooltip of a picture link inside a Markdown preview, whose Preview button is guided' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
 const guided = new Set(claims.map((c) => c.key));

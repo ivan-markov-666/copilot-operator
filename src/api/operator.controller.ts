@@ -239,6 +239,32 @@ export class OperatorController {
     return this.ops.workspaceFiles().catch(fail);
   }
 
+  /** The folder's code searched, as VS Code's Search view (2026-10-21): the text, and its options as 1 or nothing. */
+  @Get('workspace/search')
+  workspaceSearch(
+    @Query('q') q?: string,
+    @Query('case') matchCase?: string,
+    @Query('word') wholeWord?: string,
+    @Query('regex') regex?: string,
+    @Query('include') include?: string,
+    @Query('exclude') exclude?: string,
+  ): Promise<unknown> {
+    const on = (v?: string): boolean => v === '1' || v === 'true';
+    return this.ops.workspaceSearch(q ?? '', { matchCase: on(matchCase), wholeWord: on(wholeWord), regex: on(regex), include: include ?? '', exclude: exclude ?? '' }).catch(fail);
+  }
+
+  /** A picture of the folder, for a Markdown preview (2026-10-21). Served so it can only be shown, never run. */
+  @Get('workspace/raw')
+  async workspaceRaw(@Query('path') path: string | undefined, @Res() res: Response): Promise<void> {
+    if (!path) throw new BadRequestException('path is required');
+    const r = await this.ops.workspaceRaw(path).catch(fail);
+    res.setHeader('Content-Type', r.type);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(r.bytes);
+  }
+
   @Get('workspace/file')
   workspaceFile(@Query('path') path?: string): Promise<unknown> {
     if (!path) throw new BadRequestException('path is required');

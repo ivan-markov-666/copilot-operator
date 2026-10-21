@@ -82,6 +82,27 @@ export async function workspaceFile(dir: string, path: string, maxBytes = MAX_ED
   return { path: clean, text: binary ? null : bytes.toString('utf8').replace(/^\ufeff/, ''), binary, tooLarge: false, size: st.size, version: versionOf(bytes) };
 }
 
+/** The pictures a Markdown preview may show from the folder, by extension, with the type they are served as. */
+const PICTURES: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif',
+};
+const MAX_PICTURE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * A picture of the folder as its bytes (2026-10-21), for an image a Markdown preview shows: only pictures, only inside
+ * the folder, at most 10 MB. Anything else is refused, so this is not a way to read the folder's files whole.
+ */
+export async function workspaceRaw(dir: string, path: string): Promise<{ bytes: Buffer; type: string }> {
+  const { clean, full } = insideFolder(dir, path);
+  const ext = clean.split('.').pop()?.toLowerCase() ?? '';
+  const type = PICTURES[ext];
+  if (!type) throw new Error(`${clean} is not a picture this view shows.`);
+  const st = await stat(full).catch(() => null);
+  if (!st?.isFile()) throw new Error(`There is no file ${clean} in the project folder.`);
+  if (st.size > MAX_PICTURE_BYTES) throw new Error(`${clean} is larger than a preview shows.`);
+  return { bytes: await readFile(full), type };
+}
+
 /** Said when the file changed on disk after the editor read it; the page offers to read it again or to save anyway. */
 export const CHANGED_ON_DISK = 'changed-on-disk';
 

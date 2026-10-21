@@ -819,6 +819,123 @@ try {
   });
 
   /*
+   * Go to File and the Search view, as in VS Code (operator, 2026-10-21): Ctrl+P finds a file by a few letters and opens
+   * it, at a line with :N; Ctrl+Shift+F searches the code, its toggles narrow it, a result opens its file at the match.
+   */
+  await scenario('Go to File (Ctrl+P) and the Search view (Ctrl+Shift+F), as in VS Code', {}, async (h, page, url) => {
+    mkdirSync(join(h.repo, 'src', 'deep'), { recursive: true });
+    writeFileSync(join(h.repo, 'src', 'deep', 'thing.ts'), 'const a = 1;\nconst b = 2;\nexport const needle = a + b;\nconst Needle2 = needle;\n');
+    await page.goto(url('/'));
+    await page.locator('.wb-side .file-ico').first().waitFor();
+    t.check('the files are shown, and the Search view is not, until asked for', await page.locator('.sv').isVisible(), false);
+    await page.keyboard.press('Control+p');
+    const quick = page.getByRole('dialog', { name: en['quick.label']! });
+    await quick.waitFor();
+    await quick.getByRole('combobox').fill('thng');
+    const first = quick.getByRole('option').first();
+    t.truthy('a few letters of the name find the file, the letters marked, its folder beside it', ((await first.textContent()) ?? '').includes('thing.ts') && ((await first.textContent()) ?? '').includes('src/deep') && (await first.locator('mark.qo-hit').count()) > 0, await first.textContent());
+    await quick.getByRole('combobox').fill('thing:3');
+    await quick.getByRole('combobox').press('Enter');
+    const editor = page.getByRole('textbox', { name: en['ed.label']!.replace('{path}', 'src/deep/thing.ts') });
+    await editor.waitFor();
+    const at = async (): Promise<number> => await editor.evaluate((el) => (el as HTMLTextAreaElement).value.slice(0, (el as HTMLTextAreaElement).selectionStart).split('\n').length);
+    await waitFor('the cursor to be on line 3', async () => (await at()) === 3, 5_000).catch(() => undefined);
+    t.check('name:3 opens it at line 3', await at(), 3);
+
+    await page.keyboard.press('Control+Shift+f');
+    const box = page.getByRole('textbox', { name: en['search.input']!, exact: true });
+    await box.waitFor();
+    await waitFor('the box to take the keys', async () => await box.evaluate((el) => el === document.activeElement), 3_000).catch(() => undefined);
+    t.check('Ctrl+Shift+F: the Search view, its box ready', await box.evaluate((el) => el === document.activeElement), true);
+    await box.fill('needle');
+    const status = page.locator('.sv-message').first();
+    await waitFor('the results', async () => /results in/.test((await status.textContent()) ?? ''), 10_000).catch(() => undefined);
+    t.check('found as one types, any case: how many in how many files', (await status.textContent())?.trim(), en['search.results']!.replace('{n}', '3').replace('{files}', '1'));
+    t.check('the file with its count, the matches marked', [await page.locator('.sv-file-head .sv-count').first().textContent(), await page.locator('.sv-match mark.sv-hit').count()], ['3', 3]);
+    await page.getByRole('button', { name: en['search.matchCase']!, exact: true }).click();
+    await waitFor('Match Case to narrow it', async () => ((await status.textContent()) ?? '').startsWith('2 '), 10_000).catch(() => undefined);
+    t.check('Match Case narrows it', (await status.textContent())?.trim(), en['search.results']!.replace('{n}', '2').replace('{files}', '1'));
+    await page.getByRole('button', { name: en['search.matchCase']!, exact: true }).click();
+    await waitFor('back to any case', async () => ((await status.textContent()) ?? '').startsWith('3 '), 10_000).catch(() => undefined);
+    await page.getByRole('button', { name: en['search.wholeWord']!, exact: true }).click();
+    await waitFor('Match Whole Word to narrow it', async () => ((await status.textContent()) ?? '').startsWith('2 '), 10_000).catch(() => undefined);
+    t.check('Match Whole Word: needle, not Needle2', (await status.textContent())?.trim(), en['search.results']!.replace('{n}', '2').replace('{files}', '1'));
+    await page.locator('.sv-match').nth(1).click();
+    await waitFor('the file to open at the match', async () => (await at()) === 4, 5_000).catch(() => undefined);
+    const chosen = await editor.evaluate((el) => (el as HTMLTextAreaElement).value.slice((el as HTMLTextAreaElement).selectionStart, (el as HTMLTextAreaElement).selectionEnd));
+    t.check('a result opens its file at that line, the match chosen', [await at(), chosen], [4, 'needle']);
+    await page.getByRole('button', { name: en['search.regex']!, exact: true }).click();
+    await box.fill('needle(');
+    await waitFor('the pattern to be refused', async () => ((await status.textContent()) ?? '').includes(en['search.problem']!.split('{why}')[0]!), 10_000).catch(() => undefined);
+    t.truthy('a regular expression that is not valid is said under the box', ((await status.textContent()) ?? '').startsWith(en['search.problem']!.split('{why}')[0]!), await status.textContent());
+    // The panel has one grip, the shown view's: the Search view kept while the files are shown carries none.
+    t.check('one grip for the side panel while searching', await page.locator('.wb-side .wb-grip').count(), 1);
+    await page.keyboard.press('Control+Shift+e');
+    await page.locator('.wb-side .file-ico').first().waitFor();
+    t.check('one grip for the side panel back on the files, the Search view kept but hidden', [await page.locator('.wb-side .wb-grip').count(), await page.locator('.sv').count(), await page.locator('.sv').isVisible()], [1, 1, false]);
+  });
+
+  /*
+   * A Markdown file as it reads (operator, 2026-10-21), mermaid diagrams drawn: by default as it reads; Code shows its
+   * text; Side by side both; a link to another file of the folder opens it.
+   */
+  await scenario('Markdown as it reads: headings, a table, code, a mermaid diagram drawn; Code and side by side', {}, async (h, page, url) => {
+    mkdirSync(join(h.repo, 'docs'), { recursive: true });
+    writeFileSync(join(h.repo, 'docs', 'other.md'), '# The other one\n');
+    writeFileSync(
+      join(h.repo, 'docs', 'guide.md'),
+      [
+        '# The guide',
+        '',
+        'Some **bold** and `code`, and [the other file](other.md).',
+        '',
+        '- one',
+        '- [x] done',
+        '',
+        '| Name | Count |',
+        '|:-----|------:|',
+        '| a    |     1 |',
+        '',
+        '```ts',
+        'const x: number = 1;',
+        '```',
+        '',
+        '```mermaid',
+        'flowchart LR',
+        '  A[Start] --> B{Ready?}',
+        '  B -->|yes| C[Go]',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    await page.goto(url('/'));
+    await page.locator('.wb-side .file-ico').first().waitFor();
+    await page.keyboard.press('Control+p');
+    const quick = page.getByRole('dialog', { name: en['quick.label']! });
+    await quick.getByRole('combobox').fill('guide.md');
+    await quick.getByRole('combobox').press('Enter');
+    const md = page.locator('.ed-preview .md');
+    await md.waitFor();
+    t.check('opened as it reads: the heading, the list with its box, the table aligned, the code coloured', [
+      await md.locator('h1').textContent(),
+      await md.locator('li.md-task input[type=checkbox]').isChecked(),
+      await md.locator('td').nth(1).evaluate((el) => (el as HTMLElement).style.textAlign),
+      (await md.locator('pre.md-code span').count()) > 0,
+    ], ['The guide', true, 'right', true]);
+    await md.locator('.md-mermaid svg').waitFor({ timeout: 30_000 }).catch(() => undefined);
+    t.truthy('the mermaid block drawn as its diagram', (await md.locator('.md-mermaid svg').count()) === 1 && ((await md.locator('.md-mermaid').textContent()) ?? '').includes('Ready?'), await md.locator('.md-mermaid').innerHTML().catch(() => ''));
+    t.check('and not as its text', await page.locator('.ed-body.ed-show-preview .ed-area').isVisible(), false);
+    await page.getByRole('button', { name: en['ed.viewCode']!, exact: true }).click();
+    t.check('Code: its text to edit', [await page.locator('.ed-area textarea').isVisible(), await page.locator('.ed-preview').count()], [true, 0]);
+    await page.getByRole('button', { name: en['ed.viewSplit']!, exact: true }).click();
+    t.check('Side by side: both', [await page.locator('.ed-area textarea').isVisible(), await page.locator('.ed-preview .md').isVisible()], [true, true]);
+    await page.getByRole('button', { name: en['ed.viewPreview']!, exact: true }).click();
+    await md.getByRole('link', { name: 'the other file' }).click();
+    await page.locator('.wb-tab').filter({ hasText: 'other.md' }).waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.check('a link to another file of the folder opens it', await page.locator('.wb-tab').filter({ hasText: 'other.md' }).count(), 1);
+  });
+
+  /*
    * The pause between messages, in Settings (operator, 2026-10-21): a box; ticked, the seconds and a second box for a
    * random time; that one ticked, the longest.
    */

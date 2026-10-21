@@ -27,6 +27,9 @@ import { Palette, type PaletteCommand } from './palette';
 import { AppearanceMenu } from './appearanceMenu';
 import { KerriganButton } from './kerriganButton';
 import { FileIcon } from './fileIcon';
+import { QuickOpen } from './quickOpen';
+import { SearchView, type SearchHit } from './searchView';
+import type { GoTo } from './fileView';
 import { AREA_DRAG, DEFAULT_ORDER, movedTo, orderOf, PanelGrip, type Area } from './panelGrip';
 import { confirmDialog } from '../dialog';
 
@@ -34,7 +37,7 @@ export type Tab =
   | { kind: 'file'; path: string }
   /** A file of the open folder's git, its two versions side by side (see gitDiff.tsx). */
   | { kind: 'diff'; area: GitArea; path: string; commit?: string };
-export type SideView = 'files' | 'commits';
+export type SideView = 'files' | 'search' | 'commits';
 export type BottomTab = 'terminal' | 'problems' | 'output';
 
 const tabKey = (t: Tab): string => (t.kind === 'diff' ? `d:${t.area}:${t.commit ?? ''}:${t.path}` : `f:${t.path}`);
@@ -134,6 +137,22 @@ function WorkbenchInner() {
     setTabs((all) => (all.some((x) => tabKey(x) === tabKey(tab)) ? all : [...all, tab]));
     setActive(tabKey(tab));
   }, []);
+  /** Go to File (Ctrl+P) open, the line a file was opened at, and the Search view's box asked to take the keys. */
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [goTo, setGoTo] = useState<(GoTo & { path: string }) | null>(null);
+  const [searchAsk, setSearchAsk] = useState(0);
+  const openAt = useCallback(
+    (hit: SearchHit) => {
+      open({ kind: 'file', path: hit.path });
+      setGoTo((g) => ({ path: hit.path, line: hit.line, from: hit.from, to: hit.to, n: (g?.n ?? 0) + 1 }));
+    },
+    [open],
+  );
+  const toSearch = (): void => {
+    setSide('search');
+    setL({ sideOpen: true });
+    setSearchAsk((n) => n + 1);
+  };
   const close = async (key: string) => {
     const tab = tabs.find((x) => tabKey(x) === key);
     if (tab?.kind === 'file' && unsaved.has(tab.path)) {
@@ -173,6 +192,17 @@ function WorkbenchInner() {
       if (k === 'k' || (k === 'p' && e.shiftKey)) {
         e.preventDefault();
         setPalette(true);
+      } else if (k === 'p') {
+        // Go to File, as in VS Code (2026-10-21).
+        e.preventDefault();
+        setQuickOpen(true);
+      } else if (k === 'f' && e.shiftKey) {
+        e.preventDefault();
+        toSearch();
+      } else if (k === 'e' && e.shiftKey) {
+        e.preventDefault();
+        setSide('files');
+        setL({ sideOpen: true });
       } else if (k === 'b' && !e.shiftKey) {
         e.preventDefault();
         setL({ sideOpen: !layout.sideOpen });
@@ -193,6 +223,8 @@ function WorkbenchInner() {
       { id: 'chat', label: t('wb.cmdChat'), hint: 'Ctrl+L', run: toChat },
       { id: 'side', label: t('wb.cmdSide'), hint: 'Ctrl+B', run: () => setL({ sideOpen: !layout.sideOpen }) },
       { id: 'panel', label: t('wb.cmdPanel'), hint: 'Ctrl+J', run: () => setL({ bottomOpen: !layout.bottomOpen }) },
+      { id: 'quick-open', label: t('wb.cmdQuickOpen'), hint: 'Ctrl+P', run: () => setQuickOpen(true) },
+      { id: 'search', label: t('wb.cmdSearch'), hint: 'Ctrl+Shift+F', run: toSearch },
       { id: 'layout', label: t('wb.cmdResetLayout'), run: () => setL({ order: DEFAULT_ORDER, side: DEFAULT_LAYOUT.side, chat: DEFAULT_LAYOUT.chat }) },
       { id: 'files', label: t('wb.cmdFiles'), run: () => { setL({ sideOpen: true }); setSide('files'); } },
       { id: 'commits', label: t('wb.cmdCommits'), run: () => { setL({ sideOpen: true }); setSide('commits'); } },
@@ -263,7 +295,12 @@ function WorkbenchInner() {
   const panels: Record<Area, ReactNode> = {
     side: (
       <aside key="side" className={`wb-side${dropClass('side')}`} aria-label={t('wb.explorer')} hidden={!layout.sideOpen} {...dropOn('side')}>
-        <Explorer view={side} onOpen={open} workspace={workspace} onOpenFolder={() => void openFolder()} grip={grip('side', t('wb.explorer'))} />
+        {/* The Search view stays as it was left while the files are shown, as VS Code keeps it; the panel's one grip
+            goes to the view that is shown. */}
+        <div className="wb-side-view" hidden={side !== 'search'}>
+          <SearchView onOpen={openAt} grip={side === 'search' ? grip('side', t('wb.explorer')) : undefined} focusAsk={searchAsk} />
+        </div>
+        {side !== 'search' && <Explorer view={side} onOpen={open} workspace={workspace} onOpenFolder={() => void openFolder()} grip={grip('side', t('wb.explorer'))} />}
       </aside>
     ),
     center: (
@@ -303,7 +340,7 @@ function WorkbenchInner() {
             {tabs.map((tab) =>
               tab.kind === 'file' ? (
                 <div key={tabKey(tab)} className="wb-file-pane" hidden={tabKey(tab) !== active}>
-                  <FileView path={tab.path} onDirty={onDirty} />
+                  <FileView path={tab.path} onDirty={onDirty} goTo={goTo?.path === tab.path ? goTo : undefined} onOpenFile={(p) => open({ kind: 'file', path: p })} />
                 </div>
               ) : null,
             )}
@@ -374,6 +411,13 @@ function WorkbenchInner() {
 
       <StatusBar sessions={sessions ?? []} session={chatSession} workspace={workspace} onShowThread={(id) => { setL({ chatOpen: true }); setShowThread((v) => ({ id, n: (v?.n ?? 0) + 1 })); }} />
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
+      {quickOpen && (
+        <QuickOpen
+          recent={tabs.filter((x) => x.kind === 'file').map((x) => x.path).reverse()}
+          onOpen={(path, line) => (line ? openAt({ path, line }) : open({ kind: 'file', path }))}
+          onClose={() => setQuickOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -393,6 +437,7 @@ function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat }: { side: SideV
   return (
     <nav className="wb-activity" aria-label={t('wb.views')}>
       {item('files', t('wb.viewFiles'), <path d="M4 4h6l2 2h8v14H4z" />)}
+      {item('search', t('wb.search'), <><circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></>)}
       {item('commits', t('wb.viewCommits'), <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6" /></>)}
       <span className="grow" />
       <button type="button" className={`wb-act${chatOpen ? ' on' : ''}`} aria-pressed={chatOpen} aria-label={t('wb.toggleChat')} title={`${t('wb.toggleChat')} (Ctrl+L)`} onClick={onChat}>
