@@ -154,9 +154,11 @@ function sourceFiles(dir: string): string[] {
   for (const entry of readdirSync(dir)) {
     if (entry === 'node_modules' || entry.startsWith('.')) continue;
     const path = join(dir, entry);
-    if (statSync(path).isDirectory()) out.push(...sourceFiles(path));
-    // The dictionary itself is not a page: every key is in it by definition.
-    else if (/\.tsx?$/.test(entry) && entry !== 'strings.ts') out.push(path);
+    // The dictionaries are not pages: every key is in each of them by definition (one file a language since 2026-10-20).
+    if (statSync(path).isDirectory()) {
+      if (path.replace(/\\/g, '/').endsWith('web/lib/lang')) continue;
+      out.push(...sourceFiles(path));
+    } else if (/\.tsx?$/.test(entry) && entry !== 'strings.ts') out.push(path);
   }
   return out;
 }

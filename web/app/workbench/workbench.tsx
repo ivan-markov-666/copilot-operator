@@ -14,7 +14,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import Link from 'next/link';
 import { api, type GitArea, type Session, type Task, type Workspace } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
-import { LanguageSwitcher, useT } from '../../lib/i18n';
+import { useT } from '../../lib/i18n';
+import { LanguageSwitcher } from '../languageMenu';
 import { Explorer } from './explorer';
 import { FileView } from './fileView';
 import { GitDiff } from './gitDiff';
@@ -191,9 +192,6 @@ function WorkbenchInner() {
       ...(
         [
           ['/defaults', 'nav.defaults'],
-          ['/level1', 'nav.level1'],
-          ['/presets', 'nav.presets'],
-          ['/appearance', 'nav.appearance'],
           ['/system', 'nav.system'],
         ] as const
       ).map(([href, key]) => ({ id: `go:${href}`, label: t('wb.cmdGo', { page: t(key) }), href })),
@@ -219,6 +217,8 @@ function WorkbenchInner() {
         </button>
         <nav className="wb-menu" aria-label={t('nav.label')}>
           <Link href="/defaults">{t('nav.defaults')}</Link>
+          {/* System on the chat's screen too (operator, 2026-10-20), as it is on every other page. */}
+          <Link href="/system">{t('nav.system')}</Link>
           <LanguageSwitcher />
         </nav>
       </header>

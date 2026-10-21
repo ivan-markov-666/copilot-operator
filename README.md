@@ -412,9 +412,14 @@ Open a project folder, write what to change in the chat on the right, approve ea
 the conversation (or let them run without asking), and read the summary when it finishes. The
 files of the folder are on the left, with its git; a file opens in the editor, coloured by its
 language, and can be edited and saved. "Plan mode" under the chat's box asks Copilot for a plan
-first, shown in the conversation to approve. "Pause" holds the work at its next message or command
-and becomes "Continue". "Kerrigan" on the home screen hands out a persona to
-give another chat, which then helps you write tasks for this one (optional). See
+first, shown in the conversation to approve; "Review" has a conversation of its own check the work
+when Copilot says it is done. "Two chats" gives a complex task to a lead, which plans and directs,
+and a worker, which runs the commands of each subtask and reports back — two conversations in the
+same Copilot window, the lead asking you only what nobody else can decide. "Pause" holds the work at its next message or command and becomes
+"Continue". The interface speaks nine languages (English, Bulgarian, German, Spanish, French,
+Portuguese, Japanese, Korean, Arabic), chosen from "Language". "Kerrigan" on the home screen hands out a persona to
+give another chat, which then helps you write tasks for this one (optional); she knows your projects,
+with the level 2 you write for each in Settings. See
 [`docs/ui.md`](docs/ui.md); the Sessions page, the task register and plans from JSON were removed
 on 2026-10-20.
 

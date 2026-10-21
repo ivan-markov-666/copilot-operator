@@ -190,6 +190,14 @@ export type Task = {
    * "go back to before this message" puts back. See `session/checkpoint.ts`.
    */
   checkpoint?: { commit: string; head: string; branch: string; at: string };
+  /**
+   * A message of a conversation in the two-chat mode (operator, 2026-10-20): what its lead did — each of its replies,
+   * the subtasks it gave the worker, the questions it put to the operator — and the evidence of the result it
+   * delivered, which is the task's `summary`. See `orchestrator/leadRunner.ts`.
+   */
+  lead?: LeadRecord;
+  /** A worker's subtask: the lead's message it is part of, and which of its subtasks it is. */
+  fromLead?: { sessionId: string; taskId: string; n: number };
   /** What version control was *asked* to do for this task, as opposed to what it did. */
   vcsPlan?: TaskVcsPlan;
   /**
@@ -535,6 +543,8 @@ export type TaskAttempt = {
   handoff?: Handoff;
   /** The plan this attempt made and worked to, in plan mode. */
   plan?: TaskPlan;
+  /** What the lead did in this attempt, in the two-chat mode. */
+  lead?: LeadRecord;
   accepted?: Task['accepted'];
   /**
    * The operator undid this attempt (2026-10-14): `this` — its work taken out of the session's line by a
@@ -998,8 +1008,16 @@ export type Session = {
    * writes is a task of it, run at once in the same Copilot conversation and on the same branch.
    */
   kind?: 'chat';
+  /**
+   * The two-chat mode (operator, 2026-10-20): this conversation is the lead's, which plans and directs; its subtasks are
+   * carried out by a worker, a session of its own (`workerSessionId`, made at the first subtask) with a conversation of
+   * its own in the same Copilot window. The worker's model, as chosen under the chat's box.
+   */
+  lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
+  /** A worker's session: the chat session whose lead gives it its subtasks. It is not a conversation of the chat's list. */
+  workerOf?: string;
   /** The language the workbench was in at the chat's last message, for what its window says at the end (2026-10-19). */
-  lang?: 'en' | 'bg';
+  lang?: string;
   /**
    * The chat went back to before a message (2026-10-17): said to the conversation with the next message, then
    * cleared — the Copilot chat still holds what was undone, and must not build on it.
@@ -1159,13 +1177,45 @@ export type PendingApproval = {
    * 2026-10-06). Answers: run = "I chose it, check and go on"; skip = "go on with the model it is on";
    * abort = stop. Asked in every mode, like a fetch.
    */
-  model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean };
+  /** `review`: the model of the review's own conversation (2026-10-20), best another, stronger one than the work's. */
+  /** `role`: the lead's or the worker's conversation of the two-chat mode (2026-10-20). */
+  model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' };
   /**
    * Set when this is a task's plan waiting for the operator (plan mode `approve`, in a run that asks
    * before each command). Answers: approve (with a note, optionally), ask for another plan (with what to
    * change), or stop the task.
    */
   plan?: { title: string; plan: TaskPlan };
+  /**
+   * Set when the lead of a two-chat conversation asks the operator something only a person can answer (2026-10-20): the
+   * question, why, and the choices when it gave some. Answered with text (`/approvals/:id/answer`), or the task stopped.
+   */
+  question?: { text: string; why?: string; options: string[] };
+};
+
+/** One reply of the lead: what it decided, and what came of it. */
+export type LeadRound = {
+  n: number;
+  at: string;
+  status: 'delegate' | 'plan' | 'ask' | 'done' | 'blocked';
+  understanding?: string;
+  notes?: string;
+  /** The subtask it gave, by its task in the worker's session. */
+  subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean };
+  /** The question it asked the operator, and the answer it got. */
+  question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
+};
+
+/** What the lead of a message did, as the chat shows it. */
+export type LeadRecord = {
+  rounds: LeadRound[];
+  /** How many subtasks it has given, and the most it may. */
+  subtasks: number;
+  maxSubtasks: number;
+  /** What it says shows the result. */
+  evidence?: string[];
+  /** The worker's session, the subtasks' tasks are in. */
+  workerSessionId?: string;
 };
 
 export function newId(prefix = ''): string {

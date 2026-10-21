@@ -26,6 +26,7 @@ import { chromium, type Browser, type Locator, type Page } from 'playwright';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 import { dict } from '../web/lib/strings.js';
+import { themeScript } from '../web/lib/themeScript.js';
 
 const en = dict.en as Record<string, string>;
 
@@ -139,12 +140,15 @@ console.log('\n--- every built page hydrates <head> from what is in the page ---
     }
     if (heads === 0) noHead.push(p);
   }
-  // The workbench, Settings, Level 1, the presets, Appearance, System, and the 404 (the Sessions pages went on 2026-10-20).
-  t.truthy('the build has its pages', pages.length >= 7 && pages.includes('index.html') && pages.includes('defaults.html'), pages);
+  // The chat, Settings, System, and the 404 (the Sessions pages went on 2026-10-20, and Level 1, the presets and Appearance with them).
+  t.truthy('the build has its pages', pages.length >= 4 && pages.includes('index.html') && pages.includes('defaults.html') && pages.includes('system.html'), pages);
+  t.check('and not the pages that went', ['level1.html', 'presets.html', 'appearance.html'].filter((x) => pages.includes(x)), []);
   // Without this the two checks below would pass on a page whose data they could not read at all.
   t.check('pages whose data has no <head> to look at', noHead, []);
   t.check('parts of <head> the browser must fetch before it can hydrate it', inHead, []);
   t.check('inline scripts whose text is a reference rather than the text', inlineCode, []);
+  // Under the length React sends as a row of its own, which is what makes it a reference (2026-10-20, at 1 045).
+  t.truthy('the pre-paint script stays under 1 024 characters', themeScript.length < 1024, themeScript.length);
 }
 
 let browser: Browser | null = null;
@@ -185,7 +189,7 @@ try {
    */
   await scenario("every page keeps the markup of its HTML when the layout's script comes late", {}, async (h, page, url) => {
     const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (late).', model: 'Think deeper' });
-    await page.goto(url('/appearance'));
+    await page.goto(url('/system'));
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
     // Held on the network every time: while a route is set, Playwright fetches past the cache.
     await page.route('**/_next/static/chunks/app/layout-*.js', async (r) => {
@@ -206,7 +210,7 @@ try {
         }
       }).observe(document, { childList: true, subtree: true });
     });
-    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/defaults', '/system'];
     const redrawn: string[] = [];
     for (let round = 1; round <= 2; round++) {
       for (const p of pages) {
@@ -220,31 +224,42 @@ try {
     t.check('loads whose markup was thrown away and drawn again', redrawn, []);
   });
 
-  await scenario('text size: five steps, remembered, and a bad stored value falls back', {}, async (_h, page, url) => {
-    await page.goto(url('/appearance'));
-    const group = page.getByRole('group', { name: 'Text size' });
-    const names = await group.getByRole('button').allTextContents();
-    t.check('five sizes, smallest first', names, ['Small', 'Normal', 'Large', 'Larger', 'Largest']);
+  /*
+   * The text size through the appearance menu at the foot of the chat's left column (2026-10-20: the Appearance page
+   * went with the rest; the menu does all of it): five steps by A− and A+, remembered, a bad stored value falling back.
+   */
+  await scenario('text size: five steps by A− and A+, remembered, and a bad stored value falls back', {}, async (_h, page, url) => {
+    await page.goto(url('/'));
+    const openMenu = async (): Promise<void> => {
+      await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).click();
+      await page.getByRole('dialog', { name: en['wb.appearance']! }).waitFor();
+    };
+    await openMenu();
+    const menu = page.getByRole('dialog', { name: en['wb.appearance']! });
     const scaleOf = async (): Promise<[string | null, string]> =>
       await page.evaluate(() => [document.documentElement.dataset.textsize ?? null, getComputedStyle(document.documentElement).getPropertyValue('--scale').trim()]);
-    const seen: Array<[string | null, string]> = [];
-    for (const n of names) {
-      await group.getByRole('button', { name: n, exact: true }).click();
+    const smaller = menu.getByRole('button', { name: en['ap.smaller']!, exact: true });
+    const larger = menu.getByRole('button', { name: en['ap.larger']!, exact: true });
+    await smaller.click();
+    const seen: Array<[string | null, string]> = [await scaleOf()];
+    for (let i = 0; i < 4; i++) {
+      await larger.click();
       seen.push(await scaleOf());
     }
-    t.check('each step sets its own scale', seen, [['small', '0.9'], ['normal', '1'], ['large', '1.12'], ['huge', '1.28'], ['giant', '1.45']]);
+    t.check('A− then A+ four times: each step its own scale, smallest first', seen, [['small', '0.9'], ['normal', '1'], ['large', '1.12'], ['huge', '1.28'], ['giant', '1.45']]);
+    t.check('at the largest, A+ is off', await larger.isDisabled(), true);
     const body = async (): Promise<number> => await page.evaluate(() => parseFloat(getComputedStyle(document.body).fontSize));
     t.check('the body text follows it (15px × 1.45)', Math.round((await body()) * 100) / 100, 21.75);
 
     await page.reload();
     t.check('the choice survives a reload, before React runs', (await scaleOf())[0], 'giant');
-    t.check('and its button is the pressed one', await group.getByRole('button', { pressed: true }).allTextContents(), ['Largest']);
+    await openMenu();
+    t.truthy('and the menu says it', ((await menu.textContent()) ?? '').includes(en['ap.sizeGiant']!), await menu.textContent());
 
     await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ textSize: 'enormous', theme: 'purple', highContrast: 'yes' })));
     await page.reload();
     t.check('an unknown stored size falls back to normal', (await scaleOf())[0], 'normal');
-    t.check('and Normal shows as chosen', await group.getByRole('button', { pressed: true }).allTextContents(), ['Normal']);
-    t.check('an unknown theme falls back to light', await page.evaluate(() => document.documentElement.dataset.theme), 'light');
+    t.check('an unknown theme falls back to the machine\'s (light here)', await page.evaluate(() => document.documentElement.dataset.theme), 'light');
   });
 
   /*
@@ -256,7 +271,7 @@ try {
     await page.route('**/_next/static/chunks/**', (r) => r.abort());
     const at = async (): Promise<Record<string, string | undefined>> => await page.evaluate(() => ({ theme: document.documentElement.dataset.theme, night: document.documentElement.dataset.night }));
     await page.emulateMedia({ colorScheme: 'dark' });
-    await page.goto(url('/appearance'), { waitUntil: 'domcontentloaded' });
+    await page.goto(url('/system'), { waitUntil: 'domcontentloaded' });
     t.check('nothing chosen, the machine dark: dark', (await at()).theme, 'dark');
     await page.emulateMedia({ colorScheme: 'light' });
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -268,17 +283,25 @@ try {
     await page.emulateMedia({ colorScheme: 'dark' });
     await page.reload({ waitUntil: 'domcontentloaded' });
     t.check('"system" stored: the machine\'s, dark; no night light', await at(), { theme: 'dark', night: 'off' });
+    // Arabic is written right to left: the page is turned before its first paint too (2026-10-20), and only for it.
+    const dirOf = async (): Promise<[string, string]> => await page.evaluate(() => [document.documentElement.dir, document.documentElement.lang]);
+    await page.evaluate(() => localStorage.setItem('cop.locale', 'ar'));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    t.check('Arabic chosen: right to left, and the page says Arabic, before any script of the page', await dirOf(), ['rtl', 'ar']);
+    await page.evaluate(() => localStorage.setItem('cop.locale', 'de'));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    t.check('German chosen: left to right', (await dirOf())[0], '');
   });
 
   await scenario('on a phone, at the normal and the largest size, no page scrolls sideways', {}, async (h, page, url) => {
     const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (phone).', model: 'Think deeper' });
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
     await h.run(threadId);
-    await page.goto(url('/appearance'));
+    await page.goto(url('/system'));
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
     await page.setViewportSize({ width: 360, height: 780 });
-    await page.goto(url('/appearance'));
-    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    await page.goto(url('/system'));
+    const pages = ['/', '/defaults', '/system'];
     const wide: Record<string, number> = {};
     for (const size of ['normal', 'giant']) {
       await page.evaluate((textSize) => localStorage.setItem('cop.appearance', JSON.stringify({ textSize })), size);
@@ -294,9 +317,9 @@ try {
 
   await scenario('on a tablet and a laptop at the largest size, no page scrolls sideways either', {}, async (h, page, url) => {
     const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (wide).', model: 'Think deeper' });
-    await page.goto(url('/appearance'));
+    await page.goto(url('/system'));
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
-    await page.goto(url('/appearance'));
+    await page.goto(url('/system'));
     await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ textSize: 'giant' })));
     const wide: Record<string, number> = {};
     for (const [w, hgt] of [[768, 1024], [1280, 800]] as const) {
@@ -315,9 +338,9 @@ try {
     const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi (labels).', model: 'Think deeper' });
     h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
     await h.run(threadId);
-    await page.goto(url('/appearance'));
+    await page.goto(url('/system'));
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
-    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/defaults', '/system'];
     const unnamed: Record<string, string[]> = {};
     for (const p of pages) {
       await page.goto(url(p));
@@ -341,33 +364,59 @@ try {
     t.check('fields with no name, by page', unnamed, {});
   });
 
-  await scenario('a project in Settings is prepared from the remote main, keeping everything on a saved branch', {}, async (h, page, url) => {
+  /*
+   * Settings as they are since 2026-10-20: the base prompt to read, folded, with what it is said above the fold; each
+   * project with its branch and its level 2, saved and carried by Kerrigan; no "Prepare the folder from the remote
+   * main branch" any more; and an ⓘ beside the name of every field.
+   */
+  await scenario('Settings: the base prompt folded, a project\'s branch and level 2, no "prepare", an ⓘ on every field', {}, async (h, page, url) => {
     const git = (...args: string[]): string => execFileSync('git', ['-C', h.repo, ...args], { encoding: 'utf8' }).trim();
-    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', join(h.base, 'remote.git')]);
-    git('remote', 'add', 'origin', join(h.base, 'remote.git'));
-    git('push', '-q', 'origin', 'main');
-    const mainAt = git('rev-parse', 'HEAD');
-    git('checkout', '-q', '-b', 'cop/work');
-    writeFileSync(join(h.repo, 'stray.txt'), 'stray\n');
-
+    git('checkout', '-q', '-b', 'feature/settings');
+    await h.call('PUT', '/project', { rootDir: h.repo, name: 'fixture' });
     await page.goto(url('/defaults'));
-    await page.getByRole('button', { name: 'Prepare the folder from the remote main branch' }).first().click();
-    await page.getByText('On "Confirm":').waitFor();
-    const box = page.locator('.prepare-folder').first();
-    t.truthy('it names the new file and where it is kept', /stray\.txt/.test((await box.textContent()) ?? '') && /cop\/saved\//.test((await box.textContent()) ?? ''), (await box.textContent())?.slice(0, 400));
-    t.check('the preview changed nothing', [existsSync(join(h.repo, 'stray.txt')), git('rev-parse', '--abbrev-ref', 'HEAD')], [true, 'cop/work']);
-
-    await box.getByRole('button', { name: 'Confirm' }).click();
-    await box.getByRole('status').waitFor();
-    const saved = git('branch', '--list', 'cop/saved/*', '--format=%(refname:short)');
-    t.check('the folder is on main at the remote, clean', [git('rev-parse', '--abbrev-ref', 'HEAD'), git('rev-parse', 'HEAD'), git('status', '--porcelain'), existsSync(join(h.repo, 'stray.txt'))], ['main', mainAt, '', false]);
-    t.truthy('and the new file is kept on the saved branch', !!saved && git('show', `${saved}:stray.txt`) === 'stray', saved);
-    t.truthy('the branch it was on is still there', git('branch', '--list', 'cop/work') !== '');
+    await page.getByRole('heading', { name: en['l1.title']!, exact: true }).waitFor();
+    const l1 = page.locator('#level1');
+    t.truthy('the base prompt: what it is, said where it is seen at once', (await l1.locator('.callout').isVisible()) && ((await l1.locator('.callout').textContent()) ?? '').includes('Kerrigan'), await l1.locator('.callout').textContent());
+    t.check('and its text folded', await l1.locator('details').evaluate((d) => (d as HTMLDetailsElement).open), false);
+    await l1.getByText(en['l1.show']!, { exact: true }).click();
+    await waitFor('the base prompt to be read', async () => ((await l1.locator('pre').textContent()) ?? '').length > 200, 10_000).catch(() => undefined);
+    t.truthy('opened, it is the contract the bot ships', ((await l1.locator('pre').textContent()) ?? '').length > 200 && (await l1.locator('textarea').count()) === 0, (await l1.locator('pre').textContent())?.slice(0, 80));
+    t.check('nothing on the page prepares a folder from the remote main any more', await page.getByRole('button', { name: /remote main/i }).count(), 0);
+    const entry = page.locator('.project-entry').first();
+    await entry.locator('.badge.branch').waitFor();
+    t.truthy('the project says the branch checked out in it', ((await entry.locator('.badge.branch').textContent()) ?? '').includes('feature/settings'), await entry.locator('.badge.branch').textContent());
+    const level2 = entry.getByLabel(en['proj.level2']!, { exact: true });
+    await level2.fill('A fixture repository. Tests: none. Never touch README.md.');
+    await waitFor('the level 2 to be saved', async () => (await h.call<{ level2: string }>('GET', '/project')).level2.includes('Never touch README.md'), 10_000).catch(() => undefined);
+    t.check('the level 2 is saved with the project', (await h.call<{ level2: string }>('GET', '/project')).level2, 'A fixture repository. Tests: none. Never touch README.md.');
+    const kerrigan = await h.call<{ text: string }>('GET', '/kerrigan?lang=en');
+    t.truthy('and Kerrigan carries it, with the branch', kerrigan.text.includes('Never touch README.md') && kerrigan.text.includes('`feature/settings`'), kerrigan.text.slice(kerrigan.text.indexOf('## The projects'), kerrigan.text.indexOf('## How you help')));
+    // Every field has an ⓘ beside its name.
+    const bare = await page.evaluate(() => {
+      const out: string[] = [];
+      for (const el of Array.from(document.querySelectorAll('main input, main select, main textarea'))) {
+        const f = el as HTMLInputElement;
+        if (f.type === 'hidden' || f.getClientRects().length === 0) continue;
+        const holder = f.closest('.settings-field, .project-fields > div, .project-level2');
+        const info = holder?.querySelector('.info-btn');
+        if (!info) out.push(f.id || f.getAttribute('aria-label') || f.outerHTML.slice(0, 60));
+      }
+      return out;
+    });
+    t.check('fields without an ⓘ', bare, []);
+    await page.locator('#execution .info-btn').first().click();
+    const pop = page.locator('.info-pop');
+    await pop.waitFor();
+    t.truthy('an ⓘ opens what the field is for', ((await pop.textContent()) ?? '').includes(en['exec.autoContinue']!), await pop.textContent());
+    // The fields of a section line up: their controls start at the same place.
+    const lefts = await page.locator('#execution .settings-field .field-control').evaluateAll((els) => [...new Set(els.map((e) => Math.round(e.getBoundingClientRect().left)))]);
+    t.check('the controls of Execution start in one column', lefts.length, 1);
   });
 
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {
     await page.goto(url('/defaults'));
-    const iterations = page.getByLabel('Most messages to the chat in one task');
+    // Exact: the ⓘ beside each field is "About “…”", which a looser match takes as well.
+    const iterations = page.getByLabel('Most messages to the chat in one task', { exact: true });
     await iterations.waitFor();
     // Removed on 2026-09-30: nothing on this page copies a project to the Desktop any more.
     t.check('no Desktop copy of the projects is offered', await page.getByText(/on the Desktop/).count(), 0);
@@ -378,7 +427,7 @@ try {
       return s.raw.limits?.maxIterations === 5;
     });
     t.check('a value under the minimum is raised to it (5)', await iterations.inputValue(), '5');
-    const wait = page.getByLabel('How long to wait for a reply from the chat');
+    const wait = page.getByLabel('How long to wait for a reply from the chat', { exact: true });
     await wait.fill('1200');
     await wait.blur();
     await waitFor('the reply wait to be saved', async () => {
@@ -386,7 +435,7 @@ try {
       return s.raw.copilot?.replyTimeoutSec === 1200;
     });
     t.check('the reply wait is saved', (await h.call<{ raw: { copilot?: { replyTimeoutSec?: number } } }>('GET', '/settings')).raw.copilot?.replyTimeoutSec, 1200);
-    const approaches = page.getByLabel('Approaches the chat must try before it may give up');
+    const approaches = page.getByLabel('Approaches the chat must try before it may give up', { exact: true });
     await approaches.fill('6');
     await approaches.blur();
     await waitFor('the approaches to be saved', async () => {

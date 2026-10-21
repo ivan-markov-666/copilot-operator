@@ -10,7 +10,7 @@
 import { mkdir, readFile, writeFile, readdir, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Interruption } from './interruption.js';
 import type {
   Session,
@@ -127,6 +127,9 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   notes: 'kept',
   // The folder before the message first ran: the point "go back" returns to, whatever attempt came after.
   checkpoint: 'kept',
+  // The lead's rounds belong to the attempt that made them (two chats, 2026-10-20); which lead a subtask serves, to the task.
+  lead: 'archived',
+  fromLead: 'kept',
   interruption: 'cleared',
   finalReply: 'cleared',
   firstMessage: 'cleared',
@@ -199,39 +202,32 @@ export function applyTaskPatch(t: Task, patch: TaskPatch): void {
 export class SessionStore {
   readonly dir: string;
   private readonly sessionsDir: string;
-  private readonly presetsDir: string;
-  private readonly level1Path: string;
   private readonly modelsPath: string;
 
   constructor(dataDir: string, private readonly defaultLevel1Path: string) {
     this.dir = resolve(dataDir);
     this.sessionsDir = join(this.dir, 'sessions');
-    this.presetsDir = join(this.dir, 'level2');
-    this.level1Path = join(this.dir, 'level1.md');
     this.modelsPath = join(this.dir, 'models.json');
   }
 
   async init(): Promise<void> {
     await mkdir(this.sessionsDir, { recursive: true });
-    await mkdir(this.presetsDir, { recursive: true });
   }
 
   // --- level 1 --------------------------------------------------------------------------
 
-  /** The contract in force: the user's edited copy if there is one, else the shipped one. */
-  async getLevel1(): Promise<{ content: string; customised: boolean }> {
-    if (existsSync(this.level1Path)) {
-      return { content: await readFile(this.level1Path, 'utf8'), customised: true };
-    }
-    return { content: await readFile(this.defaultLevel1Path, 'utf8'), customised: false };
+  /**
+   * The contract in force: the one that ships with the bot, always (operator, 2026-10-20: "it no longer needs changing;
+   * it changes at system level, when the bot is updated"). An edited copy an earlier version kept in the data folder
+   * (`level1.md` there) is not read any more, and the page that edited it is gone.
+   */
+  async getLevel1(): Promise<{ content: string }> {
+    return { content: await readFile(this.defaultLevel1Path, 'utf8') };
   }
 
-  async setLevel1(content: string): Promise<void> {
-    await writeFileAtomically(this.level1Path, content);
-  }
-
-  async resetLevel1(): Promise<void> {
-    await removeFile(this.level1Path);
+  /** The lead's contract (two chats, 2026-10-20): `lead1.md`, beside the base prompt it ships with. */
+  async getLead1(): Promise<{ content: string }> {
+    return { content: await readFile(join(dirname(this.defaultLevel1Path), 'lead1.md'), 'utf8') };
   }
 
   // --- the model catalogue ----------------------------------------------------------------
@@ -247,41 +243,6 @@ export class SessionStore {
 
   async saveModels(catalogue: ModelCatalogue): Promise<void> {
     await writeFileAtomically(this.modelsPath, JSON.stringify(catalogue, null, 2));
-  }
-
-  // --- level 2 presets ------------------------------------------------------------------
-
-  async listPresets(): Promise<Level2Preset[]> {
-    const names = (await readdir(this.presetsDir).catch(() => [] as string[]))
-      .filter((n) => n.endsWith('.md'))
-      .sort();
-    const out: Level2Preset[] = [];
-    for (const n of names) {
-      const path = join(this.presetsDir, n);
-      const content = await readFile(path, 'utf8');
-      const { mtime } = await import('node:fs').then((fs) => fs.statSync(path));
-      out.push({ name: n.slice(0, -3), content, updatedAt: mtime.toISOString() });
-    }
-    return out;
-  }
-
-  /**
-   * Saves a preset under the name it can later be deleted by.
-   *
-   * Stripping the characters a file name cannot hold is not enough on its own: a leading dot and
-   * ".." survive it, and `safePresetName` refuses both, so ".env" and "a..b" were saved and then
-   * could never be deleted. The name goes through the same rule as the delete, so a name that could
-   * not be removed is refused here instead.
-   */
-  async savePreset(name: string, content: string): Promise<Level2Preset> {
-    const safe = name.replace(/[^\p{L}\p{N}._ -]/gu, '').trim();
-    if (!safe) throw new Error('Preset name is empty after removing unsafe characters.');
-    await writeFileAtomically(join(this.presetsDir, `${safePresetName(safe)}.md`), content);
-    return { name: safe, content, updatedAt: new Date().toISOString() };
-  }
-
-  async deletePreset(name: string): Promise<void> {
-    await removeFile(await namedFile(this.presetsDir, name));
   }
 
   // --- sessions -------------------------------------------------------------------------
@@ -664,6 +625,8 @@ export class SessionStore {
           vcs: t.vcs,
           plan: t.plan,
           accepted: t.accepted,
+          // Two chats: the lead's rounds and subtasks of this attempt (the next one counts its own from nothing).
+          lead: t.lead,
         },
       ];
 
@@ -700,6 +663,7 @@ export class SessionStore {
       t.handoff = undefined;
       t.plan = undefined;
       t.accepted = undefined;
+      t.lead = undefined;
       t.scopeReverted = undefined;
       t.treeChanged = undefined;
       t.inputsRestored = undefined;
@@ -895,24 +859,10 @@ async function replaceFile(path: string, content: string): Promise<void> {
 }
 
 /**
- * The file a preset or persona of this name is kept in, for removing it.
- *
- * A name `safePresetName` accepts, or one that is already a file in the folder. The save did not
- * always apply that rule, so a preset called ".env" or "a..b" may be on disk from before; without
- * the second way it is listed and can never be deleted. A name matched against the folder's own
- * listing is a file name, which cannot hold a separator, so it cannot reach outside the folder.
- */
-async function namedFile(dir: string, name: string): Promise<string> {
-  const onDisk = await readdir(dir).catch(() => [] as string[]);
-  if (onDisk.includes(`${name}.md`)) return join(dir, `${name}.md`);
-  return join(dir, `${safePresetName(name)}.md`);
-}
-
-/**
  * A session id as it may appear in a file name, or an error.
  *
- * Ids, and preset names (see `safePresetName`), arrive from URL parameters. Found on 2026-09-27: `DELETE /sessions/:id` and `DELETE
- * /presets/:name` joined them straight into a path, and Express decodes `%5C` and `%2F`, so
+ * Ids arrive from URL parameters. Found on 2026-09-27: `DELETE /sessions/:id` and `DELETE
+ * /presets/:name` (the presets went on 2026-10-20) joined them straight into a path, and Express decodes `%5C` and `%2F`, so
  * `..\..\<anything>` reached a `.json` or `.md` file anywhere the process could write. The ids this
  * store makes are letters, digits, `-`, `_` and `.` (not leading); anything else is not one of them.
  */
@@ -923,10 +873,3 @@ export function safeName(value: string): string {
   return value;
 }
 
-/** A preset name as `savePreset` allows it — letters in any script, digits, space, `.`, `_`, `-` — never a path. */
-export function safePresetName(value: string): string {
-  if (!/^[\p{L}\p{N}_ -][\p{L}\p{N}._ -]{0,199}$/u.test(value) || value.includes('..')) {
-    throw new Error(`Not a valid preset name: ${JSON.stringify(value).slice(0, 80)}`);
-  }
-  return value;
-}

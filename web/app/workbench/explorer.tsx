@@ -11,6 +11,7 @@ import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
 import type { SideView, Tab } from './workbench';
 import { FileIcon } from './fileIcon';
+import { BranchIcon } from '../branchIcon';
 
 export function Explorer({ view, onOpen, workspace, onOpenFolder }: { view: SideView; onOpen: (tab: Tab) => void; workspace: Workspace | null; onOpenFolder: () => void }) {
   if (view === 'commits') return <GitView workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
@@ -125,7 +126,15 @@ function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | nul
         <p className="muted small wb-pad">{t('wb.loading')}</p>
       ) : (
         <>
-          <p className="muted small wb-pad" title={workspace.dir}>{workspace.branch ? `⎇ ${workspace.branch}` : workspace.dir}</p>
+          <p className="muted small wb-pad" title={workspace.dir}>
+            {workspace.branch ? (
+              <>
+                <BranchIcon /> {workspace.branch}
+              </>
+            ) : (
+              workspace.dir
+            )}
+          </p>
           <ul className="wb-tree-list" role="tree" aria-label={t('wb.files')}>
             {render(treeOf(files), '')}
           </ul>
@@ -243,8 +252,7 @@ function GitView({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | n
       ) : (
         <>
           <p className="small wb-pad wb-git-branch">
-            <span aria-hidden="true">⎇ </span>
-            <strong>{state.branch ?? 'HEAD'}</strong>
+            <BranchIcon /> <strong>{state.branch ?? 'HEAD'}</strong>
             {state.upstream && <span className="muted"> · {t('git.upstream', { name: state.upstream.name, ahead: state.upstream.ahead, behind: state.upstream.behind })}</span>}
           </p>
           {state.staged.length > 0 && section('staged', t('git.staged'), state.staged.length, <ul className="wb-git-files">{state.staged.map((f) => fileRow(f, 'staged'))}</ul>)}

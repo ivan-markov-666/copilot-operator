@@ -141,6 +141,23 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
           <Link href="/">{sessionName}</Link>
           <span className="muted small">{fmtTime(approval.createdAt)}</span>
         </div>
+        {/*
+          The review's own conversation (operator, 2026-10-20): said so plainly, before anything else on the card, with why
+          another, stronger model is worth choosing for it.
+        */}
+        {m.review && (
+          <div className="approval-review" role="note">
+            <strong>{t('approval.reviewModelTitle')}</strong>
+            <span>{t('approval.reviewModelWhy')}</span>
+          </div>
+        )}
+        {/* Two chats (2026-10-20): which of the two conversations the model is for. */}
+        {m.role && (
+          <div className="approval-review" role="note">
+            <strong>{t(m.role === 'lead' ? 'approval.leadModelTitle' : 'approval.workerModelTitle')}</strong>
+            <span>{t(m.role === 'lead' ? 'approval.leadModelWhy' : 'approval.workerModelWhy')}</span>
+          </div>
+        )}
         <p>{m.manual ? (m.asked ? t('approval.manualAsk', { model: m.asked }) : t('approval.manualAskAny')) : t('approval.modelAsk', { model: m.asked })}</p>
         <p className="muted small">{t('approval.modelShown', { shown: m.shown ?? '—' })}</p>
         {!m.manual && <p className="reason small">{t('approval.modelWhy', { why: m.why, tries: m.tries })}</p>}
@@ -209,7 +226,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
  * answer, and three answers — approve it, ask for another (the note says what to change, so it is
  * required), or stop the task. In the chat's conversation it is shown where it was asked for, with no session name.
  */
-export function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName?: string; onDecided: () => void }) {
+export function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName?: string; onDecided: (ok: boolean) => void }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
   const [note, setNote] = useState('');
@@ -228,14 +245,16 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
     deciding.current = true;
     setBusy(true);
     setErr('');
+    let ok = false;
     try {
       await api.decidePlan(approval.id, action, note);
+      ok = true;
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       deciding.current = false;
       setBusy(false);
-      onDecided();
+      onDecided(ok);
     }
   };
 

@@ -326,6 +326,12 @@ export const RunConfigSchema = z.object({
        */
       name: z.string().trim().default(''),
       /**
+       * Level 2 of this project (operator, 2026-10-20: "a level 2 template for each project"): what the operator
+       * writes about it — its stack, its conventions, how its tests run, what not to touch. It goes into Kerrigan,
+       * saved or copied, so the chat she helps in knows the project; the bot sends it nowhere by itself.
+       */
+      level2: z.string().default(''),
+      /**
        * The other folders this operator works in, each with a short name: a front end, a back
        * end, the test suite. They are not defaults — a new session still starts on `rootDir` —
        * and they are not sessions. They exist for two readers: every folder field in the app
@@ -338,6 +344,8 @@ export const RunConfigSchema = z.object({
           z.object({
             name: z.string().trim().min(1),
             rootDir: z.string().trim().min(1),
+            /** Its level 2, as the default project's `level2`. */
+            level2: z.string().default(''),
           }),
         )
         .default([]),
@@ -432,6 +440,11 @@ export const RunConfigSchema = z.object({
        * Zero turns it off.
        */
       autoContinue: z.number().int().min(0).max(20).default(3),
+      /*
+       * The most subtasks the lead of a two-chat conversation may give its worker for one message (2026-10-20). Each
+       * subtask is a task of the worker's, with the limits above; this bounds the whole. Settings → Execution.
+       */
+      maxSubtasks: z.number().int().min(1).max(100).default(20),
       /*
        * How many genuinely different approaches the chat must have tried before it may end a task
        * "blocked". The reply format's own floor is 2 (replySchema.ts); this raises it. A "blocked"

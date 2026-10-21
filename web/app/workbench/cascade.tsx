@@ -15,8 +15,8 @@
  * each message the folder is photographed, and "go back" on a message puts it back as it was then, with that
  * message and the ones after it gone from the conversation. The model is chosen under the box, as in an IDE.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, type Approval, type ChatThread, type ModelCatalogue, type Session, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type Session, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
@@ -35,6 +35,10 @@ const THREAD_KEY = 'cop.chat.thread';
 const MODE_KEY = 'cop.chat.mode';
 /** Plan mode for the next new conversation, as last chosen in this browser. */
 const PLAN_KEY = 'cop.chat.plan';
+/** The review for the next new conversation, as last chosen in this browser: on unless 'off'. */
+const REVIEW_KEY = 'cop.chat.review';
+/** Two chats for the next new conversation, as last chosen in this browser: 'on', or one chat. */
+const LEAD_KEY = 'cop.chat.lead';
 const keep = (key: string, value: string): void => {
   try {
     if (value) window.localStorage.setItem(key, value);
@@ -63,6 +67,17 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   const [mode, setMode] = useState<'confirm' | 'unattended'>('confirm');
   /** Plan mode for a conversation not started yet; a started one has its own (`Session.planMode`). */
   const [newPlan, setNewPlan] = useState(false);
+  /** The review for a conversation not started yet; a started one has its own (`Session.review`). */
+  const [newReview, setNewReview] = useState(true);
+  /**
+   * Two chats for a conversation not started yet (operator, 2026-10-20): a lead that understands, plans and directs, and
+   * a worker that carries out its subtasks. A started conversation keeps how it began. The worker's model: '' is the
+   * lead's.
+   */
+  const [newLead, setNewLead] = useState(false);
+  const [newWorkerModel, setNewWorkerModel] = useState('');
+  /** The worker's session of a two-chat conversation, whose tasks are the lead's subtasks. */
+  const [worker, setWorker] = useState<Session | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState('');
@@ -85,6 +100,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   useEffect(() => {
     setThreadId(kept(THREAD_KEY));
     setNewPlan(kept(PLAN_KEY) === 'on');
+    setNewReview(kept(REVIEW_KEY) !== 'off');
+    setNewLead(kept(LEAD_KEY) === 'on');
     const m = kept(MODE_KEY);
     if (m === 'confirm' || m === 'unattended') setMode(m);
     else
@@ -128,13 +145,55 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     void readSession();
   }, [readSession]);
   usePoll(readSession, running ? 1500 : 5000, !!threadId);
-  usePoll(() => (threadId && running ? api.approvals(threadId).then(setApprovals).catch(() => undefined) : Promise.resolve(setApprovals([]))), 1500, !!threadId);
+  /*
+   * A card answered here goes at once, not with the next read of the list (2026-10-20: the lead's question stayed on
+   * the screen, answered, until then); a read already on its way when the answer went does not bring it back.
+   */
+  const answered = useRef(new Set<string>());
+  const readApprovals = () => (threadId && running ? api.approvals(threadId).then((list) => setApprovals(list.filter((a) => !answered.current.has(a.id)))).catch(() => undefined) : Promise.resolve(setApprovals([])));
+  usePoll(readApprovals, 1500, !!threadId);
+  const decided = (id: string, ok: boolean) => {
+    if (ok) {
+      answered.current.add(id);
+      setApprovals((list) => list.filter((a) => a.id !== id));
+    }
+    void readApprovals();
+  };
+  // The worker of a two-chat conversation: its tasks are the subtasks shown under the lead's message.
+  const workerId = session?.lead?.workerSessionId ?? '';
+  const readWorker = useCallback(() => (workerId ? api.session(workerId).then(setWorker).catch(() => undefined) : Promise.resolve(setWorker(null))), [workerId]);
+  useEffect(() => {
+    void readWorker();
+  }, [readWorker]);
+  usePoll(readWorker, running ? 1500 : 10_000, !!workerId);
 
   const choose = (id: string) => {
     setThreadId(id);
     keep(THREAD_KEY, id);
     setSaid('');
   };
+  /** The conversation's model, with the button that reads the list again; as wide as `maxWidth` lets it. */
+  const modelPicker = (maxWidth: string) => (
+    <>
+      <label htmlFor="cs-model" className="sr-only">{t('chat.model')}</label>
+      <ModelPicker
+        id="cs-model"
+        chosen={session ? sessionModelShown : newModelShown}
+        onChange={(n) => void chooseModel(n)}
+        byHand={t('chat.modelByHand')}
+        none={catalogue?.defaultModel ? t('chat.modelDefault', { model: catalogue.defaultModel }) : undefined}
+        catalogue={catalogue}
+        disabled={running}
+        style={{ minWidth: 0, maxWidth }}
+      />
+      <button type="button" className="wb-icon-btn" onClick={() => void readModels()} disabled={reading || running} title={t('chat.readModels')} aria-label={t('chat.readModels')}>
+        ↻
+      </button>
+    </>
+  );
+  /** Why "New chat" is off, or '' when it is on: a task running anywhere, or a new chat not begun yet. */
+  const anyRunning = running || threads.some((x) => x.running);
+  const newChatOff = anyRunning ? t('chat.newChatRunning') : !session ? t('chat.newChatFresh') : '';
   const fresh = () => {
     choose('');
     setSession(null);
@@ -151,7 +210,9 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       // Only when chosen: with no model anywhere the runner asks by hand anyway, and Settings may name one not read yet.
       const byHand = fresh && newModel === BY_HAND;
       // The language of the page goes along: the Copilot window says in it when the work on the message has ended.
-      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan);
+      // Two chats, for a new conversation: the lead judges the worker's reports, so there is no review of its own.
+      const two = fresh && newLead ? { workerModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, workerManualModel: newWorkerModel === BY_HAND } : undefined;
+      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan, fresh ? (two ? false : newReview) : undefined, two);
       setText('');
       choose(r.threadId);
       if (r.noted) {
@@ -199,9 +260,20 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * what the API refused goes back to what it holds. Shown only once the API had answered, a click on "Plan mode"
    * looked like it did nothing for as long as the write and the next read took (2026-10-20).
    */
-  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve' }) => {
+  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve'; review?: { enabled: boolean }; workerModel?: string; workerManualModel?: boolean }) => {
     if (!session) return;
-    setSession((s) => (s ? { ...s, ...patch } : s));
+    setSession((s) => {
+      if (!s) return s;
+      const { review, workerModel, workerManualModel, ...rest } = patch;
+      return {
+        ...s,
+        ...rest,
+        ...(review ? { review: { ...(s.review ?? { enabled: true, model: '' }), ...review } } : {}),
+        ...(s.lead && (workerModel !== undefined || workerManualModel !== undefined)
+          ? { lead: { ...s.lead, workerManualModel: workerManualModel || undefined, workerModel: workerManualModel ? undefined : workerModel || undefined } }
+          : {}),
+      };
+    });
     try {
       await api.updateSession(session.id, patch);
     } catch (e) {
@@ -217,6 +289,24 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       return;
     }
     await changeSession(name === BY_HAND ? { model: '', manualModel: true } : { model: name, manualModel: false });
+  };
+  /**
+   * Two chats (2026-10-20): a lead and a worker, chosen for a new conversation; a started one keeps how it began. The
+   * worker's model is chosen beside the lead's: the same as the lead's when none is chosen, or by hand.
+   */
+  const leadOn = session ? !!session.lead : newLead;
+  const chooseLead = (on: boolean) => {
+    if (session) return;
+    setNewLead(on);
+    keep(LEAD_KEY, on ? 'on' : '');
+  };
+  const workerModelShown = session ? (session.lead?.workerManualModel ? BY_HAND : (session.lead?.workerModel ?? '')) : newWorkerModel;
+  const chooseWorkerModel = async (name: string) => {
+    if (!session) {
+      setNewWorkerModel(name);
+      return;
+    }
+    await changeSession(name === BY_HAND ? { workerModel: '', workerManualModel: true } : { workerModel: name, workerManualModel: false });
   };
   /** The latest models, read from Copilot's own picker (it opens the browser for a moment). */
   const readModels = async () => {
@@ -245,6 +335,19 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     }
     await changeSession({ planMode: on ? 'approve' : 'off' });
   };
+  /**
+   * The review (operator, 2026-10-20): when Copilot says the work is done, a conversation of its own checks it and sends
+   * back what it finds. On unless unticked; of the conversation when there is one, else of the next one.
+   */
+  const reviewOn = session ? session.review?.enabled !== false : newReview;
+  const chooseReview = async (on: boolean) => {
+    if (!session) {
+      setNewReview(on);
+      keep(REVIEW_KEY, on ? '' : 'off');
+      return;
+    }
+    await changeSession({ review: { enabled: on } });
+  };
   /*
    * "Pause" and "Continue" (operator, 2026-10-20): the work holds at its next message to Copilot or its next command —
    * a reply being written and a command running are let finish — and goes on from there when asked. Shown at once,
@@ -268,18 +371,20 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   };
 
   const last = session?.tasks.at(-1);
+  // Two chats: the panel under the editor follows the worker's latest subtask, where the commands are.
+  const lastSubtask = last?.lead?.rounds.filter((r) => r.subtask).at(-1)?.subtask;
   useEffect(() => {
     // A new chat is said as such: the panel under the editor then shows nothing of another conversation (2026-10-19).
-    onTurn(!threadId ? 'new' : session && last ? { sessionId: session.id, taskId: last.id } : null);
+    onTurn(!threadId ? 'new' : session && last ? (lastSubtask && workerId ? { sessionId: workerId, taskId: lastSubtask.taskId } : { sessionId: session.id, taskId: last.id }) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, session?.id, last?.id]);
+  }, [threadId, session?.id, last?.id, lastSubtask?.taskId, workerId]);
   const { ref: scrollRef } = useFollowBottom<HTMLDivElement>(true, `${session?.tasks.length ?? 0}:${last?.status ?? ''}:${last?.iterations ?? 0}`);
 
   return (
     <div className="cs">
       <div className="cs-head">
         <label htmlFor="cs-thread" className="sr-only">{t('chat.thread')}</label>
-        <select id="cs-thread" value={threadId} onChange={(e) => choose(e.target.value)}>
+        <select id="cs-thread" dir="auto" value={threadId} onChange={(e) => choose(e.target.value)}>
           <option value="">{t('chat.newThread')}</option>
           {threads.map((x) => (
             <option key={x.id} value={x.id}>
@@ -291,18 +396,42 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
           A button with its name on it (2026-10-18: "a 'New chat' button, where the tasks run in a new Copilot chat"): it
           was a bare "+". The next message opens a new conversation in Copilot; this one stays in the list beside it.
         */}
-        <button type="button" className="cs-new" onClick={fresh} disabled={!session} title={t('chat.newChatWhy')}>
-          {t('chat.newChat')}
-        </button>
+        {/*
+          Off while a task runs, in this conversation or another, until it is stopped or its window closed; and on a new
+          chat not begun yet, which this already is (operator, 2026-10-20). Each says why on hover and on focus.
+        */}
+        <span className="cs-new-wrap">
+          <button
+            type="button"
+            className="cs-new"
+            aria-disabled={newChatOff ? true : undefined}
+            aria-describedby={newChatOff ? 'cs-new-tip' : undefined}
+            onClick={() => {
+              if (!newChatOff) fresh();
+            }}
+            title={newChatOff ? undefined : t('chat.newChatWhy')}
+          >
+            {t('chat.newChat')}
+          </button>
+          {newChatOff && (
+            <span id="cs-new-tip" role="tooltip" className="cs-new-tip">
+              {newChatOff}
+            </span>
+          )}
+        </span>
       </div>
 
       <div className="cs-body" ref={scrollRef} aria-live="polite">
         {!session ? (
           <Welcome workspace={workspace} onPick={(p) => { setText(p); box.current?.focus(); }} onOpenFolder={onOpenFolder} />
         ) : (
-          session.tasks.map((task) => (
-            <Turn key={task.id} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
-          ))
+          session.tasks.map((task) =>
+            session.lead ? (
+              <LeadTurn key={task.id} session={session} task={task} worker={worker} approvals={approvals} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
+            ) : (
+              <Turn key={task.id} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
+            ),
+          )
         )}
         {paused && <p className="cs-system cs-paused" role="status">{t('chat.pausedNote')}</p>}
         {said && <p className="cs-system" role="status">{said}</p>}
@@ -324,22 +453,32 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             }
           }}
         />
-        <div className="cs-bar">
-          <label htmlFor="cs-model" className="sr-only">{t('chat.model')}</label>
-          <ModelPicker
-            id="cs-model"
-            chosen={session ? sessionModelShown : newModelShown}
-            onChange={(n) => void chooseModel(n)}
-            byHand={t('chat.modelByHand')}
-            none={catalogue?.defaultModel ? t('chat.modelDefault', { model: catalogue.defaultModel }) : undefined}
-            catalogue={catalogue}
-            disabled={running}
-            style={{ minWidth: 0, maxWidth: '48%' }}
-          />
-          <button type="button" className="wb-icon-btn" onClick={() => void readModels()} disabled={reading || running} title={t('chat.readModels')} aria-label={t('chat.readModels')}>
-            ↻
-          </button>
-        </div>
+        {leadOn ? (
+          /* Two chats: the worker's model under the lead's, the two pickers lined up — the lead's when none is chosen. */
+          <div className="cs-models">
+            <span className="cs-pick-label" aria-hidden="true">
+              {t('chat.leadModel')}
+            </span>
+            <div className="cs-bar">{modelPicker('90%')}</div>
+            <label htmlFor="cs-worker-model" className="cs-pick-label">
+              {t('chat.workerModel')}
+            </label>
+            <div className="cs-bar">
+              <ModelPicker
+                id="cs-worker-model"
+                chosen={workerModelShown}
+                onChange={(n) => void chooseWorkerModel(n)}
+                byHand={t('chat.modelByHand')}
+                none={t('chat.workerSameModel')}
+                catalogue={catalogue}
+                disabled={running}
+                style={{ minWidth: 0, maxWidth: '90%' }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="cs-bar">{modelPicker('48%')}</div>
+        )}
         <div className="cs-bar">
           <label htmlFor="cs-mode" className="sr-only">{t('chat.mode')}</label>
           <select id="cs-mode" value={mode} onChange={(e) => { const m = e.target.value as 'confirm' | 'unattended'; setMode(m); keep(MODE_KEY, m); }} disabled={running} title={t('chat.modeWhy')}>
@@ -350,20 +489,37 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             <input type="checkbox" checked={planOn} disabled={running} onChange={(e) => void choosePlan(e.target.checked)} />
             <span>{t('chat.planMode')}</span>
           </label>
-          <span className="grow" />
-          {running && (
-            <button type="button" className="cs-pause" onClick={() => void togglePause()} title={paused ? t('chat.resumeWhy') : t('chat.pauseWhy')}>
-              {paused ? t('chat.resume') : t('chat.pause')}
-            </button>
+          {/* Two chats (2026-10-20): for a new conversation; a started one shows how it began. */}
+          <label className="cs-plan-toggle cs-lead-toggle" title={t('chat.leadWhy')}>
+            <input type="checkbox" checked={leadOn} disabled={running || !!session} onChange={(e) => chooseLead(e.target.checked)} />
+            <span>{t('chat.lead')}</span>
+          </label>
+          {/* The lead judges the worker's reports: a conversation with two chats has no review of its own. */}
+          {!leadOn && (
+            <label className="cs-plan-toggle cs-review-toggle" title={t('chat.reviewWhy')}>
+              <input type="checkbox" checked={reviewOn} disabled={running} onChange={(e) => void chooseReview(e.target.checked)} />
+              <span>{t('chat.review')}</span>
+            </label>
           )}
-          {running && (
-            <button type="button" className="danger" onClick={stop}>
-              {t('chat.stop')}
+          {/*
+            "Pause", "Stop" and "Add" (operator, 2026-10-20): one group, kept on one line — beside the rest when there is
+            room, on a line of its own when there is not, and wrapped only when even alone it does not fit.
+          */}
+          <span className="cs-actions">
+            {running && (
+              <button type="button" className="cs-pause" onClick={() => void togglePause()} title={paused ? t('chat.resumeWhy') : t('chat.pauseWhy')}>
+                {paused ? t('chat.resume') : t('chat.pause')}
+              </button>
+            )}
+            {running && (
+              <button type="button" className="danger" onClick={stop}>
+                {t('chat.stop')}
+              </button>
+            )}
+            <button type="button" className="primary" disabled={busy || !text.trim() || !workspace?.ok} onClick={() => void send()} title={t('chat.sendWhy')}>
+              {running ? t('chat.sendNote') : t('chat.send')}
             </button>
-          )}
-          <button type="button" className="primary" disabled={busy || !text.trim() || !workspace?.ok} onClick={() => void send()} title={t('chat.sendWhy')}>
-            {running ? t('chat.sendNote') : t('chat.send')}
-          </button>
+          </span>
         </div>
       </div>
     </div>
@@ -401,20 +557,51 @@ function Welcome({ workspace, onPick, onOpenFolder }: { workspace: Workspace | n
 }
 
 /** One message and everything that came of it. */
-function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Session; task: Task; approvals: Approval[]; onOpenFile: (path: string) => void; onRewind?: () => void }) {
-  const { t } = useT();
+/** What a task's attempt said and ran, read from its run folder, again and again while it is live. */
+function useStoryEntries(sessionId: string, task: Task | undefined): StoryEntry[] {
   const [story, setStory] = useState<Story | null>(null);
-  const live = task.status === 'running' || task.status === 'waiting-approval';
-  const read = () => (task.startedAt || live ? api.taskStory(session.id, task.id, task.runId).then(setStory).catch(() => undefined) : Promise.resolve());
+  const live = task?.status === 'running' || task?.status === 'waiting-approval';
+  const read = () => (task && (task.startedAt || live) ? api.taskStory(sessionId, task.id, task.runId).then(setStory).catch(() => undefined) : Promise.resolve());
   useEffect(() => {
     void read();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.id, task.runId, task.status]);
-  usePoll(read, live ? 1500 : 60_000, live);
-
+  }, [sessionId, task?.id, task?.runId, task?.status]);
+  usePoll(read, live ? 1500 : 60_000, !!live);
   const entries: StoryEntry[] = [];
   const walk = (es: StoryEntry[]): void => es.forEach((e) => (e.kind === 'review' ? walk(e.entries) : entries.push(e)));
   walk(story?.entries ?? []);
+  return entries;
+}
+
+/** What Copilot said and what it ran, in order: its notes as messages, each command as a card. */
+function StoryLines({ entries }: { entries: StoryEntry[] }) {
+  return (
+    <>
+      {entries.map((e, i) =>
+        e.kind === 'reply' ? (
+          e.notes?.trim() ? (
+            <div key={i} className="cs-bot">
+              <RichText text={e.notes} />
+              <div className="cs-copy-row">
+                <CopyButton text={e.notes} what="chat.copyReply" />
+              </div>
+            </div>
+          ) : null
+        ) : e.kind === 'step' ? (
+          <Command key={i} step={e} />
+        ) : null,
+      )}
+    </>
+  );
+}
+
+/** Said when a card in the conversation was answered: `ok` when the API took the answer, and the card goes. */
+type Decided = (id: string, ok: boolean) => void;
+
+function Turn({ session, task, approvals, onDecided, onOpenFile, onRewind }: { session: Session; task: Task; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
+  const { t } = useT();
+  const live = task.status === 'running' || task.status === 'waiting-approval';
+  const entries = useStoryEntries(session.id, task);
 
   return (
     <section className="cs-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
@@ -434,20 +621,7 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
         </div>
       </div>
       {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
-      {entries.map((e, i) =>
-        e.kind === 'reply' ? (
-          e.notes?.trim() ? (
-            <div key={i} className="cs-bot">
-              <RichText text={e.notes} />
-              <div className="cs-copy-row">
-                <CopyButton text={e.notes} what="chat.copyReply" />
-              </div>
-            </div>
-          ) : null
-        ) : e.kind === 'step' ? (
-          <Command key={i} step={e} />
-        ) : null,
-      )}
+      <StoryLines entries={entries} />
       {/* The plan, once approved: what the work follows, folded under its heading. */}
       {task.plan?.approved && !approvals.some((a) => a.plan) && (
         <details className="cs-plan">
@@ -456,7 +630,7 @@ function Turn({ session, task, approvals, onOpenFile, onRewind }: { session: Ses
         </details>
       )}
       {approvals.map((a) => (
-        <Ask key={a.id} approval={a} />
+        <Ask key={a.id} approval={a} onDecided={onDecided} />
       ))}
       {live && (
         <p className="cs-working" role="status">
@@ -608,19 +782,23 @@ function Command({ step }: { step: Extract<StoryEntry, { kind: 'step' }> }) {
 }
 
 /** A command waiting to be run, asked about where it was asked for. */
-function Ask({ approval }: { approval: Approval }) {
+function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
   const { t } = useT();
   const [busy, setBusy] = useState(false);
   const answer = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
     setBusy(true);
+    let ok = false;
     try {
       await api.decide(approval.id, action);
+      ok = true;
     } finally {
       setBusy(false);
+      onDecided(approval.id, ok);
     }
   };
   // The plan is asked about here, in the conversation (plan mode, 2026-10-20); the model card stays at the top.
-  if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={() => undefined} /></div>;
+  if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={(ok) => onDecided(approval.id, ok)} /></div>;
+  if (approval.question) return <QuestionCard approval={approval} onDecided={onDecided} />;
   if (approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
   return (
     <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
@@ -631,6 +809,220 @@ function Ask({ approval }: { approval: Approval }) {
         {!approval.network && <button type="button" disabled={busy} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
         <button type="button" disabled={busy} onClick={() => void answer('skip')}>{t('chat.askSkip')}</button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A message of a conversation with two chats (operator, 2026-10-20): the operator's assignment; then what the lead did,
+ * reply by reply — how it understood the assignment, its notes, its plan, each subtask with the worker's commands under
+ * it, its questions with their answers — and the result, which is the message's summary.
+ */
+function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onRewind }: { session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
+  const { t } = useT();
+  const live = task.status === 'running' || task.status === 'waiting-approval';
+  const rounds = task.lead?.rounds ?? [];
+  const lastPlanRound = rounds.filter((r) => r.status === 'plan').at(-1)?.n;
+  const mine = approvals.filter((a) => a.taskId === task.id);
+  const working = rounds.at(-1)?.subtask && worker?.tasks.find((x) => x.id === rounds.at(-1)?.subtask?.taskId && (x.status === 'running' || x.status === 'waiting-approval'));
+  return (
+    <section className="cs-turn cs-lead-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
+      <div className="cs-user-row">
+        {onRewind && (task.checkpoint || task.status === 'queued') && (
+          <button type="button" className="wb-icon-btn cs-rewind" onClick={onRewind} title={t('chat.rewind')} aria-label={t('chat.rewind')}>
+            ↶
+          </button>
+        )}
+        <div className="cs-user">
+          <Folded>
+            <RichText text={task.prompt} />
+          </Folded>
+          <div className="cs-copy-row">
+            <CopyButton text={task.prompt} what="chat.copyMessage" />
+          </div>
+        </div>
+      </div>
+      {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
+      {rounds.map((r) => (
+        <Fragment key={r.n}>
+          {r.understanding && <LeadSays who={t('lead.understood')} text={r.understanding} />}
+          {r.notes && <LeadSays who={t('lead.who')} text={r.notes} />}
+          {r.status === 'plan' && r.n === lastPlanRound && task.plan && !mine.some((a) => a.plan) && (
+            <details className="cs-plan">
+              <summary>{t('lead.plan', { v: task.plan.version })}</summary>
+              <PlanView plan={task.plan} />
+            </details>
+          )}
+          {r.subtask && <SubtaskTurn round={r} worker={worker} approvals={approvals.filter((a) => a.taskId === r.subtask?.taskId)} onDecided={onDecided} onOpenFile={onOpenFile} />}
+          {r.question?.answer !== undefined && (
+            <div className="cs-bot cs-lead-qa">
+              <p className="cs-who">{t('lead.question')}</p>
+              <RichText text={r.question.text} />
+              <p className="cs-who">{t('lead.answered')}</p>
+              <RichText text={r.question.answer} />
+            </div>
+          )}
+        </Fragment>
+      ))}
+      {mine.map((a) => (
+        <Ask key={a.id} approval={a} onDecided={onDecided} />
+      ))}
+      {live && (
+        <p className="cs-working" role="status">
+          <span className="wb-live" aria-hidden="true" /> {working ? t('lead.working', { n: rounds.at(-1)?.subtask?.n ?? 0 }) : t('lead.thinking')}
+          {task.lead ? <span className="muted small"> · {t('lead.subtasks', { n: task.lead.subtasks, max: task.lead.maxSubtasks })}</span> : null}
+        </p>
+      )}
+      {!live && task.status !== 'queued' && <Ending task={task} />}
+      {!live && (task.lead?.evidence?.length ?? 0) > 0 && (
+        <div className="cs-evidence">
+          <p className="cs-who">{t('lead.evidence')}</p>
+          <ul>
+            {task.lead!.evidence!.map((e) => (
+              <li key={e}>
+                <RichText text={e} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {task.runId && (
+        <div className="cs-exchange">
+          <a className="button-link quiet small" href={api.taskExchangeUrl(session.id, task.id)} download title={t('chat.exchangeWhy')}>
+            {t('chat.exchange')}
+          </a>
+        </div>
+      )}
+      {(task.vcs?.files?.length ?? 0) > 0 && !live && (
+        <div className="cs-files">
+          <span className="small">{t('chat.changed', { n: task.vcs!.files!.length })}</span>
+          {task.vcs!.files!.slice(0, 12).map((f) => (
+            <button key={f.path} type="button" className="cs-file" onClick={() => onOpenFile(f.path)} title={f.path}>
+              <FileIcon path={f.path} /> {f.path.split('/').pop()} <span className="muted">{f.added >= 0 ? `+${f.added} −${f.removed}` : ''}</span>
+            </button>
+          ))}
+          <ChangesButton sessionId={session.id} taskId={task.id} runId={task.runId} title={task.title} files={task.vcs!.files!.length} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** What the lead says: its understanding of the assignment, or its notes. */
+function LeadSays({ who, text }: { who: string; text: string }) {
+  return (
+    <div className="cs-bot cs-lead-say">
+      <p className="cs-who">{who}</p>
+      <RichText text={text} />
+      <div className="cs-copy-row">
+        <CopyButton text={text} what="chat.copyReply" />
+      </div>
+    </div>
+  );
+}
+
+/** One subtask of the lead's, as the worker did it: folded once it ended, open while it runs. */
+function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile }: { round: LeadRound; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void }) {
+  const { t } = useT();
+  const sub = round.subtask!;
+  const task = worker?.tasks.find((x) => x.id === sub.taskId);
+  const live = task?.status === 'running' || task?.status === 'waiting-approval';
+  const entries = useStoryEntries(worker?.id ?? '', task);
+  return (
+    <details className={`cs-subtask s-${task?.status ?? 'queued'}`} open={live || approvals.length > 0 || undefined}>
+      <summary>
+        <StatusMark status={task?.status ?? 'queued'} /> <span>{t('lead.subtask', { n: sub.n, title: sub.title })}</span>
+        {sub.readOnly && <span className="badge">{t('lead.readOnly')}</span>}
+        {sub.fresh && <span className="badge">{t('lead.fresh')}</span>}
+      </summary>
+      <div className="cs-subtask-body">
+        <StoryLines entries={entries} />
+        {approvals.map((a) => (
+          <Ask key={a.id} approval={a} onDecided={onDecided} />
+        ))}
+        {task && !live && task.status !== 'queued' && <Ending task={task} />}
+        {task && (task.vcs?.files?.length ?? 0) > 0 && !live && (
+          <div className="cs-files">
+            {task.vcs!.files!.slice(0, 8).map((f) => (
+              <button key={f.path} type="button" className="cs-file" onClick={() => onOpenFile(f.path)} title={f.path}>
+                <FileIcon path={f.path} /> {f.path.split('/').pop()}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/** The lead's question for the operator: the choices it offered, or an answer written out; or the task stopped. */
+function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
+  const { t } = useT();
+  const id = useId();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const q = approval.question!;
+  const answer = async (value: string) => {
+    if (!value.trim()) return;
+    setBusy(true);
+    setErr('');
+    let ok = false;
+    try {
+      await api.answerQuestion(approval.id, value);
+      ok = true;
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+      onDecided(approval.id, ok);
+    }
+  };
+  const stop = async () => {
+    if (!(await confirmDialog(t('lead.stopConfirm')))) return;
+    setBusy(true);
+    let ok = false;
+    try {
+      await api.decide(approval.id, 'abort');
+      ok = true;
+    } finally {
+      setBusy(false);
+      onDecided(approval.id, ok);
+    }
+  };
+  return (
+    <div className="cs-ask cs-question" role="group" aria-label={t('lead.question')}>
+      <p className="small">
+        <strong>{t('lead.question')}</strong>
+      </p>
+      <RichText text={q.text} />
+      {q.why && <p className="muted small">{q.why}</p>}
+      {q.options.length > 0 && (
+        <div className="row cs-options">
+          {q.options.map((o) => (
+            <button key={o} type="button" disabled={busy} onClick={() => void answer(o)}>
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+      <label htmlFor={`${id}-answer`} className="small">
+        {t('lead.answer')}
+      </label>
+      <textarea id={`${id}-answer`} className="prose" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('lead.answerPlaceholder')} disabled={busy} />
+      <div className="row">
+        <button type="button" className="primary" disabled={busy || !text.trim()} onClick={() => void answer(text)}>
+          {t('lead.send')}
+        </button>
+        <button type="button" className="danger" disabled={busy} onClick={() => void stop()}>
+          {t('lead.stop')}
+        </button>
+      </div>
+      {err && (
+        <p className="err" role="alert">
+          {err}
+        </p>
+      )}
     </div>
   );
 }

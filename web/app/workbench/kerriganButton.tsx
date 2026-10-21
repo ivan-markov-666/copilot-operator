@@ -9,22 +9,25 @@
  */
 import { useState } from 'react';
 import { api, type KerriganText } from '../../lib/api';
-import { useT } from '../../lib/i18n';
+import { useT, type Key } from '../../lib/i18n';
 import { copyText } from '../copyButton';
 import { InfoTip, usePopover } from '../popover';
 
 export function KerriganButton() {
   const { t, locale } = useT();
   const pop = usePopover('below');
-  const [text, setText] = useState<KerriganText | null>(null);
   const [said, setSaid] = useState('');
 
+  /*
+   * Read each time the menu opens: she carries the projects of Settings with their branches, which change. In a language
+   * she is not written out in, the names of the controls come back as ⟦key⟧, filled in here from this page's dictionary,
+   * so she quotes what is on this screen, in its language.
+   */
   const read = async (): Promise<KerriganText | null> => {
-    if (text && text.lang === locale) return text;
     try {
       const got = await api.kerrigan(locale);
-      setText(got);
-      return got;
+      const filled = got.filled ? got : { ...got, text: got.text.replace(/⟦([\w.-]+)⟧/g, (_, key: string) => t(key as Key)) };
+      return filled;
     } catch (e) {
       setSaid(t('kerrigan.failed', { reason: (e as Error).message }));
       return null;

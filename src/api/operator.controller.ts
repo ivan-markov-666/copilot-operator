@@ -83,41 +83,10 @@ export class OperatorController {
 
   // --- level 1 ----------------------------------------------------------------------------
 
+  /** The contract the bot gives Copilot, as it ships: shown in Settings to read, changed only by an update of the bot. */
   @Get('level1')
-  level1(): Promise<{ content: string; customised: boolean }> {
+  level1(): Promise<{ content: string }> {
     return this.ops.getLevel1();
-  }
-
-  @Put('level1')
-  async setLevel1(@Body() body: { content: string }): Promise<{ ok: true }> {
-    if (typeof body?.content !== 'string' || body.content.trim().length < 100) {
-      throw new BadRequestException('Level 1 must be a real contract, not a few words.');
-    }
-    await this.ops.setLevel1(body.content);
-    return { ok: true };
-  }
-
-  @Delete('level1')
-  resetLevel1(): Promise<{ content: string; customised: boolean }> {
-    return this.ops.resetLevel1();
-  }
-
-  // --- level 2 presets --------------------------------------------------------------------
-
-  @Get('presets')
-  presets(): Promise<unknown> {
-    return this.ops.listPresets();
-  }
-
-  @Put('presets/:name')
-  savePreset(@Param('name') name: string, @Body() body: { content: string }): Promise<unknown> {
-    return this.ops.savePreset(name, body?.content ?? '').catch(fail);
-  }
-
-  @Delete('presets/:name')
-  async deletePreset(@Param('name') name: string): Promise<{ ok: true }> {
-    await this.ops.deletePreset(name).catch(fail);
-    return { ok: true };
   }
 
   // --- Kerrigan -------------------------------------------------------------------------------
@@ -125,7 +94,9 @@ export class OperatorController {
   /** Kerrigan, the persona to give another chat: what copilot-operator is and how a task is best written for it. */
   @Get('kerrigan')
   kerrigan(@Query('lang') lang?: string): Promise<unknown> {
-    return this.ops.kerrigan(lang === 'bg' ? 'bg' : 'en').catch(fail);
+    // Any language code of the interface: in one she is not written out in, the page fills in the controls' names.
+    const code = typeof lang === 'string' && /^[a-z]{2,3}$/.test(lang) ? lang : 'en';
+    return this.ops.kerrigan(code).catch(fail);
   }
 
   // --- the chat's conversations (sessions of kind `chat`) -------------------------------------
@@ -319,7 +290,7 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
@@ -327,8 +298,14 @@ export class OperatorController {
         ...(typeof body.threadId === 'string' && body.threadId ? { threadId: body.threadId } : {}),
         ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model } : {}),
         ...(body.manualModel === true ? { manualModel: true } : {}),
-        ...(body.lang === 'bg' || body.lang === 'en' ? { lang: body.lang } : {}),
+        // The page's language, any of the interface's (`web/lib/lang/languages.ts`): the window's card says it in it.
+        ...(typeof body.lang === 'string' && /^[a-z]{2,3}$/.test(body.lang) ? { lang: body.lang } : {}),
         ...(body.planMode === true ? { planMode: true } : {}),
+        ...(typeof body.review === 'boolean' ? { review: body.review } : {}),
+        // Two chats, for a new conversation: a lead that directs and a worker that carries out (2026-10-20).
+        ...(body.lead === true ? { lead: true } : {}),
+        ...(typeof body.workerModel === 'string' && body.workerModel.trim() ? { workerModel: body.workerModel } : {}),
+        ...(body.workerManualModel === true ? { workerManualModel: true } : {}),
       })
       .catch(fail);
   }
@@ -355,6 +332,14 @@ export class OperatorController {
       throw new BadRequestException('action must be run, run-all, skip or abort');
     }
     return this.ops.decide(id, body.action);
+  }
+
+  /** The lead's question (two chats): the operator's answer, as text. Stopping the task is `approvals/:id` with abort. */
+  @Post('approvals/:id/answer')
+  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown }): unknown {
+    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '');
+    if (!result.ok) throw new BadRequestException(result.problem);
+    return result;
   }
 
   /** A plan waiting for approval (plan mode): approve it, with a note or not; ask for another; or stop the task. */
@@ -389,22 +374,15 @@ export class OperatorController {
     body: {
       rootDir?: string;
       name?: string;
-      others?: Array<{ name: string; rootDir: string }>;
+      level2?: string;
+      others?: Array<{ name: string; rootDir: string; level2?: string }>;
     },
   ): Promise<unknown> {
-    return this.ops.setProject({ rootDir: body?.rootDir, name: body?.name, others: body?.others }).catch(fail);
-  }
-
-  /** "Prepare the folder from the remote main branch": what it would do (fetches, changes nothing else). */
-  @Post('repo/prepare/preview')
-  repoPreparePreview(@Body() body: { dir?: string; fetch?: boolean }): Promise<unknown> {
-    return this.ops.preparePreview(body?.dir ?? '', body?.fetch !== false).catch(fail);
-  }
-
-  /** …and doing it, if the folder is still what the preview showed. */
-  @Post('repo/prepare')
-  repoPrepare(@Body() body: { dir?: string; fingerprint?: string; savedBranch?: string; savedMainBranch?: string }): Promise<unknown> {
-    return this.ops.prepareProject(body?.dir ?? '', body?.fingerprint ?? '', { savedBranch: body?.savedBranch, savedMainBranch: body?.savedMainBranch }).catch(fail);
+    const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+    const others = Array.isArray(body?.others)
+      ? body.others.map((o) => ({ name: String(o?.name ?? ''), rootDir: String(o?.rootDir ?? ''), ...(typeof o?.level2 === 'string' ? { level2: o.level2 } : {}) }))
+      : undefined;
+    return this.ops.setProject({ rootDir: text(body?.rootDir), name: text(body?.name), level2: text(body?.level2), ...(others ? { others } : {}) }).catch(fail);
   }
 
   // --- the model picker ---------------------------------------------------------------------

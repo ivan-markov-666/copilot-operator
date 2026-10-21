@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
-import { LanguageSwitcher, useT, type Key } from '../lib/i18n';
+import { useT, type Key } from '../lib/i18n';
+import { LanguageSwitcher } from './languageMenu';
 
 /**
  * One small line icon per page, drawn inline so they take the current colour and need no
@@ -13,20 +14,19 @@ import { LanguageSwitcher, useT, type Key } from '../lib/i18n';
  * the label is what stays readable.
  */
 const ICONS: Record<string, ReactNode> = {
-  workbench: <path d="M3 4h18v16H3zM9 4v16M3 15h6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
+  workbench: <path d="M4 5h16v11H9l-5 4zM8 9h8M8 12h5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
   defaults: <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.5 4 1.5 1-1.6 2.8-1.8-.4a7 7 0 0 1-1.5 1.5l.4 1.8L14.7 21l-1-1.5a7 7 0 0 1-3.4 0l-1 1.5-2.8-1.6.4-1.8A7 7 0 0 1 5.4 16l-1.8.4L2 13.6 3.5 12.6V11.4L2 10.4l1.6-2.8 1.8.4A7 7 0 0 1 6.9 6.5l-.4-1.8L9.3 3l1 1.5a7 7 0 0 1 3.4 0l1-1.5 2.8 1.6-.4 1.8a7 7 0 0 1 1.5 1.5l1.8-.4L22 10.4l-1.5 1z" />,
-  level1: <path d="M6 3h9l5 5v13H6zM14 3v6h6M9 13h7M9 17h7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
-  presets: <path d="M5 4h14v4H5zM5 10h14v4H5zM5 16h9v4H5z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
-  appearance: <path d="M12 3a9 9 0 0 0 0 18c1.5 0 2-1 2-2s-1-1.5-1-2.5S14 15 15.5 15H17a4 4 0 0 0 4-4 8 8 0 0 0-9-8zM8 9a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm4-3a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm4 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2z" />,
   system: <path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
 };
 
+/*
+ * The chat, Settings and System (operator, 2026-10-20). The base prompt's page went (it changes only with the bot, and
+ * Settings shows it to read), and so did the presets' (each project carries its level 2 in Settings now) and the
+ * Appearance page (the menu at the foot of the chat's left column does all of it).
+ */
 const LINKS: Array<{ href: string; label: Key; icon: keyof typeof ICONS }> = [
   { href: '/', label: 'nav.workbench', icon: 'workbench' },
   { href: '/defaults', label: 'nav.defaults', icon: 'defaults' },
-  { href: '/level1', label: 'nav.level1', icon: 'level1' },
-  { href: '/presets', label: 'nav.presets', icon: 'presets' },
-  { href: '/appearance', label: 'nav.appearance', icon: 'appearance' },
   { href: '/system', label: 'nav.system', icon: 'system' },
 ];
 
@@ -65,7 +65,6 @@ export function Nav() {
           )}
         </Link>
       ))}
-      {/* Light or dark is chosen on the Appearance page, with the rest of the reading settings. */}
       <LanguageSwitcher />
     </nav>
   );

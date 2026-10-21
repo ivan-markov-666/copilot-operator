@@ -40,14 +40,22 @@ import { chatCode } from '../transport/chatSession.js';
 import { type PlanCheck } from '../plan/schema.js';
 
 /** The folders the operator works in: the default new sessions start on, and the rest by name. */
-export type ProjectDefault = {
-  rootDir: string;
-  /** What the operator calls it. Empty means the folder's own name. */
+/** The longest level 2 a project may have: Kerrigan carries each one whole. */
+export const MAX_PROJECT_LEVEL2 = 8000;
+
+/** One project as Settings show it: its folder, whether it is a repository and on which branch, and its level 2. */
+export type ProjectEntry = {
   name: string;
+  rootDir: string;
   repoOk: boolean;
   repoProblem?: string;
-  others: Array<{ name: string; rootDir: string; repoOk: boolean; repoProblem?: string }>;
+  /** The branch checked out there now; 'HEAD' when it is on none (a detached HEAD). Absent outside a repository. */
+  branch?: string;
+  /** What the operator wrote about the project, for Kerrigan. */
+  level2: string;
 };
+
+export type ProjectDefault = ProjectEntry & { others: ProjectEntry[] };
 
 /**
  * A settings file or a policy lock that cannot be used: answered 409 with its own message on every route
@@ -80,8 +88,6 @@ import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
 import { composeHandoff } from '../session/handoff.js';
-import { planPrepare, prepareFromRemote, type PreparePlan, type PrepareResult } from '../vcs/prepareFromRemote.js';
-import { askpassProgram } from '../vcs/remoteAuth.js';
 import { appendRunLog, appendSessionLog, readRunLog, type RunLogEntry, type RunLogType } from '../session/runLog.js';
 import { StartFailures, failureReport, refOf, type StartFailureRef, type StartStage } from '../session/startFailure.js';
 import { formatTerminal, localTime, terminalLines, terminalLogFile } from '../log/terminal.js';
@@ -126,6 +132,8 @@ type Waiting = {
   approval: PendingApproval;
   resolve: (d: PolicyDecision) => void;
   resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
+  /** The lead's question (two chats): the operator's answer, or a stop. */
+  resolveAnswer?: (a: { answer: string } | 'stop') => void;
 };
 
 /** Who has the browser profile: a conversation's run, a read of the model list, or the sign-in. */
@@ -376,6 +384,16 @@ export class OperatorService {
 
   private readonly running = new Map<string, Running>();
   private readonly waiting = new Map<string, Waiting>();
+  /**
+   * The workers of the two-chat mode, by the session of the lead they work for (2026-10-20). A worker's steps and cards
+   * carry its own session's id, while the run, its mode and its Stop are the lead's: they are looked up through this.
+   */
+  private readonly workerLeads = new Map<string, string>();
+
+  /** The session whose run a session's steps belong to: its own, or its lead's for a worker. */
+  private runKey(sessionId: string): string {
+    return this.running.has(sessionId) ? sessionId : (this.workerLeads.get(sessionId) ?? sessionId);
+  }
   private ready: Promise<void> | null = null;
   /**
    * What has the browser now: one session's run, a batch, or a read of the model list.
@@ -476,42 +494,10 @@ export class OperatorService {
 
   // --- level 1 --------------------------------------------------------------------------
 
-  async getLevel1(): Promise<{ content: string; customised: boolean }> {
+  async getLevel1(): Promise<{ content: string }> {
     await this.init();
     return await this.store.getLevel1();
   }
-
-  async setLevel1(content: string): Promise<void> {
-    await this.init();
-    await this.store.setLevel1(content);
-  }
-
-  async resetLevel1(): Promise<{ content: string; customised: boolean }> {
-    await this.init();
-    await this.store.resetLevel1();
-    return await this.store.getLevel1();
-  }
-
-  // --- the organisation's part of the plan persona -------------------------------------
-
-  // --- level 2 presets ------------------------------------------------------------------
-
-  async listPresets(): Promise<Level2Preset[]> {
-    await this.init();
-    return await this.store.listPresets();
-  }
-
-  async savePreset(name: string, content: string): Promise<Level2Preset> {
-    await this.init();
-    return await this.store.savePreset(name, content);
-  }
-
-  async deletePreset(name: string): Promise<void> {
-    await this.init();
-    await this.store.deletePreset(name);
-  }
-
-  // --- named personas for the import page -----------------------------------------------
 
   // --- sessions and tasks ---------------------------------------------------------------
 
@@ -546,13 +532,16 @@ export class OperatorService {
       active?: boolean;
       /** Plan mode for this session; empty follows Settings. See `PlanMode`. */
       planMode?: PlanMode | '';
+      /** Two chats: the worker's model, or by hand. */
+      workerModel?: string;
+      workerManualModel?: boolean;
     },
   ): Promise<Session> {
     await this.init();
     if (patch.active !== undefined && this.running.has(id)) {
       throw new Error('This session is running; its status can be changed once it has stopped.');
     }
-    return await this.store.updateSession(id, (s) => {
+    const updated = await this.store.updateSession(id, (s) => {
       const before = { model: s.model, manualModel: s.manualModel };
       if (patch.name !== undefined) s.name = patch.name.trim() || s.name;
       if (patch.active === true) delete s.active;
@@ -571,6 +560,12 @@ export class OperatorService {
       // Another choice of model: what was set by hand in the conversation is not what is asked for any more.
       if ((patch.model !== undefined || typeof patch.manualModel === 'boolean') && (s.model !== before.model || !!s.manualModel !== !!before.manualModel)) {
         delete s.modelByHand;
+      }
+      // The worker's model (two chats), kept on the lead's session and given to its worker below.
+      if (s.lead && (patch.workerModel !== undefined || typeof patch.workerManualModel === 'boolean')) {
+        const manual = typeof patch.workerManualModel === 'boolean' ? patch.workerManualModel : !!s.lead.workerManualModel;
+        const model = patch.workerModel !== undefined ? patch.workerModel.trim() : (s.lead.workerModel ?? '');
+        s.lead = { ...s.lead, workerManualModel: manual || undefined, workerModel: manual ? undefined : model || undefined };
       }
       // The same for the group: clearing it gives this session its conversation back. It does
       // not move the conversation it is already in; that history is where it is.
@@ -660,6 +655,19 @@ export class OperatorService {
         s.vcs = merged;
       }
     });
+    // The worker's model (two chats): given to the worker's session too, which asks again for one chosen by hand.
+    const workerId = updated.lead?.workerSessionId;
+    if (workerId && (patch.workerModel !== undefined || typeof patch.workerManualModel === 'boolean')) {
+      await this.store
+        .updateSession(workerId, (w) => {
+          w.manualModel = updated.lead?.workerManualModel ? true : undefined;
+          w.model = updated.lead?.workerManualModel ? undefined : updated.lead?.workerModel;
+          w.modelSource = w.model ? 'operator' : undefined;
+          delete w.modelByHand;
+        })
+        .catch(() => undefined);
+    }
+    return updated;
   }
 
   /**
@@ -852,7 +860,7 @@ export class OperatorService {
     const tasks = s.tasks.filter((t) => ids.has(t.id)).map((t) => ({ title: t.title, status: t.status, reason: t.reason, summary: t.summary }));
     if (tasks.length === 0) return;
     // Refused at its turn, nothing of it began: said as a start that could not happen, not as a stop.
-    await window.showNotice(chatNotice(s.lang === 'bg' ? 'bg' : 'en', tasks, tally.error ?? tally.refused)).catch(() => undefined);
+    await window.showNotice(chatNotice(s.lang || 'en', tasks, tally.error ?? tally.refused)).catch(() => undefined);
   }
 
   /** The program is closing: so is the window the chat left open. */
@@ -1086,6 +1094,10 @@ export class OperatorService {
     const startedAt = new Date().toISOString();
     const hold = new Hold();
     this.running.set(sessionId, { controller, startedAt, mode, policy, hold });
+    {
+      const asLead = await this.store.getSession(sessionId);
+      if (asLead?.lead?.workerSessionId) this.workerLeads.set(asLead.lead.workerSessionId, sessionId);
+    }
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
     // Said at the start of every run, in both modes, because it is the one fact about this tool a
     // data-protection team needs and the one an operator forgets: the reports leave the machine.
@@ -1150,6 +1162,9 @@ export class OperatorService {
       },
       // Plan mode `approve`: the plan is put to the operator on the approvals card.
       approvePlan: (ask) => this.askPlanApproval(ask, controller.signal),
+      // The two-chat mode (2026-10-20): the lead's questions, and the worker the run speaks for too.
+      askQuestion: (ask) => this.askLeadQuestion(ask, controller.signal),
+      onWorker: (workerId) => this.workerLeads.set(workerId, sessionId),
       hold,
     })
       .then(async (outcome) => {
@@ -1175,13 +1190,13 @@ export class OperatorService {
         return tally;
       })
       .finally(() => {
-        this.running.delete(sessionId);
         for (const [id, w] of this.waiting) {
-          if (w.approval.sessionId === sessionId) {
+          if (this.runKey(w.approval.sessionId) === sessionId) {
             w.resolve({ action: 'abort', reason: 'the run ended' });
             this.waiting.delete(id);
           }
         }
+        this.running.delete(sessionId);
       });
 
     return { started: true, done };
@@ -1243,7 +1258,7 @@ export class OperatorService {
     if (!r) return { stopping: false };
     r.controller.abort();
     for (const [id, w] of this.waiting) {
-      if (w.approval.sessionId === sessionId) {
+      if (this.runKey(w.approval.sessionId) === sessionId) {
         w.resolve({ action: 'abort', reason: 'stopped by the operator', by: 'operator' });
         this.waiting.delete(id);
       }
@@ -1360,36 +1375,47 @@ export class OperatorService {
 
   /**
    * Kerrigan (2026-10-20): the persona the operator may give to a chat of their own, in the language asked for, with
-   * this machine's limits in it. Nothing is sent anywhere: the page saves it or copies it. See `plan/kerrigan.ts`.
+   * this machine's limits in it and the projects of Settings — each one's folder, its branch now, and the level 2 the
+   * operator wrote for it. Nothing is sent anywhere: the page saves it or copies it. See `plan/kerrigan.ts`; in a
+   * language she is not written out in, the page fills in the names of the controls (`filled: false`).
    */
-  async kerrigan(lang: 'en' | 'bg'): Promise<{ lang: 'en' | 'bg'; fileName: string; text: string }> {
+  async kerrigan(lang: string): Promise<{ lang: string; fileName: string; text: string; filled: boolean }> {
     const cfg = await this.settings.load();
+    const p = await this.project();
+    const projects = [
+      ...(p.rootDir ? [{ name: p.name, rootDir: p.rootDir, ...(p.branch ? { branch: p.branch } : {}), level2: p.level2, chat: true }] : []),
+      ...p.others.map((o) => ({ name: o.name, rootDir: o.rootDir, ...(o.branch ? { branch: o.branch } : {}), level2: o.level2 })),
+    ];
     const text = kerriganPersona(lang, {
       version: botVersion(),
       maxIterations: cfg.limits.maxIterations,
       maxRunMinutes: cfg.limits.maxRunMinutes,
       autoContinue: cfg.limits.autoContinue ?? 0,
+      maxReviewRounds: cfg.limits.maxReviewRounds ?? 2,
+      maxSubtasks: cfg.limits.maxSubtasks ?? 20,
+      projects,
     });
-    return { lang, fileName: kerriganFileName(lang), text };
+    return { lang, fileName: kerriganFileName(lang), text, filled: lang === 'en' || lang === 'bg' };
   }
 
   /** The chat's conversations, newest first. */
   async chatThreads(): Promise<Array<{ id: string; name: string; createdAt: string; status: Session['status']; turns: number; running: boolean; repoDir: string }>> {
     await this.init();
     return (await this.store.listSessions())
-      .filter((s) => s.kind === 'chat')
+      // A worker's session (two chats) is not a conversation of the list: it is shown under its lead's messages.
+      .filter((s) => s.kind === 'chat' && !s.workerOf)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map((s) => ({ id: s.id, name: s.name, createdAt: s.createdAt, status: s.status, turns: s.tasks.length, running: this.running.has(s.id), repoDir: s.vcs?.repoDir || s.projectDir }));
   }
 
   /**
    * A message written in the chat. With no conversation yet, one is made in the open project folder: a session of
-   * kind `chat`, one branch for all of it, no independent review, plan mode off, so each message is answered as
-   * it would be in an IDE's chat. The message becomes a task of it, queued; the caller starts it (the start window
+   * kind `chat`, one branch for all of it, reviewed by a conversation of its own unless "Review" under the box is
+   * unticked (2026-10-20), plan mode as chosen there, so each message is answered as it would be in an IDE's chat. The message becomes a task of it, queued; the caller starts it (the start window
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: 'en' | 'bg'; planMode?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; lead?: boolean; workerModel?: string; workerManualModel?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -1410,7 +1436,12 @@ export class OperatorService {
       session = await this.store.updateSession(created.id, (s) => {
         s.kind = 'chat';
         s.onFailure = 'continue';
-        s.review = { enabled: false, model: '' };
+        /*
+         * The review as chosen under the box (operator, 2026-10-20): the box is on unless unticked, and the page always
+         * says which. A second conversation checks the work when it says it is done, and sends back what it finds; it
+         * was off for the chat from 2026-10-17. Asked for without the box — the API on its own, a script — it stays off.
+         */
+        s.review = { enabled: input.review === true, model: '' };
         // Plan mode as chosen under the box (2026-10-20, "as in Claude Code"): the plan first, approved by the operator.
         s.planMode = input.planMode ? 'approve' : 'off';
         /*
@@ -1420,6 +1451,17 @@ export class OperatorService {
          */
         s.vcs = { ...(s.vcs ?? DEFAULT_VCS), enabled: false, repoDir: '' };
         s.projectDir = ws.dir;
+        /*
+         * Two chats (operator, 2026-10-20): this conversation is the lead's, and a worker carries out its subtasks. The
+         * lead judges the worker's reports, so there is no review of its own.
+         */
+        if (input.lead) {
+          s.lead = {
+            ...(input.workerManualModel ? { workerManualModel: true } : {}),
+            ...(!input.workerManualModel && input.workerModel?.trim() ? { workerModel: input.workerModel.trim() } : {}),
+          };
+          s.review = { enabled: false, model: '' };
+        }
         // The model chosen in the chat for this conversation: the operator's word, which outranks Settings.
         if (input.manualModel) s.manualModel = true;
         else if (input.model?.trim()) {
@@ -1507,7 +1549,7 @@ export class OperatorService {
    * answered or the run is stopped.
    */
   askModelHelp(
-    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean },
+    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' },
     signal: AbortSignal,
   ): Promise<'recheck' | 'continue' | 'stop'> {
     return new Promise((resolveAnswer) => {
@@ -1520,9 +1562,9 @@ export class OperatorService {
         sessionId: ask.sessionId,
         taskId: '',
         stepId: 0,
-        description: ask.asked ? `Choose "${ask.asked}" in the Copilot window` : 'Choose the model in the Copilot window',
+        description: `${ask.asked ? `Choose "${ask.asked}" in the Copilot window` : 'Choose the model in the Copilot window'}${ask.review ? ' for the review' : ask.role ? ` for the ${ask.role}` : ''}`,
         createdAt: new Date().toISOString(),
-        model: { asked: ask.asked, shown: ask.shown, why: ask.why, tries: ask.tries, ...(ask.manual ? { manual: true } : {}) },
+        model: { asked: ask.asked, shown: ask.shown, why: ask.why, tries: ask.tries, ...(ask.manual ? { manual: true } : {}), ...(ask.review ? { review: true } : {}), ...(ask.role ? { role: ask.role } : {}) },
       };
       this.waiting.set(approval.id, {
         approval,
@@ -1531,6 +1573,49 @@ export class OperatorService {
       this.bus.publish({ sessionId: ask.sessionId, type: 'approval-requested', level: 'warn',
         message: `choose "${ask.asked}" in the Copilot window, then answer on the card`, data: { approvalId: approval.id, model: approval.model } });
     });
+  }
+
+  /**
+   * The lead's question for the operator (two chats, 2026-10-20): what only a person can decide, on a card in the
+   * conversation, waiting in every mode — an unattended run included, since nobody else can answer it — until it is
+   * answered or the task is stopped.
+   */
+  askLeadQuestion(ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[] }, signal: AbortSignal): Promise<{ answer: string } | 'stop'> {
+    return new Promise((resolveAnswer) => {
+      if (signal.aborted) {
+        resolveAnswer('stop');
+        return;
+      }
+      const approval: PendingApproval = {
+        id: newId('a-'),
+        sessionId: ask.sessionId,
+        taskId: ask.taskId,
+        stepId: 0,
+        description: `The lead asks: ${ask.question}`,
+        createdAt: new Date().toISOString(),
+        question: { text: ask.question, ...(ask.why ? { why: ask.why } : {}), options: ask.options },
+      };
+      this.waiting.set(approval.id, {
+        approval,
+        // A stop, the end of the run, "abort" on the card: the task stops at the question.
+        resolve: () => resolveAnswer('stop'),
+        resolveAnswer,
+      });
+      this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
+        message: `the lead asks the operator: ${ask.question}`, data: { approvalId: approval.id, question: approval.question } });
+    });
+  }
+
+  /** The operator's answer to the lead's question. */
+  answerQuestion(approvalId: string, text: string): { ok: boolean; problem?: string } {
+    const w = this.waiting.get(approvalId);
+    if (!w?.resolveAnswer) return { ok: false, problem: 'No question of the lead is waiting under that id.' };
+    if (!text.trim()) return { ok: false, problem: 'Write the answer first.' };
+    this.waiting.delete(approvalId);
+    w.resolveAnswer({ answer: text.trim() });
+    this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
+      message: 'the operator answered the lead', data: { approvalId, question: true } });
+    return { ok: true };
   }
 
   /**
@@ -1580,8 +1665,9 @@ export class OperatorService {
     return { ok: true };
   }
 
+  /** What waits for the operator; of one session, its worker's included (two chats: they are asked in its conversation). */
   pendingApprovals(sessionId?: string): PendingApproval[] {
-    return [...this.waiting.values()].map((w) => w.approval).filter((a) => !sessionId || a.sessionId === sessionId);
+    return [...this.waiting.values()].map((w) => w.approval).filter((a) => !sessionId || a.sessionId === sessionId || this.workerLeads.get(a.sessionId) === sessionId);
   }
 
   /**
@@ -1597,7 +1683,7 @@ export class OperatorService {
     if (!w) return { ok: false };
     this.waiting.delete(approvalId);
 
-    if (action === 'run-all') this.setRunMode(w.approval.sessionId, 'unattended');
+    if (action === 'run-all') this.setRunMode(this.runKey(w.approval.sessionId), 'unattended');
 
     const decision: PolicyDecision =
       action === 'run' || action === 'run-all'
@@ -1655,9 +1741,9 @@ export class OperatorService {
 
     if (mode === 'unattended') {
       for (const [id, w] of this.waiting) {
-        if (w.approval.sessionId !== sessionId) continue;
-        // A fetch waits for its own answer: "run the rest without asking" is not an answer to it.
-        if (w.approval.network || w.approval.model) continue;
+        if (this.runKey(w.approval.sessionId) !== sessionId) continue;
+        // A fetch waits for its own answer: "run the rest without asking" is not an answer to it; nor is a question.
+        if (w.approval.network || w.approval.model || w.approval.question || w.approval.plan) continue;
         this.waiting.delete(id);
         w.resolve({ action: 'run' });
       }
@@ -1683,7 +1769,7 @@ export class OperatorService {
         // This is checked per step rather than captured once, which is what makes the switch
         // take effect from the very next step instead of the next run. A held step is the
         // exception: it is asked about in an unattended run too, which is the point of holding it.
-        if (!held && this.running.get(ctx.sessionId ?? '')?.mode === 'unattended') {
+        if (!held && this.running.get(this.runKey(ctx.sessionId ?? ''))?.mode === 'unattended') {
           resolvePromise({ action: 'run' });
           return;
         }
@@ -1958,56 +2044,6 @@ export class OperatorService {
     return undefined;
   }
 
-  /** Throws unless the folder is a project in Settings or the repository of a session. */
-  private async knownProjectFolder(dir: string, otherwise: string): Promise<void> {
-    const wanted = normaliseDir(dir);
-    const cfg = await this.settings.load();
-    const known = new Set(
-      [cfg.project?.rootDir ?? '', ...(cfg.project?.others ?? []).map((o) => o.rootDir), ...(await this.store.listSessions()).flatMap((s) => [s.vcs?.repoDir ?? '', s.projectDir ?? ''])]
-        .filter((d) => d.trim())
-        .map(normaliseDir),
-    );
-    if (!wanted || !known.has(wanted)) {
-      throw new Error(`That folder is not one of the projects in Settings or the repository of a session, so ${otherwise}.`);
-    }
-  }
-
-  /**
-   * "Prepare the folder from the remote main branch", first half: fetches and says what would be
-   * kept where and what the folder would be. See `vcs/prepareFromRemote.ts`.
-   */
-  async preparePreview(dir: string, fetch = true): Promise<PreparePlan> {
-    await this.init();
-    await this.knownProjectFolder(dir, 'it is not prepared from here');
-    // The operator pressed the button and is looking: the remote may ask for a password through Git's own window.
-    return await planPrepare(resolve(dir.trim()), { fetch, askpass: fetch ? await askpassProgram() : null });
-  }
-
-  /**
-   * The second half: does it, if the folder is still what the preview showed. Refused while anything
-   * runs, or is being started, in that folder or one around it: it moves the checkout.
-   */
-  async prepareProject(dir: string, fingerprint: string, names: { savedBranch?: string; savedMainBranch?: string } = {}): Promise<PrepareResult> {
-    await this.init();
-    await this.knownProjectFolder(dir, 'it is not prepared from here');
-    if (this.running.size > 0) return { ok: false, problem: 'A run is going. Stop it before preparing the folder; nothing was changed.' };
-    if (this.browser?.kind === 'run') return { ok: false, problem: 'A run is being started. Wait for it, or stop it, before preparing the folder; nothing was changed.' };
-    const other = await this.runningIn(dir);
-    if (other) return { ok: false, problem: `Session "${other.name}" is running in this folder. Stop it before preparing the folder; nothing was changed.` };
-    const done = await prepareFromRemote(resolve(dir.trim()), String(fingerprint ?? ''), { names });
-    // Kept on every session working in that folder: it moved the checkout and made saved branches.
-    if (done.ok) {
-      const cfg = await this.settings.load();
-      const here = normaliseDir(dir);
-      for (const s of (await this.store.listSessions()).filter((x) => normaliseDir(repoDirOf(x)) === here)) {
-        const message = `the folder was prepared from ${done.target}: ${done.result}`;
-        await appendSessionLog(cfg.resolved.runsDir, s.id, { type: 'folder-prepared', message, data: { target: done.target, commit: done.commit, branch: done.branch, saved: done.saved, removedFromFolder: done.removedFromFolder } }).catch(() => undefined);
-        this.bus.publish({ sessionId: s.id, type: 'folder-prepared', level: 'info', message, data: { target: done.target, commit: done.commit, saved: done.saved } });
-      }
-    }
-    return done;
-  }
-
   // --- the project being worked on ---------------------------------------------------------
 
   /**
@@ -2019,18 +2055,25 @@ export class OperatorService {
   async project(): Promise<ProjectDefault> {
     const cfg = await this.settings.load();
     const rootDir = (cfg.project?.rootDir ?? '').trim();
-    const problem = repoUnusableReason(rootDir);
-    const others = (cfg.project?.others ?? []).map((o) => {
-      const p = repoUnusableReason(o.rootDir);
-      return { name: o.name, rootDir: o.rootDir, repoOk: p === null, ...(p ? { repoProblem: p } : {}) };
-    });
-    return {
-      rootDir,
-      name: (cfg.project?.name ?? '').trim(),
-      repoOk: rootDir !== '' && problem === null,
-      ...(problem ? { repoProblem: problem } : {}),
-      others,
+    /*
+     * The branch each folder is on now (operator, 2026-10-20: "show which branch is chosen"), read from git each
+     * time, since the operator switches it by hand and the chat works on whatever is checked out.
+     */
+    const entry = async (name: string, dir: string, level2: string): Promise<ProjectEntry> => {
+      const problem = dir ? repoUnusableReason(dir) : 'no folder';
+      const branch = dir && problem === null ? await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => null) : null;
+      return {
+        name,
+        rootDir: dir,
+        repoOk: dir !== '' && problem === null,
+        ...(dir && problem ? { repoProblem: problem } : {}),
+        ...(branch?.ok && branch.stdout ? { branch: branch.stdout } : {}),
+        level2,
+      };
     };
+    const main = await entry((cfg.project?.name ?? '').trim(), rootDir, cfg.project?.level2 ?? '');
+    const others = await Promise.all((cfg.project?.others ?? []).map((o) => entry(o.name, o.rootDir, o.level2 ?? '')));
+    return { ...main, others };
   }
 
   /**
@@ -2047,7 +2090,8 @@ export class OperatorService {
   async setProject(patch: {
     rootDir?: string;
     name?: string;
-    others?: Array<{ name: string; rootDir: string }>;
+    level2?: string;
+    others?: Array<{ name: string; rootDir: string; level2?: string }>;
   }): Promise<ProjectDefault> {
     // Worked out from the file in its turn (see `Settings.update`), so a model chosen at the same
     // moment is kept, and a refusal below leaves the file as it was.
@@ -2055,16 +2099,30 @@ export class OperatorService {
       const current = ((raw.project as Record<string, unknown>) ?? {}) as {
         rootDir?: string;
         name?: string;
-        others?: Array<{ name: string; rootDir: string }>;
+        level2?: string;
+        others?: Array<{ name: string; rootDir: string; level2?: string }>;
       };
       const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
       const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
+      const level2 = patch.level2 !== undefined ? patch.level2 : (current.level2 ?? '');
+      // Each goes into Kerrigan whole, and she is pasted into a chat: bounded, so one project cannot crowd out the rest.
+      const tooLong = [{ name: name || rootDir, level2 }, ...(patch.others ?? [])].find((o) => (o.level2 ?? '').length > MAX_PROJECT_LEVEL2);
+      if (tooLong) throw new Error(`The level 2 of "${tooLong.name}" is longer than ${MAX_PROJECT_LEVEL2.toLocaleString('en')} characters; keep it to what a chat needs to know about the project.`);
       if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
 
-      const others = (patch.others ?? current.others ?? []).map((o) => ({
-        name: (o.name ?? '').trim(),
-        rootDir: (o.rootDir ?? '').trim(),
-      }));
+      /*
+       * A project's level 2 is kept with it when the list comes without one — renamed or moved, or saved by a page that
+       * does not know the field — matched by its folder, then by its name.
+       */
+      const before = current.others ?? [];
+      const others = (patch.others ?? before).map((o) => {
+        const was = before.find((b) => sameFolder(b.rootDir ?? '', o.rootDir ?? '')) ?? before.find((b) => (b.name ?? '').trim() === (o.name ?? '').trim());
+        return {
+          name: (o.name ?? '').trim(),
+          rootDir: (o.rootDir ?? '').trim(),
+          level2: o.level2 !== undefined ? o.level2 : (was?.level2 ?? ''),
+        };
+      });
       const seen = new Set<string>();
       for (const o of others) {
         if (!o.name) throw new Error(`Every other project needs a name; the one at ${o.rootDir || '(no folder)'} has none.`);
@@ -2078,7 +2136,7 @@ export class OperatorService {
 
       // What the removed Desktop copies left in the stored project is dropped with the next save.
       const { mirror: _m, desktop: _d, mirrorToDesktop: _t, ...rest } = current as typeof current & { mirror?: unknown; desktop?: unknown; mirrorToDesktop?: unknown };
-      return { ...raw, project: { ...rest, rootDir, name, others } };
+      return { ...raw, project: { ...rest, rootDir, name, level2, others } };
     });
     return await this.project();
   }

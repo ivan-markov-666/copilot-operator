@@ -14,6 +14,37 @@ takes an authorizer (who approves steps), a store (where sessions persist) and a
 
 ## The workbench
 
+**Two chats: a lead and a worker (2026-10-20, the third round).** "Two chats" under the chat's box, for a new
+conversation, gives the message to a lead instead of straight to the one who works (`src/orchestrator/leadRunner.ts`,
+the contract `prompts/lead1.md`, its replies held by `src/protocol/leadSchema.ts`). The lead runs nothing: its first
+reply restates the assignment (`understanding`); then each reply is one decision — `delegate` a subtask, `plan`, `ask`
+the operator, `done` with the result in the form asked for, or `blocked`. A subtask goes to the worker, a session of
+its own (`Session.workerOf`, hidden from the conversation list) with a conversation of its own in the same Copilot
+window, as a task run by `runTask` — commands asked about or not, Pause, Stop, its own photograph of the folder, no
+branch or commit; the worker keeps its conversation across subtasks unless the lead asks for a fresh one. The worker's
+report goes back to the lead: its summary, the commands it ran with their exit codes, the files it changed, how many
+subtasks are left (`limits.maxSubtasks`, default 20). The plan is put to the operator when "Plan mode" is ticked; the
+lead's question waits on a card in the conversation (`POST /api/approvals/:id/answer`). The message shows the lead's
+understanding, its notes, its plan, each subtask as a fold with the worker's commands, the questions with their
+answers, and the result; the panel follows the worker's latest subtask. The worker's model is chosen beside the
+lead's (the lead's when none is), and a model chosen by hand is asked on a card that says which of the two it is for.
+
+
+**Since 2026-10-20 (the second round).** The pages are the chat (`/`), Settings (`/defaults`) and System (`/system`):
+the base prompt's page, the presets' page and the Appearance page went. The base prompt is shown in Settings to read,
+folded, with what it is said above the fold; it is the one that ships and changes only when the bot is updated (an
+edited copy an earlier version kept in the data folder is not read). Each project in Settings has its branch (read
+from git each time) and a "Level 2 template (for Kerrigan)", which Kerrigan carries, saved or copied; "Prepare the
+folder from the remote main branch" went, with its routes and the sync command before it. Every field of Settings has
+an ⓘ, and the fields are one grid. The chat has "Review" under its box, on unless unticked: when Copilot says a message
+is done, a conversation of its own reviews the work, told what the message changed from the folder against its
+photograph; chosen by hand, the review's model is asked on a card that says plainly it is the review's and why a
+different, stronger one is worth it. "New chat" is off while a task runs and on a chat not begun, saying why. "Pause",
+"Stop" and "Add to it" are one group. The interface has nine languages (`web/lib/lang/`, one file each, listed with
+how to add one in `languages.ts`), chosen from "Language", which reads so in every language, with flags; Arabic turns
+the page right to left before its first paint, and what is code or the operator's own text keeps its direction.
+
+
 The home screen (`/`) is laid out as an IDE with the chat beside it: the operator asked for the app to work like
 VS Code with a chat bot at its side, in this app's own design. `web/app/workbench/`. Since 2026-10-20 it is the
 chat and Kerrigan only: the Sessions page, the task register and plans from JSON were removed, with their routes,
@@ -497,47 +528,26 @@ fallback.
 ## Endpoints
 
 ```
-GET    /api/health
-GET    /api/doctor
+GET    /api/health                   GET /api/doctor
 GET    /api/settings                 PUT /api/settings
-GET    /api/level1                   PUT /api/level1      DELETE /api/level1 (reset)
-GET    /api/presets                  PUT /api/presets/:name   DELETE /api/presets/:name
-GET    /api/sessions                 POST /api/sessions
-GET    /api/sessions/:id             PUT /api/sessions/:id    DELETE /api/sessions/:id
-POST   /api/sessions/:id/tasks
-PUT    /api/sessions/:id/tasks/:taskId          DELETE (queued only)
-GET    /api/sessions/:id/tasks/:taskId/log      text/plain
-GET    /api/sessions/:id/tasks/:taskId/files    { reports, artifacts, replies }
-GET    /api/sessions/:id/tasks/:taskId/files/:kind/:name
-POST   /api/sessions/:id/start       { mode: "confirm" | "unattended" }
-POST   /api/sessions/:id/stop
+GET    /api/level1                   the base prompt as it ships, to read (not edited since 2026-10-20)
+GET    /api/kerrigan?lang=           the persona: limits, projects with their branch and level 2; ⟦key⟧ names outside en/bg
+GET    /api/project                  PUT /api/project     the projects: folder, branch, level 2 (for Kerrigan)
+GET    /api/sessions                 GET|PUT /api/sessions/:id     (the chat's conversations)
+GET    /api/sessions/:id/tasks/:taskId/story | changes | changes/file | exchange
 GET    /api/sessions/:id/events      recent history
-GET    /api/sessions/:id/stream      server-sent events
-GET    /api/approvals?session=       POST /api/approvals/:id { action: run | skip | abort }
-GET    /api/sessions/:id/tasks/:taskId/undo     what undoing would do, both ways
-POST   /api/sessions/:id/tasks/:taskId/undo     { how: this | back }  nothing is started
-POST   /api/sessions/:id/tasks/:taskId/accept   { note? }  accepted as done
-POST   /api/sessions/:id/tasks/:taskId/notes    { text }   to the chat with the task's next message
-GET    /api/sessions/:id/repo/tree?path=&task=  one folder, read-only
-GET    /api/sessions/:id/repo/file?path=&task=  one file, as text
-GET    /api/sessions/:id/repo/log               commits on the session's line, with their tasks
-POST   /api/kerrigan/report          { sessionIds?, taskIds?, note? } what happened, for Kerrigan
-POST   /api/changes/check            { text } her changes, said in words; nothing changes
-POST   /api/changes/apply            { text } made one by one; nothing is started
-POST   /api/approvals/:id/plan       { action: approve | revise | stop, note? } a plan waiting (plan mode)
-GET    /api/tasks                    every task of every session, for the register
-GET    /api/activity                 { running, sessions, batch } — in-memory, safe to poll
-GET    /api/sessions/:id/tasks/:taskId/restart   what starting again from here would do
-POST   /api/sessions/:id/tasks/:taskId/restart   { restore?, start?, mode?, onFailure? }
-GET    /api/models                   the cached model list plus the default for new sessions
-POST   /api/models/refresh           re-reads the chat's model picker (opens the browser)
-PUT    /api/models/default           { model } the model new sessions start on
-PUT    /api/sessions/:id              { onFailure, vcs, planMode } queue behaviour, version control, plan first
-GET    /api/sessions/:id/vcs          can version control work here, and on which branch
-POST   /api/sessions/:id/tasks/:taskId/rerun    queues a finished task again
-POST   /api/sessions/:id/mode        { mode } asks or stops asking, mid-run
-GET    /api/sessions/:id/export      ?variant=full|outcome&tasks=id,id  downloads the record
-POST   /api/browse-folder            { start? } -> opens the machine's folder dialog
+POST   /api/sessions/:id/start       { mode: "confirm" | "unattended" }
+POST   /api/sessions/:id/stop        POST /api/sessions/:id/pause    POST /api/sessions/:id/resume
+GET    /api/start/failures           GET /api/start/failures/:id/report
+GET    /api/terminal
+GET    /api/workspace                GET /api/workspace/files   GET|PUT /api/workspace/file
+GET    /api/workspace/git            GET /api/workspace/git/commit   GET /api/workspace/git/file
+GET    /api/chat/threads             POST /api/chat { text, threadId?, model?, manualModel?, lang?, planMode?, review?, lead?, workerModel?, workerManualModel? }
+POST   /api/chat/:id/rewind
+GET    /api/approvals                POST /api/approvals/:id   POST /api/approvals/:id/plan   POST /api/approvals/:id/answer
+GET    /api/activity
+GET    /api/models                   POST /api/models/refresh   PUT /api/models/default   PUT /api/models/review-default
+POST   /api/login                    POST /api/browse-folder
 ```
 
 ## Settings

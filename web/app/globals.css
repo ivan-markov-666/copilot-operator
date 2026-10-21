@@ -150,17 +150,22 @@ a:hover { text-decoration: underline; }
 }
 
 /* A keyboard user's first stop: jump past the header into the page. */
+/*
+ * Hidden above the page, not 9 999 px to its left: right to left (Arabic, 2026-10-20), what is to the left is where the
+ * page scrolls to, and the page could be scrolled sideways by that much.
+ */
 .skip-link {
   position: absolute;
-  left: -9999px;
+  inset-inline-start: 0;
   top: 0;
+  transform: translateY(-120%);
   background: var(--accent);
   color: var(--accent-ink);
   padding: 10px 16px;
-  border-radius: 0 0 var(--radius) 0;
+  border-end-end-radius: var(--radius);
   z-index: 10;
 }
-.skip-link:focus { left: 0; }
+.skip-link:focus { transform: none; }
 
 .wrap { max-width: calc(1100px * var(--scale)); margin: 0 auto; padding: 24px 16px 80px; }
 
@@ -246,6 +251,7 @@ a:hover { text-decoration: underline; }
 .small { font-size: calc(13px * var(--scale)); }
 
 input[type='text'],
+input[type='email'],
 input[type='number'],
 textarea,
 select {
@@ -258,6 +264,7 @@ select {
   font: inherit;
 }
 input[type='text']:focus,
+input[type='email']:focus,
 input[type='number']:focus,
 textarea:focus,
 select:focus { border-color: var(--accent); }
@@ -1116,6 +1123,14 @@ button.linkish:hover { text-decoration: underline; }
 .wb-problems li.seen { opacity: 0.6; }
 .wb-seen { flex: none; }
 .cs-new { flex: none; padding: 4px 10px; font-size: calc(13px * var(--scale)); }
+/*
+ * "New chat" off (2026-10-20): while a task runs, and on a new chat not begun yet. Not `disabled`, which takes the
+ * pointer and the focus away, so the reason could not be shown: it is said beside the button on hover and on focus.
+ */
+.cs-new-wrap { position: relative; flex: none; display: inline-flex; }
+.cs-new[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.cs-new-tip { display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: max-content; max-width: min(300px, 80vw); padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: 0 6px 18px rgba(0, 0, 0, .16); font-size: calc(12.5px * var(--scale)); line-height: 1.4; white-space: normal; }
+.cs-new-wrap:hover .cs-new-tip, .cs-new-wrap:focus-within .cs-new-tip { display: block; }
 .cs-file { padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--panel); color: var(--ink); font: inherit; font-size: calc(12px * var(--scale)); cursor: pointer; }
 .cs-file:hover { border-color: var(--accent); }
 .cs-system { color: var(--muted); font-size: calc(12.5px * var(--scale)); margin: 0; }
@@ -1128,6 +1143,12 @@ button.linkish:hover { text-decoration: underline; }
 .cs-compose { padding: 8px 10px 10px; border-top: 1px solid var(--line); background: var(--bg); }
 .cs-compose textarea { width: 100%; min-height: 72px; max-height: 40vh; resize: vertical; }
 .cs-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+/*
+ * "Pause", "Stop" and "Add" (2026-10-20): one flex item, so the line breaks around the group and not inside it — beside
+ * the box's other controls when there is room, on a line of its own when not; only there, still too narrow, they wrap.
+ */
+.cs-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; flex: 0 1 auto; min-width: 0; }
+.cs-actions > button { white-space: nowrap; }
 .cs-plan-toggle { display: inline-flex; align-items: center; gap: 5px; margin: 0; color: var(--ink); font-size: calc(12.5px * var(--scale)); white-space: nowrap; cursor: pointer; }
 .cs-plan { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--panel); }
 .cs-plan > summary { cursor: pointer; font-size: calc(13px * var(--scale)); color: var(--muted); }
@@ -1223,3 +1244,116 @@ button.linkish:hover { text-decoration: underline; }
 .wb-appear-size span { flex: 1; text-align: center; }
 .wb-appear-aid { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; color: var(--ink); font-size: calc(13px * var(--scale)); cursor: pointer; }
 .wb-appear .row { margin-top: 10px; }
+
+/* The manual-model card of the review's own conversation (2026-10-20): first on the card, hard to miss. */
+.approval-review { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; padding: 8px 10px; border-radius: 8px; border: 2px solid var(--warn); background: var(--warn-soft); color: var(--ink); }
+.approval-review strong { color: var(--warn); letter-spacing: .02em; }
+
+/*
+ * Settings (2026-10-20: "align the buttons, the inputs and the other elements"). Every field is one row of a grid —
+ * its name with an ⓘ on the left, the control and its unit on the right — so the inputs, the selects and the buttons
+ * line up down the page and are all the same height; one column on a narrow screen.
+ */
+.settings .panel > h2 { margin-bottom: 4px; }
+.settings .section-title { gap: 10px; margin-bottom: 4px; }
+.settings .section-title h2 { margin: 0; }
+.settings-field { display: grid; grid-template-columns: minmax(200px, 36%) minmax(0, 1fr); gap: 6px 18px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.settings .panel > p + .settings-field, .settings .panel > .err + .settings-field { margin-top: 8px; }
+.field-label { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 0 0 4px; }
+.settings-field > .field-label { margin: 0; }
+.field-label label, .field-label .field-name { display: inline; margin: 0; color: var(--ink); font-weight: 600; font-size: calc(13.5px * var(--scale)); }
+.field-label.check-label { gap: 8px; grid-column: 1 / -1; }
+.field-label.check-label input { flex: none; margin: 0; }
+.field-label.check-label label { font-weight: 600; cursor: pointer; }
+.field-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.field-control > select, .field-control > input[type='text'], .field-control > input[type='email'] { flex: 1 1 240px; width: auto; max-width: 460px; min-width: 0; }
+.field-control > input.number { flex: none; width: 10ch; }
+.field-control > button { flex: none; white-space: nowrap; }
+.field-control .unit { color: var(--muted); font-size: calc(12.5px * var(--scale)); flex: 1 1 160px; min-width: 0; }
+.field-after { margin: 4px 0 0; }
+.warned-text { color: var(--warn); }
+.saved-note { margin-top: 10px; }
+.settings input:not([type='checkbox']), .settings select, .settings button:not(.info-btn) { min-height: calc(36px * var(--scale)); }
+.settings textarea { min-height: 0; }
+@media (max-width: 720px) {
+  .settings-field { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The base prompt: what it is, said above the fold where it cannot be missed; the text itself folded. */
+.callout { border-left: 4px solid var(--accent); background: var(--accent-soft); color: var(--ink); padding: 10px 14px; border-radius: 8px; margin: 10px 0; line-height: 1.5; }
+.l1-text { margin-top: 8px; }
+.l1-text > summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 4px 0; }
+.l1-pre { margin: 8px 0 0; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); line-height: 1.5; }
+
+/* A project: its tags (the chat's folder, git, the branch), its name and folder side by side, then its level 2. */
+.project-entry { margin-top: 12px; }
+.project-tags { gap: 8px; margin-bottom: 8px; }
+.branch-tag { display: inline-flex; align-items: center; gap: 4px; }
+.badge.branch { font-family: var(--mono); }
+.project-fields { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 10px 14px; align-items: end; }
+.project-fields.add-project { margin-top: 8px; }
+.input-with-buttons { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.input-with-buttons > input { flex: 1 1 220px; width: auto; min-width: 0; }
+.input-with-buttons > button { flex: none; white-space: nowrap; }
+.project-level2 { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.project-level2 textarea { width: 100%; min-height: calc(6em * var(--scale)); resize: vertical; }
+@media (max-width: 720px) {
+  .project-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
+/*
+ * "Language" (2026-10-20): the button reads "Language" in every language, with a globe; the list has each language's
+ * flag, its own name and its English one, the one in use ticked.
+ */
+.lang-menu { display: inline-flex; }
+.lang-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; white-space: nowrap; }
+.lang-globe { width: calc(15px * var(--scale)); height: calc(15px * var(--scale)); flex: none; }
+.pop.lang-list { min-width: 0; width: max-content; max-width: min(380px, calc(100vw - 24px)); }
+.lang-list > button { display: grid; grid-template-columns: auto max-content minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; text-align: start; }
+.lang-english { text-align: end; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lang-list > button[aria-checked='true'] { background: var(--accent-soft); }
+.flag { width: calc(21px * var(--scale)); height: calc(14px * var(--scale)); border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2); flex: none; }
+.lang-native { font-weight: 600; }
+.lang-tick { color: var(--accent); font-weight: 700; min-width: 1em; text-align: center; }
+
+/*
+ * Right to left (Arabic, 2026-10-20): the layout follows the page's direction; what is code — the editor, the
+ * terminal, commands and their output, diffs, paths, keys — stays left to right, as it is written.
+ */
+[dir='rtl'] :is(pre, code, kbd, samp, .ed, .ed-area, .ed-input, .ed-shown, .ed-gutter, .wb-terminal, .cs-out, .cs-cmd-row, .diff-scroll, .diff-path, .diff-name, .ed-path, .l1-pre, .badge.branch) { direction: ltr; text-align: left; }
+[dir='rtl'] input[type='text'][placeholder^='C:'] { direction: ltr; }
+
+/* The branch mark beside a branch's name. */
+.branch-ico { display: inline-block; width: 1em; height: 1em; vertical-align: -0.15em; flex: none; }
+
+/*
+ * Right to left, what the operator wrote and what the folder holds keeps its own direction (2026-10-20): each line of
+ * a message, a file name, a tab's title or a path is set by its own first letter, so ".gitignore" is not "gitignore."
+ * and an English message's full stop stays at its end; the icons' letters are drawn left to right ("C#", not "#C").
+ */
+[dir='rtl'] :is(.cs-body, .wb-side, .wb-tabs, .wb-statusbar, .wb-file-pane) :is(p, span, button, a, li, summary, div, strong, em, code), [dir='rtl'] :is(#cs-thread, textarea, input[type='text'], .project-entry input) { unicode-bidi: plaintext; }
+.file-ico, .flag, .branch-ico { direction: ltr; }
+
+/*
+ * Two chats (2026-10-20): what the lead says, set apart from the worker's commands; each subtask a fold of its own
+ * with the worker's commands in it; the lead's question as a card with its choices and an answer box.
+ */
+.cs-who { margin: 0 0 4px; font-size: calc(12px * var(--scale)); font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+.cs-lead-say, .cs-lead-qa { border-inline-start: 3px solid var(--accent); padding-inline-start: 10px; margin: 6px 0; }
+.cs-lead-qa { border-inline-start-color: var(--warn); }
+.cs-lead-qa > .cs-who:not(:first-child) { margin-top: 8px; }
+.cs-models { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; column-gap: 8px; }
+.cs-models > .cs-pick-label { margin-top: 6px; }
+.cs-subtask { margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.cs-subtask > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; font-weight: 600; font-size: calc(13px * var(--scale)); }
+.cs-subtask > summary .badge { font-weight: 500; }
+.cs-subtask[open] > summary { border-bottom: 1px solid var(--line); }
+.cs-subtask-body { padding: 6px 10px 10px; }
+.cs-subtask.s-running, .cs-subtask.s-waiting-approval { border-color: var(--accent); }
+.cs-subtask.s-failed, .cs-subtask.s-blocked { border-color: var(--warn); }
+.cs-question { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; }
+.cs-question textarea { width: 100%; min-height: 0; margin: 4px 0 8px; }
+.cs-question .cs-options { margin: 8px 0; }
+.cs-evidence { margin: 6px 0; font-size: calc(13px * var(--scale)); }
+.cs-evidence ul { margin: 0; padding-inline-start: 20px; }
+.cs-pick-label { font-size: calc(12px * var(--scale)); color: var(--muted); font-weight: 600; margin: 0; white-space: nowrap; }

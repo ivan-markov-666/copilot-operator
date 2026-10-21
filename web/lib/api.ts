@@ -307,6 +307,10 @@ export type Task = {
   accepted?: { at: string; note?: string; was: TaskStatus; reason?: string };
   /** A chat message: the folder as it was before it first ran, which "go back" puts back. */
   checkpoint?: { commit: string; head: string; branch: string; at: string };
+  /** Two chats (2026-10-20): what the lead of this message did. See `LeadRecord`. */
+  lead?: LeadRecord;
+  /** A worker's subtask: the lead's message it is part of. */
+  fromLead?: { sessionId: string; taskId: string; n: number };
 };
 
 export type VersionControl = {
@@ -668,6 +672,10 @@ export type Session = {
   planMode?: 'off' | 'auto' | 'approve';
   /** A conversation of the workbench's chat: each message is a task of it. */
   kind?: 'chat';
+  /** Two chats (2026-10-20): this conversation is the lead's; its worker is a session of its own. */
+  lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
+  /** A worker's session: the lead's it works for. */
+  workerOf?: string;
   /** The name of the plan this session was imported from, offered as the run's name. */
   planName?: string;
   vcs?: VersionControl;
@@ -696,10 +704,27 @@ export type Approval = {
   /** Set when the step was held because it downloads; asked about even in an unattended run. */
   network?: string;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */
-  model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean };
+  /** `review`: the model of the review's own conversation, best another, stronger one than the work's. */
+  model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' };
   /** Set when this is a task's plan waiting for approval (plan mode). */
   plan?: { title: string; plan: TaskPlan };
+  /** Two chats: the lead's question for the operator, answered with text. */
+  question?: { text: string; why?: string; options: string[] };
 };
+
+/** One reply of the lead (two chats): what it decided, and what came of it. */
+export type LeadRound = {
+  n: number;
+  at: string;
+  status: 'delegate' | 'plan' | 'ask' | 'done' | 'blocked';
+  understanding?: string;
+  notes?: string;
+  subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean };
+  question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
+};
+
+/** What the lead of a message did, as the chat shows it. */
+export type LeadRecord = { rounds: LeadRound[]; subtasks: number; maxSubtasks: number; evidence?: string[]; workerSessionId?: string };
 
 /** A task's plan, in plan mode: see `TaskPlan` on the server. */
 export type TaskPlan = {
@@ -772,19 +797,21 @@ export type BatchState = {
 };
 
 /** One of the other folders the operator works in, by name, with whether it can carry version control. */
-export type OtherProject = { name: string; rootDir: string; repoOk: boolean; repoProblem?: string };
-
-/** The project folder new sessions start pointed at, whether it can carry version control, and the other folders by name. */
-export type ProjectDefault = {
-  rootDir: string;
-  /** What the operator calls it. Empty means the folder's own name. */
+/** One project as Settings show it: its folder, whether it is a repository and on which branch, and its level 2. */
+export type ProjectEntry = {
   name: string;
+  rootDir: string;
   repoOk: boolean;
   repoProblem?: string;
-  others: OtherProject[];
+  /** The branch checked out there now; 'HEAD' on none. Absent outside a repository. */
+  branch?: string;
+  /** What the operator wrote about the project, for Kerrigan. */
+  level2: string;
 };
+export type OtherProject = ProjectEntry;
 
-export type Preset = { name: string; content: string; updatedAt: string };
+/** The chat's folder, the first project, and the others by name. */
+export type ProjectDefault = ProjectEntry & { others: ProjectEntry[] };
 
 /** One thing that happened in a task attempt, as the run folder recorded it. */
 export type StoryEntry =
@@ -853,7 +880,6 @@ export type SavedLog = {
 export type ContextKind = 'organisation' | 'persona' | 'work';
 export type ContextText = { content: string; customised: boolean; example: string };
 
-/** See `src/vcs/prepareFromRemote.ts`: what preparing the folder from the remote's main would keep where. */
 /** Where one session's work starts, as the start window chooses it. See src/vcs/startChoice.ts. */
 export type StartChoice =
   | { from: 'local'; branch: string; onBranch?: boolean; rechoose?: boolean }
@@ -925,30 +951,6 @@ export type StartFailureRef = {
 
 /** The answer to a start button. */
 export type StartReply = { started: boolean; reason?: string; batch?: BatchState; failure?: StartFailureRef };
-
-export type PreparePlan = {
-  ok: boolean;
-  problem?: string;
-  repoDir: string;
-  branch?: string | null;
-  head?: string;
-  remote?: string;
-  target?: string;
-  targetCommit?: string;
-  localBranch?: string;
-  localHead?: string | null;
-  changed: string[];
-  untracked: string[];
-  mainOnlyCommits: string[];
-  branchOnlyCommits: string[];
-  savedBranch?: string;
-  savedMainBranch?: string;
-  alreadyThere?: boolean;
-  fingerprint?: string;
-  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked?: boolean };
-  lastFetched?: string;
-  fetchCommand?: string;
-};
 
 export type StopCode = 'format-repair-exhausted' | 'contract-conflict' | 'no-progress' | 'invalid-check' | 'environment';
 
@@ -1066,7 +1068,7 @@ async function call<T>(path: string, init?: RequestInit, opts: { timeoutMs?: num
 }
 
 /** Kerrigan's text, as `GET /kerrigan` gives it. */
-export type KerriganText = { lang: string; fileName: string; text: string };
+export type KerriganText = { lang: string; fileName: string; text: string; /** False when the names of the controls are left as ⟦key⟧ for the page. */ filled: boolean };
 
 export const api = {
   doctor: () => call<Record<string, unknown>>('/doctor'),
@@ -1074,23 +1076,10 @@ export const api = {
   /** Writes the whole raw settings object back; the API validates it before saving. */
   saveSettings: (raw: Record<string, unknown>) => call<{ ok: true }>('/settings', { method: 'PUT', body: JSON.stringify(raw) }),
 
-  level1: () => call<{ content: string; customised: boolean }>('/level1'),
-  setLevel1: (content: string) => call<{ ok: true }>('/level1', { method: 'PUT', body: JSON.stringify({ content }) }),
-  resetLevel1: () => call<{ content: string; customised: boolean }>('/level1', { method: 'DELETE' }),
-
-  presets: () => call<Preset[]>('/presets'),
-  savePreset: (name: string, content: string) =>
-    call<Preset>(`/presets/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
-  deletePreset: (name: string) => call<{ ok: true }>(`/presets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  /** The base prompt as it ships: shown in Settings to read. */
+  level1: () => call<{ content: string }>('/level1'),
 
   sessions: () => call<Session[]>('/sessions'),
-  /** "Prepare the folder from the remote main branch": fetches and says what it would do. */
-  // The fetch may wait up to five minutes for the operator to type a password in Git's window (src/vcs/remoteAuth.ts).
-  preparePreview: (dir: string, fetch = true) =>
-    call<PreparePlan>('/repo/prepare/preview', { method: 'POST', body: JSON.stringify({ dir, fetch }) }, { timeoutMs: 330_000 }),
-  /** …and does it, if the folder is still what the preview showed. */
-  prepareProject: (dir: string, fingerprint: string, names: { savedBranch?: string; savedMainBranch?: string } = {}) =>
-    call<{ ok: boolean; problem?: string; result?: string }>('/repo/prepare', { method: 'POST', body: JSON.stringify({ dir, fingerprint, ...names }) }),
   session: (id: string) => call<Session>(`/sessions/${id}`),
   updateSession: (
     id: string,
@@ -1107,6 +1096,9 @@ export const api = {
       vcs?: Partial<VersionControl>;
       /** Plan mode for this session; empty follows Settings. */
       planMode?: '' | 'off' | 'auto' | 'approve';
+      /** Two chats: the worker's model, or by hand. */
+      workerModel?: string;
+      workerManualModel?: boolean;
     },
   ) =>
     call<Session>(`/sessions/${id}`, { method: 'PUT', body: JSON.stringify(patch) }),
@@ -1155,8 +1147,24 @@ export const api = {
   /** The chat: its conversations, and a message — a task of the conversation, or a note while it works. */
   chatThreads: () => call<ChatThread[]>('/chat/threads'),
   /** `planMode` for a new conversation: the plan first, approved in the chat (an existing one's is set with `updateSession`). */
-  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean) =>
-    call<ChatSent>('/chat', { method: 'POST', body: JSON.stringify({ text, ...(threadId ? { threadId } : {}), ...(model ? { model } : {}), ...(manualModel ? { manualModel: true } : {}), ...(lang ? { lang } : {}), ...(planMode ? { planMode: true } : {}) }) }),
+  /** `review`: whether a new conversation's messages are reviewed (the box under the chat); left out, they are not. */
+  /** `two`: a new conversation with a lead and a worker (two chats, 2026-10-20), and the worker's model. */
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }) =>
+    call<ChatSent>('/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        text,
+        ...(threadId ? { threadId } : {}),
+        ...(model ? { model } : {}),
+        ...(manualModel ? { manualModel: true } : {}),
+        ...(lang ? { lang } : {}),
+        ...(planMode ? { planMode: true } : {}),
+        ...(review !== undefined ? { review } : {}),
+        ...(two ? { lead: true, ...(two.workerManualModel ? { workerManualModel: true } : two.workerModel ? { workerModel: two.workerModel } : {}) } : {}),
+      }),
+    }),
+  /** The lead's question (two chats): the operator's answer. */
+  answerQuestion: (approvalId: string, text: string) => call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
   /** Back to before a message: the folder as it was then; that message and the ones after it taken out. */
   chatRewind: (threadId: string, taskId: string) =>
     call<{ ok: boolean; message: string; text: string; safety?: string }>(`/chat/${threadId}/rewind`, { method: 'POST', body: JSON.stringify({ taskId }) }),
@@ -1185,14 +1193,14 @@ export const api = {
   kerrigan: (lang: string) => call<KerriganText>(`/kerrigan?lang=${encodeURIComponent(lang)}`),
   /** One task's whole exchange with Copilot — messages, replies, commands and their output — as a JSON file. */
   taskExchangeUrl: (id: string, taskId: string) => withToken(`${API}/sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/exchange`),
-  /** The folder new sessions start pointed at. */
+  /** The projects: the chat's folder first, then the others, each with its branch and its level 2. */
   project: () => call<ProjectDefault>('/project'),
-  /** Stores it; an empty path clears it. */
-  /** A field left out is kept; an empty `rootDir` clears the default. */
+  /** A field left out is kept; an empty `rootDir` clears the chat's folder. */
   setProject: (patch: {
     rootDir?: string;
     name?: string;
-    others?: Array<{ name: string; rootDir: string }>;
+    level2?: string;
+    others?: Array<{ name: string; rootDir: string; level2?: string }>;
   }) => call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
 
   models: () => call<ModelCatalogue>('/models'),

@@ -33,7 +33,7 @@ export type Sent = {
   attachments: string[];
   attached: Record<string, string>;
   /** Which kind of opening this was, when it was one. */
-  contract?: 'task' | 'review';
+  contract?: 'task' | 'review' | 'lead';
 };
 
 /** What a scripted reply sees: the message it answers and every conversation so far. */
@@ -41,7 +41,7 @@ export type Incoming = Sent & { chat: FakeConversation; world: FakeCopilot };
 
 export type Script = string | ((m: Incoming) => string | Promise<string>);
 
-export type FakeConversation = { id: string; name?: string; messages: Sent[]; review: boolean };
+export type FakeConversation = { id: string; name?: string; messages: Sent[]; review: boolean; /** Given the lead's contract (two chats). */ lead?: boolean };
 
 const repoRoot = join(import.meta.dirname, '..', '..');
 
@@ -98,6 +98,7 @@ export class FakeCopilot {
   private nextChat = 1;
   private readonly taskContract = firstLine('level1.md');
   private readonly reviewContract = firstLine('review1.md');
+  private readonly leadContract = firstLine('lead1.md');
 
   /** What answers when the queue is empty: only for test/support/demo.ts, where a person types. Checks leave it unset. */
   fallback: Script | null = null;
@@ -158,6 +159,12 @@ export class FakeCopilot {
   }
 
   async answer(chat: FakeConversation, m: Sent): Promise<string> {
+    // The lead's contract of the two-chat mode (2026-10-20): answered like the others, without a scripted reply.
+    if (m.text.includes(this.leadContract)) {
+      chat.lead = true;
+      m.contract = 'lead';
+      return 'Understood. I will direct the work and answer in the lead\'s JSON format. Send the assignment.';
+    }
     if (m.text.includes(this.reviewContract)) {
       chat.review = true;
       m.contract = 'review';
@@ -443,5 +450,51 @@ export const reply = {
   /** Not JSON at all: what a chat that forgot the format sends. */
   prose(text = 'Sure! I will get right on that.'): string {
     return text;
+  },
+  /** The lead's replies, in the format of prompts/lead1.md (two chats, 2026-10-20). */
+  lead: {
+    delegate(
+      sub: Partial<{ title: string; goal: string; context: string; steps: string[]; report: string; doneWhen: string; readOnly: boolean; freshWorker: boolean }> = {},
+      extra: { understanding?: string; notes?: string } = {},
+    ): string {
+      return fenced({
+        status: 'delegate',
+        ...extra,
+        subtask: {
+          title: 'Survey the project',
+          goal: 'Find out what is in the project folder and how it is laid out.',
+          context: 'The project is the open folder.',
+          steps: [],
+          report: 'The files at the root, one per line.',
+          doneWhen: 'Every file at the root is listed.',
+          readOnly: true,
+          freshWorker: false,
+          ...sub,
+        },
+      });
+    },
+    plan(over: Partial<{ existing: string; approach: string; steps: string[]; files: string[]; verification: string; risks: string }> = {}, extra: { understanding?: string; notes?: string } = {}): string {
+      return fenced({
+        status: 'plan',
+        ...extra,
+        plan: {
+          existing: 'A README and nothing else, as the survey found.',
+          approach: 'Have the worker write the file the assignment names, then read it back.',
+          steps: ['write the file', 'read it back'],
+          files: ['result.txt'],
+          verification: 'The worker reads the file back and it holds exactly the text asked for.',
+          ...over,
+        },
+      });
+    },
+    ask(question = 'Which of the two folders is the one the assignment means: the old one or the new one?', options: string[] = [], extra: { understanding?: string; notes?: string; why?: string } = {}): string {
+      return fenced({ status: 'ask', question, ...(options.length > 0 ? { options } : {}), why: 'the assignment names a folder that is there twice', ...extra });
+    },
+    done(answer: unknown = 'The work is finished: the worker wrote the file and read it back, and it holds exactly the text the assignment asked for.', evidence: string[] = [], extra: { understanding?: string; notes?: string } = {}): string {
+      return fenced({ status: 'done', answer, evidence, ...extra });
+    },
+    blocked(summary = 'The worker surveyed the project and found no test suite at all, so nothing could be run or fixed.', needed = 'the folder where the tests are', extra: { understanding?: string; notes?: string } = {}): string {
+      return fenced({ status: 'blocked', summary, needed, ...extra });
+    },
   },
 };

@@ -278,7 +278,7 @@ export class WindowClosed extends Error {
  * A card drawn over the chat's page (see `showNotice`): a heading, the message it is about, a few lines, one button.
  * `tone` picks the mark beside the heading: a tick, a stop, or a warning.
  */
-export type WindowNotice = { tone: 'done' | 'stopped' | 'failed'; title: string; subject?: string; lines: string[]; button: string };
+export type WindowNotice = { tone: 'done' | 'stopped' | 'failed'; title: string; subject?: string; lines: string[]; button: string; /** Right to left (Arabic). */ dir?: 'rtl' };
 
 /** The id of the notice's element in the chat's page, so the next one, and `clearNotice`, find it. */
 const NOTICE_ID = 'copilot-operator-notice';
@@ -531,6 +531,7 @@ export class CopilotTransport {
         card.setAttribute('role', 'alertdialog');
         card.setAttribute('aria-modal', 'true');
         card.setAttribute('aria-labelledby', 'title');
+        if (n.dir) card.setAttribute('dir', n.dir);
         const h = document.createElement('h2');
         h.id = 'title';
         const mark = document.createElement('span');

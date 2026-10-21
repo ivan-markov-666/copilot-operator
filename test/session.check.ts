@@ -1,7 +1,7 @@
 import { composeOpening } from '../src/session/compose.js';
 import { SessionStore } from '../src/session/store.js';
 import { EventBus } from '../src/session/events.js';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -33,11 +33,15 @@ const dir = await mkdtemp(join(tmpdir(), 'cop-store-'));
 const store = new SessionStore(dir, join(process.cwd(), 'prompts', 'level1.md'));
 await store.init();
 const l1 = await store.getLevel1();
-console.log('level1 shipped    :', !l1.customised, '| length', l1.content.length);
-await store.setLevel1('# custom');
-console.log('level1 customised :', (await store.getLevel1()).customised);
-await store.resetLevel1();
-console.log('level1 reset      :', !(await store.getLevel1()).customised);
+console.log('level1 shipped    :', l1.content.length > 100, '| length', l1.content.length);
+/*
+ * An edited copy an earlier version kept in the data folder is not read any more (2026-10-20): level 1 changes only with
+ * an update of the bot.
+ */
+await writeFile(join(dir, 'level1.md'), '# custom', 'utf8');
+const shippedOnly = (await store.getLevel1()).content === l1.content;
+console.log('level1 edited copy ignored:', shippedOnly);
+if (!shippedOnly) process.exitCode = 1;
 
 const s = await store.createSession('payments', 'C:/x');
 console.log('project folder    :', s.projectDir, '(expect C:/x)');
@@ -102,8 +106,6 @@ console.log('queued untouched  :', after?.tasks.find((t) => t.id === kq.id)?.sta
 console.log('session freed     :', after?.status, '(expect idle)');
 console.log('now deletable     :', await store.deleteTask(killed.id, kt.id).then(() => 'yes').catch((e: Error) => `no: ${e.message}`));
 console.log('second pass finds :', (await store.recoverInterrupted()).length, '(expect 0)');
-await store.savePreset('Payments team', 'Use pnpm.');
-console.log('presets           :', (await store.listPresets()).map((p) => p.name).join(', '));
 console.log('sessions listed   :', (await store.listSessions()).length);
 console.log('raw file is json  :', JSON.parse(await readFile(join(dir, 'sessions', `${s.id}.json`), 'utf8')).name);
 

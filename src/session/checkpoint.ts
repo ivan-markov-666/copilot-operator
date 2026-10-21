@@ -70,6 +70,23 @@ export async function takeAfter(dir: string, id: string, before: Checkpoint): Pr
 }
 
 /**
+ * The files a message has changed so far: the folder photographed now, against its checkpoint (for the review of a
+ * chat message, 2026-10-20). The photograph is let go of afterwards; the one taken when the message ends is kept.
+ */
+export async function changedSince(dir: string, before: Checkpoint, id: string): Promise<string[]> {
+  const ref = `refs/copilot-operator/review/${id}`;
+  const r = await photograph(dir, ref, `the folder during the review of ${id}`, before.commit);
+  if ('problem' in r) throw new Error(r.problem);
+  try {
+    const diff = await git(dir, ['diff', '--name-only', '--no-renames', before.commit, r.commit]);
+    if (!diff.ok) throw new Error(diff.stderr);
+    return diff.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  } finally {
+    await git(dir, ['update-ref', '-d', ref]).catch(() => undefined);
+  }
+}
+
+/**
  * Puts the folder back as `cp` photographed it: its branch checked out at its commit, its working tree with the
  * same uncommitted changes. The folder as it is now is photographed first, under `refs/copilot-operator/safety/`.
  */

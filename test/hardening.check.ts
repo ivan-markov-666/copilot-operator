@@ -21,7 +21,7 @@ import { RunConfigSchema } from '../src/config/schema.js';
 import { botSelfRefusal, networkFetchReason } from '../src/exec/network.js';
 import { inlineCodeRefusal, startProcessTargets } from '../src/exec/programs.js';
 import { redactSecrets } from '../src/exec/redaction.js';
-import { safeName, safePresetName } from '../src/session/store.js';
+import { safeName } from '../src/session/store.js';
 import { invocationFor, resolveShell } from '../src/exec/shells.js';
 import { git } from '../src/vcs/git.js';
 import { applyPolicyLock, readPolicyLocks, PolicyLockSchema } from '../src/config/lockedPolicy.js';
@@ -127,14 +127,6 @@ console.log('\n--- a session id or a preset name is a file name, never a path --
     }
     check(`refused: ${JSON.stringify(bad)}`, threw, true);
   }
-  check('a Cyrillic preset name passes', safePresetName('моят пресет'), 'моят пресет');
-  let threw = false;
-  try {
-    safePresetName('..\\evil');
-  } catch {
-    threw = true;
-  }
-  check('a preset name that climbs is refused', threw, true);
 }
 
 console.log('\n--- shapes of secrets that used to pass ---');

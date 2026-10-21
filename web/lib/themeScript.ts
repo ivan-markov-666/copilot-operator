@@ -16,6 +16,13 @@
 export const APPEARANCE_STORAGE_KEY = 'cop.appearance';
 
 /**
+ * The languages written right to left (Arabic): the page is turned before its first paint, not after. Written out
+ * here rather than read from `lang/languages.ts`, which the page's client modules import too: imported, the script's
+ * text reached the page as a reference again (the #418 above). `test/ui-flows.check.ts` holds it to that list.
+ */
+export const RIGHT_TO_LEFT = ['ar'];
+
+/**
  * The text sizes, smallest first: one step below normal and three above it.
  *
  * The names are what is stored, so they never change meaning: `large` and `huge` were the only two
@@ -29,22 +36,22 @@ export type TextSize = (typeof TEXT_SIZES)[number];
 /**
  * Runs before React, inline in the document head. Anything it cannot do — bad json, no
  * storage — leaves the defaults in the markup, which are already correct.
+ *
+ * "system", the default theme: whatever the machine is set to, light or dark (2026-10-20). Arabic, chosen, turns the
+ * page right to left. Kept short, and without comments of its own: React sends a text of 1 024 characters or more as
+ * a row of its own, which the page then reads as a reference (2026-10-20: one comment line and the language took it
+ * to 1 045, and the #418 check above failed). `test/ui.check.ts` holds it under that.
  */
-export const themeScript = `
-(function () {
-  try {
-    var d = document.documentElement;
-    var raw = localStorage.getItem('${APPEARANCE_STORAGE_KEY}');
-    var a = raw ? JSON.parse(raw) : {};
-    if (!a || typeof a !== 'object') a = {};
-    // "system", the default: whatever the machine is set to, light or dark (2026-10-20).
-    d.dataset.theme = a.theme === 'dark' || a.theme === 'light' ? a.theme : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    d.dataset.textsize = ${JSON.stringify(TEXT_SIZES)}.indexOf(a.textSize) >= 0 ? a.textSize : 'normal';
-    d.dataset.contrast = a.highContrast ? 'high' : 'normal';
-    d.dataset.motion = a.reduceMotion ? 'reduced' : 'normal';
-    d.dataset.links = a.underlineLinks ? 'underline' : 'plain';
-    d.dataset.focus = a.strongFocus ? 'strong' : 'normal';
-    d.dataset.night = a.nightLight ? 'on' : 'off';
-  } catch (e) {}
-})();
-`;
+export const themeScript = `(function(){try{
+var d=document.documentElement,raw=localStorage.getItem('${APPEARANCE_STORAGE_KEY}'),a=raw?JSON.parse(raw):{};
+if(!a||typeof a!=='object')a={};
+d.dataset.theme=a.theme==='dark'||a.theme==='light'?a.theme:window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';
+d.dataset.textsize=${JSON.stringify(TEXT_SIZES)}.indexOf(a.textSize)>=0?a.textSize:'normal';
+d.dataset.contrast=a.highContrast?'high':'normal';
+d.dataset.motion=a.reduceMotion?'reduced':'normal';
+d.dataset.links=a.underlineLinks?'underline':'plain';
+d.dataset.focus=a.strongFocus?'strong':'normal';
+d.dataset.night=a.nightLight?'on':'off';
+var l=(localStorage.getItem('cop.locale')||'').toLowerCase();
+if(${JSON.stringify(RIGHT_TO_LEFT)}.indexOf(l)>=0){d.dir='rtl';d.lang=l;}
+}catch(e){}})();`;

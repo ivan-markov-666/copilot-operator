@@ -55,7 +55,7 @@ export function stripLineNumbers(body: string): string {
   return lines.filter((l) => !/^\s*\d+\s*$/.test(l)).join('\n');
 }
 
-function findJsonCandidates(markdown: string): string[] {
+export function findJsonCandidates(markdown: string): string[] {
   const blocks = extractFencedBlocks(markdown);
   const out: string[] = [];
 

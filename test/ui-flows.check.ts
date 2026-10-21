@@ -38,6 +38,8 @@ import { startHarness, waitFor, Tally, type Harness, type SessionView } from './
 import { reply } from './support/fakeChat.js';
 import { setTransportFactory, type ChatTransport } from '../src/transport/chatTransport.js';
 import { dict } from '../web/lib/strings.js';
+import { LANGUAGES } from '../web/lib/lang/languages.js';
+import { RIGHT_TO_LEFT } from '../web/lib/themeScript.js';
 
 const t = new Tally();
 const root = join(import.meta.dirname, '..');
@@ -128,17 +130,23 @@ console.log('\n--- release gate: publishing runs the browser checks ---');
 // middle of a Bulgarian page; a placeholder in one and not the other shows "{n}" or drops a number.
 // ---------------------------------------------------------------------------------------------
 
-console.log('\n--- languages: the same keys and the same placeholders in English and Bulgarian ---');
+console.log('\n--- languages: every one has English\'s keys and placeholders, and "Language" stays in English ---');
 {
-  const onlyEn = Object.keys(en).filter((k) => !(k in bg));
-  const onlyBg = Object.keys(bg).filter((k) => !(k in en));
-  t.check('keys only in English', onlyEn, []);
-  t.check('keys only in Bulgarian', onlyBg, []);
-  const holes = (s: string): string => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]))].sort().join(',');
-  const differ = Object.keys(en)
-    .filter((k) => k in bg && holes(en[k]!) !== holes(bg[k]!))
-    .map((k) => `${k}: en {${holes(en[k]!)}} bg {${holes(bg[k]!)}}`);
-  t.check('keys whose placeholders differ between the languages', differ, []);
+  const holes = (text: string): string => [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]))].sort().join(',');
+  const codes = LANGUAGES.map((l) => l.code);
+  t.check('every language of the list has its dictionary', codes.filter((c) => !(c in dict)), []);
+  t.check('and nine of them (2026-10-20)', codes, ['en', 'bg', 'de', 'es', 'fr', 'pt', 'ja', 'ko', 'ar']);
+  // The script that turns the page before its first paint keeps its own list; it must be the registry's.
+  t.check('the pre-paint script\'s right-to-left languages are the registry\'s', RIGHT_TO_LEFT, LANGUAGES.filter((l) => l.dir === 'rtl').map((l) => l.code));
+  for (const code of codes.filter((c) => c !== 'en')) {
+    const other = (dict as unknown as Record<string, Record<string, string>>)[code] ?? {};
+    const missing = Object.keys(en).filter((k) => !(k in other));
+    const extra = Object.keys(other).filter((k) => !(k in en));
+    const differ = Object.keys(en).filter((k) => k in other && holes(en[k]!) !== holes(other[k]!)).map((k) => `${k}: en {${holes(en[k]!)}} ${code} {${holes(other[k]!)}}`);
+    const empty = Object.keys(other).filter((k) => !(other[k] ?? '').trim());
+    t.check(`${code}: keys missing, keys extra, placeholders that differ, texts left empty`, [missing, extra, differ, empty], [[], [], [], []]);
+    t.check(`${code}: "Language" is "Language"`, other['lang.label'], 'Language');
+  }
 }
 
 if (!existsSync(join(webDir, 'index.html'))) {
@@ -165,6 +173,17 @@ async function scenario(
   const context = await browser!.newContext({ viewport: { width: 1280, height: 900 } });
   const pageErrors: string[] = [];
   context.on('page', (p) => p.on('pageerror', (e) => pageErrors.push(`${p.url().replace(/^https?:\/\/[^/]+/, '')}: ${e.message}`)));
+  /*
+   * The chat's "Review" off, as the box remembers it, in every scenario but the one about it: a review is a
+   * conversation of its own with replies of its own, and a scenario about something else scripts none for it.
+   */
+  if (!title.includes('REVIEW')) await context.addInitScript(() => {
+    try {
+      if (localStorage.getItem('cop.chat.review') === null) localStorage.setItem('cop.chat.review', 'off');
+    } catch {
+      /* no storage: the box is on, and the scenario says so by failing */
+    }
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const url = (p: string): string => `http://127.0.0.1:${h.api.port}${p}`;
@@ -289,7 +308,7 @@ try {
     }) as unknown as ChatTransport);
     t.check('the chat\'s start is accepted', (await h.call<{ started: boolean }>('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' })).started, true);
     await h.idle();
-    await page.goto(url('/appearance'));
+    await page.goto(url('/system'));
     const notice = page.getByRole('alert').filter({ hasText: en['startfail.later']! });
     await notice.waitFor({ timeout: 15_000 });
     const said = (await notice.textContent()) ?? '';
@@ -301,7 +320,7 @@ try {
     t.check('nothing of the message ran', (await cards(h, sent.threadId))[0]!.status, 'queued');
     await notice.getByRole('button', { name: en['startfail.dismiss']!, exact: true }).click();
     await notice.waitFor({ state: 'detached' });
-    await page.goto(url('/presets'));
+    await page.goto(url('/defaults'));
     await sleep(6_000);
     t.check('closed, it does not come back', await page.getByRole('alert').filter({ hasText: en['startfail.later']! }).count(), 0);
   });
@@ -354,8 +373,8 @@ try {
     await page.keyboard.press('Control+A');
     await page.keyboard.type('3');
     // Straight to another page, inside the pause before the save.
-    await page.locator('nav a[href="/presets"]').click();
-    await waitFor('the presets page', async () => new URL(page.url()).pathname === '/presets', 10_000);
+    await page.locator('nav a[href="/system"]').click();
+    await waitFor('the System page', async () => new URL(page.url()).pathname === '/system', 10_000);
     await waitFor('the retry count to be saved', async () => (await settingsOf(h)).limits?.retryBlockedInFreshChat === 3, 10_000).catch(() => undefined);
     const after = await settingsOf(h);
     t.check('a value typed just before leaving is saved (3)', after.limits?.retryBlockedInFreshChat, 3);
@@ -581,7 +600,7 @@ try {
     const kerrigan = page.getByRole('button', { name: en['kerrigan.button']!, exact: true });
     await kerrigan.waitFor();
     t.check('the right panel has the chat alone', await page.getByRole('tablist', { name: en['wb.chatPanel']! }).getByRole('tab').allTextContents(), [en['wb.chatTab']]);
-    t.check('the bar on top links Settings, and nothing of the sessions', await page.locator('.wb-menu a').allTextContents(), [en['nav.defaults']]);
+    t.check('the bar on top links Settings and System, and nothing of the sessions', await page.locator('.wb-menu a').allTextContents(), [en['nav.defaults'], en['nav.system']]);
     t.check('no "Write in the chat", "Import a plan" or "Ask Kerrigan" on the home screen', await page.locator('.wb-welcome').getByRole('button').allTextContents(), [`${en['kerrigan.button']} ▾`, 'i']);
 
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
@@ -619,17 +638,34 @@ try {
       await box.waitFor({ state: 'detached' });
     }
 
-    await page.locator('nav select').first().selectOption({ label: 'Български' });
+    const chooseLanguage = async (native: RegExp): Promise<void> => {
+      await page.getByRole('button', { name: 'Language', exact: true }).first().click();
+      await page.getByRole('menuitemradio', { name: native }).click();
+    };
+    await chooseLanguage(/Български/);
     await page.getByRole('button', { name: bg['kerrigan.button']!, exact: true }).click();
     await page.getByRole('menu').getByRole('menuitem', { name: bg['kerrigan.copy']! }).click();
     await page.getByRole('status').filter({ hasText: /Копирано/ }).waitFor();
     t.truthy('in Bulgarian, she is in Bulgarian', (await page.evaluate(() => navigator.clipboard.readText())).startsWith('# Кериган'), '');
+    /*
+     * In a language she is not written out in (German): her prose is English, and the names she quotes are the ones on
+     * this screen, in German, filled in by the page (2026-10-20).
+     */
+    const de = (dict as unknown as Record<string, Record<string, string>>).de!;
+    await chooseLanguage(/Deutsch/);
+    await page.getByRole('button', { name: de['kerrigan.button']!, exact: true }).click();
+    await page.getByRole('menu').getByRole('menuitem', { name: de['kerrigan.copy']! }).click();
+    await page.getByRole('status').filter({ hasText: de['kerrigan.copied']!.split('{')[0]!.trim().slice(0, 12) }).waitFor();
+    const german = await page.evaluate(() => navigator.clipboard.readText());
+    t.truthy('in German: the controls by their German names, none left unfilled', german.includes(`**"${de['chat.newChat']}"**`) && german.includes(`**"${de['chat.pause']}"**`) && !german.includes('⟦'), german.slice(0, 300));
+    await chooseLanguage(/English/);
 
     await page.goto(url('/defaults'));
     await page.locator('nav').first().waitFor();
     const navLinks = await page.locator('header nav a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
     t.check('the other pages\' navigation has no Sessions, task register or plan from JSON', navLinks.filter((x) => x === '/sessions' || x === '/history' || x === '/import'), []);
-    for (const gone of ['/sessions', '/history', '/import']) {
+    t.check('the navigation: the chat, Settings and System, nothing else (2026-10-20)', navLinks.filter((x) => x !== null), ['/', '/defaults', '/system']);
+    for (const gone of ['/sessions', '/history', '/import', '/level1', '/presets', '/appearance']) {
       const r = await page.request.get(url(gone));
       t.truthy(`${gone} is not a page any more`, r.status() === 404 || !(await r.text()).includes('<main'), r.status());
     }
@@ -687,9 +723,9 @@ try {
     t.check('Escape closes the menu', true, true);
     t.check('it is not a link to Settings', await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).evaluate((b) => b.tagName), 'BUTTON');
 
-    await page.goto(url('/appearance'));
-    await page.getByRole('group', { name: en['ap.theme']! }).waitFor();
-    t.check('the Appearance page offers the same three', await page.getByRole('group', { name: en['ap.theme']! }).getByRole('button').allTextContents(), [en['theme.system'], en['theme.light'], en['theme.dark']]);
+    // The Appearance page went (2026-10-20): the menu is where all of it is.
+    await page.goto(url('/defaults'));
+    t.check('no page of its own in the navigation', await page.locator('nav a[href="/appearance"]').count(), 0);
   });
 
   /*
@@ -880,7 +916,8 @@ try {
     await page.goto(url('/defaults'));
     const sessionsLink = page.locator('nav a[href="/defaults"]');
     await sessionsLink.waitFor();
-    await page.locator('nav select').selectOption({ label: 'Български' });
+    await page.getByRole('button', { name: 'Language', exact: true }).first().click();
+    await page.getByRole('menuitemradio', { name: /Български/ }).click();
     const lang = async (): Promise<[string, string]> => [((await sessionsLink.textContent()) ?? '').trim(), await page.evaluate(() => document.documentElement.lang)];
     await waitFor('the nav in Bulgarian', async () => (await lang())[0] === bg['nav.defaults'], 5_000).catch(() => undefined);
     t.check('the nav speaks Bulgarian and the page says lang="bg"', await lang(), [bg['nav.defaults'], 'bg']);
@@ -890,7 +927,7 @@ try {
 
     await page.setViewportSize({ width: 360, height: 780 });
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), sent.threadId);
-    const pages = ['/', '/defaults', '/presets', '/level1', '/appearance', '/system'];
+    const pages = ['/', '/defaults', '/system'];
     const wide: Record<string, number> = {};
     for (const size of ['normal', 'giant']) {
       await page.evaluate((textSize) => localStorage.setItem('cop.appearance', JSON.stringify({ textSize })), size);
@@ -903,6 +940,183 @@ try {
     }
     t.check('in Bulgarian, pages wider than a phone screen (pixels too wide)', wide, {});
     t.check('and it was Bulgarian throughout', await page.evaluate(() => document.documentElement.lang), 'bg');
+  });
+
+  /*
+   * The chat's controls of 2026-10-20: "Review" on by default and sent with the first message; "New chat" off on a chat
+   * not begun and while a task runs, each time saying why when pointed at; "Pause", "Stop" and "Add to it" on one line;
+   * the review's model asked by hand on a card that says so plainly; the files' icons without a frame.
+   */
+  await scenario('the chat\'s REVIEW box, "New chat" off while it works, "Pause", "Stop" and "Add to it" on one line', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    await page.goto(url('/'));
+    const review = page.getByRole('checkbox', { name: en['chat.review']! });
+    await review.waitFor();
+    t.check('"Review" is on by default', await review.isChecked(), true);
+    const newChat = page.getByRole('button', { name: en['chat.newChat']!, exact: true });
+    t.check('a new chat not begun: "New chat" off', await newChat.getAttribute('aria-disabled'), 'true');
+    await newChat.hover();
+    t.truthy('and it says why when pointed at', await appears(page.locator('#cs-new-tip').filter({ hasText: en['chat.newChatFresh']! }), 3_000), await page.locator('#cs-new-tip').textContent().catch(() => ''));
+    await page.locator('.wb-side .file-ico').first().waitFor();
+    t.check('the files have their icons without a frame', [await page.locator('.wb-side .file-ico').count() > 0, await page.locator('.wb-side .file-ico rect').count()], [true, 0]);
+
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    h.chat.script(
+      async () => {
+        await answered;
+        return reply.steps(write('checked.txt', 'checked'));
+      },
+      reply.done('I created checked.txt holding the word checked and read it back to check that it is there.'),
+      reply.steps('Get-Content -Path checked.txt'),
+      reply.pass('I read checked.txt and it holds exactly the word checked, as the task asked for.'),
+    );
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Create checked.txt holding the word checked.');
+    await input.press('Enter');
+    const pause = page.getByRole('button', { name: en['chat.pause']!, exact: true });
+    await pause.waitFor({ timeout: 20_000 });
+    const thread = (await h.call<Array<{ id: string }>>('GET', '/chat/threads'))[0]!.id;
+    t.check('the first message took "Review" with it', (await h.call<{ review?: { enabled: boolean } }>('GET', `/sessions/${thread}`)).review?.enabled, true);
+    await waitFor('"New chat" to go off', async () => (await newChat.getAttribute('aria-disabled')) === 'true', 10_000).catch(() => undefined);
+    t.check('while it works: "New chat" off', await newChat.getAttribute('aria-disabled'), 'true');
+    await newChat.hover();
+    t.truthy('saying it comes on once it is stopped or its window closed', await appears(page.locator('#cs-new-tip').filter({ hasText: en['chat.newChatRunning']! }), 3_000), await page.locator('#cs-new-tip').textContent().catch(() => ''));
+    await newChat.click({ force: true });
+    t.check('pressed anyway, it does nothing: the conversation stays', await page.locator('#cs-thread').inputValue(), thread);
+    const rows = await Promise.all([pause, page.getByRole('button', { name: en['chat.stop']!, exact: true }), page.getByRole('button', { name: en['chat.sendNote']!, exact: true })].map(async (b) => Math.round((await b.boundingBox())?.y ?? -1)));
+    t.truthy('"Pause", "Stop" and "Add to it" on one line', rows.every((y) => y === rows[0] && y >= 0), rows);
+    answer();
+
+    // The review's conversation: its model chosen by hand (none named for it), on a card that says it is the review's.
+    const card = page.locator('.approval').filter({ has: page.locator('.approval-review') });
+    await card.waitFor({ timeout: 30_000 });
+    t.truthy('the card says plainly it is the review\'s, and why another, stronger model', ((await card.locator('.approval-review').textContent()) ?? '').includes(en['approval.reviewModelTitle']!) && ((await card.locator('.approval-review').textContent()) ?? '').includes('stronger'), await card.textContent());
+    await card.getByRole('button', { name: en['approval.manualReady']!, exact: true }).click();
+    await page.locator('.cs-body').getByText('I created checked.txt holding the word checked').waitFor({ timeout: 30_000 });
+    await waitFor('the work to end', async () => (await h.call<{ running: boolean }>('GET', `/sessions/${thread}`)).running === false, 30_000).catch(() => undefined);
+    const ended = (await h.call<{ tasks: Array<{ status: string; review?: { verdict: string } }> }>('GET', `/sessions/${thread}`)).tasks[0];
+    t.check('reviewed and passed', [ended?.status, ended?.review?.verdict], ['done', 'pass']);
+    await waitFor('"New chat" to come on', async () => (await newChat.getAttribute('aria-disabled')) === null, 10_000).catch(() => undefined);
+    t.check('ended: "New chat" on again', await newChat.getAttribute('aria-disabled'), null);
+    await review.uncheck();
+    await waitFor('the review off for the conversation', async () => (await h.call<{ review?: { enabled: boolean } }>('GET', `/sessions/${thread}`)).review?.enabled === false, 10_000).catch(() => undefined);
+    t.check('unticked: off for this conversation', (await h.call<{ review?: { enabled: boolean } }>('GET', `/sessions/${thread}`)).review?.enabled, false);
+  });
+
+  /*
+   * Two chats (operator, 2026-10-20): ticked for a new conversation, the message goes to a lead, whose understanding of
+   * it, notes, subtasks (each a fold with the worker's commands) and question are shown in the conversation; the
+   * question is answered on its card; the result is the message's ending. The worker is not a conversation of the
+   * list, and the panel follows its commands.
+   */
+  await scenario('two chats: the lead understands, the worker\'s subtask is folded under it, its question answered on a card', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    await page.goto(url('/'));
+    const two = page.getByRole('checkbox', { name: en['chat.lead']! });
+    await two.waitFor();
+    t.check('"Two chats" is off at first, and "Review" is there', [await two.isChecked(), await page.getByRole('checkbox', { name: en['chat.review']! }).count()], [false, 1]);
+    await two.check();
+    t.check('ticked: the worker\'s model beside the lead\'s, and no "Review" (the lead judges the worker)', [await page.locator('#cs-worker-model').count(), await page.getByRole('checkbox', { name: en['chat.review']! }).count()], [1, 0]);
+    // The two pickers one under the other, lined up, whatever the length of "Lead" and "Worker" in the language.
+    const lead = await page.locator('#cs-model').boundingBox();
+    const worker = await page.locator('#cs-worker-model').boundingBox();
+    t.truthy('the lead\'s model and the worker\'s, one under the other and lined up', !!lead && !!worker && Math.abs(lead.x - worker.x) < 1 && worker.y > lead.y, JSON.stringify({ lead, worker }));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    h.chat.script(
+      reply.lead.delegate({ title: 'Survey the project' }, { understanding: 'Create done.txt holding done; report it in one sentence.', notes: 'First I look at what is there.' }),
+      reply.steps('Get-ChildItem -Name'),
+      reply.done('The project folder holds README.md at its root, and nothing else that the assignment names.'),
+      reply.lead.ask('Should done.txt go at the root, or in a folder of its own?', ['at the root', 'in a folder'], { notes: 'The assignment does not say where.' }),
+      async (m) => {
+        t.truthy('the answer chosen on the card reached the lead', m.text.includes('at the root'), m.text.slice(0, 200));
+        await held;
+        return reply.lead.done('Nothing needed writing: the survey showed the folder, and the operator chose the root; done.txt is to go there.');
+      },
+    );
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Create done.txt holding done, and say in one sentence what was done.');
+    await input.press('Enter');
+    await page.locator('.cs-lead-say').filter({ hasText: 'Create done.txt holding done; report it in one sentence.' }).waitFor({ timeout: 30_000 });
+    t.truthy('the lead\'s understanding of the task, said as such', ((await page.locator('.cs-lead-say').first().textContent()) ?? '').includes(en['lead.understood']!), await page.locator('.cs-lead-say').first().textContent());
+    const gap = await page.locator('.cs-lead-say').first().evaluate((el) => parseFloat(getComputedStyle(el).paddingInlineStart));
+    t.truthy('what the lead says keeps off the line beside it', gap >= 6, `padding-inline-start ${gap}px`);
+    const sub = page.locator('details.cs-subtask').first();
+    await sub.waitFor({ timeout: 30_000 });
+    t.truthy('the subtask, folded under the lead\'s message, marked as only reading', ((await sub.locator('summary').textContent()) ?? '').includes(en['lead.subtask']!.replace('{n}', '1').replace('{title}', 'Survey the project')) && ((await sub.locator('summary').textContent()) ?? '').includes(en['lead.readOnly']!), await sub.locator('summary').textContent());
+    const card = page.locator('.cs-question');
+    await card.waitFor({ timeout: 30_000 });
+    await sub.locator('summary').click();
+    t.truthy('in it, the worker\'s command', ((await sub.textContent()) ?? '').includes('Get-ChildItem -Name'), await sub.textContent());
+    t.truthy('the lead\'s question, with its choices', ((await card.textContent()) ?? '').includes('Should done.txt go at the root') && (await card.getByRole('button', { name: 'at the root', exact: true }).count()) === 1, await card.textContent());
+    /*
+     * Answered, the card goes at once (2026-10-20: it stayed, answered, until the next read of the list) — here every
+     * read of the list is the API's answer at the time it was asked, arriving late, so neither the next read nor one
+     * already on its way when the answer went may decide it.
+     */
+    const lists = /\/api\/approvals(\?|$)/;
+    let onTheWay = 0;
+    await page.route(lists, async (r) => {
+      if (r.request().method() !== 'GET') return r.fallback();
+      const res = await r.fetch();
+      onTheWay += 1;
+      await sleep(2_500);
+      onTheWay -= 1;
+      await r.fulfill({ response: res }).catch(() => undefined);
+    });
+    // A read with the question in it is on its way, and lands a while before any read made after the answer.
+    await waitFor('a read of the list to be on its way', async () => onTheWay > 0, 10_000);
+    await sleep(1_000);
+    await card.getByRole('button', { name: 'at the root', exact: true }).click();
+    t.truthy('answered, the card goes at once', await card.waitFor({ state: 'detached', timeout: 1_000 }).then(() => true, () => false), await page.locator('.cs-lead-turn').textContent());
+    let back = 0;
+    for (const until = Date.now() + 3_000; Date.now() < until; await sleep(100)) back = Math.max(back, await card.count());
+    t.check('and the read that was on its way when the answer went does not bring it back', back, 0);
+    await page.unroute(lists);
+    release();
+    await page.locator('.cs-end').getByText('Nothing needed writing').waitFor({ timeout: 30_000 });
+    t.truthy('asked and answered, on the record of the message', ((await page.locator('.cs-lead-qa').textContent()) ?? '').includes('at the root'), await page.locator('.cs-lead-qa').textContent());
+    t.check('the worker is not a conversation of the list', await page.locator('#cs-thread option').count(), 2);
+    t.check('the started conversation shows how it began: "Two chats" ticked and fixed', [await two.isChecked(), await two.isDisabled()], [true, true]);
+    await page.getByRole('tab', { name: en['wb.terminal']!, exact: true }).click();
+    await waitFor('the panel to show the worker\'s command', async () => ((await page.locator('.wb-terminal').textContent()) ?? '').includes('Get-ChildItem'), 10_000).catch(() => undefined);
+    t.truthy('the panel follows the worker\'s commands', ((await page.locator('.wb-terminal').textContent()) ?? '').includes('Get-ChildItem'), await page.locator('.wb-terminal').textContent());
+  });
+
+  /*
+   * "Language" (operator, 2026-10-20): the button reads "Language" in every language, opens the nine with their flags,
+   * each in its own name, the one in use ticked; Arabic turns the page right to left and back. On the chat's screen,
+   * System is beside Settings in the bar on top.
+   */
+  await scenario('the "Language" menu: nine languages with flags, "Language" in every one, Arabic right to left', {}, async (_h, page, url) => {
+    await page.goto(url('/'));
+    const top = page.locator('.wb-menu');
+    await top.getByRole('link', { name: en['nav.system']!, exact: true }).waitFor();
+    t.check('on the chat\'s screen: Settings and System on top', await top.getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href'))), ['/defaults', '/system']);
+    const button = top.getByRole('button', { name: 'Language', exact: true });
+    await button.click();
+    const items = page.getByRole('menuitemradio');
+    t.check('nine languages, each with its flag', [await items.count(), await page.locator('.lang-list .flag').count()], [9, 9]);
+    t.check('the one in use is ticked', await page.getByRole('menuitemradio', { checked: true }).allTextContents().then((x) => x.map((v) => v.replace(/✓/g, '').trim())), ['English']);
+    t.check('flags drawn, not emoji', await page.locator('.lang-list .flag').first().evaluate((el) => el.tagName.toLowerCase()), 'svg');
+    const ja = (dict as unknown as Record<string, Record<string, string>>).ja!;
+    await page.getByRole('menuitemradio', { name: /日本語/ }).click();
+    await waitFor('the page in Japanese', async () => (await page.evaluate(() => document.documentElement.lang)) === 'ja', 10_000).catch(() => undefined);
+    t.check('chosen Japanese: the page in Japanese, and "Language" still in English', [await page.evaluate(() => document.documentElement.lang), ((await top.getByRole('link', { name: ja['nav.defaults']!, exact: true }).textContent()) ?? '').trim(), await button.textContent().then((x) => (x ?? '').replace('▾', '').trim())], ['ja', ja['nav.defaults'], 'Language']);
+    await button.click();
+    await page.getByRole('menuitemradio', { name: /العربية/ }).click();
+    await waitFor('the page right to left', async () => (await page.evaluate(() => document.documentElement.dir)) === 'rtl', 10_000).catch(() => undefined);
+    t.check('chosen Arabic: right to left', await page.evaluate(() => [document.documentElement.dir, document.documentElement.lang]), ['rtl', 'ar']);
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    t.truthy('and nothing scrolls sideways', over <= 1, over);
+    await page.reload();
+    await waitFor('the language to come back', async () => (await page.evaluate(() => document.documentElement.lang)) === 'ar', 10_000).catch(() => undefined);
+    t.check('remembered: still Arabic and right to left after a reload', await page.evaluate(() => [document.documentElement.dir, document.documentElement.lang]), ['rtl', 'ar']);
+    await top.getByRole('button', { name: 'Language', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: /English/ }).click();
+    await waitFor('the page left to right', async () => (await page.evaluate(() => document.documentElement.dir)) === 'ltr', 10_000).catch(() => undefined);
+    t.check('back to English: left to right', await page.evaluate(() => [document.documentElement.dir, document.documentElement.lang]), ['ltr', 'en']);
   });
 
   /*

@@ -19,7 +19,8 @@
  *
  *   npm run check:e2e-chat
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
@@ -301,14 +302,59 @@ h = null;
 try {
   h = await startHarness({ settings: { limits: { maxIterations: 33, maxRunMinutes: 44 }, execution: { mode: 'unattended', isolation: 'none-accepted' } } });
   // Kerrigan: the persona, in the language asked for, with this machine's limits.
-  type Kerrigan = { lang: string; fileName: string; text: string };
+  type Kerrigan = { lang: string; fileName: string; text: string; filled: boolean };
   const k = await h.call<Kerrigan>('GET', '/kerrigan?lang=en');
-  t.check('Kerrigan in English: her name, the file to save her as', [k.lang, k.fileName, k.text.split('\n')[0]], ['en', 'kerrigan-copilot-operator.en.md', '# Kerrigan — a helper for writing tasks for copilot-operator']);
+  t.check('Kerrigan in English: her name, the file to save her as', [k.lang, k.fileName, k.text.split('\n')[0], k.filled], ['en', 'kerrigan-copilot-operator.en.md', '# Kerrigan — a helper for copilot-operator', true]);
   t.truthy('with the limits Settings give', k.text.includes('at most 33 messages to Copilot and 44 minutes per task'), k.text.slice(0, 1500));
   t.truthy('and the chat\'s screen, named as it is', k.text.includes('"New chat"') && k.text.includes('"Plan mode"') && k.text.includes('## The chat\'s screen'), '');
+  /*
+   * What is new since 2026-10-20 is in her, and what went is not: Pause, Review, the editor, Settings with its
+   * projects; no Sessions, no task register, no plan from JSON, no presets, no "prepare the folder".
+   */
+  t.truthy('she knows Pause, Review, the editor and Settings', ['"Pause"', '"Continue"', '"Review"', 'saved with Ctrl+S', '## Settings, and what is on them', '"Level 2 template (for Kerrigan)"'].every((x) => k.text.includes(x)), k.text.slice(0, 600));
+  t.check('and says nothing of what went', ['Sessions page', 'task register', 'Import a plan', 'presets', 'remote main', 'Level 1 prompt'].filter((x) => k.text.includes(x)), []);
   const kb = await h.call<Kerrigan>('GET', '/kerrigan?lang=bg');
-  t.check('in Bulgarian: in Bulgarian', [kb.lang, kb.fileName, kb.text.split('\n')[0]], ['bg', 'kerrigan-copilot-operator.bg.md', '# Кериган — помощник за писане на задания за copilot-operator']);
-  t.check('any other language: English', (await h.call<Kerrigan>('GET', '/kerrigan?lang=de')).lang, 'en');
+  t.check('in Bulgarian: in Bulgarian', [kb.lang, kb.fileName, kb.text.split('\n')[0]], ['bg', 'kerrigan-copilot-operator.bg.md', '# Кериган — помощник за copilot-operator']);
+  // Another language of the interface: her prose in English, the controls' names left for the page, in its language.
+  const kd = await h.call<Kerrigan>('GET', '/kerrigan?lang=de');
+  t.check('in German: her own file, the names left to the page', [kd.lang, kd.fileName, kd.filled, kd.text.split('\n')[0]], ['de', 'kerrigan-copilot-operator.de.md', false, '# Kerrigan — a helper for copilot-operator']);
+  t.truthy('as ⟦key⟧, each a key of the dictionary', kd.text.includes('**"⟦chat.newChat⟧"**') && !/⟦[^⟧]*[^\w.-⟧][^⟧]*⟧/.test(kd.text), kd.text.slice(0, 400));
+  t.check('a code that is not a language: English', (await h.call<Kerrigan>('GET', '/kerrigan?lang=x!y')).lang, 'en');
+
+  /*
+   * The projects (2026-10-20): each with its branch now and the level 2 the operator wrote for it, saved in Settings
+   * and carried by Kerrigan; the level 2 of another project kept when the list is saved without it.
+   */
+  const projectRepo = h.repo;
+  const git = (...args: string[]): string => execFileSync('git', ['-C', projectRepo, ...args], { encoding: 'utf8' }).trim();
+  git('checkout', '-q', '-b', 'feature/kerrigan');
+  const other = join(h.base, 'tests-repo');
+  mkdirSync(other, { recursive: true });
+  type Project = { name: string; rootDir: string; branch?: string; level2: string; others: Array<{ name: string; rootDir: string; branch?: string; level2: string }> };
+  await h.call('PUT', '/project', { level2: 'The fixture. Tests: none. Never touch README.md.', others: [{ name: 'the tests', rootDir: other, level2: 'Where the tests live.' }] });
+  const proj = await h.call<Project>('GET', '/project');
+  t.check('the project: its branch now and its level 2', [proj.branch, proj.level2], ['feature/kerrigan', 'The fixture. Tests: none. Never touch README.md.']);
+  t.check('the other project: its level 2, and no branch outside a repository', [proj.others[0]?.level2, proj.others[0]?.branch], ['Where the tests live.', undefined]);
+  await h.call('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: other }] });
+  t.check('saved without it, the other project keeps its level 2', (await h.call<Project>('GET', '/project')).others[0]?.level2, 'Where the tests live.');
+  const tooLong = await h.raw('PUT', '/project', { level2: 'x'.repeat(8001) });
+  t.check('a level 2 longer than 8 000 characters is refused', tooLong.status, 400);
+  const kp = await h.call<Kerrigan>('GET', '/kerrigan?lang=en');
+  const part = kp.text.slice(kp.text.indexOf('## The projects'), kp.text.indexOf('## How you help'));
+  t.truthy('Kerrigan carries every project: name, folder, branch, level 2', part.includes('(the chat\'s folder)') && part.includes('`feature/kerrigan`') && part.includes('Never touch README.md') && part.includes('### the tests, renamed') && part.includes('Where the tests live.'), part);
+
+  // What went with the pages (2026-10-20): editing the base prompt, the presets, preparing a folder from the remote main.
+  const gone = await Promise.all([
+    h.raw('PUT', '/level1', { content: 'x'.repeat(200) }),
+    h.raw('DELETE', '/level1'),
+    h.raw('GET', '/presets'),
+    h.raw('POST', '/repo/prepare/preview', { dir: h.repo }),
+    h.raw('POST', '/repo/prepare', { dir: h.repo, fingerprint: 'x' }),
+    h.raw('GET', `/repo/sync?dir=${encodeURIComponent(h.repo)}`),
+  ]);
+  t.check('their routes are gone', gone.map((r) => r.status), [404, 404, 404, 404, 404, 404]);
+  const l1 = await h.call<{ content: string; customised?: boolean }>('GET', '/level1');
+  t.truthy('the base prompt is read as it ships, nothing to say it was changed', l1.content.length > 200 && l1.customised === undefined, Object.keys(l1));
 
   // The editor saving a file of the open folder.
   type Opened = { text: string | null; version?: string };
@@ -434,6 +480,53 @@ console.log('\n--- Pause holds the work at its next message or command, Continue
   }
 }
 
+/*
+ * The review in the chat (operator, 2026-10-20: "if the model is chosen by hand, say plainly on the card that this is the
+ * model for the review, best a different one"): on for a conversation the box asks it for, off for one asked for
+ * without it; its conversation's model chosen by hand on a card marked as the review's; told what the message changed,
+ * from the folder against its photograph, not from the operator's own uncommitted work.
+ */
+console.log('\n--- the review in the chat: when asked for, its model chosen by hand on a card that says it is the review\'s ---');
+{
+  let hr: Harness | undefined;
+  try {
+    hr = await startHarness({ settings: { execution: { mode: 'unattended', isolation: 'none-accepted' } } });
+    const h = hr;
+    type Reviewed = { review?: { enabled: boolean }; tasks: Array<{ status: string; review?: { verdict: string } }> };
+    const quiet = await h.call<Sent>('POST', '/chat', { text: 'Not reviewed.', model: 'Think deeper' });
+    t.check('asked for without the box: not reviewed', (await h.call<Reviewed>('GET', `/sessions/${quiet.threadId}`)).review?.enabled, false);
+    // The operator's own uncommitted work in the folder before the message: not the message's doing.
+    writeFileSync(join(h.repo, 'mine.txt'), 'the operator\'s own\n', 'utf8');
+    const sent = await h.call<Sent>('POST', '/chat', { text: 'Create reviewed.txt holding reviewed.', model: 'Think deeper', review: true });
+    t.check('with the box ticked: reviewed', (await h.call<Reviewed>('GET', `/sessions/${sent.threadId}`)).review?.enabled, true);
+    let reviewSaw = '';
+    h.chat.script(
+      reply.steps(write('reviewed.txt', 'reviewed')),
+      reply.done('I created reviewed.txt holding the word reviewed and read it back to check that it is there.'),
+      (m) => {
+        reviewSaw = m.text;
+        // A reviewer looks before it passes: a "pass" with no command run is refused.
+        return reply.steps('Get-Content -Path reviewed.txt');
+      },
+      reply.pass('I read reviewed.txt and it holds exactly the word reviewed, as the task asked for.'),
+    );
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    type Ask = { id: string; model?: { review?: boolean; manual?: boolean; asked: string } };
+    const ask = await waitFor('the card for the review\'s model', async () => (await h.call<Ask[]>('GET', `/approvals?session=${sent.threadId}`)).find((a) => a.model?.review) ?? null, 30_000);
+    t.check('no review model chosen: asked by hand, on a card marked as the review\'s', [ask.model?.review, ask.model?.manual, ask.model?.asked], [true, true, '']);
+    await h.call('POST', `/approvals/${ask.id}`, { action: 'run' });
+    await h.idle();
+    const done = (await h.call<Reviewed>('GET', `/sessions/${sent.threadId}`)).tasks[0];
+    t.check('reviewed and passed: done', [done?.status, done?.review?.verdict], ['done', 'pass']);
+    t.truthy('the review was told the file the message made, and not the operator\'s own', reviewSaw.includes('reviewed.txt') && !reviewSaw.includes('mine.txt'), reviewSaw.slice(0, 900));
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('the review scenarios ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await hr?.stop();
+  }
+}
+
 console.log('\n--- what the card in the window says, for each way the work on a message ends ---');
 {
   const keepBg = 'Прозорецът остава отворен за следващото ви съобщение. Можете да го затворите по всяко време.';
@@ -449,5 +542,12 @@ console.log('\n--- what the card in the window says, for each way the work on a 
   t.check('stopped before it was sent: stopped', [stoppedFirst.tone, stoppedFirst.title], ['stopped', 'The task was stopped']);
   const two = chatNotice('en', [{ title: 'one', status: 'done' }, { title: 'two', status: 'aborted' }]);
   t.check('two messages: each with how it ended, no single subject', [two.tone, two.title, two.subject, two.lines], ['stopped', 'The task was stopped', undefined, ['“one” — done', '“two” — stopped', 'This window stays open for your next message. You can close it at any time.']]);
+  // Every language of the interface (2026-10-20): its own words, Arabic right to left, an unknown one English.
+  const de = chatNotice('de', [{ title: 'Datei anlegen', status: 'done' }]);
+  t.check('in German: its own words and quotes', [de.title, de.subject, de.button, de.dir], ['Die Aufgabe ist erledigt', '„Datei anlegen“', 'OK', undefined]);
+  const ar = chatNotice('ar', [{ title: 'x', status: 'done' }]);
+  t.check('in Arabic: right to left', [ar.title, ar.dir], ['اكتملت المهمة', 'rtl']);
+  t.check('every language of the interface has its words', ['en', 'bg', 'de', 'es', 'fr', 'pt', 'ja', 'ko', 'ar'].filter((l) => l !== 'en' && chatNotice(l, [{ title: 'x', status: 'done' }]).title === 'The task is done'), []);
+  t.check('a language it has no words for: English', chatNotice('xx', [{ title: 'x', status: 'done' }]).title, 'The task is done');
 }
 t.finish();

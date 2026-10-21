@@ -1,31 +1,36 @@
 'use client';
 
 /**
- * What every new session starts with: which folders, which model does the work, and which
- * model reviews it.
+ * Settings: the folders the chat works in, the sign-in to Copilot, the models, and how a task runs.
  *
  * Its own page rather than a row on the system page, because the system page answers "is this
  * machine set up", which is read once, and this answers "what am I working on", which changes
- * whenever the work does. Every folder field and every model picker in the app links here, so
- * this is also where somebody arrives the first time they wonder where a default comes from.
+ * whenever the work does.
  *
- * The folders are one default and a named list. One is what a new session is pointed at; the
- * list is the rest of the repositories the same person works in — a front end, a back end, a
- * test suite — which every folder field then offers by name and the plan brief lists by path.
+ * Laid out as one grid since 2026-10-20 (operator: "align the buttons, the inputs and the other
+ * elements"): every field is a row — its name with an ⓘ that says what it is for and how it helps,
+ * then the control — so the inputs, selects and buttons line up down the page. The explanations
+ * that stood under every field went into those ⓘ, and the "what this changes" lists, which spoke of
+ * sessions that are gone, went with them. The base prompt is shown here to read (its own page, where
+ * it could be edited, went: it changes only when the bot is updated), and each project carries its
+ * level 2, which Kerrigan takes with her.
  */
 
-import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
-import { PrepareFolder } from '../prepareFolder';
-import Link from 'next/link';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, type ModelCatalogue, type ProjectDefault } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
+import { InfoTip } from '../popover';
+import { BranchIcon } from '../branchIcon';
 
 /** What the operator says contains the runner. Mirrors `execution.isolation` in the config. */
 type Isolation = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm';
 type StartMode = 'confirm' | 'unattended';
 type NetworkFetch = 'ask' | 'refuse' | 'run';
+
+/** The longest level 2 a project may have; the server holds it to the same (`MAX_PROJECT_LEVEL2`). */
+const MAX_LEVEL2 = 8000;
 
 export default function DefaultsPage() {
   const { t } = useT();
@@ -64,18 +69,19 @@ export default function DefaultsPage() {
   const shared = { catalogue, setCatalogue, refreshModels, refreshing, refreshMsg };
 
   return (
-    <>
+    <div className="settings">
       <div className="panel">
         <h2>{t('def.title')}</h2>
         <p className="muted small">{t('def.intro')}</p>
         <p className="why">{t('def.autoSave')}</p>
       </div>
+      <Level1Section />
       <ProjectSection />
       <LoginSection />
       <ModelSection {...shared} />
       <ReviewModelSection {...shared} />
       <ExecutionSection />
-    </>
+    </div>
   );
 }
 
@@ -88,12 +94,36 @@ type SharedModels = {
   refreshMsg: string;
 };
 
+/** A field's name with its ⓘ: what the field is for and how it helps. */
+function FieldName({ htmlFor, label, info, as = 'label' }: { htmlFor?: string; label: string; info: string; as?: 'label' | 'span' }) {
+  const { t } = useT();
+  return (
+    <div className="field-label">
+      {as === 'label' ? <label htmlFor={htmlFor}>{label}</label> : <span className="field-name">{label}</span>}
+      <InfoTip label={t('info.about', { name: label })} text={info} />
+    </div>
+  );
+}
+
+/** One row of the grid: the name on the left, the control (and its unit) on the right. */
+function Field({ id, label, info, unit, children }: { id: string; label: string; info: string; unit?: string; children: ReactNode }) {
+  return (
+    <div className="settings-field">
+      <FieldName htmlFor={id} label={label} info={info} />
+      <div className="field-control">
+        {children}
+        {unit && <span className="unit">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Saves a value a moment after the typing stops, and on demand.
  *
  * Every field on this page used to end in a Save button, and a page of Save buttons is a page
- * of ways to lose an edit: change the folder, forget the button, wonder later why the session
- * started somewhere else. A select or a checkbox is a decision the moment it moves, so it is
+ * of ways to lose an edit: change the folder, forget the button, wonder later why the chat
+ * worked somewhere else. A select or a checkbox is a decision the moment it moves, so it is
  * written at once; text needs the pause, or every keystroke would be a request.
  */
 function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): (value: T) => void {
@@ -152,6 +182,7 @@ function BoundedNumber({
     <input
       id={id}
       type="number"
+      className="number"
       min={min}
       max={max}
       step={1}
@@ -167,8 +198,6 @@ function BoundedNumber({
         setText(String(settled));
         if (settled !== value) onChange(settled);
       }}
-      // Wide enough for "10800" at every text size; the width is in characters, so it scales with them.
-      style={{ width: '9ch' }}
       disabled={disabled}
     />
   );
@@ -185,7 +214,7 @@ function whole(text: string): number | null {
 function SavedNote({ msg, onSave }: { msg: string; onSave?: () => void }) {
   const { t } = useT();
   return (
-    <div className="row" style={{ marginTop: 6 }}>
+    <div className="row saved-note">
       {onSave && (
         <button className="quiet" onClick={onSave} title={t('def.saveAnywayWhy')}>
           {t('def.saveAnyway')}
@@ -199,8 +228,47 @@ function SavedNote({ msg, onSave }: { msg: string; onSave?: () => void }) {
 }
 
 // ---------------------------------------------------------------------------------------
-// The folders
+// The base prompt, to read
 // ---------------------------------------------------------------------------------------
+
+/**
+ * The base prompt (level 1), shown and not edited (operator, 2026-10-20): "it changes at system level, when we
+ * update the bot". Folded, with what it is said plainly above the fold, where it cannot be missed.
+ */
+function Level1Section() {
+  const { t } = useT();
+  const [text, setText] = useState<string | null>(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api
+      .level1()
+      .then((r) => setText(r.content))
+      .catch((e) => setErr(t('l1.failed', { reason: (e as Error).message })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <section className="panel" id="level1" aria-labelledby="level1-title">
+      <div className="row section-title">
+        <h2 id="level1-title">{t('l1.title')}</h2>
+        <span className="badge">{t('l1.readOnly')}</span>
+      </div>
+      <div className="callout" role="note">
+        {t('l1.what')}
+      </div>
+      {err && <div className="err">{err}</div>}
+      <details className="l1-text">
+        <summary>{t('l1.show')}</summary>
+        <pre className="l1-pre">{text ?? '…'}</pre>
+      </details>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// The projects
+// ---------------------------------------------------------------------------------------
+
+type Patch = Parameters<typeof api.setProject>[0];
 
 function ProjectSection() {
   const { t } = useT();
@@ -231,7 +299,7 @@ function ProjectSection() {
     void load();
   }, [load]);
 
-  const save = async (patch: Parameters<typeof api.setProject>[0], done: (p: ProjectDefault) => string) => {
+  const save = async (patch: Patch, done: (p: ProjectDefault) => string) => {
     setBusy(true);
     setMsg('');
     try {
@@ -268,42 +336,37 @@ function ProjectSection() {
   };
 
   const others = project?.others ?? [];
-  const plain = (list: typeof others) =>
-    list.map((o) => ({ name: o.name, rootDir: o.rootDir }));
+  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir, level2: o.level2 }));
+  const saveOther = (o: (typeof others)[number], change: Partial<{ name: string; rootDir: string; level2: string }>, done: (p: ProjectDefault) => string) =>
+    save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, ...change } : x))) }, done);
 
   const addOther = async () => {
-    const ok = await save({ others: [...plain(others), { name: newName.trim(), rootDir: newDir.trim() }] }, (p) => t('proj.othersSaved', { n: p.others.length }));
+    const ok = await save({ others: [...plain(others), { name: newName.trim(), rootDir: newDir.trim(), level2: '' }] }, (p) => t('proj.othersSaved', { n: p.others.length }));
     if (ok) {
       setNewName('');
       setNewDir('');
     }
   };
 
-  const removeOther = (name: string) =>
-    save({ others: plain(others.filter((o) => o.name !== name)) }, (p) => t('proj.othersSaved', { n: p.others.length }));
+  const removeOther = (name: string) => save({ others: plain(others.filter((o) => o.name !== name)) }, (p) => t('proj.othersSaved', { n: p.others.length }));
 
   return (
-    <div className="panel" id="project">
-      <h2>{t('proj.title')}</h2>
+    <section className="panel" id="project" aria-labelledby="project-title">
+      <h2 id="project-title">{t('proj.title')}</h2>
       <p className="muted small">{t('proj.intro')}</p>
       {err && <div className="err">{err}</div>}
 
       {/*
-        One shape for every project, the default included.
-        The default used to be two auto-saving fields with a paragraph of repository advice under
-        them, while the others were an add-row and a table of text that could not be edited at
-        all: to correct a path you removed the project and typed it again, and the same fact —
-        whether the folder is a git repository — was a full notice for one and a three-word badge
-        for the others. Nothing about being the default makes any of that necessary. It is the
-        first entry in one list, marked, and every entry is read and written the same way.
+        One shape for every project, the chat's included: name, folder, its git and branch, and its level 2. The first is
+        where the chat works, and says so; every entry is read and written the same way.
       */}
-      <p className="muted small">{t('proj.listIntro')}</p>
-
       <ProjectEntry
         name={name}
         dir={dir}
         repoOk={!!project?.repoOk}
         repoProblem={project?.repoProblem}
+        branch={project?.branch}
+        level2={project?.level2 ?? ''}
         isDefault
         busy={busy}
         onNameInput={(v) => {
@@ -317,11 +380,11 @@ function ProjectSection() {
         }}
         onDir={(v) => void saveDefault(v)}
         onBrowse={() => void browse((path) => void saveDefault(path), dir)}
+        onLevel2={(v) => save({ level2: v }, () => t('proj.level2Saved', { name: name || dir }))}
         onRemove={project?.rootDir ? () => void saveDefault('') : undefined}
         removeLabel={t('proj.clear')}
       />
-      <SavedNote msg={msg} />
-      {project && !project.rootDir && <p className="muted small" style={{ marginTop: 8 }}>{t('proj.none')}</p>}
+      {project && !project.rootDir && <p className="muted small">{t('proj.none')}</p>}
 
       {others.map((o, i) => (
         <ProjectEntry
@@ -331,73 +394,57 @@ function ProjectSection() {
           dir={o.rootDir}
           repoOk={o.repoOk}
           repoProblem={o.repoProblem}
+          branch={o.branch}
+          level2={o.level2}
           busy={busy}
-          onName={(v) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, name: v } : x))) }, () => t('proj.nameSaved'))}
-          onDir={(v) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, rootDir: v } : x))) }, () => t('proj.othersSaved', { n: others.length }))}
-          onBrowse={() =>
-            void browse(
-              (path) => void save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, rootDir: path } : x))) }, () => t('proj.othersSaved', { n: others.length })),
-              o.rootDir,
-            )
-          }
+          onName={(v) => void saveOther(o, { name: v }, () => t('proj.nameSaved'))}
+          onDir={(v) => void saveOther(o, { rootDir: v }, () => t('proj.othersSaved', { n: others.length }))}
+          onBrowse={() => void browse((path) => void saveOther(o, { rootDir: path }, () => t('proj.othersSaved', { n: others.length })), o.rootDir)}
+          onLevel2={(v) => saveOther(o, { level2: v }, () => t('proj.level2Saved', { name: o.name }))}
           onRemove={() => void removeOther(o.name)}
           removeLabel={t('proj.otherRemove')}
         />
       ))}
+      <SavedNote msg={msg} />
 
       <h3 id="others">{t('proj.addTitle')}</h3>
       <p className="muted small">{t('proj.othersIntro')}</p>
-      <div className="row" style={{ marginTop: 8 }}>
-        <input
-          type="text"
-          aria-label={t('proj.entryName')}
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder={t('proj.entryName')}
-          disabled={busy}
-          style={{ width: 160 }}
-        />
-        <input
-          type="text"
-          className="grow"
-          aria-label={t('proj.entryDir')}
-          value={newDir}
-          onChange={(e) => setNewDir(e.target.value)}
-          placeholder="C:\Projects\my-app-tests"
-          disabled={busy}
-        />
-        <button onClick={() => void browse((p) => setNewDir(p), newDir)} disabled={busy}>
-          {t('mirror.browse')}
-        </button>
-        <button className="primary" onClick={() => void addOther()} disabled={busy || !newName.trim() || !newDir.trim()}>
-          {t('proj.otherAdd')}
-        </button>
+      <div className="project-fields add-project">
+        <div>
+          <FieldName htmlFor="new-project-name" label={t('proj.entryName')} info={t('proj.nameInfo')} />
+          <input id="new-project-name" type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('proj.entryName')} disabled={busy} />
+        </div>
+        <div>
+          <FieldName htmlFor="new-project-dir" label={t('proj.entryDir')} info={t('proj.dirInfo')} />
+          <div className="input-with-buttons">
+            <input id="new-project-dir" type="text" value={newDir} onChange={(e) => setNewDir(e.target.value)} placeholder="C:\Projects\my-app-tests" disabled={busy} />
+            <button onClick={() => void browse((p) => setNewDir(p), newDir)} disabled={busy}>
+              {t('mirror.browse')}
+            </button>
+            <button className="primary" onClick={() => void addOther()} disabled={busy || !newName.trim() || !newDir.trim()}>
+              {t('proj.otherAdd')}
+            </button>
+          </div>
+        </div>
       </div>
-
-      <h3>{t('proj.affects')}</h3>
-      <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>
-        <li>{t('proj.affectsNew')}</li>
-        <li>{t('proj.affectsExisting')}</li>
-        <li>{t('proj.affectsPlan')}</li>
-        <li>{t('proj.affectsNever')}</li>
-      </ul>
-    </div>
+    </section>
   );
 }
 
 /**
  * One project, however it is held.
  *
- * The default lives in `project.rootDir`/`project.name` and the others in `project.others[]`,
- * which is a difference in where the setting is stored and was never a difference the operator
- * should have had to see. They read and write the same way here; only the chip says which one
- * new sessions start in.
+ * The chat's lives in `project.rootDir`/`project.name`/`project.level2` and the others in `project.others[]`,
+ * which is a difference in where the setting is stored and was never a difference the operator should have
+ * had to see. They read and write the same way here; only the chip says which one the chat works in.
  */
 function ProjectEntry({
   name,
   dir,
   repoOk,
   repoProblem,
+  branch,
+  level2,
   isDefault = false,
   busy,
   onNameInput,
@@ -405,6 +452,7 @@ function ProjectEntry({
   onDirInput,
   onDir,
   onBrowse,
+  onLevel2,
   onRemove,
   removeLabel,
 }: {
@@ -412,15 +460,18 @@ function ProjectEntry({
   dir: string;
   repoOk: boolean;
   repoProblem?: string;
+  branch?: string;
+  level2: string;
   isDefault?: boolean;
   busy: boolean;
-  /** Every keystroke, for an entry that saves as it is typed (the default one, debounced). */
+  /** Every keystroke, for an entry that saves as it is typed (the chat's, debounced). */
   onNameInput?: (value: string) => void;
   /** The finished value, when the field is left and it differs from what is saved. */
   onName: (value: string) => void;
   onDirInput?: (value: string) => void;
   onDir: (value: string) => void;
   onBrowse: () => void;
+  onLevel2: (value: string) => Promise<unknown>;
   onRemove?: () => void;
   removeLabel: string;
 }) {
@@ -434,13 +485,46 @@ function ProjectEntry({
    */
   const [nameDraft, setNameDraft] = useState(name);
   const [dirDraft, setDirDraft] = useState(dir);
+  const [level2Draft, setLevel2Draft] = useState(level2);
+  const typingLevel2 = useRef(false);
   useEffect(() => setNameDraft(name), [name]);
   useEffect(() => setDirDraft(dir), [dir]);
+  // The saved text replaces the field only when nobody is typing in it.
+  useEffect(() => {
+    if (!typingLevel2.current) setLevel2Draft(level2);
+  }, [level2]);
+  const level2Later = useDebouncedSave(async (v: string) => {
+    typingLevel2.current = false;
+    if (v !== level2) await onLevel2(v);
+  }, 1200);
   return (
-    <div className="panel inner" style={{ marginTop: 10 }}>
-      <div className="row">
-        <div style={{ width: 'min(200px, 100%)' }}>
-          <label htmlFor={`${id}-name`}>{t('proj.entryName')}</label>
+    <div className="panel inner project-entry">
+      <div className="row project-tags">
+        {isDefault && (
+          <span className="chip" title={t('proj.isDefaultWhy')}>
+            {t('proj.isDefault')}
+          </span>
+        )}
+        {dir && (
+          <span className={`badge ${repoOk ? 'done' : ''}`} title={repoOk ? t('proj.isRepo') : repoProblem}>
+            {repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
+          </span>
+        )}
+        {/* The branch checked out there now (operator, 2026-10-20: "show which branch is chosen"). */}
+        {dir && repoOk && branch && (
+          <span className="branch-tag">
+            <span className="badge branch">
+              <BranchIcon /> {branch === 'HEAD' ? t('proj.detached') : t('proj.branch', { name: branch })}
+            </span>
+            <InfoTip label={t('info.about', { name: t('proj.branch', { name: branch }) })} text={t('proj.branchInfo')} />
+          </span>
+        )}
+      </div>
+      {dir && !repoOk && <p className="muted small">{repoProblem || t('proj.notRepoWhy')}</p>}
+
+      <div className="project-fields">
+        <div>
+          <FieldName htmlFor={`${id}-name`} label={t('proj.entryName')} info={t('proj.nameInfo')} />
           <input
             id={`${id}-name`}
             type="text"
@@ -452,389 +536,61 @@ function ProjectEntry({
             onBlur={() => {
               if (nameDraft !== name || onNameInput) onName(nameDraft);
             }}
-            placeholder={dir ? (dir.replace(/[\/]+$/, '').split(/[\/]/).pop() ?? '') : t('proj.namePlaceholder')}
+            placeholder={dir ? (dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '') : t('proj.namePlaceholder')}
           />
         </div>
-        <div className="grow">
-          <label htmlFor={`${id}-dir`}>{t('proj.entryDir')}</label>
-          <input
-            id={`${id}-dir`}
-            type="text"
-            value={dirDraft}
-            onChange={(e) => {
-              setDirDraft(e.target.value);
-              onDirInput?.(e.target.value);
-            }}
-            onBlur={() => {
-              if (dirDraft !== dir || onDirInput) onDir(dirDraft);
-            }}
-            placeholder="C:\Projects\my-app"
-          />
+        <div>
+          <FieldName htmlFor={`${id}-dir`} label={t('proj.entryDir')} info={t('proj.dirInfo')} />
+          <div className="input-with-buttons">
+            <input
+              id={`${id}-dir`}
+              type="text"
+              value={dirDraft}
+              onChange={(e) => {
+                setDirDraft(e.target.value);
+                onDirInput?.(e.target.value);
+              }}
+              onBlur={() => {
+                if (dirDraft !== dir || onDirInput) onDir(dirDraft);
+              }}
+              placeholder="C:\Projects\my-app"
+            />
+            <button onClick={onBrowse} disabled={busy}>
+              {t('mirror.browse')}
+            </button>
+            {onRemove && (
+              <button className="quiet" onClick={onRemove} disabled={busy}>
+                {removeLabel}
+              </button>
+            )}
+          </div>
         </div>
-        <button onClick={onBrowse} disabled={busy}>
-          {t('mirror.browse')}
-        </button>
-        {onRemove && (
-          <button className="quiet" onClick={onRemove} disabled={busy}>
-            {removeLabel}
-          </button>
-        )}
       </div>
 
-      <div className="row small" style={{ marginTop: 6 }}>
-        {isDefault && (
-          <span className="chip" title={t('proj.isDefaultWhy')}>
-            {t('proj.isDefault')}
-          </span>
-        )}
-        {dir && (
-          <span className={`badge ${repoOk ? 'done' : ''}`} title={repoOk ? t('proj.isRepo') : repoProblem}>
-            {repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
-          </span>
-        )}
-        {dir && !repoOk && <span className="muted">{repoProblem || t('proj.notRepoWhy')}</span>}
-      </div>
-
-      {dir && repoOk && <PrepareFolder dir={dir} />}
-    </div>
-  );
-}
-
-
-/**
- * How a run behaves: how long a task may go on, and what happens when one does not end done.
- *
- * The retry count is a decision the operator meets after every blocked task. The two ceilings —
- * iterations and minutes per task — are what a long task runs into, and until 2026-09-28 they were
- * only in the settings file; a task cut off by them can be continued in its own chat ("Continue").
- * The review rounds are here too (2026-10-06), apart from the approaches; the rest of `limits` stays in the file.
- */
-function ExecutionSection() {
-  const { t } = useT();
-  const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
-  // The settings as the last write left them, read synchronously by the next one. See `write`.
-  const rawRef = useRef<Record<string, unknown> | null>(null);
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const [retries, setRetries] = useState(2);
-  /** Times a task a limit stopped is carried on by itself (`limits.autoContinue`). */
-  const [autoContinue, setAutoContinue] = useState(3);
-  const [approaches, setApproaches] = useState(2);
-  const [reviewRounds, setReviewRounds] = useState(2);
-  const [iterations, setIterations] = useState(60);
-  const [minutes, setMinutes] = useState(240);
-  const [replySec, setReplySec] = useState(900);
-  const [isolation, setIsolation] = useState<Isolation>('none');
-  const [startMode, setStartMode] = useState<StartMode>('confirm');
-  const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
-  /** Plan mode for every session that sets none of its own (2026-10-13). See `PlanMode` on the server. */
-  const [planMode, setPlanMode] = useState<'off' | 'auto' | 'approve'>('off');
-  const [msg, setMsg] = useState('');
-  const [err, setErr] = useState('');
-
-  useEffect(() => {
-    api
-      .settings()
-      .then((s) => {
-        rawRef.current = s.raw;
-        setRaw(s.raw);
-        /*
-         * Read from `raw`, which is the settings file, and not from `resolved`, which carries only
-         * the resolved *paths* (profileDir, cwd, runsDir…) and never had an `execution` or `limits`
-         * on it at all. Reading it there did not fail, it silently fell through to the default, so
-         * the retry field showed 2 on a machine that had saved 0 and the value it displayed was
-         * never the value in force. Both fields now read the branch they write back to.
-         */
-        const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as {
-          retryBlockedInFreshChat?: number;
-          minApproachesBeforeBlocked?: number;
-          maxReviewRounds?: number;
-          maxIterations?: number;
-          maxRunMinutes?: number;
-          autoContinue?: number;
-        };
-        setAutoContinue(typeof limits.autoContinue === 'number' ? limits.autoContinue : 3);
-        setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
-        setApproaches(typeof limits.minApproachesBeforeBlocked === 'number' ? limits.minApproachesBeforeBlocked : 2);
-        setReviewRounds(typeof limits.maxReviewRounds === 'number' ? limits.maxReviewRounds : 2);
-        setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
-        setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
-        const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
-        setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as {
-          isolation?: Isolation;
-          mode?: StartMode;
-          networkFetch?: NetworkFetch;
-          planMode?: 'off' | 'auto' | 'approve';
-        };
-        setIsolation(exec.isolation ?? 'none');
-        setStartMode(exec.mode ?? 'confirm');
-        setNetworkFetch(exec.networkFetch ?? 'ask');
-        setPlanMode(exec.planMode ?? 'off');
-      })
-      .catch((e) => setErr((e as Error).message));
-  }, []);
-
-  /*
-   * One field's value, written into the whole settings object.
-   *
-   * Every field here saves the whole object, so two writes in flight at once — a number field's
-   * pause ending while a select is being saved — would each start from the object as it was before
-   * the other, and the second would put back what the first had changed. They used to be kept
-   * apart by disabling every field while one saved, which also took the focus out of a number
-   * field in the middle of typing it: the pause fired a save, the field went grey, and the next
-   * digits went nowhere. Now each write waits for the one before and is built on the object that
-   * one produced, so nothing has to be disabled.
-   */
-  const write = (branch: 'limits' | 'execution' | 'copilot', key: string, value: unknown): Promise<void> => {
-    const run = async () => {
-      if (!rawRef.current) return;
-      /*
-       * The file as it is now, not as this section first read it. The other sections of this page
-       * save through their own calls — the models, the projects — and a write built on the copy read
-       * when the page opened put back whatever they had changed since: choose a model, then change a
-       * limit, and the old model was back.
-       */
-      const base = await api
-        .settings()
-        .then((s) => s.raw)
-        .catch(() => rawRef.current as Record<string, unknown>);
-      const next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } };
-      setMsg('');
-      try {
-        await api.saveSettings(next);
-        rawRef.current = next;
-        setRaw(next);
-        setMsg(t('exec.saved'));
-        setErr('');
-      } catch (e) {
-        setErr((e as Error).message);
-      }
-    };
-    const done = queue.current.then(run);
-    queue.current = done.catch(() => undefined);
-    return done;
-  };
-  const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
-  const saveAutoContinueLater = useDebouncedSave((n: number) => write('limits', 'autoContinue', n));
-  const saveApproachesLater = useDebouncedSave((n: number) => write('limits', 'minApproachesBeforeBlocked', n));
-  const saveReviewRoundsLater = useDebouncedSave((n: number) => write('limits', 'maxReviewRounds', n));
-  const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
-  const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
-  const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
-
-  /*
-   * The fields that change what a run is allowed to do rather than how hard it tries. Saved
-   * immediately on choosing, like the other selects on this page.
-   */
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'planMode', value: string) => write('execution', key, value);
-
-  return (
-    <div className="panel" id="execution">
-      <h2>{t('exec.title')}</h2>
-      <p className="muted small">{t('exec.intro')}</p>
-      {err && <div className="err">{err}</div>}
-      {/* Keep going until done (2026-10-14): first, as it decides whether a limit ends the work at all. */}
-      <label htmlFor="auto-continue">{t('exec.autoContinue')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="auto-continue"
-          value={autoContinue}
-          min={0}
-          max={20}
-          onChange={(n) => {
-            setAutoContinue(n);
-            saveAutoContinueLater(n);
+      {/* Level 2 (operator, 2026-10-20): what is written here goes into Kerrigan, saved or copied. */}
+      <div className="project-level2">
+        <FieldName htmlFor={`${id}-level2`} label={t('proj.level2')} info={t('proj.level2Info', { n: MAX_LEVEL2.toLocaleString() })} />
+        <textarea
+          id={`${id}-level2`}
+          className="prose"
+          rows={4}
+          maxLength={MAX_LEVEL2}
+          value={level2Draft}
+          onChange={(e) => {
+            typingLevel2.current = true;
+            setLevel2Draft(e.target.value);
+            level2Later(e.target.value);
           }}
-          disabled={!raw}
+          placeholder={t('proj.level2Placeholder')}
         />
-        <span className="muted small">{t('exec.autoContinueUnit')}</span>
+        <span className="muted small">{t('proj.level2Count', { n: level2Draft.length.toLocaleString(), max: MAX_LEVEL2.toLocaleString() })}</span>
       </div>
-      <p className="why">{t('exec.autoContinueWhy')}</p>
-
-      <label htmlFor="min-approaches">{t('exec.minApproaches')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="min-approaches"
-          value={approaches}
-          min={2}
-          max={20}
-          onChange={(n) => {
-            setApproaches(n);
-            saveApproachesLater(n);
-          }}
-          disabled={!raw}
-        />
-        <span className="muted small">{t('exec.minApproachesUnit')}</span>
-      </div>
-      <p className="why">{t('exec.minApproachesWhy')}</p>
-
-      {/* Its own limit, apart from the approaches above: the export showed two limits, and only one was on screen (2026-10-06). */}
-      <label htmlFor="max-review-rounds">{t('exec.maxReviewRounds')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="max-review-rounds"
-          value={reviewRounds}
-          min={1}
-          max={6}
-          onChange={(n) => {
-            setReviewRounds(n);
-            saveReviewRoundsLater(n);
-          }}
-          disabled={!raw}
-        />
-        <span className="muted small">{t('exec.maxReviewRoundsUnit')}</span>
-      </div>
-      <p className="why">{t('exec.maxReviewRoundsWhy')}</p>
-
-      <label htmlFor="retry-blocked">{t('exec.retryBlocked')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="retry-blocked"
-          value={retries}
-          min={0}
-          max={5}
-          onChange={(n) => {
-            setRetries(n);
-            saveRetriesLater(n);
-          }}
-          disabled={!raw}
-        />
-        <span className="muted small">{t('exec.retryBlockedTimes')}</span>
-      </div>
-      <p className="why">{t('exec.retryBlockedWhy')}</p>
-
-      <label htmlFor="max-iterations">{t('exec.maxIterations')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="max-iterations"
-          value={iterations}
-          min={5}
-          max={200}
-          onChange={(n) => {
-            setIterations(n);
-            saveIterationsLater(n);
-          }}
-          disabled={!raw}
-        />
-        <span className="muted small">{t('exec.maxIterationsUnit')}</span>
-      </div>
-      <p className="why">{t('exec.maxIterationsWhy')}</p>
-
-      <label htmlFor="max-minutes">{t('exec.maxRunMinutes')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="max-minutes"
-          value={minutes}
-          min={10}
-          max={1440}
-          onChange={(n) => {
-            setMinutes(n);
-            saveMinutesLater(n);
-          }}
-          disabled={!raw}
-        />
-        <span className="muted small">{t('exec.maxRunMinutesUnit')}</span>
-      </div>
-      <p className="why">{t('exec.maxRunMinutesWhy')}</p>
-
-      <label htmlFor="reply-timeout">{t('exec.replyTimeout')}</label>
-      <div className="row">
-        <BoundedNumber
-          id="reply-timeout"
-          value={replySec}
-          min={60}
-          max={10800}
-          onChange={(n) => {
-            setReplySec(n);
-            saveReplyLater(n);
-          }}
-          disabled={!raw}
-        />
-        <span className="muted small">{t('exec.replyTimeoutUnit')}</span>
-      </div>
-      <p className="why">{t('exec.replyTimeoutWhy')}</p>
-
-      <label htmlFor="isolation">{t('exec.isolation')}</label>
-      <select
-        id="isolation"
-        value={isolation}
-        onChange={(e) => {
-          const v = e.target.value as Isolation;
-          setIsolation(v);
-          void saveExecution('isolation', v);
-        }}
-        disabled={!raw}
-      >
-        <option value="none">{t('exec.isolationNone')}</option>
-        <option value="none-accepted">{t('exec.isolationNoneAccepted')}</option>
-        <option value="separate-account">{t('exec.isolationAccount')}</option>
-        <option value="sandbox">{t('exec.isolationSandbox')}</option>
-        <option value="vm">{t('exec.isolationVm')}</option>
-      </select>
-      <p className="why">{t('exec.isolationWhy')}</p>
-
-      {/*
-        The two choices that make a run go without anybody. Placed after the isolation claim
-        because that claim is what allows an unattended run on this machine at all; these two only
-        decide how much such a run still asks. Both are about unattended runs: a step-by-step run
-        shows every step, whatever is chosen here.
-      */}
-      <label htmlFor="start-mode">{t('exec.startMode')}</label>
-      <select
-        id="start-mode"
-        value={startMode}
-        onChange={(e) => {
-          const v = e.target.value as StartMode;
-          setStartMode(v);
-          void saveExecution('mode', v);
-        }}
-        disabled={!raw}
-      >
-        <option value="confirm">{t('exec.startModeAsk')}</option>
-        <option value="unattended">{t('exec.startModeAuto')}</option>
-      </select>
-      <p className="why">{t('exec.startModeWhy')}</p>
-
-      <label htmlFor="network-fetch">{t('exec.networkFetch')}</label>
-      <select
-        id="network-fetch"
-        value={networkFetch}
-        onChange={(e) => {
-          const v = e.target.value as NetworkFetch;
-          setNetworkFetch(v);
-          void saveExecution('networkFetch', v);
-        }}
-        disabled={!raw}
-      >
-        <option value="ask">{t('exec.networkFetchAsk')}</option>
-        <option value="refuse">{t('exec.networkFetchRefuse')}</option>
-        <option value="run">{t('exec.networkFetchRun')}</option>
-      </select>
-      <p className="why">{t('exec.networkFetchWhy')}</p>
-
-      <label htmlFor="plan-mode">{t('pm.setting')}</label>
-      <select
-        id="plan-mode"
-        value={planMode}
-        onChange={(e) => {
-          const v = e.target.value as 'off' | 'auto' | 'approve';
-          setPlanMode(v);
-          void saveExecution('planMode', v);
-        }}
-        disabled={!raw}
-      >
-        <option value="off">{t('pm.off')}</option>
-        <option value="auto">{t('pm.auto')}</option>
-        <option value="approve">{t('pm.approveMode')}</option>
-      </select>
-      <SavedNote msg={msg} />
-      <p className="why">{t('pm.settingWhy')}</p>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------------------
-// The models: one for the work, one for the second opinion
+// Signing in, and the models: one for the work, one for the second opinion
 // ---------------------------------------------------------------------------------------
 
 /**
@@ -873,32 +629,22 @@ function LoginSection() {
   };
 
   return (
-    <div className="panel" id="login">
-      <h2>{t('login.title')}</h2>
+    <section className="panel" id="login" aria-labelledby="login-title">
+      <h2 id="login-title">{t('login.title')}</h2>
       <p className="muted small">{t('login.intro')}</p>
       {err && <div className="err">{err}</div>}
-      <label htmlFor="login-account">{t('login.account')}</label>
-      <div className="row">
-        <input
-          id="login-account"
-          type="email"
-          className="grow"
-          value={account}
-          onChange={(e) => setAccount(e.target.value)}
-          placeholder="name@company.com"
-          disabled={busy}
-        />
+      <Field id="login-account" label={t('login.account')} info={t('login.accountWhy')}>
+        <input id="login-account" type="email" value={account} onChange={(e) => setAccount(e.target.value)} placeholder="name@company.com" disabled={busy} />
         <button className="primary" onClick={() => void signIn()} disabled={busy}>
           {busy ? t('login.busy') : t('login.button')}
         </button>
-      </div>
-      <p className="why">{t('login.accountWhy')}</p>
+      </Field>
       {msg && (
         <div className="small" role="status">
           {msg}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -928,45 +674,26 @@ function ModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refr
   };
 
   return (
-    <div className="panel" id="model">
-      <h2>{t('def.modelTitle')}</h2>
+    <section className="panel" id="model" aria-labelledby="model-title">
+      <h2 id="model-title">{t('def.modelTitle')}</h2>
       <p className="muted small">{t('def.modelIntro')}</p>
       {err && <div className="err">{err}</div>}
 
-      <label htmlFor="default-model">{t('def.modelField')}</label>
-      <div className="row">
-        <ModelPicker
-          id="default-model"
-          chosen={chosen}
-          onChange={(name) => void save(name)}
-          none={t('def.modelNone')}
-          catalogue={catalogue}
-          disabled={busy || refreshing}
-        />
+      <Field id="default-model" label={t('def.modelField')} info={t('def.modelInfo')}>
+        <ModelPicker id="default-model" chosen={chosen} onChange={(name) => void save(name)} none={t('def.modelNone')} catalogue={catalogue} disabled={busy || refreshing} />
         <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
           {t('proj.clear')}
         </button>
         <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
           {t('model.refresh')}
         </button>
-      </div>
-      <SavedNote msg={msg || refreshMsg} />
-
-      <p className="muted small" style={{ marginTop: 8 }}>
-        {catalogue?.readAt
-          ? t('model.readAt', { t: fmtTime(catalogue.readAt), n: catalogue.options.length })
-          : t('model.neverRead')}
+      </Field>
+      <p className="muted small field-after">
+        {catalogue?.readAt ? t('model.readAt', { t: fmtTime(catalogue.readAt), n: catalogue.options.length }) : t('model.neverRead')}
       </p>
-
       <ManualModelToggle />
-
-      <h3>{t('proj.affects')}</h3>
-      <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>
-        <li>{t('def.modelAffectsNew')}</li>
-        <li>{t('def.modelAffectsExisting')}</li>
-        <li>{t('def.modelAffectsBatch')}</li>
-      </ul>
-    </div>
+      <SavedNote msg={msg || refreshMsg} />
+    </section>
   );
 }
 
@@ -1000,12 +727,12 @@ function ManualModelToggle() {
     }
   };
   return (
-    <div style={{ marginTop: 12 }}>
-      <label className="row" style={{ gap: 8, alignItems: 'center' }}>
+    <div className="settings-field">
+      <div className="field-label check-label">
         <input id="manual-model" type="checkbox" checked={on === true} disabled={on === null} onChange={(e) => void save(e.target.checked)} />
-        <span>{t('def.manualModel')}</span>
-      </label>
-      <p className="why">{t('def.manualModelWhy')}</p>
+        <label htmlFor="manual-model">{t('def.manualModel')}</label>
+        <InfoTip label={t('info.about', { name: t('def.manualModel') })} text={t('def.manualModelWhy')} />
+      </div>
       {err && <div className="err">{err}</div>}
     </div>
   );
@@ -1037,21 +764,13 @@ function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing
   const sameAsWork = chosen !== '' && chosen === (catalogue?.defaultModel ?? '');
 
   return (
-    <div className="panel" id="review">
-      <h2>{t('def.reviewTitle')}</h2>
+    <section className="panel" id="review" aria-labelledby="review-title">
+      <h2 id="review-title">{t('def.reviewTitle')}</h2>
       <p className="muted small">{t('def.reviewIntro')}</p>
       {err && <div className="err">{err}</div>}
 
-      <label htmlFor="default-review-model">{t('def.reviewField')}</label>
-      <div className="row">
-        <ModelPicker
-          id="default-review-model"
-          chosen={chosen}
-          onChange={(name) => void save(name)}
-          none={t('def.reviewNone')}
-          catalogue={catalogue}
-          disabled={busy || refreshing}
-        />
+      <Field id="default-review-model" label={t('def.reviewField')} info={t('def.reviewInfo')}>
+        <ModelPicker id="default-review-model" chosen={chosen} onChange={(name) => void save(name)} none={t('def.reviewNone')} catalogue={catalogue} disabled={busy || refreshing} />
         <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
           {t('proj.clear')}
         </button>
@@ -1060,20 +779,224 @@ function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing
         <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
           {t('model.refresh')}
         </button>
-      </div>
-      {sameAsWork && (
-        <p className="why" style={{ color: 'var(--warn)' }}>
-          {t('def.reviewSame')}
-        </p>
-      )}
+      </Field>
+      {sameAsWork && <p className="why field-after warned-text">{t('def.reviewSame')}</p>}
       <SavedNote msg={msg || refreshMsg} />
+    </section>
+  );
+}
 
-      <h3>{t('proj.affects')}</h3>
-      <ul className="muted small" style={{ margin: 0, paddingLeft: 20 }}>
-        <li>{t('def.reviewAffectsNew')}</li>
-        <li>{t('def.reviewAffectsExisting')}</li>
-        <li>{t('def.reviewAffectsBatch')}</li>
-      </ul>
-    </div>
+// ---------------------------------------------------------------------------------------
+// How a task runs
+// ---------------------------------------------------------------------------------------
+
+/**
+ * How a task runs: how long it may go on, what happens at a limit, and what may run without anybody.
+ *
+ * The retry count is a decision the operator meets after every blocked task. The two ceilings —
+ * iterations and minutes per task — are what a long task runs into; a task cut off by them can be
+ * continued in its own chat ("Continue"). Plan first is not here any more (2026-10-20): the chat
+ * chooses it per conversation, under its box, and no other run is left to follow the setting.
+ */
+function ExecutionSection() {
+  const { t } = useT();
+  const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
+  // The settings as the last write left them, read synchronously by the next one. See `write`.
+  const rawRef = useRef<Record<string, unknown> | null>(null);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const [retries, setRetries] = useState(2);
+  /** Times a task a limit stopped is carried on by itself (`limits.autoContinue`). */
+  const [autoContinue, setAutoContinue] = useState(3);
+  const [approaches, setApproaches] = useState(2);
+  const [reviewRounds, setReviewRounds] = useState(2);
+  const [iterations, setIterations] = useState(60);
+  const [minutes, setMinutes] = useState(240);
+  /** The most subtasks the lead of a two-chat conversation may give for one message (`limits.maxSubtasks`). */
+  const [subtasks, setSubtasks] = useState(20);
+  const [replySec, setReplySec] = useState(900);
+  const [isolation, setIsolation] = useState<Isolation>('none');
+  const [startMode, setStartMode] = useState<StartMode>('confirm');
+  const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => {
+        rawRef.current = s.raw;
+        setRaw(s.raw);
+        /*
+         * Read from `raw`, which is the settings file, and not from `resolved`, which carries only
+         * the resolved *paths* (profileDir, cwd, runsDir…) and never had an `execution` or `limits`
+         * on it at all. Reading it there did not fail, it silently fell through to the default, so
+         * the retry field showed 2 on a machine that had saved 0 and the value it displayed was
+         * never the value in force. Both fields now read the branch they write back to.
+         */
+        const limits = ((s.raw.limits as Record<string, unknown>) ?? {}) as {
+          retryBlockedInFreshChat?: number;
+          minApproachesBeforeBlocked?: number;
+          maxReviewRounds?: number;
+          maxIterations?: number;
+          maxRunMinutes?: number;
+          autoContinue?: number;
+          maxSubtasks?: number;
+        };
+        setAutoContinue(typeof limits.autoContinue === 'number' ? limits.autoContinue : 3);
+        setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
+        setApproaches(typeof limits.minApproachesBeforeBlocked === 'number' ? limits.minApproachesBeforeBlocked : 2);
+        setReviewRounds(typeof limits.maxReviewRounds === 'number' ? limits.maxReviewRounds : 2);
+        setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
+        setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
+        setSubtasks(typeof limits.maxSubtasks === 'number' ? limits.maxSubtasks : 20);
+        const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
+        setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch };
+        setIsolation(exec.isolation ?? 'none');
+        setStartMode(exec.mode ?? 'confirm');
+        setNetworkFetch(exec.networkFetch ?? 'ask');
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  /*
+   * One field's value, written into the whole settings object.
+   *
+   * Every field here saves the whole object, so two writes in flight at once — a number field's
+   * pause ending while a select is being saved — would each start from the object as it was before
+   * the other, and the second would put back what the first had changed. Each write waits for the one
+   * before and is built on the object that one produced, so nothing has to be disabled.
+   */
+  const write = (branch: 'limits' | 'execution' | 'copilot', key: string, value: unknown): Promise<void> => {
+    const run = async () => {
+      if (!rawRef.current) return;
+      /*
+       * The file as it is now, not as this section first read it. The other sections of this page
+       * save through their own calls — the models, the projects — and a write built on the copy read
+       * when the page opened put back whatever they had changed since.
+       */
+      const base = await api
+        .settings()
+        .then((s) => s.raw)
+        .catch(() => rawRef.current as Record<string, unknown>);
+      const next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } };
+      setMsg('');
+      try {
+        await api.saveSettings(next);
+        rawRef.current = next;
+        setRaw(next);
+        setMsg(t('exec.saved'));
+        setErr('');
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    };
+    const done = queue.current.then(run);
+    queue.current = done.catch(() => undefined);
+    return done;
+  };
+  const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
+  const saveAutoContinueLater = useDebouncedSave((n: number) => write('limits', 'autoContinue', n));
+  const saveApproachesLater = useDebouncedSave((n: number) => write('limits', 'minApproachesBeforeBlocked', n));
+  const saveReviewRoundsLater = useDebouncedSave((n: number) => write('limits', 'maxReviewRounds', n));
+  const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
+  const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
+  const saveSubtasksLater = useDebouncedSave((n: number) => write('limits', 'maxSubtasks', n));
+  const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch', value: string) => write('execution', key, value);
+
+  /** The number fields, in the order a task meets them. */
+  const numbers: Array<{ id: string; label: string; info: string; unit: string; value: number; min: number; max: number; set: (n: number) => void; later: (n: number) => void }> = [
+    // Keep going until done (2026-10-14): first, as it decides whether a limit ends the work at all.
+    { id: 'auto-continue', label: t('exec.autoContinue'), info: t('exec.autoContinueWhy'), unit: t('exec.autoContinueUnit'), value: autoContinue, min: 0, max: 20, set: setAutoContinue, later: saveAutoContinueLater },
+    { id: 'min-approaches', label: t('exec.minApproaches'), info: t('exec.minApproachesWhy'), unit: t('exec.minApproachesUnit'), value: approaches, min: 2, max: 20, set: setApproaches, later: saveApproachesLater },
+    { id: 'max-review-rounds', label: t('exec.maxReviewRounds'), info: t('exec.maxReviewRoundsWhy'), unit: t('exec.maxReviewRoundsUnit'), value: reviewRounds, min: 1, max: 6, set: setReviewRounds, later: saveReviewRoundsLater },
+    { id: 'retry-blocked', label: t('exec.retryBlocked'), info: t('exec.retryBlockedWhy'), unit: t('exec.retryBlockedTimes'), value: retries, min: 0, max: 5, set: setRetries, later: saveRetriesLater },
+    { id: 'max-iterations', label: t('exec.maxIterations'), info: t('exec.maxIterationsWhy'), unit: t('exec.maxIterationsUnit'), value: iterations, min: 5, max: 200, set: setIterations, later: saveIterationsLater },
+    { id: 'max-minutes', label: t('exec.maxRunMinutes'), info: t('exec.maxRunMinutesWhy'), unit: t('exec.maxRunMinutesUnit'), value: minutes, min: 10, max: 1440, set: setMinutes, later: saveMinutesLater },
+    // Two chats (2026-10-20): the lead's subtasks for one message, each a task of the worker's with the limits above.
+    { id: 'max-subtasks', label: t('exec.maxSubtasks'), info: t('exec.maxSubtasksWhy'), unit: t('exec.maxSubtasksUnit'), value: subtasks, min: 1, max: 100, set: setSubtasks, later: saveSubtasksLater },
+    { id: 'reply-timeout', label: t('exec.replyTimeout'), info: t('exec.replyTimeoutWhy'), unit: t('exec.replyTimeoutUnit'), value: replySec, min: 60, max: 10800, set: setReplySec, later: saveReplyLater },
+  ];
+
+  return (
+    <section className="panel" id="execution" aria-labelledby="execution-title">
+      <h2 id="execution-title">{t('exec.title')}</h2>
+      <p className="muted small">{t('exec.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      {numbers.map((f) => (
+        <Field key={f.id} id={f.id} label={f.label} info={f.info} unit={f.unit}>
+          <BoundedNumber
+            id={f.id}
+            value={f.value}
+            min={f.min}
+            max={f.max}
+            onChange={(n) => {
+              f.set(n);
+              f.later(n);
+            }}
+            disabled={!raw}
+          />
+        </Field>
+      ))}
+
+      <Field id="isolation" label={t('exec.isolation')} info={t('exec.isolationWhy')}>
+        <select
+          id="isolation"
+          value={isolation}
+          onChange={(e) => {
+            const v = e.target.value as Isolation;
+            setIsolation(v);
+            void saveExecution('isolation', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="none">{t('exec.isolationNone')}</option>
+          <option value="none-accepted">{t('exec.isolationNoneAccepted')}</option>
+          <option value="separate-account">{t('exec.isolationAccount')}</option>
+          <option value="sandbox">{t('exec.isolationSandbox')}</option>
+          <option value="vm">{t('exec.isolationVm')}</option>
+        </select>
+      </Field>
+
+      {/*
+        The two choices that make a run go without anybody. Placed after the isolation claim
+        because that claim is what allows an unattended run on this machine at all; these two only
+        decide how much such a run still asks.
+      */}
+      <Field id="start-mode" label={t('exec.startMode')} info={t('exec.startModeWhy')}>
+        <select
+          id="start-mode"
+          value={startMode}
+          onChange={(e) => {
+            const v = e.target.value as StartMode;
+            setStartMode(v);
+            void saveExecution('mode', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="confirm">{t('exec.startModeAsk')}</option>
+          <option value="unattended">{t('exec.startModeAuto')}</option>
+        </select>
+      </Field>
+
+      <Field id="network-fetch" label={t('exec.networkFetch')} info={t('exec.networkFetchWhy')}>
+        <select
+          id="network-fetch"
+          value={networkFetch}
+          onChange={(e) => {
+            const v = e.target.value as NetworkFetch;
+            setNetworkFetch(v);
+            void saveExecution('networkFetch', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="ask">{t('exec.networkFetchAsk')}</option>
+          <option value="refuse">{t('exec.networkFetchRefuse')}</option>
+          <option value="run">{t('exec.networkFetchRun')}</option>
+        </select>
+      </Field>
+      <SavedNote msg={msg} />
+    </section>
   );
 }

@@ -44,7 +44,7 @@ import { writeReport } from '../exec/reportFile.js';
 import { Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, operatorNotesSection, readOnlyNote } from '../session/compose.js';
-import { takeAfter, takeCheckpoint } from '../session/checkpoint.js';
+import { changedSince, takeAfter, takeCheckpoint } from '../session/checkpoint.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
 import { PLAN_FIRST, PLAN_NOT_NOW, PLAN_NUDGE_AFTER, describePlan, planApprovedMessage, planFrom, planModeNote, planNudge, planReviseMessage } from './planMode.js';
@@ -62,6 +62,7 @@ import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFi
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 import type { Hold } from './hold.js';
+import { runLeadTask } from './leadRunner.js';
 
 export type TaskOutcome = {
   status: Extract<TaskStatus, 'done' | 'blocked' | 'failed' | 'aborted' | 'limit-reached'>;
@@ -143,6 +144,13 @@ export type RunDeps = {
    * that does not ask, the runner approves the plan itself. See `PlanMode`.
    */
   approvePlan?: (ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan }) => Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }>;
+  /**
+   * The two-chat mode (2026-10-20): the lead's question for the operator, put to them on a card in the conversation; the
+   * answer is text, or the operator stops the task. Absent (the terminal), the lead is told nobody can answer.
+   */
+  askQuestion?: (ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[] }) => Promise<{ answer: string } | 'stop'>;
+  /** The two-chat mode: the worker's session the run now also speaks for, so its steps and cards are the run's. */
+  onWorker?: (workerSessionId: string) => void;
 };
 
 /**
@@ -155,7 +163,7 @@ export type ModelHooks = {
    * The operator's hand, when the chat could not be put on the chosen model by itself: they are asked to
    * choose it in the Copilot window and answer — check and go on, go on as it is, or stop.
    */
-  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean }) => Promise<'recheck' | 'continue' | 'stop'>;
+  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' }) => Promise<'recheck' | 'continue' | 'stop'>;
   /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
   locate?: (name: string) => Promise<ModelLocator | undefined>;
   renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
@@ -399,7 +407,7 @@ export class StoppedSend extends Error {
  * checks — and holding here holds all of them, the ones added later included. `hold` resolves true when the run
  * was stopped while held: then nothing is sent.
  */
-function holdsWhilePaused(transport: ChatTransport, hold: () => Promise<boolean>): ChatTransport {
+export function holdsWhilePaused(transport: ChatTransport, hold: () => Promise<boolean>): ChatTransport {
   return new Proxy(transport, {
     get(target, key) {
       if (key === 'sendAndConfirm') {
@@ -415,7 +423,7 @@ function holdsWhilePaused(transport: ChatTransport, hold: () => Promise<boolean>
 }
 
 /** One place that writes to the transcript, the console and the live stream at once. */
-class Sink {
+export class Sink {
   constructor(
     private readonly log: RunLog,
     private readonly bus: EventBus,
@@ -676,6 +684,11 @@ async function joinGroupConversation(store: SessionStore, session: Session, bus:
   return updated;
 }
 
+/** Which conversation of the two-chat mode a session's is, for the cards that ask about its model (2026-10-20). */
+export function roleOf(session: Pick<Session, 'workerOf' | 'lead'>): { role?: 'lead' | 'worker' } {
+  return session.workerOf ? { role: 'worker' } : session.lead ? { role: 'lead' } : {};
+}
+
 /**
  * Marks a run's failure as one of opening the browser, its profile, the sign-in or the conversation, so the notice of
  * a start that could not begin says "opening the browser" rather than "the run" (2026-10-20: with the batch's own
@@ -756,7 +769,7 @@ export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'mod
   return session.kind === 'chat' && !effectiveModels(session, cfg).model;
 }
 
-async function applySessionModel(
+export async function applySessionModel(
   transport: ChatTransport,
   session: Session,
   bus: EventBus,
@@ -798,7 +811,7 @@ async function applySessionModel(
     const why = cfg.copilot.manualModel ? 'Settings ask for the model to be chosen by hand' : 'the session asks for the model to be set by hand';
     const hand = wanted && buttonShows(shown, wanted)
       ? { result: { ok: true, current: wanted, by: 'already' } as ModelChoice, goOnAsItIs: false }
-      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: why }, hooks, session.id, bus, true);
+      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: why }, hooks, session.id, bus, true, roleOf(session));
     if (!wanted) {
       const now = await transport.currentModel().catch(() => null);
       if (hand.result.ok || hand.goOnAsItIs) {
@@ -895,16 +908,20 @@ async function withOperatorHand(
   sessionId: string,
   bus: EventBus,
   manual: boolean,
+  /** For the review's own conversation: the card says so, and why its model is best another, stronger one. For the
+   * lead's or the worker's conversation of the two-chat mode: the card says which it is (2026-10-20). */
+  opts: { review?: boolean; role?: 'lead' | 'worker' } = {},
 ): Promise<{ result: ModelChoice; goOnAsItIs: boolean }> {
   let result = first;
   for (let tries = 1; !result.ok && hooks?.askHelp; tries += 1) {
     const shown = await transport.currentModel().catch(() => null);
+    const what = `${wanted ? `"${wanted}"` : 'the model'}${opts.review ? ' for the review' : opts.role ? ` for the ${opts.role}` : ''}`;
     bus.publish({ sessionId, type: 'model-help-asked', level: 'warn',
       message: manual
-        ? `asking the operator to choose ${wanted ? `"${wanted}"` : 'the model'} in the Copilot window (Settings: by hand; picker shows "${shown ?? 'nothing'}")`
-        : `the chat could not be put on "${wanted}" by the runner; asking the operator to choose it in the Copilot window (picker shows "${shown ?? 'nothing'}")`,
-      data: { asked: wanted, shown, why: result.reason ?? '', tries, manual } });
-    const answer = await hooks.askHelp({ sessionId, asked: wanted, shown, why: result.reason ?? 'unknown reason', tries, ...(manual ? { manual: true } : {}) });
+        ? `asking the operator to choose ${what} in the Copilot window (by hand; picker shows "${shown ?? 'nothing'}")`
+        : `the chat could not be put on ${what} by the runner; asking the operator to choose it in the Copilot window (picker shows "${shown ?? 'nothing'}")`,
+      data: { asked: wanted, shown, why: result.reason ?? '', tries, manual, ...(opts.review ? { review: true } : {}), ...(opts.role ? { role: opts.role } : {}) } });
+    const answer = await hooks.askHelp({ sessionId, asked: wanted, shown, why: result.reason ?? 'unknown reason', tries, ...(manual ? { manual: true } : {}), ...(opts.review ? { review: true } : {}), ...(opts.role ? { role: opts.role } : {}) });
     if (answer === 'stop') return { result, goOnAsItIs: false };
     if (answer === 'continue') {
       bus.publish({ sessionId, type: 'model-help-continue', level: 'warn', message: `the operator chose to go on with the model the chat is on ("${shown ?? 'unknown'}")${wanted ? `, not "${wanted}"` : ''}`, data: { asked: wanted, shown } });
@@ -2290,18 +2307,29 @@ export async function runTask(
       reviewRounds += 1;
 
       const model = effectiveModels(session, cfg).reviewModel;
+      /*
+       * Chosen by hand: in the Copilot window, as the work's model is (see `modelByHand`). The chat's model is by
+       * hand unless one is named (2026-10-17), and its review is too: asked on a card that says it is the review's
+       * and why a different, stronger model is worth choosing for it (operator, 2026-10-20).
+       */
+      const reviewByHand = cfg.copilot.manualModel || !!session.manualModel || (session.kind === 'chat' && !model);
       const repoDir = trackedRepoOf(session);
       /*
        * What changed, read from git rather than from anybody's account of it.
        *
        * The commit happens when the task closes, which is after this, so the task's changes are
        * still sitting in the working tree. That is exactly the list wanted: the branch was cut
-       * before this task started, so everything dirty now is this task's doing.
+       * before this task started, so everything dirty now is this task's doing. A chat message
+       * works on the operator's own branch, where much may be uncommitted that is not its doing:
+       * what it changed is the folder against its photograph from before it (2026-10-20).
        */
-      const changedFiles = repoDir ? (await repoState(repoDir).catch(() => null))?.changed ?? [] : [];
+      const chatChanged = !repoDir && session.kind === 'chat' && chatCheckpoint && chatDir
+        ? await changedSince(chatDir, chatCheckpoint, `${task.id}-r${reviewRounds}`).catch(() => null)
+        : null;
+      const changedFiles = repoDir ? (await repoState(repoDir).catch(() => null))?.changed ?? [] : chatChanged ?? [];
       // When nothing changed, or nothing was allowed to, the closing account is the product and
       // the reviewer is given it — as claims to test. See `Deliverable` in review.ts.
-      const deliverable = deliverableFor(task, closing, repoDir !== '', changedFiles);
+      const deliverable = deliverableFor(task, closing, repoDir !== '' || chatChanged !== null, changedFiles);
 
       sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length, deliverable: deliverable?.why },
         `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})` +
@@ -2313,14 +2341,16 @@ export async function runTask(
       let outcome: ReviewOutcome;
       try {
         await transport.newChat();
-        if (model) {
+        if (model || (reviewByHand && deps.models?.askHelp)) {
           let picked: ModelChoice;
-          if (cfg.copilot.manualModel && deps.models?.askHelp) {
+          if (reviewByHand && deps.models?.askHelp) {
             // By hand, as the work's model (see `applySessionModel`): the review's fresh conversation is asked about too.
             const shown = await transport.currentModel().catch(() => null);
-            picked = buttonShows(shown, model)
+            picked = model && buttonShows(shown, model)
               ? { ok: true, current: model, by: 'already' }
-              : (await withOperatorHand(transport, model, { ok: false, current: shown, reason: 'Settings ask for the model to be chosen by hand (the review)' }, deps.models, session.id, bus, true)).result;
+              : (await withOperatorHand(transport, model, { ok: false, current: shown, reason: 'the model is chosen by hand (the review)' }, deps.models, session.id, bus, true, { review: true })).result;
+            // Stopped on the card: the run stops, as it does on the work's card, and nothing is sent to the review.
+            if (!picked.ok && signal?.aborted) throw new StoppedSend();
           } else {
             const reviewLocator = await deps.models?.locate?.(model).catch(() => undefined);
             picked = await transport.selectModel(model, { locator: reviewLocator, signal }).catch((e: unknown) => ({ ok: false, current: null, reason: (e as Error).message }));
@@ -3509,6 +3539,21 @@ export async function runSession(
         task = session.tasks.find((t) => t.id === queuedTask.id) as Task;
       }
 
+      /*
+       * A message of a conversation in the two-chat mode (2026-10-20): its lead directs it and its worker carries out the
+       * subtasks (see `leadRunner.ts`). Not carried on or retried in a fresh chat here: the lead decides what to do when
+       * a subtask falls short, and its own limits bound it.
+       */
+      if (session.lead && session.kind === 'chat') {
+        const led = await runLeadTask(chat, session, task, deps);
+        ran += 1;
+        lastStatus = led.status;
+        if (chat.closedOutside()) {
+          bus.publish({ sessionId, type: 'session-stopped', level: 'info', message: 'the browser window was closed; the tasks after this one stay queued' });
+          break;
+        }
+        continue;
+      }
       let outcome = await runTask(chat, session, task, deps);
       ran += 1;
       // The operator closed the window with its X: a stop, for the tasks after it too (2026-10-19).

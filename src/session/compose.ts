@@ -142,7 +142,7 @@ function level2Block(level2: string): string {
  * failed, that the files are as its work left them, and — after the bot stopped under it — which of
  * the steps it had just asked for actually ran.
  */
-function whyItStopped(c: TaskContinuation): string {
+export function whyItStopped(c: TaskContinuation): string {
   if (c.how === 'failed') return describeEnding(c.fromAttempt, c.ended, c.stoppedBecause);
   if (c.how === 'interrupted') {
     const where = c.interruption ? `\n\n${describeInterruption(c.interruption)}\n\n` : ' ';

@@ -9,6 +9,7 @@ import { api, type Session, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useNow } from '../../lib/useNow';
+import { BranchIcon } from '../branchIcon';
 
 export function StatusBar({ sessions, session, workspace, onShowThread }: { sessions: Session[]; session?: Session; workspace: Workspace | null; onShowThread: (sessionId: string) => void }) {
   const { t } = useT();
@@ -35,8 +36,7 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
     <footer className="wb-statusbar" aria-label={t('wb.status')}>
       {workspace?.ok && (
         <span title={workspace.dir}>
-          <span aria-hidden="true">⎇ </span>
-          {workspace.branch ? `${workspace.name} · ${workspace.branch}` : workspace.name}
+          <BranchIcon /> {workspace.branch ? `${workspace.name} · ${workspace.branch}` : workspace.name}
         </span>
       )}
       {runningSession && runningTask ? (
