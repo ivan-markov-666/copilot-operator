@@ -24,6 +24,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { notInstalled, notInstalledLines } from './installed.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWin = process.platform === 'win32';
@@ -91,6 +92,12 @@ function checkInstall() {
   }
   const nextPkg = [root, resolve(root, 'web')].map((b) => resolve(b, 'node_modules', 'next', 'package.json')).find(existsSync);
   if (!nextPkg) problems.push('the Next.js package is not installed (no node_modules/next here or in web/)');
+  // A checkout git moved on keeps its old node_modules: a package added or changed since is missing or old,
+  // and Next would say so in a stack trace once the page is asked for.
+  if (problems.length === 0) {
+    const stale = notInstalledLines(notInstalled(root));
+    if (stale.length > 0) problems.push(`the packages installed here are not the ones package-lock.json names: ${stale.join('; ')}`);
+  }
   if (existsSync(resolve(root, 'web', 'package-lock.json'))) {
     problems.push(
       'web/package-lock.json exists, which means npm install was run inside web/ instead of at the repository root; ' +

@@ -395,6 +395,10 @@ npx tsx src/cli.ts login --account you@tenant.org    # sign in once; the Edge pr
 npx tsx src/cli.ts doctor                            # check the machine
 ```
 
+A pull, a merge or a switch of branch leaves `node_modules` as it was; when what it brought in
+names a package that is not installed, or another version of one, `npm start` and the package build
+(`npm pack`, `npm publish`) say which and stop before building anything: `npm install` again.
+
 The bot never types credentials. `login` opens Edge, waits for the chat to appear, checks
 that the right account is signed in, and stores nothing but the browser profile.
 

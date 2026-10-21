@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { notInstalled, notInstalledLines } from './installed.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(root, 'web');
@@ -54,6 +55,20 @@ function run(label, args, cwd, env = {}) {
   log(label);
   const r = spawnSync(process.execPath, args, { cwd, stdio: 'inherit', windowsHide: true, env: { ...inheritedEnv(), ...env } });
   if (r.status !== 0) die(`${label} failed`);
+}
+
+// The packages installed here must be the ones package-lock.json names: a checkout git moved on keeps
+// its old node_modules, and the build would stop deep inside Next on a module it cannot find.
+const notAsLocked = notInstalled(root);
+if (notAsLocked.length > 0) {
+  die(
+    [
+      'the packages installed here are not the ones package-lock.json names:',
+      ...notInstalledLines(notAsLocked).map((line) => `  ${line}`),
+      `install them, in ${root}, and build again:`,
+      '  npm install',
+    ].join('\n'),
+  );
 }
 
 run('compiling the API and the CLI', [bin('typescript/bin/tsc'), '-p', 'tsconfig.json'], root);
