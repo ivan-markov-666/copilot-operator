@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import { useT, type Key } from '../lib/i18n';
 import { LanguageSwitcher } from './languageMenu';
+import { AppearanceMenu } from './workbench/appearanceMenu';
 
 /**
  * One small line icon per page, drawn inline so they take the current colour and need no
@@ -46,7 +47,7 @@ export function Nav() {
 
   return (
     <nav aria-label={t('nav.label')}>
-      {LINKS.map((l) => (
+      {LINKS.flatMap((l) => [
         <Link key={l.href} href={l.href} aria-current={pathname === l.href ? 'page' : undefined}>
           <svg className="nav-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
             {ICONS[l.icon]}
@@ -63,8 +64,10 @@ export function Nav() {
               {t('nav.live')}
             </span>
           )}
-        </Link>
-      ))}
+        </Link>,
+        // How the page looks, between Settings and System, as on the chat's screen (operator, 2026-10-21).
+        ...(l.href === '/defaults' ? [<AppearanceMenu key="appearance" />] : []),
+      ])}
       <LanguageSwitcher />
     </nav>
   );

@@ -17,6 +17,9 @@
  *                against service-side throttling on long runs.
  * - `backoffFor()`   exponential backoff with jitter, so a failing step cannot turn into a
  *                tight retry loop.
+ * - the gap      (operator, 2026-10-21) a pause the operator sets between two messages to Copilot, fixed or drawn
+ *                anew each time between two bounds: kept by `throttleSend` across every pacer of the program, so the
+ *                lead's message after the worker's waits as one after the lead's does.
  */
 
 export type PacingProfile = {
@@ -28,7 +31,29 @@ export type PacingProfile = {
   maxMessagesPerHour: number;
   /** Seed for the backoff jitter. Omit for a random seed; it is logged. */
   seed?: number;
+  /** The pause between two messages, at least and at most, in milliseconds (see `gapFrom`). Absent: none. */
+  gapMs?: [number, number];
+  /** Told how long the next message waits for the gap, before it waits. */
+  onGap?: (ms: number) => void;
+  /** Stops a wait for the gap (the run's Stop). */
+  signal?: AbortSignal;
 };
+
+/** The settings' pause between messages, as `gapMs`; undefined when it is off. */
+export function gapFrom(p: { gapEnabled?: boolean; gapSec?: number; gapRandom?: boolean; gapMaxSec?: number }): [number, number] | undefined {
+  if (!p.gapEnabled) return undefined;
+  const lo = Math.max(1, p.gapSec ?? 60) * 1000;
+  const hi = p.gapRandom ? Math.max(lo, Math.max(1, p.gapMaxSec ?? 90) * 1000) : lo;
+  return [lo, hi];
+}
+
+/** When the program last sent a message to Copilot: one window, one account, so one clock for every pacer. */
+let lastSentAt = 0;
+
+/** For the checks: as if nothing had been sent yet. */
+export function forgetLastSend(): void {
+  lastSentAt = 0;
+}
 
 export const DEFAULT_PACING: PacingProfile = {
   enabled: true,
@@ -74,6 +99,19 @@ export class Pacer {
    * waited, so the caller can log a visible "throttled for N s".
    */
   async throttleSend(signal?: AbortSignal): Promise<number> {
+    const stop = signal ?? this.profile.signal;
+    let gapWaited = 0;
+    // The operator's pause between two messages: from the last one the program sent, whichever pacer sent it.
+    if (this.profile.gapMs && lastSentAt > 0) {
+      const [lo, hi] = this.profile.gapMs;
+      const gap = lo + Math.round(this.rnd() * Math.max(0, hi - lo));
+      const wait = lastSentAt + gap - Date.now();
+      if (wait > 0) {
+        this.profile.onGap?.(wait);
+        await sleep(wait, stop);
+        gapWaited = wait;
+      }
+    }
     const hour = 3_600_000;
     const now = Date.now();
     while (this.sentAt.length && now - this.sentAt[0] > hour) this.sentAt.shift();
@@ -81,10 +119,11 @@ export class Pacer {
     let waited = 0;
     if (this.sentAt.length >= this.profile.maxMessagesPerHour) {
       waited = this.sentAt[0] + hour - now;
-      if (waited > 0) await sleep(waited, signal);
+      if (waited > 0) await sleep(waited, stop);
     }
     this.sentAt.push(Date.now());
-    return Math.max(waited, 0);
+    lastSentAt = Date.now();
+    return Math.max(waited, 0) + gapWaited;
   }
 
   /** Exponential backoff with jitter, for retries after a failure. */

@@ -4,6 +4,7 @@
  * The panel on the workbench's right: the chat, which works in the open project folder (see `cascade.tsx`). Only the
  * chat for now (2026-10-20: "remove the Kerrigan button beside Chat; leave only Chat"); Kerrigan is on the home screen.
  */
+import type { ReactNode } from 'react';
 import type { Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { Cascade, type ChatTurn } from './cascade';
@@ -17,6 +18,7 @@ export function ChatPanel({
   onTurn,
   onChange,
   onClose,
+  grip,
 }: {
   workspace: Workspace | null;
   composeAsk: number;
@@ -26,11 +28,14 @@ export function ChatPanel({
   onTurn: (turn: ChatTurn) => void;
   onChange: () => void;
   onClose: () => void;
+  /** Moves the panel (see `panelGrip.tsx`). */
+  grip?: ReactNode;
 }) {
   const { t } = useT();
   return (
     <div className="wb-chat-inner">
       <div className="wb-chat-tabs" role="tablist" aria-label={t('wb.chatPanel')}>
+        {grip}
         <button type="button" role="tab" aria-selected className="on">{t('wb.chatTab')}</button>
         <span className="grow" />
         <button type="button" className="wb-icon-btn" aria-label={t('wb.toggleChat')} title={t('wb.toggleChat')} onClick={onClose}>×</button>

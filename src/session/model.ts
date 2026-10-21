@@ -94,6 +94,9 @@ export type TaskReviewCheck = {
 /** What editing a task, or queueing it again with changes, may change. See `applyTaskPatch` in store.ts. */
 export type TaskPatch = Partial<Pick<Task, 'title' | 'level2' | 'prompt' | 'vcsPlan' | 'checks' | 'readOnly' | 'scope'>>;
 
+/** A skill as a task carries it: its name, when it is for, and its instructions. See `skills` in config/schema.ts. */
+export type TaskSkill = { name: string; description: string; text: string };
+
 export type Task = {
   id: string;
   title: string;
@@ -198,6 +201,11 @@ export type Task = {
   lead?: LeadRecord;
   /** A worker's subtask: the lead's message it is part of, and which of its subtasks it is. */
   fromLead?: { sessionId: string; taskId: string; n: number };
+  /**
+   * The skill the message was sent with (2026-10-21), as it read then: a later edit in Settings does not change what
+   * this task was told. Sent with its opening; a worker's subtask carries its lead's.
+   */
+  skill?: TaskSkill;
   /** What version control was *asked* to do for this task, as opposed to what it did. */
   vcsPlan?: TaskVcsPlan;
   /**
@@ -1209,6 +1217,11 @@ export type LeadRound = {
 /** What the lead of a message did, as the chat shows it. */
 export type LeadRecord = {
   rounds: LeadRound[];
+  /**
+   * The messages sent to Copilot for this message of the operator's (2026-10-21: "show how many messages went to the
+   * second chat too, to both, and how many in all"): to the lead, and to the worker across its subtasks.
+   */
+  messages?: { lead: number; worker: number };
   /** How many subtasks it has given, and the most it may. */
   subtasks: number;
   maxSubtasks: number;

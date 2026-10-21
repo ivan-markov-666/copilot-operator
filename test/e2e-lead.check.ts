@@ -119,6 +119,11 @@ await scenario('the whole of it: understood, surveyed, planned, done by the work
   const turns = order.filter((x, i) => i === 0 || x !== order[i - 1]);
   t.check('the window went from one conversation to the other and back', turns, ['lead', 'worker', 'lead', 'worker', 'lead']);
   t.check('and it was one window throughout', h.chat.windows.length, 1);
+  // How many messages went to each chat, and in all (operator, 2026-10-21): as the window counted them.
+  const counted = (await sessionOf(h, sent.threadId)).tasks[0]?.lead as unknown as { messages?: { lead: number; worker: number } } | undefined;
+  const toLead = h.chat.sent.filter((m) => m.chatId === leadChat).length;
+  const toWorker = h.chat.sent.filter((m) => m.chatId !== leadChat).length;
+  t.check('the messages of each chat are counted, as the window sent them', [counted?.messages?.lead, counted?.messages?.worker], [toLead, toWorker]);
   // The operator's repository: the chat's, with no version control of the bot's own — the worker's neither.
   const git = (...args: string[]): string => execFileSync('git', ['-C', h.repo, ...args], { encoding: 'utf8' }).trim();
   t.check('the repository stays on its branch, with no branch of the worker\'s and no commit', [git('rev-parse', '--abbrev-ref', 'HEAD'), git('branch', '--list', 'cop/*'), git('rev-list', '--count', 'HEAD')], ['main', '', '1']);

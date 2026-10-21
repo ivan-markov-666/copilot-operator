@@ -44,6 +44,11 @@ export type Confinement = {
   roots: string[];
   /** Where the command runs. Relative paths are resolved against it. */
   cwd: string;
+  /**
+   * When the work began — the conversation's or the session's start. A script committed after it was committed
+   * during the work, so it is not one of the project's own (see `ownScriptRefusal` in `scriptFiles.ts`).
+   */
+  workStartedAt?: string;
 };
 
 function normalise(p: string): string {

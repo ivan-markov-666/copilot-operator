@@ -16,7 +16,7 @@
  * message and the ones after it gone from the conversation. The model is chosen under the box, as in an IDE.
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type Session, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
+import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type Session, type Skill, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
@@ -86,6 +86,9 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
   const [newModel, setNewModel] = useState('');
   const [reading, setReading] = useState(false);
+  /** The skills of Settings (2026-10-21), and the one chosen for the next message ('' for none). */
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [skill, setSkill] = useState('');
   const box = useRef<HTMLTextAreaElement | null>(null);
   const running = !!session && session.status !== 'idle';
   /*
@@ -119,7 +122,11 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   }, [showThread?.n]);
   useEffect(() => {
     api.models().then(setCatalogue).catch(() => undefined);
+    api.skills().then((r) => setSkills(r.skills)).catch(() => undefined);
   }, []);
+  /** The skills offered here: the ones for every project, and the ones for the open folder. */
+  const folderKey = (d: string): string => d.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+  const skillsHere = skills.filter((k) => !k.projectDir || (workspace?.dir && folderKey(k.projectDir) === folderKey(workspace.dir)));
 
   const readThreads = useCallback(() => api.chatThreads().then(setThreads).catch(() => undefined), []);
   usePoll(readThreads, 5000);
@@ -201,8 +208,27 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   };
 
   const send = async () => {
-    const message = text.trim();
+    let message = text.trim();
     if (!message || busy) return;
+    /*
+     * "/its-name" at the start of the message chooses the skill (2026-10-21), as in Claude Code; the rest is the message.
+     * Only a name followed by a space or the end: a path such as /etc/hosts is a message, not a skill.
+     */
+    let chosen = skill;
+    const slash = skillsHere.length > 0 ? /^\/([a-z0-9][a-z0-9-]*[a-z0-9])(?=\s|$)\s*([\s\S]*)$/.exec(message) : null;
+    if (slash) {
+      const found = skillsHere.find((k) => k.name === slash[1]);
+      if (!found) {
+        setSaid(t('chat.skillUnknown', { name: slash[1]!, names: skillsHere.map((k) => `/${k.name}`).join(', ') }));
+        return;
+      }
+      if (!slash[2]!.trim()) {
+        setSaid(t('chat.skillNoText', { name: found.name }));
+        return;
+      }
+      chosen = found.name;
+      message = slash[2]!.trim();
+    }
     setBusy(true);
     setSaid('');
     try {
@@ -212,8 +238,10 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       // The language of the page goes along: the Copilot window says in it when the work on the message has ended.
       // Two chats, for a new conversation: the lead judges the worker's reports, so there is no review of its own.
       const two = fresh && newLead ? { workerModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, workerManualModel: newWorkerModel === BY_HAND } : undefined;
-      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan, fresh ? (two ? false : newReview) : undefined, two);
+      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan, fresh ? (two ? false : newReview) : undefined, two, chosen || undefined);
       setText('');
+      // A skill goes with one message: the next one starts without, unless chosen again.
+      setSkill('');
       choose(r.threadId);
       if (r.noted) {
         setSaid(t('chat.noted'));
@@ -479,6 +507,23 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         ) : (
           <div className="cs-bar">{modelPicker('48%')}</div>
         )}
+        {/* Skills (2026-10-21): offered when Settings have one for this folder or for every project. */}
+        {skillsHere.length > 0 && (
+          <div className="cs-bar">
+            <label htmlFor="cs-skill" className="cs-pick-label">
+              {t('chat.skill')}
+            </label>
+            <select id="cs-skill" value={skill} onChange={(e) => setSkill(e.target.value)} disabled={running} title={t('chat.skillWhy')} style={{ minWidth: 0, maxWidth: '70%' }}>
+              <option value="">{t('chat.skillNone')}</option>
+              {skillsHere.map((k) => (
+                <option key={k.name} value={k.name} title={k.description}>
+                  /{k.name}
+                  {k.description ? ` — ${k.description}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="cs-bar">
           <label htmlFor="cs-mode" className="sr-only">{t('chat.mode')}</label>
           <select id="cs-mode" value={mode} onChange={(e) => { const m = e.target.value as 'confirm' | 'unattended'; setMode(m); keep(MODE_KEY, m); }} disabled={running} title={t('chat.modeWhy')}>
@@ -612,6 +657,7 @@ function Turn({ session, task, approvals, onDecided, onOpenFile, onRewind }: { s
           </button>
         )}
         <div className="cs-user">
+          {task.skill && <SkillChip skill={task.skill} />}
           <Folded>
             <RichText text={task.prompt} />
           </Folded>
@@ -834,6 +880,7 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
           </button>
         )}
         <div className="cs-user">
+          {task.skill && <SkillChip skill={task.skill} />}
           <Folded>
             <RichText text={task.prompt} />
           </Folded>
@@ -873,6 +920,12 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
           {task.lead ? <span className="muted small"> · {t('lead.subtasks', { n: task.lead.subtasks, max: task.lead.maxSubtasks })}</span> : null}
         </p>
       )}
+      {/* How many messages went to each chat, and in all (2026-10-21). */}
+      {task.lead?.messages && (
+        <p className="muted small cs-lead-count">
+          {t('lead.messages', { lead: task.lead.messages.lead, worker: task.lead.messages.worker, total: task.lead.messages.lead + task.lead.messages.worker })}
+        </p>
+      )}
       {!live && task.status !== 'queued' && <Ending task={task} />}
       {!live && (task.lead?.evidence?.length ?? 0) > 0 && (
         <div className="cs-evidence">
@@ -905,6 +958,18 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
         </div>
       )}
     </section>
+  );
+}
+
+/** The skill a message was sent with, above it: its name, and what it is for on hover. */
+function SkillChip({ skill }: { skill: NonNullable<Task['skill']> }) {
+  const { t } = useT();
+  return (
+    <p className="cs-skill-chip">
+      <span className="badge skill" title={skill.description || undefined}>
+        {t('chat.skillUsed', { name: skill.name })}
+      </span>
+    </p>
   );
 }
 

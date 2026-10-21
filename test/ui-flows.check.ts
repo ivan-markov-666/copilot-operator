@@ -15,7 +15,7 @@
  *   editor; plan mode, asked about in the conversation; a long message folded; a long ending with "Copy" under it;
  *   the drop-downs' arrows off their text;
  * - the home screen: only the chat, Kerrigan saved and copied, the "i"s;
- * - the appearance menu on the left: System, light and dark, A− and A+, night light and the reading aids;
+ * - the appearance menu in the bar on top: System, light and dark, A− and A+, night light and the reading aids;
  * - the editor: colour by language, an edit kept across tabs and saved, a change on disk asked about;
  * - the Git view, and the changes of a message by keyboard, their buttons in pairs.
  *
@@ -672,14 +672,20 @@ try {
   });
 
   /*
-   * How the page looks, from the last icon on the left (2026-10-20): the theme — System by default, which follows
-   * the machine — Light and Dark; the text a step smaller or larger; night light and the reading aids.
+   * How the page looks, from the bar on top, between Settings and System (2026-10-21; it was the last icon on the left):
+   * the theme — System by default, which follows the machine — Light and Dark; the text a step smaller or larger;
+   * night light and the reading aids, the system's cursor among them.
    */
-  await scenario('the appearance menu on the left: System by default, light and dark, A− and A+, night light and the reading aids', {}, async (_h, page, url) => {
+  await scenario('the appearance menu in the bar on top: System by default, light and dark, A− and A+, night light and the reading aids', {}, async (_h, page, url) => {
     await page.emulateMedia({ colorScheme: 'dark' });
     await page.goto(url('/'));
     const html = (name: string): Promise<string | undefined> => page.evaluate((n) => document.documentElement.dataset[n], name);
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).waitFor();
+    const order = await page.locator('.wb-menu').evaluate((nav) => Array.from(nav.children).map((c) => (c.textContent ?? '').trim()));
+    t.check('in the bar on top, between Settings and System', order.slice(0, 3), [en['nav.defaults'], en['nav.appearance'], en['nav.system']]);
+    t.check('and no longer in the column of icons', await page.locator('.wb-activity').getByRole('button', { name: en['wb.appearance']!, exact: true }).count(), 0);
+    // Cursors of the page's own, by the theme; the system's when asked for (2026-10-21).
+    t.truthy('the page draws its own cursor', (await page.evaluate(() => getComputedStyle(document.body).cursor)).includes('url('), await page.evaluate(() => getComputedStyle(document.body).cursor));
     t.check('nothing chosen: the theme is the machine\'s, here dark, before and after the page has loaded', await html('theme'), 'dark');
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).click();
     const menu = page.getByRole('dialog', { name: en['wb.appearance']! });
@@ -713,6 +719,14 @@ try {
     await aid('ap.links').check();
     await aid('ap.motion').check();
     t.check('underlined links and less motion', [await html('links'), await html('motion')], ['underline', 'reduced']);
+    const darkCursor = await page.evaluate(() => getComputedStyle(document.body).cursor);
+    await aid('ap.systemCursor').check();
+    t.check('the system\'s cursor: the page\'s own is put away', [await html('cursor'), await page.evaluate(() => getComputedStyle(document.body).cursor)], ['system', 'default']);
+    await aid('ap.systemCursor').uncheck();
+    await theme('theme.light').click();
+    const lightCursor = await page.evaluate(() => getComputedStyle(document.body).cursor);
+    t.truthy('and its own again, drawn for each theme', lightCursor.includes('url(') && darkCursor.includes('url(') && lightCursor !== darkCursor, { lightCursor: lightCursor.slice(0, 80), darkCursor: darkCursor.slice(0, 80) });
+    await theme('theme.dark').click();
     await page.reload();
     t.check('kept in this browser, from before the first paint', [await html('theme'), await html('textsize'), await html('night'), await html('links')], ['dark', 'small', 'on', 'underline']);
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).click();
@@ -726,6 +740,107 @@ try {
     // The Appearance page went (2026-10-20): the menu is where all of it is.
     await page.goto(url('/defaults'));
     t.check('no page of its own in the navigation', await page.locator('nav a[href="/appearance"]').count(), 0);
+    const pages = await page.locator('header nav').first().evaluate((nav) => Array.from(nav.children).map((c) => (c.textContent ?? '').trim()));
+    t.truthy('on the other pages too, between Settings and System', pages.indexOf(en['nav.appearance']!) === pages.indexOf(en['nav.defaults']!) + 1 && pages.indexOf(en['nav.system']!) === pages.indexOf(en['nav.appearance']!) + 1, pages);
+  });
+
+  /*
+   * The panels moved as in VS Code (operator, 2026-10-21: "the chat where 'Open a file from the explorer' is, and that
+   * one where the chat was"): a grip dragged onto another panel swaps the two; its menu puts a panel in a place; the
+   * order is kept; the palette puts it back.
+   */
+  await scenario('the panels: dragged onto another they swap, the grip\'s menu moves one, the order is kept, the palette puts it back', {}, async (_h, page, url) => {
+    await page.goto(url('/'));
+    await page.locator('.wb-chat .wb-grip').waitFor();
+    const places = async (): Promise<string[]> =>
+      await page.evaluate(() =>
+        Array.from(document.querySelectorAll<HTMLElement>('.wb-body > [data-area]'))
+          .filter((e) => !e.hidden)
+          .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
+          .map((e) => e.dataset.area ?? ''),
+      );
+    t.check('as they start: the files, the editor, the chat', await places(), ['side', 'center', 'chat']);
+    await page.locator('.wb-chat .wb-grip').dragTo(page.locator('.wb-center'));
+    await waitFor('the two to swap', async () => (await places()).join() === 'side,chat,center', 5_000).catch(() => undefined);
+    t.check('the chat dragged onto the editor: the two swap', await places(), ['side', 'chat', 'center']);
+    const chatBox = await page.locator('.wb-chat').boundingBox();
+    const editorBox = await page.locator('.wb-center').boundingBox();
+    t.truthy('the middle takes what is left: the chat is now the wide one', !!chatBox && !!editorBox && chatBox.width > editorBox.width, { chatBox, editorBox });
+    await page.reload();
+    await page.locator('.wb-chat .wb-grip').waitFor();
+    t.check('kept in this browser', await places(), ['side', 'chat', 'center']);
+    await page.locator('.wb-side .wb-grip').click();
+    const menu = page.getByRole('menu', { name: en['wb.move']!.replace('{name}', en['wb.explorer']!) });
+    await menu.waitFor();
+    t.check('the grip\'s menu: the three places, the one it is in not offered', [await menu.getByRole('menuitem').allTextContents(), await menu.getByRole('menuitem', { name: en['wb.moveLeft']! }).isDisabled()], [[en['wb.moveLeft'], en['wb.moveCenter'], en['wb.moveRight']], true]);
+    await menu.getByRole('menuitem', { name: en['wb.moveRight']! }).click();
+    await waitFor('the explorer to move right', async () => (await places()).at(-1) === 'side', 5_000).catch(() => undefined);
+    t.check('"To the right": the files go right, and what was there takes their place', await places(), ['center', 'chat', 'side']);
+    await page.keyboard.press('Control+k');
+    await page.getByRole('option', { name: en['wb.cmdResetLayout']! }).or(page.getByRole('button', { name: en['wb.cmdResetLayout']! })).first().click();
+    await waitFor('the panels to be put back', async () => (await places()).join() === 'side,center,chat', 5_000).catch(() => undefined);
+    t.check('the palette puts them back where they were', await places(), ['side', 'center', 'chat']);
+  });
+
+  /*
+   * Skills (operator, 2026-10-21): written in Settings, chosen under the chat's box or with /its-name at the start of a
+   * message; the message shows which; an unknown name is said, not sent.
+   */
+  await scenario('skills: written in Settings, chosen under the box or with /its-name, shown on the message', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    await page.goto(url('/defaults'));
+    const add = page.locator('.skill-new');
+    await add.waitFor();
+    await add.getByLabel(en['skills.name']!, { exact: true }).fill('new-test');
+    await add.getByLabel(en['skills.description']!, { exact: true }).fill('Adding an automated test');
+    await add.getByLabel(en['skills.text']!, { exact: true }).fill('Tests live in tests/e2e, one file per page.');
+    await page.getByRole('button', { name: en['skills.add']!, exact: true }).click();
+    await waitFor('the skill to be saved', async () => (await h.call<{ skills: Array<{ name: string }> }>('GET', '/skills')).skills.length === 1, 10_000).catch(() => undefined);
+    t.check('added in Settings', (await h.call<{ skills: Array<{ name: string; text: string }> }>('GET', '/skills')).skills.map((k) => [k.name, k.text]), [['new-test', 'Tests live in tests/e2e, one file per page.']]);
+    t.check('and listed there, the form empty again', [await page.locator('.skill-entry:not(.skill-new)').count(), await add.getByLabel(en['skills.name']!, { exact: true }).inputValue()], [1, '']);
+
+    await page.goto(url('/'));
+    const pick = page.locator('#cs-skill');
+    await pick.waitFor();
+    t.check('under the chat\'s box: none, or the skill', await pick.locator('option').allTextContents(), [en['chat.skillNone'], '/new-test — Adding an automated test']);
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('/nope do it');
+    await input.press('Enter');
+    await page.locator('.cs-system').getByText('/nope').waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.truthy('an unknown name is said, with the ones there are, and nothing is sent', ((await page.locator('.cs-body').textContent()) ?? '').includes('/new-test') && h.chat.sent.length === 0, await page.locator('.cs-body').textContent());
+    h.chat.script(reply.done('The test was added where the skill says; it passes, as its output shows.'));
+    await input.fill('/new-test add a test for the login page');
+    await input.press('Enter');
+    await page.locator('.cs-skill-chip').waitFor({ timeout: 30_000 });
+    t.check('the message shows its skill, and is the rest of what was typed', [((await page.locator('.cs-skill-chip').textContent()) ?? '').trim(), ((await page.locator('.cs-user').first().textContent()) ?? '').includes('add a test for the login page')], [en['chat.skillUsed']!.replace('{name}', 'new-test'), true]);
+    await page.locator('.cs-end').waitFor({ timeout: 30_000 });
+    t.truthy('and Copilot was given the skill with it', h.chat.sent.some((m) => m.text.includes('## Skill: new-test')), h.chat.sent.map((m) => m.text.slice(0, 80)));
+    t.check('the next message starts without a skill', await pick.inputValue(), '');
+  });
+
+  /*
+   * The pause between messages, in Settings (operator, 2026-10-21): a box; ticked, the seconds and a second box for a
+   * random time; that one ticked, the longest.
+   */
+  await scenario('Settings: the pause between messages, its seconds and a random time appearing as the boxes are ticked', {}, async (h, page, url) => {
+    await page.goto(url('/defaults'));
+    const on = page.getByRole('checkbox', { name: en['exec.gap']!, exact: true });
+    await on.waitFor();
+    t.check('off at first, nothing under it', [await on.isChecked(), await page.locator('#gap-sec').count(), await page.locator('#gap-random').count()], [false, 0, 0]);
+    await on.check();
+    await page.locator('#gap-sec').waitFor();
+    t.check('ticked: the seconds, 60, and the box for a random time', [await page.locator('#gap-sec').inputValue(), await page.locator('#gap-random').count(), await page.locator('#gap-max').count()], ['60', 1, 0]);
+    await page.getByRole('checkbox', { name: en['exec.gapRandom']!, exact: true }).check();
+    await page.locator('#gap-max').waitFor();
+    t.check('a random time: the longest, 90', await page.locator('#gap-max').inputValue(), '90');
+    await waitFor('the settings to be saved', async () => {
+      const p = ((await h.call<{ raw: Record<string, unknown> }>('GET', '/settings')).raw.pacing ?? {}) as { gapEnabled?: boolean; gapRandom?: boolean };
+      return p.gapEnabled === true && p.gapRandom === true;
+    }, 10_000).catch(() => undefined);
+    const saved = ((await h.call<{ raw: Record<string, unknown> }>('GET', '/settings')).raw.pacing ?? {}) as Record<string, unknown>;
+    t.check('saved', [saved.gapEnabled, saved.gapRandom], [true, true]);
+    await on.uncheck();
+    t.check('unticked: the rest goes', [await page.locator('#gap-sec').count(), await page.locator('#gap-random').count()], [0, 0]);
   });
 
   /*
@@ -817,7 +932,17 @@ try {
     const card = page.locator('.cs-plan-ask .approval');
     await card.waitFor({ timeout: 30_000 });
     t.truthy('the plan is asked about in the conversation, though commands run without asking', ((await card.textContent()) ?? '').includes('create the file'), await card.textContent());
-    t.check('with its three answers', await card.getByRole('button').allTextContents(), [en['pm.approve'], en['pm.revise'], en['pm.stop']]);
+    t.check('with its three answers', await card.locator('button:not(.copy-btn)').allTextContents(), [en['pm.approve'], en['pm.revise'], en['pm.stop']]);
+    // "Copy" on the plan (operator, 2026-10-21): the whole plan, under its headings, at its top and at its foot.
+    t.check('"Copy" at the plan\'s top and at its foot', await card.locator('.plan-view .copy-btn').count(), 2);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    await card.locator('.plan-view .copy-btn').first().click();
+    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    t.truthy(
+      'it copies the plan whole: what is there, the approach, the steps numbered, the files, how it is shown done',
+      copied.startsWith(`## ${en['pm.existing']}\n\nOnly README.md`) && copied.includes(`## ${en['pm.steps']}\n\n1. create the file\n2. read it back`) && copied.includes('- `planned.txt`') && copied.includes(`## ${en['pm.verification']}`),
+      copied,
+    );
     t.check('and not in the banner over the workbench', await page.locator('.approval-banner .approval').count(), 0);
     t.check('nothing was changed before it is approved', existsSync(join(h.repo, 'planned.txt')), false);
     await card.getByRole('textbox', { name: en['pm.note']! }).fill(note);
@@ -1049,6 +1174,12 @@ try {
     await card.waitFor({ timeout: 30_000 });
     await sub.locator('summary').click();
     t.truthy('in it, the worker\'s command', ((await sub.textContent()) ?? '').includes('Get-ChildItem -Name'), await sub.textContent());
+    // Both chats' messages and their sum (operator, 2026-10-21), along the bottom and under the message.
+    await waitFor('the status bar to count both chats', async () => /messages: lead \d+, worker \d+, \d+ in all/.test((await page.locator('.wb-statusbar').textContent()) ?? ''), 10_000).catch(() => undefined);
+    const line = (await page.locator('.wb-statusbar').textContent()) ?? '';
+    const [, ld, wk, all] = /messages: lead (\d+), worker (\d+), (\d+) in all/.exec(line) ?? [];
+    t.truthy('the status bar counts the lead\'s messages, the worker\'s, and the two together', !!ld && Number(ld) > 0 && Number(wk) > 0 && Number(all) === Number(ld) + Number(wk), line);
+    t.truthy('and so does the message', /Messages: lead \d+ · worker \d+ · \d+ in all/.test((await page.locator('.cs-lead-count').textContent()) ?? ''), await page.locator('.cs-lead-count').textContent());
     t.truthy('the lead\'s question, with its choices', ((await card.textContent()) ?? '').includes('Should done.txt go at the root') && (await card.getByRole('button', { name: 'at the root', exact: true }).count()) === 1, await card.textContent());
     /*
      * Answered, the card goes at once (2026-10-20: it stayed, answered, until the next read of the list) — here every

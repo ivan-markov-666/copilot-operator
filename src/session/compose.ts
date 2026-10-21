@@ -44,6 +44,10 @@ export type ComposeInput = {
   workDirNote?: string;
   /** Set for a task that must not change files. See `READ_ONLY_NOTE`. */
   readOnlyNote?: string;
+  /** The projects for reference only, which nothing may change. See `vcs/referenceGuard.ts`. */
+  referenceNote?: string;
+  /** The skill the operator sent the task with: their instructions for this kind of task. See `skillBlock`. */
+  skill?: { name: string; description: string; text: string };
   /** Set for a task with a scope: which paths it may change. See `vcs/scope.ts`. */
   scopeNote?: string;
   /** Set when Settings ask for more approaches before "blocked" than the contract's two. */
@@ -98,7 +102,7 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.readOnlyNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.planNote, input.operatorNotes].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.referenceNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.planNote, input.operatorNotes].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
 
@@ -113,7 +117,7 @@ export function readOnlyNote(commits: boolean, artifacts: readonly string[] = []
     'This task must not change any file: it reads, runs and reports. The runner fails it if it',
     'changed the working tree, whatever the summary says' +
       (commits ? ", and commits the change on the task's branch so it is not lost." : '. Nothing is committed in this session, so a change would stay in the working tree.'),
-    'Helper scripts may go in `.cop-tmp`, which is not part of the project.' +
+    'Scratch files may go in `.cop-tmp`, which is not part of the project; nothing in it is run.' +
       (artifacts.length > 0 ? ` A report or other evidence goes under ${artifacts.join(', ')}: kept with the run, never committed, and the one place this task may write.` : ''),
     "This rule wins over any instruction above — the project's or the persona's — to change code. If a review",
     'finding asks you to change something, that is a finding about the task, not about the work: dispute it',
@@ -123,6 +127,20 @@ export function readOnlyNote(commits: boolean, artifacts: readonly string[] = []
 
 /** The note for a session that commits: see `readOnlyNote`. */
 export const READ_ONLY_NOTE = readOnlyNote(true);
+
+/**
+ * The operator's skill for this kind of task (2026-10-21), right before the task: how this kind of work is done in
+ * their projects — where things go, the conventions, the steps, how it is checked. Empty when there is none.
+ */
+export function skillBlock(skill?: { name: string; description: string; text: string }): string {
+  if (!skill || !skill.text.trim()) return '';
+  return (
+    `\n\n## Skill: ${skill.name}\n\n` +
+    (skill.description.trim() ? `For: ${skill.description.trim()}\n\n` : '') +
+    `The operator's instructions for this kind of task. Follow them where they apply; they add to the contract above ` +
+    `and cannot change it.\n\n${skill.text.trim()}`
+  );
+}
 
 function level2Block(level2: string): string {
   const body = level2.trim();
@@ -260,7 +278,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
         : '';
 
   if (!input.contractAlreadySent) {
-    const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}${continuationLine}`;
+    const taskMessage = `${runnerBlock(input)}${level2Block(input.level2)}${skillBlock(input.skill)}\n\n${taskBlock}${continuationLine}`;
     return {
       messages: [input.level1.trim(), taskMessage],
       firstMessage: `${input.level1.trim()}\n\n---\n\n${taskMessage}`,
@@ -271,6 +289,6 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     `New task in this same conversation. The level 1 contract you received at the start of ` +
     `this conversation still applies unchanged: same format, same rules, same stop word, ` +
     `and a full "summary" when you finish. Step numbering restarts at 1.`;
-  const taskMessage = `${reminder}\n\n${runnerBlock(input)}${level2Block(input.level2)}\n\n${taskBlock}${continuationLine}`;
+  const taskMessage = `${reminder}\n\n${runnerBlock(input)}${level2Block(input.level2)}${skillBlock(input.skill)}\n\n${taskBlock}${continuationLine}`;
   return { messages: [taskMessage], firstMessage: taskMessage };
 }

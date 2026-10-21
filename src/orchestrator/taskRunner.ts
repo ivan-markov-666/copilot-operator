@@ -12,7 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
@@ -38,12 +38,13 @@ import { describeStep, checkCommandRefusal, commandRefusal, type PolicyConfig } 
 import { networkFetchReason } from '../exec/network.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
-import { confinementRefusal, sessionRoots, type Confinement } from '../exec/confinement.js';
+import { confinementRefusal, isWithin, sessionRoots, type Confinement } from '../exec/confinement.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
-import { Pacer } from '../util/pacing.js';
+import { gapFrom, Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, operatorNotesSection, readOnlyNote } from '../session/compose.js';
+import { describeChange, ReferenceGuard, referenceMessage, referenceNote, type ReferenceProject } from '../vcs/referenceGuard.js';
 import { changedSince, takeAfter, takeCheckpoint } from '../session/checkpoint.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
@@ -1043,6 +1044,10 @@ export async function runTask(
     enabled: cfg.pacing.enabled,
     settleMs: cfg.pacing.settleMs,
     maxMessagesPerHour: cfg.pacing.maxMessagesPerHour,
+    // The operator's pause between messages (2026-10-21), said in the log when a message waits for it.
+    gapMs: gapFrom(cfg.pacing),
+    signal,
+    onGap: (ms) => sink.event('pacing-gap', { ms }, `the next message waits ${Math.ceil(ms / 1000)} s: Settings ask for a pause between messages`),
   });
 
   const artifactsDir = log.path('artifacts');
@@ -1117,6 +1122,8 @@ export async function runTask(
   let disputes: Dispute[] = [];
   /** What the runner tells the model in its next message about the reply just processed. */
   let runnerNotes: string[] = [];
+  /** The projects for reference only, watched for the length of the task (see `vcs/referenceGuard.ts`). */
+  let reference: ReferenceGuard | null = null;
   /** Steps the chat sent that were not run, for the handoff at the end. */
   const notRun: NotRun[] = [];
   /**
@@ -1241,6 +1248,8 @@ export async function runTask(
 
     // The net under the plan's own checks: whatever the task left running is stopped and named.
     await reap(processesBefore, 'the task');
+    await reference?.close().catch(() => undefined);
+    reference = null;
 
     /*
      * A chat message: the folder photographed again after it, on top of its checkpoint, so what it changed is
@@ -1619,8 +1628,27 @@ export async function runTask(
   const confinement: Confinement = {
     roots: sessionRoots(work.cwd, [cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)]),
     cwd: work.cwd,
+    // A script committed after this is the work's, not the project's (see `ownScriptRefusal`).
+    workStartedAt: session.createdAt,
   };
   sink.event('confinement', { roots: confinement.roots }, `commands are confined to ${confinement.roots.join(', ')}`);
+
+  /*
+   * The projects for reference only (operator, 2026-10-21) that this task can reach: photographed now, and after every
+   * step compared with that, whatever changed put back (see `vcs/referenceGuard.ts`).
+   */
+  const forReference: ReferenceProject[] = [
+    ...(cfg.project.readOnly && cfg.project.rootDir ? [{ name: cfg.project.name || basename(cfg.project.rootDir), dir: cfg.project.rootDir }] : []),
+    ...cfg.project.others.filter((o) => o.readOnly).map((o) => ({ name: o.name, dir: o.rootDir })),
+  ].filter((p) => isWithin(p.dir, confinement.roots));
+  if (forReference.length > 0) {
+    reference = await ReferenceGuard.start(forReference, runId);
+    for (const p of reference.projects) sink.event('reference', { name: p.name, dir: p.dir }, `for reference only, nothing may change there: ${p.name} (${p.dir})`);
+    for (const p of reference.unwatched) {
+      sink.event('reference-unwatched', { name: p.name, dir: p.dir, problem: p.problem },
+        `for reference only, but it cannot be watched (${p.problem}): ${p.name} (${p.dir}); the chat is told to leave it alone`, 'warn');
+    }
+  }
 
   const isolation = assessIsolation(cfg.execution.isolation, readIsolationSignals());
   for (const concern of isolation.warnings) {
@@ -1845,6 +1873,7 @@ export async function runTask(
       // Said of the session's conversation, so with none on record nothing has had it: this run
       // entered a fresh one (see `enterSessionConversation`), whatever an older record says.
       contractAlreadySent: session.contractSent && !!session.chat,
+      skill: task.skill,
       continuing,
       buildsOn,
       // The operator's new prompt goes out whether or not the attempt it follows reached a conversation.
@@ -1852,6 +1881,7 @@ export async function runTask(
       workDirNote: workingDirNote(work),
       vcsNote: session.kind === 'chat' ? CHAT_NOTE : prepared.note,
       // What is said about a commit is true only where one happens (live run 2026-10-03: promised with commits off).
+      referenceNote: forReference.length > 0 ? referenceNote(forReference, work.cwd) : undefined,
       readOnlyNote: task.readOnly ? readOnlyNote(!!(session.vcs?.enabled && session.vcs.commitOnFinish !== false && trackedRepoOf(session)), artifactPatterns(session.vcs)) : undefined,
       scopeNote: [
         scopeNote(scope, scopeEnforced, {
@@ -2371,6 +2401,15 @@ export async function runTask(
           round: reviewRounds,
           cwd: work.cwd,
           roots: confinement.roots,
+          workStartedAt: confinement.workStartedAt,
+          afterStep: reference?.active
+            ? async () => {
+                const touched = await reference!.check();
+                if (touched.length === 0) return null;
+                sink.event('reference-put-back', { review: true, changes: touched }, `a review step changed a project for reference only: ${touched.map((c) => `${c.name}: ${describeChange(c)}`).join('; ')}`, 'warn');
+                return referenceMessage(touched);
+              }
+            : undefined,
           tracker,
           changedFiles,
           deliverable,
@@ -3146,6 +3185,22 @@ export async function runTask(
           environmentProblem = result.shellProblem;
           sink.event('step-environment', { id: step.id, requested: result.requestedShell ?? null, available: result.shellProblem.available },
             result.shellProblem.message, 'error');
+          break;
+        }
+
+        /*
+         * A project for reference only changed: put back as it was, the chat told with the step's own output, and
+         * the rest of the round not run — a step after it could build on what was just undone.
+         */
+        const touched = reference?.active ? await reference.check() : [];
+        if (touched.length > 0) {
+          const told = referenceMessage(touched);
+          const all = touched.every((c) => c.putBack);
+          sink.event('reference-put-back', { id: step.id, changes: touched },
+            `step ${step.id} changed a project for reference only, ${all ? 'put back' : 'NOT all put back'}: ${touched.map((c) => `${c.name}: ${describeChange(c)}`).join('; ')}`,
+            all ? 'warn' : 'error');
+          result.stderr = `${result.stderr}${result.stderr.endsWith('\n') || !result.stderr ? '' : '\n'}[runner] ${told}\n`;
+          runnerNotes.push(told);
           break;
         }
 

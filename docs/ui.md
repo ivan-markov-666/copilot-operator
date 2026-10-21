@@ -552,6 +552,46 @@ POST   /api/login                    POST /api/browse-folder
 
 ## Settings
 
+**Skills (2026-10-21).** Settings → Skills keeps instructions for a kind of task that comes back — a new test, a
+new entity, a migration: a name to call it by (`new-test`, lowercase with hyphens), a line on what it is for, the
+project it is for or every project, and the instructions (`skills` in the settings, `GET`/`PUT /api/skills`). A
+message is sent with one chosen under the chat's box (`#cs-skill`, only the skills for the open folder and for every
+project) or by starting with `/its-name`; the task keeps the skill as it read then (`Task.skill`), and its opening
+carries it right before the task under "## Skill: <name>" (`skillBlock` in `session/compose.ts`). With two chats the
+lead is given it with the assignment and the worker with every subtask. Kerrigan lists the skills.
+
+**The panels (2026-10-21).** The explorer, the editor with its panel and the chat sit in three places; the grip ⠿ in
+each one's head drags onto another to swap the two, or opens a menu of the places (`web/app/workbench/panelGrip.tsx`).
+The order is kept with the layout in this browser; "Put the panels back where they were" (Ctrl+K) undoes it. The
+left and right places keep their widths, the middle takes the rest.
+
+**Appearance, cursors, scroll bars (2026-10-21).** "Appearance" sits in the bar on top, between Settings and System,
+on every page. The page draws its own cursors, in the theme's colours (`--cur-*` in globals.css), with "The system's
+cursor" among the reading aids to put Windows' back (`data-cursor`); scroll bars are thin and rounded, in the theme's
+muted colour.
+
+**Pausing between messages, counting them (2026-10-21).** Settings → Execution → "Pause between messages"
+(`pacing.gapEnabled`, `gapSec`), and under it "Random time" (`gapRandom`, `gapMaxSec`): a message to Copilot waits until
+that long has passed since the one before, whichever conversation it went to (one clock for every `Pacer`, see
+`util/pacing.ts`); the log says how long. With two chats, the lead's message keeps how many messages went to the lead
+and to the worker (`LeadRecord.messages`); the status bar and the message show both and their sum.
+
+**Projects for reference only (2026-10-21).** Each project in Settings has "For reference only (no
+changes)" (`project.readOnly`, `project.others[].readOnly`). When a task begins, every such project
+it can reach is photographed (`src/vcs/referenceGuard.ts`): its files that git does not ignore, its
+branches, tags and stash, HEAD and what is staged — in a repository of its own in a temporary
+folder, so nothing is written into the project. After every step, the implementer's and the
+reviewer's, it is photographed again; whatever changed is put back as its exact bytes, refs and the
+index as they were, the step's output says so, and the rest of that round is not run. The chat is
+told about these projects before it starts; on the chat's own folder marked so, every message can
+only read and report. Files git ignores are not watched.
+
+**Script files (2026-10-21).** A chat's step may run a script file — `.ps1`, `.psm1`, `.cmd`, `.bat`,
+`.sh`, `.vbs`, `.wsf` — only when it is the project's own: committed, unchanged, last committed by
+someone other than the runner and before the work began (`ownScriptRefusal` in
+`src/exec/scriptFiles.ts`); nothing in `.cop-tmp` is run. The operator's own checks are not held to
+it. Commands themselves always run as text given to the shell.
+
 `data/settings.json`, same shape as `run.example.yaml`, everything optional. The System page
 shows what is saved and what it resolves to. Sign-in stays in the terminal on purpose, so the
 bot never handles credentials: `npx tsx src/cli.ts login --account <upn>`.

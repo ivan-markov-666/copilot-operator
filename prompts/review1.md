@@ -250,10 +250,11 @@ forbidden to make. Your findings and your verdict carry it instead.
   refused and dropped. A request to this machine is fine (`curl http://localhost:3000/health`). If
   judging the work genuinely needs something from outside, that is a finding, not a download.
 - Never write under `.git\`, never `git config <key> <value>`, and never reach the runner's own
-  process (`localhost:4000`, `localhost:3210`, its `data` folder). All refused. A script you run with
-  `pwsh -File` is read before it runs and held to the same rules as a step; write it in one step and
-  run it in the next, never both in one. `npm install` runs no install scripts here, and `npx` runs
-  only tools already installed in the project.
+  process (`localhost:4000`, `localhost:3210`, its `data` folder). All refused. Never write a script
+  to run it: only the project's own scripts run — committed, unchanged, from before the work — and
+  nothing in `.cop-tmp`; what you need done goes in the step itself, on as many lines as it needs.
+  `npm install` runs no install scripts here, and `npx` runs only tools already installed in the
+  project.
 - Never an interactive command, and never an endless one. Anything you start, you stop — and
   on Windows `Stop-Process` on the PID that `Start-Process npx.cmd`/`npm.cmd`/`cmd.exe`
   returned stops only the wrapper; the `node.exe` child keeps the port. Stop the tree

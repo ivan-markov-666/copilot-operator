@@ -299,27 +299,46 @@ There is no step that takes a file, and nothing you attach is fetched, saved or 
 a setting; the step type does not exist. A process that receives a file and executes it is a
 loader whatever it meant, and that is what this runner refuses to be.
 
-So everything you want done arrives as a `command`. For something too long for one line, write
-the file **from a command step** and run it in the next:
+So everything you want done arrives as a `command`, and **runs as that command**: you never write
+a script to run it. For something too long for one line, the command itself is several lines —
+it is given to PowerShell whole:
+
+```
+$tests = Get-ChildItem .\test -Recurse -Filter *.test.ts
+"$($tests.Count) test files"
+$tests | Select-Object -First 5 -ExpandProperty FullName
+```
+
+**Only the project's own scripts run** (the operator's rule): a script file — `.ps1`, `.psm1`,
+`.cmd`, `.bat`, `.sh`, `.vbs`, `.wsf` — must be committed in the project, unchanged since, and
+committed before this work began. A script written, changed or downloaded during the work is refused
+however it is called — `pwsh -File`, `&`, a path, `cmd /c`, `bash`, `Start-Process`, `Import-Module`
+— and so is any file in `.cop-tmp` given to a program that runs it (`node .\.cop-tmp\x.js`). The
+project's own tools are not scripts of this kind: `npm test`, `npm run build`, `dotnet test`, `node`
+starting the application — the project's code, run the way the project runs it — go on as before.
+If a script is meant to become part of the project, write it as part of the work and say in `notes`
+that the operator should commit it; until then it is not run.
+
+Scratch copies, drafts and anything else that is not the work go in `.cop-tmp`: the runner never
+commits that folder, and nothing in it is run. Every other file you leave in the project is
+committed as the work. A file's contents go in with `Set-Content` and a here-string:
 
 ```
 New-Item -ItemType Directory -Force .\.cop-tmp | Out-Null
-Set-Content -NoNewline -Path .\.cop-tmp\count-tests.ps1 -Value @'
-Get-ChildItem .\test -Recurse -Filter *.test.ts | Measure-Object | Select-Object Count
+Set-Content -NoNewline -Path .\.cop-tmp\notes.md -Value @'
+# What the survey found
 
 '@
 ```
 
-then `pwsh -File .\.cop-tmp\count-tests.ps1`. Helper scripts, scratch copies and anything else
-that is not the work go in `.cop-tmp`: the runner never commits that folder. Every other file you
-leave in the project is committed as the work. Keep `-NoNewline` and the empty line before `'@`: without
+Keep `-NoNewline` and the empty line before `'@`: without
 them `Set-Content` adds a Windows line ending after the last line while the lines of the
 here-string end in LF, and a file with two kinds of line ending is sent back to you. When you
 change an existing file, keep the line endings it already has. The difference is not cosmetic: what the file contains
 passed through a step that was read and screened, and it is in the project where it can be read
 afterwards, rather than arriving from the chat as something nobody saw.
 
-Prefer a here-string (`@'` … `'@`) over quoting a long script inline, which is how quoting gets
+Prefer a here-string (`@'` … `'@`) over quoting a long text inline, which is how quoting gets
 mangled — and see "Characters that do not survive" below, which still applies inside one.
 
 ## You never download anything
@@ -339,7 +358,8 @@ Do this instead:
 | Instead of downloading | Do this |
 |---|---|
 | a package or library | the project's own package manager: `npm install`, `dotnet add package`, `pip` into the project's `.venv` |
-| a script, a config, a sample file | write it into the project with a `command` step (`Set-Content` and a here-string) |
+| a config or a sample file | write it into the project with a `command` step (`Set-Content` and a here-string) |
+| a script | the commands themselves, in the step; a script is not run unless it is the project's own |
 | checking that a server you started answers | a request to this machine is fine: `curl http://localhost:3000/health`, `Invoke-WebRequest http://127.0.0.1:5000` |
 | anything else from the internet | say in `notes` what is needed and from where, and end `blocked`; the operator fetches it |
 
@@ -476,10 +496,10 @@ ordinary way to do each one:
 | opening a file or a URL through Windows (`Invoke-Item`, `Start-Process` on a document or an address) | start the program itself, by name, with the file as its argument |
 | anything under `.git\`, and `git config <key> <value>` | read history with `git log`, `git show`, `git diff`; the runner owns the repository |
 | the runner itself: `localhost:4000`, `localhost:3210`, its `data` folder | nothing: the bot that runs the task is not part of the task |
-| writing a script and running it in the same step | write it in one step, run it in the next |
+| running a script written or changed during the work, or anything in `.cop-tmp` | the commands themselves, in the step, on as many lines as they need |
 
-Scripts you run with `pwsh -File` are **read from disk before they run** and held to the same
-rules as a step; a script that does not exist yet, or that could not be read, is not run.
+The project's own scripts are **read from disk before they run** and held to the same rules as a
+step; one that could not be read is not run.
 
 `npm install` runs **no install scripts** (`postinstall` and the like) on this machine, and `npx`
 runs only a tool that is already installed in the project — an `npx` of something not installed

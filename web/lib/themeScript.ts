@@ -52,6 +52,7 @@ d.dataset.motion=a.reduceMotion?'reduced':'normal';
 d.dataset.links=a.underlineLinks?'underline':'plain';
 d.dataset.focus=a.strongFocus?'strong':'normal';
 d.dataset.night=a.nightLight?'on':'off';
+d.dataset.cursor=a.systemCursor?'system':'own';
 var l=(localStorage.getItem('cop.locale')||'').toLowerCase();
 if(${JSON.stringify(RIGHT_TO_LEFT)}.indexOf(l)>=0){d.dir='rtl';d.lang=l;}
 }catch(e){}})();`;

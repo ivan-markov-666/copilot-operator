@@ -332,6 +332,11 @@ export const RunConfigSchema = z.object({
        */
       level2: z.string().default(''),
       /**
+       * For reference only (operator, 2026-10-21): the bot may read it and run what only reads, and nothing in it
+       * may change while it works. Whatever a step changes there is put back (see `vcs/referenceGuard.ts`).
+       */
+      readOnly: z.boolean().default(false),
+      /**
        * The other folders this operator works in, each with a short name: a front end, a back
        * end, the test suite. They are not defaults — a new session still starts on `rootDir` —
        * and they are not sessions. They exist for two readers: every folder field in the app
@@ -346,17 +351,47 @@ export const RunConfigSchema = z.object({
             rootDir: z.string().trim().min(1),
             /** Its level 2, as the default project's `level2`. */
             level2: z.string().default(''),
+            /** For reference only, as the default project's `readOnly`. */
+            readOnly: z.boolean().default(false),
           }),
         )
         .default([]),
     })
     .prefault({}),
 
+  /**
+   * Skills (operator, 2026-10-21: "a skill I can set and call for a certain task — information that belongs only to
+   * one task that comes back: adding a new automated test, a new entity, migrations of the database"): instructions
+   * for a kind of task, chosen under the chat's box or with `/its-name` at the start of a message, and sent to the
+   * chat with that message. `projectDir` is the project a skill is for; empty, every project. Kept loose here, so a
+   * hand-edited file still loads; the API holds what it saves to the rules (see `setSkills` in operator.service.ts).
+   */
+  skills: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1),
+        description: z.string().default(''),
+        text: z.string().default(''),
+        projectDir: z.string().default(''),
+      }),
+    )
+    .default([]),
+
   pacing: z
     .object({
       enabled: z.boolean().default(true),
       settleMs: z.number().int().nonnegative().default(1000),
       maxMessagesPerHour: z.number().int().positive().default(60),
+      /**
+       * A pause between two messages to Copilot (operator, 2026-10-21: "how often a message may be sent — one a minute,
+       * say: a message sent, the next no sooner than 60 seconds after"), and with `gapRandom` a time drawn anew each
+       * time between `gapSec` and `gapMaxSec` ("between 60 and 90"). Held across every conversation of the window,
+       * the lead's and the worker's alike (see `util/pacing.ts`).
+       */
+      gapEnabled: z.boolean().default(false),
+      gapSec: z.number().int().min(1).max(3600).default(60),
+      gapRandom: z.boolean().default(false),
+      gapMaxSec: z.number().int().min(1).max(3600).default(90),
     })
     .prefault({}),
 

@@ -290,7 +290,7 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
@@ -306,6 +306,8 @@ export class OperatorController {
         ...(body.lead === true ? { lead: true } : {}),
         ...(typeof body.workerModel === 'string' && body.workerModel.trim() ? { workerModel: body.workerModel } : {}),
         ...(body.workerManualModel === true ? { workerManualModel: true } : {}),
+        // The skill chosen for this message (2026-10-21), by its name.
+        ...(typeof body.skill === 'string' && body.skill.trim() ? { skill: body.skill } : {}),
       })
       .catch(fail);
   }
@@ -375,14 +377,37 @@ export class OperatorController {
       rootDir?: string;
       name?: string;
       level2?: string;
-      others?: Array<{ name: string; rootDir: string; level2?: string }>;
+      readOnly?: boolean;
+      others?: Array<{ name: string; rootDir: string; level2?: string; readOnly?: boolean }>;
     },
   ): Promise<unknown> {
     const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+    const flag = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined);
     const others = Array.isArray(body?.others)
-      ? body.others.map((o) => ({ name: String(o?.name ?? ''), rootDir: String(o?.rootDir ?? ''), ...(typeof o?.level2 === 'string' ? { level2: o.level2 } : {}) }))
+      ? body.others.map((o) => ({
+          name: String(o?.name ?? ''),
+          rootDir: String(o?.rootDir ?? ''),
+          ...(typeof o?.level2 === 'string' ? { level2: o.level2 } : {}),
+          ...(typeof o?.readOnly === 'boolean' ? { readOnly: o.readOnly } : {}),
+        }))
       : undefined;
-    return this.ops.setProject({ rootDir: text(body?.rootDir), name: text(body?.name), level2: text(body?.level2), ...(others ? { others } : {}) }).catch(fail);
+    return this.ops
+      .setProject({ rootDir: text(body?.rootDir), name: text(body?.name), level2: text(body?.level2), readOnly: flag(body?.readOnly), ...(others ? { others } : {}) })
+      .catch(fail);
+  }
+
+  // --- skills (2026-10-21) ---------------------------------------------------------------------
+
+  @Get('skills')
+  skills(): Promise<unknown> {
+    return this.ops.skills();
+  }
+
+  /** The whole list, as Settings show it: each skill's name, what it is for, its instructions and its project. */
+  @Put('skills')
+  setSkills(@Body() body: { skills?: unknown } = {}): Promise<unknown> {
+    if (!Array.isArray(body?.skills)) throw new BadRequestException('skills must be a list');
+    return this.ops.setSkills(body.skills as Array<Record<string, unknown>>).catch(fail);
   }
 
   // --- the model picker ---------------------------------------------------------------------

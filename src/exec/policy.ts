@@ -20,7 +20,7 @@ import { inlineCodeRefusal, programRefusal } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
 import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
-import { scriptFileRefusal } from './scriptFiles.js';
+import { ownScriptRefusal, scriptFileRefusal } from './scriptFiles.js';
 
 /*
  * `by: 'operator'` marks a decision a person made on the approval screen or at the terminal; without
@@ -240,6 +240,15 @@ export function staticCheck(
   env: NodeJS.ProcessEnv = process.env,
   confinement?: Confinement,
 ): PolicyDecision | null {
+  /*
+   * Only the project's own scripts, and nothing from .cop-tmp (operator, 2026-10-21): a script the chat wrote is not
+   * run, however it is called. First, so the chat is told that, and not the older advice of the shared gate to write
+   * a script in one step and run it in the next. See `scriptFiles.ts`.
+   */
+  if (confinement) {
+    const own = ownScriptRefusal(step.cmd, confinement.cwd, confinement.workStartedAt);
+    if (own) return { action: 'skip', reason: own };
+  }
   // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`
   // are shell-specific, so screening for one interpreter and running in another finds nothing.
   const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env, confinement);

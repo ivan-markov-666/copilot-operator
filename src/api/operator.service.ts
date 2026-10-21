@@ -43,6 +43,15 @@ import { type PlanCheck } from '../plan/schema.js';
 /** The longest level 2 a project may have: Kerrigan carries each one whole. */
 export const MAX_PROJECT_LEVEL2 = 8000;
 
+/** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
+export type Skill = { name: string; description: string; text: string; projectDir: string };
+/** Its instructions: as long as a project's level 2, the longest text the opening carries besides the task. */
+export const MAX_SKILL_TEXT = 8000;
+export const MAX_SKILL_DESCRIPTION = 300;
+export const MAX_SKILLS = 50;
+/** What follows `/` at the start of a message: lowercase letters, digits and hyphens, 2 to 40 of them. */
+export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/;
+
 /** One project as Settings show it: its folder, whether it is a repository and on which branch, and its level 2. */
 export type ProjectEntry = {
   name: string;
@@ -53,6 +62,8 @@ export type ProjectEntry = {
   branch?: string;
   /** What the operator wrote about the project, for Kerrigan. */
   level2: string;
+  /** For reference only: nothing in it may change while the bot works (see `vcs/referenceGuard.ts`). */
+  readOnly: boolean;
 };
 
 export type ProjectDefault = ProjectEntry & { others: ProjectEntry[] };
@@ -1383,11 +1394,15 @@ export class OperatorService {
     const cfg = await this.settings.load();
     const p = await this.project();
     const projects = [
-      ...(p.rootDir ? [{ name: p.name, rootDir: p.rootDir, ...(p.branch ? { branch: p.branch } : {}), level2: p.level2, chat: true }] : []),
-      ...p.others.map((o) => ({ name: o.name, rootDir: o.rootDir, ...(o.branch ? { branch: o.branch } : {}), level2: o.level2 })),
+      ...(p.rootDir ? [{ name: p.name, rootDir: p.rootDir, ...(p.branch ? { branch: p.branch } : {}), level2: p.level2, chat: true, ...(p.readOnly ? { readOnly: true } : {}) }] : []),
+      ...p.others.map((o) => ({ name: o.name, rootDir: o.rootDir, ...(o.branch ? { branch: o.branch } : {}), level2: o.level2, ...(o.readOnly ? { readOnly: true } : {}) })),
     ];
+    // The skills, each with the name of the project it is for.
+    const nameOf = (dir: string): string => [{ name: p.name || p.rootDir, rootDir: p.rootDir }, ...p.others].find((x) => x.rootDir && sameFolder(x.rootDir, dir))?.name ?? dir;
+    const skills = (await this.skills()).skills.map((k) => ({ name: k.name, description: k.description, ...(k.projectDir ? { project: nameOf(k.projectDir) } : {}) }));
     const text = kerriganPersona(lang, {
       version: botVersion(),
+      skills,
       maxIterations: cfg.limits.maxIterations,
       maxRunMinutes: cfg.limits.maxRunMinutes,
       autoContinue: cfg.limits.autoContinue ?? 0,
@@ -1415,16 +1430,19 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; lead?: boolean; workerModel?: string; workerManualModel?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
     if (text.length > MAX_INSTRUCTION_CHARS) throw new Error(`The message is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.`);
     let session = input.threadId ? await this.store.getSession(input.threadId) : null;
     if (input.threadId && (!session || session.kind !== 'chat')) throw new Error('That conversation is not there any more. Start a new one.');
+    // The skill chosen for this message, as it reads now: the task keeps this copy whatever is edited later.
+    const skill = input.skill?.trim() ? await this.skillFor(input.skill, session?.projectDir ?? (await this.workspace()).dir) : undefined;
     if (session) {
       const inFlight = session.tasks.find((t) => t.status === 'running' || t.status === 'waiting-approval');
       if (inFlight && this.running.has(session.id)) {
+        if (skill) throw new Error(`A skill goes with a new message, and this one would be a note to the message at work. Send /${skill.name} when it has finished.`);
         await this.addTaskNote(session.id, inFlight.id, text);
         return { threadId: session.id, taskId: inFlight.id, noted: true, needsStart: false };
       }
@@ -1475,6 +1493,7 @@ export class OperatorService {
       title: text.split(/\r?\n/)[0]!.trim().slice(0, 80) || 'message',
       level2: '',
       prompt: text,
+      ...(skill ? { skill: { name: skill.name, description: skill.description, text: skill.text } } : {}),
     });
     // The language the workbench is in, for what the chat's window says when the work has ended (`chatWindowNotice`).
     if (input.lang && session.lang !== input.lang) {
@@ -1491,6 +1510,58 @@ export class OperatorService {
       });
     }
     return { threadId: session.id, taskId: task.id, needsStart: false };
+  }
+
+  // --- skills (2026-10-21) ----------------------------------------------------------------------------
+
+  /** The skills in Settings, and how long their instructions may be. */
+  async skills(): Promise<{ skills: Skill[]; maxText: number; maxDescription: number }> {
+    const cfg = await this.settings.load();
+    return {
+      skills: (cfg.skills ?? []).map((k) => ({ name: k.name, description: k.description ?? '', text: k.text ?? '', projectDir: k.projectDir ?? '' })),
+      maxText: MAX_SKILL_TEXT,
+      maxDescription: MAX_SKILL_DESCRIPTION,
+    };
+  }
+
+  /**
+   * Stores the list as given, held to the rules: a name to type after `/` — lowercase, digits and hyphens, each used
+   * once — instructions that are there and not too long, a project that is one of Settings' or every project.
+   */
+  async setSkills(list: Array<Record<string, unknown>>): Promise<{ skills: Skill[]; maxText: number; maxDescription: number }> {
+    if (!Array.isArray(list)) throw new Error('The skills come as a list.');
+    if (list.length > MAX_SKILLS) throw new Error(`There can be at most ${MAX_SKILLS} skills.`);
+    const cfg = await this.settings.load();
+    const folders = [cfg.project.rootDir, ...cfg.project.others.map((o) => o.rootDir)].filter((d) => d?.trim());
+    const seen = new Set<string>();
+    const skills: Skill[] = list.map((k) => {
+      const name = String(k?.name ?? '').trim().toLowerCase();
+      if (!SKILL_NAME.test(name)) throw new Error(`"${name || '(no name)'}" cannot be a skill's name: 2 to 40 lowercase letters, digits and hyphens, as typed after / — new-test, new-entity, db-migration.`);
+      if (seen.has(name)) throw new Error(`Two skills are named "${name}". The name is how a message calls one, so each needs its own.`);
+      seen.add(name);
+      const description = String(k?.description ?? '').trim();
+      if (description.length > MAX_SKILL_DESCRIPTION) throw new Error(`What "${name}" is for is longer than ${MAX_SKILL_DESCRIPTION} characters; one line is enough.`);
+      const text = String(k?.text ?? '');
+      if (!text.trim()) throw new Error(`The skill "${name}" has no instructions: write what the chat should know and do for this kind of task.`);
+      if (text.length > MAX_SKILL_TEXT) throw new Error(`The instructions of "${name}" are longer than ${MAX_SKILL_TEXT.toLocaleString('en')} characters.`);
+      const projectDir = String(k?.projectDir ?? '').trim();
+      if (projectDir && !folders.some((f) => sameFolder(f, projectDir))) throw new Error(`The skill "${name}" is for ${projectDir}, which is not one of the projects in Settings.`);
+      return { name, description, text, projectDir };
+    });
+    await this.settings.update((raw) => ({ ...raw, skills }));
+    return await this.skills();
+  }
+
+  /** The skill a message calls, for the folder it works in: one for every project, or one for this one. */
+  private async skillFor(asked: string, dir: string): Promise<Skill> {
+    const name = asked.trim().replace(/^\//, '').toLowerCase();
+    const { skills } = await this.skills();
+    const fits = skills.filter((k) => !k.projectDir || (dir && sameFolder(k.projectDir, dir)));
+    const found = fits.find((k) => k.name === name);
+    if (found) return found;
+    const other = skills.find((k) => k.name === name);
+    if (other) throw new Error(`The skill "${name}" is for ${other.projectDir}, not for the folder this chat works in.`);
+    throw new Error(`There is no skill called "${name}"${fits.length > 0 ? `; there are ${fits.map((k) => k.name).join(', ')}` : ''}. Skills are written in Settings → Skills.`);
   }
 
   /**
@@ -2059,7 +2130,7 @@ export class OperatorService {
      * The branch each folder is on now (operator, 2026-10-20: "show which branch is chosen"), read from git each
      * time, since the operator switches it by hand and the chat works on whatever is checked out.
      */
-    const entry = async (name: string, dir: string, level2: string): Promise<ProjectEntry> => {
+    const entry = async (name: string, dir: string, level2: string, readOnly: boolean): Promise<ProjectEntry> => {
       const problem = dir ? repoUnusableReason(dir) : 'no folder';
       const branch = dir && problem === null ? await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => null) : null;
       return {
@@ -2069,10 +2140,11 @@ export class OperatorService {
         ...(dir && problem ? { repoProblem: problem } : {}),
         ...(branch?.ok && branch.stdout ? { branch: branch.stdout } : {}),
         level2,
+        readOnly,
       };
     };
-    const main = await entry((cfg.project?.name ?? '').trim(), rootDir, cfg.project?.level2 ?? '');
-    const others = await Promise.all((cfg.project?.others ?? []).map((o) => entry(o.name, o.rootDir, o.level2 ?? '')));
+    const main = await entry((cfg.project?.name ?? '').trim(), rootDir, cfg.project?.level2 ?? '', cfg.project?.readOnly === true);
+    const others = await Promise.all((cfg.project?.others ?? []).map((o) => entry(o.name, o.rootDir, o.level2 ?? '', o.readOnly === true)));
     return { ...main, others };
   }
 
@@ -2091,7 +2163,8 @@ export class OperatorService {
     rootDir?: string;
     name?: string;
     level2?: string;
-    others?: Array<{ name: string; rootDir: string; level2?: string }>;
+    readOnly?: boolean;
+    others?: Array<{ name: string; rootDir: string; level2?: string; readOnly?: boolean }>;
   }): Promise<ProjectDefault> {
     // Worked out from the file in its turn (see `Settings.update`), so a model chosen at the same
     // moment is kept, and a refusal below leaves the file as it was.
@@ -2100,9 +2173,11 @@ export class OperatorService {
         rootDir?: string;
         name?: string;
         level2?: string;
-        others?: Array<{ name: string; rootDir: string; level2?: string }>;
+        readOnly?: boolean;
+        others?: Array<{ name: string; rootDir: string; level2?: string; readOnly?: boolean }>;
       };
       const rootDir = patch.rootDir !== undefined ? patch.rootDir.trim() : (current.rootDir ?? '').trim();
+      const readOnly = patch.readOnly !== undefined ? patch.readOnly === true : current.readOnly === true;
       const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
       const level2 = patch.level2 !== undefined ? patch.level2 : (current.level2 ?? '');
       // Each goes into Kerrigan whole, and she is pasted into a chat: bounded, so one project cannot crowd out the rest.
@@ -2121,6 +2196,8 @@ export class OperatorService {
           name: (o.name ?? '').trim(),
           rootDir: (o.rootDir ?? '').trim(),
           level2: o.level2 !== undefined ? o.level2 : (was?.level2 ?? ''),
+          // Kept like the level 2 when the list comes without it: a page that does not know the box must not clear it.
+          readOnly: o.readOnly !== undefined ? o.readOnly === true : was?.readOnly === true,
         };
       });
       const seen = new Set<string>();
@@ -2136,7 +2213,7 @@ export class OperatorService {
 
       // What the removed Desktop copies left in the stored project is dropped with the next save.
       const { mirror: _m, desktop: _d, mirrorToDesktop: _t, ...rest } = current as typeof current & { mirror?: unknown; desktop?: unknown; mirrorToDesktop?: unknown };
-      return { ...raw, project: { ...rest, rootDir, name, level2, others } };
+      return { ...raw, project: { ...rest, rootDir, name, level2, readOnly, others } };
     });
     return await this.project();
   }

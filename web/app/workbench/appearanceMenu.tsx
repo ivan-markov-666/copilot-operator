@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * How the page looks, from the button at the bottom of the column of icons (2026-10-20: "let dark and light be set
+ * How the page looks, from the button in the bar on top, between Settings and System (2026-10-21: "move it up there";
+ * it was at the foot of the column of icons). Since 2026-10-20: "let dark and light be set
  * from the button on the left too, not lead to Settings; a System theme as the default; A+ and A−, and the other such
  * options — underlined links, less motion and so on"; "and a night mode to spare the eyes"). The same settings as the
  * Appearance page, changed as they are pressed and kept in this browser: the theme, the text size a step at a time,
@@ -25,35 +26,38 @@ const SIZE_NAMES: Record<(typeof TEXT_SIZES)[number], Key> = {
   giant: 'ap.sizeGiant',
 };
 
-const AIDS: Array<{ name: 'highContrast' | 'reduceMotion' | 'underlineLinks' | 'strongFocus' | 'nightLight'; label: Key }> = [
+const AIDS: Array<{ name: 'highContrast' | 'reduceMotion' | 'underlineLinks' | 'strongFocus' | 'nightLight' | 'systemCursor'; label: Key }> = [
   { name: 'nightLight', label: 'ap.night' },
   { name: 'underlineLinks', label: 'ap.links' },
   { name: 'reduceMotion', label: 'ap.motion' },
   { name: 'highContrast', label: 'ap.contrast' },
   { name: 'strongFocus', label: 'ap.focus' },
+  // The page draws cursors of its own (2026-10-21); this gives back the ones set in Windows.
+  { name: 'systemCursor', label: 'ap.systemCursor' },
 ];
 
 export function AppearanceMenu() {
   const { t } = useT();
   const { appearance, set, reset, loaded } = useAppearance();
-  const pop = usePopover('right');
+  const pop = usePopover('below');
   const at = TEXT_SIZES.indexOf(appearance.textSize);
   return (
     <>
       <button
         ref={pop.anchor}
         type="button"
-        className={`wb-act${pop.open ? ' on' : ''}`}
+        className={`lang-btn ap-btn${pop.open ? ' on' : ''}`}
         aria-label={t('wb.appearance')}
         title={t('wb.appearance')}
         aria-expanded={pop.open}
         aria-controls={pop.open ? pop.id : undefined}
         onClick={pop.toggle}
       >
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <circle cx="12" cy="12" r="8.5" />
           <path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" />
         </svg>
+        <span aria-hidden="true">{t('nav.appearance')}</span>
       </button>
       {pop.open && (
         <div ref={pop.panel} id={pop.id} role="dialog" aria-label={t('wb.appearance')} className="pop wb-appear" style={pop.style}>

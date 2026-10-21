@@ -311,6 +311,8 @@ export type Task = {
   lead?: LeadRecord;
   /** A worker's subtask: the lead's message it is part of. */
   fromLead?: { sessionId: string; taskId: string; n: number };
+  /** The skill the message was sent with, as it read then (2026-10-21). */
+  skill?: { name: string; description: string; text: string };
 };
 
 export type VersionControl = {
@@ -724,7 +726,7 @@ export type LeadRound = {
 };
 
 /** What the lead of a message did, as the chat shows it. */
-export type LeadRecord = { rounds: LeadRound[]; subtasks: number; maxSubtasks: number; evidence?: string[]; workerSessionId?: string };
+export type LeadRecord = { rounds: LeadRound[]; subtasks: number; maxSubtasks: number; evidence?: string[]; workerSessionId?: string; messages?: { lead: number; worker: number } };
 
 /** A task's plan, in plan mode: see `TaskPlan` on the server. */
 export type TaskPlan = {
@@ -807,8 +809,14 @@ export type ProjectEntry = {
   branch?: string;
   /** What the operator wrote about the project, for Kerrigan. */
   level2: string;
+  /** For reference only: the bot changes nothing in it (2026-10-21). */
+  readOnly: boolean;
 };
 export type OtherProject = ProjectEntry;
+
+/** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
+export type Skill = { name: string; description: string; text: string; projectDir: string };
+export type SkillList = { skills: Skill[]; maxText: number; maxDescription: number };
 
 /** The chat's folder, the first project, and the others by name. */
 export type ProjectDefault = ProjectEntry & { others: ProjectEntry[] };
@@ -1149,7 +1157,7 @@ export const api = {
   /** `planMode` for a new conversation: the plan first, approved in the chat (an existing one's is set with `updateSession`). */
   /** `review`: whether a new conversation's messages are reviewed (the box under the chat); left out, they are not. */
   /** `two`: a new conversation with a lead and a worker (two chats, 2026-10-20), and the worker's model. */
-  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }) =>
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string) =>
     call<ChatSent>('/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -1161,6 +1169,7 @@ export const api = {
         ...(planMode ? { planMode: true } : {}),
         ...(review !== undefined ? { review } : {}),
         ...(two ? { lead: true, ...(two.workerManualModel ? { workerManualModel: true } : two.workerModel ? { workerModel: two.workerModel } : {}) } : {}),
+        ...(skill ? { skill } : {}),
       }),
     }),
   /** The lead's question (two chats): the operator's answer. */
@@ -1200,8 +1209,12 @@ export const api = {
     rootDir?: string;
     name?: string;
     level2?: string;
-    others?: Array<{ name: string; rootDir: string; level2?: string }>;
+    readOnly?: boolean;
+    others?: Array<{ name: string; rootDir: string; level2?: string; readOnly?: boolean }>;
   }) => call<ProjectDefault>('/project', { method: 'PUT', body: JSON.stringify(patch) }),
+
+  skills: () => call<SkillList>('/skills'),
+  setSkills: (skills: Skill[]) => call<SkillList>('/skills', { method: 'PUT', body: JSON.stringify({ skills }) }),
 
   models: () => call<ModelCatalogue>('/models'),
   /** Stores the model new sessions start on. An empty name clears it. */

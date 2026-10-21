@@ -10,7 +10,7 @@
  * only from the UI, we do not need them; we keep the chat, and Kerrigan, who helps with using it"). The panels'
  * sizes and which are open are kept in this browser.
  */
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { api, type GitArea, type Session, type Task, type Workspace } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
@@ -27,6 +27,7 @@ import { Palette, type PaletteCommand } from './palette';
 import { AppearanceMenu } from './appearanceMenu';
 import { KerriganButton } from './kerriganButton';
 import { FileIcon } from './fileIcon';
+import { AREA_DRAG, DEFAULT_ORDER, movedTo, orderOf, PanelGrip, type Area } from './panelGrip';
 import { confirmDialog } from '../dialog';
 
 export type Tab =
@@ -39,13 +40,19 @@ export type BottomTab = 'terminal' | 'problems' | 'output';
 const tabKey = (t: Tab): string => (t.kind === 'diff' ? `d:${t.area}:${t.commit ?? ''}:${t.path}` : `f:${t.path}`);
 
 /** Kept in this browser: which panels are open and how big they are. Read with care: storage may be refused. */
-type Layout = { side: number; chat: number; bottom: number; sideOpen: boolean; chatOpen: boolean; bottomOpen: boolean };
-const DEFAULT_LAYOUT: Layout = { side: 290, chat: 420, bottom: 240, sideOpen: true, chatOpen: true, bottomOpen: true };
+/**
+ * `side` and `chat` are the widths of the left place and the right one — whichever panel is in them since the panels
+ * can be moved (2026-10-21, see `panelGrip.tsx`); `order` is which panel is in which place.
+ */
+type Layout = { side: number; chat: number; bottom: number; sideOpen: boolean; chatOpen: boolean; bottomOpen: boolean; order: Area[] };
+const DEFAULT_LAYOUT: Layout = { side: 290, chat: 420, bottom: 240, sideOpen: true, chatOpen: true, bottomOpen: true, order: DEFAULT_ORDER };
 const LAYOUT_KEY = 'cop.workbench.layout';
 function readLayout(): Layout {
   try {
     const raw = window.localStorage.getItem(LAYOUT_KEY);
-    return raw ? { ...DEFAULT_LAYOUT, ...(JSON.parse(raw) as Partial<Layout>) } : DEFAULT_LAYOUT;
+    if (!raw) return DEFAULT_LAYOUT;
+    const kept = { ...DEFAULT_LAYOUT, ...(JSON.parse(raw) as Partial<Layout>) };
+    return { ...kept, order: orderOf(kept.order) };
   } catch {
     return DEFAULT_LAYOUT;
   }
@@ -186,6 +193,7 @@ function WorkbenchInner() {
       { id: 'chat', label: t('wb.cmdChat'), hint: 'Ctrl+L', run: toChat },
       { id: 'side', label: t('wb.cmdSide'), hint: 'Ctrl+B', run: () => setL({ sideOpen: !layout.sideOpen }) },
       { id: 'panel', label: t('wb.cmdPanel'), hint: 'Ctrl+J', run: () => setL({ bottomOpen: !layout.bottomOpen }) },
+      { id: 'layout', label: t('wb.cmdResetLayout'), run: () => setL({ order: DEFAULT_ORDER, side: DEFAULT_LAYOUT.side, chat: DEFAULT_LAYOUT.chat }) },
       { id: 'files', label: t('wb.cmdFiles'), run: () => { setL({ sideOpen: true }); setSide('files'); } },
       { id: 'commits', label: t('wb.cmdCommits'), run: () => { setL({ sideOpen: true }); setSide('commits'); } },
       { id: 'problems', label: t('wb.cmdProblems'), run: () => { setL({ bottomOpen: true }); setBottomTab('problems'); } },
@@ -201,38 +209,67 @@ function WorkbenchInner() {
     [sessions, t, layout],
   );
 
+  // A panel's grip being dragged, and the panel it is over (2026-10-21, see `panelGrip.tsx`).
+  const [dragging, setDragging] = useState(false);
+  const [over, setOver] = useState<Area | null>(null);
+  /*
+   * The three places (2026-10-21): the panels shown, in their order, a splitter between two; the middle place takes
+   * what is left, and when the panel there is hidden, the last one shown does.
+   */
+  const placeOf = (a: Area): number => layout.order.indexOf(a);
+  const isShown = (a: Area): boolean => (a === 'side' ? layout.sideOpen : a === 'chat' ? layout.chatOpen : true);
+  const shown = layout.order.filter(isShown);
+  const widths = shown.map((a) => (placeOf(a) === 1 ? 'minmax(0, 1fr)' : `${placeOf(a) === 0 ? layout.side : layout.chat}px`));
+  if (widths.length > 0 && !widths.includes('minmax(0, 1fr)')) widths[widths.length - 1] = 'minmax(0, 1fr)';
+  const columns = ['46px', ...widths.flatMap((w, i) => (i === 0 ? [w] : ['5px', w]))].join(' ');
+  /** The splitter between two panels shown: it resizes the place at the side, not the middle one. */
+  const resize = (left: Area, right: Area) => (d: number) => {
+    if (placeOf(left) === 0) setL({ side: clamp(layout.side + d, 180, 820) });
+    else if (placeOf(right) === 2) setL({ chat: clamp(layout.chat - d, 260, 820) });
+  };
+  const moveTo = (a: Area, to: number) => setL({ order: movedTo(layout.order, a, to) });
+  const grip = (a: Area, name: string): ReactNode => <PanelGrip area={a} name={name} place={placeOf(a)} onMove={(to) => moveTo(a, to)} onDragging={setDragging} />;
+  /** A panel takes another's place when that one's grip is let go of over it. */
+  const dropOn = (a: Area) => ({
+    'data-area': a,
+    'data-drop': t('wb.dropHere'),
+    onDragOver: (e: ReactDragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes(AREA_DRAG)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (over !== a) setOver(a);
+    },
+    onDragLeave: (e: ReactDragEvent<HTMLElement>) => {
+      if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) setOver((o) => (o === a ? null : o));
+    },
+    onDrop: (e: ReactDragEvent<HTMLElement>) => {
+      const from = e.dataTransfer.getData(AREA_DRAG) as Area;
+      e.preventDefault();
+      setOver(null);
+      setDragging(false);
+      if (from && from !== a && layout.order.includes(from)) moveTo(from, placeOf(a));
+    },
+  });
+  const dropClass = (a: Area): string => `${dragging ? ' wb-drop' : ''}${over === a ? ' wb-drop-over' : ''}`;
+
   const style = {
+    '--wb-columns': columns,
     '--wb-side': layout.sideOpen ? `${layout.side}px` : '0px',
     '--wb-chat': layout.chatOpen ? `${layout.chat}px` : '0px',
     '--wb-bottom': layout.bottomOpen ? `${layout.bottom}px` : '34px',
   } as CSSProperties;
 
-  return (
-    <div className="wb" style={style}>
-      <header className="wb-top">
-        <span className="wb-brand">copilot-operator</span>
-        <button type="button" className="wb-search" onClick={() => setPalette(true)} title={t('wb.paletteWhy')}>
-          <span>{t('wb.palette')}</span>
-          <kbd>Ctrl+K</kbd>
-        </button>
-        <nav className="wb-menu" aria-label={t('nav.label')}>
-          <Link href="/defaults">{t('nav.defaults')}</Link>
-          {/* System on the chat's screen too (operator, 2026-10-20), as it is on every other page. */}
-          <Link href="/system">{t('nav.system')}</Link>
-          <LanguageSwitcher />
-        </nav>
-      </header>
-
-      <div className={`wb-body${layout.sideOpen ? '' : ' no-side'}${layout.chatOpen ? '' : ' no-chat'}`}>
-        <ActivityBar side={side} sideOpen={layout.sideOpen} onSide={(v) => { if (v === side && layout.sideOpen) setL({ sideOpen: false }); else { setSide(v); setL({ sideOpen: true }); } }} chatOpen={layout.chatOpen} onChat={() => setL({ chatOpen: !layout.chatOpen })} />
-
-        <aside className="wb-side" aria-label={t('wb.explorer')} hidden={!layout.sideOpen}>
-          <Explorer view={side} onOpen={open} workspace={workspace} onOpenFolder={() => void openFolder()} />
-        </aside>
-        {layout.sideOpen && <Splitter axis="x" label={t('wb.resize')} onDrag={(d) => setL({ side: clamp(layout.side + d, 180, 560) })} />}
-
-        <section className="wb-center" aria-label={t('wb.editor')}>
+  /** The three panels, by name; the body puts them in the places `layout.order` says. */
+  const panels: Record<Area, ReactNode> = {
+    side: (
+      <aside key="side" className={`wb-side${dropClass('side')}`} aria-label={t('wb.explorer')} hidden={!layout.sideOpen} {...dropOn('side')}>
+        <Explorer view={side} onOpen={open} workspace={workspace} onOpenFolder={() => void openFolder()} grip={grip('side', t('wb.explorer'))} />
+      </aside>
+    ),
+    center: (
+      <section key="center" className={`wb-center${dropClass('center')}`} aria-label={t('wb.editor')} {...dropOn('center')}>
           <div className="wb-tabs" role="tablist" aria-label={t('wb.openTabs')}>
+            {grip('center', t('wb.editor'))}
             {tabs.length === 0 && <span className="muted small wb-tabs-empty">{t('wb.noTabs')}</span>}
             {tabs.map((tab) => {
               const key = tabKey(tab);
@@ -284,8 +321,9 @@ function WorkbenchInner() {
           />
         </section>
 
-        {layout.chatOpen && <Splitter axis="x" label={t('wb.resize')} onDrag={(d) => setL({ chat: clamp(layout.chat - d, 300, 820) })} />}
-        <aside className="wb-chat" aria-label={t('wb.chatPanel')} hidden={!layout.chatOpen}>
+      ),
+    chat: (
+      <aside key="chat" className={`wb-chat${dropClass('chat')}`} aria-label={t('wb.chatPanel')} hidden={!layout.chatOpen} {...dropOn('chat')}>
           <ChatPanel
             workspace={workspace}
             composeAsk={composeAsk}
@@ -295,8 +333,43 @@ function WorkbenchInner() {
             onTurn={setChatTurn}
             onChange={() => void load()}
             onClose={() => setL({ chatOpen: false })}
+            grip={grip('chat', t('wb.chatPanel'))}
           />
         </aside>
+    ),
+  };
+
+  return (
+    <div className="wb" style={style}>
+      <header className="wb-top">
+        <span className="wb-brand">copilot-operator</span>
+        <button type="button" className="wb-search" onClick={() => setPalette(true)} title={t('wb.paletteWhy')}>
+          <span>{t('wb.palette')}</span>
+          <kbd>Ctrl+K</kbd>
+        </button>
+        <nav className="wb-menu" aria-label={t('nav.label')}>
+          <Link href="/defaults">{t('nav.defaults')}</Link>
+          {/* How the page looks, between Settings and System (operator, 2026-10-21). */}
+          <AppearanceMenu />
+          {/* System on the chat's screen too (operator, 2026-10-20), as it is on every other page. */}
+          <Link href="/system">{t('nav.system')}</Link>
+          <LanguageSwitcher />
+        </nav>
+      </header>
+
+      <div className={`wb-body${layout.sideOpen ? '' : ' no-side'}${layout.chatOpen ? '' : ' no-chat'}`}>
+        <ActivityBar side={side} sideOpen={layout.sideOpen} onSide={(v) => { if (v === side && layout.sideOpen) setL({ sideOpen: false }); else { setSide(v); setL({ sideOpen: true }); } }} chatOpen={layout.chatOpen} onChat={() => setL({ chatOpen: !layout.chatOpen })} />
+
+        {layout.order.map((a) => {
+          const i = shown.indexOf(a);
+          const before = i > 0 ? shown[i - 1]! : null;
+          return (
+            <Fragment key={a}>
+              {before && <Splitter axis="x" label={t('wb.resize')} onDrag={resize(before, a)} />}
+              {panels[a]}
+            </Fragment>
+          );
+        })}
       </div>
 
       <StatusBar sessions={sessions ?? []} session={chatSession} workspace={workspace} onShowThread={(id) => { setL({ chatOpen: true }); setShowThread((v) => ({ id, n: (v?.n ?? 0) + 1 })); }} />
@@ -327,8 +400,6 @@ function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat }: { side: SideV
           <path d="M4 5h16v11H9l-5 4z" />
         </svg>
       </button>
-      {/* Light, dark or the machine's, the text size and the reading aids, here: it no longer leads to Settings. */}
-      <AppearanceMenu />
     </nav>
   );
 }

@@ -180,7 +180,8 @@ console.log('\n--- C10: a new problem in another file is pointed out, not waved 
   }
 }
 
-console.log('\n--- C11: helper scripts in .cop-tmp are never committed; a scratch copy elsewhere is pointed out ---');
+// Since 2026-10-21 nothing in .cop-tmp is run (see own-scripts.check.ts): the scratch kept there is a draft, not a script.
+console.log('\n--- C11: scratch files in .cop-tmp are never committed; a scratch copy elsewhere is pointed out ---');
 {
   const h = await startHarness({});
   try {
@@ -191,8 +192,8 @@ console.log('\n--- C11: helper scripts in .cop-tmp are never committed; a scratc
     });
     h.chat.script(
       reply.steps(
-        "New-Item -ItemType Directory -Force .cop-tmp | Out-Null; Set-Content -Path .cop-tmp/write.ps1 -Value \"Set-Content -Path greeting.txt -Value 'hello'\"",
-        'pwsh -NoProfile -File .cop-tmp/write.ps1',
+        "New-Item -ItemType Directory -Force .cop-tmp | Out-Null; Set-Content -Path .cop-tmp/draft.txt -Value 'hello, maybe'",
+        "Set-Content -Path greeting.txt -Value 'hello'",
         'Copy-Item greeting.txt tmp-greeting.txt',
       ),
       reply.done(),
@@ -204,7 +205,7 @@ console.log('\n--- C11: helper scripts in .cop-tmp are never committed; a scratc
     const told = h.chat.sent.map((m) => m.text + Object.values(m.attached).join(' '));
     t.truthy('the scratch copy was pointed out', told.some((x) => /tmp-greeting\.txt/.test(x) && /temporary copy/.test(x)), told.map((x) => x.slice(0, 120)));
     t.check('the commit holds the work only', [v.tasks[0]!.status, (v.tasks[0]!.vcs?.files ?? []).map((f) => f.path)], ['done', ['greeting.txt']]);
-    t.check('.cop-tmp is excluded from git', h.git('check-ignore', '.cop-tmp/write.ps1'), '.cop-tmp/write.ps1');
+    t.check('.cop-tmp is excluded from git', h.git('check-ignore', '.cop-tmp/draft.txt'), '.cop-tmp/draft.txt');
   } catch (e) {
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {

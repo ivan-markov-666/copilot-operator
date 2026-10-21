@@ -23,7 +23,7 @@ import type {
   ReviewSettings,
   VersionControl,
 } from './model.js';
-import { endingOf, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type TaskNote, type TaskPatch } from './model.js';
+import { endingOf, isContinuable, MAX_INSTRUCTION_CHARS, newId, tidyVcsPlan, type TaskNote, type TaskPatch, type TaskSkill } from './model.js';
 
 /** A task the runner is inside of. It cannot be edited, deleted, or left behind at startup. */
 const ACTIVE_STATUSES: TaskStatus[] = ['running', 'waiting-approval'];
@@ -130,6 +130,8 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   // The lead's rounds belong to the attempt that made them (two chats, 2026-10-20); which lead a subtask serves, to the task.
   lead: 'archived',
   fromLead: 'kept',
+  // The kind of task it is: every attempt is sent with the same skill.
+  skill: 'kept',
   interruption: 'cleared',
   finalReply: 'cleared',
   firstMessage: 'cleared',
@@ -395,6 +397,7 @@ export class SessionStore {
       readOnly?: boolean;
       scope?: string[];
       outputs?: string[];
+      skill?: TaskSkill;
     },
   ): Promise<Task> {
     const vcsPlan = tidyVcsPlan(input.vcsPlan);
@@ -418,6 +421,7 @@ export class SessionStore {
       // Stored only when it limits something: absent means anywhere, as before scopes existed.
       ...((input.scope ?? []).filter((p) => p.trim()).length > 0 ? { scope: (input.scope ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
       ...((input.outputs ?? []).filter((p) => p.trim()).length > 0 ? { outputs: (input.outputs ?? []).map((p) => p.trim()).filter(Boolean) } : {}),
+      ...(input.skill ? { skill: { name: input.skill.name, description: input.skill.description, text: input.skill.text } } : {}),
     };
     await this.updateSession(sessionId, (s) => {
       s.tasks.push(task);

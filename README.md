@@ -419,9 +419,25 @@ same Copilot window, the lead asking you only what nobody else can decide. "Paus
 "Continue". The interface speaks nine languages (English, Bulgarian, German, Spanish, French,
 Portuguese, Japanese, Korean, Arabic), chosen from "Language". "Kerrigan" on the home screen hands out a persona to
 give another chat, which then helps you write tasks for this one (optional); she knows your projects,
-with the level 2 you write for each in Settings. See
+with the level 2 you write for each in Settings. A project in Settings can be marked "For
+reference only": the bot reads it and runs what only reads it, and whatever a command changes there
+— files, branches, what is staged — is put back after that command, and the chat is told. See
 [`docs/ui.md`](docs/ui.md); the Sessions page, the task register and plans from JSON were removed
 on 2026-10-20.
+
+Skills keep your instructions for a kind of task that comes back — a new test, a new entity, a migration — in
+Settings; a message starting with `/its-name` (or with the skill chosen under the chat's box) carries them to the
+chat. The three panels move as in VS Code: drag the grip ⠿ in a panel's head onto another. Settings can also make
+the bot pause between messages to Copilot, by a fixed or a random time.
+
+**What runs, and how.** Every command the chat sends is given to PowerShell as text
+(`pwsh -NoProfile -NonInteractive -Command "…"`); the bot writes no script to run it. A script file
+— `.ps1`, `.cmd`, `.bat`, `.sh`, `.vbs` — runs only when it is the project's own: committed in its
+repository, unchanged since, and committed before the work began. One the chat wrote, changed or
+downloaded is refused however it is called, and nothing in `.cop-tmp` is run. The project's tools
+go on as usual — `npm test`, `npm run build`, `dotnet test`, `node` starting the application.
+Downloads wait for you even in an unattended run, `npm install` runs no install scripts, and the
+package itself has none.
 
 ### Removing it from a machine
 

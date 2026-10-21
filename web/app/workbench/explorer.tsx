@@ -13,14 +13,15 @@ import type { SideView, Tab } from './workbench';
 import { FileIcon } from './fileIcon';
 import { BranchIcon } from '../branchIcon';
 
-export function Explorer({ view, onOpen, workspace, onOpenFolder }: { view: SideView; onOpen: (tab: Tab) => void; workspace: Workspace | null; onOpenFolder: () => void }) {
-  if (view === 'commits') return <GitView workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
-  return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} />;
+export function Explorer({ view, onOpen, workspace, onOpenFolder, grip }: { view: SideView; onOpen: (tab: Tab) => void; workspace: Workspace | null; onOpenFolder: () => void; /** Moves the panel (see `panelGrip.tsx`). */ grip?: React.ReactNode }) {
+  if (view === 'commits') return <GitView workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} grip={grip} />;
+  return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} grip={grip} />;
 }
 
-function Head({ title, children }: { title: string; children?: React.ReactNode }) {
+function Head({ title, children, grip }: { title: string; children?: React.ReactNode; grip?: React.ReactNode }) {
   return (
     <div className="wb-side-head">
+      {grip}
       <h2>{title}</h2>
       <span className="grow" />
       {children}
@@ -53,7 +54,7 @@ const byName = (a: string, b: string): number => a.localeCompare(b, undefined, {
  * The open project folder as it is on disk (2026-10-17, "like Windsurf"): what the chat works on, every file of
  * it a click from the editor. Read again on demand and every few seconds, so what the chat writes shows up.
  */
-function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void }) {
+function Files({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void; grip?: React.ReactNode }) {
   const { t } = useT();
   const [files, setFiles] = useState<string[] | null>(null);
   const [err, setErr] = useState('');
@@ -109,7 +110,7 @@ function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | nul
 
   return (
     <div className="wb-tree">
-      <Head title={workspace?.ok ? workspace.name : t('wb.files')}>
+      <Head title={workspace?.ok ? workspace.name : t('wb.files')} grip={grip}>
         <button type="button" className="wb-icon-btn" onClick={onOpenFolder} title={t('chat.openFolder')} aria-label={t('chat.openFolder')}>⋯</button>
         <button type="button" className="wb-icon-btn" onClick={() => void read()} title={t('wb.refresh')} aria-label={t('wb.refresh')}>↻</button>
       </Head>
@@ -151,7 +152,7 @@ function Files({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | nul
  * opening to the files it changed, which open the same way. Read-only: it stages, commits and checks out nothing.
  * Read again every five seconds, as the chat changes the folder.
  */
-function GitView({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void }) {
+function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void; grip?: React.ReactNode }) {
   const { t } = useT();
   const fmt = useFmtTime();
   const [state, setState] = useState<WorkspaceGit | null>(null);
@@ -233,7 +234,7 @@ function GitView({ workspace, onOpen, onOpenFolder }: { workspace: Workspace | n
 
   return (
     <div className="wb-tree">
-      <Head title={t('git.title')}>
+      <Head title={t('git.title')} grip={grip}>
         <button type="button" className="wb-icon-btn" onClick={() => void read()} title={t('git.refresh')} aria-label={t('git.refresh')} disabled={!workspace?.ok}>
           ↻
         </button>

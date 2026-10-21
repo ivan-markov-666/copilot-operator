@@ -28,7 +28,8 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
   }, []);
   usePoll(() => api.approvals().then((a) => setWaiting(a.length)).catch(() => undefined), 3000);
 
-  const runningSession = sessions.find((s) => s.status !== 'idle');
+  // The lead's conversation rather than its worker's, which is hidden from the list and works for it.
+  const runningSession = sessions.find((s) => s.status !== 'idle' && !s.workerOf) ?? sessions.find((s) => s.status !== 'idle');
   const runningTask = runningSession?.tasks.find((x) => x.status === 'running' || x.status === 'waiting-approval');
   const minutes = runningTask?.startedAt ? Math.floor((now - Date.parse(runningTask.startedAt)) / 60000) : 0;
 
@@ -41,7 +42,19 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
       )}
       {runningSession && runningTask ? (
         <button type="button" className="wb-status-btn" onClick={() => onShowThread(runningSession.id)} title={t('wb.openRunning')}>
-          <span className={runningSession.paused ? 'wb-live paused' : 'wb-live'} aria-hidden="true" /> {t('wb.runningLine', { session: runningSession.name.replace(/^chat: /, ''), task: runningTask.title, n: runningTask.iterations, max: limits.iterations, m: minutes, maxm: limits.minutes })}
+          <span className={runningSession.paused ? 'wb-live paused' : 'wb-live'} aria-hidden="true" />{' '}
+          {runningTask.lead
+            ? // Two chats (2026-10-21): the lead's messages, the worker's, and the two together.
+              t('wb.runningLineTwo', {
+                session: runningSession.name.replace(/^chat: /, ''),
+                task: runningTask.title,
+                lead: runningTask.lead.messages?.lead ?? 0,
+                worker: runningTask.lead.messages?.worker ?? 0,
+                total: (runningTask.lead.messages?.lead ?? 0) + (runningTask.lead.messages?.worker ?? 0),
+                m: minutes,
+                maxm: limits.minutes,
+              })
+            : t('wb.runningLine', { session: runningSession.name.replace(/^chat: /, ''), task: runningTask.title, n: runningTask.iterations, max: limits.iterations, m: minutes, maxm: limits.minutes })}
           {runningSession.paused && <strong className="wb-paused"> · {t('wb.pausedTag')}</strong>}
         </button>
       ) : (

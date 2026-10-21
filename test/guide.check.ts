@@ -251,6 +251,8 @@ const EXEMPT: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /^diff\.(before|after)$/, why: 'the two column headings of the changes view' },
   { pattern: /\.(checking|saving|importing|loading)$/, why: 'what a button says for a moment while it works; nobody is sent to press it' },
   { pattern: /^proj\.desktopMasterOff$/, why: 'the greyed-out note beside "Keep a copy of this project on the Desktop", which is guided' },
+  { pattern: /^(skills\.allProjects|chat\.skillNone)$/, why: 'the first option of a list that is guided ("Project", "Skill"): every project, no skill' },
+  { pattern: /^skills\.addTitle$/, why: 'the heading over the new skill\'s fields, which are guided with "Add the skill"' },
 ];
 const CONTROL_TAGS = new Set(['button', 'option', 'summary', 'label', 'a', 'Link', 'h2', 'h3', 'legend', 'th']);
 const guided = new Set(claims.map((c) => c.key));

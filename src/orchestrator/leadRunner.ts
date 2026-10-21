@@ -25,7 +25,7 @@ import { isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/c
 import type { ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { RunLog } from '../log/runLog.js';
-import { Pacer } from '../util/pacing.js';
+import { gapFrom, Pacer } from '../util/pacing.js';
 import { takeAfter, takeCheckpoint } from '../session/checkpoint.js';
 import { commitFiles } from '../vcs/git.js';
 import { buildStory } from '../session/story.js';
@@ -45,10 +45,12 @@ export type AssignmentFacts = {
   maxRunMinutes: number;
   /** Whether the operator approves the lead's plan before the work goes on. */
   planApproval: boolean;
+  /** The projects for reference only (2026-10-21): the worker reads them and changes nothing there. */
+  reference?: Array<{ name: string; dir: string }>;
 };
 
 /** The assignment as the lead is given it: the operator's message, and what the runner tells it about the work. */
-export function assignmentMessage(task: Pick<Task, 'title' | 'prompt'>, n: number, facts: AssignmentFacts, again: boolean): string {
+export function assignmentMessage(task: Pick<Task, 'title' | 'prompt' | 'skill'>, n: number, facts: AssignmentFacts, again: boolean): string {
   return [
     again
       ? 'New assignment in this same conversation. The lead\'s contract you were given at the start still applies unchanged: the same format, the same rules. Restate this assignment in "understanding" in your first reply to it.'
@@ -57,6 +59,18 @@ export function assignmentMessage(task: Pick<Task, 'title' | 'prompt'>, n: numbe
     '',
     task.prompt.trim(),
     '',
+    // The operator's skill for this kind of work (2026-10-21): the lead plans by it, and every subtask carries it to the worker.
+    ...(task.skill?.text.trim()
+      ? [
+          `## Skill: ${task.skill.name}`,
+          '',
+          ...(task.skill.description.trim() ? [`For: ${task.skill.description.trim()}`, ''] : []),
+          'The operator\'s instructions for this kind of work. Plan and judge the work by them; the worker is given them with every subtask.',
+          '',
+          task.skill.text.trim(),
+          '',
+        ]
+      : []),
     '## What the runner tells you',
     '',
     `- The project folder, where the worker's commands run: ${facts.workDir || '(none is open)'}.`,
@@ -64,6 +78,11 @@ export function assignmentMessage(task: Pick<Task, 'title' | 'prompt'>, n: numbe
     facts.planApproval
       ? '- The operator approves plans: when you send "plan", the work waits for their answer.'
       : '- Plans are not put to the operator here: send "plan" all the same, so it is on record; the work goes on at once.',
+    ...((facts.reference?.length ?? 0) > 0
+      ? [
+          `- For reference only, changed by nothing: ${facts.reference!.map((p) => `${p.name} (${p.dir})`).join(', ')}. The worker may read them and run what only reads; whatever it changes there is put back. Plan no change in them; if the result needs one, say so to the operator.`,
+        ]
+      : []),
     '- Reply in the lead\'s format.',
   ]
     .filter((l, i) => l !== '' || i > 0)
@@ -209,7 +228,14 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     }
   }
 
-  const pacer = new Pacer({ enabled: cfg.pacing.enabled, settleMs: cfg.pacing.settleMs, maxMessagesPerHour: cfg.pacing.maxMessagesPerHour });
+  const pacer = new Pacer({
+    enabled: cfg.pacing.enabled,
+    settleMs: cfg.pacing.settleMs,
+    maxMessagesPerHour: cfg.pacing.maxMessagesPerHour,
+    gapMs: gapFrom(cfg.pacing),
+    signal,
+    onGap: (ms) => sink.event('pacing-gap', { ms, lead: true }, `the next message to the lead waits ${Math.ceil(ms / 1000)} s: Settings ask for a pause between messages`),
+  });
   let limitHit: TaskLimit | undefined;
 
   /*
@@ -239,6 +265,9 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     if (notes.length > 0) sink.event('operator-note-sent', { notes: notes.length, with: 'lead' }, `${notes.length} note(s) from the operator go to the lead`);
     const before = await leadChat.sendAndConfirm(message);
     sent += 1;
+    // Counted for the operator, with the worker's (2026-10-21): shown under the message and in the status bar.
+    lead.messages = { lead: sent, worker: lead.messages?.worker ?? 0 };
+    await saveLead();
     await writeFile(log.path('messages', `${String(sent).padStart(2, '0')}.md`), message, 'utf8').catch(() => undefined);
     sink.event('message-sent', { n: sent, chars: message.length, lead: true, chatId: session.chat?.chatId ?? null }, `message ${sent} sent to the lead (${message.length} chars)`);
     await record(`TO THE LEAD (${sent})`, message);
@@ -381,7 +410,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       });
       sink.event('worker-fresh', { n }, `subtask ${n} goes to a fresh worker conversation`);
     }
-    const made = await store.addTask(worker.id, { title: `${n}. ${sub.title}`, level2: '', prompt: subtaskPrompt(sub, n), reviewEnabled: false, readOnly: sub.readOnly });
+    const made = await store.addTask(worker.id, { title: `${n}. ${sub.title}`, level2: '', prompt: subtaskPrompt(sub, n), reviewEnabled: false, readOnly: sub.readOnly, ...(task.skill ? { skill: task.skill } : {}) });
     await store.updateTask(worker.id, made.id, (t) => {
       t.fromLead = { sessionId: session.id, taskId: task.id, n };
     });
@@ -401,7 +430,22 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     }
     const current = (await store.getSession(worker.id)) as Session;
     const subtask = current.tasks.find((x) => x.id === made.id) as Task;
-    const out = await runTask(transport, current, subtask, { ...deps, approvePlan: undefined });
+    // Every message the worker's task sends is counted as the worker's, as it goes.
+    const counted = new Proxy(transport, {
+      get(target, key) {
+        if (key === 'sendAndConfirm') {
+          return async (...args: Parameters<ChatTransport['sendAndConfirm']>) => {
+            const r = await target.sendAndConfirm(...args);
+            lead.messages = { lead: lead.messages?.lead ?? sent, worker: (lead.messages?.worker ?? 0) + 1 };
+            await saveLead();
+            return r;
+          };
+        }
+        const value: unknown = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const out = await runTask(counted, current, subtask, { ...deps, approvePlan: undefined });
     speakFor(transport, session.id);
     if (transport.closedOutside()) throw new WindowClosed();
     if (signal?.aborted) return 'stopped';
@@ -425,6 +469,10 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       maxIterations: cfg.limits.maxIterations,
       maxRunMinutes: cfg.limits.maxRunMinutes,
       planApproval: session.planMode === 'approve' && !!deps.approvePlan,
+      reference: [
+        ...(cfg.project.readOnly && cfg.project.rootDir ? [{ name: cfg.project.name || cfg.project.rootDir, dir: cfg.project.rootDir }] : []),
+        ...cfg.project.others.filter((o) => o.readOnly).map((o) => ({ name: o.name, dir: o.rootDir })),
+      ],
     };
     const n = session.tasks.findIndex((x) => x.id === task.id) + 1;
     const contract = (await store.getLead1()).content.trim();

@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { api, type ModelCatalogue, type ProjectDefault } from '../../lib/api';
+import { api, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
 import { useT, useFmtTime } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
@@ -77,6 +77,7 @@ export default function DefaultsPage() {
       </div>
       <Level1Section />
       <ProjectSection />
+      <SkillsSection />
       <LoginSection />
       <ModelSection {...shared} />
       <ReviewModelSection {...shared} />
@@ -228,6 +229,201 @@ function SavedNote({ msg, onSave }: { msg: string; onSave?: () => void }) {
 }
 
 // ---------------------------------------------------------------------------------------
+// Skills (operator, 2026-10-21): instructions for a kind of task that comes back
+// ---------------------------------------------------------------------------------------
+
+const EMPTY_SKILL: Skill = { name: '', description: '', text: '', projectDir: '' };
+
+/**
+ * The skills: each one a name to call it by (after `/` at the start of a message, or from the list under the chat's
+ * box), a line on what it is for, the project it is for or every project, and the instructions that go with the
+ * message. Saved as the rest of the page is — a field when it is left, the instructions a moment after typing stops.
+ */
+function SkillsSection() {
+  const { t } = useT();
+  const [list, setList] = useState<Skill[] | null>(null);
+  const [limits, setLimits] = useState({ maxText: 8000, maxDescription: 300 });
+  const [projects, setProjects] = useState<Array<{ name: string; dir: string }>>([]);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<Skill>(EMPTY_SKILL);
+
+  useEffect(() => {
+    api
+      .skills()
+      .then((r) => {
+        setList(r.skills);
+        setLimits({ maxText: r.maxText, maxDescription: r.maxDescription });
+      })
+      .catch((e: unknown) => setErr((e as Error).message));
+    api
+      .project()
+      .then((p) => setProjects([...(p.rootDir ? [{ name: p.name || p.rootDir, dir: p.rootDir }] : []), ...p.others.map((o) => ({ name: o.name, dir: o.rootDir }))]))
+      .catch(() => undefined);
+  }, []);
+
+  const save = async (next: Skill[]): Promise<boolean> => {
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await api.setSkills(next);
+      setList(r.skills);
+      setMsg(t('skills.saved', { n: r.skills.length }));
+      return true;
+    } catch (e) {
+      setErr((e as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const all = list ?? [];
+  const add = async () => {
+    if (await save([...all, { ...draft, name: draft.name.trim().toLowerCase() }])) setDraft(EMPTY_SKILL);
+  };
+  const remove = async (i: number) => {
+    if (!(await confirmDialog(t('skills.removeConfirm', { name: all[i]!.name })))) return;
+    await save(all.filter((_, j) => j !== i));
+  };
+
+  return (
+    <section className="panel" id="skills" aria-labelledby="skills-title">
+      <h2 id="skills-title">{t('skills.title')}</h2>
+      <p className="muted small">{t('skills.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      {list && list.length === 0 && <p className="muted small">{t('skills.none')}</p>}
+      {all.map((k, i) => (
+        <SkillEntry
+          // By place: renaming a skill must not remount the row under the cursor.
+          key={`skill-${i}`}
+          skill={k}
+          projects={projects}
+          limits={limits}
+          onChange={(changed) => save(all.map((x, j) => (j === i ? changed : x)))}
+          onRemove={() => void remove(i)}
+          busy={busy}
+        />
+      ))}
+      <SavedNote msg={msg} />
+
+      <h3 id="skills-add">{t('skills.addTitle')}</h3>
+      <SkillEntry skill={draft} projects={projects} limits={limits} onDraft={setDraft} busy={busy} />
+      <div className="row">
+        <button className="primary" onClick={() => void add()} disabled={busy || !draft.name.trim() || !draft.text.trim()}>
+          {t('skills.add')}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * One skill's fields. A saved one is written as it is edited (`onChange`); the new one only keeps what is typed
+ * (`onDraft`) until "Add the skill".
+ */
+function SkillEntry({
+  skill,
+  projects,
+  limits,
+  onChange,
+  onDraft,
+  onRemove,
+  busy,
+}: {
+  skill: Skill;
+  projects: Array<{ name: string; dir: string }>;
+  limits: { maxText: number; maxDescription: number };
+  onChange?: (skill: Skill) => Promise<boolean>;
+  onDraft?: (skill: Skill) => void;
+  onRemove?: () => void;
+  busy: boolean;
+}) {
+  const { t } = useT();
+  const id = useId();
+  const [shown, setShown] = useState(skill);
+  const typing = useRef(false);
+  useEffect(() => {
+    if (!typing.current) setShown(skill);
+  }, [skill]);
+  const edit = (patch: Partial<Skill>): Skill => {
+    const next = { ...shown, ...patch };
+    setShown(next);
+    onDraft?.(next);
+    return next;
+  };
+  const textLater = useDebouncedSave(async (next: Skill) => {
+    typing.current = false;
+    if (onChange && next.text !== skill.text) await onChange(next);
+  }, 1200);
+  const leave = (): void => {
+    if (onChange && (shown.name !== skill.name || shown.description !== skill.description)) void onChange(shown);
+  };
+  return (
+    <div className={`panel inner skill-entry${onChange ? '' : ' skill-new'}`}>
+      <div className="project-fields">
+        <div>
+          <FieldName htmlFor={`${id}-name`} label={t('skills.name')} info={t('skills.nameInfo')} />
+          <div className="input-with-buttons">
+            <span className="skill-slash" aria-hidden="true">/</span>
+            <input id={`${id}-name`} type="text" value={shown.name} onChange={(e) => edit({ name: e.target.value })} onBlur={leave} placeholder="new-test" spellCheck={false} />
+          </div>
+        </div>
+        <div>
+          <FieldName htmlFor={`${id}-description`} label={t('skills.description')} info={t('skills.descriptionInfo')} />
+          <input id={`${id}-description`} type="text" value={shown.description} maxLength={limits.maxDescription} onChange={(e) => edit({ description: e.target.value })} onBlur={leave} />
+        </div>
+        <div>
+          <FieldName htmlFor={`${id}-project`} label={t('skills.project')} info={t('skills.projectInfo')} />
+          <div className="input-with-buttons">
+            <select
+              id={`${id}-project`}
+              value={shown.projectDir}
+              onChange={(e) => {
+                const next = edit({ projectDir: e.target.value });
+                if (onChange) void onChange(next);
+              }}
+            >
+              <option value="">{t('skills.allProjects')}</option>
+              {projects.map((p) => (
+                <option key={p.dir} value={p.dir}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {onRemove && (
+              <button className="quiet" onClick={onRemove} disabled={busy}>
+                {t('skills.remove')}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="project-level2">
+        <FieldName htmlFor={`${id}-text`} label={t('skills.text')} info={t('skills.textInfo', { n: limits.maxText.toLocaleString() })} />
+        <textarea
+          id={`${id}-text`}
+          className="prose"
+          rows={5}
+          maxLength={limits.maxText}
+          value={shown.text}
+          onChange={(e) => {
+            const next = edit({ text: e.target.value });
+            // A saved skill is written a moment after the typing stops; the new one's text is only kept until it is added.
+            if (onChange) {
+              typing.current = true;
+              textLater(next);
+            }
+          }}
+          placeholder={t('skills.textPlaceholder')}
+        />
+        <span className="muted small">{t('skills.count', { n: shown.text.length.toLocaleString(), max: limits.maxText.toLocaleString() })}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
 // The base prompt, to read
 // ---------------------------------------------------------------------------------------
 
@@ -336,12 +532,12 @@ function ProjectSection() {
   };
 
   const others = project?.others ?? [];
-  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir, level2: o.level2 }));
-  const saveOther = (o: (typeof others)[number], change: Partial<{ name: string; rootDir: string; level2: string }>, done: (p: ProjectDefault) => string) =>
+  const plain = (list: typeof others) => list.map((o) => ({ name: o.name, rootDir: o.rootDir, level2: o.level2, readOnly: o.readOnly }));
+  const saveOther = (o: (typeof others)[number], change: Partial<{ name: string; rootDir: string; level2: string; readOnly: boolean }>, done: (p: ProjectDefault) => string) =>
     save({ others: plain(others.map((x) => (x.name === o.name ? { ...x, ...change } : x))) }, done);
 
   const addOther = async () => {
-    const ok = await save({ others: [...plain(others), { name: newName.trim(), rootDir: newDir.trim(), level2: '' }] }, (p) => t('proj.othersSaved', { n: p.others.length }));
+    const ok = await save({ others: [...plain(others), { name: newName.trim(), rootDir: newDir.trim(), level2: '', readOnly: false }] }, (p) => t('proj.othersSaved', { n: p.others.length }));
     if (ok) {
       setNewName('');
       setNewDir('');
@@ -367,6 +563,8 @@ function ProjectSection() {
         repoProblem={project?.repoProblem}
         branch={project?.branch}
         level2={project?.level2 ?? ''}
+        readOnly={project?.readOnly === true}
+        onReadOnly={(v) => save({ readOnly: v }, () => t(v ? 'proj.readOnlyOn' : 'proj.readOnlyOff', { name: name || dir }))}
         isDefault
         busy={busy}
         onNameInput={(v) => {
@@ -396,6 +594,8 @@ function ProjectSection() {
           repoProblem={o.repoProblem}
           branch={o.branch}
           level2={o.level2}
+          readOnly={o.readOnly === true}
+          onReadOnly={(v) => saveOther(o, { readOnly: v }, () => t(v ? 'proj.readOnlyOn' : 'proj.readOnlyOff', { name: o.name }))}
           busy={busy}
           onName={(v) => void saveOther(o, { name: v }, () => t('proj.nameSaved'))}
           onDir={(v) => void saveOther(o, { rootDir: v }, () => t('proj.othersSaved', { n: others.length }))}
@@ -445,6 +645,8 @@ function ProjectEntry({
   repoProblem,
   branch,
   level2,
+  readOnly,
+  onReadOnly,
   isDefault = false,
   busy,
   onNameInput,
@@ -462,6 +664,9 @@ function ProjectEntry({
   repoProblem?: string;
   branch?: string;
   level2: string;
+  /** For reference only (operator, 2026-10-21): the bot changes nothing in it. */
+  readOnly: boolean;
+  onReadOnly: (value: boolean) => Promise<unknown>;
   isDefault?: boolean;
   busy: boolean;
   /** Every keystroke, for an entry that saves as it is typed (the chat's, debounced). */
@@ -487,6 +692,9 @@ function ProjectEntry({
   const [dirDraft, setDirDraft] = useState(dir);
   const [level2Draft, setLevel2Draft] = useState(level2);
   const typingLevel2 = useRef(false);
+  // The box shows the choice at once, and goes back only if it could not be saved.
+  const [readOnlyShown, setReadOnlyShown] = useState(readOnly);
+  useEffect(() => setReadOnlyShown(readOnly), [readOnly]);
   useEffect(() => setNameDraft(name), [name]);
   useEffect(() => setDirDraft(dir), [dir]);
   // The saved text replaces the field only when nobody is typing in it.
@@ -505,6 +713,11 @@ function ProjectEntry({
             {t('proj.isDefault')}
           </span>
         )}
+        {readOnlyShown && (
+          <span className="badge reference" title={t('proj.readOnlyInfo')}>
+            {t('proj.readOnlyBadge')}
+          </span>
+        )}
         {dir && (
           <span className={`badge ${repoOk ? 'done' : ''}`} title={repoOk ? t('proj.isRepo') : repoProblem}>
             {repoOk ? t('proj.otherRepo') : t('proj.otherNotRepo')}
@@ -521,6 +734,24 @@ function ProjectEntry({
         )}
       </div>
       {dir && !repoOk && <p className="muted small">{repoProblem || t('proj.notRepoWhy')}</p>}
+
+      {/* For reference only (operator, 2026-10-21): read, never changed — whatever a command changes there is put back. */}
+      <div className="field-label check-label project-readonly">
+        <input
+          id={`${id}-readonly`}
+          type="checkbox"
+          checked={readOnlyShown}
+          onChange={(e) => {
+            const v = e.target.checked;
+            setReadOnlyShown(v);
+            void onReadOnly(v).then((ok) => {
+              if (ok === false) setReadOnlyShown(!v);
+            });
+          }}
+        />
+        <label htmlFor={`${id}-readonly`}>{t('proj.readOnly')}</label>
+        <InfoTip label={t('info.about', { name: t('proj.readOnly') })} text={t('proj.readOnlyInfo')} />
+      </div>
 
       <div className="project-fields">
         <div>
@@ -814,6 +1045,11 @@ function ExecutionSection() {
   /** The most subtasks the lead of a two-chat conversation may give for one message (`limits.maxSubtasks`). */
   const [subtasks, setSubtasks] = useState(20);
   const [replySec, setReplySec] = useState(900);
+  /** The pause between messages (`pacing.gap*`, 2026-10-21): on or off, its shortest time, and a random one up to the longest. */
+  const [gapOn, setGapOn] = useState(false);
+  const [gapSec, setGapSec] = useState(60);
+  const [gapRandom, setGapRandom] = useState(false);
+  const [gapMax, setGapMax] = useState(90);
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [startMode, setStartMode] = useState<StartMode>('confirm');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
@@ -849,6 +1085,11 @@ function ExecutionSection() {
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         setSubtasks(typeof limits.maxSubtasks === 'number' ? limits.maxSubtasks : 20);
+        const pacing = ((s.raw.pacing as Record<string, unknown>) ?? {}) as { gapEnabled?: boolean; gapSec?: number; gapRandom?: boolean; gapMaxSec?: number };
+        setGapOn(pacing.gapEnabled === true);
+        setGapSec(typeof pacing.gapSec === 'number' ? pacing.gapSec : 60);
+        setGapRandom(pacing.gapRandom === true);
+        setGapMax(typeof pacing.gapMaxSec === 'number' ? pacing.gapMaxSec : 90);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
         setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
         const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch };
@@ -867,7 +1108,7 @@ function ExecutionSection() {
    * the other, and the second would put back what the first had changed. Each write waits for the one
    * before and is built on the object that one produced, so nothing has to be disabled.
    */
-  const write = (branch: 'limits' | 'execution' | 'copilot', key: string, value: unknown): Promise<void> => {
+  const write = (branch: 'limits' | 'execution' | 'copilot' | 'pacing', key: string, value: unknown): Promise<void> => {
     const run = async () => {
       if (!rawRef.current) return;
       /*
@@ -903,6 +1144,8 @@ function ExecutionSection() {
   const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
   const saveSubtasksLater = useDebouncedSave((n: number) => write('limits', 'maxSubtasks', n));
   const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
+  const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
+  const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
   const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch', value: string) => write('execution', key, value);
 
   /** The number fields, in the order a task meets them. */
@@ -939,6 +1182,81 @@ function ExecutionSection() {
           />
         </Field>
       ))}
+
+      {/*
+        A pause between messages (operator, 2026-10-21: "how often a message may be sent; and a random time, between 60
+        and 90 seconds, say — as a box that appears when the first box is ticked"). The time shows when the box is
+        ticked, and with it a second box for a random time, and under that the longest.
+      */}
+      <div className="settings-field">
+        <div className="field-label check-label">
+          <input
+            id="gap-on"
+            type="checkbox"
+            checked={gapOn}
+            disabled={!raw}
+            onChange={(e) => {
+              setGapOn(e.target.checked);
+              void write('pacing', 'gapEnabled', e.target.checked);
+            }}
+          />
+          <label htmlFor="gap-on">{t('exec.gap')}</label>
+          <InfoTip label={t('info.about', { name: t('exec.gap') })} text={t('exec.gapWhy')} />
+        </div>
+      </div>
+      {gapOn && (
+        <Field id="gap-sec" label={t('exec.gapSec')} info={t('exec.gapSecWhy')} unit={t('exec.gapUnit')}>
+          <BoundedNumber
+            id="gap-sec"
+            value={gapSec}
+            min={1}
+            max={3600}
+            onChange={(n) => {
+              setGapSec(n);
+              saveGapSecLater(n);
+            }}
+            disabled={!raw}
+          />
+        </Field>
+      )}
+      {gapOn && (
+        <div className="settings-field gap-random">
+          <div className="field-label check-label">
+            <input
+              id="gap-random"
+              type="checkbox"
+              checked={gapRandom}
+              disabled={!raw}
+              onChange={(e) => {
+                setGapRandom(e.target.checked);
+                void write('pacing', 'gapRandom', e.target.checked);
+                // The longest is never less than the shortest.
+                if (e.target.checked && gapMax < gapSec) {
+                  setGapMax(gapSec);
+                  saveGapMaxLater(gapSec);
+                }
+              }}
+            />
+            <label htmlFor="gap-random">{t('exec.gapRandom')}</label>
+            <InfoTip label={t('info.about', { name: t('exec.gapRandom') })} text={t('exec.gapRandomWhy')} />
+          </div>
+        </div>
+      )}
+      {gapOn && gapRandom && (
+        <Field id="gap-max" label={t('exec.gapMax')} info={t('exec.gapMaxWhy')} unit={t('exec.gapUnit')}>
+          <BoundedNumber
+            id="gap-max"
+            value={gapMax}
+            min={gapSec}
+            max={3600}
+            onChange={(n) => {
+              setGapMax(n);
+              saveGapMaxLater(n);
+            }}
+            disabled={!raw}
+          />
+        </Field>
+      )}
 
       <Field id="isolation" label={t('exec.isolation')} info={t('exec.isolationWhy')}>
         <select

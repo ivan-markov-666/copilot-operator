@@ -391,13 +391,26 @@ try {
     t.check('the level 2 is saved with the project', (await h.call<{ level2: string }>('GET', '/project')).level2, 'A fixture repository. Tests: none. Never touch README.md.');
     const kerrigan = await h.call<{ text: string }>('GET', '/kerrigan?lang=en');
     t.truthy('and Kerrigan carries it, with the branch', kerrigan.text.includes('Never touch README.md') && kerrigan.text.includes('`feature/settings`'), kerrigan.text.slice(kerrigan.text.indexOf('## The projects'), kerrigan.text.indexOf('## How you help')));
+    // For reference only (operator, 2026-10-21): a box on each project, saved at once, said on the project and to Kerrigan.
+    const reference = entry.getByRole('checkbox', { name: en['proj.readOnly']!, exact: true });
+    t.check('a project is open for work at first', await reference.isChecked(), false);
+    await reference.check();
+    await waitFor('the box to be saved', async () => (await h.call<{ readOnly: boolean }>('GET', '/project')).readOnly, 10_000).catch(() => undefined);
+    t.check('ticked: saved with the project', (await h.call<{ readOnly: boolean }>('GET', '/project')).readOnly, true);
+    await entry.locator('.badge.reference').waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.check('and said on it', await entry.locator('.badge.reference').textContent(), en['proj.readOnlyBadge']);
+    const marked = await h.call<{ text: string }>('GET', '/kerrigan?lang=en');
+    t.truthy('Kerrigan knows it is for reference only', marked.text.includes('**For reference only**'), marked.text.slice(marked.text.indexOf('## The projects'), marked.text.indexOf('## How you help')));
+    await reference.uncheck();
+    await waitFor('the box to be cleared', async () => !(await h.call<{ readOnly: boolean }>('GET', '/project')).readOnly, 10_000).catch(() => undefined);
+    t.check('unticked: open for work again', (await h.call<{ readOnly: boolean }>('GET', '/project')).readOnly, false);
     // Every field has an ⓘ beside its name.
     const bare = await page.evaluate(() => {
       const out: string[] = [];
       for (const el of Array.from(document.querySelectorAll('main input, main select, main textarea'))) {
         const f = el as HTMLInputElement;
         if (f.type === 'hidden' || f.getClientRects().length === 0) continue;
-        const holder = f.closest('.settings-field, .project-fields > div, .project-level2');
+        const holder = f.closest('.settings-field, .project-fields > div, .project-level2, .project-readonly');
         const info = holder?.querySelector('.info-btn');
         if (!info) out.push(f.id || f.getAttribute('aria-label') || f.outerHTML.slice(0, 60));
       }

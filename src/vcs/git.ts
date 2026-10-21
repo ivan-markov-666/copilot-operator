@@ -15,7 +15,7 @@
  *   - Nothing runs through a shell. `execFile` takes an argument list, so a branch name or a
  *     commit message cannot turn into another command.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -89,6 +89,17 @@ export function git(
       }, timeoutMs);
     }
   });
+}
+
+/**
+ * One git command, synchronously, for the gate: it decides before a step starts, in a function with no await to give
+ * (see `exec/scriptFiles.ts`). Only reading commands go through it. Never throws: a git that is missing, fails or
+ * runs out of time is `ok: false`.
+ */
+export function gitSync(cwd: string, args: string[], timeoutMs = 15_000): GitResult {
+  const r = spawnSync('git', [...SAFE_GIT, ...args], { cwd, timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const code = typeof r.status === 'number' ? r.status : 1;
+  return { ok: !r.error && code === 0, stdout: (r.stdout ?? '').trim(), stderr: (r.stderr ?? '').trim() || (r.error ? r.error.message : ''), code };
 }
 
 /**

@@ -73,6 +73,13 @@ export type ReviewDeps = {
    * exactly as able to reach outside the project as the work they judge. See `confinement.ts`.
    */
   roots: string[];
+  /** When the work began: a script committed after it is the work's, not the project's. See `scriptFiles.ts`. */
+  workStartedAt?: string;
+  /**
+   * After each step: a project for reference only it changed is put back, and what to tell the reviewer comes back
+   * (null when nothing changed). See `vcs/referenceGuard.ts`.
+   */
+  afterStep?: () => Promise<string | null>;
   /** The task's record of the shells the bot started. See `processes.ts`. */
   tracker?: ProcessTracker;
   /** The files the task changed, as version control recorded them. */
@@ -660,7 +667,7 @@ ${machineNote}` : contract);
           sessionId: session.id,
           taskId: task.id,
           iteration: iterations,
-          confinement: { roots: deps.roots, cwd: deps.cwd },
+          confinement: { roots: deps.roots, cwd: deps.cwd, workStartedAt: deps.workStartedAt },
         });
         if (decision.action !== 'run') {
           results.push(refused(step.id, decision.reason, step.cmd, step.shell, decision.by === 'operator' ? 'operator' : 'runner'));
@@ -705,10 +712,14 @@ ${machineNote}` : contract);
         );
         stepsRun += 1;
         results.push(result);
+        const touched = deps.afterStep ? await deps.afterStep().catch(() => null) : null;
+        if (touched) result.stderr = `${result.stderr}${result.stderr && !result.stderr.endsWith('\n') ? '\n' : ''}[runner] ${touched}\n`;
         deps.event('review-step-finished', { round, id: step.id, outcome: result.outcome, exitCode: result.exitCode, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `review step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
         // Stopped while it ran: no step after it is started, and the report waits below.
         if (signal?.aborted) break;
+        // A project for reference only was changed and put back: the rest of the round is not run.
+        if (touched) break;
         await pacer.settle();
       }
 

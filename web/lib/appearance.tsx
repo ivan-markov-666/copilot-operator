@@ -34,6 +34,8 @@ export type Appearance = {
   strongFocus: boolean;
   /** A warm veil over the page, with less blue light, for the evening (2026-10-20). */
   nightLight: boolean;
+  /** The system's own cursor instead of the page's (2026-10-21): for a cursor made larger or a scheme of one's own in Windows. */
+  systemCursor: boolean;
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -44,6 +46,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   underlineLinks: false,
   strongFocus: false,
   nightLight: false,
+  systemCursor: false,
 };
 
 /**
@@ -66,6 +69,7 @@ export function sanitiseAppearance(raw: unknown): Appearance {
     underlineLinks: flag(a.underlineLinks, DEFAULT_APPEARANCE.underlineLinks),
     strongFocus: flag(a.strongFocus, DEFAULT_APPEARANCE.strongFocus),
     nightLight: flag(a.nightLight, DEFAULT_APPEARANCE.nightLight),
+    systemCursor: flag(a.systemCursor, DEFAULT_APPEARANCE.systemCursor),
   };
 }
 
@@ -88,6 +92,7 @@ function apply(a: Appearance): void {
   d.dataset.links = a.underlineLinks ? 'underline' : 'plain';
   d.dataset.focus = a.strongFocus ? 'strong' : 'normal';
   d.dataset.night = a.nightLight ? 'on' : 'off';
+  d.dataset.cursor = a.systemCursor ? 'system' : 'own';
 }
 
 type Ctx = {
