@@ -453,13 +453,19 @@ export const reply = {
   },
   /** The lead's replies, in the format of prompts/lead1.md (two chats, 2026-10-20). */
   lead: {
+    /**
+     * A subtask, with the lead's list of subtasks (2026-10-21): by default only this one, running; `todo` gives the whole
+     * list, and `null` leaves it out, as a lead that forgot it does.
+     */
     delegate(
       sub: Partial<{ title: string; goal: string; context: string; steps: string[]; report: string; doneWhen: string; readOnly: boolean; freshWorker: boolean }> = {},
-      extra: { understanding?: string; notes?: string } = {},
+      extra: { understanding?: string; notes?: string; todo?: unknown[] | null } = {},
     ): string {
+      const { todo, ...rest } = extra;
       return fenced({
         status: 'delegate',
-        ...extra,
+        ...rest,
+        ...(todo === null ? {} : { todo: todo ?? [{ title: sub.title ?? 'Survey the project', status: 'running' }] }),
         subtask: {
           title: 'Survey the project',
           goal: 'Find out what is in the project folder and how it is laid out.',
@@ -473,10 +479,13 @@ export const reply = {
         },
       });
     },
-    plan(over: Partial<{ existing: string; approach: string; steps: string[]; files: string[]; verification: string; risks: string }> = {}, extra: { understanding?: string; notes?: string } = {}): string {
+    /** The plan, with the lead's list: by default its steps, planned; `todo` gives it, `null` leaves it out. */
+    plan(over: Partial<{ existing: string; approach: string; steps: string[]; files: string[]; verification: string; risks: string }> = {}, extra: { understanding?: string; notes?: string; todo?: unknown[] | null } = {}): string {
+      const { todo, ...rest } = extra;
       return fenced({
         status: 'plan',
-        ...extra,
+        ...rest,
+        ...(todo === null ? {} : { todo: todo ?? (over.steps ?? ['write the file', 'read it back']).map((title) => ({ title, status: 'planned' })) }),
         plan: {
           existing: 'A README and nothing else, as the survey found.',
           approach: 'Have the worker write the file the assignment names, then read it back.',
@@ -487,7 +496,7 @@ export const reply = {
         },
       });
     },
-    ask(question = 'Which of the two folders is the one the assignment means: the old one or the new one?', options: string[] = [], extra: { understanding?: string; notes?: string; why?: string } = {}): string {
+    ask(question = 'Which of the two folders is the one the assignment means: the old one or the new one?', options: string[] = [], extra: { understanding?: string; notes?: string; why?: string; todo?: unknown[] } = {}): string {
       return fenced({ status: 'ask', question, ...(options.length > 0 ? { options } : {}), why: 'the assignment names a folder that is there twice', ...extra });
     },
     done(answer: unknown = 'The work is finished: the worker wrote the file and read it back, and it holds exactly the text the assignment asked for.', evidence: string[] = [], extra: { understanding?: string; notes?: string } = {}): string {

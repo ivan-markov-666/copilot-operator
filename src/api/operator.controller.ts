@@ -316,7 +316,7 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; reviewModel?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
@@ -328,6 +328,8 @@ export class OperatorController {
         ...(typeof body.lang === 'string' && /^[a-z]{2,3}$/.test(body.lang) ? { lang: body.lang } : {}),
         ...(body.planMode === true ? { planMode: true } : {}),
         ...(typeof body.review === 'boolean' ? { review: body.review } : {}),
+        // The review's model, chosen beside the box (2026-10-21); left out, Settings' review model.
+        ...(typeof body.reviewModel === 'string' && body.reviewModel.trim() ? { reviewModel: body.reviewModel } : {}),
         // Two chats, for a new conversation: a lead that directs and a worker that carries out (2026-10-20).
         ...(body.lead === true ? { lead: true } : {}),
         ...(typeof body.workerModel === 'string' && body.workerModel.trim() ? { workerModel: body.workerModel } : {}),

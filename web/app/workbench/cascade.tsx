@@ -30,6 +30,7 @@ import { PlanCard } from '../approvals';
 import { PlanView } from '../planView';
 import { StatusMark } from './workbench';
 import { FileIcon } from './fileIcon';
+import { LeadProgress, LedgerChange } from './leadPlan';
 
 const THREAD_KEY = 'cop.chat.thread';
 const MODE_KEY = 'cop.chat.mode';
@@ -69,6 +70,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   const [newPlan, setNewPlan] = useState(false);
   /** The review for a conversation not started yet; a started one has its own (`Session.review`). */
   const [newReview, setNewReview] = useState(true);
+  /** The review's model for a conversation not started yet (2026-10-21): '' is the one in Settings. */
+  const [newReviewModel, setNewReviewModel] = useState('');
   /**
    * Two chats for a conversation not started yet (operator, 2026-10-20): a lead that understands, plans and directs, and
    * a worker that carries out its subtasks. A started conversation keeps how it began. The worker's model: '' is the
@@ -130,27 +133,36 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
 
   const readThreads = useCallback(() => api.chatThreads().then(setThreads).catch(() => undefined), []);
   usePoll(readThreads, 5000);
-  const readSession = useCallback(
-    () =>
-      threadId
-        ? api
-            .session(threadId)
-            .then((s) => setSession(s.kind === 'chat' ? s : null))
-            .catch((e: unknown) => {
-              // Only a conversation the API no longer has is forgotten. A read that failed on the way — the bot
-              // restarting, a timeout, the page reloading under it — keeps it, and the next read opens it again
-              // (2026-10-20: a reload while the first read was out lost the conversation).
-              if ((e as { status?: number }).status !== 404) return;
-              setSession(null);
-              setThreadId('');
-              keep(THREAD_KEY, '');
-            })
-        : Promise.resolve(setSession(null)),
-    [threadId],
-  );
+  /*
+   * The conversation shown, as of now rather than as of the render a caller was made in, and an answer kept only for the
+   * conversation it was asked for (2026-10-21). "Send" reads the conversation when it has finished, from the render
+   * before its first message made one: it read "no conversation" and blanked the chat to the welcome until the next
+   * poll, up to five seconds, whenever the start answered after the conversation's first read — and a model chosen
+   * then went to the next new conversation instead of this one.
+   */
+  const shownThread = useRef(threadId);
+  shownThread.current = threadId;
+  const readSession = useCallback(() => {
+    const id = shownThread.current;
+    if (!id) return Promise.resolve(setSession(null));
+    return api
+      .session(id)
+      .then((s) => {
+        if (shownThread.current === id) setSession(s.kind === 'chat' ? s : null);
+      })
+      .catch((e: unknown) => {
+        // Only a conversation the API no longer has is forgotten. A read that failed on the way — the bot
+        // restarting, a timeout, the page reloading under it — keeps it, and the next read opens it again
+        // (2026-10-20: a reload while the first read was out lost the conversation).
+        if ((e as { status?: number }).status !== 404 || shownThread.current !== id) return;
+        setSession(null);
+        setThreadId('');
+        keep(THREAD_KEY, '');
+      });
+  }, []);
   useEffect(() => {
     void readSession();
-  }, [readSession]);
+  }, [threadId, readSession]);
   usePoll(readSession, running ? 1500 : 5000, !!threadId);
   /*
    * A card answered here goes at once, not with the next read of the list (2026-10-20: the lead's question stayed on
@@ -175,6 +187,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   usePoll(readWorker, running ? 1500 : 10_000, !!workerId);
 
   const choose = (id: string) => {
+    shownThread.current = id;
     setThreadId(id);
     keep(THREAD_KEY, id);
     setSaid('');
@@ -238,7 +251,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       // The language of the page goes along: the Copilot window says in it when the work on the message has ended.
       // Two chats, for a new conversation: the lead judges the worker's reports, so there is no review of its own.
       const two = fresh && newLead ? { workerModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, workerManualModel: newWorkerModel === BY_HAND } : undefined;
-      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan, fresh ? (two ? false : newReview) : undefined, two, chosen || undefined);
+      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan, fresh ? (two ? false : newReview) : undefined, two, chosen || undefined, fresh && !two ? newReviewModel || undefined : undefined);
       setText('');
       // A skill goes with one message: the next one starts without, unless chosen again.
       setSkill('');
@@ -288,7 +301,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * what the API refused goes back to what it holds. Shown only once the API had answered, a click on "Plan mode"
    * looked like it did nothing for as long as the write and the next read took (2026-10-20).
    */
-  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve'; review?: { enabled: boolean }; workerModel?: string; workerManualModel?: boolean }) => {
+  const changeSession = async (patch: { model?: string; manualModel?: boolean; planMode?: 'off' | 'approve'; review?: { enabled?: boolean; model?: string }; workerModel?: string; workerManualModel?: boolean }) => {
     if (!session) return;
     setSession((s) => {
       if (!s) return s;
@@ -297,6 +310,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         ...s,
         ...rest,
         ...(review ? { review: { ...(s.review ?? { enabled: true, model: '' }), ...review } } : {}),
+        ...(review?.model !== undefined ? { reviewModelSource: review.model ? ('operator' as const) : undefined } : {}),
         ...(s.lead && (workerModel !== undefined || workerManualModel !== undefined)
           ? { lead: { ...s.lead, workerManualModel: workerManualModel || undefined, workerModel: workerManualModel ? undefined : workerModel || undefined } }
           : {}),
@@ -375,6 +389,20 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       return;
     }
     await changeSession({ review: { enabled: on } });
+  };
+  /**
+   * The review's model (operator, 2026-10-21: "is the review model used by the chat? If so, put it in the chat, with its
+   * drop-down"): beside the work's while "Review" is ticked. '' is the one in Settings; with none there, the review's
+   * model is chosen by hand in the Copilot window, as the runner does (`gateOnReview` in taskRunner.ts).
+   */
+  const reviewModelShown = session ? (session.reviewModelSource === 'operator' ? (session.review?.model ?? '') : '') : newReviewModel;
+  const settingsReviewModel = catalogue?.defaultReviewModel ?? '';
+  const chooseReviewModel = async (name: string) => {
+    if (!session) {
+      setNewReviewModel(name);
+      return;
+    }
+    await changeSession({ review: { model: name } });
   };
   /*
    * "Pause" and "Continue" (operator, 2026-10-20): the work holds at its next message to Copilot or its next command —
@@ -498,6 +526,28 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
                 onChange={(n) => void chooseWorkerModel(n)}
                 byHand={t('chat.modelByHand')}
                 none={t('chat.workerSameModel')}
+                catalogue={catalogue}
+                disabled={running}
+                style={{ minWidth: 0, maxWidth: '90%' }}
+              />
+            </div>
+          </div>
+        ) : reviewOn ? (
+          /* With "Review" ticked: the review's model under the work's, the two pickers lined up, as with two chats. */
+          <div className="cs-models">
+            <span className="cs-pick-label" aria-hidden="true">
+              {t('chat.workModel')}
+            </span>
+            <div className="cs-bar">{modelPicker('90%')}</div>
+            <label htmlFor="cs-review-model" className="cs-pick-label">
+              {t('chat.reviewModel')}
+            </label>
+            <div className="cs-bar" title={t('chat.reviewModelWhy')}>
+              <ModelPicker
+                id="cs-review-model"
+                chosen={reviewModelShown}
+                onChange={(n) => void chooseReviewModel(n)}
+                none={settingsReviewModel ? t('chat.reviewModelDefault', { model: settingsReviewModel }) : t('chat.reviewModelByHand')}
                 catalogue={catalogue}
                 disabled={running}
                 style={{ minWidth: 0, maxWidth: '90%' }}
@@ -894,6 +944,8 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
         <Fragment key={r.n}>
           {r.understanding && <LeadSays who={t('lead.understood')} text={r.understanding} />}
           {r.notes && <LeadSays who={t('lead.who')} text={r.notes} />}
+          {/* Where this reply made the list of subtasks, or changed it (2026-10-21). */}
+          {r.ledger && <LedgerChange change={r.ledger} />}
           {r.status === 'plan' && r.n === lastPlanRound && task.plan && !mine.some((a) => a.plan) && (
             <details className="cs-plan">
               <summary>{t('lead.plan', { v: task.plan.version })}</summary>
@@ -916,10 +968,12 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
       ))}
       {live && (
         <p className="cs-working" role="status">
-          <span className="wb-live" aria-hidden="true" /> {working ? t('lead.working', { n: rounds.at(-1)?.subtask?.n ?? 0 }) : t('lead.thinking')}
-          {task.lead ? <span className="muted small"> · {t('lead.subtasks', { n: task.lead.subtasks, max: task.lead.maxSubtasks })}</span> : null}
+          {/* By its title with the lead's list, whose "Subtask 3 of 8" is the place in the plan, not the order given. */}
+          <span className="wb-live" aria-hidden="true" /> {working ? (task.lead?.ledger ? t('lead.workingOn', { title: rounds.at(-1)?.subtask?.title ?? '' }) : t('lead.working', { n: rounds.at(-1)?.subtask?.n ?? 0 })) : t('lead.thinking')}
         </p>
       )}
+      {/* Where the work is against the lead's plan, the limit apart (operator's feedback, 2026-10-21). */}
+      {task.lead && (live || task.lead.ledger) && <LeadProgress lead={task.lead} live={live} />}
       {/* How many messages went to each chat, and in all (2026-10-21). */}
       {task.lead?.messages && (
         <p className="muted small cs-lead-count">

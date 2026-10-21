@@ -283,7 +283,7 @@ function SkillsSection() {
     if (await save([...all, { ...draft, name: draft.name.trim().toLowerCase() }])) setDraft(EMPTY_SKILL);
   };
   const remove = async (i: number) => {
-    if (!(await confirmDialog(t('skills.removeConfirm', { name: all[i]!.name })))) return;
+    if (!(await confirmDialog(t('skills.removeConfirm', { name: all[i]!.name }), { okLabel: t('skills.remove'), danger: true }))) return;
     await save(all.filter((_, j) => j !== i));
   };
 
@@ -315,6 +315,15 @@ function SkillsSection() {
         </button>
       </div>
     </section>
+  );
+}
+
+/** A waste bin, beside Delete. */
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.5 4h11M6 4V2.5h4V4M3.8 4l.7 9.5h7l.7-9.5M6.6 6.6v4.8M9.4 6.6v4.8" />
+    </svg>
   );
 }
 
@@ -361,10 +370,20 @@ function SkillEntry({
   };
   return (
     <div className={`panel inner skill-entry${onChange ? '' : ' skill-new'}`}>
+      {/* A saved skill's name and Delete on top of it, where they are seen (operator, 2026-10-21: "an option to delete a skill"). */}
+      {onRemove && (
+        <div className="skill-head">
+          <span className="skill-title">/{shown.name}</span>
+          <button type="button" className="danger skill-delete" onClick={onRemove} disabled={busy} aria-label={t('skills.removeOne', { name: shown.name })} title={t('skills.removeOne', { name: shown.name })}>
+            <TrashIcon />
+            {t('skills.remove')}
+          </button>
+        </div>
+      )}
       <div className="project-fields">
         <div>
           <FieldName htmlFor={`${id}-name`} label={t('skills.name')} info={t('skills.nameInfo')} />
-          <div className="input-with-buttons">
+          <div className="input-with-buttons skill-name-box">
             <span className="skill-slash" aria-hidden="true">/</span>
             <input id={`${id}-name`} type="text" value={shown.name} onChange={(e) => edit({ name: e.target.value })} onBlur={leave} placeholder="new-test" spellCheck={false} />
           </div>
@@ -391,11 +410,6 @@ function SkillEntry({
                 </option>
               ))}
             </select>
-            {onRemove && (
-              <button className="quiet" onClick={onRemove} disabled={busy}>
-                {t('skills.remove')}
-              </button>
-            )}
           </div>
         </div>
       </div>

@@ -579,7 +579,32 @@ left and right places keep their widths, the middle takes the rest.
 **Appearance, cursors, scroll bars (2026-10-21).** "Appearance" sits in the bar on top, between Settings and System,
 on every page. The page draws its own cursors, in the theme's colours (`--cur-*` in globals.css), with "The system's
 cursor" among the reading aids to put Windows' back (`data-cursor`); scroll bars are thin and rounded, in the theme's
-muted colour.
+muted colour. The arrow is close to Windows' own, its corners rounded and a light stroke along its edge, so as not to
+bother; over what can be clicked, a pointing hand, its fingertip the spot.
+
+**The clock stops while paused (2026-10-21).** `Hold` keeps each pause from "Pause" pressed to "Continue" — from
+the press, not from the point the work holds at a little later — and the runner takes them off a task's minutes
+against `maxRunMinutes`; the task keeps how long it was paused (`pausedMs`). A running session's pauses come with it
+from the API (`pauses`), and the status bar takes them off the minutes it shows (`web/lib/paused.ts`), so they stand
+still while paused.
+
+**The lead's list of subtasks (2026-10-21).** "1 of 20 subtasks" read as if twenty were planned, when twenty is only
+the most the lead may give. The lead now sends its whole list (`todo` in `protocol/leadSchema.ts`, required with every
+plan and every subtask): each subtask "done" (once it has accepted the report), "running" (the one given now — exactly
+one, the runner makes sure), "planned", "blocked" or "failed", each in a phase if the plan has phases. The runner keeps
+it as `LeadRecord.ledger` (`orchestrator/leadLedger.ts`), its version going up when subtasks are added, dropped or
+reordered, and gives it back to the lead with every report. Under the message (`leadPlan.tsx`): "Phase 2 of 4:
+Diagnosis", "Subtask 3 of 8 planned", "5 to go · at most 20 allowed", the list by phase under a fold; where the list
+was made or changed, the conversation says so ("The plan was updated (version 2): +1 new"). While the worker works,
+it is named by the subtask's title; "#2" in the list is the order it was given in. A message without a list says
+"Subtasks used: 1 of at most 20".
+
+**Skills deleted, the review's model in the chat, what each setting is for (2026-10-21).** Each saved skill has its
+name and "Delete" (red, with a bin) on top of its card; it asks first. With "Review" ticked under the chat, the review's
+model is chosen under the work's (`#cs-review-model`): "As in Settings (…)" is Settings → Model for the review; another
+is the conversation's own (`review.model`, `reviewModelSource: 'operator'`), sent with the first message
+(`reviewModel` of `POST /api/chat`) or set on an open conversation. Every ⓘ of Settings says what its field does, an
+example, and its default; a list's ⓘ says what each of its choices means, a paragraph each.
 
 **Pausing between messages, counting them (2026-10-21).** Settings → Execution → "Pause between messages"
 (`pacing.gapEnabled`, `gapSec`), and under it "Random time" (`gapRandom`, `gapMaxSec`): a message to Copilot waits until

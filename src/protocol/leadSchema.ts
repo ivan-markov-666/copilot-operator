@@ -61,6 +61,47 @@ export const SubtaskSchema = z.object({
 });
 export type Subtask = z.infer<typeof SubtaskSchema>;
 
+/**
+ * The lead's list of subtasks as it plans them now (operator's feedback, 2026-10-21: "1 of 20 subtasks" read as if 20
+ * were planned; show the subtasks planned and done, the phase, and the limit apart). Sent whole with every plan and every
+ * subtask, so the count the chat shows is the lead's own plan: a subtask is "done" once the lead has accepted its
+ * report, "running" is the one given now, "planned" the ones still to come; a list that grows says so.
+ */
+export const TODO_STATUSES = ['done', 'running', 'planned', 'blocked', 'failed'] as const;
+export type TodoStatus = (typeof TODO_STATUSES)[number];
+/** The words a chat uses for the five, read as them. */
+const TODO_WORDS: Record<string, TodoStatus> = {
+  done: 'done', completed: 'done', complete: 'done', finished: 'done', accepted: 'done', passed: 'done', ok: 'done',
+  running: 'running', 'in-progress': 'running', in_progress: 'running', 'in progress': 'running', current: 'running', active: 'running', now: 'running', doing: 'running', started: 'running',
+  planned: 'planned', pending: 'planned', todo: 'planned', 'to-do': 'planned', next: 'planned', queued: 'planned', open: 'planned', 'not started': 'planned',
+  blocked: 'blocked', stuck: 'blocked', waiting: 'blocked',
+  failed: 'failed', error: 'failed', fail: 'failed',
+};
+export const TodoItemSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? { title: v } : v),
+  z.object({
+    title: z.preprocess((v) => proseOfValue(v), z.string().trim().min(2, 'todo[].title must name the subtask in a few words.').max(140)),
+    status: z.preprocess(
+      (v) => (v === undefined || v === null || v === '' ? 'planned' : (TODO_WORDS[String(v).trim().toLowerCase()] ?? v)),
+      z.enum(TODO_STATUSES, { message: 'todo[].status is one of "done", "running", "planned", "blocked", "failed".' }),
+    ),
+    phase: z.preprocess((v) => (v === undefined || v === null ? undefined : proseOfValue(v).trim() || undefined), z.string().max(80).optional()),
+  }),
+);
+export type TodoItem = z.infer<typeof TodoItemSchema>;
+const todoList = z.preprocess(
+  (v) =>
+    v === undefined || v === null
+      ? undefined
+      : typeof v === 'string'
+        ? v.split(/\r?\n/).map((l) => l.replace(/^\s*(?:\d+[.)]|[-*•])\s+/, '').trim()).filter(Boolean)
+        : Array.isArray(v)
+          ? v
+          : [v],
+  z.array(TodoItemSchema).max(100).optional(),
+);
+const TODO_SHAPE = '[{"title": "…", "status": "done" | "running" | "planned" | "blocked" | "failed", "phase": "…"}]';
+
 export const LeadReplySchema = z
   .object({
     /**
@@ -76,6 +117,8 @@ export const LeadReplySchema = z
     notes: prose,
     plan: PlanSchema.optional(),
     subtask: SubtaskSchema.optional(),
+    /** The whole list of subtasks as planned now; required with `delegate` and `plan` (see `TodoItemSchema`). */
+    todo: todoList,
     question: prose,
     why: prose,
     options: proseList.default([]),
@@ -89,6 +132,10 @@ export const LeadReplySchema = z
   })
   .refine((r) => r.status !== 'plan' || !!r.plan, {
     message: 'status "plan" requires a "plan": {"existing", "approach", "steps": [the stages], "files", "verification", "risks"}.',
+  })
+  .refine((r) => (r.status !== 'delegate' && r.status !== 'plan') || (r.todo?.length ?? 0) > 0, {
+    message: `status "delegate" and status "plan" require "todo": the whole list of subtasks as you plan them now, ${TODO_SHAPE} — "done" only once you have accepted its report, the one you give now "running", the ones still to come "planned".`,
+    path: ['todo'],
   })
   .refine((r) => r.status !== 'ask' || (r.question ?? '').trim().length >= 10, {
     message: 'status "ask" requires a "question" for the operator: what only a person can decide, said in full.',
@@ -144,9 +191,9 @@ export function parseLeadReply(markdown: string): LeadParseResult {
 
 const LEAD_EXAMPLE = [
   '```json',
-  '{"status": "delegate", "notes": "what you decide and why", "subtask": {"title": "Run the tests", "goal": "Find out which tests fail now.", "context": "Change nothing.", "steps": [], "report": "The totals, and for each failing test its name and its error, quoted.", "doneWhen": "The suite ran once.", "readOnly": true, "freshWorker": false}}',
+  '{"status": "delegate", "notes": "what you decide and why", "subtask": {"title": "Run the tests", "goal": "Find out which tests fail now.", "context": "Change nothing.", "steps": [], "report": "The totals, and for each failing test its name and its error, quoted.", "doneWhen": "The suite ran once.", "readOnly": true, "freshWorker": false}, "todo": [{"title": "Survey the project", "status": "done", "phase": "Survey"}, {"title": "Run the tests", "status": "running", "phase": "Diagnosis"}, {"title": "Fix the failing test", "status": "planned", "phase": "Fix"}]}',
   '```',
-  'or {"status": "plan", "plan": {"existing": "…", "approach": "…", "steps": ["…"], "files": [], "verification": "…"}}',
+  'or {"status": "plan", "plan": {"existing": "…", "approach": "…", "steps": ["…"], "files": [], "verification": "…"}, "todo": [{"title": "…", "status": "planned", "phase": "…"}]}',
   'or {"status": "ask", "question": "…", "why": "…", "options": ["…", "…"]}',
   'or {"status": "done", "answer": "the result, in the form asked for", "evidence": ["…"]}',
   'or {"status": "blocked", "summary": "what was done and found", "needed": "what would let it go on"}',

@@ -686,6 +686,14 @@ try {
     t.check('and no longer in the column of icons', await page.locator('.wb-activity').getByRole('button', { name: en['wb.appearance']!, exact: true }).count(), 0);
     // Cursors of the page's own, by the theme; the system's when asked for (2026-10-21).
     t.truthy('the page draws its own cursor', (await page.evaluate(() => getComputedStyle(document.body).cursor)).includes('url('), await page.evaluate(() => getComputedStyle(document.body).cursor));
+    // Over what can be clicked, a hand, the fingertip its spot (operator, 2026-10-21: "a click hand"); elsewhere the
+    // arrow, its tip the spot. Not the same picture in other colours.
+    {
+      const arrow = await page.evaluate(() => getComputedStyle(document.body).cursor);
+      const hand = await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).evaluate((b) => getComputedStyle(b).cursor);
+      const shape = (c: string): string => c.replace(/%23[0-9a-f]{6}/gi, '');
+      t.truthy('a hand over a button, the arrow elsewhere: two pictures, each with its spot', / 10 2, pointer$/.test(hand) && / 5 3, default$/.test(arrow) && shape(hand) !== shape(arrow), { hand: hand.slice(-30), arrow: arrow.slice(-30) });
+    }
     t.check('nothing chosen: the theme is the machine\'s, here dark, before and after the page has loaded', await html('theme'), 'dark');
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).click();
     const menu = page.getByRole('dialog', { name: en['wb.appearance']! });
@@ -783,6 +791,71 @@ try {
   });
 
   /*
+   * What each setting is for (operator, 2026-10-21: "more information in the i of the Execution options; it must be clear
+   * what each one is for; look at the other options too"): every ⓘ of Settings opens and says something; in Execution,
+   * each number's says its default, and each list's names every one of its choices.
+   */
+  await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {
+    await page.goto(url('/defaults'));
+    await page.locator('#execution input#max-iterations').waitFor();
+    await page.locator('#gap-on').check();
+    await page.locator('#gap-random').check();
+    await page.locator('#gap-max').waitFor();
+    /** The ⓘ of the field whose control has this id, opened: its text; closed again after. */
+    const tipOf = async (id: string): Promise<string> => {
+      const button = page.locator('.settings-field').filter({ has: page.locator(`[id="${id}"]`) }).locator('.info-btn').first();
+      await button.click();
+      const pop = page.locator('.info-pop');
+      await pop.waitFor({ timeout: 3_000 });
+      const text = ((await pop.textContent()) ?? '').trim();
+      await button.click();
+      await pop.waitFor({ state: 'detached', timeout: 3_000 }).catch(() => undefined);
+      return text;
+    };
+    const defaults: Record<string, number> = { 'auto-continue': 3, 'min-approaches': 2, 'max-review-rounds': 2, 'retry-blocked': 2, 'max-iterations': 60, 'max-minutes': 240, 'max-subtasks': 20, 'reply-timeout': 900, 'gap-sec': 60, 'gap-max': 90 };
+    const noDefault: string[] = [];
+    for (const [id, value] of Object.entries(defaults)) {
+      const text = await tipOf(id);
+      if (!new RegExp(`Default[^.:]*: ${value}\\b`).test(text)) noDefault.push(`${id}: ${text.slice(-80)}`);
+    }
+    t.check('each number of Execution says its default in its ⓘ', noDefault, []);
+    const unnamed: string[] = [];
+    for (const id of ['isolation', 'start-mode', 'network-fetch']) {
+      const text = await tipOf(id);
+      for (const label of await page.locator(`select#${id} option`).allTextContents()) {
+        const head = label.split(' — ')[0]!.trim();
+        if (!text.includes(head)) unnamed.push(`${id}: ${head}`);
+      }
+    }
+    t.check('each list of Execution names every one of its choices in its ⓘ', unnamed, []);
+    {
+      const button = page.locator('.settings-field').filter({ has: page.locator('[id="network-fetch"]') }).locator('.info-btn').first();
+      await button.click();
+      const bold = await page.locator('.info-pop strong').allTextContents();
+      await button.click();
+      const heads = (await page.locator('select#network-fetch option').allTextContents()).map((l) => l.split(' — ')[0]!.trim());
+      t.truthy('a choice that opens its paragraph is in bold', heads.every((x) => bold.includes(x)), { bold, heads });
+    }
+    const buttons = page.locator('main .info-btn');
+    const thin: string[] = [];
+    const n = await buttons.count();
+    for (let i = 0; i < n; i++) {
+      const b = buttons.nth(i);
+      await b.scrollIntoViewIfNeeded();
+      await b.click();
+      const pop = page.locator('.info-pop');
+      await pop.waitFor({ timeout: 3_000 });
+      const title = ((await pop.locator('.pop-title').textContent()) ?? '').trim();
+      const body = ((await pop.textContent()) ?? '').replace(title, '').trim();
+      if (body.length < 80) thin.push(`${title}: ${body}`);
+      await b.click();
+      await pop.waitFor({ state: 'detached', timeout: 3_000 }).catch(() => undefined);
+    }
+    t.truthy('every ⓘ on the page opens', n >= 25, n);
+    t.check('and says more than a few words', thin, []);
+  });
+
+  /*
    * Skills (operator, 2026-10-21): written in Settings, chosen under the chat's box or with /its-name at the start of a
    * message; the message shows which; an unknown name is said, not sent.
    */
@@ -816,6 +889,23 @@ try {
     await page.locator('.cs-end').waitFor({ timeout: 30_000 });
     t.truthy('and Copilot was given the skill with it', h.chat.sent.some((m) => m.text.includes('## Skill: new-test')), h.chat.sent.map((m) => m.text.slice(0, 80)));
     t.check('the next message starts without a skill', await pick.inputValue(), '');
+
+    // Deleted from Settings (operator, 2026-10-21: "an option to delete a skill"): Delete at the top of its card, named
+    // for it, asks first; No keeps it, Delete deletes it.
+    await page.goto(url('/defaults'));
+    const del = page.getByRole('button', { name: en['skills.removeOne']!.replace('{name}', 'new-test'), exact: true });
+    await del.waitFor();
+    t.check('Delete is on top of the skill, beside its name', [((await page.locator('.skill-entry:not(.skill-new) .skill-head').textContent()) ?? '').trim(), await del.isVisible()], [`/new-test${en['skills.remove']}`, true]);
+    await del.click();
+    const ask = page.getByRole('alertdialog');
+    await ask.waitFor({ timeout: 3_000 });
+    t.truthy('it asks first, naming the skill', ((await ask.textContent()) ?? '').includes(en['skills.removeConfirm']!.replace('{name}', 'new-test')), await ask.textContent());
+    await ask.getByRole('button', { name: en['dialog.cancel']!, exact: true }).click();
+    t.check('answered no: kept', (await h.call<{ skills: unknown[] }>('GET', '/skills')).skills.length, 1);
+    await del.click();
+    await page.getByRole('alertdialog').getByRole('button', { name: en['skills.remove']!, exact: true }).click();
+    await waitFor('the skill to be deleted', async () => (await h.call<{ skills: unknown[] }>('GET', '/skills')).skills.length === 0, 10_000).catch(() => undefined);
+    t.check('answered Delete: gone from the settings and the page', [(await h.call<{ skills: unknown[] }>('GET', '/skills')).skills.length, await page.locator('.skill-entry:not(.skill-new)').count()], [0, 0]);
   });
 
   /*
@@ -1247,6 +1337,67 @@ try {
   });
 
   /*
+   * The review's model in the chat (operator, 2026-10-21: "is the review model used by the chat? If so, put it in the
+   * chat as an option, with its drop-down"): under the work's while "Review" is ticked; Settings' one unless another is
+   * chosen; the choice goes with the first message, the review runs on it, and an open conversation's can be changed.
+   */
+  await scenario("the review's model beside the work's in the chat: Settings' unless chosen here, and the review runs on it", { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    await h.call('POST', '/models/refresh');
+    await h.call('PUT', '/models/review-default', { model: 'Think deeper' });
+    await page.goto(url('/'));
+    const review = page.getByRole('checkbox', { name: en['chat.review']! });
+    await review.waitFor();
+    t.check('"Review" unticked: no model for it', [await review.isChecked(), await page.locator('#cs-review-model').count()], [false, 0]);
+    await review.check();
+    const pick = page.locator('#cs-review-model');
+    await pick.waitFor();
+    t.check(
+      "ticked: the review's model under the work's, Settings' one chosen",
+      [await page.locator('.cs-models .cs-pick-label').allTextContents(), ((await pick.locator('option').first().textContent()) ?? '').trim(), await pick.inputValue()],
+      [[en['chat.workModel'], en['chat.reviewModel']], en['chat.reviewModelDefault']!.replace('{model}', 'Think deeper'), ''],
+    );
+    await pick.selectOption('GPT 5.6 Think deeper');
+    h.chat.script(
+      reply.steps(write('hello.txt', 'hello')),
+      reply.done('I created hello.txt holding the word hello and read it back to check that it is there.'),
+      reply.steps('Get-Content -Path hello.txt'),
+      reply.pass('I read hello.txt and it holds exactly the word hello, as the message asked for.'),
+    );
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Create hello.txt holding the word hello.');
+    /*
+     * The start answering late, as it does on a busy machine: the conversation's first read comes back before it, and
+     * the read "Send" makes when it is done must not blank the chat to the welcome (2026-10-21: it read the conversation
+     * of the render before the message made one; a review model chosen then went to the next new conversation).
+     */
+    await page.route('**/sessions/*/start', async (route) => {
+      await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+    const started = page.waitForResponse((r) => r.request().method() === 'POST' && /\/sessions\/[^/]+\/start$/.test(new URL(r.url()).pathname), { timeout: 20_000 });
+    await input.press('Enter');
+    await started;
+    await page.waitForTimeout(400);
+    t.check('the first message answered late: its conversation stays on the screen', [await page.locator('.cs-welcome').count(), await page.locator('.cs-user').count() > 0], [0, true]);
+    await page.unroute('**/sessions/*/start');
+    const thread = await waitFor('the conversation', async () => (await h.call<Array<{ id: string }>>('GET', '/chat/threads'))[0]?.id, 20_000);
+    type Rev = { review?: { enabled: boolean; model: string }; reviewModelSource?: string; running?: boolean };
+    const first = await h.call<Rev>('GET', `/sessions/${thread}`);
+    t.check("the first message took the review's model with it, as the operator's", [first.review?.enabled, first.review?.model, first.reviewModelSource], [true, 'GPT 5.6 Think deeper', 'operator']);
+    type Ended = Rev & { tasks: Array<{ status: string; review?: { verdict: string } }> };
+    const ended = async (): Promise<Ended> => await h.call<Ended>('GET', `/sessions/${thread}`);
+    await waitFor('the work and its review to end', async () => { const e = await ended(); return e.tasks[0]?.status === 'done' && e.running === false; }, 45_000).catch(() => undefined);
+    const task = (await ended()).tasks[0];
+    t.check('reviewed and passed', [task?.status, task?.review?.verdict], ['done', 'pass']);
+    t.truthy("and the review was put on the model chosen here, not Settings' one", h.chat.modelRequests.includes('GPT 5.6 Think deeper'), { asked: h.chat.modelRequests });
+    await pick.selectOption('');
+    await waitFor("the conversation to follow Settings' again", async () => (await h.call<Rev>('GET', `/sessions/${thread}`)).review?.model === '', 10_000).catch(() => undefined);
+    const after = await h.call<Rev>('GET', `/sessions/${thread}`);
+    t.check("Settings' one chosen again on the open conversation: its own is cleared", [after.review?.model, after.reviewModelSource ?? null, await pick.inputValue()], ['', null, '']);
+  });
+
+  /*
    * Two chats (operator, 2026-10-20): ticked for a new conversation, the message goes to a lead, whose understanding of
    * it, notes, subtasks (each a fold with the worker's commands) and question are shown in the conversation; the
    * question is answered on its card; the result is the message's ending. The worker is not a conversation of the
@@ -1266,11 +1417,26 @@ try {
     t.truthy('the lead\'s model and the worker\'s, one under the other and lined up', !!lead && !!worker && Math.abs(lead.x - worker.x) < 1 && worker.y > lead.y, JSON.stringify({ lead, worker }));
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    let releaseWorker!: () => void;
+    const workerHeld = new Promise<void>((r) => (releaseWorker = r));
     h.chat.script(
-      reply.lead.delegate({ title: 'Survey the project' }, { understanding: 'Create done.txt holding done; report it in one sentence.', notes: 'First I look at what is there.' }),
-      reply.steps('Get-ChildItem -Name'),
+      reply.lead.delegate(
+        { title: 'Survey the project' },
+        {
+          understanding: 'Create done.txt holding done; report it in one sentence.',
+          notes: 'First I look at what is there.',
+          todo: [{ title: 'Survey the project', status: 'running', phase: 'Survey' }, { title: 'Write done.txt', status: 'planned', phase: 'Work' }, { title: 'Read it back', status: 'planned', phase: 'Verification' }],
+        },
+      ),
+      async () => {
+        await workerHeld;
+        return reply.steps('Get-ChildItem -Name');
+      },
       reply.done('The project folder holds README.md at its root, and nothing else that the assignment names.'),
-      reply.lead.ask('Should done.txt go at the root, or in a folder of its own?', ['at the root', 'in a folder'], { notes: 'The assignment does not say where.' }),
+      reply.lead.ask('Should done.txt go at the root, or in a folder of its own?', ['at the root', 'in a folder'], {
+        notes: 'The assignment does not say where.',
+        todo: [{ title: 'Survey the project', status: 'done', phase: 'Survey' }, { title: 'Write done.txt', status: 'planned', phase: 'Work' }, { title: 'Read it back', status: 'planned', phase: 'Verification' }, { title: 'Say it in one sentence', status: 'planned', phase: 'Report' }],
+      }),
       async (m) => {
         t.truthy('the answer chosen on the card reached the lead', m.text.includes('at the root'), m.text.slice(0, 200));
         await held;
@@ -1284,6 +1450,15 @@ try {
     t.truthy('the lead\'s understanding of the task, said as such', ((await page.locator('.cs-lead-say').first().textContent()) ?? '').includes(en['lead.understood']!), await page.locator('.cs-lead-say').first().textContent());
     const gap = await page.locator('.cs-lead-say').first().evaluate((el) => parseFloat(getComputedStyle(el).paddingInlineStart));
     t.truthy('what the lead says keeps off the line beside it', gap >= 6, `padding-inline-start ${gap}px`);
+    // While the worker works: the subtask by its title — "Subtask 1 of 3 planned" is its place in the plan, not a number.
+    const workingOn = en['lead.workingOn']!.replace('{title}', 'Survey the project');
+    await page.locator('.cs-working').filter({ hasText: workingOn }).waitFor({ timeout: 30_000 }).catch(() => undefined);
+    t.check(
+      'while the worker works: what it is on, by its title, and the place of it in the plan',
+      [((await page.locator('.cs-working').textContent()) ?? '').includes(workingOn), (await page.locator('.cs-lead-progress strong').first().textContent())?.trim()],
+      [true, en['lead.subtaskOf']!.replace('{n}', '1').replace('{total}', '3')],
+    );
+    releaseWorker();
     const sub = page.locator('details.cs-subtask').first();
     await sub.waitFor({ timeout: 30_000 });
     t.truthy('the subtask, folded under the lead\'s message, marked as only reading', ((await sub.locator('summary').textContent()) ?? '').includes(en['lead.subtask']!.replace('{n}', '1').replace('{title}', 'Survey the project')) && ((await sub.locator('summary').textContent()) ?? '').includes(en['lead.readOnly']!), await sub.locator('summary').textContent());
@@ -1297,7 +1472,30 @@ try {
     const [, ld, wk, all] = /messages: lead (\d+), worker (\d+), (\d+) in all/.exec(line) ?? [];
     t.truthy('the status bar counts the lead\'s messages, the worker\'s, and the two together', !!ld && Number(ld) > 0 && Number(wk) > 0 && Number(all) === Number(ld) + Number(wk), line);
     t.truthy('and so does the message', /Messages: lead \d+ · worker \d+ · \d+ in all/.test((await page.locator('.cs-lead-count').textContent()) ?? ''), await page.locator('.cs-lead-count').textContent());
-    t.truthy('the lead\'s question, with its choices', ((await card.textContent()) ?? '').includes('Should done.txt go at the root') && (await card.getByRole('button', { name: 'at the root', exact: true }).count()) === 1, await card.textContent());
+    /*
+     * Where the work is against the lead's plan (operator's feedback, 2026-10-21: "1 of 20 subtasks" read as twenty
+     * planned): the lead's own list — its phase, the subtasks done of the planned, the ones left — and the limit apart.
+     */
+    await waitFor('the list to change', async () => (await page.locator('.cs-ledger-change').count()) === 2, 10_000).catch(() => undefined);
+    t.check(
+      'where the list was made, and where it changed, said in the conversation',
+      await page.locator('.cs-ledger-change').allTextContents(),
+      [en['lead.ledgerFirst']!.replace('{n}', '3'), en['lead.ledgerChanged']!.replace('{v}', '2').replace('{what}', en['lead.ledgerAdded']!.replace('{n}', '1'))],
+    );
+    const progress = page.locator('.cs-lead-progress');
+    t.check(
+      'the phase, the subtasks done of the planned, the ones left, and the limit apart',
+      [(await progress.locator('.cs-lead-phase').textContent())?.trim(), (await progress.locator('strong').first().textContent())?.trim(), (await progress.locator('p.muted').textContent())?.trim()],
+      [en['lead.phase']!.replace('{n}', '2').replace('{total}', '4').replace('{title}', 'Work'), en['lead.doneOf']!.replace('{done}', '1').replace('{total}', '4'), en['lead.left']!.replace('{left}', '3').replace('{max}', '20')],
+    );
+    t.truthy('and no count of the limit as if it were the plan', !/\b\d+ of 20 subtasks\b/.test((await page.locator('.cs-lead-turn').textContent()) ?? ''), await page.locator('.cs-lead-turn').textContent());
+    await progress.locator('details.cs-ledger > summary').click();
+    t.check(
+      'the list under its fold, by phase, each with what it is at',
+      await progress.locator('.cs-todo').evaluateAll((els) => els.map((el) => [el.querySelector('.cs-todo-mark')?.textContent, el.querySelector('.cs-todo-title')?.textContent])),
+      [['✓', 'Survey the project'], ['○', 'Write done.txt'], ['○', 'Read it back'], ['○', 'Say it in one sentence']],
+    );
+    t.truthy('the lead\'s question, with its choices',((await card.textContent()) ?? '').includes('Should done.txt go at the root') && (await card.getByRole('button', { name: 'at the root', exact: true }).count()) === 1, await card.textContent());
     /*
      * Answered, the card goes at once (2026-10-20: it stayed, answered, until the next read of the list) — here every
      * read of the list is the API's answer at the time it was asked, arriving late, so neither the next read nor one

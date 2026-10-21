@@ -691,6 +691,8 @@ export type Session = {
   running: boolean;
   /** Paused by the operator ("Pause"): the run holds at its next message or command until "Continue". */
   paused?: boolean;
+  /** The run's pauses, from "Pause" to "Continue" (the last open while paused): not counted in a task's minutes. */
+  pauses?: Array<{ from: string; to?: string }>;
   /** How the run in progress is answering approvals right now. Absent when nothing runs. */
   runMode?: 'confirm' | 'unattended';
   pending?: Approval[];
@@ -723,10 +725,17 @@ export type LeadRound = {
   notes?: string;
   subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean };
   question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
+  /** This reply made the list of subtasks or changed it: its version, how many came and went, how many in all. */
+  ledger?: { revision: number; added: number; removed: number; total: number };
 };
 
+/** One subtask of the lead's list as it plans them (2026-10-21); `n` once it has been given to the worker. */
+export type LeadTodo = { title: string; status: 'done' | 'running' | 'planned' | 'blocked' | 'failed'; phase?: string; n?: number };
+/** The lead's list of subtasks: its version, the subtasks, and what its last change added and dropped. */
+export type LeadLedger = { revision: number; items: LeadTodo[]; at: string; added?: string[]; removed?: string[] };
+
 /** What the lead of a message did, as the chat shows it. */
-export type LeadRecord = { rounds: LeadRound[]; subtasks: number; maxSubtasks: number; evidence?: string[]; workerSessionId?: string; messages?: { lead: number; worker: number } };
+export type LeadRecord = { rounds: LeadRound[]; subtasks: number; maxSubtasks: number; evidence?: string[]; workerSessionId?: string; messages?: { lead: number; worker: number }; ledger?: LeadLedger };
 
 /** A task's plan, in plan mode: see `TaskPlan` on the server. */
 export type TaskPlan = {
@@ -1170,7 +1179,8 @@ export const api = {
   /** `planMode` for a new conversation: the plan first, approved in the chat (an existing one's is set with `updateSession`). */
   /** `review`: whether a new conversation's messages are reviewed (the box under the chat); left out, they are not. */
   /** `two`: a new conversation with a lead and a worker (two chats, 2026-10-20), and the worker's model. */
-  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string) =>
+  /** `reviewModel`: the model of a new conversation's review, chosen beside the box (2026-10-21); left out, Settings' one. */
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string, reviewModel?: string) =>
     call<ChatSent>('/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -1183,6 +1193,7 @@ export const api = {
         ...(review !== undefined ? { review } : {}),
         ...(two ? { lead: true, ...(two.workerManualModel ? { workerManualModel: true } : two.workerModel ? { workerModel: two.workerModel } : {}) } : {}),
         ...(skill ? { skill } : {}),
+        ...(reviewModel ? { reviewModel } : {}),
       }),
     }),
   /** The lead's question (two chats): the operator's answer. */

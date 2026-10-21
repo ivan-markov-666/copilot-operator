@@ -1242,6 +1242,8 @@ button.linkish:hover { text-decoration: underline; }
 .pop p { margin: 0 0 8px; line-height: 1.5; }
 .pop p:last-child { margin-bottom: 0; }
 .pop-title { font-weight: 600; }
+/* An ⓘ says what a field is for in a few paragraphs (2026-10-21): room for them, and the choices of a list easy to tell apart. */
+.info-pop { max-width: min(500px, calc(100vw - 16px)); }
 .pop.menu { display: flex; flex-direction: column; gap: 2px; padding: 4px; min-width: 200px; }
 .pop.menu > button { justify-content: flex-start; text-align: left; border-color: transparent; background: none; }
 .pop.menu > button:hover, .pop.menu > button:focus-visible { background: var(--accent-soft); border-color: var(--accent); }
@@ -1314,10 +1316,34 @@ button.linkish:hover { text-decoration: underline; }
 /* The pause's random time, set under the box that shows it (2026-10-21). */
 .gap-random { padding-inline-start: 22px; }
 .cs-lead-count { margin: 2px 0 6px; }
+/* Where a two-chat message is against the lead's plan (2026-10-21): the phase, the subtask of the planned, the limit apart. */
+.cs-lead-progress { margin: 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel); }
+.cs-lead-progress p { margin: 0 0 2px; }
+.cs-lead-phase { font-weight: 600; font-size: calc(13px * var(--scale)); }
+.cs-lead-stuck { color: var(--warn); }
+.cs-ledger { margin-top: 6px; }
+.cs-ledger > summary { cursor: var(--cur-pointer); color: var(--muted); font-size: calc(12.5px * var(--scale)); }
+.cs-ledger-phase { margin: 6px 0 2px; color: var(--muted); font-size: calc(11.5px * var(--scale)); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.cs-ledger ul { list-style: none; margin: 0; padding: 0; }
+.cs-todo { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: calc(13px * var(--scale)); }
+.cs-todo-mark { flex: none; width: 1.2em; text-align: center; }
+.cs-todo-done .cs-todo-mark { color: var(--ok); }
+.cs-todo-running .cs-todo-mark { color: var(--accent); }
+.cs-todo-planned { color: var(--muted); }
+.cs-todo-blocked .cs-todo-mark, .cs-todo-failed .cs-todo-mark { color: var(--bad); }
+.cs-todo-stopped .cs-todo-mark { color: var(--muted); }
+.cs-todo-running .cs-todo-title { font-weight: 600; }
+.cs-ledger-change { font-style: italic; }
 /* Skills (2026-10-21): the name after its slash, as it is typed in the chat; a new one set apart. */
 .skill-entry { margin-bottom: 10px; }
 .skill-slash { font-family: var(--mono); color: var(--muted); padding: 0 2px; align-self: center; }
+/* The / and the name on one line, however narrow the column. */
+.input-with-buttons.skill-name-box { flex-wrap: nowrap; }
+.skill-name-box > input { flex-basis: 0; }
 .skill-new { border-style: dashed; }
+.skill-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; min-width: 0; }
+.skill-title { font-family: var(--mono); font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.skill-delete { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: calc(13px * var(--scale)); }
 .cs-skill-chip { margin: 0 0 4px; }
 .badge.skill { font-family: var(--mono); background: var(--bg-tint); }
 .badge.reference { background: var(--warn-soft); color: var(--ink); border-color: var(--warn); }
@@ -1387,28 +1413,30 @@ button.linkish:hover { text-decoration: underline; }
 /*
  * Cursors and scroll bars of our own (operator, 2026-10-21: "custom cursor icons on the web UI, and custom scroll
  * bars; colours to suit the dark and the light mode, two of each if need be"). Each cursor is a small picture
- * drawn here, in the theme's ink with an outline of the opposite colour so it stands out on anything, the ones
- * that mean "this does something" in the accent. The appearance menu can put the system's back (`data-cursor`).
+ * drawn here, with an outline that stands out on anything. The arrow is close to the system's, so as not to bother
+ * ("a little different, but not much"): its corners rounded, a light stroke along its edge; over what can be
+ * clicked, a hand pointing, its fingertip the spot ("a click hand"). The appearance menu can put the system's back
+ * (`data-cursor`).
  */
 :root {
-  --cur-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 2.5v16.2l4.3-4.1 2.9 6.6 3-1.3-2.8-6.4h6z' fill='%230f2133' stroke='%23ffffff' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 4 2, default;
-  --cur-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 2.5v16.2l4.3-4.1 2.9 6.6 3-1.3-2.8-6.4h6z' fill='%231670b3' stroke='%23ffffff' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3Ccircle cx='17.5' cy='18.5' r='3.2' fill='%231670b3' stroke='%23ffffff' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 4 2, pointer;
+  --cur-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M5 2.8v15.6l3.9-3.7 2.6 5.9 2.7-1.2-2.5-5.7h5.4z' fill='%23ffffff' stroke='%230f2133' stroke-width='1.35' stroke-linejoin='round'/%3E%3Cpath d='M6.4 6.2v8.6' stroke='%23e9f4fd' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") 5 3, default;
+  --cur-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M8.6 12.6V4.1a1.55 1.55 0 0 1 3.1 0v6.2a1.5 1.5 0 0 1 3 .3v.4a1.5 1.5 0 0 1 3 .3v.5a1.4 1.4 0 0 1 2.8.3v4.4c0 3.1-2.2 5.3-5.2 5.3h-1.9c-1.8 0-3.1-.8-4.2-2.1l-3.6-4.4a1.45 1.45 0 0 1 2.1-2z' fill='%23ffffff' stroke='%230f2133' stroke-width='1.3' stroke-linejoin='round'/%3E%3Cpath d='M11.7 10.3v2.4M14.7 11v2.2M17.7 11.8v2' fill='none' stroke='%230f2133' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E") 10 2, pointer;
   --cur-text: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M9 4.5h6M12 4.5v15M9 19.5h6' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M9 4.5h6M12 4.5v15M9 19.5h6' fill='none' stroke='%230f2133' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") 12 12, text;
   --cur-grab: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%231670b3' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, grab;
   --cur-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%230f2133' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='12' cy='12' r='2.4' fill='%231670b3' stroke='%23ffffff' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 12 12, grabbing;
   --cur-col: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3.5 12h17M3.5 12l3-3M3.5 12l3 3M20.5 12l-3-3M20.5 12l-3 3M12 6v12' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M3.5 12h17M3.5 12l3-3M3.5 12l3 3M20.5 12l-3-3M20.5 12l-3 3M12 6v12' fill='none' stroke='%230f2133' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, col-resize;
   --cur-row: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 3.5v17M12 3.5l-3 3M12 3.5l3 3M12 20.5l-3-3M12 20.5l3-3M6 12h12' fill='none' stroke='%23ffffff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 3.5v17M12 3.5l-3 3M12 3.5l3 3M12 20.5l-3-3M12 20.5l3-3M6 12h12' fill='none' stroke='%230f2133' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, row-resize;
-  --cur-not: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 2.5v16.2l4.3-4.1 2.9 6.6 3-1.3-2.8-6.4h6z' fill='%230f2133' stroke='%23ffffff' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3Ccircle cx='17' cy='17' r='4.6' fill='%23ffffff'/%3E%3Ccircle cx='17' cy='17' r='3.6' fill='none' stroke='%23ac2a2a' stroke-width='1.7'/%3E%3Cpath d='M14.5 19.5l5-5' stroke='%23ac2a2a' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") 4 2, not-allowed;
+  --cur-not: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M5 2.8v15.6l3.9-3.7 2.6 5.9 2.7-1.2-2.5-5.7h5.4z' fill='%23ffffff' stroke='%230f2133' stroke-width='1.35' stroke-linejoin='round'/%3E%3Ccircle cx='17' cy='17' r='4.6' fill='%23ffffff'/%3E%3Ccircle cx='17' cy='17' r='3.6' fill='none' stroke='%23ac2a2a' stroke-width='1.7'/%3E%3Cpath d='M14.5 19.5l5-5' stroke='%23ac2a2a' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") 5 3, not-allowed;
 }
 :root[data-theme='dark'] {
-  --cur-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 2.5v16.2l4.3-4.1 2.9 6.6 3-1.3-2.8-6.4h6z' fill='%23e3eef9' stroke='%2305182a' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 4 2, default;
-  --cur-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 2.5v16.2l4.3-4.1 2.9 6.6 3-1.3-2.8-6.4h6z' fill='%235ab6f4' stroke='%2305182a' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3Ccircle cx='17.5' cy='18.5' r='3.2' fill='%235ab6f4' stroke='%2305182a' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 4 2, pointer;
+  --cur-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M5 2.8v15.6l3.9-3.7 2.6 5.9 2.7-1.2-2.5-5.7h5.4z' fill='%23e3eef9' stroke='%2305182a' stroke-width='1.35' stroke-linejoin='round'/%3E%3Cpath d='M6.4 6.2v8.6' stroke='%23d4e9fa' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") 5 3, default;
+  --cur-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M8.6 12.6V4.1a1.55 1.55 0 0 1 3.1 0v6.2a1.5 1.5 0 0 1 3 .3v.4a1.5 1.5 0 0 1 3 .3v.5a1.4 1.4 0 0 1 2.8.3v4.4c0 3.1-2.2 5.3-5.2 5.3h-1.9c-1.8 0-3.1-.8-4.2-2.1l-3.6-4.4a1.45 1.45 0 0 1 2.1-2z' fill='%23e3eef9' stroke='%2305182a' stroke-width='1.3' stroke-linejoin='round'/%3E%3Cpath d='M11.7 10.3v2.4M14.7 11v2.2M17.7 11.8v2' fill='none' stroke='%2305182a' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E") 10 2, pointer;
   --cur-text: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M9 4.5h6M12 4.5v15M9 19.5h6' fill='none' stroke='%2305182a' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M9 4.5h6M12 4.5v15M9 19.5h6' fill='none' stroke='%23e3eef9' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") 12 12, text;
   --cur-grab: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%2305182a' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%235ab6f4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, grab;
   --cur-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%2305182a' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 3v18M3 12h18M12 3l-2.6 2.6M12 3l2.6 2.6M12 21l-2.6-2.6M12 21l2.6-2.6M3 12l2.6-2.6M3 12l2.6 2.6M21 12l-2.6-2.6M21 12l-2.6 2.6' fill='none' stroke='%23e3eef9' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='12' cy='12' r='2.4' fill='%235ab6f4' stroke='%2305182a' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3C/svg%3E") 12 12, grabbing;
   --cur-col: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3.5 12h17M3.5 12l3-3M3.5 12l3 3M20.5 12l-3-3M20.5 12l-3 3M12 6v12' fill='none' stroke='%2305182a' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M3.5 12h17M3.5 12l3-3M3.5 12l3 3M20.5 12l-3-3M20.5 12l-3 3M12 6v12' fill='none' stroke='%23e3eef9' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, col-resize;
   --cur-row: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 3.5v17M12 3.5l-3 3M12 3.5l3 3M12 20.5l-3-3M12 20.5l3-3M6 12h12' fill='none' stroke='%2305182a' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 3.5v17M12 3.5l-3 3M12 3.5l3 3M12 20.5l-3-3M12 20.5l3-3M6 12h12' fill='none' stroke='%23e3eef9' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, row-resize;
-  --cur-not: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 2.5v16.2l4.3-4.1 2.9 6.6 3-1.3-2.8-6.4h6z' fill='%23e3eef9' stroke='%2305182a' stroke-width='1.6' stroke-linejoin='round' paint-order='stroke'/%3E%3Ccircle cx='17' cy='17' r='4.6' fill='%2305182a'/%3E%3Ccircle cx='17' cy='17' r='3.6' fill='none' stroke='%23ff8f8f' stroke-width='1.7'/%3E%3Cpath d='M14.5 19.5l5-5' stroke='%23ff8f8f' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") 4 2, not-allowed;
+  --cur-not: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M5 2.8v15.6l3.9-3.7 2.6 5.9 2.7-1.2-2.5-5.7h5.4z' fill='%23e3eef9' stroke='%2305182a' stroke-width='1.35' stroke-linejoin='round'/%3E%3Ccircle cx='17' cy='17' r='4.6' fill='%2305182a'/%3E%3Ccircle cx='17' cy='17' r='3.6' fill='none' stroke='%23ff8f8f' stroke-width='1.7'/%3E%3Cpath d='M14.5 19.5l5-5' stroke='%23ff8f8f' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") 5 3, not-allowed;
 }
 :root[data-cursor='system'], :root[data-cursor='system'][data-theme='dark'] {
   --cur-default: default;

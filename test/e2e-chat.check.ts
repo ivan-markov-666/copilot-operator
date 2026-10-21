@@ -437,16 +437,24 @@ console.log('\n--- Pause holds the work at its next message or command, Continue
     await waitFor('the command to be running', async () => (await h.call<Ev[]>('GET', `/sessions/${one.threadId}/events`)).some((e) => e.type === 'step-started'), 20_000);
     t.check('"Pause" while a command runs', await h.call<{ paused: boolean }>('POST', `/sessions/${one.threadId}/pause`, {}), { paused: true });
     t.check('the conversation says it is paused', (await view(one.threadId)).paused, true);
+    /*
+     * The clock stops at the press (operator, 2026-10-21: "when paused, the time must stop being measured"), not at the
+     * point the work holds at once the command has ended: two minutes pass here, before that point, and are not counted.
+     */
+    Date.now = () => realNow() + 2 * 60_000;
+    const pauses = ((await view(one.threadId)) as View & { pauses?: Array<{ from: string; to?: string }> }).pauses;
+    t.truthy('the pause, from the press and still open, is given with the conversation for the page', pauses?.length === 1 && !pauses[0]!.to && Date.parse(pauses[0]!.from) <= realNow(), pauses);
     await waitFor('the command to end', async () => exists('slow.txt'), 20_000);
     const sentBefore = h.chat.exchanged.length;
     await quiet(1500);
     t.check('the command running was let finish, and its report is not sent while paused', [exists('slow.txt'), h.chat.exchanged.length, h.chat.pending], [true, sentBefore, 1]);
     t.check('the task is still the same task, running', (await view(one.threadId)).tasks[0]?.status, 'running');
-    Date.now = () => realNow() + 2 * 60_000;
     t.check('"Continue"', await h.call<{ paused: boolean }>('POST', `/sessions/${one.threadId}/resume`, {}), { paused: false });
     await h.idle();
     const done = await view(one.threadId);
     t.check('it went on, and two minutes paused did not use up its one-minute limit', [done.tasks[0]?.status, done.paused, h.chat.pending], ['done', false, 0]);
+    const kept = (done.tasks[0] as { pausedMs?: number } | undefined)?.pausedMs ?? 0;
+    t.truthy('how long it was paused is on the task: the two minutes, from the press', kept >= 2 * 60_000 && kept < 3 * 60_000, kept);
     const said = (await h.call<Ev[]>('GET', `/sessions/${one.threadId}/events`)).map((e) => e.type);
     t.truthy('paused and continued are on its record', ['pause-asked', 'task-paused', 'resume-asked', 'task-resumed'].every((x) => said.includes(x)), said);
     Date.now = realNow;

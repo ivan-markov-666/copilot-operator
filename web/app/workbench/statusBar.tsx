@@ -9,6 +9,7 @@ import { api, type Session, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useNow } from '../../lib/useNow';
+import { workedMs } from '../../lib/paused';
 import { BranchIcon } from '../branchIcon';
 
 export function StatusBar({ sessions, session, workspace, onShowThread }: { sessions: Session[]; session?: Session; workspace: Workspace | null; onShowThread: (sessionId: string) => void }) {
@@ -31,7 +32,8 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
   // The lead's conversation rather than its worker's, which is hidden from the list and works for it.
   const runningSession = sessions.find((s) => s.status !== 'idle' && !s.workerOf) ?? sessions.find((s) => s.status !== 'idle');
   const runningTask = runningSession?.tasks.find((x) => x.status === 'running' || x.status === 'waiting-approval');
-  const minutes = runningTask?.startedAt ? Math.floor((now - Date.parse(runningTask.startedAt)) / 60000) : 0;
+  // Its pauses not counted: the minutes stand still while it is paused, as its limit does (2026-10-21).
+  const minutes = Math.floor(workedMs(runningTask?.startedAt, runningSession?.pauses, now) / 60000);
 
   return (
     <footer className="wb-statusbar" aria-label={t('wb.status')}>

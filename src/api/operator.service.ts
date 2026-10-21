@@ -513,20 +513,27 @@ export class OperatorService {
 
   // --- sessions and tasks ---------------------------------------------------------------
 
-  async listSessions(): Promise<Array<Session & { running: boolean; paused: boolean }>> {
+  async listSessions(): Promise<Array<Session & { running: boolean; paused: boolean; pauses?: Array<{ from: string; to?: string }> }>> {
     await this.init();
     const all = await this.store.listSessions();
-    return all.map((s) => ({ ...s, running: this.running.has(s.id), paused: this.running.get(s.id)?.hold.held ?? false }));
+    // The pauses of the run going on, for the page to take them off the minutes it shows (2026-10-21).
+    return all.map((s) => ({ ...s, running: this.running.has(s.id), paused: this.running.get(s.id)?.hold.held ?? false, ...this.pausesOf(s.id) }));
   }
 
   async getSession(
     id: string,
-  ): Promise<(Session & { running: boolean; paused: boolean; pending: PendingApproval[]; runMode?: 'confirm' | 'unattended' }) | null> {
+  ): Promise<(Session & { running: boolean; paused: boolean; pauses?: Array<{ from: string; to?: string }>; pending: PendingApproval[]; runMode?: 'confirm' | 'unattended' }) | null> {
     await this.init();
     const s = await this.store.getSession(id);
     if (!s) return null;
     const pending = [...this.waiting.values()].filter((w) => w.approval.sessionId === id).map((w) => w.approval);
-    return { ...s, running: this.running.has(id), paused: this.running.get(id)?.hold.held ?? false, pending, runMode: this.running.get(id)?.mode };
+    return { ...s, running: this.running.has(id), paused: this.running.get(id)?.hold.held ?? false, ...this.pausesOf(id), pending, runMode: this.running.get(id)?.mode };
+  }
+
+  /** The pauses of the run going on in a session, from "Pause" to "Continue"; none when nothing runs or it was never paused. */
+  private pausesOf(id: string): { pauses?: Array<{ from: string; to?: string }> } {
+    const pauses = this.running.get(id)?.hold.pauses ?? [];
+    return pauses.length > 0 ? { pauses } : {};
   }
 
   async updateSession(
@@ -1445,7 +1452,7 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; reviewModel?: string; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -1474,7 +1481,9 @@ export class OperatorService {
          * says which. A second conversation checks the work when it says it is done, and sends back what it finds; it
          * was off for the chat from 2026-10-17. Asked for without the box — the API on its own, a script — it stays off.
          */
-        s.review = { enabled: input.review === true, model: '' };
+        s.review = { enabled: input.review === true, model: input.reviewModel?.trim() ?? '' };
+        // The review's model chosen beside the box (2026-10-21) is the operator's word, as the work's is.
+        if (s.review.model) s.reviewModelSource = 'operator';
         // Plan mode as chosen under the box (2026-10-20, "as in Claude Code"): the plan first, approved by the operator.
         s.planMode = input.planMode ? 'approve' : 'off';
         /*

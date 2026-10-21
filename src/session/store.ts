@@ -103,6 +103,7 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   runGroup: 'archived',
   startedAt: 'archived',
   finishedAt: 'archived',
+  pausedMs: 'archived',
   summary: 'archived',
   reason: 'archived',
   deviations: 'archived',
@@ -600,6 +601,7 @@ export class SessionStore {
           status: t.status,
           startedAt: t.startedAt,
           finishedAt: t.finishedAt,
+          ...(t.pausedMs ? { pausedMs: t.pausedMs } : {}),
           iterations: t.iterations,
           summary: t.summary,
           reason: t.reason,
@@ -649,6 +651,7 @@ export class SessionStore {
       t.runGroup = undefined;
       t.startedAt = undefined;
       t.finishedAt = undefined;
+      t.pausedMs = undefined;
       t.summary = undefined;
       t.reason = undefined;
       t.finalReply = undefined;

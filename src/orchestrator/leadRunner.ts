@@ -33,6 +33,7 @@ import { operatorNotesSection, whyItStopped } from '../session/compose.js';
 import { describeDeviations } from '../protocol/replySchema.js';
 import { leadFormatErrorMessage, parseLeadReply, UNDERSTANDING_FIRST, type Subtask } from '../protocol/leadSchema.js';
 import { describePlan, planFrom } from './planMode.js';
+import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
 import { applySessionModel, enterSessionConversation, holdsWhilePaused, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
 import type { LeadRecord, LeadRound, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
@@ -203,6 +204,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     });
   };
 
+  // From here the message's minutes are counted, its pauses taken off (2026-10-21).
+  const leadStartedAt = Date.now();
   await setTask((t) => {
     t.status = 'running';
     t.runId = runId;
@@ -315,6 +318,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       if (vcs) t.vcs = vcs;
       t.status = status;
       t.finishedAt = new Date().toISOString();
+      const held = deps.hold?.pausedSince(leadStartedAt) ?? 0;
+      if (held > 0) t.pausedMs = held;
       t.summary = summary;
       t.reason = reason;
       t.logFile = 'task-log.txt';
@@ -393,6 +398,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       ...((t?.deviations?.length ?? 0) > 0 ? ['', describeDeviations(t!.deviations!)] : []),
       '',
       `Subtasks left: ${max - lead.subtasks} of ${max}.`,
+      // Its own list, as it sent it last, to send again with the next subtask (2026-10-21).
+      ...(lead.ledger ? ['', describeLedger(lead.ledger, lead.subtasks, max)] : []),
       'Reply in the lead\'s format: the next subtask, the plan, a question for the operator, or the result.',
     ].join('\n');
   };
@@ -540,6 +547,21 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
         ...(r.notes ? { notes: r.notes } : {}),
       };
       lead.rounds.push(round);
+      // Its list of subtasks, as this reply sends it (2026-10-21); the subtask given now is the running one.
+      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < max ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
+      const listed = nextLedger(lead.ledger, r.todo, round.at, giving);
+      lead.ledger = listed.ledger;
+      if (listed.change) {
+        round.ledger = listed.change;
+        const { revision, added, removed, total } = listed.change;
+        sink.event(
+          'lead-ledger',
+          { round: round.n, ...listed.change },
+          revision === 1
+            ? `the lead's list: ${total} subtask(s)`
+            : `the lead's list changed (version ${revision}): ${total} subtask(s)${added > 0 ? `, ${added} new` : ''}${removed > 0 ? `, ${removed} dropped` : ''}${added === 0 && removed === 0 ? ', in another order' : ''}`,
+        );
+      }
       await saveLead();
       sink.event('lead-reply', { round: round.n, status: r.status }, `the lead: ${r.status}${r.subtask ? ` — ${r.subtask.title}` : ''}`);
 
@@ -602,9 +624,12 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
         }
         case 'done': {
           lead.evidence = r.evidence;
+          // Delivered: the subtask it was on was accepted with it.
+          lead.ledger = closeLedger(lead.ledger, 'done');
           return await finish('done', undefined, r.answer);
         }
         case 'blocked': {
+          lead.ledger = closeLedger(lead.ledger, 'blocked');
           return await finish('blocked', `the lead could not take it further: ${r.needed ?? ''}`.trim(), r.summary);
         }
       }

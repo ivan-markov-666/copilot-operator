@@ -1087,8 +1087,12 @@ export async function runTask(
   };
 
   const startedAt = Date.now();
-  /** Moved on by the time the operator held the task paused: the limit is on the work, not on the pause. */
-  let deadline = startedAt + cfg.limits.maxRunMinutes * 60_000;
+  /*
+   * The limit is on the work, not on the pause: the time from "Pause" pressed to "Continue" is taken off (2026-10-21:
+   * from the press, not from the point the work held at — a reply being written, a command running — a little later).
+   */
+  const pausedMs = (): number => deps.hold?.pausedSince(startedAt) ?? 0;
+  const pastDeadline = (): boolean => Date.now() - startedAt - pausedMs() > cfg.limits.maxRunMinutes * 60_000;
   /*
    * "Pause" (operator, 2026-10-20; see `Hold`): every message to the chat waits here while the task is paused, and
    * so does every command (the step loop below). True when the run was stopped while held.
@@ -1104,7 +1108,6 @@ export async function runTask(
     );
     await hold.until(signal);
     const heldMs = Date.now() - from;
-    deadline += heldMs;
     const stopped = !!signal?.aborted;
     const secs = Math.round(heldMs / 1000);
     sink.event(
@@ -1465,6 +1468,8 @@ export async function runTask(
       t.status = status;
       t.iterations = iterations;
       t.finishedAt = new Date().toISOString();
+      const held = pausedMs();
+      if (held > 0) t.pausedMs = held;
       t.summary = summary;
       t.reason = reason;
       t.finalReply = finalReply;
@@ -2730,7 +2735,7 @@ export async function runTask(
 
     for (;;) {
       if (signal?.aborted) return await finish('aborted', 'stopped by the operator');
-      if (Date.now() > deadline) {
+      if (pastDeadline()) {
         limitHit = { setting: 'maxRunMinutes', value: cfg.limits.maxRunMinutes };
         return await finish('limit-reached', `maxRunMinutes (${cfg.limits.maxRunMinutes}) reached`);
       }

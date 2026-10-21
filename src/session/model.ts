@@ -108,6 +108,8 @@ export type Task = {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+  /** How long it was paused ("Pause" to "Continue"), in ms: not counted against its minutes (2026-10-21). */
+  pausedMs?: number;
   /** Folder name under `runs/` holding this task's artefacts, once it has started. */
   runId?: string;
   iterations: number;
@@ -504,6 +506,7 @@ export type TaskAttempt = {
   status: TaskStatus;
   startedAt?: string;
   finishedAt?: string;
+  pausedMs?: number;
   iterations: number;
   summary?: string;
   reason?: string;
@@ -1212,7 +1215,22 @@ export type LeadRound = {
   subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean };
   /** The question it asked the operator, and the answer it got. */
   question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
+  /** This reply made the list of subtasks, or changed it: its version, and how many came and went (see `LeadLedger`). */
+  ledger?: { revision: number; added: number; removed: number; total: number };
 };
+
+/**
+ * One subtask of the lead's list as it plans them (2026-10-21): "done" once the lead accepted its report, "running" the one
+ * given now, "planned" still to come. `n` is the subtask's number once it has been given to the worker.
+ */
+export type LeadTodo = { title: string; status: 'done' | 'running' | 'planned' | 'blocked' | 'failed'; phase?: string; n?: number };
+
+/**
+ * The lead's list of subtasks (operator's feedback, 2026-10-21: "1 of 20 subtasks" read as twenty planned): sent whole with
+ * every plan and subtask, kept here with a version that goes up when subtasks are added, dropped or reordered, and what
+ * the last change added and dropped, so the chat shows where the work is against the plan, and the limit apart.
+ */
+export type LeadLedger = { revision: number; items: LeadTodo[]; at: string; added?: string[]; removed?: string[] };
 
 /** What the lead of a message did, as the chat shows it. */
 export type LeadRecord = {
@@ -1225,6 +1243,8 @@ export type LeadRecord = {
   /** How many subtasks it has given, and the most it may. */
   subtasks: number;
   maxSubtasks: number;
+  /** Its list of subtasks as it plans them now, when it has sent one. */
+  ledger?: LeadLedger;
   /** What it says shows the result. */
   evidence?: string[];
   /** The worker's session, the subtasks' tasks are in. */

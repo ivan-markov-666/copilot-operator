@@ -70,7 +70,7 @@ await scenario('the whole of it: understood, surveyed, planned, done by the work
   let report2 = '';
   let workerFirst = '';
   h.chat.script(
-    reply.lead.delegate({ title: 'Survey the project', readOnly: true }, { understanding: 'Goal: a file result.txt holding hello. Result: the fields Title and Result. Done when the file is there and read back.', notes: 'I start by looking at what is there.' }),
+    reply.lead.delegate({ title: 'Survey the project', readOnly: true }, { understanding: 'Goal: a file result.txt holding hello. Result: the fields Title and Result. Done when the file is there and read back.', notes: 'I start by looking at what is there.', todo: [{ title: 'Survey the project', status: 'running', phase: 'Survey' }, { title: 'Plan the work', status: 'planned', phase: 'Plan' }] }),
     (m) => {
       workerFirst = m.text;
       return reply.steps('Get-ChildItem -Name');
@@ -78,9 +78,9 @@ await scenario('the whole of it: understood, surveyed, planned, done by the work
     reply.done('The project folder holds README.md at its root, and nothing else that the assignment names.'),
     (m) => {
       report1 = m.text;
-      return reply.lead.plan({}, { notes: 'The survey found only the README; the plan is short.' });
+      return reply.lead.plan({}, { notes: 'The survey found only the README; the plan is short.', todo: [{ title: 'Survey the project', status: 'completed', phase: 'Survey' }, { title: 'Write result.txt', status: 'pending', phase: 'Work' }, { title: 'Read it back', phase: 'Verification' }] });
     },
-    reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt at the root holding exactly the word hello.', readOnly: false, report: 'The command that wrote it and what Get-Content prints for the file.' }),
+    reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt at the root holding exactly the word hello.', readOnly: false, report: 'The command that wrote it and what Get-Content prints for the file.' }, { todo: [{ title: 'Survey the project', status: 'done', phase: 'Survey' }, { title: 'write result.txt', status: 'planned', phase: 'Work' }, { title: 'Read it back', status: 'planned', phase: 'Verification' }, { title: 'Check the README does not need it', status: 'planned', phase: 'Verification' }] }),
     reply.steps(write('result.txt', 'hello'), 'Get-Content result.txt'),
     reply.done('I wrote result.txt with Set-Content and read it back: Get-Content prints hello, exactly as asked.'),
     (m) => {
@@ -131,6 +131,48 @@ await scenario('the whole of it: understood, surveyed, planned, done by the work
   // The reports.
   t.truthy('the report: how it ended, the worker\'s summary, the command and its exit code, what is left', report1.startsWith('Report of subtask 1 (Survey the project): done.') && report1.includes('README.md at its root') && report1.includes('`Get-ChildItem -Name` → 0') && report1.includes('It changed no file.') && report1.includes('Subtasks left: 19 of 20.'), report1);
   t.truthy('the second names the file it changed', report2.includes('Files it changed: result.txt.') && report2.includes('Subtasks left: 18 of 20.'), report2);
+
+  /*
+   * The lead's list of subtasks (operator's feedback, 2026-10-21: "1 of 20" read as twenty planned): kept as it sent it,
+   * the one given now running whatever its spelling there, a new version when subtasks come or go, what changed kept on
+   * the round, the one it delivered on done; and given back to it with every report.
+   */
+  type Ledger = { revision: number; items: Array<{ title: string; status: string; phase?: string; n?: number }>; added?: string[]; removed?: string[] };
+  const ledger = (job.lead as unknown as { ledger?: Ledger }).ledger;
+  t.check(
+    'the list as the lead sent it last, the subtask it delivered on done',
+    ledger?.items.map((i) => [i.title, i.status, i.phase ?? null, i.n ?? null]),
+    [['Survey the project', 'done', 'Survey', 1], ['write result.txt', 'done', 'Work', 2], ['Read it back', 'planned', 'Verification', null], ['Check the README does not need it', 'planned', 'Verification', null]],
+  );
+  t.check(
+    'a version a change, what it added and dropped on the round it changed in',
+    job.lead?.rounds.map((r) => (r as Round & { ledger?: { revision: number; added: number; removed: number; total: number } }).ledger ?? null),
+    [{ revision: 1, added: 2, removed: 0, total: 2 }, { revision: 2, added: 2, removed: 1, total: 3 }, { revision: 3, added: 1, removed: 0, total: 4 }, null],
+  );
+  t.check('the last change kept on the list', [ledger?.revision, ledger?.added, ledger?.removed ?? []], [3, ['Check the README does not need it'], []]);
+  t.truthy(
+    'the report gives the lead its list back, with what to do with it',
+    report1.includes('Your list of subtasks (version 1): 0 done, 1 running, 1 planned. Subtasks given so far: 1; at most 20 may be given.') && report1.includes('1. [running] Survey the project — Survey') && report1.includes('Send the whole list again'),
+    report1,
+  );
+  t.truthy('the second, the list as the plan changed it', report2.includes('Your list of subtasks (version 3): 1 done, 1 running, 2 planned') && report2.includes('2. [running] write result.txt — Work'), report2);
+});
+
+await scenario('a subtask without the list of subtasks is sent back for it, and nothing of it runs', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  let askedAgain = '';
+  h.chat.script(
+    reply.lead.delegate({ title: 'Survey the project' }, { understanding: 'A file result.txt holding hello, reported in two fields.', todo: null }),
+    (m) => {
+      askedAgain = m.text;
+      return reply.lead.blocked('Nothing was done yet: I was asked for my list of subtasks again and stop here, as this check needs.', 'nothing; this is a check', { understanding: 'A file result.txt holding hello, reported in two fields.' });
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  t.truthy('sent back with the reason: the list, and its shape', askedAgain.includes('did not match the lead\'s format') && askedAgain.includes('"todo"') && askedAgain.includes('"running"'), askedAgain.slice(0, 900));
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('and no subtask was given for it', [job.lead?.subtasks, job.lead?.rounds.map((r) => r.status)], [0, ['blocked']]);
 });
 
 await scenario('the operator: a question answered, a plan sent back and then approved, a stop at the result', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {

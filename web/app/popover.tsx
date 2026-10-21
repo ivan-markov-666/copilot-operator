@@ -85,9 +85,25 @@ export function InfoTip({ label, text }: { label: string; text: string }) {
       {pop.open && (
         <div ref={pop.panel} id={pop.id} role="dialog" aria-label={label} className="pop info-pop" style={pop.style}>
           <p className="pop-title">{label}</p>
-          {text.split(/\n\s*\n/).map((p) => (
-            <p key={p}>{p}</p>
-          ))}
+          {/*
+            A paragraph after the first that opens with a name and a colon — one of a list's choices, "Example",
+            "Default" — has that name in bold (2026-10-21), so the choices of a list are told apart at a glance.
+          */}
+          {text.split(/\n\s*\n/).map((p, i) => {
+            const head = i > 0 ? /^([^:：.。\n]{2,90}?)\s?(?::\s|：)/.exec(p) : null;
+            return (
+              <p key={p}>
+                {head ? (
+                  <>
+                    <strong>{head[1]}</strong>
+                    {p.slice(head[1]!.length)}
+                  </>
+                ) : (
+                  p
+                )}
+              </p>
+            );
+          })}
         </div>
       )}
     </>
