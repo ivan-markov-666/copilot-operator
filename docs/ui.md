@@ -545,9 +545,9 @@ GET    /api/workspace/git            GET /api/workspace/git/commit   GET /api/wo
 GET    /api/chat/threads             POST /api/chat { text, threadId?, model?, manualModel?, lang?, planMode?, review?, lead?, workerModel?, workerManualModel? }
 POST   /api/chat/:id/rewind
 GET    /api/approvals                POST /api/approvals/:id   POST /api/approvals/:id/plan   POST /api/approvals/:id/answer
-GET    /api/activity
+GET    /api/activity                 running, starting, acting (who is at work), paused
 GET    /api/models                   POST /api/models/refresh   PUT /api/models/default   PUT /api/models/review-default
-POST   /api/login                    POST /api/browse-folder
+POST   /api/login                    POST /api/browse-folder   PUT /api/home (the bot's folder from the next start)
 ```
 
 ## Settings
@@ -621,6 +621,28 @@ Diagnosis", "Subtask 3 of 8 planned", "5 to go · at most 20 allowed", the list 
 was made or changed, the conversation says so ("The plan was updated (version 2): +1 new"). While the worker works,
 it is named by the subtask's title; "#2" in the list is the order it was given in. A message without a list says
 "Subtasks used: 1 of at most 20".
+
+**Who works, and who asks (2026-10-22).** Four actors (`Actor` in `session/model.ts`): plan mode (the chat writing its
+plan; nothing changes yet), the lead (of two chats), the worker (the chat that does the work — the worker of two chats,
+or the one chat), and the reviewer. The runner says who is at work as it passes from one to another
+(`Task.acting`, the `acting` event; `actingNow` in `taskRunner.ts` and `leadRunner.ts`), and `/api/activity` answers it
+from memory with `acting` and `paused`. Every card carries who asks (`PendingApproval.actor`): a command while
+planning is plan mode's, after the plan the worker's, in the review the reviewer's; a model card is the conversation's
+(`actorOfSession`: worker, lead, plan mode first, else the worker); a plan is plan mode's or the lead's; a question is
+the lead's. Shown as one coloured mark (`web/app/actor.tsx`, words in `web/lib/actors.ts`): "Asked by: Reviewer" on
+the cards, the name on the line "Working…" and along the bottom. While the bot works, **LIVE** sits beside "Chat"
+(red; amber while paused; on hover who is at work), and the browser tab reads "● Worker at work — copilot-operator" —
+"(1) waiting for you" first when something waits for the operator.
+
+**The logo and the icon (2026-10-22).** An aeroplane crossing its orbit, drawn once in `web/lib/brand.ts`: beside the
+name in the bar on top of every page (`app/logo.tsx`, coloured by the theme from `--logo-plane` and `--logo-orbit`:
+dark blue on light, light with a sky-blue orbit on dark), and as files in `docs/brand/` (`logo-light.svg`,
+`logo-dark.svg`). The tab's icon (`app/icon.svg`, which Next names in every page's head) is the aeroplane alone,
+dark blue with a white edge, so it shows on a light browser and a dark one. `check:brand` holds the files to the
+drawing and the icon's colours to WCAG contrast on both.
+
+**The operator's messages (2026-10-22).** Each is headed "You · Your message 3 · 10:42", edged in the accent, and kept
+in sight at the top of the chat (`position: sticky`) while what came of it is read; a long one scrolls inside its box.
 
 **Skills deleted, the review's model in the chat, what each setting is for (2026-10-21).** Each saved skill has its
 name and "Delete" (red, with a bin) on top of its card; it asks first. With "Review" ticked under the chat, the review's

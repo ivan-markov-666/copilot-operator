@@ -56,7 +56,7 @@ import { commitFiles, treeFingerprint } from '../vcs/git.js';
 import type { TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
-import type { PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
+import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
 import { isContinuable } from '../session/model.js';
 import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf, whereLeft } from '../vcs/taskVcs.js';
 import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
@@ -144,7 +144,7 @@ export type RunDeps = {
    * answer is approve (with a note, optionally), revise (with what to change) or stop. Absent, or in a run
    * that does not ask, the runner approves the plan itself. See `PlanMode`.
    */
-  approvePlan?: (ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan }) => Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }>;
+  approvePlan?: (ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan; actor?: Actor }) => Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }>;
   /**
    * The two-chat mode (2026-10-20): the lead's question for the operator, put to them on a card in the conversation; the
    * answer is text, or the operator stops the task. Absent (the terminal), the lead is told nobody can answer.
@@ -164,7 +164,7 @@ export type ModelHooks = {
    * The operator's hand, when the chat could not be put on the chosen model by itself: they are asked to
    * choose it in the Copilot window and answer — check and go on, go on as it is, or stop.
    */
-  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' }) => Promise<'recheck' | 'continue' | 'stop'>;
+  askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker'; actor?: Actor }) => Promise<'recheck' | 'continue' | 'stop'>;
   /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
   locate?: (name: string) => Promise<ModelLocator | undefined>;
   renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
@@ -724,6 +724,19 @@ export function roleOf(session: Pick<Session, 'workerOf' | 'lead'>): { role?: 'l
   return session.workerOf ? { role: 'worker' } : session.lead ? { role: 'lead' } : {};
 }
 
+/** Who is at work, as the run's transcript and the Output panel say it. */
+export const ACTOR_WORDS: Record<Actor, string> = { plan: 'the chat writing its plan', lead: 'the lead', worker: 'the worker', review: 'the reviewer' };
+
+/**
+ * Who a session's conversation is, for a card it raises before its first message (2026-10-22): the lead or the worker
+ * of two chats, the chat that writes its plan first in plan mode, or else the chat that does the work.
+ */
+export function actorOfSession(session: Pick<Session, 'workerOf' | 'lead' | 'planMode'>, cfg: { execution?: { planMode?: PlanMode } }): Actor {
+  if (session.workerOf) return 'worker';
+  if (session.lead) return 'lead';
+  return (session.planMode ?? cfg.execution?.planMode ?? 'off') !== 'off' ? 'plan' : 'worker';
+}
+
 /**
  * Marks a run's failure as one of opening the browser, its profile, the sign-in or the conversation, so the notice of
  * a start that could not begin says "opening the browser" rather than "the run" (2026-10-20: with the batch's own
@@ -822,6 +835,8 @@ export async function applySessionModel(
   const fromSettings = modelFrom === 'settings';
   const manual = modelByHand(session, cfg) && !!hooks?.askHelp;
   if (!wanted && !manual) return {};
+  // Whose conversation the card is for: said on it, whichever way it is asked (2026-10-22).
+  const asks = { ...roleOf(session), actor: actorOfSession(session, cfg as { execution?: { planMode?: PlanMode } }) };
 
   let result: ModelChoice;
   if (manual) {
@@ -846,7 +861,7 @@ export async function applySessionModel(
     const why = cfg.copilot.manualModel ? 'Settings ask for the model to be chosen by hand' : 'the session asks for the model to be set by hand';
     const hand = wanted && buttonShows(shown, wanted)
       ? { result: { ok: true, current: wanted, by: 'already' } as ModelChoice, goOnAsItIs: false }
-      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: why }, hooks, session.id, bus, true, roleOf(session));
+      : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: why }, hooks, session.id, bus, true, asks);
     if (!wanted) {
       const now = await transport.currentModel().catch(() => null);
       if (hand.result.ok || hand.goOnAsItIs) {
@@ -883,7 +898,7 @@ export async function applySessionModel(
       return stopped;
     }
   }
-  const hand = await withOperatorHand(transport, wanted, result, hooks, session.id, bus, false);
+  const hand = await withOperatorHand(transport, wanted, result, hooks, session.id, bus, false, asks);
   result = hand.result;
   const goOnAsItIs = hand.goOnAsItIs;
   const renamed = await followPageModels('model', wanted, result, session, store, hooks, modelFrom);
@@ -945,7 +960,7 @@ async function withOperatorHand(
   manual: boolean,
   /** For the review's own conversation: the card says so, and why its model is best another, stronger one. For the
    * lead's or the worker's conversation of the two-chat mode: the card says which it is (2026-10-20). */
-  opts: { review?: boolean; role?: 'lead' | 'worker' } = {},
+  opts: { review?: boolean; role?: 'lead' | 'worker'; actor?: Actor } = {},
 ): Promise<{ result: ModelChoice; goOnAsItIs: boolean }> {
   let result = first;
   for (let tries = 1; !result.ok && hooks?.askHelp; tries += 1) {
@@ -956,7 +971,17 @@ async function withOperatorHand(
         ? `asking the operator to choose ${what} in the Copilot window (by hand; picker shows "${shown ?? 'nothing'}")`
         : `the chat could not be put on ${what} by the runner; asking the operator to choose it in the Copilot window (picker shows "${shown ?? 'nothing'}")`,
       data: { asked: wanted, shown, why: result.reason ?? '', tries, manual, ...(opts.review ? { review: true } : {}), ...(opts.role ? { role: opts.role } : {}) } });
-    const answer = await hooks.askHelp({ sessionId, asked: wanted, shown, why: result.reason ?? 'unknown reason', tries, ...(manual ? { manual: true } : {}), ...(opts.review ? { review: true } : {}), ...(opts.role ? { role: opts.role } : {}) });
+    const answer = await hooks.askHelp({
+      sessionId,
+      asked: wanted,
+      shown,
+      why: result.reason ?? 'unknown reason',
+      tries,
+      ...(manual ? { manual: true } : {}),
+      ...(opts.review ? { review: true } : {}),
+      ...(opts.role ? { role: opts.role } : {}),
+      actor: opts.actor ?? (opts.review ? 'review' : opts.role ?? 'worker'),
+    });
     if (answer === 'stop') return { result, goOnAsItIs: false };
     if (answer === 'continue') {
       bus.publish({ sessionId, type: 'model-help-continue', level: 'warn', message: `the operator chose to go on with the model the chat is on ("${shown ?? 'unknown'}")${wanted ? `, not "${wanted}"` : ''}`, data: { asked: wanted, shown } });
@@ -1118,6 +1143,20 @@ export async function runTask(
 
   const setTask = async (mutate: (t: Task) => void): Promise<void> => {
     await store.updateTask(session.id, task.id, mutate);
+  };
+  /*
+   * Who is at work on the task now (2026-10-22): kept on it for the chat and the status bar, and said as an event for
+   * the bot's own count of what is going on (`activity`). Only when it changes.
+   */
+  let actingAs: Actor | null = null;
+  const actingNow = async (actor: Actor, more: Omit<Acting, 'actor' | 'since'> = {}): Promise<void> => {
+    if (actingAs === actor && !more.round) return;
+    actingAs = actor;
+    const acting: Acting = { actor, since: new Date().toISOString(), ...more };
+    await setTask((t) => {
+      t.acting = acting;
+    });
+    sink.event('acting', acting, `at work now: ${ACTOR_WORDS[actor]}${more.round ? ` (round ${more.round})` : ''}`);
   };
 
   const startedAt = Date.now();
@@ -1507,6 +1546,7 @@ export async function runTask(
     await setTask((t) => {
       if (vcsAfter) t.vcs = vcsAfter;
       t.status = status;
+      delete t.acting;
       t.iterations = iterations;
       t.finishedAt = new Date().toISOString();
       const held = pausedMs();
@@ -1775,6 +1815,7 @@ export async function runTask(
      */
     const planMode: PlanMode = session.planMode ?? cfg.execution.planMode ?? 'off';
     let planning = planMode !== 'off' && !task.continuing;
+    await actingNow(planning ? 'plan' : 'worker');
     const planEnforced = planning && onOwnBranch;
     let planVersion = 0;
     let planningRounds = 0;
@@ -2407,6 +2448,7 @@ export async function runTask(
       // the reviewer is given it — as claims to test. See `Deliverable` in review.ts.
       const deliverable = deliverableFor(task, closing, repoDir !== '' || chatChanged !== null, changedFiles);
 
+      await actingNow('review', { round: reviewRounds });
       sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length, deliverable: deliverable?.why },
         `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})` +
           (deliverable ? `; the closing summary goes with it as the product (${deliverable.why})` : ''));
@@ -2424,7 +2466,7 @@ export async function runTask(
             const shown = await transport.currentModel().catch(() => null);
             picked = model && buttonShows(shown, model)
               ? { ok: true, current: model, by: 'already' }
-              : (await withOperatorHand(transport, model, { ok: false, current: shown, reason: 'the model is chosen by hand (the review)' }, deps.models, session.id, bus, true, { review: true })).result;
+              : (await withOperatorHand(transport, model, { ok: false, current: shown, reason: 'the model is chosen by hand (the review)' }, deps.models, session.id, bus, true, { review: true, actor: 'review' })).result;
             // Stopped on the card: the run stops, as it does on the work's card, and nothing is sent to the review.
             if (!picked.ok && signal?.aborted) throw new StoppedSend();
           } else {
@@ -2504,6 +2546,8 @@ export async function runTask(
         });
       }
 
+      // The work's own chat again: it fixes what the review found, or closes the task.
+      await actingNow('worker');
       // A reviewer that left its own server listening once failed the work for it.
       roundLeftovers = [...roundLeftovers, ...(await reap(beforeReview, `review round ${reviewRounds}`))];
 
@@ -2943,7 +2987,7 @@ export async function runTask(
           let answer: { decision: 'approve' | 'revise' | 'stop'; note?: string } = { decision: 'approve' };
           if (asks) {
             sink.event('plan-waiting', { version: planVersion }, `plan ${planVersion} is waiting for the operator`, 'warn');
-            answer = await deps.approvePlan!({ sessionId: session.id, taskId: task.id, title: task.title, plan });
+            answer = await deps.approvePlan!({ sessionId: session.id, taskId: task.id, title: task.title, plan, actor: 'plan' });
           }
           if (signal?.aborted || answer.decision === 'stop') {
             return await finish('aborted', answer.decision === 'stop' ? 'stopped by the operator at its plan' : 'stopped by the operator', undefined, lastMarkdown);
@@ -2972,6 +3016,7 @@ export async function runTask(
             sink.event('plan-approved', { version: planVersion, by: approved.by, ...(approved.note ? { note: approved.note } : {}) },
               `plan ${planVersion} approved ${asks ? 'by the operator' : `by the runner — ${why}`}${approved.note ? `, with a note` : ''}`);
             planning = false;
+            await actingNow('worker');
             message = planApprovedMessage(approved);
           }
         }
@@ -3151,7 +3196,7 @@ export async function runTask(
           t.status = 'waiting-approval';
         });
         sink.event('step-proposed', { id: step.id, description: describeStep(step) }, `step ${step.id}: ${describeStep(step)}`);
-        const decided = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement });
+        const decided = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement, actor: planning ? 'plan' : 'worker' });
         await setTask((t) => {
           t.status = 'running';
         });

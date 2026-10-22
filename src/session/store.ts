@@ -134,6 +134,8 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   // The kind of task it is: every attempt is sent with the same skill.
   skill: 'kept',
   interruption: 'cleared',
+  // Who was at work when the attempt ended, had it not ended cleanly: never the next attempt's.
+  acting: 'cleared',
   finalReply: 'cleared',
   firstMessage: 'cleared',
   logFile: 'cleared',
@@ -646,6 +648,8 @@ export class SessionStore {
       t.buildsOn = buildsOn;
       // Where the attempt that stopped had got to belongs to that attempt; the next one starts clean.
       t.interruption = undefined;
+      // Who was at work when it stopped: the next attempt says who is, when it begins.
+      t.acting = undefined;
       // Cleared so the next run starts from nothing and gets its own run folder.
       t.runId = undefined;
       t.runGroup = undefined;

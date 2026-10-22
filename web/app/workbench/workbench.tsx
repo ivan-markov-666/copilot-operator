@@ -26,6 +26,7 @@ import { StatusBar } from './statusBar';
 import { Palette, type PaletteCommand } from './palette';
 import { AppearanceMenu } from './appearanceMenu';
 import { KerriganAbout, KerriganButton } from './kerriganButton';
+import { Logo } from '../logo';
 import { FileIcon } from './fileIcon';
 import { QuickOpen } from './quickOpen';
 import { SearchView, type SearchHit } from './searchView';
@@ -379,7 +380,10 @@ function WorkbenchInner() {
   return (
     <div className="wb" style={style}>
       <header className="wb-top">
-        <span className="wb-brand">copilot-operator</span>
+        <span className="wb-brand">
+          <Logo />
+          copilot-operator
+        </span>
         <button type="button" className="wb-search" onClick={() => setPalette(true)} title={t('wb.paletteWhy')}>
           <span>{t('wb.palette')}</span>
           <kbd>Ctrl+K</kbd>

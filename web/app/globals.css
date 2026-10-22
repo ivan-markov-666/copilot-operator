@@ -28,6 +28,14 @@
   --warn-soft: #fbf0d8;
   --bad: #ac2a2a;
   --bad-soft: #fbe7e7;
+  /* Who works (2026-10-22): plan mode and the reviewer; the lead is the accent, the worker the green of work done. */
+  /* The logo's two colours (2026-10-22): dark blue on light, as drawn. */
+  --logo-plane: #0d2a42;
+  --logo-orbit: #0d2a42;
+  --plan: #6b3fc4;
+  --plan-soft: #efe8fb;
+  --review: #a3266f;
+  --review-soft: #f9e6f1;
   --code: #edf5fc;
   --shadow: 0 1px 2px rgba(16, 56, 96, 0.07), 0 6px 18px rgba(16, 56, 96, 0.06);
 
@@ -55,6 +63,12 @@
   --warn-soft: #2f281a;
   --bad: #ff8f8f;
   --bad-soft: #3a1f25;
+  --logo-plane: #e3eef9;
+  --logo-orbit: #5ab6f4;
+  --plan: #c4a8ff;
+  --plan-soft: #2a2140;
+  --review: #f39ac9;
+  --review-soft: #3a1d30;
   --code: #101c2a;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
 }
@@ -1081,7 +1095,13 @@ button.linkish:hover { text-decoration: underline; }
 .cs-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 8px; }
 .cs-turn { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .cs-turn:last-child { border-bottom: 0; }
-.cs-user { align-self: flex-end; max-width: 92%; padding: 8px 12px; border-radius: 12px 12px 2px 12px; background: var(--accent-soft); border: 1px solid var(--line-strong); }
+/*
+ * The operator's own messages (2026-10-22: "make it easier to see where my prompts are"): headed "You · Your message
+ * 3 · 10:42", edged in the accent, and kept in sight at the top of the chat while what came of each is read.
+ */
+.cs-user { align-self: flex-end; max-width: 92%; max-height: 45vh; overflow: auto; padding: 6px 12px 8px; border-radius: 12px 12px 2px 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-inline-end-width: 4px; box-shadow: var(--shadow); }
+.cs-user-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 4px; font-size: calc(11.5px * var(--scale)); color: var(--muted); }
+.cs-user-who { color: var(--accent); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .cs-user p:first-child, .cs-bot p:first-child, .cs-end p:first-child { margin-top: 0; }
 .cs-user p:last-child, .cs-bot p:last-child, .cs-end p:last-child { margin-bottom: 0; }
 .cs-bot { max-width: 100%; padding: 2px 2px; }
@@ -1094,7 +1114,27 @@ button.linkish:hover { text-decoration: underline; }
 .cs-out { margin: 0; padding: 6px 10px 8px; max-height: 260px; overflow: auto; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; font-size: calc(12px * var(--scale)); }
 .cs-ask { padding: 8px 10px; border: 2px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
 .cs-ask .cs-out { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); margin: 4px 0 8px; }
-.cs-working { display: flex; align-items: center; gap: 8px; margin: 2px 0; color: var(--muted); font-size: calc(12.5px * var(--scale)); }
+.cs-working { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px 0; color: var(--muted); font-size: calc(12.5px * var(--scale)); }
+.cs-ask-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+
+/* Who works, or asks (2026-10-22): one colour for each, wherever it is said — the status bar, the chat, the cards. */
+.actor-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: calc(11.5px * var(--scale)); font-weight: 600; line-height: 1.5; letter-spacing: 0; text-transform: none; white-space: nowrap; vertical-align: middle; }
+.actor-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.actor-plan { color: var(--plan); background: var(--plan-soft); }
+.actor-lead { color: var(--accent); background: var(--accent-soft); }
+.actor-worker { color: var(--ok); background: var(--ok-soft); }
+.actor-review { color: var(--review); background: var(--review-soft); }
+.wb-statusbar .actor-chip { border-color: transparent; }
+
+/* The logo beside the name, in the bar on top of every page (2026-10-22). */
+.brand-logo { height: 1.7em; width: auto; flex: none; vertical-align: middle; }
+.wb-brand, .brand-link { display: inline-flex; align-items: center; gap: 0.45em; }
+
+/* LIVE beside Chat while the bot works (2026-10-22). */
+.wb-live-badge { display: inline-flex; align-items: center; gap: 4px; margin-inline-start: 7px; padding: 0 6px; border-radius: 4px; background: var(--bad); color: var(--panel); font-size: calc(10px * var(--scale)); font-weight: 700; letter-spacing: 0.06em; line-height: 1.6; vertical-align: middle; }
+.wb-live-badge.paused { background: var(--warn); }
+.wb-live-badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: live-pulse 1.6s ease-in-out infinite; }
+.wb-live-badge.paused .wb-live-badge-dot { animation: none; }
 .cs-end { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--ok-soft); border: 1px solid var(--line); }
 .cs-end:not(.s-done) { background: var(--warn-soft); }
 .cs-end.s-failed, .cs-end.s-blocked { background: var(--bad-soft); }
@@ -1244,7 +1284,7 @@ button.linkish:hover { text-decoration: underline; }
 :root[data-theme='dark'] .hl-link { color: #7fd8c8; }
 .cs-bar select { width: auto; max-width: 60%; padding: 3px 26px 3px 8px; background-position: right 8px center; font-size: calc(12.5px * var(--scale)); text-overflow: ellipsis; }
 .wb-task-compose { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 10px; }
-.cs-user-row { display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; }
+.cs-user-row { display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; position: sticky; top: -10px; z-index: 3; padding: 4px 0 8px; background: linear-gradient(var(--panel) 75%, transparent); }
 .cs-rewind { margin-top: 4px; opacity: 0.55; }
 .cs-user-row:hover .cs-rewind, .cs-rewind:focus-visible { opacity: 1; }
 

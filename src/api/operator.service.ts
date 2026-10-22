@@ -27,7 +27,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { MAX_INSTRUCTION_CHARS, newId, type PlanMode, type TaskPlan } from '../session/model.js';
+import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type PlanMode, type TaskPlan } from '../session/model.js';
 import { runSession, queuedToRun, failedWhileOpening } from '../orchestrator/taskRunner.js';
 import { Hold } from '../orchestrator/hold.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
@@ -395,6 +395,15 @@ export class OperatorService {
   readonly startFailures = new StartFailures();
 
   private readonly running = new Map<string, Running>();
+  /**
+   * Who is at work in each session's message now, as its runner says it (2026-10-22: "show clearly who works"):
+   * for `activity`, which every page asks on a timer and answers from memory. Gone when the message ends.
+   */
+  private readonly acting = new Map<string, Acting>();
+  private readonly followsActing = this.bus.subscribe('*', (e) => {
+    if (e.type === 'acting' && e.data) this.acting.set(e.sessionId, e.data as Acting);
+    else if (e.type === 'task-finished') this.acting.delete(e.sessionId);
+  });
   private readonly waiting = new Map<string, Waiting>();
   /**
    * The workers of the two-chat mode, by the session of the lead they work for (2026-10-20). A worker's steps and cards
@@ -1113,6 +1122,8 @@ export class OperatorService {
     const startedAt = new Date().toISOString();
     const hold = new Hold();
     this.running.set(sessionId, { controller, startedAt, mode, policy, hold });
+    // Who was at work in a run of it that ended without saying so is not who is at work in this one.
+    this.acting.delete(sessionId);
     {
       const asLead = await this.store.getSession(sessionId);
       if (asLead?.lead?.workerSessionId) this.workerLeads.set(asLead.lead.workerSessionId, sessionId);
@@ -1301,13 +1312,22 @@ export class OperatorService {
    * answer a question this one answers from two fields already in memory. A poll that costs a
    * directory walk every few seconds, on every page, to light up a dot would be a bad trade.
    */
-  activity(): { running: boolean; sessions: number; starting: boolean } {
+  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean } {
     /*
      * A run being started — its version control checked before the browser opens — is not running yet
      * and not idle either: `starting` says so, so "nothing is happening" is not read in that moment.
      */
     const starting = this.running.size === 0 && this.browser?.kind === 'run';
-    return { running: this.running.size > 0, sessions: this.running.size, starting };
+    // Who is at work in the run going now — the lead's session says when its worker is (2026-10-22) — and whether it is held.
+    const [id, run] = [...this.running.entries()][0] ?? [];
+    const acting = id ? this.acting.get(id) : undefined;
+    return {
+      running: this.running.size > 0,
+      sessions: this.running.size,
+      starting,
+      ...(acting ? { acting } : {}),
+      ...(run?.hold?.held ? { paused: true } : {}),
+    };
   }
 
   /**
@@ -1651,7 +1671,7 @@ export class OperatorService {
    * answered or the run is stopped.
    */
   askModelHelp(
-    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' },
+    ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker'; actor?: Actor },
     signal: AbortSignal,
   ): Promise<'recheck' | 'continue' | 'stop'> {
     return new Promise((resolveAnswer) => {
@@ -1666,6 +1686,7 @@ export class OperatorService {
         stepId: 0,
         description: `${ask.asked ? `Choose "${ask.asked}" in the Copilot window` : 'Choose the model in the Copilot window'}${ask.review ? ' for the review' : ask.role ? ` for the ${ask.role}` : ''}`,
         createdAt: new Date().toISOString(),
+        ...(ask.actor ? { actor: ask.actor } : {}),
         model: { asked: ask.asked, shown: ask.shown, why: ask.why, tries: ask.tries, ...(ask.manual ? { manual: true } : {}), ...(ask.review ? { review: true } : {}), ...(ask.role ? { role: ask.role } : {}) },
       };
       this.waiting.set(approval.id, {
@@ -1695,6 +1716,7 @@ export class OperatorService {
         stepId: 0,
         description: `The lead asks: ${ask.question}`,
         createdAt: new Date().toISOString(),
+        actor: 'lead',
         question: { text: ask.question, ...(ask.why ? { why: ask.why } : {}), options: ask.options },
       };
       this.waiting.set(approval.id, {
@@ -1725,7 +1747,7 @@ export class OperatorService {
    * waits on the approvals card, on every page, until it is approved, sent back for another, or the task
    * is stopped. See `PlanMode`.
    */
-  askPlanApproval(ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan }, signal: AbortSignal): Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }> {
+  askPlanApproval(ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan; actor?: Actor }, signal: AbortSignal): Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }> {
     return new Promise((resolveAnswer) => {
       if (signal.aborted) {
         resolveAnswer({ decision: 'stop' });
@@ -1738,6 +1760,8 @@ export class OperatorService {
         stepId: 0,
         description: `The plan of "${ask.title}" (version ${ask.plan.version})`,
         createdAt: new Date().toISOString(),
+        // The chat that wrote it in plan mode, or the lead's plan of two chats.
+        actor: ask.actor ?? 'plan',
         plan: { title: ask.title, plan: ask.plan },
       };
       this.waiting.set(approval.id, {
@@ -1883,6 +1907,7 @@ export class OperatorService {
           stepId: step.id,
           description: `[${step.shell ?? 'pwsh'}] ${step.cmd}`,
           createdAt: new Date().toISOString(),
+          ...(ctx.actor ? { actor: ctx.actor } : {}),
           ...(held ? { network: held.network } : {}),
         };
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });

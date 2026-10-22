@@ -706,6 +706,26 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Чатът на отворената папка, както в IDE: съобщението отива при Copilot, командите, с които отговаря, се изпълняват в папката и изходът им се връща, докато свърши; показва се като разговор.',
           },
           {
+            key: 'wb.live',
+            kind: 'badge',
+            en: 'LIVE',
+            bg: 'LIVE',
+            doesEn:
+              'Beside "Chat" while the bot works, red (amber while paused); on hover it says who is at work. The browser tab says it too: "● Worker at work — copilot-operator", or "(1) waiting for you" when something waits for the operator.',
+            doesBg:
+              'До „Чат“, докато ботът работи — червено (жълто на пауза); при посочване казва кой работи. Казва го и табът на браузъра: „● Работи: Изпълнител — copilot-operator“, или „(1) чака вас“, когато нещо чака оператора.',
+          },
+          {
+            key: 'actor.asks',
+            kind: 'badge',
+            en: 'Asked by: {who}',
+            bg: 'Иска: {who}',
+            doesEn:
+              'On every card — a command to allow, the model to choose, a plan, the lead\'s question — and, without "Asked by", on the line "Working…" and along the bottom: who it is, in its own colour. Plan mode (the chat writing its plan; nothing changes yet), Lead (of two chats), Worker (the chat that does the work), Reviewer (the independent check).',
+            doesBg:
+              'На всяка карта — команда за разрешаване, модел за избор, план, въпрос на ръководителя — и, без „Иска“, на реда „Работи…“ и по долната лента: кой е, в свой цвят. Режим на плана (чатът пише плана си; нищо още не се променя), Ръководител (на двата чата), Изпълнител (чатът, който върши работата), Рецензент (независимата проверка).',
+          },
+          {
             key: 'chat.thread',
             kind: 'select',
             en: 'Conversation',

@@ -183,6 +183,12 @@ export type Task = {
   /** The plan this attempt made before it changed anything, in plan mode. See `TaskPlan`. */
   plan?: TaskPlan;
   /**
+   * Who is at work on it right now (operator, 2026-10-22: "show clearly what the bot is doing and who works — plan
+   * mode, the lead, the worker, the reviewer"): set by the runner as the work passes from one to another, gone when
+   * the attempt ends.
+   */
+  acting?: Acting;
+  /**
    * What the operator told the chat about this task besides its prompt (2026-10-14: "the user must be able to
    * add more information to a task"): each note goes out with the next message — the opening of its next
    * attempt, or the next report while it runs — and is marked sent then. Kept across attempts.
@@ -1170,6 +1176,16 @@ export type SessionEvent = {
  * A step waiting for a human decision: every step in confirm mode, and in any mode a step that
  * fetches from the network (see `src/exec/network.ts`).
  */
+/**
+ * Who works, or asks the operator something (2026-10-22): `plan` the chat writing its plan in plan mode, `lead` the
+ * lead of two chats, `worker` the chat doing the work — the worker of two chats, or the one chat without them — and
+ * `review` the independent reviewer.
+ */
+export type Actor = 'plan' | 'lead' | 'worker' | 'review';
+
+/** Who is at work on a task now, and since when; with the subtask the worker is on, or the review's round. */
+export type Acting = { actor: Actor; since: string; subtask?: number; round?: number };
+
 export type PendingApproval = {
   id: string;
   sessionId: string;
@@ -1177,6 +1193,8 @@ export type PendingApproval = {
   stepId: number;
   description: string;
   createdAt: string;
+  /** Who asks (2026-10-22): the chat writing its plan, the lead, the worker or the reviewer. Absent on older cards. */
+  actor?: Actor;
   /**
    * Set when the step was held because it downloads: the reason, as the log prints it. Such a step
    * is asked about even in an unattended run, and "run the rest without asking" does not answer it.

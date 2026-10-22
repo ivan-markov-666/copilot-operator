@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120">
+<title>copilot-operator</title>
+<defs>
+<mask id="cop-logo-light" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="120">
+<rect width="200" height="120" fill="#fff"/>
+<path d="M50 3L94 60L94 62.6L69.5 89.6L30.5 89.6L6 62.6L6 60Z" transform="translate(104 14) scale(0.74) rotate(42 50 50)" fill="#000" stroke="#000" stroke-width="18" stroke-linejoin="round"/>
+</mask>
+</defs>
+<g mask="url(#cop-logo-light)" fill="none" stroke="#0d2a42" stroke-linecap="round">
+<ellipse cx="96" cy="64" rx="86" ry="36" transform="rotate(-25 96 64)" stroke-width="6.5"/>
+<path d="M70 104 C112 124 166 112 186 86 C194 74 192 60 184 52" stroke-width="6"/>
+<path d="M22 28 C18 42 22 56 34 70" stroke-width="2.4"/>
+</g>
+<path d="M50 3C54.6 3 56.6 8.2 56.6 14.5L56.6 35.5L91.5 55.8C93.2 56.8 94 58.2 94 60L94 62.6L56.6 52.8L55.4 74.5L69.5 84.6L69.5 89.6L52.6 85.6L50 89.8L47.4 85.6L30.5 89.6L30.5 84.6L44.6 74.5L43.4 52.8L6 62.6L6 60C6 58.2 6.8 56.8 8.5 55.8L43.4 35.5L43.4 14.5C43.4 8.2 45.4 3 50 3Z" transform="translate(104 14) scale(0.74) rotate(42 50 50)" fill="#0d2a42"/>
+</svg>

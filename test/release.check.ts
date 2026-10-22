@@ -302,7 +302,7 @@ await section('what the tarball carries', async () => {
     t.truthy('the tarball was written', existsSync(tarball), tarball);
 
     // The licences of what the interface is built from go with it (2026-10-22: Monaco, mermaid, React, Next.js and theirs).
-    for (const need of ['package.json', 'dist/src/cli.js', 'dist/src/api/main.js', 'dist/web/index.html', 'dist/web/third-party-notices.txt', 'prompts/level1.md', 'prompts/review1.md', 'README.md', 'LICENSE']) {
+    for (const need of ['package.json', 'dist/src/cli.js', 'dist/src/api/main.js', 'dist/web/index.html', 'dist/web/third-party-notices.txt', 'dist/web/icon.svg', 'prompts/level1.md', 'prompts/review1.md', 'README.md', 'LICENSE']) {
       t.truthy(`ships ${need}`, packedFiles.includes(need));
     }
     // The operator's records, the checks, the web sources and Next's build bookkeeping (the server

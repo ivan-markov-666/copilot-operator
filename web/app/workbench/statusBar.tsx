@@ -11,6 +11,7 @@ import { usePoll } from '../../lib/usePoll';
 import { useNow } from '../../lib/useNow';
 import { workedMs } from '../../lib/paused';
 import { BranchIcon } from '../branchIcon';
+import { ActorChip } from '../actor';
 
 export function StatusBar({ sessions, session, workspace, onShowThread }: { sessions: Session[]; session?: Session; workspace: Workspace | null; onShowThread: (sessionId: string) => void }) {
   const { t } = useT();
@@ -45,6 +46,8 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
       {runningSession && runningTask ? (
         <button type="button" className="wb-status-btn" onClick={() => onShowThread(runningSession.id)} title={t('wb.openRunning')}>
           <span className={runningSession.paused ? 'wb-live paused' : 'wb-live'} aria-hidden="true" />{' '}
+          {/* Who is at work now (2026-10-22): plan mode, the lead, the worker or the reviewer. */}
+          {runningTask.acting && <ActorChip actor={runningTask.acting.actor} acting={runningTask.acting} />}{' '}
           {runningTask.lead
             ? // Two chats (2026-10-21): the lead's messages, the worker's, and the two together.
               t('wb.runningLineTwo', {

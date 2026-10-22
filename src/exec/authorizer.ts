@@ -7,6 +7,7 @@
  * so the runner does not know or care which one it is talking to.
  */
 import type { Step } from '../protocol/replySchema.js';
+import type { Actor } from '../session/model.js';
 import { staticCheck, describeStep, type PolicyConfig, type PolicyDecision } from './policy.js';
 import type { Confinement } from './confinement.js';
 import { networkFetchReason, networkFetchRefusal } from './network.js';
@@ -20,6 +21,8 @@ export type AuthorizeContext = {
   iteration: number;
   /** The project folders and where the step runs. See `confinement.ts`. */
   confinement?: Confinement;
+  /** Whose step it is: the chat writing its plan, the worker or the reviewer — the card says so (2026-10-22). */
+  actor?: Actor;
 };
 
 export interface StepAuthorizer {

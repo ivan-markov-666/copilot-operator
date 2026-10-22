@@ -301,6 +301,8 @@ export type Task = {
   review?: TaskReview;
   /** The plan this attempt made before changing anything (plan mode). */
   plan?: TaskPlan;
+  /** Who is at work on it right now; gone when the attempt ends. */
+  acting?: Acting;
   /** The operator's notes to the chat about this task; each goes out with the task's next message. */
   notes?: Array<{ id: string; text: string; at: string; sentAt?: string; attempt?: number }>;
   /** Accepted as done by the operator though it did not end so. */
@@ -552,7 +554,16 @@ export type RegistryEntry = {
 export type TaskRunGroup = { id: string; startedAt: string; sessions: number; name?: string };
 
 /** Whether the bot is working. Cheap enough to ask from every page on a timer. */
-export type Activity = { running: boolean; sessions: number; batch: boolean };
+/**
+ * Who works, or asks (2026-10-22): the chat writing its plan in plan mode, the lead of two chats, the worker — the chat
+ * doing the work, the worker of two chats or the one chat — and the independent reviewer.
+ */
+export type Actor = 'plan' | 'lead' | 'worker' | 'review';
+/** Who is at work on a task now, and since when; the subtask the worker is on, or the review's round. */
+export type Acting = { actor: Actor; since: string; subtask?: number; round?: number };
+
+/** Whether the bot is working, and who in the run going now (answered from memory: polling it is fine). */
+export type Activity = { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean };
 
 export type RunMode = 'confirm' | 'unattended';
 export type OnFailure = 'stop' | 'continue';
@@ -705,6 +716,8 @@ export type Approval = {
   stepId: number;
   description: string;
   createdAt: string;
+  /** Who asks: the chat writing its plan, the lead, the worker or the reviewer. Absent on older cards. */
+  actor?: Actor;
   /** Set when the step was held because it downloads; asked about even in an unattended run. */
   network?: string;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */

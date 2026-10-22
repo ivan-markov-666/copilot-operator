@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ivan-markov-666/copilot-operator/main/docs/brand/logo-dark.svg">
+    <img src="https://raw.githubusercontent.com/ivan-markov-666/copilot-operator/main/docs/brand/logo-light.svg" alt="copilot-operator" width="240">
+  </picture>
+</p>
+
 # copilot-operator
 
 A Windows bot that runs a task loop with Microsoft 365 Copilot.

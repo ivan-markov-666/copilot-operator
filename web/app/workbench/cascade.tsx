@@ -17,7 +17,7 @@
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type Session, type Skill, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
-import { useT } from '../../lib/i18n';
+import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
@@ -27,6 +27,7 @@ import { ChangesButton } from '../diffView';
 import { CopyButton } from '../copyButton';
 import { RichText } from '../richText';
 import { PlanCard } from '../approvals';
+import { ActorChip } from '../actor';
 import { PlanView } from '../planView';
 import { StatusMark } from './workbench';
 import { FileIcon } from './fileIcon';
@@ -481,11 +482,11 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         {!session ? (
           <Welcome workspace={workspace} onPick={(p) => { setText(p); box.current?.focus(); }} onOpenFolder={onOpenFolder} />
         ) : (
-          session.tasks.map((task) =>
+          session.tasks.map((task, i) =>
             session.lead ? (
-              <LeadTurn key={task.id} session={session} task={task} worker={worker} approvals={approvals} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
+              <LeadTurn key={task.id} n={i + 1} session={session} task={task} worker={worker} approvals={approvals} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
             ) : (
-              <Turn key={task.id} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
+              <Turn key={task.id} n={i + 1} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
             ),
           )
         )}
@@ -693,29 +694,47 @@ function StoryLines({ entries }: { entries: StoryEntry[] }) {
 /** Said when a card in the conversation was answered: `ok` when the API took the answer, and the card goes. */
 type Decided = (id: string, ok: boolean) => void;
 
-function Turn({ session, task, approvals, onDecided, onOpenFile, onRewind }: { session: Session; task: Task; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
+/**
+ * The operator's own message, as it was sent (2026-10-22: "make it easier to see where my prompts are in the chat"):
+ * headed "You · Your message 3 · 10:42" in the page's accent, and kept in sight at the top of the conversation while
+ * what came of it is read.
+ */
+function UserPrompt({ task, n, onRewind }: { task: Task; n: number; onRewind?: () => void }) {
+  const { t } = useT();
+  const clock = useFmtClock();
+  return (
+    <div className="cs-user-row">
+      {onRewind && (task.checkpoint || task.status === 'queued') && (
+        <button type="button" className="wb-icon-btn cs-rewind" onClick={onRewind} title={t('chat.rewind')} aria-label={t('chat.rewind')}>
+          ↶
+        </button>
+      )}
+      <div className="cs-user">
+        <p className="cs-user-head">
+          <span className="cs-user-who">{t('chat.you')}</span>
+          <span className="cs-user-n">{t('chat.youN', { n })}</span>
+          <time dateTime={task.createdAt}>{clock(task.createdAt)}</time>
+        </p>
+        {task.skill && <SkillChip skill={task.skill} />}
+        <Folded>
+          <RichText text={task.prompt} />
+        </Folded>
+        <div className="cs-copy-row">
+          <CopyButton text={task.prompt} what="chat.copyMessage" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Turn({ n, session, task, approvals, onDecided, onOpenFile, onRewind }: { n: number; session: Session; task: Task; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
   const { t } = useT();
   const live = task.status === 'running' || task.status === 'waiting-approval';
   const entries = useStoryEntries(session.id, task);
 
   return (
     <section className="cs-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
-      <div className="cs-user-row">
-        {onRewind && (task.checkpoint || task.status === 'queued') && (
-          <button type="button" className="wb-icon-btn cs-rewind" onClick={onRewind} title={t('chat.rewind')} aria-label={t('chat.rewind')}>
-            ↶
-          </button>
-        )}
-        <div className="cs-user">
-          {task.skill && <SkillChip skill={task.skill} />}
-          <Folded>
-            <RichText text={task.prompt} />
-          </Folded>
-          <div className="cs-copy-row">
-            <CopyButton text={task.prompt} what="chat.copyMessage" />
-          </div>
-        </div>
-      </div>
+      <UserPrompt task={task} n={n} onRewind={onRewind} />
       {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
       <StoryLines entries={entries} />
       {/* The plan, once approved: what the work follows, folded under its heading. */}
@@ -730,7 +749,8 @@ function Turn({ session, task, approvals, onDecided, onOpenFile, onRewind }: { s
       ))}
       {live && (
         <p className="cs-working" role="status">
-          <span className="wb-live" aria-hidden="true" /> {t('chat.working', { n: task.iterations })}
+          {/* Who is at work, by its mark; the plain dot until it is said (2026-10-22). */}
+          {task.acting ? <ActorChip actor={task.acting.actor} acting={task.acting} /> : <span className="wb-live" aria-hidden="true" />} {t('chat.working', { n: task.iterations })}
         </p>
       )}
       {!live && task.status !== 'queued' && <Ending task={task} />}
@@ -898,7 +918,7 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
   if (approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
   return (
     <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
-      <p className="small"><strong>{t('chat.askTitle')}</strong></p>
+      <p className="small cs-ask-head"><strong>{t('chat.askTitle')}</strong> {approval.actor && <ActorChip actor={approval.actor} how="asks" />}</p>
       <pre className="cs-out">{approval.description}</pre>
       <div className="row">
         <button type="button" className="primary" disabled={busy} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
@@ -914,7 +934,7 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
  * reply by reply — how it understood the assignment, its notes, its plan, each subtask with the worker's commands under
  * it, its questions with their answers — and the result, which is the message's summary.
  */
-function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onRewind }: { session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
+function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, onRewind }: { n: number; session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
   const { t } = useT();
   const live = task.status === 'running' || task.status === 'waiting-approval';
   const rounds = task.lead?.rounds ?? [];
@@ -923,22 +943,7 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
   const working = rounds.at(-1)?.subtask && worker?.tasks.find((x) => x.id === rounds.at(-1)?.subtask?.taskId && (x.status === 'running' || x.status === 'waiting-approval'));
   return (
     <section className="cs-turn cs-lead-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
-      <div className="cs-user-row">
-        {onRewind && (task.checkpoint || task.status === 'queued') && (
-          <button type="button" className="wb-icon-btn cs-rewind" onClick={onRewind} title={t('chat.rewind')} aria-label={t('chat.rewind')}>
-            ↶
-          </button>
-        )}
-        <div className="cs-user">
-          {task.skill && <SkillChip skill={task.skill} />}
-          <Folded>
-            <RichText text={task.prompt} />
-          </Folded>
-          <div className="cs-copy-row">
-            <CopyButton text={task.prompt} what="chat.copyMessage" />
-          </div>
-        </div>
-      </div>
+      <UserPrompt task={task} n={n} onRewind={onRewind} />
       {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
       {rounds.map((r) => (
         <Fragment key={r.n}>
@@ -969,7 +974,8 @@ function LeadTurn({ session, task, worker, approvals, onDecided, onOpenFile, onR
       {live && (
         <p className="cs-working" role="status">
           {/* By its title with the lead's list, whose "Subtask 3 of 8" is the place in the plan, not the order given. */}
-          <span className="wb-live" aria-hidden="true" /> {working ? (task.lead?.ledger ? t('lead.workingOn', { title: rounds.at(-1)?.subtask?.title ?? '' }) : t('lead.working', { n: rounds.at(-1)?.subtask?.n ?? 0 })) : t('lead.thinking')}
+          {/* Who is at work, by its mark; the plain dot until it is said (2026-10-22). */}
+          {task.acting ? <ActorChip actor={task.acting.actor} acting={task.acting} /> : <span className="wb-live" aria-hidden="true" />} {working ? (task.lead?.ledger ? t('lead.workingOn', { title: rounds.at(-1)?.subtask?.title ?? '' }) : t('lead.working', { n: rounds.at(-1)?.subtask?.n ?? 0 })) : t('lead.thinking')}
         </p>
       )}
       {/* Where the work is against the lead's plan, the limit apart (operator's feedback, 2026-10-21). */}
@@ -1111,8 +1117,8 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
   };
   return (
     <div className="cs-ask cs-question" role="group" aria-label={t('lead.question')}>
-      <p className="small">
-        <strong>{t('lead.question')}</strong>
+      <p className="small cs-ask-head">
+        <strong>{t('lead.question')}</strong> <ActorChip actor={approval.actor ?? 'lead'} how="asks" />
       </p>
       <RichText text={q.text} />
       {q.why && <p className="muted small">{q.why}</p>}

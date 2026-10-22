@@ -664,6 +664,7 @@ ${machineNote}` : contract);
 
         deps.event('review-step-proposed', { round, id: step.id, description: describeStep(step) }, `review step ${step.id}: ${describeStep(step)}`);
         const decision = await authorizer.authorize(step, {
+          actor: 'review',
           sessionId: session.id,
           taskId: task.id,
           iteration: iterations,

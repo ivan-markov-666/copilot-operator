@@ -776,6 +776,12 @@ try {
     t.check('the right panel has the chat alone', await page.getByRole('tablist', { name: en['wb.chatPanel']! }).getByRole('tab').allTextContents(), [en['wb.chatTab']]);
     t.check('the bar on top links Settings and System, and nothing of the sessions', await page.locator('.wb-menu a').allTextContents(), [en['nav.defaults'], en['nav.system']]);
     t.check('no "Write in the chat", "Import a plan" or "Ask Kerrigan" on the home screen', await page.locator('.wb-welcome').getByRole('button').allTextContents(), [`${en['kerrigan.button']} ▾`, 'i']);
+    // The tab's icon (2026-10-22): the aeroplane, named by the page and served with it.
+    const iconHref = await page.locator('head link[rel="icon"]').first().getAttribute('href');
+    t.truthy('the page names its icon, the aeroplane', !!iconHref && /icon\.svg/.test(iconHref), iconHref);
+    const icon = await page.request.get(url(iconHref ?? '/icon.svg'));
+    t.check('and it is served as an SVG', [icon.status(), (icon.headers()['content-type'] ?? '').split(';')[0]], [200, 'image/svg+xml']);
+    t.truthy('the logo is beside the name in the bar on top', (await page.locator('.wb-brand svg.brand-logo').count()) === 1, await page.locator('.wb-brand').innerHTML());
     // What Kerrigan is, in the room under her button (operator, 2026-10-22: "short and clear; no empty space there").
     const aboutBox = page.locator('.wb-welcome .kerrigan-about');
     t.check('under her button: what Kerrigan is, and three things she is for', [await aboutBox.getByRole('heading').textContent(), await aboutBox.locator('li').count()], [en['kerrigan.aboutTitle'], 3]);
@@ -849,6 +855,7 @@ try {
     const navLinks = await page.locator('header nav a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
     t.check('the other pages\' navigation has no Sessions, task register or plan from JSON', navLinks.filter((x) => x === '/sessions' || x === '/history' || x === '/import'), []);
     t.check('the navigation: the chat, Settings and System, nothing else (2026-10-20)', navLinks.filter((x) => x !== null), ['/', '/settings', '/system']);
+    t.check('the other pages have the logo beside the name too', await page.locator('header .brand-link svg.brand-logo').count(), 1);
     for (const gone of ['/sessions', '/history', '/import', '/level1', '/presets', '/appearance']) {
       const r = await page.request.get(url(gone));
       t.truthy(`${gone} is not a page any more`, r.status() === 404 || !(await r.text()).includes('<main'), r.status());
@@ -887,6 +894,12 @@ try {
     t.check('System is the one pressed', await theme('theme.system').getAttribute('aria-pressed'), 'true');
     await theme('theme.light').click();
     t.check('Light: the page is light', await html('theme'), 'light');
+    // The logo in the theme's colours (2026-10-22): dark blue on light; on dark, light with a sky-blue orbit.
+    const logo = async (): Promise<string[]> => [
+      await page.locator('.wb-brand .brand-plane').evaluate((p) => getComputedStyle(p).fill),
+      await page.locator('.wb-brand ellipse').evaluate((e) => getComputedStyle(e).stroke),
+    ];
+    t.check('the logo beside the name, dark blue on light', await logo(), ['rgb(13, 42, 66)', 'rgb(13, 42, 66)']);
     await theme('theme.system').click();
     t.check('System again: dark, as the machine is', await html('theme'), 'dark');
     await page.emulateMedia({ colorScheme: 'light' });
@@ -894,6 +907,7 @@ try {
     t.check('and it follows the machine when that changes', await html('theme'), 'light');
     await theme('theme.dark').click();
     t.check('Dark: dark whatever the machine', await html('theme'), 'dark');
+    t.check('the logo on dark: the aeroplane light, its orbit sky blue', await logo(), ['rgb(227, 238, 249)', 'rgb(90, 182, 244)']);
 
     const larger = menu.getByRole('button', { name: en['ap.larger']!, exact: true });
     const smaller = menu.getByRole('button', { name: en['ap.smaller']!, exact: true });
@@ -1364,6 +1378,7 @@ try {
     await card.waitFor({ timeout: 30_000 });
     t.truthy('the plan is asked about in the conversation, though commands run without asking', ((await card.textContent()) ?? '').includes('create the file'), await card.textContent());
     t.check('with its three answers', await card.locator('button:not(.copy-btn)').allTextContents(), [en['pm.approve'], en['pm.revise'], en['pm.stop']]);
+    t.check('and says who asks: plan mode', await card.locator('.actor-chip').textContent(), 'Asked by: Plan mode');
     // "Copy" on the plan (operator, 2026-10-21): the whole plan, under its headings, at its top and at its foot.
     t.check('"Copy" at the plan\'s top and at its foot', await card.locator('.plan-view .copy-btn').count(), 2);
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
@@ -1389,6 +1404,58 @@ try {
     await plan.uncheck();
     await waitFor('plan mode off for the conversation', async () => ((await h.call<{ planMode?: string }>('GET', `/sessions/${thread}`)).planMode === 'off' ? true : null), 10_000).catch(() => undefined);
     t.check('turned off under the box, for this conversation', (await h.call<{ planMode?: string }>('GET', `/sessions/${thread}`)).planMode, 'off');
+  });
+
+  /*
+   * Who works, said everywhere (operator, 2026-10-22: "show clearly what the bot is doing and who works"; "a LIVE mark
+   * beside Chat while the bot works"; "and in the tab that says copilot-operator"; "make it easier to see where my
+   * prompts are"): LIVE beside Chat saying who, the tab's title, the working line and the status bar naming the
+   * worker, the command card saying who asks, the operator's own message headed and kept in sight; all of it gone
+   * when the work ends.
+   */
+  await scenario('who works, said: LIVE beside Chat, the tab\'s title, the working line, the card; the operator\'s message headed', { execution: { mode: 'confirm' } }, async (h, page, url) => {
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create live.txt holding live.', model: 'Think deeper' });
+    h.chat.script(
+      async () => {
+        await answered;
+        return reply.steps(write('live.txt', 'live'));
+      },
+      reply.done('I wrote live.txt holding the word live and read it back to check that it is there.'),
+    );
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const tab = page.getByRole('tablist', { name: en['wb.chatPanel']! }).getByRole('tab');
+    const badge = tab.locator('.wb-live-badge');
+    await page.locator('.cs-turn').first().waitFor();
+    t.check('idle: no LIVE beside Chat, and the tab is the name alone', [await badge.count(), await page.title()], [0, 'copilot-operator']);
+    const head = page.locator('.cs-turn').first().locator('.cs-user-head');
+    t.check("the operator's message is headed: You, Your message 1, and its time", [await head.locator('.cs-user-who').textContent(), await head.locator('.cs-user-n').textContent(), /^\d{2}:\d{2}$/.test((await head.locator('time').textContent()) ?? '')], [en['chat.you'], 'Your message 1', true]);
+    t.check('and kept in sight at the top of the chat while what came of it is read', await page.locator('.cs-user-row').first().evaluate((el) => getComputedStyle(el).position), 'sticky');
+
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'confirm' });
+    await badge.waitFor({ timeout: 15_000 });
+    await waitFor('who is at work to be said', async () => ((await badge.getAttribute('aria-label')) ?? '').includes(en['actor.worker']!) || null, 15_000).catch(() => undefined);
+    t.check('working: LIVE beside Chat, saying who', [await badge.textContent(), await badge.getAttribute('aria-label')], ['LIVE', 'The bot is working — Worker']);
+    await waitFor('the tab to say who', async () => (await page.title()) === '● Worker at work — copilot-operator' || null, 10_000).catch(() => undefined);
+    t.check('the tab says who is at work', await page.title(), '● Worker at work — copilot-operator');
+    await page.locator('.cs-working .actor-chip').waitFor();
+    t.check('the working line and the status bar name the worker', [await page.locator('.cs-working .actor-chip').textContent(), await page.locator('.wb-statusbar .actor-chip').textContent()], [en['actor.worker'], en['actor.worker']]);
+
+    answer();
+    const ask = page.locator('.cs-ask');
+    await ask.waitFor({ timeout: 20_000 });
+    t.check('the command card says who asks', await ask.locator('.actor-chip').textContent(), 'Asked by: Worker');
+    await waitFor('the tab to say something waits', async () => (await page.title()) === '(1) waiting for you — copilot-operator' || null, 10_000).catch(() => undefined);
+    t.check('the tab says first that something waits for the operator', await page.title(), '(1) waiting for you — copilot-operator');
+    await ask.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
+    await page.locator('.cs-body').getByText('I wrote live.txt holding the word live').waitFor({ timeout: 30_000 });
+    await waitFor('LIVE to go', async () => (await badge.count()) === 0 || null, 15_000).catch(() => undefined);
+    await waitFor('the title to go back', async () => (await page.title()) === 'copilot-operator' || null, 10_000).catch(() => undefined);
+    t.check('ended: no LIVE, the tab the name alone, no working line', [await badge.count(), await page.title(), await page.locator('.cs-working').count()], [0, 'copilot-operator', 0]);
   });
 
   /*
@@ -1688,6 +1755,10 @@ try {
     t.truthy('the subtask, folded under the lead\'s message, marked as only reading', ((await sub.locator('summary').textContent()) ?? '').includes(en['lead.subtask']!.replace('{n}', '1').replace('{title}', 'Survey the project')) && ((await sub.locator('summary').textContent()) ?? '').includes(en['lead.readOnly']!), await sub.locator('summary').textContent());
     const card = page.locator('.cs-question');
     await card.waitFor({ timeout: 30_000 });
+    // Who asks, on the card (2026-10-22); and who is at work, on the line under the message: the lead, waiting for the answer.
+    t.check('the question says it is the lead who asks', await card.locator('.actor-chip').textContent(), 'Asked by: Lead');
+    await waitFor('the lead at work on the line', async () => (await page.locator('.cs-lead-turn .cs-working .actor-chip').textContent().catch(() => '')) === en['actor.lead'] || null, 10_000).catch(() => undefined);
+    t.check('and the working line names the lead', await page.locator('.cs-lead-turn .cs-working .actor-chip').textContent(), en['actor.lead']);
     await sub.locator('summary').click();
     t.truthy('in it, the worker\'s command', ((await sub.textContent()) ?? '').includes('Get-ChildItem -Name'), await sub.textContent());
     // Both chats' messages and their sum (operator, 2026-10-21), along the bottom and under the message.

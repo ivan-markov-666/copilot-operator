@@ -20,7 +20,10 @@ import { api, type Approval } from '../lib/api';
 import { useT, useFmtTime } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { usePoll } from '../lib/usePoll';
+import { useActivity } from '../lib/activity';
+import { tabTitle } from '../lib/actors';
 import { PlanView } from './planView';
+import { ActorChip } from './actor';
 
 const EVERY_MS = 2_000;
 
@@ -63,11 +66,15 @@ export function GlobalApprovals() {
 
   usePoll(load, EVERY_MS);
 
-  // The tab says so too, for an operator whose attention is in another window.
+  /*
+   * The tab says so too, for an operator whose attention is in another window: what waits for them first, else that the
+   * bot is at work and who (2026-10-22: "when the bot works, let it show in the tab that says copilot-operator").
+   */
+  const activity = useActivity();
+  const title = tabTitle(t, approvals.length, activity);
   useEffect(() => {
-    const base = 'copilot-operator';
-    document.title = approvals.length > 0 ? `(${approvals.length}) ${t('approval.tabTitle')} — ${base}` : base;
-  }, [approvals.length, t]);
+    document.title = title;
+  }, [title]);
 
   /*
    * On the workbench the chat asks about its own commands, in the conversation (2026-10-17, "like Windsurf"); the
@@ -138,6 +145,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
       <div className="approval">
         <div className="row">
           <strong>{t(m.manual ? 'approval.manualTitle' : 'approval.modelTitle')}</strong>
+          {approval.actor && <ActorChip actor={approval.actor} how="asks" />}
           <Link href="/">{sessionName}</Link>
           <span className="muted small">{fmtTime(approval.createdAt)}</span>
         </div>
@@ -191,6 +199,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
     <div className="approval">
       <div className="row">
         <strong>{t('approval.title', { n: approval.stepId })}</strong>
+        {approval.actor && <ActorChip actor={approval.actor} how="asks" />}
         <Link href="/">{sessionName}</Link>
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
@@ -262,6 +271,7 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
     <div className="approval">
       <div className="row">
         <strong>{t('pm.cardTitle', { title: p.title })}</strong>
+        {approval.actor && <ActorChip actor={approval.actor} how="asks" />}
         {sessionName !== undefined && <Link href="/">{sessionName}</Link>}
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>

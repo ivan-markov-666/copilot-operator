@@ -16,6 +16,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { en } from './lang/en';
 import { languageFor, languageOf, type Locale } from './lang/languages';
 import { LOADERS } from './lang/load';
+import { fmtClock } from './actors';
 import type { Dictionary, Key } from './lang/types';
 
 export type { Key } from './lang/types';
@@ -106,4 +107,10 @@ export function useFmtTime() {
     if (!iso) return '';
     return new Date(iso).toLocaleString(languageOf(locale)?.dateLocale, { hour12: false });
   };
+}
+
+/** A time short enough for a heading: the hour and minute of today, with the day for another. */
+export function useFmtClock() {
+  const { locale } = useContext(LocaleContext);
+  return (iso?: string): string => fmtClock(iso, languageOf(locale)?.dateLocale);
 }

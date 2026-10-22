@@ -34,8 +34,8 @@ import { describeDeviations } from '../protocol/replySchema.js';
 import { leadFormatErrorMessage, parseLeadReply, UNDERSTANDING_FIRST, type Subtask } from '../protocol/leadSchema.js';
 import { describePlan, planFrom } from './planMode.js';
 import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
-import { applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
-import type { LeadRecord, LeadRound, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
+import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
+import type { Acting, Actor, LeadRecord, LeadRound, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
 /** The facts the assignment is sent with. */
@@ -194,6 +194,14 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
   const setTask = async (mutate: (t: Task) => void): Promise<void> => {
     await store.updateTask(session.id, task.id, mutate);
   };
+  // Who is at work on the message now (2026-10-22): the lead, or the worker on a subtask it was given.
+  const actingNow = async (actor: Actor, more: Omit<Acting, 'actor' | 'since'> = {}): Promise<void> => {
+    const acting: Acting = { actor, since: new Date().toISOString(), ...more };
+    await setTask((t) => {
+      t.acting = acting;
+    });
+    sink.event('acting', acting, `at work now: ${ACTOR_WORDS[actor]}${more.subtask ? ` (subtask ${more.subtask})` : ''}`);
+  };
   const max = Math.max(1, cfg.limits.maxSubtasks ?? 20);
   const lead: LeadRecord = { rounds: [], subtasks: 0, maxSubtasks: max };
   const saveLead = async (): Promise<void> => {
@@ -215,6 +223,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
   });
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\nMODE: lead and worker\n`, 'utf8');
   sink.event('task-started', { runId, title: task.title, lead: true }, `task "${task.title}" starting with a lead and a worker (run ${runId})`);
+  await actingNow('lead');
 
   // The folder before the message, for "go back" and for what the whole of it changed.
   const chatDir = session.projectDir?.trim() ?? '';
@@ -323,6 +332,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     await setTask((t) => {
       if (vcs) t.vcs = vcs;
       t.status = status;
+      delete t.acting;
       t.finishedAt = new Date().toISOString();
       const held = deps.hold?.pausedSince(leadStartedAt) ?? 0;
       if (held > 0) t.pausedMs = held;
@@ -430,6 +440,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     round.subtask = { n, taskId: made.id, title: sub.title, ...(sub.readOnly ? { readOnly: true } : {}), ...(sub.freshWorker ? { fresh: true } : {}) };
     await saveLead();
     sink.event('subtask-given', { n, taskId: made.id, title: sub.title, readOnly: sub.readOnly, fresh: sub.freshWorker }, `subtask ${n} to the worker: ${sub.title}`);
+    await actingNow('worker', { subtask: n });
 
     // To the worker's conversation, in the same window.
     speakFor(transport, worker.id);
@@ -463,6 +474,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     if (transport.closedOutside()) throw new WindowClosed();
     if (signal?.aborted) return 'stopped';
     sink.event('subtask-ended', { n, status: out.status }, `subtask ${n} ${out.status}`);
+    await actingNow('lead');
 
     // Back to the lead's conversation.
     const leadNow = (await store.getSession(session.id)) as Session;
@@ -591,7 +603,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           await record(`THE LEAD'S PLAN (version ${planVersion})`, describePlan(plan));
           let approved: NonNullable<TaskPlan['approved']>;
           if (facts.planApproval && deps.approvePlan) {
-            const answer = await deps.approvePlan({ sessionId: session.id, taskId: task.id, title: task.title, plan });
+            const answer = await deps.approvePlan({ sessionId: session.id, taskId: task.id, title: task.title, plan, actor: 'lead' });
             if (answer.decision === 'stop' || signal?.aborted) return await finish('aborted', 'the operator stopped the task at the lead\'s plan');
             if (answer.decision === 'revise') {
               revisions = [...(revisions ?? []), { version: planVersion, comment: answer.note ?? '', at: new Date().toISOString() }];

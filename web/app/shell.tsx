@@ -12,6 +12,7 @@ import { usePathname } from 'next/navigation';
 import { Nav } from './nav';
 import { GlobalApprovals } from './approvals';
 import { StartFailureBanner } from './startFailure';
+import { Logo } from './logo';
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -30,7 +31,10 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="wrap">
       <header className="top">
         <h1>
-          <Link href="/">copilot-operator</Link>
+          <Link href="/" className="brand-link">
+            <Logo />
+            copilot-operator
+          </Link>
         </h1>
         <Nav />
       </header>
