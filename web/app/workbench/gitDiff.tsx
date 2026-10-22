@@ -58,7 +58,7 @@ export function GitDiff({ area, path, commit }: { area: GitArea; path: string; c
     scroller.current?.querySelector(`[data-row="${blocks[next]}"]`)?.scrollIntoView({ block: 'center' });
   };
 
-  const where = area === 'commit' ? (commit ?? '').slice(0, 7) : t(area === 'staged' ? 'git.index' : 'git.workingTree');
+  const where = area === 'commit' ? (commit ?? '').slice(0, 7) : area === 'branch' ? t('git.againstBase', { base: commit ?? '' }) : t(area === 'staged' ? 'git.index' : 'git.workingTree');
   const status = content?.status ?? '';
   return (
     <div className="wb-gitdiff">

@@ -558,4 +558,39 @@ console.log('\n--- what the card in the window says, for each way the work on a 
   t.check('every language of the interface has its words', ['en', 'bg', 'de', 'es', 'fr', 'pt', 'ja', 'ko', 'ar'].filter((l) => l !== 'en' && chatNotice(l, [{ title: 'x', status: 'done' }]).title === 'The task is done'), []);
   t.check('a language it has no words for: English', chatNotice('xx', [{ title: 'x', status: 'done' }]).title, 'The task is done');
 }
+
+/*
+ * The longest message sent as text (operator, 2026-10-22: "the most characters the chat takes as text, not as an
+ * attached document; and a check that the messages made are not longer"): with the limit at 2000, the instructions
+ * — far longer — go as their beginning, said to be only that, with the whole of them attached; every message sent is
+ * within the limit; the run's record says so.
+ */
+console.log('\n--- a message longer than the limit: its beginning as text, the whole of it attached ---');
+{
+  let hl: Harness | undefined;
+  try {
+    hl = await startHarness({ settings: { limits: { maxMessageChars: 2000 } } });
+    const h = hl;
+    const sent = await h.call<Sent>('POST', '/chat', { text: 'Say in one sentence what this folder is.', model: 'Think deeper' });
+    h.chat.script(reply.done('The folder holds a README and nothing else; nothing needed changing for this question.'));
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await h.idle();
+    const over = h.chat.sent.filter((m) => m.text.length > 2000);
+    t.check('no message sent as text is longer than the limit', over.map((m) => m.text.length), []);
+    const long = h.chat.sent.find((m) => m.attachments.some((a) => /message-\d+-in-full\.txt$/.test(a)));
+    const file = long?.attachments.find((a) => /message-\d+-in-full\.txt$/.test(a)) ?? '';
+    const whole = long ? long.attached[file] ?? '' : '';
+    t.truthy('the long one went as its beginning, said to be only that', !!long && long.text.includes('the whole of it is in the attached file') && long.text.includes('more than the 2000 sent as text'), long?.text.slice(-400));
+    t.truthy('with the whole of it attached, of which the text is the beginning', whole.length > 2000 && whole.startsWith(long!.text.slice(0, 500)), { attached: whole.length });
+    t.check('and the chat still knew it for the instructions it is', long?.contract, 'task');
+    const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${sent.threadId}/events`);
+    t.truthy('the run\'s record says so', events.some((e) => e.type === 'message-long'), events.map((e) => e.type));
+    t.check('and the task went on to its end', (await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${sent.threadId}`)).tasks[0]?.status, 'done');
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('the long-message scenario ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await hl?.stop();
+  }
+}
 t.finish();

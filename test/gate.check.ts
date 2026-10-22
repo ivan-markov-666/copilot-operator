@@ -509,6 +509,28 @@ try {
   for (const cmd of ['Get-Content .\\src\\a.ts', 'curl http://127.0.0.1:5173/']) {
     t.check(`not the bot's: ${cmd}`, botSelfRefusal(cmd, [4000], 'C:\\bot'), null);
   }
+  /*
+   * Its folder outside the project (2026-10-22): the user's local application data by default, or one the operator
+   * chose — its settings, its key, its conversations and the Edge profile with the Copilot sign-in in it. By path in
+   * any spelling, and the default one by the variables that name it.
+   */
+  const homes = ['C:\\Users\\x\\AppData\\Local\\copilot-operator', 'D:\\bot'];
+  for (const cmd of [
+    'Get-Content $env:LOCALAPPDATA\\copilot-operator\\data\\settings.json',
+    'type %LOCALAPPDATA%\\copilot-operator\\edge-profile\\Default\\Cookies',
+    'Get-ChildItem ~/AppData/Local/copilot-operator',
+    "Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'copilot-operator'",
+    'Remove-Item C:/Users/x/AppData/Local/copilot-operator/location.json',
+    'Get-Content D:/bot/data/api-token',
+    'Copy-Item "D:\\bot" E:\\elsewhere -Recurse',
+    'Get-Content D:\\\\bot\\\\runs\\\\a.log',
+  ]) {
+    const why = botSelfRefusal(cmd, [4000], 'C:\\bot', homes);
+    t.truthy(`refused, the bot's folder: ${cmd}`, why !== null && why.includes("the bot's own folder"), String(why));
+  }
+  for (const cmd of ['Get-Content D:\\bot2\\a.txt', 'Get-Content C:\\Users\\x\\AppData\\Local\\copilot-operator-other\\a', 'Get-ChildItem $env:LOCALAPPDATA\\Temp']) {
+    t.check(`not the bot's folder: ${cmd}`, botSelfRefusal(cmd, [4000], 'C:\\bot', homes), null);
+  }
 
   /*
    * A step is started with the variables Windows and the toolchains need, by name. The bot's own

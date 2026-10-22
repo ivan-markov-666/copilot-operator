@@ -233,7 +233,7 @@ export function judgeRequest(
       status: 401,
       reason: 'token',
       detail:
-        'this API needs the token kept in data/api-token (.copilot-operator/data/api-token when installed from npm), ' +
+        'this API needs the token kept in data/api-token (in the bot\'s folder when installed from npm: System shows where), ' +
         'as an Authorization: Bearer header, ' +
         'an x-cop-token header, or a token query parameter. Open the interface from `npx cop start` (or ' +
         '`npm start` in a clone) and it is given the token.',

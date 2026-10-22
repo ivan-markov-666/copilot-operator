@@ -406,7 +406,11 @@ export const RunConfigSchema = z.object({
       maxIterations: z.number().int().positive().default(60),
       maxRunMinutes: z.number().int().positive().default(240),
       maxFormatRetries: z.number().int().nonnegative().default(2),
-      maxMessageChars: z.number().int().positive().default(100_000),
+      /*
+       * The most characters of one message sent to the chat as text (operator, 2026-10-22: 120 000 by default, set in
+       * Settings → Execution): a longer one goes as its beginning with the whole of it attached (`limitsMessageLength`).
+       */
+      maxMessageChars: z.number().int().min(1000).max(1_000_000).default(120_000),
       /**
        * How many times a task may be sent back because its checks did not pass.
        *

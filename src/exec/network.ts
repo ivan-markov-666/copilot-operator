@@ -53,6 +53,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { botRootDir } from './workDir.js';
+import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 
 /** One way of fetching: what it is called in the reason, how it is recognised, what to do instead. */
 type NetworkFetcher = { name: string; pattern: RegExp; instead?: string };
@@ -272,13 +273,27 @@ export function networkFetchReason(command: string, cwd?: string): string | null
  * `127.0.0.1:4000` and answer its own held download. The token is no longer passed (`stepEnv.ts`);
  * this refuses the attempt as well, so a step that goes looking gets a reason instead of a 401.
  */
-export function botSelfRefusal(command: string, ports: number[] = botPorts(), root: string = botRootDir()): string | null {
+export function botSelfRefusal(command: string, ports: number[] = botPorts(), root: string = botRootDir(), homes: string[] = botHomeFolders()): string | null {
   const port = `(?:${ports.map((p) => String(Math.trunc(p))).join('|')})`;
   const host = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0|::1)`;
   // The folders the bot keeps its records in, by path: its data, its runs, its update backups.
-  const folded = command.replace(/\//g, '\\').toLowerCase();
-  const own = root.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
+  const folded = foldPath(command);
+  const own = foldPath(root).replace(/\\+$/, '');
   const reachesRecords = ['data', 'runs', 'data-backups'].some((d) => folded.includes(`${own}\\${d}`));
+  /*
+   * The bot's own folder (2026-10-22): its settings, conversations, logs, its key and its Edge profile, kept in the
+   * user's local application data by default and wherever the operator chose otherwise — by its path, and the default
+   * one by the variables that spell it as well.
+   */
+  const reachesHome =
+    homes.some((h) => namesFolder(folded, foldPath(h).replace(/\\+$/, ''))) ||
+    (/appdata|localapplicationdata/i.test(command) && /(?:^|[\s'"`=(\\/,;])copilot-operator(?![\w-])/i.test(command));
+  if (reachesHome) {
+    return (
+      "refused: this reaches the bot's own folder — its settings, conversations, logs, its key and its Edge profile. " +
+      'The bot that runs the task is not part of the work; leave that folder alone.'
+    );
+  }
   /*
    * Installed from npm, the bot is a dependency of the very project it works on: its code sits in
    * the project's `node_modules`, its records in the project's `.copilot-operator`, and both are
@@ -303,6 +318,42 @@ export function botSelfRefusal(command: string, ports: number[] = botPorts(), ro
     );
   }
   return null;
+}
+
+/** A path or a command as compared here: one backslash for any run of slashes, lower case. */
+function foldPath(text: string): string {
+  return text.replace(/[\\/]+/g, '\\').toLowerCase();
+}
+
+/** Whether `folded` names `folder` itself or something in it — not a folder whose name merely starts the same. */
+function namesFolder(folded: string, folder: string): boolean {
+  if (!folder) return false;
+  for (let i = folded.indexOf(folder); i >= 0; i = folded.indexOf(folder, i + 1)) {
+    const next = folded[i + folder.length];
+    if (next === undefined || /[\\\s'"`;|),]/.test(next)) return true;
+  }
+  return false;
+}
+
+/** The bot's folders as this process found them when it started: a folder chosen since takes effect at the next start. */
+const homesAtStart: string[] = (() => {
+  try {
+    const layout = installLayout();
+    // A clone's folder is the clone, whose records are found by `root` above; its data may be elsewhere (COP_DATA_DIR).
+    return layout.mode === 'package' ? [layout.homeDir, layout.dataDir] : [layout.dataDir];
+  } catch {
+    return [];
+  }
+})();
+
+/**
+ * The folders that hold the bot's records apart from its code: its folder now, the one its next start will use, and
+ * the default one — which holds a clone's Edge profile and the pointer to a chosen folder, so a step that rewrote it
+ * would move the bot's records where it likes.
+ */
+export function botHomeFolders(env: NodeJS.ProcessEnv = process.env): string[] {
+  const next = chosenHome(env);
+  return [...new Set([...homesAtStart, defaultHome(env), ...(next ? [next] : [])])];
 }
 
 /** The ports the bot's API and web page listen on. */

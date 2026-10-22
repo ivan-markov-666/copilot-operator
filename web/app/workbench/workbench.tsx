@@ -25,7 +25,7 @@ import { BottomPanel } from './bottomPanel';
 import { StatusBar } from './statusBar';
 import { Palette, type PaletteCommand } from './palette';
 import { AppearanceMenu } from './appearanceMenu';
-import { KerriganButton } from './kerriganButton';
+import { KerriganAbout, KerriganButton } from './kerriganButton';
 import { FileIcon } from './fileIcon';
 import { QuickOpen } from './quickOpen';
 import { SearchView, type SearchHit } from './searchView';
@@ -231,7 +231,7 @@ function WorkbenchInner() {
       { id: 'problems', label: t('wb.cmdProblems'), run: () => { setL({ bottomOpen: true }); setBottomTab('problems'); } },
       ...(
         [
-          ['/defaults', 'nav.defaults'],
+          ['/settings', 'nav.defaults'],
           ['/system', 'nav.system'],
         ] as const
       ).map(([href, key]) => ({ id: `go:${href}`, label: t('wb.cmdGo', { page: t(key) }), href })),
@@ -312,7 +312,7 @@ function WorkbenchInner() {
               const key = tabKey(tab);
               const label =
                 tab.kind === 'diff'
-                  ? `${tab.path.split('/').pop()} (${tab.area === 'commit' ? (tab.commit ?? '').slice(0, 7) : t(tab.area === 'staged' ? 'git.index' : 'git.workingTree')})`
+                  ? `${tab.path.split('/').pop()} (${tab.area === 'commit' ? (tab.commit ?? '').slice(0, 7) : tab.area === 'branch' ? `⎇ ${tab.commit ?? ''}` : t(tab.area === 'staged' ? 'git.index' : 'git.workingTree')})`
                   : (tab.path.split('/').pop() ?? tab.path);
               return (
                 <div key={key} className={`wb-tab${key === active ? ' active' : ''}`}>
@@ -385,11 +385,11 @@ function WorkbenchInner() {
           <kbd>Ctrl+K</kbd>
         </button>
         <nav className="wb-menu" aria-label={t('nav.label')}>
-          <Link href="/defaults">{t('nav.defaults')}</Link>
-          {/* How the page looks, between Settings and System (operator, 2026-10-21). */}
-          <AppearanceMenu />
+          <Link href="/settings">{t('nav.defaults')}</Link>
           {/* System on the chat's screen too (operator, 2026-10-20), as it is on every other page. */}
           <Link href="/system">{t('nav.system')}</Link>
+          {/* How the page looks, after System and before the language (operator, 2026-10-22: the two swapped). */}
+          <AppearanceMenu />
           <LanguageSwitcher />
         </nav>
       </header>
@@ -499,6 +499,7 @@ function Welcome({ workspace, problem }: { workspace: Workspace | null; problem:
       <p className="muted">{workspace?.ok ? t('wb.welcomeChat', { dir: workspace.dir }) : t('wb.welcomeWhy')}</p>
       {problem && <p className="err small">{problem}</p>}
       <KerriganButton />
+      <KerriganAbout />
       <p className="muted small">{t('wb.keys')}</p>
     </div>
   );

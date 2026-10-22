@@ -6,7 +6,8 @@
  * (2026-10-20).
  */
 import { useCallback, useEffect, useState } from 'react';
-import { api, type GitArea, type GitFile, type Workspace, type WorkspaceGit } from '../../lib/api';
+import { api, type BranchChanges, type GitArea, type GitFile, type Workspace, type WorkspaceGit } from '../../lib/api';
+import { BranchSection } from './branchChanges';
 import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
 import type { SideView, Tab } from './workbench';
@@ -160,19 +161,42 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
   const [shut, setShut] = useState<Set<string>>(new Set());
   const [opened, setOpened] = useState('');
   const [commitFiles, setCommitFiles] = useState<Map<string, GitFile[] | string>>(new Map());
+  /*
+   * Everything the branch changed, as a pull request shows it (2026-10-22), against the branch chosen for this folder
+   * — kept in this browser — or the one a pull request would go into.
+   */
+  const [branch, setBranch] = useState<BranchChanges | null>(null);
+  const baseKey = `cop.git.base:${workspace?.dir ?? ''}`;
+  const [base, setBase] = useState('');
+  useEffect(() => {
+    try {
+      setBase(window.localStorage.getItem(baseKey) ?? '');
+    } catch {
+      setBase('');
+    }
+  }, [baseKey]);
+  const chooseBase = (b: string): void => {
+    setBase(b);
+    try {
+      window.localStorage.setItem(baseKey, b);
+    } catch {
+      /* kept for this visit only */
+    }
+  };
   const read = useCallback(
     () =>
-      api
-        .workspaceGit()
-        .then((g) => {
+      Promise.all([api.workspaceGit(), api.workspaceBranch(base || undefined)])
+        .then(([g, b]) => {
           setState(g);
+          setBranch(b);
           setErr('');
         })
         .catch((e: unknown) => setErr((e as Error).message)),
-    [],
+    [base],
   );
   useEffect(() => {
     setState(null);
+    setBranch(null);
     if (workspace?.ok) void read();
   }, [read, workspace?.ok, workspace?.dir]);
   usePoll(read, 5_000, !!workspace?.ok);
@@ -256,6 +280,13 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
             <BranchIcon /> <strong>{state.branch ?? 'HEAD'}</strong>
             {state.upstream && <span className="muted"> · {t('git.upstream', { name: state.upstream.name, ahead: state.upstream.ahead, behind: state.upstream.behind })}</span>}
           </p>
+          {branch &&
+            section(
+              'branch',
+              t('git.branch'),
+              branch.problem ? null : branch.files.length,
+              <BranchSection data={branch} onBase={chooseBase} statusName={statusName} onOpenFile={(path) => onOpen({ kind: 'diff', area: 'branch', path, ...(branch.base ? { commit: branch.base } : {}) })} />,
+            )}
           {state.staged.length > 0 && section('staged', t('git.staged'), state.staged.length, <ul className="wb-git-files">{state.staged.map((f) => fileRow(f, 'staged'))}</ul>)}
           {section(
             'changes',
@@ -271,11 +302,19 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
               <p className="muted small wb-pad">{t('git.noCommits')}</p>
             ) : (
               <ul className="wb-commits">
-                {state.commits.map((c) => {
+                {state.commits.map((c, i) => {
                   const files = commitFiles.get(c.sha);
+                  // The branch's own commits, marked; where it left the base, a line that says so (2026-10-22).
+                  const mine = !!branch?.mergeBase && branch.commits.includes(c.sha);
+                  const startsHere = !!branch?.mergeBase && c.sha === branch.mergeBase && i > 0 && branch.commits.length > 0;
                   return (
-                    <li key={c.sha}>
-                      <button type="button" className="wb-row" aria-expanded={opened === c.sha} onClick={() => openCommit(c.sha)} title={c.subject}>
+                    <li key={c.sha} className={mine ? 'on-branch' : undefined}>
+                      {startsHere && (
+                        <p className="wb-branch-start small" role="separator">
+                          {t('git.branchStart', { base: branch!.base ?? '', sha: c.short })}
+                        </p>
+                      )}
+                      <button type="button" className="wb-row" aria-expanded={opened === c.sha} onClick={() => openCommit(c.sha)} title={mine ? `${c.subject} · ${t('git.onBranch')}` : c.subject}>
                         <span aria-hidden="true">{opened === c.sha ? '▾' : '▸'}</span>
                         <code>{c.short}</code>
                         <span className="wb-row-name">{c.subject}</span>

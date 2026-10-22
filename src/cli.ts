@@ -27,10 +27,9 @@ import { EventBus } from './session/events.js';
 import { terminalAuthorizer, unattendedAuthorizer } from './exec/authorizer.js';
 import { unattendedPrecondition } from './exec/policy.js';
 import { isOwnCheckout } from './exec/workDir.js';
-import { desktopIsSynced, resolveDesktopDir } from './context/desktopDir.js';
 import { Url } from './transport/locators.js';
 import { botVersion } from './config/version.js';
-import { findEdgeUsingProfile } from './transport/profileLock.js';
+import { findEdgeUsingProfile, profileHolder, profileLockOwner } from './transport/profileLock.js';
 import { assessIsolation, readIsolationSignals, type IsolationClaim } from './exec/isolation.js';
 
 /** The running version; see `config/version.ts`. */
@@ -42,7 +41,8 @@ program
   .description('Runs a task loop with Microsoft 365 Copilot on a Windows machine.')
   .version(ownVersion());
 
-const DEFAULT_PROFILE = expandPath('~/AppData/Local/copilot-operator/edge-profile', process.cwd());
+// In the bot's folder when installed from npm, as the API has it (config/layout.ts, 2026-10-22).
+const DEFAULT_PROFILE = installLayout().mode === 'package' ? join(installLayout().homeDir, 'edge-profile') : expandPath('~/AppData/Local/copilot-operator/edge-profile', process.cwd());
 
 program
   .command('start')
@@ -361,7 +361,11 @@ program
     }
 
     const edgeUsers = findEdgeUsingProfile(DEFAULT_PROFILE);
-    if (Array.isArray(edgeUsers) && edgeUsers.length > 0) {
+    // The bot's own API may hold it — its chat window stays open between messages — and then a run uses it.
+    const lockOwner = profileLockOwner(DEFAULT_PROFILE);
+    if (Array.isArray(edgeUsers) && edgeUsers.length > 0 && lockOwner !== null && profileHolder(edgeUsers, lockOwner) === 'own') {
+      console.log(`  ok    the bot's own Edge has the profile (its API, process ${lockOwner}): its chat window, kept open between messages`);
+    } else if (Array.isArray(edgeUsers) && edgeUsers.length > 0) {
       const pids = edgeUsers.map((u) => u.pid);
       say(
         false,
@@ -374,13 +378,6 @@ program
     } else {
       console.log('  ok    no Edge process is holding the bot profile');
     }
-
-    const desktop = resolveDesktopDir();
-    say(existsSync(desktop), `Desktop at ${desktop}`);
-    console.log(
-      `  ${desktopIsSynced() ? 'ok  ' : 'note'}  Desktop ${desktopIsSynced() ? 'is' : 'is NOT'} backed up by OneDrive` +
-        `${desktopIsSynced() ? '' : ' — logs saved there stay on this machine only'}`,
-    );
 
     if (configPath) {
       try {

@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { winPsEnv } from '../exec/winps.js';
 
-export type ProfileUser = { pid: number; commandLine: string };
+export type ProfileUser = { pid: number; commandLine: string; /** The process that started it. */ parentPid?: number };
 
 /**
  * Edge processes that currently have this profile open.
@@ -26,10 +26,12 @@ export type ProfileUser = { pid: number; commandLine: string };
  * a broken check never silently claims the profile is free.
  */
 export function findEdgeUsingProfile(profileDir: string): ProfileUser[] | 'unknown' {
+  // The folder as text, not a pattern: -like read a [ or ] in a path as a wildcard (2026-10-22).
   const script =
+    `$dir = '${profileDir.replace(/'/g, "''")}'; ` +
     `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ` +
-    `Where-Object { $_.CommandLine -like '*${profileDir.replace(/\\/g, '\\').replace(/'/g, "''")}*' } | ` +
-    `Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress`;
+    `Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($dir, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | ` +
+    `Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress`;
 
   const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: winPsEnv(),
@@ -42,13 +44,38 @@ export function findEdgeUsingProfile(profileDir: string): ProfileUser[] | 'unkno
   const text = res.stdout.trim();
   if (text.length === 0) return [];
   try {
-    const parsed = JSON.parse(text) as
-      | { ProcessId: number; CommandLine: string }
-      | Array<{ ProcessId: number; CommandLine: string }>;
+    type Row = { ProcessId: number; ParentProcessId?: number; CommandLine: string };
+    const parsed = JSON.parse(text) as Row | Row[];
     const list = Array.isArray(parsed) ? parsed : [parsed];
-    return list.map((p) => ({ pid: p.ProcessId, commandLine: p.CommandLine ?? '' }));
+    return list.map((p) => ({ pid: p.ProcessId, commandLine: p.CommandLine ?? '', ...(typeof p.ParentProcessId === 'number' ? { parentPid: p.ParentProcessId } : {}) }));
   } catch {
     return 'unknown';
+  }
+}
+
+/**
+ * Whose the Edge holding the profile is (2026-10-22: the System page called the bot's own chat window — kept open
+ * between messages — a stray Edge that "would make a run fail"). Edge's main process is the one whose parent is not
+ * itself an Edge holding the profile; the others are its children. When every main process was started by `owner` —
+ * the bot's API, whose browser Playwright launches as its child — it is the bot's own.
+ */
+export function profileHolder(users: ProfileUser[] | 'unknown', owner: number): 'free' | 'own' | 'other' | 'unknown' {
+  if (users === 'unknown') return 'unknown';
+  if (users.length === 0) return 'free';
+  const pids = new Set(users.map((u) => u.pid));
+  const mains = users.filter((u) => u.parentPid === undefined || !pids.has(u.parentPid));
+  return mains.length > 0 && mains.every((m) => m.parentPid === owner) ? 'own' : 'other';
+}
+
+/** The bot process whose lock is on the profile, while it is alive: the API that opened the browser on it. */
+export function profileLockOwner(profileDir: string): number | null {
+  try {
+    const held = JSON.parse(readFileSync(join(profileDir, '.cop-lock.json'), 'utf8')) as { pid?: unknown };
+    if (typeof held.pid !== 'number') return null;
+    process.kill(held.pid, 0);
+    return held.pid;
+  } catch {
+    return null;
   }
 }
 

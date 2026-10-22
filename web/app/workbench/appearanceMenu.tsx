@@ -19,6 +19,9 @@ const THEMES: Array<{ value: Theme; label: Key }> = [
 ];
 
 const SIZE_NAMES: Record<(typeof TEXT_SIZES)[number], Key> = {
+  smallest: 'ap.sizeSmallest',
+  verysmall: 'ap.sizeVerySmall',
+  compact: 'ap.sizeCompact',
   small: 'ap.sizeSmall',
   normal: 'ap.sizeNormal',
   large: 'ap.sizeLarge',

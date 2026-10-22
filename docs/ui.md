@@ -30,7 +30,7 @@ answers, and the result; the panel follows the worker's latest subtask. The work
 lead's (the lead's when none is), and a model chosen by hand is asked on a card that says which of the two it is for.
 
 
-**Since 2026-10-20 (the second round).** The pages are the chat (`/`), Settings (`/defaults`) and System (`/system`):
+**Since 2026-10-20 (the second round).** The pages are the chat (`/`), Settings (`/settings`; `/defaults` until 2026-10-22, which goes on to it) and System (`/system`):
 the base prompt's page, the presets' page and the Appearance page went. The base prompt is shown in Settings to read,
 folded, with what it is said above the fold; it is the one that ships and changes only when the bot is updated (an
 edited copy an earlier version kept in the data folder is not read). Each project in Settings has its branch (read
@@ -55,7 +55,7 @@ them as they were, and is kept as the record of why the runner does what it does
 |---|---|---|
 | Activity bar (far left) | the open folder's files; its git; the chat; how the page looks | switches the explorer, hides or shows the chat; the last icon opens the theme (System — the machine's, the default — Light, Dark), A− and A+, night light and the reading aids |
 | Explorer | the open folder's files, each with an icon of its kind; or its git: the changes, staged and not, and the branch's commits | opens a file, or a file's two versions, in a tab |
-| Editor | tabs: a file, coloured by its language (found from its name, its extension, its first line, or chosen), with line numbers, editable — saved with Ctrl+S over the version it was opened at, keeping its line endings; a file's two versions side by side | with nothing open: the folder the chat works in, and **Kerrigan** — a persona to save or copy for a chat of one's own, optional |
+| Editor | tabs: a file, coloured by its language (found from its name, its extension, its first line, or chosen), with line numbers, editable — saved with Ctrl+S over the version it was opened at, keeping its line endings; a file's two versions side by side | with nothing open: the folder the chat works in, and **Kerrigan** — a persona to save or copy for a chat of one's own, optional — with a short box under her button saying what she is, three things she is for and how to use her (2026-10-22) |
 | Panel (below) | Terminal: the commands of the chat's latest message and their output; Problems: what did not go well in the conversation; Output: its events — each with an "i" saying what it shows | a problem brings its message into view in the chat; "Seen" takes it off the list |
 | Chat (right) | the conversation, as it happens | a message is a task run in the open folder; "Plan mode" asks for a plan first, approved in the conversation; "Pause", which becomes "Continue" (the work holds at its next message or command; the time held does not count against the time limit); Stop; "New chat"; go back to before a message |
 | Status bar | the folder and its branch, what is running, commands or plans waiting for an answer, the model | shows the running conversation in the chat; brings the waiting card into view |
@@ -576,11 +576,34 @@ each one's head drags onto another to swap the two, or opens a menu of the place
 The order is kept with the layout in this browser; "Put the panels back where they were" (Ctrl+K) undoes it. The
 left and right places keep their widths, the middle takes the rest.
 
-**Appearance, cursors, scroll bars (2026-10-21).** "Appearance" sits in the bar on top, between Settings and System,
+**Appearance, cursors, scroll bars (2026-10-21).** "Appearance" sits in the bar on top, after System and before the language (between Settings and System until 2026-10-22),
 on every page. The page draws its own cursors, in the theme's colours (`--cur-*` in globals.css), with "The system's
 cursor" among the reading aids to put Windows' back (`data-cursor`); scroll bars are thin and rounded, in the theme's
 muted colour. The arrow is close to Windows' own, its corners rounded and a light stroke along its edge, so as not to
 bother; over what can be clicked, a pointing hand, its fingertip the spot.
+
+**The editor of VS Code (2026-10-22).** A file opens in Monaco, the editor of VS Code (`monaco-editor` 0.57.0, MIT;
+`codeEditor.tsx`): colours and line numbers, find and replace, several cursors, folding, the minimap, IntelliSense
+for TypeScript, JavaScript, JSON, CSS and HTML from its workers (`workbench/monaco/*.worker.ts`, modules of the page's
+own), VS Code's keys. It is bundled with the page and loaded only when a file is opened; nothing is fetched from the
+internet. Its theme follows the page's, and its size the text size; it keeps a file's line endings. The file view
+keeps the text: what is typed is handed up, and a text set from outside — read again from disk, "Revert my changes" —
+comes with a new `reset` and replaces the editor's (a value merely handed back is never put back: that scrambled fast
+typing). Save is an editor action, not a command: Monaco keeps a command for the page, and Ctrl+S saved the file opened
+last. The language picker still chooses its language. DOMPurify, which Monaco brings, is held at 3.4.17 by
+`overrides` in package.json (`npm ls` calls that "invalid" in a workspace; it is not). The package carries
+`dist/web/third-party-notices.txt`: the licences of everything the interface is built from
+(`scripts/thirdPartyNotices.mjs`).
+
+**On this branch (2026-10-22).** At the top of the git view, every file the branch changed, as a pull request shows
+them (`branchChanges` in `session/workspaceGit.ts`, `GET /api/workspace/git/branch`, `branchChanges.tsx`): against the
+branch it would go into — the remote's default, else main or master, or one chosen in "Compared with", kept for the
+folder — from where it left it (`git merge-base`), its commits and what is not committed together, the files git does
+not track among them. Each file has its letter and lines, and a dot when something of it is not committed (staged, not
+staged, not tracked, or staged and changed since); "All", "Committed" and "Not committed" filter them. A file opens as
+the pull request shows it: where the branch began against the file as it is now (`area: 'branch'`). The branch's own
+commits are marked in "Commits", with a line where it left the base. The base asked for must be one of the branches
+listed; nothing else of the request reaches git.
 
 **The clock stops while paused (2026-10-21).** `Hold` keeps each pause from "Pause" pressed to "Continue" — from
 the press, not from the point the work holds at a little later — and the runner takes them off a task's minutes
@@ -631,6 +654,26 @@ it. Commands themselves always run as text given to the shell.
 `data/settings.json`, same shape as `run.example.yaml`, everything optional. The System page
 shows what is saved and what it resolves to. Sign-in stays in the terminal on purpose, so the
 bot never handles credentials: `npx tsx src/cli.ts login --account <upn>`.
+
+**The bot's folder (2026-10-22).** Installed from npm, the bot keeps its settings, conversations,
+logs, its key and its Edge profile in `%LOCALAPPDATA%\copilot-operator` — never in the project,
+unless the operator chooses that. System → **The bot's folder** shows where it is and whether it is
+the default, chosen, set by `COP_HOME`, or the clone itself; **Change…** (a field, **Browse…**, and a
+checkbox to copy what is there, so the sign-in stays) writes the choice to `location.json` in the
+default folder, and the next start uses it (`installLayout`, `chooseHome` in `src/config/home.ts`).
+Nothing in the new folder is overwritten. Refused while work goes on, inside the program or
+`node_modules`, inside the current folder or holding it, or where it cannot be written. A version
+before 0.1.56 kept the records in `<project>\.copilot-operator`: the first newer start copies them
+over once (`moveLegacyHome`) and System says from where. Steps are refused when they name the
+folder by any spelling, `%LOCALAPPDATA%\copilot-operator` included (`botSelfRefusal`).
+
+**Whose Edge has the profile (2026-10-22).** "Profile in use" says whose Edge it is: the bot's own
+for a run, the bot's own chat window (kept open between messages — nothing to do), another Edge
+(close it or end its processes: the bot cannot open its browser meanwhile), or free. Until then
+any Edge on the profile while no run was going read "a run would fail; close that window" — the
+chat's own window too. The bot's own is told by the Edge main process's parent being the API
+(`profileHolder` in `src/transport/profileLock.ts`). The Desktop row is gone: it was left from the
+Desktop copies removed in 0.1.14.
 
 ## Running it
 

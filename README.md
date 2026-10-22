@@ -346,9 +346,13 @@ npx cop start --open                     # the API and the interface, on http://
 ```
 
 Installed this way, the bot belongs to the project it is installed in. Its records — settings,
-sessions, the API key, every run's logs — go to `.copilot-operator/` in the project, which carries
-its own `.gitignore`, so the project's git never sees it and the bot's version control finds a
-clean tree. The interface ships prebuilt and is served by the same process on one port; there is no
+sessions, the API key, every run's logs and its Edge profile — go to the bot's own folder,
+`%LOCALAPPDATA%\copilot-operator`, not into the project, so the project's git never sees them and
+the bot's version control finds a clean tree. **System → The bot's folder → Change…** keeps them in
+another folder from the next start (optionally copying what is there, so the sign-in stays), and
+`COP_HOME` sets one from outside. A version before 0.1.56 kept them in `.copilot-operator/` in the
+project: the first start of a newer one copies them over once and says so; the old folder can then
+be deleted. The interface ships prebuilt and is served by the same process on one port; there is no
 second server and nothing is compiled on the machine. `npx cop start --port 4100` picks another
 port. `npm update copilot-operator` updates it; `npm run update` is for a clone.
 
@@ -362,12 +366,12 @@ cd C:\path\to\your-project
 cop start --open
 ```
 
-Nothing in the project changes except `.copilot-operator/`, which git does not see. The bot's own
-code is then outside the folders its steps may write, which is the safer of the two.
+Nothing in the project changes. The bot's own code is then outside the folders its steps may write,
+which is the safer of the two.
 
 The bot is then inside the folders its own steps may write, so a step that reaches for
-`node_modules/copilot-operator`, for `.copilot-operator`, or that installs, updates or removes the
-bot as a package is refused. What no rule can see is a step that rewrites the project's
+`node_modules/copilot-operator`, for the bot's folder (by its path, or as `%LOCALAPPDATA%\copilot-operator`
+in any spelling), or that installs, updates or removes the bot as a package is refused. What no rule can see is a step that rewrites the project's
 `package.json` with a different version of the bot for a later `npm install` to fetch; the commit
 the bot makes after the task shows such a change, and it is worth a look before the next install.
 
@@ -431,6 +435,9 @@ on 2026-10-20.
 
 As in VS Code, Ctrl+P finds a file by name and Ctrl+Shift+F searches the code (match case, whole word,
 regular expressions, files to include or exclude); a Markdown file opens as it reads, its mermaid diagrams drawn.
+A file opens in the editor of VS Code itself (Monaco): find and replace, several cursors, folding, the minimap,
+IntelliSense for TypeScript, JavaScript, JSON, CSS and HTML. The git view shows everything the branch changed, as a
+pull request does, against the branch it would go into, with the files not committed yet marked.
 Skills keep your instructions for a kind of task that comes back — a new test, a new entity, a migration — in
 Settings; a message starting with `/its-name` (or with the skill chosen under the chat's box) carries them to the
 chat. The three panels move as in VS Code: drag the grip ⠿ in a panel's head onto another. Settings can also make
@@ -456,8 +463,10 @@ exist. What the software leaves, and where:
 | every run's logs, reports and failure screenshots | `runs/` in the checkout | delete the folder (or set `runsRetentionDays`) |
 | backups taken by `npm run update` | `data-backups/` in the checkout | delete the folder |
 | the bot's own Edge profile, with its Microsoft 365 session | `%LOCALAPPDATA%\copilot-operator\edge-profile` | sign out in that window (`cop login --fresh` deletes it) and delete the folder |
+| installed from npm: its settings, sessions, the API token, every run's logs and its Edge profile | the bot's folder, `%LOCALAPPDATA%\copilot-operator` unless another was chosen (System shows which) | delete the folder |
+| installed from npm, a version before 0.1.56: the same records | `.copilot-operator\` in the project, or in the folder it was started from | delete the folder; a newer version copied what it needed |
 | the API key the browser was handed | the browser's storage for `localhost:3210` | clear site data for that origin |
-| logs saved on request | `Desktop\copilot-operator-logs` | delete them; they may already be in OneDrive |
+| logs saved on request by older versions | `Desktop\copilot-operator-logs` | delete them; they may already be in OneDrive, and nothing writes there any more |
 | the project copies of versions before 0.1.14 | `Desktop\copilot-operator-context` | delete the folder; nothing writes to it any more |
 | the reports uploaded to Copilot | the account's OneDrive and Copilot chat history | delete the conversations, or let the tenant's retention run |
 | a machine-wide policy lock, if an administrator placed one | `%ProgramData%\copilot-operator\policy.lock.json` | the administrator removes it |
@@ -474,7 +483,7 @@ npm run update -- --check   # say what would happen, change nothing
 **A pull cannot lose what you have entered.** Everything this program records lives in `data/`
 (settings, sessions, level 2 presets, a customised level 1, the organisation and work texts, the
 model list) and `runs/` (every log, report and artifact of every task). Both are in `.gitignore`,
-every write in `src/` goes to one of them or to the Desktop, and git does not know they exist.
+every write in `src/` goes to one of them, and git does not know they exist.
 
 What a pull *can* do is refuse to start. `npm run update` deals with each reason in turn: it
 copies `data/` to `data-backups/<timestamp>/` before touching anything, refuses to run while the
@@ -511,7 +520,7 @@ npx tsx src/cli.ts run run.yaml
 | Command | What it does |
 |---|---|
 | `cop login` | opens Edge with the bot profile and waits for you to sign in |
-| `cop doctor [run.yaml]` | checks Node, Edge, PowerShell, the Desktop, the config |
+| `cop doctor [run.yaml]` | checks Node, Edge, PowerShell, the bot's Edge profile, the config |
 | `cop run <run.yaml>` | one task as a new session; `--unattended` skips the per-step prompt |
 | `cop chat [run.yaml]` | prints the last run's conversation name and link |
 
@@ -529,7 +538,7 @@ ordered so the risk climbs slowly, starting with checks that need no account at 
 | Command runner, dual timeouts, process-tree kill | `src/exec/runner.ts` | implemented, checked |
 | Chat naming and reattach after re-login | `src/transport/chatSession.ts` | implemented, checked |
 | Covering message for the results file | `src/protocol/reporter.ts` | implemented, checked |
-| Desktop folder resolution (for saved logs) | `src/context/desktopDir.ts` | implemented |
+| The bot's folder: default, chosen on System, moved out of the project once | `src/config/layout.ts`, `src/config/home.ts` | implemented, checked |
 | Pacing, send cap, backoff | `src/util/pacing.ts` | implemented, checked |
 | Playwright transport | `src/transport/copilotTransport.ts` | implemented; selectors verified live |
 | Reply parser and the JSON contract | `src/protocol/parser.ts`, `replySchema.ts` | implemented, checked |

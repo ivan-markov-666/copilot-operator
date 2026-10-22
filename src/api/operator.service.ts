@@ -10,7 +10,8 @@ import { pageModelFor, sameModel } from '../transport/modelMatch.js';
 import { Injectable } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { installLayout } from '../config/layout.js';
+import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
+import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW } from '../session/store.js';
 import { EventBus } from '../session/events.js';
@@ -35,7 +36,7 @@ import { buildStory, type Story } from '../session/story.js';
 import { buildTaskExchange } from '../session/taskExchange.js';
 import { chatNotice } from '../session/chatNotice.js';
 import { kerriganFileName, kerriganPersona } from '../plan/kerrigan.js';
-import { workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
+import { branchChanges, workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
 import { chatCode } from '../transport/chatSession.js';
 import { type PlanCheck } from '../plan/schema.js';
 
@@ -95,7 +96,7 @@ import { changedFilesBetween, fileAt, git, repoUnusableReason, type ChangedFile 
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
-import { findEdgeUsingProfile } from '../transport/profileLock.js';
+import { findEdgeUsingProfile, profileHolder } from '../transport/profileLock.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { unattendedPrecondition, type PolicyConfig } from '../exec/policy.js';
 import { createTransport, type ChatTransport } from '../transport/chatTransport.js';
@@ -114,7 +115,6 @@ import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
-import { resolveDesktopDir, desktopIsSynced } from '../context/desktopDir.js';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
@@ -1394,6 +1394,13 @@ export class OperatorService {
     return await workspaceGit(ws.dir);
   }
 
+  /** Everything the branch changed against a base, as a pull request shows it (see `branchChanges`). Read-only. */
+  async workspaceBranch(base?: string): Promise<Awaited<ReturnType<typeof branchChanges>>> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await branchChanges(ws.dir, base);
+  }
+
   async workspaceCommit(sha: string): Promise<Awaited<ReturnType<typeof workspaceCommit>>> {
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
@@ -2429,10 +2436,51 @@ export class OperatorService {
     return await pickFolder(start);
   }
 
+  /**
+   * The bot's folder chosen on the System page (operator, 2026-10-22): `dir`, or `null` for the default; with `copy`,
+   * what is in the folder now goes there too. Read at the next start; refused while work goes on, for a clone, or for
+   * a folder that cannot be the bot's.
+   */
+  async setHome(dir: string | null, copy: boolean): Promise<{ home: string; copied: string[]; kept: string[]; restart: true }> {
+    const layout = this.layout;
+    if (layout.mode !== 'package') throw new Error('A clone keeps its records in the clone (data/ and runs/); start it with COP_DATA_DIR set to keep them elsewhere.');
+    if (layout.homeFrom === 'env') throw new Error(`COP_HOME places the bot's folder (${layout.homeDir}); change or remove it where it is set.`);
+    if (this.running.size > 0) throw new Error('Work is going on: stop it, or let it end, before moving the bot\'s folder.');
+    if (dir !== null) {
+      const refused = homeRefusal(dir, layout);
+      if (refused) throw new Error(refused);
+    }
+    if (copy) {
+      // Its files are in use while its window is open: closed first, as another run would close it.
+      await this.closeChatWindow('the bot\'s folder is being copied');
+      const cfg = await this.settings.load();
+      const holders = findEdgeUsingProfile(cfg.resolved.profileDir);
+      if (Array.isArray(holders) && holders.length > 0) throw new Error(`Edge has the bot's profile open (pid ${holders.slice(0, 4).map((h) => h.pid).join(', ')}): close that window, then copy.`);
+    }
+    /*
+     * A profile the settings name in the folder left behind would stay there: it follows the folder instead. Before the
+     * copy, so the settings copied over say so too; for this process it is the same folder, the default one.
+     */
+    await this.settings.update((raw) => {
+      const copilot = (raw.copilot as Record<string, unknown> | undefined) ?? {};
+      if (typeof copilot.profileDir === 'string' && resolve(copilot.profileDir).toLowerCase() === resolve(join(layout.homeDir, 'edge-profile')).toLowerCase()) {
+        const { profileDir: _gone, ...rest } = copilot;
+        return { ...raw, copilot: rest };
+      }
+      return raw;
+    });
+    const chosen = chooseHome(layout, dir, copy);
+    console.log(`[home] the bot's folder will be ${chosen.home} from its next start${chosen.copied.length ? ` (copied: ${chosen.copied.join(', ')})` : ''}`);
+    return { ...chosen, restart: true };
+  }
+
   async doctor(): Promise<Record<string, unknown>> {
     const cfg = await this.settings.load();
     const edge = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find((p) => existsSync(p));
     const holders = findEdgeUsingProfile(cfg.resolved.profileDir);
+    // Whose Edge it is: the bot's own — a run's, or its chat window kept open between messages — or another's.
+    const holder = profileHolder(holders, process.pid);
+    const layout = this.layout;
     return {
       // Which copilot-operator this is: `cop --version` without a terminal.
       version: botVersion(),
@@ -2442,13 +2490,20 @@ export class OperatorService {
       profileExists: existsSync(cfg.resolved.profileDir),
       profileHeldBy: Array.isArray(holders) ? holders.map((h) => h.pid) : 'unknown',
       /*
-       * Whether the bot itself is what holds the profile. While a run is going, Edge is open
-       * on that profile *by the runner*, and the warning "close this Edge window, a run would
-       * fail" was shown in exactly the moment it was false. The page says which it is.
+       * Whose Edge holds the profile (2026-10-22). While a run is going, Edge is open on it by the runner; between
+       * messages the chat's window stays open by the bot too, and the warning "close this Edge window, a run would
+       * fail" was shown then, when it was false: it counted only runs. An Edge the bot's API started is its own.
        */
+      profileHolder: holder === 'own' ? (this.running.size > 0 ? 'own-run' : 'own-window') : holder,
       botRunning: this.running.size > 0,
-      desktop: resolveDesktopDir(),
-      desktopSynced: desktopIsSynced(),
+      // The bot's folder (2026-10-22): where it is, where it would be by default, and what was chosen for the next start.
+      install: layout.mode,
+      home: layout.homeDir,
+      homeFrom: layout.homeFrom,
+      homeDefault: layout.mode === 'package' ? defaultHome() : null,
+      homeNext: layout.mode === 'package' && layout.homeFrom !== 'env' ? (chosenHome() ?? defaultHome()) : null,
+      homeMovedFrom: movedFrom(layout.homeDir),
+      settingsFile: join(this.dataDir, 'settings.json'),
       cwd: cfg.resolved.cwd,
       runsDir: cfg.resolved.runsDir,
       dataDir: this.dataDir,

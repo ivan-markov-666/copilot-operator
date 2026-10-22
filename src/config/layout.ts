@@ -6,7 +6,9 @@
  *              Next.js dev server of its own.
  *   package    `npm i -D copilot-operator` in a project, started with `npx cop start`. The code
  *              is in `node_modules`, which `npm install` rewrites whenever it likes, so nothing of
- *              the operator's may live there: the records go to `<project>/.copilot-operator/`,
+ *              the operator's may live there: the records go to the bot's own folder —
+ *              `%LOCALAPPDATA%\copilot-operator` unless the operator chose another on the System
+ *              page, or COP_HOME names one (2026-10-22; until then `<project>/.copilot-operator/`) —
  *              and the UI is the prebuilt one shipped in the package, served by the API itself.
  *
  * Which one is decided by where the code is: inside a `node_modules` folder is a package. The
@@ -20,8 +22,9 @@
  * data folder or the runs folder asks here instead, so the two installs cannot disagree about
  * where a thing is.
  */
-import { existsSync } from 'node:fs';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { botRootDir } from '../exec/workDir.js';
 
 export type InstallLayout = {
@@ -33,6 +36,10 @@ export type InstallLayout = {
   projectRoot: string;
   /** The folder that holds the operator's records for this install. */
   homeDir: string;
+  /** Where that folder came from: the default, the operator's choice, or COP_HOME. A checkout's is its clone. */
+  homeFrom: 'default' | 'chosen' | 'env' | 'checkout';
+  /** The folder a package kept its records in before 2026-10-22, inside the project: read once, to move them. */
+  legacyHomeDir?: string;
   dataDir: string;
   runsDir: string;
   /**
@@ -42,8 +49,35 @@ export type InstallLayout = {
   webDir: string | null;
 };
 
-/** The name of the records folder a package keeps inside the project. */
+/**
+ * The name of the records folder a package kept inside the project until 2026-10-22 — and still keeps there when the
+ * operator chooses that folder. See `defaultHome`.
+ */
 export const HOME_FOLDER = '.copilot-operator';
+
+/**
+ * Where a package keeps its records unless the operator chose another folder (operator, 2026-10-22: "I do not want a
+ * .copilot-operator folder in the project's folder unless I set it there"): the user's own local application data,
+ * `%LOCALAPPDATA%\copilot-operator`, where the bot's Edge profile already was. Not the folder it was started from —
+ * a global install started from C:\ kept everything in C:\.copilot-operator.
+ */
+export function defaultHome(env: NodeJS.ProcessEnv = process.env): string {
+  const local = env.LOCALAPPDATA?.trim() || join(env.USERPROFILE?.trim() || homedir(), 'AppData', 'Local');
+  return join(local, 'copilot-operator');
+}
+
+/** The file in the default home that names the folder the operator chose instead: `{ "home": "D:\\bot" }`. */
+export const HOME_CHOICE_FILE = 'location.json';
+
+/** The folder the operator chose for the records, when they chose one (System → the bot's folder). */
+export function chosenHome(env: NodeJS.ProcessEnv = process.env): string | null {
+  try {
+    const value = JSON.parse(readFileSync(join(defaultHome(env), HOME_CHOICE_FILE), 'utf8')) as { home?: unknown };
+    return typeof value.home === 'string' && isAbsolute(value.home.trim()) ? resolve(value.home.trim()) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The project a package install belongs to: the folder holding the `node_modules` the code sits in. */
 function projectOfPackage(botRoot: string): string | null {
@@ -70,7 +104,11 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
     // was started. Checked by folder, so a start from a subfolder of the project still finds it.
     const owner = isInside(cwd, packaged) ? packaged : cwd;
     const projectRoot = resolve(env.COP_PROJECT_ROOT ?? owner);
-    const homeDir = join(projectRoot, HOME_FOLDER);
+    // The operator's own folder by default; another they chose; COP_HOME over both (2026-10-22).
+    const fromEnv = env.COP_HOME?.trim() ?? '';
+    const chosen = fromEnv ? null : chosenHome(env);
+    const homeFrom: InstallLayout['homeFrom'] = fromEnv ? 'env' : chosen ? 'chosen' : 'default';
+    const homeDir = resolve(fromEnv || chosen || defaultHome(env));
     const shippedWeb = join(botRoot, 'dist', 'web');
     return {
       mode: 'package',
@@ -78,6 +116,8 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
       promptsDir,
       projectRoot,
       homeDir,
+      homeFrom,
+      legacyHomeDir: join(projectRoot, HOME_FOLDER),
       dataDir: resolve(env.COP_DATA_DIR ?? join(homeDir, 'data')),
       runsDir: join(homeDir, 'runs'),
       webDir: existsSync(join(shippedWeb, 'index.html')) ? shippedWeb : null,
@@ -91,6 +131,7 @@ export function installLayout(env: NodeJS.ProcessEnv = process.env, cwd: string 
     promptsDir,
     projectRoot,
     homeDir: projectRoot,
+    homeFrom: 'checkout',
     dataDir: resolve(env.COP_DATA_DIR ?? join(projectRoot, 'data')),
     runsDir: join(projectRoot, 'runs'),
     /*

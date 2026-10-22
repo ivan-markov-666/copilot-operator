@@ -30,7 +30,8 @@ export const RIGHT_TO_LEFT = ['ar'];
  * same size. New steps got new names (`small`, `giant`) rather than renumbering the old ones. The
  * factor for each lives in globals.css, beside the rest of the scale.
  */
-export const TEXT_SIZES = ['small', 'normal', 'large', 'huge', 'giant'] as const;
+// Three more steps below Small (operator, 2026-10-22: "three more A− levels").
+export const TEXT_SIZES = ['smallest', 'verysmall', 'compact', 'small', 'normal', 'large', 'huge', 'giant'] as const;
 export type TextSize = (typeof TEXT_SIZES)[number];
 
 /**

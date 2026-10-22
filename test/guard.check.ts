@@ -473,7 +473,7 @@ await scenario('isolation claimed but no allowlist: an unattended start is refus
  * the request, so rewriting the setting alone never stopped the button (found 2026-09-27).
  *
  * The effective mode is read from GET /doctor, the route the System page shows: GET /settings
- * carries only the resolved *paths* under `resolved`, by design (see web/app/defaults/page.tsx).
+ * carries only the resolved *paths* under `resolved`, by design (see web/app/settings/page.tsx).
  */
 {
   const lockDir = mkdtempSync(join(tmpdir(), 'cop-guard-lock-'));

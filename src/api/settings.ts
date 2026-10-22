@@ -82,7 +82,8 @@ export function settingsOf(layout: InstallLayout): Settings {
   return new Settings(
     layout.projectRoot,
     layout.dataDir,
-    layout.mode === 'package' ? { runsDir: layout.runsDir, level1File: join(layout.promptsDir, 'level1.md') } : {},
+    // A package's Edge profile is in its folder, wherever that is (2026-10-22): where it was, unless another was chosen.
+    layout.mode === 'package' ? { runsDir: layout.runsDir, level1File: join(layout.promptsDir, 'level1.md'), profileDir: join(layout.homeDir, 'edge-profile') } : {},
   );
 }
 
@@ -127,7 +128,7 @@ export class Settings {
    * does not parse is a `PolicyLockUnusableError`, answered by name on every route as this one is.
    */
   async load(): Promise<ResolvedConfig> {
-    const value = { ...this.installDefaults, ...(await this.raw()), dataDir: this.dataDir };
+    const value = this.withDefaults(await this.raw());
     try {
       return await loadConfigObject(value, this.projectRoot, this.path);
     } catch (e) {
@@ -176,7 +177,7 @@ export class Settings {
       const raw = await this.raw();
       const value = next(raw);
       try {
-        resolved = await loadConfigObject({ ...this.installDefaults, ...value, dataDir: this.dataDir }, this.projectRoot, this.path);
+        resolved = await loadConfigObject(this.withDefaults(value), this.projectRoot, this.path);
       } catch (e) {
         /*
          * A save of one setting carries every other over from the file, so a value the schema
@@ -185,12 +186,24 @@ export class Settings {
          * new default model, without the way out, while a read of the same file named it. A whole
          * set replaces what the file holds, and what the schema refuses in it is the request's own.
          */
-        if (rest === 'keeps') checkSettings({ ...this.installDefaults, ...raw, dataDir: this.dataDir }, this.path);
+        if (rest === 'keeps') checkSettings(this.withDefaults(raw), this.path);
         throw e;
       }
       return JSON.stringify(value, null, 2);
     });
     return resolved as ResolvedConfig;
+  }
+
+  /**
+   * What the file holds over this install's defaults. The Edge profile's is one of `copilot`'s keys, so it goes in
+   * there when the file names none, keeping whatever else the file says of `copilot`.
+   */
+  private withDefaults(raw: Record<string, unknown>): Record<string, unknown> {
+    const { profileDir, ...defaults } = this.installDefaults as Record<string, unknown> & { profileDir?: string };
+    const value: Record<string, unknown> = { ...defaults, ...raw, dataDir: this.dataDir };
+    const copilot = (raw.copilot as Record<string, unknown> | undefined) ?? {};
+    if (typeof profileDir === 'string' && typeof copilot.profileDir !== 'string') value.copilot = { ...copilot, profileDir };
+    return value;
   }
 
   /** The schema defaults, for the UI to show what "not set" means. */

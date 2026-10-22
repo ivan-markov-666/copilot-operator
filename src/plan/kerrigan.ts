@@ -226,7 +226,7 @@ ${skillsPart(lang, f.skills ?? [])}
 ${screenGuide(lang, '/')}
 
 ## Settings, and what is on them
-${screenGuide(lang, '/defaults')}
+${screenGuide(lang, '/settings')}
 `;
 }
 
@@ -296,6 +296,6 @@ ${skillsPart('bg', f.skills ?? [])}
 ${screenGuide('bg', '/')}
 
 ## Настройките и какво има в тях
-${screenGuide('bg', '/defaults')}
+${screenGuide('bg', '/settings')}
 `;
 }

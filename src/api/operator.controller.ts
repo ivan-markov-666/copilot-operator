@@ -288,9 +288,25 @@ export class OperatorController {
   }
 
   /** The open folder's git: the changes, staged and not, and the branch's commits. Read-only. */
+  /**
+   * The bot's folder, chosen on the System page (2026-10-22): `dir` a folder, or null for the default; `copy` to copy
+   * what is in the folder now. Read at the bot's next start.
+   */
+  @Put('home')
+  setHome(@Body() body: { dir?: unknown; copy?: unknown } = {}): Promise<unknown> {
+    if (body.dir !== null && typeof body.dir !== 'string') throw new BadRequestException('dir must be the path of a folder, or null for the default');
+    return this.ops.setHome(body.dir === null ? null : (body.dir as string), body.copy === true).catch(fail);
+  }
+
   @Get('workspace/git')
   workspaceGit(): Promise<unknown> {
     return this.ops.workspaceGit().catch(fail);
+  }
+
+  /** Everything the branch changed against `base` (a branch of the list it gives), as a pull request shows it. Read-only. */
+  @Get('workspace/git/branch')
+  workspaceBranch(@Query('base') base?: string): Promise<unknown> {
+    return this.ops.workspaceBranch(base || undefined).catch(fail);
   }
 
   @Get('workspace/git/commit')
@@ -299,11 +315,11 @@ export class OperatorController {
     return this.ops.workspaceCommit(sha).catch(fail);
   }
 
-  /** A file of those lists, its two versions: `area` staged, changes or commit (with `commit`). */
+  /** A file of those lists, its two versions: `area` staged, changes, commit (with `commit`) or branch (`commit`: the base). */
   @Get('workspace/git/file')
   workspaceGitFile(@Query('area') area?: string, @Query('path') path?: string, @Query('commit') commit?: string): Promise<unknown> {
     if (!path) throw new BadRequestException('path is required');
-    if (area !== 'staged' && area !== 'changes' && area !== 'commit') throw new BadRequestException('area must be staged, changes or commit');
+    if (area !== 'staged' && area !== 'changes' && area !== 'commit' && area !== 'branch') throw new BadRequestException('area must be staged, changes, commit or branch');
     if (area === 'commit' && !commit) throw new BadRequestException('commit is required');
     return this.ops.workspaceGitFile(area, path, commit).catch(fail);
   }

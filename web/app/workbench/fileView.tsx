@@ -2,23 +2,22 @@
 
 /**
  * A file of the open project folder, in an editor as an IDE has it (2026-10-20: "clicking a file, it can be edited; a
- * colorizer for the different languages, with automatic recognition at least by the extension"). The text in colour
- * by its language — found by itself, or chosen — with line numbers; edited in place, saved with "Save" or Ctrl+S.
+ * colorizer for the different languages, with automatic recognition at least by the extension"): since 2026-10-22 the
+ * editor of VS Code itself (Monaco, see codeEditor.tsx), its language found by itself or chosen; saved with "Save"
+ * or Ctrl+S.
  *
  * Saved over the version it was opened at: a file the chat changed meanwhile is not overwritten without asking, and
- * one with no edit of the operator's follows the disk as it changes. Tab indents (Shift+Tab takes it back), Escape
- * gives the keyboard back to the page. A binary or very large file is said to be one and not opened.
+ * one with no edit of the operator's follows the disk as it changes. A binary or very large file is said to be one and
+ * not opened.
  */
 import { MarkdownView } from './markdownView';
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, type WorkspaceFile } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
-import { LANGUAGES, detectLanguage, highlight, languageName, type LangId } from '../../lib/highlight';
+import { LANGUAGES, detectLanguage, languageName, type LangId } from '../../lib/highlight';
 import { FileIcon } from './fileIcon';
-
-/** Past this many characters the text is shown without colour, so typing stays quick. */
-const COLOUR_LIMIT = 400_000;
+import { CodeEditor } from './codeEditor';
 
 /** Where to put the cursor when the file is opened from a search or "Go to File": a line, and the match on it. */
 export type GoTo = { line: number; from?: number; to?: number; n: number };
@@ -36,9 +35,8 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
   /** The file changed on disk under an edit: the operator chooses to read it again or to save over it. */
   const [conflict, setConflict] = useState(false);
   const [choice, setChoice] = useState<'auto' | LangId>('auto');
-  const input = useRef<HTMLTextAreaElement | null>(null);
-  const shown = useRef<HTMLPreElement | null>(null);
-  const gutter = useRef<HTMLPreElement | null>(null);
+  /** Goes up when the text is set from outside the editor — read from disk, put back — so the editor takes it. */
+  const [reset, setReset] = useState(0);
 
   const dirty = !!file && file.text !== null && text !== file.text;
   useEffect(() => onDirty?.(path, dirty), [path, dirty, onDirty]);
@@ -49,6 +47,7 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
       const f = await api.workspaceFile(path);
       setFile(f);
       setText(f.text ?? '');
+      setReset((n) => n + 1);
       setConflict(false);
       setErr('');
     } catch (e) {
@@ -71,6 +70,7 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
       else {
         setFile(f);
         setText(f.text ?? '');
+        setReset((n) => n + 1);
       }
     },
     4_000,
@@ -101,14 +101,6 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
     }
   };
   const view: MdView = isMarkdown ? mdView : 'code';
-  const coloured = useMemo(() => (text.length > COLOUR_LIMIT ? highlight(text, 'plain') : highlight(text, lang)), [text, lang]);
-  const lines = useMemo(() => {
-    const n = text.split('\n').length;
-    let s = '';
-    for (let i = 1; i <= n; i += 1) s += `${i}\n`;
-    return s;
-  }, [text]);
-
   const save = async (over = false): Promise<void> => {
     if (!file || busy) return;
     setBusy(true);
@@ -126,77 +118,11 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
     }
   };
 
-  const follow = (): void => {
-    // The coloured copy and the numbers move with the text under them.
-    const el = input.current;
-    if (!el) return;
-    if (shown.current) {
-      shown.current.scrollTop = el.scrollTop;
-      shown.current.scrollLeft = el.scrollLeft;
-    }
-    if (gutter.current) gutter.current.scrollTop = el.scrollTop;
-  };
-  useEffect(follow, [coloured]);
-
-  /*
-   * Opened at a line — from the search, or "Go to File" with :42 (2026-10-21): the cursor there, the match chosen, the
-   * line a third of the way down, as VS Code puts it. A Markdown file shown as it reads shows its text beside it.
-   */
+  // Opened at a line (from the search, or Go to File with :42): a Markdown file shown as it reads shows its text beside it.
   useEffect(() => {
-    if (!goTo || !file || file.text === null) return;
-    if (isMarkdown && mdView === 'preview') setMdViewState('split');
-    const el = input.current;
-    if (!el) return;
-    const all = el.value.split('\n');
-    const line = Math.max(1, Math.min(goTo.line, all.length));
-    let start = 0;
-    for (let i = 0; i < line - 1; i += 1) start += all[i]!.length + 1;
-    const len = all[line - 1]!.length;
-    const a = start + Math.min(goTo.from ?? 0, len);
-    const b = start + Math.min(goTo.to ?? goTo.from ?? 0, len);
-    el.focus({ preventScroll: true });
-    el.setSelectionRange(a, b);
-    const height = parseFloat(getComputedStyle(el).lineHeight) || 20;
-    el.scrollTop = Math.max(0, (line - 1) * height - el.clientHeight / 3);
-    follow();
+    if (goTo && isMarkdown && mdView === 'preview') setMdViewState('split');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goTo?.n, file?.version]);
-
-  /** Tab indents the line or the lines chosen, Shift+Tab takes it back; through the browser's own edit, so Ctrl+Z undoes it. */
-  const indent = (el: HTMLTextAreaElement, back: boolean): void => {
-    const unit = /^\t/m.test(el.value) && !/^ {2,}\S/m.test(el.value) ? '\t' : '  ';
-    const { selectionStart: a, selectionEnd: b, value } = el;
-    if (a === b && !back) {
-      if (!document.execCommand('insertText', false, unit)) el.setRangeText(unit, a, b, 'end');
-      setText(el.value);
-      return;
-    }
-    const from = value.lastIndexOf('\n', a - 1) + 1;
-    const to = b > a && value[b - 1] === '\n' ? b - 1 : b;
-    const chunk = value.slice(from, to);
-    const next = chunk
-      .split('\n')
-      .map((l) => (back ? l.replace(unit === '\t' ? /^\t/ : /^ {1,2}/, '') : unit + l))
-      .join('\n');
-    el.setSelectionRange(from, to);
-    if (!document.execCommand('insertText', false, next)) el.setRangeText(next, from, to, 'select');
-    el.setSelectionRange(from, from + next.length);
-    setText(el.value);
-  };
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      void save();
-    } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v' && isMarkdown) {
-      e.preventDefault();
-      setMdView(mdView === 'code' ? 'preview' : 'code');
-    } else if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      e.preventDefault();
-      indent(e.currentTarget, e.shiftKey);
-    } else if (e.key === 'Escape') {
-      e.currentTarget.blur();
-    }
-  };
+  }, [goTo?.n]);
 
   if (err && !file) return <p className="err small">{err}</p>;
   if (!file) return <p className="muted small">{t('wb.loading')}</p>;
@@ -235,7 +161,7 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
             </option>
           ))}
         </select>
-        <button type="button" className="quiet small" disabled={!dirty || busy} onClick={() => { setText(file.text ?? ''); setSaid(''); }}>
+        <button type="button" className="quiet small" disabled={!dirty || busy} onClick={() => { setText(file.text ?? ''); setReset((n) => n + 1); setSaid(''); }}>
           {t('ed.revert')}
         </button>
         <button type="button" className="primary small" disabled={!dirty || busy} onClick={() => void save()} title="Ctrl+S">
@@ -255,26 +181,19 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
             <MarkdownView text={text} path={path} onOpenFile={(p) => onOpenFile?.(p)} />
           </div>
         )}
-        <pre ref={gutter} className="ed-gutter" aria-hidden="true">{lines}</pre>
-        <div className="ed-area">
-          <pre ref={shown} className="ed-shown" aria-hidden="true">
-            <code dangerouslySetInnerHTML={{ __html: `${coloured}\n` }} />
-          </pre>
-          <textarea
-            ref={input}
-            className="ed-input"
+        {view !== 'preview' && (
+          <CodeEditor
+            path={path}
             value={text}
-            onChange={(e) => setText(e.target.value)}
-            onScroll={follow}
-            onKeyDown={onKey}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
-            autoCorrect="off"
-            wrap="off"
-            aria-label={t('ed.label', { path: file.path })}
+            language={lang}
+            onChange={setText}
+            onSave={() => void save()}
+            onToggleMarkdown={isMarkdown ? () => setMdView(mdView === 'code' ? 'preview' : 'code') : undefined}
+            goTo={goTo}
+            label={t('ed.label', { path: file.path })}
+            reset={reset}
           />
-        </div>
+        )}
       </div>
     </div>
   );

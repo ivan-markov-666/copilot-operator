@@ -51,6 +51,28 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 const en = dict.en as Record<string, string>;
 const bg = dict.bg as Record<string, string>;
 
+/*
+ * The editor of a file is VS Code's (Monaco, 2026-10-22), whose text is not in a textarea of the page: read through
+ * the editor itself, which its element carries as `copEditor` (web/app/workbench/codeEditor.tsx).
+ */
+type MonacoLike = { getValue(): string; getSelection(): { positionLineNumber: number } | null; getModel(): { getValueInRange(r: unknown): string } | null };
+/** The text of the editor shown in `scope`, once it is ready. */
+async function editorText(scope: Locator): Promise<string> {
+  const host = scope.locator('.ed-monaco[data-ready]');
+  await host.waitFor({ timeout: 30_000 });
+  return await host.evaluate((el) => (el as unknown as { copEditor: MonacoLike }).copEditor.getValue());
+}
+/** Where its cursor is: the line, and the text chosen. */
+async function editorCursor(scope: Locator): Promise<{ line: number; chosen: string }> {
+  const host = scope.locator('.ed-monaco[data-ready]');
+  await host.waitFor({ timeout: 30_000 });
+  return await host.evaluate((el) => {
+    const e = (el as unknown as { copEditor: MonacoLike }).copEditor;
+    const s = e.getSelection();
+    return { line: s?.positionLineNumber ?? 0, chosen: s ? (e.getModel()?.getValueInRange(s) ?? '') : '' };
+  });
+}
+
 type Plan = { version: 1; onFailure?: 'stop' | 'continue'; sessions: Array<Record<string, unknown>> };
 type Approval = { id: string; sessionId: string; stepId: number; description: string; network?: string };
 type Raw = { raw: { execution?: Record<string, unknown>; limits?: Record<string, unknown>; copilot?: Record<string, unknown> } };
@@ -246,7 +268,7 @@ try {
       return reply.done();
     });
     await h.call('POST', `/sessions/${rest!.id}/start`, { mode: 'confirm' });
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     const card = page.locator('.approval-banner .approval').first();
     await card.waitFor();
     const link = card.getByRole('link');
@@ -320,7 +342,7 @@ try {
     t.check('nothing of the message ran', (await cards(h, sent.threadId))[0]!.status, 'queued');
     await notice.getByRole('button', { name: en['startfail.dismiss']!, exact: true }).click();
     await notice.waitFor({ state: 'detached' });
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     await sleep(6_000);
     t.check('closed, it does not come back', await page.getByRole('alert').filter({ hasText: en['startfail.later']! }).count(), 0);
   });
@@ -332,7 +354,7 @@ try {
    * starts from the settings as they are now, so a model chosen elsewhere is not put back.
    */
   await scenario('Settings that gate autonomy, number fields typed freely, a pending value saved on leaving', {}, async (h, page, url) => {
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     const fetchSel = page.locator('#network-fetch');
     await waitFor('the settings to load', async () => !(await fetchSel.isDisabled()), 10_000);
     // Chosen after the page read the settings, as another section or another tab would.
@@ -436,8 +458,7 @@ try {
     t.truthy('named for its conversation and message', /^copilot-operator-exchange-.+-01-.+\.json$/.test(exchangeFile.suggestedFilename()), exchangeFile.suggestedFilename());
     await chat.getByRole('button', { name: /^hi\.txt/ }).click();
     const editor = page.locator('.wb-file-pane:not([hidden])');
-    await editor.locator('.ed-input').waitFor();
-    t.check('the changed file opens in the editor, as it is on disk', (await editor.locator('.ed-input').inputValue()).trim(), 'hi');
+    t.check('the changed file opens in the editor, as it is on disk', (await editorText(editor)).trim(), 'hi');
     await page.getByRole('button', { name: en['wb.refresh']!, exact: true }).first().click();
     await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'hi.txt' }).waitFor();
     t.truthy('and is in the explorer', true);
@@ -529,6 +550,67 @@ try {
   });
 
   /*
+   * "On this branch" (operator, 2026-10-22: "show all the files changed on this branch, as a pull request does, not
+   * only the ones not committed; and of them, which are not committed yet"): against main, the branch's files committed
+   * and not, a dot on the ones not committed, a filter, a file opening as the pull request shows it, the branch's
+   * commits marked with a line where it began; another base chosen and kept.
+   */
+  await scenario('the Git view, "On this branch": every file the branch changed as a pull request shows it, the ones not committed marked', {}, async (h, page, url) => {
+    const initial = h.git('rev-parse', '--short=7', 'HEAD');
+    h.git('checkout', '-q', '-b', 'feature');
+    writeFileSync(join(h.repo, 'feat.txt'), 'a\n', 'utf8');
+    h.git('add', 'feat.txt');
+    h.git('-c', 'user.name=op', '-c', 'user.email=op@example.com', 'commit', '-q', '-m', 'feature work');
+    h.git('branch', 'other');
+    writeFileSync(join(h.repo, 'feat.txt'), 'a\nb\n', 'utf8');
+    writeFileSync(join(h.repo, 'loose.txt'), 'loose\n', 'utf8');
+    await page.goto(url('/'));
+    await page.getByRole('button', { name: en['wb.viewCommits']!, exact: true }).click();
+    const side = page.locator('.wb-side');
+    const branch = side.locator('.wb-branch');
+    await branch.locator('.wb-git-files li').nth(1).waitFor({ timeout: 15_000 });
+    const rows = async (): Promise<string[][]> =>
+      await branch.locator('.wb-git-files li').evaluateAll((els) => els.map((li) => [li.querySelector('.wb-row-name')?.textContent ?? '', li.querySelector('.wb-git-status')?.textContent ?? '', li.querySelector('.wb-uncommitted')?.className ?? '']));
+    t.check(
+      'against main: the branch\'s files, committed and not, a dot on the ones not committed',
+      [await side.locator('#wb-branch-base').inputValue(), await branch.locator('.wb-branch-counts > span').allTextContents(), await rows()],
+      ['main', [en['git.branchCounts']!.replace('{ahead}', '1').replace('{behind}', '0'), `${en['git.branchFiles']!.replace('{files}', '2')} · +3 −0`], [['feat.txt', 'A', 'wb-uncommitted u-changes'], ['loose.txt', 'A', 'wb-uncommitted u-untracked']]],
+    );
+    const filter = branch.getByRole('tablist', { name: en['git.filter']! });
+    await filter.getByRole('tab', { name: en['git.filterCommitted']!.replace('{n}', '1') }).click();
+    t.check('"Committed": the one in a commit of the branch', (await rows()).map((r) => r[0]), ['feat.txt']);
+    await filter.getByRole('tab', { name: en['git.filterUncommitted']!.replace('{n}', '2') }).click();
+    t.check('"Not committed": the two with something not committed', (await rows()).map((r) => r[0]), ['feat.txt', 'loose.txt']);
+    await filter.getByRole('tab', { name: en['git.filterAll']!.replace('{n}', '2') }).click();
+
+    await branch.locator('.wb-git-files li').first().getByRole('button').click();
+    await page.getByRole('tablist', { name: en['wb.openTabs']! }).getByRole('tab', { name: 'feat.txt (⎇ main)' }).waitFor();
+    await page.locator('.wb-gitdiff .diff-row').first().waitFor();
+    t.check(
+      'a file opens as the pull request shows it: nothing where the branch began, all of it as it is now',
+      await page.locator('.wb-gitdiff .diff-row').evaluateAll((trs) => trs.map((tr) => [tr.querySelector('.code.l')?.textContent ?? '', tr.querySelector('.code.r')?.textContent ?? ''])),
+      [['', 'a'], ['', 'b']],
+    );
+    const commits = side.locator('.wb-commits > li');
+    t.check(
+      'the branch\'s own commit marked, and a line where it left main',
+      [await commits.evaluateAll((lis) => lis.map((li) => [li.querySelector('.wb-row-name')?.textContent ?? '', li.classList.contains('on-branch')])), ((await side.locator('.wb-branch-start').textContent()) ?? '').trim()],
+      [[['feature work', true], ['initial', false]], en['git.branchStart']!.replace('{base}', 'main').replace('{sha}', initial)],
+    );
+
+    await side.locator('#wb-branch-base').selectOption('other');
+    const against = en['git.branchCounts']!.replace('{ahead}', '0').replace('{behind}', '0');
+    await waitFor('the counts against "other"', async () => (await branch.locator('.wb-branch-ahead').textContent()) === against, 10_000).catch(() => undefined);
+    t.check('against another branch: only what is not committed is new to it', await branch.locator('.wb-branch-counts > span').allTextContents(), [against, `${en['git.branchFiles']!.replace('{files}', '2')} · +2 −0`]);
+    await page.reload();
+    await page.getByRole('button', { name: en['wb.viewCommits']!, exact: true }).click();
+    await side.locator('#wb-branch-base').waitFor();
+    await waitFor('the base to be read', async () => (await side.locator('#wb-branch-base').inputValue()) === 'other', 10_000).catch(() => undefined);
+    t.check('the base chosen is kept for the folder', await side.locator('#wb-branch-base').inputValue(), 'other');
+    t.check('reading it changed nothing in the repository', h.git('status', '--porcelain').split('\n').map((l) => l.trim()).sort(), ['?? loose.txt', 'M feat.txt']);
+  });
+
+  /*
    * The conversation open in the chat is forgotten only when the API no longer has it (2026-10-20). Any failed read
    * forgot it: the page reloaded while its first read was out, or the bot was restarting, and the chat came back on a
    * new conversation — the checks that open one through this browser's storage and reload failed on it.
@@ -591,6 +673,98 @@ try {
   });
 
   /*
+   * System (2026-10-22): no Desktop row; whose Edge has the profile, said by whose it is — the chat's own window, kept
+   * open between messages, was shown as "a run would fail; close that window"; and the bot's folder, chosen there for
+   * the next start. The API under the check is a clone, which keeps its records in the clone, so the page is shown an
+   * installed copy's report; what the API does with the choice is release.check's and package.check's.
+   */
+  await scenario("System: the bot's folder chosen for the next start, whose Edge has the profile, and no Desktop", {}, async (h, page, url) => {
+    const fill = (key: string, vars: Record<string, string | number>): string => en[key]!.replace(/\{(\w+)\}/g, (_, k: string) => String(vars[k]));
+    const real = await h.call<Record<string, unknown>>('GET', '/doctor');
+    const home = 'C:\\Users\\op\\AppData\\Local\\copilot-operator';
+    let report: Record<string, unknown> = {
+      ...real,
+      install: 'package',
+      home,
+      homeFrom: 'default',
+      homeDefault: home,
+      homeNext: home,
+      homeMovedFrom: { from: 'C:\\.copilot-operator', at: '2026-10-22T07:00:00.000Z', stillThere: true },
+      profileDir: `${home}\\edge-profile`,
+      profileExists: true,
+      profileHolder: 'own-window',
+      profileHeldBy: [101, 102, 103],
+      folderDialog: true,
+    };
+    const puts: Array<{ dir: string | null; copy: boolean }> = [];
+    await page.route('**/api/doctor', (r) => r.fulfill({ json: report }));
+    await page.route('**/api/home', async (r) => {
+      const body = r.request().postDataJSON() as { dir: string | null; copy: boolean };
+      puts.push(body);
+      report = { ...report, homeNext: body.dir ?? home };
+      await r.fulfill({ json: { home: body.dir ?? home, copied: body.copy ? ['data', 'edge-profile'] : [], kept: [], restart: true } });
+    });
+    await page.route('**/api/browse-folder', (r) => r.fulfill({ json: { ok: true, path: 'D:\\bot' } }));
+
+    await page.goto(url('/system'));
+    const row = page.locator('tr.sys-home');
+    await row.waitFor();
+    t.check('no Desktop on the page any more', (await page.locator('th').allTextContents()).filter((x) => /desktop/i.test(x)), []);
+    t.check("the bot's folder, by default", [await row.locator('.sys-home-dir').textContent(), await row.locator('.badge').textContent()], [home, en['sys.homeFromDefault']]);
+    t.truthy('where its records were copied from, for the operator to delete', ((await row.locator('.sys-home-moved').textContent()) ?? '').includes('C:\\.copilot-operator'), await row.textContent());
+    // When, in the page's language (English's dates are en-GB), not the browser's: it read 10/22/2026 on a Bulgarian page.
+    const when = await page.evaluate(() => new Date('2026-10-22T07:00:00.000Z').toLocaleString('en-GB', { hour12: false }));
+    t.truthy("and when, as the page's language writes dates", ((await row.locator('.sys-home-moved').textContent()) ?? '').includes(when), `${when} in ${await row.locator('.sys-home-moved').textContent()}`);
+    const use = page.locator('tr.sys-profile-use td');
+    t.check("the chat's own window is said as the bot's own, nothing to close", [await use.textContent(), await use.locator('.err').count()], [fill('sys.profileOwnWindow', { n: 3 }), 0]);
+    t.check('no "Back to the default" while the default is used', await row.locator('.sys-home-reset').count(), 0);
+
+    await row.getByRole('button', { name: en['sys.homeChange']!, exact: true }).click();
+    const ask = row.locator('.sys-home-ask');
+    await ask.waitFor();
+    t.check('Change… asks, starting from the folder in use', await ask.locator('input.sys-home-input').inputValue(), home);
+    await ask.getByRole('button', { name: en['mirror.browse']!, exact: true }).click();
+    await waitFor('the picked folder in the field', async () => (await ask.locator('input.sys-home-input').inputValue()) === 'D:\\bot', 10_000);
+    t.check('copying what is there is offered, and on', await ask.locator('input.sys-home-copy').isChecked(), true);
+    t.truthy('the question names the folder', ((await ask.textContent()) ?? '').includes(fill('sys.homeAsk', { dir: 'D:\\bot' })), await ask.textContent());
+    await ask.getByRole('button', { name: en['sys.homeUse']!, exact: true }).click();
+    await row.locator('.sys-home-saved').waitFor();
+    t.check('Use this folder sends the folder, with the copy', puts, [{ dir: 'D:\\bot', copy: true }]);
+    t.check('and says to start the bot again', await row.locator('.sys-home-saved').textContent(), fill('sys.homeSaved', { dir: 'D:\\bot' }));
+    await waitFor('the next start named', async () => (await row.locator('.sys-home-next').count()) === 1, 10_000);
+    t.check('the row says which folder the next start uses, this one still in use', [await row.locator('.sys-home-next').textContent(), await row.locator('.sys-home-dir').textContent()], [fill('sys.homeNext', { dir: 'D:\\bot' }), home]);
+
+    await row.getByRole('button', { name: en['sys.homeReset']!, exact: true }).click();
+    t.check('Back to the default asks the same, for the default folder', await row.locator('input.sys-home-input').inputValue(), home);
+    await row.locator('input.sys-home-copy').uncheck();
+    await row.getByRole('button', { name: en['sys.homeUse']!, exact: true }).click();
+    await waitFor('the default chosen', async () => puts.length === 2, 10_000);
+    t.check('the default is sent as null, without the copy when it is off', puts[1], { dir: null, copy: false });
+    await waitFor('the next-start note gone', async () => (await row.locator('.sys-home-next').count()) === 0, 10_000);
+
+    // Another Edge, a run's own, and a look that failed: each said for what it is.
+    for (const [holder, key, err] of [
+      ['other', 'sys.profileHeld', 1],
+      ['own-run', 'sys.profileBot', 0],
+      ['unknown', 'sys.profileUnknown', 0],
+      ['free', 'sys.profileFree', 0],
+    ] as const) {
+      report = { ...report, profileHolder: holder, profileHeldBy: holder === 'free' ? [] : holder === 'unknown' ? 'unknown' : [7, 8] };
+      await page.reload();
+      await use.waitFor();
+      t.check(`whose Edge — ${holder}`, [await use.textContent(), await use.locator('.err').count()], [fill(key, { n: 2, pids: '7, 8' }), err]);
+    }
+
+    // COP_HOME and a clone: no Change…, and the badge says why.
+    for (const [install, from, badge] of [['package', 'env', 'sys.homeFromEnv'], ['checkout', 'checkout', 'sys.homeFromCheckout']] as const) {
+      report = { ...report, install, homeFrom: from, homeNext: null, homeDefault: install === 'package' ? home : null, homeMovedFrom: null };
+      await page.reload();
+      await row.waitFor();
+      t.check(`set by ${from}: said, and not changed here`, [await row.locator('.badge').textContent(), await row.getByRole('button').count()], [en[badge], 0]);
+    }
+  });
+
+  /*
    * The home screen after 2026-10-20: only the chat in the right panel, no Sessions, task register or plan from JSON
    * anywhere; Kerrigan on the home screen, saved as a file or copied, in the page's language; and an "i" beside the
    * panel's three tabs and beside Kerrigan, each saying what it is.
@@ -602,6 +776,16 @@ try {
     t.check('the right panel has the chat alone', await page.getByRole('tablist', { name: en['wb.chatPanel']! }).getByRole('tab').allTextContents(), [en['wb.chatTab']]);
     t.check('the bar on top links Settings and System, and nothing of the sessions', await page.locator('.wb-menu a').allTextContents(), [en['nav.defaults'], en['nav.system']]);
     t.check('no "Write in the chat", "Import a plan" or "Ask Kerrigan" on the home screen', await page.locator('.wb-welcome').getByRole('button').allTextContents(), [`${en['kerrigan.button']} ▾`, 'i']);
+    // What Kerrigan is, in the room under her button (operator, 2026-10-22: "short and clear; no empty space there").
+    const aboutBox = page.locator('.wb-welcome .kerrigan-about');
+    t.check('under her button: what Kerrigan is, and three things she is for', [await aboutBox.getByRole('heading').textContent(), await aboutBox.locator('li').count()], [en['kerrigan.aboutTitle'], 3]);
+    const aboutText = (await aboutBox.textContent()) ?? '';
+    t.truthy('and how to use her, by the names of her menu\'s items', aboutText.includes(`“${en['kerrigan.copy']}”`) && aboutText.includes(`“${en['kerrigan.save']}”`) && aboutText.includes(en['kerrigan.aboutNote']!), aboutText);
+    t.check(
+      'right under the button',
+      await page.evaluate(() => document.querySelector('.wb-welcome .kerrigan-about')!.getBoundingClientRect().top >= document.querySelector('.wb-welcome .kerrigan')!.getBoundingClientRect().bottom - 1),
+      true,
+    );
 
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
     await kerrigan.click();
@@ -660,11 +844,11 @@ try {
     t.truthy('in German: the controls by their German names, none left unfilled', german.includes(`**"${de['chat.newChat']}"**`) && german.includes(`**"${de['chat.pause']}"**`) && !german.includes('⟦'), german.slice(0, 300));
     await chooseLanguage(/English/);
 
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     await page.locator('nav').first().waitFor();
     const navLinks = await page.locator('header nav a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
     t.check('the other pages\' navigation has no Sessions, task register or plan from JSON', navLinks.filter((x) => x === '/sessions' || x === '/history' || x === '/import'), []);
-    t.check('the navigation: the chat, Settings and System, nothing else (2026-10-20)', navLinks.filter((x) => x !== null), ['/', '/defaults', '/system']);
+    t.check('the navigation: the chat, Settings and System, nothing else (2026-10-20)', navLinks.filter((x) => x !== null), ['/', '/settings', '/system']);
     for (const gone of ['/sessions', '/history', '/import', '/level1', '/presets', '/appearance']) {
       const r = await page.request.get(url(gone));
       t.truthy(`${gone} is not a page any more`, r.status() === 404 || !(await r.text()).includes('<main'), r.status());
@@ -682,7 +866,8 @@ try {
     const html = (name: string): Promise<string | undefined> => page.evaluate((n) => document.documentElement.dataset[n], name);
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).waitFor();
     const order = await page.locator('.wb-menu').evaluate((nav) => Array.from(nav.children).map((c) => (c.textContent ?? '').trim()));
-    t.check('in the bar on top, between Settings and System', order.slice(0, 3), [en['nav.defaults'], en['nav.appearance'], en['nav.system']]);
+    // System and Appearance swapped (operator, 2026-10-22): Settings, System, Appearance, then the language.
+    t.check('in the bar on top, after Settings and System, before the language', order.slice(0, 3), [en['nav.defaults'], en['nav.system'], en['nav.appearance']]);
     t.check('and no longer in the column of icons', await page.locator('.wb-activity').getByRole('button', { name: en['wb.appearance']!, exact: true }).count(), 0);
     // Cursors of the page's own, by the theme; the system's when asked for (2026-10-21).
     t.truthy('the page draws its own cursor', (await page.evaluate(() => getComputedStyle(document.body).cursor)).includes('url('), await page.evaluate(() => getComputedStyle(document.body).cursor));
@@ -716,8 +901,8 @@ try {
     await larger.click();
     await larger.click();
     t.check('A+ twice: two steps larger', await html('textsize'), 'huge');
-    for (let i = 0; i < 3; i++) await smaller.click();
-    t.check('A− three times: the smallest', [await html('textsize'), await smaller.isDisabled()], ['small', true]);
+    for (let i = 0; i < 6; i++) await smaller.click();
+    t.check('A− six times: the smallest of the eight', [await html('textsize'), await smaller.isDisabled()], ['smallest', true]);
 
     const aid = (key: string) => menu.getByRole('checkbox', { name: en[key]! });
     await aid('ap.night').check();
@@ -736,7 +921,7 @@ try {
     t.truthy('and its own again, drawn for each theme', lightCursor.includes('url(') && darkCursor.includes('url(') && lightCursor !== darkCursor, { lightCursor: lightCursor.slice(0, 80), darkCursor: darkCursor.slice(0, 80) });
     await theme('theme.dark').click();
     await page.reload();
-    t.check('kept in this browser, from before the first paint', [await html('theme'), await html('textsize'), await html('night'), await html('links')], ['dark', 'small', 'on', 'underline']);
+    t.check('kept in this browser, from before the first paint', [await html('theme'), await html('textsize'), await html('night'), await html('links')], ['dark', 'smallest', 'on', 'underline']);
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).click();
     await page.getByRole('dialog', { name: en['wb.appearance']! }).getByRole('button', { name: en['ap.reset']! }).click();
     t.check('back to the defaults: the machine\'s theme, normal text, no veil', [await html('theme'), await html('textsize'), await html('night')], ['light', 'normal', 'off']);
@@ -746,10 +931,14 @@ try {
     t.check('it is not a link to Settings', await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).evaluate((b) => b.tagName), 'BUTTON');
 
     // The Appearance page went (2026-10-20): the menu is where all of it is.
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     t.check('no page of its own in the navigation', await page.locator('nav a[href="/appearance"]').count(), 0);
     const pages = await page.locator('header nav').first().evaluate((nav) => Array.from(nav.children).map((c) => (c.textContent ?? '').trim()));
-    t.truthy('on the other pages too, between Settings and System', pages.indexOf(en['nav.appearance']!) === pages.indexOf(en['nav.defaults']!) + 1 && pages.indexOf(en['nav.system']!) === pages.indexOf(en['nav.appearance']!) + 1, pages);
+    t.truthy('on the other pages too, after System', pages.indexOf(en['nav.system']!) === pages.indexOf(en['nav.defaults']!) + 1 && pages.indexOf(en['nav.appearance']!) === pages.indexOf(en['nav.system']!) + 1, pages);
+    // The old address of Settings goes on to the new one, with its #part.
+    await page.goto(url('/defaults#skills'));
+    await page.waitForURL(/\/settings(\.html)?#skills$/, { timeout: 10_000 }).catch(() => undefined);
+    t.truthy('/defaults goes on to /settings, its #part kept', /\/settings(\.html)?#skills$/.test(page.url()), page.url());
   });
 
   /*
@@ -796,7 +985,7 @@ try {
    * each number's says its default, and each list's names every one of its choices.
    */
   await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     await page.locator('#execution input#max-iterations').waitFor();
     await page.locator('#gap-on').check();
     await page.locator('#gap-random').check();
@@ -812,7 +1001,7 @@ try {
       await pop.waitFor({ state: 'detached', timeout: 3_000 }).catch(() => undefined);
       return text;
     };
-    const defaults: Record<string, number> = { 'auto-continue': 3, 'min-approaches': 2, 'max-review-rounds': 2, 'retry-blocked': 2, 'max-iterations': 60, 'max-minutes': 240, 'max-subtasks': 20, 'reply-timeout': 900, 'gap-sec': 60, 'gap-max': 90 };
+    const defaults: Record<string, number> = { 'auto-continue': 3, 'min-approaches': 2, 'max-review-rounds': 2, 'retry-blocked': 2, 'max-iterations': 60, 'max-minutes': 240, 'max-subtasks': 20, 'reply-timeout': 900, 'max-message-chars': 120000, 'gap-sec': 60, 'gap-max': 90 };
     const noDefault: string[] = [];
     for (const [id, value] of Object.entries(defaults)) {
       const text = await tipOf(id);
@@ -861,7 +1050,7 @@ try {
    */
   await scenario('skills: written in Settings, chosen under the box or with /its-name, shown on the message', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
     await h.call('PUT', '/models/default', { model: 'Think deeper' });
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     const add = page.locator('.skill-new');
     await add.waitFor();
     await add.getByLabel(en['skills.name']!, { exact: true }).fill('new-test');
@@ -892,7 +1081,7 @@ try {
 
     // Deleted from Settings (operator, 2026-10-21: "an option to delete a skill"): Delete at the top of its card, named
     // for it, asks first; No keeps it, Delete deletes it.
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     const del = page.getByRole('button', { name: en['skills.removeOne']!.replace('{name}', 'new-test'), exact: true });
     await del.waitFor();
     t.check('Delete is on top of the skill, beside its name', [((await page.locator('.skill-entry:not(.skill-new) .skill-head').textContent()) ?? '').trim(), await del.isVisible()], [`/new-test${en['skills.remove']}`, true]);
@@ -926,9 +1115,10 @@ try {
     t.truthy('a few letters of the name find the file, the letters marked, its folder beside it', ((await first.textContent()) ?? '').includes('thing.ts') && ((await first.textContent()) ?? '').includes('src/deep') && (await first.locator('mark.qo-hit').count()) > 0, await first.textContent());
     await quick.getByRole('combobox').fill('thing:3');
     await quick.getByRole('combobox').press('Enter');
-    const editor = page.getByRole('textbox', { name: en['ed.label']!.replace('{path}', 'src/deep/thing.ts') });
-    await editor.waitFor();
-    const at = async (): Promise<number> => await editor.evaluate((el) => (el as HTMLTextAreaElement).value.slice(0, (el as HTMLTextAreaElement).selectionStart).split('\n').length);
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    // Named for its file, as the textarea was: Monaco's own input takes the label it is given (it is not drawn: attached).
+    await page.getByRole('textbox', { name: en['ed.label']!.replace('{path}', 'src/deep/thing.ts') }).waitFor({ state: 'attached', timeout: 30_000 });
+    const at = async (): Promise<number> => (await editorCursor(pane)).line;
     await waitFor('the cursor to be on line 3', async () => (await at()) === 3, 5_000).catch(() => undefined);
     t.check('name:3 opens it at line 3', await at(), 3);
 
@@ -952,7 +1142,7 @@ try {
     t.check('Match Whole Word: needle, not Needle2', (await status.textContent())?.trim(), en['search.results']!.replace('{n}', '2').replace('{files}', '1'));
     await page.locator('.sv-match').nth(1).click();
     await waitFor('the file to open at the match', async () => (await at()) === 4, 5_000).catch(() => undefined);
-    const chosen = await editor.evaluate((el) => (el as HTMLTextAreaElement).value.slice((el as HTMLTextAreaElement).selectionStart, (el as HTMLTextAreaElement).selectionEnd));
+    const chosen = (await editorCursor(pane)).chosen;
     t.check('a result opens its file at that line, the match chosen', [await at(), chosen], [4, 'needle']);
     await page.getByRole('button', { name: en['search.regex']!, exact: true }).click();
     await box.fill('needle(');
@@ -1014,11 +1204,13 @@ try {
     ], ['The guide', true, 'right', true]);
     await md.locator('.md-mermaid svg').waitFor({ timeout: 30_000 }).catch(() => undefined);
     t.truthy('the mermaid block drawn as its diagram', (await md.locator('.md-mermaid svg').count()) === 1 && ((await md.locator('.md-mermaid').textContent()) ?? '').includes('Ready?'), await md.locator('.md-mermaid').innerHTML().catch(() => ''));
-    t.check('and not as its text', await page.locator('.ed-body.ed-show-preview .ed-area').isVisible(), false);
+    t.check('and not as its text', await page.locator('.ed-body.ed-show-preview .ed-code').isVisible(), false);
     await page.getByRole('button', { name: en['ed.viewCode']!, exact: true }).click();
-    t.check('Code: its text to edit', [await page.locator('.ed-area textarea').isVisible(), await page.locator('.ed-preview').count()], [true, 0]);
+    await page.locator('.ed-monaco[data-ready]').waitFor({ timeout: 30_000 });
+    t.check('Code: its text to edit', [await page.locator('.ed-code .ed-monaco').isVisible(), await page.locator('.ed-preview').count()], [true, 0]);
     await page.getByRole('button', { name: en['ed.viewSplit']!, exact: true }).click();
-    t.check('Side by side: both', [await page.locator('.ed-area textarea').isVisible(), await page.locator('.ed-preview .md').isVisible()], [true, true]);
+    await page.locator('.ed-monaco[data-ready]').waitFor({ timeout: 30_000 });
+    t.check('Side by side: both', [await page.locator('.ed-code .ed-monaco').isVisible(), await page.locator('.ed-preview .md').isVisible()], [true, true]);
     await page.getByRole('button', { name: en['ed.viewPreview']!, exact: true }).click();
     await md.getByRole('link', { name: 'the other file' }).click();
     await page.locator('.wb-tab').filter({ hasText: 'other.md' }).waitFor({ timeout: 5_000 }).catch(() => undefined);
@@ -1030,7 +1222,7 @@ try {
    * random time; that one ticked, the longest.
    */
   await scenario('Settings: the pause between messages, its seconds and a random time appearing as the boxes are ticked', {}, async (h, page, url) => {
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     const on = page.getByRole('checkbox', { name: en['exec.gap']!, exact: true });
     await on.waitFor();
     t.check('off at first, nothing under it', [await on.isChecked(), await page.locator('#gap-sec').count(), await page.locator('#gap-random').count()], [false, 0, 0]);
@@ -1063,26 +1255,30 @@ try {
     const files = page.getByRole('tree', { name: en['wb.files']! });
     await files.getByRole('button', { name: 'greet.ts' }).click();
     const pane = page.locator('.wb-file-pane:not([hidden])');
-    const box = pane.locator('.ed-input');
-    await box.waitFor();
+    const shown = (): Locator => page.locator('.wb-file-pane:not([hidden]) .ed-monaco');
+    // The editor of VS Code (Monaco, 2026-10-22): its colours are its tokens' classes, its line numbers its own.
+    const colours = async (): Promise<number> => await shown().locator('.view-lines').evaluate((el) => new Set([...el.querySelectorAll('span span')].flatMap((s) => s.className.match(/\bmtk\d+\b/g) ?? [])).size);
+    await editorText(pane);
     t.check('found by itself: TypeScript', ((await pane.locator('.ed-lang option:checked').textContent()) ?? '').trim(), en['ed.langAuto']!.replace('{name}', 'TypeScript'));
-    t.truthy('in colour: keywords, a number, a comment', (await pane.locator('.ed-shown .hl-kw').count()) >= 3 && (await pane.locator('.ed-shown .hl-num').count()) >= 1 && (await pane.locator('.ed-shown .hl-com').count()) === 1, await pane.locator('.ed-shown').innerHTML());
-    t.check('with line numbers', ((await pane.locator('.ed-gutter').textContent()) ?? '').trim().split('\n'), ['1', '2', '3', '4', '5']);
+    await waitFor('the colours', async () => (await colours()) >= 4, 10_000).catch(() => undefined);
+    t.truthy('in colour: keywords, a number, a comment, each its own', (await colours()) >= 4, await shown().locator('.view-lines').innerHTML());
+    t.check('with line numbers', (await shown().locator('.line-numbers').allTextContents()).map((n) => n.trim()), ['1', '2', '3', '4', '5']);
     t.check('and an icon of its kind on its tab', await page.getByRole('tab', { name: /greet\.ts/ }).locator('svg.file-ico').count(), 1);
     await pane.locator('.ed-lang').selectOption('plain');
-    t.check('chosen by hand, plain text: no colours', await pane.locator('.ed-shown .hl-kw').count(), 0);
+    await waitFor('plain text', async () => (await colours()) <= 1, 10_000).catch(() => undefined);
+    t.check('chosen by hand, plain text: no colours', await colours(), 1);
     await pane.locator('.ed-lang').selectOption('auto');
 
-    await box.click();
+    await shown().locator('.view-lines').click();
     await page.keyboard.press('Control+End');
     await page.keyboard.type('// edited');
     await page.getByRole('tab', { name: /greet\.ts/ }).locator('.wb-unsaved').waitFor();
     t.check('edited: "Not saved", and a dot on its tab', ((await pane.locator('.ed-bar [role="status"]').textContent()) ?? '').trim(), en['ed.unsaved']);
     await files.getByRole('button', { name: 'notes.txt' }).click();
-    await page.locator('.wb-file-pane:not([hidden]) .ed-input').waitFor();
+    await editorText(page.locator('.wb-file-pane:not([hidden])'));
     await page.getByRole('tab', { name: /greet\.ts/ }).click();
-    t.truthy('another tab and back: the edit is still there', (await page.locator('.wb-file-pane:not([hidden]) .ed-input').inputValue()).endsWith('// edited'), '');
-    await page.locator('.wb-file-pane:not([hidden]) .ed-input').click();
+    t.truthy('another tab and back: the edit is still there', (await editorText(page.locator('.wb-file-pane:not([hidden])'))).endsWith('// edited'), '');
+    await shown().locator('.view-lines').click();
     await page.keyboard.press('Control+S');
     await page.locator('.wb-file-pane:not([hidden]) .ed-bar').getByText(en['ed.saved']!).waitFor();
     const onDisk = readFileSync(ts, 'utf8');
@@ -1091,9 +1287,10 @@ try {
 
     // A change on disk with no edit: followed. Under an edit: asked about.
     writeFileSync(ts, 'export const a = 2;\r\n');
-    await waitFor('the editor to follow the disk', async () => (await page.locator('.wb-file-pane:not([hidden]) .ed-input').inputValue()) === 'export const a = 2;\n', 10_000).catch(() => undefined);
-    t.check('no edit: it follows the change on disk', await page.locator('.wb-file-pane:not([hidden]) .ed-input').inputValue(), 'export const a = 2;\n');
-    await page.locator('.wb-file-pane:not([hidden]) .ed-input').click();
+    // As on disk, its line endings too: VS Code's editor keeps a file's CRLF, where the textarea before it showed LF.
+    await waitFor('the editor to follow the disk', async () => (await editorText(pane)) === 'export const a = 2;\r\n', 10_000).catch(() => undefined);
+    t.check('no edit: it follows the change on disk', await editorText(pane), 'export const a = 2;\r\n');
+    await shown().locator('.view-lines').click();
     await page.keyboard.press('Control+End');
     await page.keyboard.type('// mine');
     writeFileSync(ts, 'export const a = 3;\r\n');
@@ -1104,13 +1301,40 @@ try {
     await page.locator('.wb-file-pane:not([hidden]) .ed-bar').getByText(en['ed.saved']!).waitFor();
     t.check('"Save over it": the edit is on disk', readFileSync(ts, 'utf8'), 'export const a = 2;\r\n// mine');
 
-    // Tab indents, through the browser's own edit.
-    await page.locator('.wb-file-pane:not([hidden]) .ed-input').click();
+    // Tab indents, and Ctrl+Z takes it back, as in VS Code.
+    await shown().locator('.view-lines').click();
     await page.keyboard.press('Control+Home');
     await page.keyboard.press('Tab');
-    t.truthy('Tab indents the line', (await page.locator('.wb-file-pane:not([hidden]) .ed-input').inputValue()).startsWith('  export'), '');
+    t.truthy('Tab indents the line', (await editorText(pane)).startsWith('  export'), await editorText(pane));
     await page.keyboard.press('Control+Z');
-    t.truthy('and Ctrl+Z takes it back', (await page.locator('.wb-file-pane:not([hidden]) .ed-input').inputValue()).startsWith('export'), '');
+    t.truthy('and Ctrl+Z takes it back', (await editorText(pane)).startsWith('export'), await editorText(pane));
+
+    /*
+     * Typed fast, it stays as typed (2026-10-22: the text handed up and back a render later was put back into the
+     * editor, and a burst of keys came out scrambled), and "Revert my changes" still puts the file back.
+     */
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('\nconst quick = [1, 2, 3].map((n) => n * 2);', { delay: 0 });
+    await sleep(500);
+    t.truthy('typed fast: exactly as typed, where it was typed', (await editorText(pane)).endsWith('\nconst quick = [1, 2, 3].map((n) => n * 2);'), await editorText(pane));
+    await pane.getByRole('button', { name: en['ed.revert']!, exact: true }).click();
+    await waitFor('the file put back', async () => (await editorText(pane)) === readFileSync(ts, 'utf8'), 5_000).catch(() => undefined);
+    t.check('"Revert my changes": the file as it is on disk again', await editorText(pane), readFileSync(ts, 'utf8'));
+
+    /*
+     * The editor of VS Code (operator, 2026-10-22: Monaco): IntelliSense for TypeScript, from its worker — a member of a
+     * type offered after the dot, with its type.
+     */
+    writeFileSync(join(h.repo, 'user.ts'), 'interface User {\n  name: string;\n  email: string;\n}\nconst u: User = { name: "a", email: "b" };\n');
+    await files.getByRole('button', { name: 'user.ts' }).click();
+    const userPane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(userPane);
+    await userPane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('u.');
+    const suggest = page.locator('.suggest-widget .monaco-list-row');
+    await suggest.first().waitFor({ timeout: 20_000 }).catch(() => undefined);
+    t.truthy('IntelliSense: the members of the type, after the dot', (await suggest.allTextContents()).some((s) => s.startsWith('email')) && (await suggest.allTextContents()).some((s) => s.startsWith('name')), await suggest.allTextContents());
   });
 
   /*
@@ -1245,8 +1469,8 @@ try {
     const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create hello.txt holding hi.', model: 'Think deeper' });
     h.chat.script(reply.steps(write('hello.txt', 'hi')), reply.done());
     await h.run(sent.threadId);
-    await page.goto(url('/defaults'));
-    const sessionsLink = page.locator('nav a[href="/defaults"]');
+    await page.goto(url('/settings'));
+    const sessionsLink = page.locator('nav a[href="/settings"]');
     await sessionsLink.waitFor();
     await page.getByRole('button', { name: 'Language', exact: true }).first().click();
     await page.getByRole('menuitemradio', { name: /Български/ }).click();
@@ -1259,7 +1483,7 @@ try {
 
     await page.setViewportSize({ width: 360, height: 780 });
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), sent.threadId);
-    const pages = ['/', '/defaults', '/system'];
+    const pages = ['/', '/settings', '/system'];
     const wide: Record<string, number> = {};
     for (const size of ['normal', 'giant']) {
       await page.evaluate((textSize) => localStorage.setItem('cop.appearance', JSON.stringify({ textSize })), size);
@@ -1539,7 +1763,7 @@ try {
     await page.goto(url('/'));
     const top = page.locator('.wb-menu');
     await top.getByRole('link', { name: en['nav.system']!, exact: true }).waitFor();
-    t.check('on the chat\'s screen: Settings and System on top', await top.getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href'))), ['/defaults', '/system']);
+    t.check('on the chat\'s screen: Settings and System on top', await top.getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href'))), ['/settings', '/system']);
     const button = top.getByRole('button', { name: 'Language', exact: true });
     await button.click();
     const items = page.getByRole('menuitemradio');

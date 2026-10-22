@@ -20,7 +20,7 @@ const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const MAX_FILE = 2 * 1024 * 1024;
 const MAX_COMMITS = 200;
 
-export type GitArea = 'staged' | 'changes' | 'commit';
+export type GitArea = 'staged' | 'changes' | 'commit' | 'branch';
 
 export type GitFile = {
   path: string;
@@ -166,6 +166,109 @@ export async function workspaceGit(dir: string): Promise<WorkspaceGit> {
   };
 }
 
+/**
+ * A file the branch changed, as a pull request lists it, and whether some of it is not committed yet: staged, not
+ * staged, not tracked by git at all, or staged and changed again since ("mixed").
+ */
+export type BranchFile = GitFile & { committed: boolean; uncommitted?: 'staged' | 'changes' | 'untracked' | 'mixed' };
+
+export type BranchChanges = {
+  dir: string;
+  isRepo: boolean;
+  branch?: string;
+  /** The branch compared with, and the ones it may be. */
+  base?: string;
+  bases: string[];
+  /** Where the branch left the base: what a pull request is compared from. */
+  mergeBase?: string;
+  /** Commits of the branch the base has not, and of the base the branch has not. */
+  ahead: number;
+  behind: number;
+  /** The branch's own commits, newest first (at most `MAX_BRANCH_COMMITS`). */
+  commits: string[];
+  files: BranchFile[];
+  /** Whether there were more files than the ones listed. */
+  moreFiles: boolean;
+  /** Why there is nothing to compare: no other branch, no common history. */
+  problem?: string;
+};
+
+const MAX_BRANCH_COMMITS = 500;
+const MAX_BRANCH_FILES = 3000;
+
+/** Every branch, local and remote, a branch can be compared with: not the one it is, not a remote's HEAD. */
+async function branchRefs(dir: string, current: string): Promise<string[]> {
+  const r = await git(dir, ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
+  if (!r.ok) return [];
+  return r.stdout
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter((x) => x && x !== current && !/\/HEAD$/.test(x) && x !== 'HEAD');
+}
+
+/** The branch a pull request of this one would go into: the remote's default, else main, master or develop. */
+async function defaultBase(dir: string, refs: string[]): Promise<string | undefined> {
+  const head = await git(dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  if (head.ok && refs.includes(head.stdout.trim())) return head.stdout.trim();
+  return ['origin/main', 'origin/master', 'main', 'master', 'origin/develop', 'develop'].find((b) => refs.includes(b)) ?? refs[0];
+}
+
+/**
+ * Everything the branch changed, as a pull request shows it (operator, 2026-10-22: "show all the files changed on this
+ * branch, as a pull request does, not only the ones not committed; and of them, which are not committed yet"): each
+ * file against where the branch left `base` — its commits and what is not committed yet together, the files git does
+ * not track among them — marked with whether it is in a commit of the branch, and what of it is not committed. `base`
+ * must be one of the branches there are; left out, the one a pull request would go into. Read-only.
+ */
+export async function branchChanges(dir: string, base?: string): Promise<BranchChanges> {
+  const none: BranchChanges = { dir, isRepo: false, bases: [], ahead: 0, behind: 0, commits: [], files: [], moreFiles: false };
+  if (!dir || !looksLikeRepo(dir)) return none;
+  const branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || undefined;
+  const out: BranchChanges = { ...none, isRepo: true, ...(branch ? { branch } : {}) };
+  if (!(await hasHead(dir))) return { ...out, problem: 'no-commit' };
+  const bases = await branchRefs(dir, branch ?? '');
+  out.bases = bases;
+  // Only a branch the list names: nothing else of the request reaches git.
+  const chosen = base && bases.includes(base) ? base : await defaultBase(dir, bases);
+  if (!chosen) return { ...out, problem: 'no-base' };
+  out.base = chosen;
+  const mb = await git(dir, ['merge-base', chosen, 'HEAD']);
+  if (!mb.ok || !mb.stdout) return { ...out, problem: 'no-common' };
+  const mergeBase = mb.stdout.trim();
+  out.mergeBase = mergeBase;
+  const counts = await git(dir, ['rev-list', '--left-right', '--count', `${chosen}...HEAD`]);
+  const [behind = '0', ahead = '0'] = counts.stdout.split(/\s+/);
+  out.ahead = Number(ahead) || 0;
+  out.behind = Number(behind) || 0;
+  const list = await git(dir, ['rev-list', `--max-count=${MAX_BRANCH_COMMITS}`, `${mergeBase}..HEAD`]);
+  out.commits = list.ok ? list.stdout.split(/\s+/).filter(Boolean) : [];
+
+  // The branch's commits; the whole of it against the working tree; and what is not committed, by where it is.
+  const committed = await diffFiles(dir, [mergeBase, 'HEAD']);
+  const net = await diffFiles(dir, [mergeBase]);
+  const staged = new Set((await diffFiles(dir, ['--cached', 'HEAD'])).flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]));
+  const unstaged = new Set((await diffFiles(dir, [])).flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]));
+  const others = await gitBytes(dir, ['ls-files', '--others', '--exclude-standard', '-z']);
+  const fresh = others.ok ? others.stdout.toString('utf8').split('\0').filter(Boolean) : [];
+  const inCommits = new Set(committed.flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]));
+
+  const files: GitFile[] = [...net, ...(await Promise.all(fresh.slice(0, MAX_BRANCH_FILES).map((p) => untracked(dir, p)))).map((f) => ({ ...f, status: 'A' }))];
+  // Committed on the branch and undone since in the working tree: still the branch's, nothing of it left against the base.
+  for (const c of committed) if (!files.some((f) => f.path === c.path)) files.push({ ...c, added: 0, removed: 0 });
+  const untrackedSet = new Set(fresh);
+  const marked: BranchFile[] = files.map((f) => {
+    const keys = [f.path, ...(f.oldPath ? [f.oldPath] : [])];
+    const isStaged = keys.some((k) => staged.has(k));
+    const isUnstaged = keys.some((k) => unstaged.has(k));
+    const uncommitted: BranchFile['uncommitted'] = untrackedSet.has(f.path) ? 'untracked' : isStaged && isUnstaged ? 'mixed' : isStaged ? 'staged' : isUnstaged ? 'changes' : undefined;
+    return { ...f, committed: keys.some((k) => inCommits.has(k)), ...(uncommitted ? { uncommitted } : {}) };
+  });
+  marked.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  out.files = marked.slice(0, MAX_BRANCH_FILES);
+  out.moreFiles = marked.length > MAX_BRANCH_FILES || fresh.length > MAX_BRANCH_FILES;
+  return out;
+}
+
 /** One commit: who, when, what it says, and the files it changed (a first commit against nothing). */
 export async function workspaceCommit(dir: string, sha: string): Promise<GitCommit & { body: string; files: GitFile[] }> {
   if (!SHA.test(sha)) throw new Error('That is not a commit.');
@@ -196,7 +299,18 @@ export async function workspaceGitVersions(dir: string, area: GitArea, path: str
   let file: GitFile | undefined;
   let before: { bytes: Buffer | null; tooLarge: boolean } = { bytes: null, tooLarge: false };
   let after: { bytes: Buffer | null; tooLarge: boolean } = { bytes: null, tooLarge: false };
-  if (area === 'commit') {
+  if (area === 'branch') {
+    // As a pull request shows it: where the branch left the base, against the file as it is now, committed or not.
+    const b = await branchChanges(dir, commit);
+    if (!b.mergeBase) throw new Error('This branch has nothing to compare with.');
+    file = b.files.find((f) => f.path === want);
+    if (!file) throw new Error('That file is not one this branch changed.');
+    if (file.status !== 'A') before = await fileAt(dir, b.mergeBase, file.oldPath ?? file.path, MAX_FILE);
+    if (file.status !== 'D') {
+      const info = await stat(join(dir, file.path)).catch(() => null);
+      if (info?.isFile()) after = info.size > MAX_FILE ? { bytes: null, tooLarge: true } : { bytes: await readFile(join(dir, file.path)), tooLarge: false };
+    }
+  } else if (area === 'commit') {
     const c = await workspaceCommit(dir, commit ?? '');
     file = c.files.find((f) => f.path === want);
     if (!file) throw new Error('That file is not one this commit changed.');

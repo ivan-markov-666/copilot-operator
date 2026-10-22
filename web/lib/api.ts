@@ -874,7 +874,24 @@ export type WorkspaceGit = {
   commits: GitCommit[];
   moreCommits: boolean;
 };
-export type GitArea = 'staged' | 'changes' | 'commit';
+export type GitArea = 'staged' | 'changes' | 'commit' | 'branch';
+/** A file the branch changed, as a pull request lists it, and what of it is not committed yet (2026-10-22). */
+export type BranchFile = GitFile & { committed: boolean; uncommitted?: 'staged' | 'changes' | 'untracked' | 'mixed' };
+/** Everything the branch changed against a base: its commits and what is not committed yet together. */
+export type BranchChanges = {
+  dir: string;
+  isRepo: boolean;
+  branch?: string;
+  base?: string;
+  bases: string[];
+  mergeBase?: string;
+  ahead: number;
+  behind: number;
+  commits: string[];
+  files: BranchFile[];
+  moreFiles: boolean;
+  problem?: 'no-commit' | 'no-base' | 'no-common';
+};
 
 export type Story = {
   runId: string;
@@ -1170,6 +1187,8 @@ export const api = {
     call<{ path: string; version: string; size: number }>('/workspace/file', { method: 'PUT', body: JSON.stringify({ path, text, ...(base ? { base } : {}) }) }),
   /** The open folder's git: what changed, staged and not, and the branch's commits. Read-only. */
   workspaceGit: () => call<WorkspaceGit>('/workspace/git'),
+  /** Everything the branch changed against `base` (one of the branches it lists), as a pull request shows it. */
+  workspaceBranch: (base?: string) => call<BranchChanges>(`/workspace/git/branch${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   workspaceCommit: (sha: string) => call<GitCommit & { body: string; files: GitFile[] }>(`/workspace/git/commit?sha=${encodeURIComponent(sha)}`),
   /** A file of those lists, as it was before and after: for the side-by-side view. */
   workspaceGitFile: (area: GitArea, path: string, commit?: string) =>
@@ -1215,6 +1234,12 @@ export const api = {
   /** Opens the machine's own folder dialog. Resolves when the operator picks or cancels. */
   // Open until the operator closes the folder picker.
   browseFolder: (start?: string) => call<FolderPick>('/browse-folder', { method: 'POST', body: JSON.stringify({ start }) }, { timeoutMs: null }),
+  /**
+   * The bot's folder from its next start: `dir`, or null for the default; `copy` copies what is in the folder now
+   * (`kept` names what the new folder had already, left as it was).
+   */
+  setHome: (dir: string | null, copy: boolean) =>
+    call<{ home: string; copied: string[]; kept: string[]; restart: true }>('/home', { method: 'PUT', body: JSON.stringify({ dir, copy }) }),
 
   /** Is anything running right now? Answered from memory, so polling it is fine. */
   activity: () => call<Activity>('/activity'),

@@ -13,10 +13,12 @@
  * Plain .mjs, run by node: nothing here may depend on a build that has not happened yet.
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { notInstalled, notInstalledLines } from './installed.mjs';
+import { bundledPackages, noticesText } from './thirdPartyNotices.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const web = join(root, 'web');
@@ -138,6 +140,17 @@ run('building the web interface as static files', [bin('next/dist/bin/next'), 'b
 });
 if (!existsSync(join(exported, 'index.html'))) die('the web build produced no index.html in web/.next-export');
 
+/*
+ * The licences of what the interface is built from, beside it (2026-10-22): Next.js, React, mermaid, Monaco and all
+ * they bring are bundled into it, and their licences ask that their notices go with every copy. Written into the
+ * export, so the scan below reads it and the copy carries it.
+ */
+if (existsSync(exported)) {
+  const list = bundledPackages(root, 'web');
+  writeFileSync(join(exported, 'third-party-notices.txt'), noticesText(list, 'copilot-operator'), 'utf8');
+  log(`third-party notices: ${list.length} package(s)`);
+}
+
 /** What of the export ships: the static pages and their assets, not Next's build bookkeeping beside them. */
 const ships = (path) => {
   const rel = path.slice(exported.length).replace(/\\/g, '/');
@@ -174,6 +187,9 @@ const lookFor = (value) => {
 for (const file of [
   join(root, 'data', 'api-token'),
   join(root, '.copilot-operator', 'data', 'api-token'),
+  // The bot's own folder since 2026-10-22, where an installed copy on this machine keeps its token.
+  join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'copilot-operator', 'data', 'api-token'),
+  ...(process.env.COP_HOME ? [join(process.env.COP_HOME, 'data', 'api-token')] : []),
   ...(process.env.COP_DATA_DIR ? [join(process.env.COP_DATA_DIR, 'api-token')] : []),
 ]) {
   try {

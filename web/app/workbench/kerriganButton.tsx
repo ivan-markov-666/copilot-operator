@@ -13,6 +13,29 @@ import { useT, type Key } from '../../lib/i18n';
 import { copyText } from '../copyButton';
 import { InfoTip, usePopover } from '../popover';
 
+/**
+ * What Kerrigan is and what she is for, said where there is room for it (operator, 2026-10-22: "in the empty space
+ * under the Kerrigan drop-down, what it is and its use cases; short and clear"). The ⓘ beside the button keeps the
+ * whole story.
+ */
+export function KerriganAbout() {
+  const { t } = useT();
+  return (
+    <section className="kerrigan-about" aria-labelledby="kerrigan-about-title">
+      <h3 id="kerrigan-about-title">{t('kerrigan.aboutTitle')}</h3>
+      <p>{t('kerrigan.aboutWhat')}</p>
+      <p className="kerrigan-about-uses">{t('kerrigan.aboutUses')}</p>
+      <ul>
+        <li>{t('kerrigan.aboutUse1')}</li>
+        <li>{t('kerrigan.aboutUse2')}</li>
+        <li>{t('kerrigan.aboutUse3')}</li>
+      </ul>
+      <p>{t('kerrigan.aboutHow', { button: t('kerrigan.button'), copy: t('kerrigan.copy'), save: t('kerrigan.save') })}</p>
+      <p className="muted small">{t('kerrigan.aboutNote')}</p>
+    </section>
+  );
+}
+
 export function KerriganButton() {
   const { t, locale } = useT();
   const pop = usePopover('below');

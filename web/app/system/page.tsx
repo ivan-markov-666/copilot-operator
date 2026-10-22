@@ -2,7 +2,141 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
-import { useT } from '../../lib/i18n';
+import { useFmtTime, useT } from '../../lib/i18n';
+
+type Moved = { from: string; at: string; stillThere: boolean };
+
+/**
+ * The bot's folder (operator, 2026-10-22): where its settings, conversations, logs and Edge profile are, and a way to
+ * keep them elsewhere from the next start. A clone keeps them in the clone, and COP_HOME is changed where it is set.
+ */
+function HomeRow({ doctor, onSaved }: { doctor: Record<string, unknown>; onSaved: () => void }) {
+  const { t } = useT();
+  const fmtTime = useFmtTime();
+  const home = String(doctor.home ?? '');
+  const from = String(doctor.homeFrom ?? 'checkout');
+  const next = typeof doctor.homeNext === 'string' ? doctor.homeNext : null;
+  const byDefault = typeof doctor.homeDefault === 'string' ? doctor.homeDefault : null;
+  const moved = (doctor.homeMovedFrom ?? null) as Moved | null;
+  const changeable = doctor.install === 'package' && from !== 'env';
+  const same = (a: string, b: string) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase();
+
+  const [asking, setAsking] = useState<string | null>(null);
+  const [copy, setCopy] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState('');
+
+  const browse = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      const picked = await api.browseFolder((asking ?? '').trim() || home || undefined);
+      if (picked.ok) setAsking(picked.path);
+      else if (!picked.cancelled) setErr(picked.reason ?? '');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const choose = async (dir: string | null) => {
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await api.setHome(dir, copy);
+      setSaved(t('sys.homeSaved', { dir: r.home }));
+      setAsking(null);
+      onSaved();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const badge = from === 'chosen' ? t('sys.homeFromChosen') : from === 'env' ? t('sys.homeFromEnv') : from === 'default' ? t('sys.homeFromDefault') : t('sys.homeFromCheckout');
+  // Back to the default is offered whenever the next start would not use it.
+  const offBase = changeable && byDefault !== null && next !== null && !same(next, byDefault);
+
+  return (
+    <tr className="sys-home">
+      <th>{t('sys.home')}</th>
+      <td>
+        <span className="sys-home-dir">{home}</span> <span className="badge">{badge}</span>
+        <div className="muted small">{t('sys.homeHolds')}</div>
+        {next !== null && !same(next, home) && <div className="notice caution sys-home-next">{t('sys.homeNext', { dir: next })}</div>}
+        {moved?.stillThere && <div className="notice calm sys-home-moved">{t('sys.homeMoved', { from: moved.from, at: fmtTime(moved.at) })}</div>}
+        {changeable && asking === null && (
+          <div className="row" style={{ marginTop: 6 }}>
+            <button type="button" className="sys-home-change" disabled={busy} onClick={() => { setSaved(''); setErr(''); setAsking(next ?? home); }}>
+              {t('sys.homeChange')}
+            </button>
+            {offBase && (
+              <button type="button" className="quiet sys-home-reset" disabled={busy} onClick={() => { setSaved(''); setAsking(byDefault); }}>
+                {t('sys.homeReset')}
+              </button>
+            )}
+          </div>
+        )}
+        {changeable && asking !== null && (
+          <div className="notice calm sys-home-ask">
+            <div>{t('sys.homeAsk', { dir: asking || '…' })}</div>
+            <div className="row" style={{ marginTop: 6 }}>
+              <input type="text" className="sys-home-input" value={asking} onChange={(e) => setAsking(e.target.value)} spellCheck={false} aria-label={t('sys.home')} style={{ flex: 1, minWidth: 0 }} />
+              {doctor.folderDialog === true && (
+                <button type="button" disabled={busy} onClick={browse}>
+                  {t('mirror.browse')}
+                </button>
+              )}
+            </div>
+            <label className="sys-home-copyline small">
+              <input type="checkbox" className="sys-home-copy" checked={copy} onChange={(e) => setCopy(e.target.checked)} />
+              <span>{t('sys.homeCopy')}</span>
+            </label>
+            <div className="row" style={{ marginTop: 6 }}>
+              <button
+                type="button"
+                className="primary sys-home-use"
+                disabled={busy || !asking.trim()}
+                onClick={() => choose(byDefault !== null && same(asking.trim(), byDefault) ? null : asking.trim())}
+              >
+                {t('sys.homeUse')}
+              </button>
+              <button type="button" className="quiet" disabled={busy} onClick={() => { setAsking(null); setErr(''); }}>
+                {t('dialog.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
+        {saved && <div className="notice calm sys-home-saved">{saved}</div>}
+        {err && <div className="err sys-home-err">{err}</div>}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Whose Edge has the bot's profile open (2026-10-22). Until then any Edge on it was "a run would fail" unless a run was
+ * going, and the chat's window — kept open between messages by the bot itself — was shown as that warning.
+ */
+function ProfileUse({ doctor }: { doctor: Record<string, unknown> }) {
+  const { t } = useT();
+  const pids = Array.isArray(doctor.profileHeldBy) ? (doctor.profileHeldBy as number[]) : [];
+  switch (doctor.profileHolder) {
+    case 'own-run':
+      return <span className="muted">{t('sys.profileBot', { n: pids.length })}</span>;
+    case 'own-window':
+      return <span className="muted">{t('sys.profileOwnWindow', { n: pids.length })}</span>;
+    case 'other':
+      return <span className="err">{t('sys.profileHeld', { n: pids.length, pids: pids.join(', ') })}</span>;
+    case 'unknown':
+      return <span className="muted">{t('sys.profileUnknown')}</span>;
+    default:
+      return <>{t('sys.profileFree')}</>;
+  }
+}
 
 export default function SystemPage() {
   const { t } = useT();
@@ -10,12 +144,11 @@ export default function SystemPage() {
   const [settings, setSettings] = useState<{ raw: Record<string, unknown>; resolved: Record<string, unknown> } | null>(null);
   const [err, setErr] = useState('');
 
+  const readDoctor = () => api.doctor().then(setDoctor).catch((e) => setErr((e as Error).message));
   useEffect(() => {
-    api.doctor().then(setDoctor).catch((e) => setErr((e as Error).message));
+    readDoctor();
     api.settings().then(setSettings).catch((e) => setErr((e as Error).message));
   }, []);
-
-  const held = doctor?.profileHeldBy as number[] | 'unknown' | undefined;
 
   return (
     <>
@@ -38,30 +171,17 @@ export default function SystemPage() {
                 <th>{t('sys.edge')}</th>
                 <td>{doctor.edge ? String(doctor.edge) : <span className="err">{t('sys.edgeMissing')}</span>}</td>
               </tr>
+              <HomeRow doctor={doctor} onSaved={readDoctor} />
               <tr>
                 <th>{t('sys.profile')}</th>
                 <td>
                   {String(doctor.profileDir)} {doctor.profileExists ? '' : <span className="muted">{t('sys.profileMissing')}</span>}
                 </td>
               </tr>
-              <tr>
+              <tr className="sys-profile-use">
                 <th>{t('sys.profileInUse')}</th>
                 <td>
-                  {Array.isArray(held) && held.length > 0 && doctor.botRunning ? (
-                    <span className="muted">{t('sys.profileBot', { n: held.length })}</span>
-                  ) : Array.isArray(held) && held.length > 0 ? (
-                    <span className="err">{t('sys.profileHeld', { pids: held.join(', ') })}</span>
-                  ) : held === 'unknown' ? (
-                    <span className="muted">{t('sys.profileUnknown')}</span>
-                  ) : (
-                    t('sys.profileFree')
-                  )}
-                </td>
-              </tr>
-              <tr>
-                <th>{t('sys.desktop')}</th>
-                <td>
-                  {String(doctor.desktop)} <span className="muted">{doctor.desktopSynced ? t('sys.desktopSynced') : t('sys.desktopLocal')}</span>
+                  <ProfileUse doctor={doctor} />
                 </td>
               </tr>
               <tr>
@@ -94,7 +214,7 @@ export default function SystemPage() {
 
       <div className="panel">
         <h2>{t('sys.settings')}</h2>
-        <p className="muted small">{t('sys.settingsHint', { file: 'data/settings.json', example: 'run.example.yaml' })}</p>
+        <p className="muted small">{t('sys.settingsHint', { file: String(doctor?.settingsFile ?? 'data/settings.json'), example: 'run.example.yaml' })}</p>
         {settings && (
           <>
             <h3>{t('sys.asSaved')}</h3>

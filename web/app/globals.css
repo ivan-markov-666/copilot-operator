@@ -111,6 +111,9 @@
  * Anything drawn at a fixed size in this file — the page's width, icon buttons, tick boxes — is
  * multiplied by the same factor, or the text outgrows the thing it sits in.
  */
+:root[data-textsize='smallest'] { --scale: 0.6; }
+:root[data-textsize='verysmall'] { --scale: 0.7; }
+:root[data-textsize='compact'] { --scale: 0.8; }
 :root[data-textsize='small'] { --scale: 0.9; }
 :root[data-textsize='large'] { --scale: 1.12; }
 :root[data-textsize='huge'] { --scale: 1.28; }
@@ -1111,6 +1114,21 @@ button.linkish:hover { text-decoration: underline; }
 .wb-git-status.s-M, .wb-git-status.s-R, .wb-git-status.s-T, .wb-git-status.s-C { color: var(--warn); }
 .wb-git-status.s-A, .wb-git-status.s-U { color: var(--ok); }
 .wb-git-status.s-D, .wb-git-status.s-conflict { color: var(--bad); }
+/* "On this branch" (2026-10-22): every file the branch changed, as a pull request lists them; a dot on what is not committed. */
+.wb-branch-base { display: flex; align-items: center; gap: 6px; padding: 4px 10px; min-width: 0; }
+.wb-branch-base select { flex: 1; min-width: 0; width: auto; padding: 2px 6px; font-size: calc(12.5px * var(--scale)); }
+.wb-branch-counts { margin: 0 0 4px; }
+.wb-branch-counts > span { display: block; }
+.wb-branch-files { white-space: nowrap; }
+.wb-branch-filter { display: flex; flex-wrap: wrap; gap: 2px; margin: 2px 10px 6px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.wb-branch-filter button { flex: 1 1 auto; padding: 3px 5px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: calc(12px * var(--scale)); white-space: nowrap; }
+.wb-branch-filter button.on { background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); font-weight: 600; }
+.wb-branch-legend { margin: 0 0 4px; }
+.wb-uncommitted { flex: none; width: 1em; text-align: center; color: var(--warn); font-size: calc(11px * var(--scale)); }
+.wb-uncommitted.u-untracked { color: var(--ok); }
+.wb-uncommitted.none { visibility: hidden; }
+.wb-commits li.on-branch > .wb-row { box-shadow: inset 2px 0 0 var(--accent); }
+.wb-branch-start { margin: 4px 10px; padding-top: 4px; border-top: 1px dashed var(--line-strong); color: var(--muted); }
 .wb-gitdiff { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .wb-gitdiff .diff-scroll { flex: 1; min-height: 0; overflow: auto; }
 .copy-btn { flex: none; padding: 1px 6px; font-size: calc(11.5px * var(--scale)); opacity: 0.7; }
@@ -1186,15 +1204,11 @@ button.linkish:hover { text-decoration: underline; }
 .ed-lang { width: auto; max-width: 220px; padding: 3px 26px 3px 8px; background-position: right 8px center; font-size: calc(12.5px * var(--scale)); }
 .ed-conflict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
 .ed-body { flex: 1; min-height: 0; display: flex; border: 1px solid var(--line); border-radius: 8px; background: var(--code); overflow: hidden; }
-.ed-gutter, .ed-shown, .ed-input { margin: 0; font-family: var(--mono); font-size: calc(13px * var(--scale)); line-height: 1.5; tab-size: 4; letter-spacing: 0; }
-.ed-gutter { flex: none; min-width: 3.4em; padding: 8px 8px 8px 6px; overflow: hidden; text-align: right; color: var(--muted); opacity: 0.75; user-select: none; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: var(--bg-tint); white-space: pre; }
-.ed-area { position: relative; flex: 1; min-width: 0; }
-.ed-shown { position: absolute; inset: 0; padding: 8px 10px; overflow: hidden; white-space: pre; pointer-events: none; color: var(--ink); background: transparent; border: 0; border-radius: 0; }
-.ed-shown code { font: inherit; background: none; padding: 0; white-space: inherit; }
-.ed-input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; padding: 8px 10px; border: 0; border-radius: 0; resize: none; overflow: auto; white-space: pre; overflow-wrap: normal; background: transparent; color: transparent; caret-color: var(--ink); -webkit-text-fill-color: transparent; }
-.ed-input:focus { outline: none; border: 0; }
 .ed-body:focus-within { border-color: var(--accent); }
-.ed-input::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); -webkit-text-fill-color: transparent; }
+/* The editor of VS Code (Monaco, 2026-10-22): it fills the body, laid out again as the panel changes size. */
+.ed-code { position: relative; flex: 1; min-width: 0; min-height: 0; }
+.ed-monaco { position: absolute; inset: 0; }
+.ed-code-loading { position: absolute; inset: 8px 10px; margin: 0; }
 
 /* The colours of code (lib/highlight.ts), for each theme. */
 .hl-com { color: #6a8a6a; font-style: italic; }
@@ -1251,6 +1265,26 @@ button.linkish:hover { text-decoration: underline; }
 .info-btn:hover, .info-btn[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .kerrigan { margin: 14px 0; }
 .kerrigan .row { align-items: center; }
+/* System → the bot's folder: the copy checkbox beside its sentence, which wraps beside it rather than under the box. */
+.sys-home-copyline { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.sys-home-copyline input { margin-top: 3px; flex: none; }
+
+/* What Kerrigan is, under her button on the welcome page. */
+.kerrigan-about {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-tint);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 4px 0 16px;
+  font-size: calc(13.5px * var(--scale));
+  line-height: 1.5;
+}
+.kerrigan-about h3 { margin: 0 0 6px; font-size: calc(14.5px * var(--scale)); }
+.kerrigan-about p { margin: 6px 0; }
+.kerrigan-about .kerrigan-about-uses { margin-bottom: 2px; font-weight: 600; }
+.kerrigan-about ul { margin: 0 0 6px; padding-inline-start: 20px; }
+.kerrigan-about li { margin: 2px 0; }
 .wb-appear { width: 290px; }
 .wb-appear-label { margin: 10px 0 4px !important; color: var(--muted); font-size: calc(12px * var(--scale)); text-transform: uppercase; letter-spacing: 0.04em; }
 .wb-appear .segmented { display: flex; }
@@ -1372,7 +1406,7 @@ button.skill-delete { flex: none; display: inline-flex; align-items: center; gap
  * Right to left (Arabic, 2026-10-20): the layout follows the page's direction; what is code — the editor, the
  * terminal, commands and their output, diffs, paths, keys — stays left to right, as it is written.
  */
-[dir='rtl'] :is(pre, code, kbd, samp, .ed, .ed-area, .ed-input, .ed-shown, .ed-gutter, .wb-terminal, .cs-out, .cs-cmd-row, .diff-scroll, .diff-path, .diff-name, .ed-path, .l1-pre, .badge.branch) { direction: ltr; text-align: left; }
+[dir='rtl'] :is(pre, code, kbd, samp, .ed, .ed-code, .wb-terminal, .cs-out, .cs-cmd-row, .diff-scroll, .diff-path, .diff-name, .ed-path, .l1-pre, .badge.branch) { direction: ltr; text-align: left; }
 [dir='rtl'] input[type='text'][placeholder^='C:'] { direction: ltr; }
 
 /* The branch mark beside a branch's name. */
@@ -1517,9 +1551,9 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
  */
 .ed-md-view { margin-inline-end: 6px; }
 .ed-md-view button { padding: 2px 8px; font-size: calc(12px * var(--scale)); }
-.ed-body.ed-show-preview > .ed-gutter, .ed-body.ed-show-preview > .ed-area { display: none; }
+.ed-body.ed-show-preview > .ed-code { display: none; }
 .ed-body.ed-show-split > .ed-preview { order: 3; flex: 1 1 0; border-inline-start: 1px solid var(--line); }
-.ed-body.ed-show-split > .ed-area { flex: 1 1 0; }
+.ed-body.ed-show-split > .ed-code { flex: 1 1 0; }
 .ed-preview { flex: 1; overflow: auto; min-width: 0; min-height: 0; background: var(--bg); }
 .md { max-width: 880px; margin: 0 auto; padding: 18px 26px 40px; font-size: calc(14px * var(--scale)); line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
 .md h1, .md h2 { padding-bottom: 0.3em; border-bottom: 1px solid var(--line); }

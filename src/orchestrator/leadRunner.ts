@@ -34,7 +34,7 @@ import { describeDeviations } from '../protocol/replySchema.js';
 import { leadFormatErrorMessage, parseLeadReply, UNDERSTANDING_FIRST, type Subtask } from '../protocol/leadSchema.js';
 import { describePlan, planFrom } from './planMode.js';
 import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
-import { applySessionModel, enterSessionConversation, holdsWhilePaused, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
+import { applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
 import type { LeadRecord, LeadRound, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
@@ -255,7 +255,13 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     sink.event('task-resumed', { heldMs: Date.now() - from, stopped }, stopped ? 'stopped while paused' : 'continued by the operator');
     return stopped;
   };
-  const leadChat = holdsWhilePaused(transport, holdHere);
+  // No message to the lead longer than Settings allow as text: the rest goes attached (2026-10-22).
+  const leadChat = limitsMessageLength(holdsWhilePaused(transport, holdHere), {
+    max: cfg.limits.maxMessageChars,
+    dir: log.path('messages'),
+    onLong: ({ chars, max, file }) =>
+      sink.event('message-long', { chars, max, file, lead: true }, `a message to the lead of ${chars} characters is over the ${max} sent as text: its beginning is sent, the whole of it attached as ${file}`, 'warn'),
+  });
 
   let sent = 0;
   let replies = 0;

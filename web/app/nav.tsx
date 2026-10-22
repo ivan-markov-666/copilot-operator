@@ -27,7 +27,7 @@ const ICONS: Record<string, ReactNode> = {
  */
 const LINKS: Array<{ href: string; label: Key; icon: keyof typeof ICONS }> = [
   { href: '/', label: 'nav.workbench', icon: 'workbench' },
-  { href: '/defaults', label: 'nav.defaults', icon: 'defaults' },
+  { href: '/settings', label: 'nav.defaults', icon: 'defaults' },
   { href: '/system', label: 'nav.system', icon: 'system' },
 ];
 
@@ -65,8 +65,8 @@ export function Nav() {
             </span>
           )}
         </Link>,
-        // How the page looks, between Settings and System, as on the chat's screen (operator, 2026-10-21).
-        ...(l.href === '/defaults' ? [<AppearanceMenu key="appearance" />] : []),
+        // How the page looks, after System and before the language, as on the chat's screen (operator, 2026-10-22).
+        ...(l.href === '/system' ? [<AppearanceMenu key="appearance" />] : []),
       ])}
       <LanguageSwitcher />
     </nav>

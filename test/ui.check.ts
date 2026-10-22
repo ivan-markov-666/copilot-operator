@@ -141,7 +141,7 @@ console.log('\n--- every built page hydrates <head> from what is in the page ---
     if (heads === 0) noHead.push(p);
   }
   // The chat, Settings, System, and the 404 (the Sessions pages went on 2026-10-20, and Level 1, the presets and Appearance with them).
-  t.truthy('the build has its pages', pages.length >= 4 && pages.includes('index.html') && pages.includes('defaults.html') && pages.includes('system.html'), pages);
+  t.truthy('the build has its pages', pages.length >= 4 && pages.includes('index.html') && pages.includes('settings.html') && pages.includes('defaults.html') && pages.includes('system.html'), pages);
   t.check('and not the pages that went', ['level1.html', 'presets.html', 'appearance.html'].filter((x) => pages.includes(x)), []);
   // Without this the two checks below would pass on a page whose data they could not read at all.
   t.check('pages whose data has no <head> to look at', noHead, []);
@@ -210,7 +210,7 @@ try {
         }
       }).observe(document, { childList: true, subtree: true });
     });
-    const pages = ['/', '/defaults', '/system'];
+    const pages = ['/', '/settings', '/system'];
     const redrawn: string[] = [];
     for (let round = 1; round <= 2; round++) {
       for (const p of pages) {
@@ -255,6 +255,14 @@ try {
     t.check('the choice survives a reload, before React runs', (await scaleOf())[0], 'giant');
     await openMenu();
     t.truthy('and the menu says it', ((await menu.textContent()) ?? '').includes(en['ap.sizeGiant']!), await menu.textContent());
+    // Three more steps below Small (operator, 2026-10-22): from the largest down, each its scale, to the smallest.
+    const down: Array<[string | null, string]> = [];
+    for (let i = 0; i < 7; i++) {
+      await smaller.click();
+      down.push(await scaleOf());
+    }
+    t.check('A− seven times from the largest: every step down to the smallest', down, [['huge', '1.28'], ['large', '1.12'], ['normal', '1'], ['small', '0.9'], ['compact', '0.8'], ['verysmall', '0.7'], ['smallest', '0.6']]);
+    t.check('at the smallest, A− is off, and the menu says which', [await smaller.isDisabled(), ((await menu.textContent()) ?? '').includes(en['ap.sizeSmallest']!)], [true, true]);
 
     await page.evaluate(() => localStorage.setItem('cop.appearance', JSON.stringify({ textSize: 'enormous', theme: 'purple', highContrast: 'yes' })));
     await page.reload();
@@ -301,7 +309,7 @@ try {
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto(url('/system'));
-    const pages = ['/', '/defaults', '/system'];
+    const pages = ['/', '/settings', '/system'];
     const wide: Record<string, number> = {};
     for (const size of ['normal', 'giant']) {
       await page.evaluate((textSize) => localStorage.setItem('cop.appearance', JSON.stringify({ textSize })), size);
@@ -324,7 +332,7 @@ try {
     const wide: Record<string, number> = {};
     for (const [w, hgt] of [[768, 1024], [1280, 800]] as const) {
       await page.setViewportSize({ width: w, height: hgt });
-      for (const p of ['/', '/defaults']) {
+      for (const p of ['/', '/settings']) {
         await page.goto(url(p));
         await page.waitForLoadState('networkidle');
         const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -340,7 +348,7 @@ try {
     await h.run(threadId);
     await page.goto(url('/system'));
     await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
-    const pages = ['/', '/defaults', '/system'];
+    const pages = ['/', '/settings', '/system'];
     const unnamed: Record<string, string[]> = {};
     for (const p of pages) {
       await page.goto(url(p));
@@ -373,7 +381,7 @@ try {
     const git = (...args: string[]): string => execFileSync('git', ['-C', h.repo, ...args], { encoding: 'utf8' }).trim();
     git('checkout', '-q', '-b', 'feature/settings');
     await h.call('PUT', '/project', { rootDir: h.repo, name: 'fixture' });
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     await page.getByRole('heading', { name: en['l1.title']!, exact: true }).waitFor();
     const l1 = page.locator('#level1');
     t.truthy('the base prompt: what it is, said where it is seen at once', (await l1.locator('.callout').isVisible()) && ((await l1.locator('.callout').textContent()) ?? '').includes('Kerrigan'), await l1.locator('.callout').textContent());
@@ -427,7 +435,7 @@ try {
   });
 
   await scenario('Settings writes what was typed, clamped to its limits', {}, async (h, page, url) => {
-    await page.goto(url('/defaults'));
+    await page.goto(url('/settings'));
     // Exact: the ⓘ beside each field is "About “…”", which a looser match takes as well.
     const iterations = page.getByLabel('Most messages to the chat in one task', { exact: true });
     await iterations.waitFor();

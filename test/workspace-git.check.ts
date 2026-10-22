@@ -75,6 +75,62 @@ try {
   await h.call('GET', `/workspace/git/commit?sha=${g.commits[0]!.sha}`);
   t.check('reading it staged, committed and stashed nothing', [h.git('status', '--porcelain'), h.git('rev-parse', 'HEAD'), h.git('stash', 'list')], before);
   t.truthy('(the earlier status was read as it was)', statusBefore.includes('A  staged.txt'), statusBefore);
+
+  /*
+   * Everything the branch changed, as a pull request shows it (operator, 2026-10-22: "all the files changed on this
+   * branch, not only the ones not committed; and of them, which are not committed yet").
+   */
+  console.log('\n--- on this branch: its commits and what is not committed, against the branch it left ---');
+  type BFile = File & { committed: boolean; uncommitted?: string };
+  type Branch = { branch?: string; base?: string; bases: string[]; mergeBase?: string; ahead: number; behind: number; commits: string[]; files: BFile[]; problem?: string };
+  const onMain = await h.call<Branch>('GET', '/workspace/git/branch');
+  t.check('on main with no other branch: nothing to compare with, said so', [onMain.branch, onMain.problem, onMain.bases], ['main', 'no-base', []]);
+  h.git('commit', '-q', '-m', 'third: later');
+  const left = h.git('rev-parse', 'HEAD');
+  h.git('checkout', '-q', '-b', 'feature');
+  put('READ.md', '# fixture\nmore\nfeature\n');
+  put('feat.txt', 'a\nb\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'feature work');
+  h.git('checkout', '-q', 'main');
+  put('main-only.txt', 'main\n');
+  h.git('add', '-A');
+  h.git('commit', '-q', '-m', 'main moves on');
+  h.git('checkout', '-q', 'feature');
+  // Not committed: a committed file changed again, a new file staged, one staged and changed since, one git does not track.
+  put('feat.txt', 'a\nb\nc\n');
+  put('staged2.txt', 'x\n');
+  h.git('add', 'staged2.txt');
+  put('docs/new.md', 'one\ntwo\nthree\nfour\n');
+  h.git('add', 'docs/new.md');
+  put('docs/new.md', 'one\ntwo\nthree\nfour\nfive\n');
+  put('loose.txt', 'loose\n');
+  const quiet = [h.git('status', '--porcelain'), h.git('rev-parse', 'HEAD')];
+  const b = await h.call<Branch>('GET', '/workspace/git/branch');
+  t.check(
+    'against main, where the branch left it: one commit ahead, one behind',
+    [b.branch, b.base, b.bases.includes('main') && !b.bases.includes('feature'), b.mergeBase, b.ahead, b.behind, b.commits.length],
+    ['feature', 'main', true, left, 1, 1, 1],
+  );
+  t.check(
+    'every file of the branch, committed and not, each marked; not main\'s own',
+    b.files.map((f) => `${f.status} ${f.path} +${f.added} -${f.removed} ${f.committed ? 'committed' : '-'} ${f.uncommitted ?? '-'}`),
+    [
+      'M READ.md +1 -0 committed -',
+      'M docs/new.md +2 -0 - mixed',
+      'A feat.txt +3 -0 committed changes',
+      'A loose.txt +1 -0 - untracked',
+      'A staged2.txt +1 -0 - staged',
+    ],
+  );
+  const feat = await h.call<Versions>('GET', '/workspace/git/file?area=branch&commit=main&path=feat.txt');
+  t.check('a file of the branch: nothing where it began, as it is now after', [feat.status, feat.before, feat.after], ['A', null, 'a\nb\nc\n']);
+  const read = await h.call<Versions>('GET', '/workspace/git/file?area=branch&commit=main&path=READ.md');
+  t.check('another: as it was where the branch began, and as it is now', [read.before, read.after], ['# fixture\nmore\n', '# fixture\nmore\nfeature\n']);
+  const odd = await h.call<Branch>('GET', `/workspace/git/branch?base=${encodeURIComponent('--output=x')}`);
+  t.check('a base that is no branch is not passed on: the default is used', [odd.base, odd.files.length], ['main', 5]);
+  t.check('main\'s own file is not one of the branch\'s', (await h.raw('GET', '/workspace/git/file?area=branch&commit=main&path=main-only.txt')).status, 400);
+  t.check('reading the branch changed nothing', [h.git('status', '--porcelain'), h.git('rev-parse', 'HEAD')], quiet);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

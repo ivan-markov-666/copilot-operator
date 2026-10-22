@@ -17,6 +17,7 @@ import { pruneRuns } from '../session/retention.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { installLayout, type InstallLayout } from '../config/layout.js';
+import { moveLegacyHome } from '../config/home.js';
 import { captureTerminal } from '../log/terminal.js';
 
 export type StartOptions = {
@@ -103,12 +104,18 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
    * on the machine were both callers all along.
    */
   const layout = installLayout();
+  /*
+   * The records a package kept in the project's .copilot-operator until 2026-10-22, copied once into the bot's own
+   * folder (see config/home.ts). The old folder stays, for the operator to delete; System says where it is.
+   */
+  const moved = moveLegacyHome(layout);
+  if (moved) console.log(`[start] the bot's records were in ${moved.from}; copied to its own folder ${moved.to}. The old folder can be deleted.`);
   const dataDir = layout.dataDir;
   const webDir = opts.webDir ?? layout.webDir;
   await mkdir(dataDir, { recursive: true });
   if (layout.mode === 'package') {
     /*
-     * The records folder sits inside the project, so it must be invisible to the project's git:
+     * The records folder may sit inside a project, when the operator chose that, so it must be invisible to its git:
      * version control refuses to branch on a tree with untracked files, and the records are not
      * the project's work. A `.gitignore` of `*` inside the folder says so without touching the
      * project's own .gitignore.

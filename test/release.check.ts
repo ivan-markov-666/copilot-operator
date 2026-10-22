@@ -43,7 +43,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Tally, waitFor, freePort, makeRepo } from './support/harness.js';
@@ -203,7 +203,12 @@ const installed = join(project, 'node_modules', 'copilot-operator');
  * so it does not count as something to look for. Read to compare, never printed.
  */
 const cloneTokens = new Set<string>();
-for (const file of [join(root, 'data', 'api-token'), join(root, '.copilot-operator', 'data', 'api-token')]) {
+for (const file of [
+  join(root, 'data', 'api-token'),
+  join(root, '.copilot-operator', 'data', 'api-token'),
+  // An installed copy's, in the bot's own folder since 2026-10-22.
+  join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'copilot-operator', 'data', 'api-token'),
+]) {
   try {
     const v = readFileSync(file, 'utf8').trim();
     if (v) cloneTokens.add(v.toLowerCase());
@@ -296,7 +301,8 @@ await section('what the tarball carries', async () => {
     tarball = join(packDir, list[0]!.filename);
     t.truthy('the tarball was written', existsSync(tarball), tarball);
 
-    for (const need of ['package.json', 'dist/src/cli.js', 'dist/src/api/main.js', 'dist/web/index.html', 'prompts/level1.md', 'prompts/review1.md', 'README.md', 'LICENSE']) {
+    // The licences of what the interface is built from go with it (2026-10-22: Monaco, mermaid, React, Next.js and theirs).
+    for (const need of ['package.json', 'dist/src/cli.js', 'dist/src/api/main.js', 'dist/web/index.html', 'dist/web/third-party-notices.txt', 'prompts/level1.md', 'prompts/review1.md', 'README.md', 'LICENSE']) {
       t.truthy(`ships ${need}`, packedFiles.includes(need));
     }
     // The operator's records, the checks, the web sources and Next's build bookkeeping (the server
@@ -377,10 +383,22 @@ await section("the installed package starts, and stays out of the project's git"
     rmSync(stranger, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 
+  /*
+   * The user's local application data, as Windows names it, of this check's own: the bot's folder is in it by
+   * default (2026-10-22), and a check must never write to the operator's real one. The project holds the records an
+   * older version kept in it, which the first start copies over once.
+   */
+  const localAppData = join(base, 'local-appdata');
+  const botHome = join(localAppData, 'copilot-operator');
+  const legacy = join(project, '.copilot-operator');
+  mkdirSync(join(legacy, 'data'), { recursive: true });
+  writeFileSync(join(legacy, '.gitignore'), '*\n', 'utf8');
+  // Naming the Edge profile in the bot's folder, as a settings file can: when the folder moves, the profile must too.
+  writeFileSync(join(legacy, 'data', 'settings.json'), JSON.stringify({ copilot: { defaultModel: 'Auto', profileDir: join(botHome, 'edge-profile') } }), 'utf8');
   const port = await freePort();
   const child = spawn(process.execPath, [join(installed, 'dist', 'src', 'cli.js'), 'start', '--port', String(port)], {
     cwd: project,
-    env: cleanEnv(),
+    env: cleanEnv({ LOCALAPPDATA: localAppData }),
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -414,11 +432,34 @@ await section("the installed package starts, and stays out of the project's git"
     const refused = await fetch(`${origin}/api/sessions`);
     t.check('and without it, 401', refused.status, 401);
 
-    const home = join(project, '.copilot-operator');
-    t.check('the records folder ignores itself: .copilot-operator/.gitignore is "*\\n"', existsSync(join(home, '.gitignore')) ? readFileSync(join(home, '.gitignore'), 'utf8') : null, '*\n');
-    const tokenFile = join(home, 'data', 'api-token');
-    t.truthy('the token is kept in .copilot-operator/data/api-token', existsSync(tokenFile));
+    t.check('the records folder ignores itself: its .gitignore is "*\\n"', existsSync(join(botHome, '.gitignore')) ? readFileSync(join(botHome, '.gitignore'), 'utf8') : null, '*\n');
+    const tokenFile = join(botHome, 'data', 'api-token');
+    t.truthy("the token is kept in the bot's own folder, %LOCALAPPDATA%\\copilot-operator\\data\\api-token", existsSync(tokenFile));
     t.truthy('and it is the token the cookie carried', existsSync(tokenFile) && readFileSync(tokenFile, 'utf8').trim() === cookie);
+    t.check('the records an older version kept in the project were copied there', existsSync(join(botHome, 'data', 'settings.json')) ? JSON.parse(readFileSync(join(botHome, 'data', 'settings.json'), 'utf8')).copilot?.defaultModel : null, 'Auto');
+    t.truthy('and the start said so', out.includes(`the bot's records were in ${legacy}`), out.slice(-1500));
+    t.check('nothing new was written into the project (no api-token there)', existsSync(join(legacy, 'data', 'api-token')), false);
+    // Where the bot's folder is, and that the next start would use the same, as the System page reads it.
+    const doctor = (await (await fetch(`${origin}/api/doctor`, { headers: { cookie: `cop_token=${cookie}` } })).json()) as Record<string, unknown>;
+    t.check('the System page is told the folder, the default and that nothing else was chosen', [doctor.home, doctor.homeFrom, doctor.homeDefault, doctor.homeNext], [botHome, 'default', botHome, botHome]);
+    t.check('and where the records came from', (doctor.homeMovedFrom as { from?: string } | null)?.from, legacy);
+    t.check('no Desktop on it any more', ['desktop', 'desktopSynced'].filter((k) => k in doctor), []);
+    t.check('the Edge profile is in the folder', doctor.profileDir, join(botHome, 'edge-profile'));
+    // Chosen on the System page: written for the next start, refused for a folder inside the program.
+    const put = (body: unknown) => fetch(`${origin}/api/home`, { method: 'PUT', headers: { cookie: `cop_token=${cookie}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const inside = await put({ dir: join(installed, 'records'), copy: false });
+    t.check('a folder inside the program is refused', inside.status, 400);
+    const elsewhere = join(base, 'chosen-home');
+    const chose = await put({ dir: elsewhere, copy: true });
+    const chosen = (await chose.json()) as { home?: string; copied?: string[] };
+    t.check('another folder is taken, with what was copied', [chose.status, chosen.home, chosen.copied?.includes('data')], [200, elsewhere, true]);
+    t.check('and is read at the next start', JSON.parse(readFileSync(join(botHome, 'location.json'), 'utf8')).home, elsewhere);
+    const copiedSettings = JSON.parse(readFileSync(join(elsewhere, 'data', 'settings.json'), 'utf8')) as { copilot?: Record<string, unknown> };
+    t.check('the settings copied there keep the model, and no longer tie the Edge profile to the old folder', [copiedSettings.copilot?.defaultModel, 'profileDir' in (copiedSettings.copilot ?? {})], ['Auto', false]);
+    const after = (await (await fetch(`${origin}/api/doctor`, { headers: { cookie: `cop_token=${cookie}` } })).json()) as Record<string, unknown>;
+    t.check('System says the folder changes at the next start, this one still in use', [after.home, after.homeNext], [botHome, elsewhere]);
+    const back = await put({ dir: null, copy: false });
+    t.check('back to the default takes the choice away', [back.status, existsSync(join(botHome, 'location.json'))], [200, false]);
     t.check("the project's git sees nothing new", git('status', '--porcelain'), '');
   } finally {
     await stopChild(child);

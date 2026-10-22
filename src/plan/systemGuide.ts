@@ -507,6 +507,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesEn: 'The "i" beside the button: says what Kerrigan is and how she helps.',
             doesBg: '„i“ до бутона: казва какво е Кериган и как помага.',
           },
+          {
+            key: 'kerrigan.aboutTitle',
+            kind: 'note',
+            en: 'What Kerrigan is',
+            bg: 'Какво е Кериган',
+            doesEn: 'The box under the button, with nothing open in the editor: what Kerrigan is, three things she is for (an idea into a clear task, big work into tasks, how something here works) and how to use her, in a few lines.',
+            doesBg: 'Карето под бутона, когато в редактора няма нищо отворено: какво е Кериган, три неща, за които служи (идея в ясна задача, голяма работа на задачи, как работи нещо тук) и как се ползва, в няколко реда.',
+          },
         ],
       },
       {
@@ -553,6 +561,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Прочети отново git на папката',
             doesEn: 'The ↻ of the git view: reads the folder\'s git again at once.',
             doesBg: '↻ на изгледа git: прочита git на папката веднага.',
+          },
+          {
+            key: 'git.branch',
+            kind: 'disclosure',
+            en: 'On this branch',
+            bg: 'На този клон',
+            doesEn: 'At the top of the git view: every file the branch changed, as a pull request shows them — its commits and what is not committed yet together — with its lines; a dot (●) marks the ones with something not committed yet. Over them, how many commits the branch is ahead and behind, and "All", "Committed" and "Not committed" to show only some. A file opens where the branch began against it as it is now. The branch\'s own commits are marked in "Commits", with a line where it began.',
+            doesBg: 'Най-горе в изгледа git: всеки файл, който клонът е променил, както ги показва pull request — комитите му и некомитнатото заедно — с редовете си; точка (●) отбелязва тези, в които има нещо некомитнато. Над тях — с колко комита клонът е напред и назад, и „Всички“, „Комитнати“ и „Некомитнати“, за да се покажат само някои. Файлът се отваря както е бил, където е започнал клонът, срещу това, какъвто е сега. Собствените комити на клона са отбелязани в „Комити“, с линия, където е започнал.',
+          },
+          {
+            key: 'git.against',
+            kind: 'select',
+            en: 'Compared with',
+            bg: 'Сравнен с',
+            doesEn: 'In "On this branch": the branch a pull request of this one would go into — the remote\'s default branch, or main, unless another is chosen; kept for the folder.',
+            doesBg: 'В „На този клон“: клонът, в който би влязъл pull request от този — подразбиращият се клон на отдалеченото хранилище или main, освен ако не е избран друг; запазва се за папката.',
           },
           {
             key: 'wb.appearance',
@@ -1030,8 +1054,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Appearance',
             bg: 'Изглед',
-            doesEn: 'In the bar on top, between Settings and System: the theme (System, Light, Dark), the text size with A− and A+, and the reading aids — night light, underlined links, less motion, more contrast, a thick focus outline, the system\'s cursor.',
-            doesBg: 'В лентата горе, между Настройки и Система: темата (Системна, Светла, Тъмна), размерът на текста с A− и A+, и помощните опции — нощна светлина, подчертани връзки, по-малко движение, повече контраст, дебел фокусен контур, курсорът на системата.',
+            doesEn: 'In the bar on top, after System and before the language: the theme (System, Light, Dark), the text size with A− and A+, and the reading aids — night light, underlined links, less motion, more contrast, a thick focus outline, the system\'s cursor.',
+            doesBg: 'В лентата горе, след Система и преди езика: темата (Системна, Светла, Тъмна), размерът на текста с A− и A+, и помощните опции — нощна светлина, подчертани връзки, по-малко движение, повече контраст, дебел фокусен контур, курсорът на системата.',
           },
           {
             key: 'wb.move',
@@ -1411,7 +1435,7 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
   },
 
   {
-    route: '/defaults',
+    route: '/settings',
     nameEn: 'Settings',
     nameBg: 'Настройки',
     purposeEn: 'The base prompt, to read; the projects, each with its folder, branch and level 2 (which Kerrigan carries); the sign-in to Copilot; the model of new conversations and of the review; how a task runs. Every field has an ⓘ saying what it is for. Everything saves itself.',
@@ -1863,6 +1887,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Колко да се чака един отговор от Copilot.',
           },
           {
+            key: 'exec.maxMessageChars',
+            kind: 'field',
+            en: 'Longest message to the chat as text',
+            bg: 'Най-дълго съобщение към чата като текст',
+            doesEn: 'The most characters the bot sends Copilot in one message as text (120000 by default); a longer message goes as its beginning, with the whole of it attached as a text file.',
+            doesBg: 'Най-много знаци, които ботът праща на Copilot в едно съобщение като текст (по подразбиране 120000); по-дълго съобщение отива като начало, а цялото — като прикачен текстов файл.',
+          },
+          {
             key: 'exec.isolation',
             kind: 'select',
             en: 'Where the bot runs',
@@ -1975,9 +2007,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
     nameEn: 'System',
     nameBg: 'Система',
     purposeEn:
-      'A read-only report on this machine: Node, Edge, the folders and whether anything is holding the bot’s browser profile. There is nothing here to press, and it is the first page to read when a run will not start.',
+      'A report on this machine: Node, Edge, the folders and whether anything is holding the bot’s browser profile, and the one place to choose where the bot keeps its folder. It is the first page to read when a run will not start.',
     purposeBg:
-      'Отчет за тази машина, само за четене: Node, Edge, папките и дали нещо държи профила на браузъра на бота. Тук няма какво да се натиска, а страницата се чете първа, когато пускане не тръгва.',
+      'Отчет за тази машина: Node, Edge, папките и дали нещо държи профила на браузъра на бота, и единственото място, където се избира къде ботът да пази папката си. Страницата се чете първа, когато пускане не тръгва.',
     sections: [
       {
         headingKey: 'sys.machine',
@@ -2023,12 +2055,56 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Под „Тази машина“: последните редове, отпечатани от конзолата на бота, с часовете им, като текстов файл — това се иска, когато нещо се е объркало и нищо по страниците не казва защо.',
           },
           {
+            key: 'sys.home',
+            kind: 'note',
+            en: 'The bot\'s folder',
+            bg: 'Папка на бота',
+            doesEn:
+              'Where the bot keeps its settings, conversations, logs and Edge profile, with a badge saying whether it is the default (the user\'s local application data, %LOCALAPPDATA%\\copilot-operator), chosen by the operator, set by COP_HOME, or the clone itself. Nothing of the bot\'s is put in the project\'s folder unless the operator chooses it.',
+            doesBg:
+              'Къде ботът пази настройките, разговорите, дневниците и профила си в Edge, с етикет дали е подразбиращата се папка (локалните данни на приложенията на потребителя, %LOCALAPPDATA%\\copilot-operator), избрана от оператора, зададена с COP_HOME, или самото копие на хранилището. Нищо на бота не се слага в папката на проекта, освен ако операторът не избере нея.',
+          },
+          {
+            key: 'sys.homeChange',
+            kind: 'button',
+            en: 'Change…',
+            bg: 'Смени…',
+            doesEn:
+              'Opens a field for another folder (and "Browse…" for the machine\'s folder dialog), with a checkbox to copy what is in the folder now — settings, conversations, logs and the Edge profile, so the sign-in stays — and "Use this folder". Nothing already in the new folder is overwritten. It takes effect when the bot is started again; until then the row says "From the next start: …". Not offered for a clone or when COP_HOME sets the folder, and refused while work is going on.',
+            doesBg:
+              'Отваря поле за друга папка (и „Преглед…“ за прозореца за избор на папка), с отметка да се копира и това, което е в папката сега — настройки, разговори, дневници и профилът в Edge, за да остане вписването — и „Използвай тази папка“. Нищо, което вече е в новата папка, не се презаписва. Важи от следващото пускане на бота; дотогава редът казва „От следващото пускане: …“. Не се предлага за копие на хранилището или когато COP_HOME задава папката и се отказва, докато върви работа.',
+          },
+          {
+            key: 'sys.homeReset',
+            kind: 'button',
+            en: 'Back to the default',
+            bg: 'Обратно към подразбиращата се',
+            doesEn: 'Shown when another folder was chosen: the same confirmation as "Change…", for the default folder.',
+            doesBg: 'Показва се, когато е избрана друга папка: същото потвърждение като при „Смени…“, за подразбиращата се папка.',
+          },
+          {
+            key: 'sys.homeUse',
+            kind: 'button',
+            en: 'Use this folder',
+            bg: 'Използвай тази папка',
+            doesEn: 'Saves the folder for the next start (copying first, when the checkbox is on) and says to start the bot again; a folder that cannot be the bot\'s — inside the program, not writable, inside the current folder — is refused with the reason.',
+            doesBg: 'Запазва папката за следващото пускане (като първо копира, ако отметката е сложена) и казва ботът да се пусне отново; папка, която не може да е на бота — в самата програма, без право на запис, вътре в сегашната папка — се отказва с причината.',
+          },
+          {
             key: 'sys.profileHeld',
             kind: 'note',
-            en: 'Edge is holding the profile (pids {pids}). A run would fail. Close that Edge window.',
-            bg: 'Edge държи профила (pid {pids}). Изпълнение би се провалило. Затворете този прозорец на Edge.',
-            doesEn: 'The line to look for when a run will not start: a stray Edge window has the profile open.',
-            doesBg: 'Редът, който се търси, когато пускане не тръгва: чужд прозорец на Edge държи профила отворен.',
+            en: 'Another Edge has the bot\'s profile open ({n} process(es), pid {pids}): one started outside the bot, or left from an earlier start of it. The bot cannot open its browser while it is: close that Edge window, or end those processes in Task Manager.',
+            bg: 'Друг Edge е отворил профила на бота ({n} процеса, pid {pids}): пуснат извън бота или останал от предишно негово пускане. Докато е така, ботът не може да отвори браузъра си: затворете този прозорец на Edge или спрете тези процеси от Task Manager.',
+            doesEn: 'The line to look for when a run will not start: an Edge that is not the bot\'s own has the profile open. The bot\'s own Edge — a run\'s, or its chat window kept open between messages — is never shown so.',
+            doesBg: 'Редът, който се търси, когато пускане не тръгва: Edge, който не е на самия бот, държи профила отворен. Собственият Edge на бота — на изпълнение или прозорецът на чата, оставен отворен между съобщенията — никога не се показва така.',
+          },
+          {
+            key: 'sys.profileOwnWindow',
+            kind: 'note',
+            en: 'The bot\'s own chat window ({n} Edge process(es)): it stays open between messages, so the next one goes on in it. Nothing to do; you may close it.',
+            bg: 'Собственият прозорец на чата на бота ({n} процеса на Edge): остава отворен между съобщенията, за да продължи следващото в него. Нищо не трябва да правите; можете да го затворите.',
+            doesEn: 'The profile is held by the chat\'s window, which the bot keeps open between messages: the next message, or a run, uses it.',
+            doesBg: 'Профилът се държи от прозореца на чата, който ботът оставя отворен между съобщенията: следващото съобщение или изпълнение го ползва.',
           },
           {
             key: 'sys.profileMissing',
@@ -2043,8 +2119,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           {
             key: 'sys.profileBot',
             kind: 'note',
-            en: 'In use by the bot\'s own run right now ({n} Edge process(es)). That is expected while a session runs.',
-            bg: 'В момента се ползва от собственото изпълнение на бота ({n} процеса на Edge). Това е очаквано, докато сесия работи.',
+            en: 'The bot\'s own Edge, for the work going on now ({n} process(es)). Nothing to do.',
+            bg: 'Собственият Edge на бота, за работата, която върви сега ({n} процеса). Нищо не трябва да правите.',
             doesEn:
               'The profile is held by the bot\'s own run right now — nothing to close.',
             doesBg:

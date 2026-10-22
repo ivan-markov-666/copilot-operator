@@ -423,6 +423,40 @@ export function holdsWhilePaused(transport: ChatTransport, hold: () => Promise<b
   });
 }
 
+/**
+ * The same chat, whose every message is at most `max` characters of text (operator, 2026-10-22: "the most characters
+ * the chat takes as text, not as an attached document, set in Settings; and a check that the messages made are not
+ * longer"). A longer one — the contract, a task's opening with its brief, a report, a review's — goes as its
+ * beginning, said to be only that, with the whole of it attached as a text file beside the files it already had;
+ * `onLong` is told of each. Like `holdsWhilePaused`, it holds every message the runner sends, from wherever.
+ */
+export function limitsMessageLength(
+  transport: ChatTransport,
+  opts: { max: number; dir: string; onLong?: (info: { chars: number; max: number; file: string }) => void },
+): ChatTransport {
+  let n = 0;
+  return new Proxy(transport, {
+    get(target, key) {
+      if (key === 'sendAndConfirm') {
+        return async (text: string, attachments: string[] = []) => {
+          if (text.length <= opts.max) return await target.sendAndConfirm(text, attachments);
+          n += 1;
+          await mkdir(opts.dir, { recursive: true });
+          const file = join(opts.dir, `message-${String(n).padStart(2, '0')}-in-full.txt`);
+          await writeFile(file, text, 'utf8');
+          const note =
+            `\n\n[This message is ${text.length} characters long, more than the ${opts.max} sent as text: the whole of it is in the attached file ` +
+            `${basename(file)}. Read it there and answer it as a whole; what is above is only its beginning.]`;
+          opts.onLong?.({ chars: text.length, max: opts.max, file });
+          return await target.sendAndConfirm(`${text.slice(0, Math.max(0, opts.max - note.length))}${note}`, [...attachments, file]);
+        };
+      }
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 /** One place that writes to the transcript, the console and the live stream at once. */
 export class Sink {
   constructor(
@@ -1118,6 +1152,13 @@ export async function runTask(
     return stopped;
   };
   transport = holdsWhilePaused(transport, () => holdHere('message'));
+  // No message longer than Settings allow as text: the rest goes attached (2026-10-22, see `limitsMessageLength`).
+  transport = limitsMessageLength(transport, {
+    max: cfg.limits.maxMessageChars,
+    dir: log.path('messages'),
+    onLong: ({ chars, max, file }) =>
+      sink.event('message-long', { chars, max, file }, `a message of ${chars} characters is over the ${max} sent as text: its beginning is sent, the whole of it attached as ${file}`, 'warn'),
+  });
   let iterations = 0;
   /** What the model has declared it could not do as written, merged across every reply. */
   let deviations: Deviation[] = [];
