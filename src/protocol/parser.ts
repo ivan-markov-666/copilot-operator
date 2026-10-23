@@ -199,6 +199,7 @@ const FORMAT_EXAMPLE = [
   '```',
   'or, to end: {"status": "done", "summary": "several sentences on what was done and what it shows"}',
   'or {"status": "blocked", "summary": "…", "tried": ["first approach", "second approach"], "needed": "what would unblock it"}',
+  'or, to ask the operator: {"status": "ask", "question": "…", "options": [{"answer": "your recommended one", "run": "a command the runner runs if it is chosen"}, {"answer": "another"}]}',
 ].join('\n');
 
 export type ParseOptions = {
@@ -262,8 +263,8 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       // model that writes "Край" under an explanation of why it cannot finish has ended the
       // task, not completed it, and reading that as `done` would file a failure as a success.
       const blocked = reply.status === 'blocked';
-      // A plan waits for its approval: the stop word in it does not end the task.
-      const plan = reply.status === 'plan';
+      // A plan waits for its approval, a question for its answer: the stop word in either does not end the task.
+      const plan = reply.status === 'plan' || reply.status === 'ask';
 
       return {
         ok: true,

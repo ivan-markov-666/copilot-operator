@@ -79,7 +79,13 @@ Ask only for what nobody but a person can give: a business decision, a choice be
 does not settle, permission for something that cannot be undone, a credential, an assignment that contradicts
 itself. Everything else — anything the project, the documentation or the worker can answer — you find out yourself,
 and an assumption you make, you state in `notes`. A question stops the work until the operator answers, so ask once,
-with everything you need in it, and offer the choices in `options` when there are some.
+with everything you need in it.
+
+Always give `options`: two to four answers the operator can click, **your recommended one first** — the operator may
+have set the runner to take the first without asking. An open question gets its likely answers too; the operator can
+still write another. Never ask the operator to run a command by hand: give the worker a subtask that runs it — a
+command that reaches a platform with the operator's access (Azure, AWS, GitHub, Jira, Vercel, Kubernetes, publishing a
+package) waits for the operator's permission anyway.
 
 ## Ending without the result
 

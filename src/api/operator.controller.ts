@@ -483,6 +483,12 @@ export class OperatorController {
     return this.ops.setDefaultModel(body?.model ?? '').catch(fail);
   }
 
+  /** The model the lead of two chats starts on (2026-10-23). An empty name leaves its chat on whatever it is. */
+  @Put('models/lead-default')
+  setDefaultLeadModel(@Body() body: { model?: string }): Promise<unknown> {
+    return this.ops.setDefaultLeadModel(body?.model ?? '').catch(fail);
+  }
+
   /** The model of the independent review. An empty name means "the session's own". */
   @Put('models/review-default')
   setDefaultReviewModel(@Body() body: { model?: string }): Promise<unknown> {

@@ -204,6 +204,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
         <span className="muted small">{fmtTime(approval.createdAt)}</span>
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
+      {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
       {approval.network && <p className="reason small">{t('approval.network')}</p>}
       {err && (
         <p className="err" role="alert">
@@ -214,7 +215,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
         <button className="primary" disabled={busy} onClick={() => void decide('run')}>
           {t('approval.run')}
         </button>
-        {!approval.network && (
+        {!approval.network && !approval.platform && (
           <button disabled={busy} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
             {t('approval.runAll')}
           </button>

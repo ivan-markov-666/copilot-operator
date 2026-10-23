@@ -1094,6 +1094,7 @@ export class OperatorService {
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       // Read once per run like the rest of the policy: a change in Settings applies from the next start.
       networkFetch: cfg.execution.networkFetch,
+      platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
     };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
@@ -1185,6 +1186,7 @@ export class OperatorService {
           const now = (await this.settings.load()).copilot;
           if (which === 'model' && (now.defaultModel ?? '').trim() === from) await this.setDefaultModel(to);
           if (which === 'review' && (now.defaultReviewModel ?? '').trim() === from) await this.setDefaultReviewModel(to);
+          if (which === 'lead' && (now.defaultLeadModel ?? '').trim() === from) await this.setDefaultLeadModel(to);
         },
         seen: async (options, current) => {
           await this.store.saveModels({ options, current: current ?? undefined, readAt: new Date().toISOString() });
@@ -1703,7 +1705,10 @@ export class OperatorService {
    * conversation, waiting in every mode — an unattended run included, since nobody else can answer it — until it is
    * answered or the task is stopped.
    */
-  askLeadQuestion(ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[] }, signal: AbortSignal): Promise<{ answer: string } | 'stop'> {
+  askLeadQuestion(
+    ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; actor?: Actor },
+    signal: AbortSignal,
+  ): Promise<{ answer: string } | 'stop'> {
     return new Promise((resolveAnswer) => {
       if (signal.aborted) {
         resolveAnswer('stop');
@@ -1714,10 +1719,11 @@ export class OperatorService {
         sessionId: ask.sessionId,
         taskId: ask.taskId,
         stepId: 0,
-        description: `The lead asks: ${ask.question}`,
+        description: `${(ask.actor ?? 'lead') === 'lead' ? 'The lead asks' : 'The chat asks'}: ${ask.question}`,
         createdAt: new Date().toISOString(),
-        actor: 'lead',
-        question: { text: ask.question, ...(ask.why ? { why: ask.why } : {}), options: ask.options },
+        // The lead's, or since 2026-10-23 the chat's own (plan mode's or the worker's).
+        actor: ask.actor ?? 'lead',
+        question: { text: ask.question, ...(ask.why ? { why: ask.why } : {}), options: ask.options, ...(ask.commands?.some(Boolean) ? { commands: ask.commands } : {}) },
       };
       this.waiting.set(approval.id, {
         approval,
@@ -1908,12 +1914,13 @@ export class OperatorService {
           description: `[${step.shell ?? 'pwsh'}] ${step.cmd}`,
           createdAt: new Date().toISOString(),
           ...(ctx.actor ? { actor: ctx.actor } : {}),
-          ...(held ? { network: held.network } : {}),
+          ...(held?.network ? { network: held.network } : {}),
+          ...(held?.platform ? { platform: held.platform } : {}),
         };
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });
         this.bus.publish({ sessionId: approval.sessionId, taskId: approval.taskId, type: 'approval-requested', level: 'warn',
           message: held
-            ? `held for the operator — ${held.network}: ${approval.description}`
+            ? `held for the operator — ${[held.platform ? `it reaches ${held.platform} with the operator's access` : '', held.network ?? ''].filter(Boolean).join('; ')}: ${approval.description}`
             : `waiting for approval: ${approval.description}`,
           data: { ...approval } });
       }),
@@ -2283,14 +2290,16 @@ export class OperatorService {
    * and which of them is the standing choice.
    */
   async models(): Promise<
-    (ModelCatalogue & { defaultModel: string; defaultReviewModel: string }) | { defaultModel: string; defaultReviewModel: string; options: []; readAt: null }
+    | (ModelCatalogue & { defaultModel: string; defaultLeadModel: string; defaultReviewModel: string })
+    | { defaultModel: string; defaultLeadModel: string; defaultReviewModel: string; options: []; readAt: null }
   > {
     await this.init();
     const cfg = await this.settings.load();
     const cached = await this.store.getModels();
     const defaultModel = cfg.copilot.defaultModel ?? '';
     const defaultReviewModel = cfg.copilot.defaultReviewModel ?? '';
-    return cached ? { ...cached, defaultModel, defaultReviewModel } : { defaultModel, defaultReviewModel, options: [], readAt: null };
+    const defaultLeadModel = cfg.copilot.defaultLeadModel ?? '';
+    return cached ? { ...cached, defaultModel, defaultLeadModel, defaultReviewModel } : { defaultModel, defaultLeadModel, defaultReviewModel, options: [], readAt: null };
   }
 
   /**
@@ -2298,6 +2307,19 @@ export class OperatorService {
    * which means the review runs on the session's own model — the weaker choice, and the one
    * every session had before this existed.
    */
+  /** Sets the model the lead of two chats starts on (2026-10-23). An empty name leaves its chat on whatever it is. */
+  async setDefaultLeadModel(name: string): Promise<{ defaultLeadModel: string }> {
+    await this.init();
+    await this.settings.update((raw) => ({ ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultLeadModel: name.trim() } }));
+    this.bus.publish({
+      sessionId: '*',
+      type: 'default-lead-model-changed',
+      level: 'info',
+      message: name.trim() ? `the lead of two chats will start on ${name.trim()}` : 'the lead of two chats leaves the chat on its model',
+    });
+    return { defaultLeadModel: name.trim() };
+  }
+
   async setDefaultReviewModel(name: string): Promise<{ defaultReviewModel: string }> {
     await this.init();
     await this.settings.update((raw) => ({ ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultReviewModel: name.trim() } }));
@@ -2441,10 +2463,13 @@ export class OperatorService {
       const saved = cfg.copilot;
       const work = (saved.defaultModel ?? '').trim();
       const review = (saved.defaultReviewModel ?? '').trim();
+      const lead = (saved.defaultLeadModel ?? '').trim();
       const workNow = work ? pageModelFor(work, options) : null;
       const reviewNow = review ? pageModelFor(review, options) : null;
+      const leadNow = lead ? pageModelFor(lead, options) : null;
       if (workNow && !sameModel(workNow.name, work)) await this.setDefaultModel(workNow.name);
       if (reviewNow && !sameModel(reviewNow.name, review)) await this.setDefaultReviewModel(reviewNow.name);
+      if (leadNow && !sameModel(leadNow.name, lead)) await this.setDefaultLeadModel(leadNow.name);
       return catalogue;
     } finally {
       await transport?.close().catch(() => undefined);

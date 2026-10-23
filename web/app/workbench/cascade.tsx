@@ -97,7 +97,10 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * none of the conversation's own and none in Settings — because then the run asks for it by hand (2026-10-17;
    * the runner decides the same way, see `modelByHand` in taskRunner.ts). It replaced "Whatever the chat is on".
    */
-  const settingsModel = catalogue?.defaultModel ?? '';
+  // Settings' model for this conversation's part (2026-10-23): the lead's with two chats, else the worker's.
+  const leading = session ? !!session.lead : newLead;
+  const settingsModel = (leading ? catalogue?.defaultLeadModel || catalogue?.defaultModel : catalogue?.defaultModel) ?? '';
+  const settingsWorkerModel = catalogue?.defaultModel ?? '';
   const sessionModelShown = session ? (session.manualModel || (!session.model && !settingsModel) ? BY_HAND : (session.model ?? '')) : '';
   const newModelShown = newModel === BY_HAND || (!newModel && !settingsModel) ? BY_HAND : newModel;
 
@@ -192,7 +195,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         chosen={session ? sessionModelShown : newModelShown}
         onChange={(n) => void chooseModel(n)}
         byHand={t('chat.modelByHand')}
-        none={catalogue?.defaultModel ? t('chat.modelDefault', { model: catalogue.defaultModel }) : undefined}
+        none={settingsModel ? t('chat.modelDefault', { model: settingsModel }) : undefined}
         catalogue={catalogue}
         disabled={running}
         style={{ minWidth: 0, maxWidth }}
@@ -337,6 +340,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     setNewLead(on);
     keep(LEAD_KEY, on ? 'on' : '');
   };
+  // The worker's own; none chosen, Settings' model for the worker (2026-10-23), else the lead's, as the runner does.
   const workerModelShown = session ? (session.lead?.workerManualModel ? BY_HAND : (session.lead?.workerModel ?? '')) : newWorkerModel;
   const chooseWorkerModel = async (name: string) => {
     if (!session) {
@@ -520,7 +524,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
                 chosen={workerModelShown}
                 onChange={(n) => void chooseWorkerModel(n)}
                 byHand={t('chat.modelByHand')}
-                none={t('chat.workerSameModel')}
+                none={settingsWorkerModel ? t('chat.modelDefault', { model: settingsWorkerModel }) : t('chat.workerSameModel')}
                 catalogue={catalogue}
                 disabled={running}
                 style={{ minWidth: 0, maxWidth: '90%' }}
@@ -916,9 +920,11 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
     <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
       <p className="small cs-ask-head"><strong>{t('chat.askTitle')}</strong> {approval.actor && <ActorChip actor={approval.actor} how="asks" />}</p>
       <pre className="cs-out">{approval.description}</pre>
+      {/* A platform reached with the operator's own access (2026-10-23): said, and never run on "the rest". */}
+      {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
       <div className="row">
         <button type="button" className="primary" disabled={busy} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
-        {!approval.network && <button type="button" disabled={busy} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
+        {!approval.network && !approval.platform && <button type="button" disabled={busy} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
         <button type="button" disabled={busy} onClick={() => void answer('skip')}>{t('chat.askSkip')}</button>
       </div>
     </div>
@@ -1084,6 +1090,8 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const q = approval.question!;
+  // The lead's question, or since 2026-10-23 the chat's own.
+  const asker = approval.actor ?? 'lead';
   const answer = async (value: string) => {
     if (!value.trim()) return;
     setBusy(true);
@@ -1112,17 +1120,22 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
     }
   };
   return (
-    <div className="cs-ask cs-question" role="group" aria-label={t('lead.question')}>
+    <div className="cs-ask cs-question" role="group" aria-label={t(asker === 'lead' ? 'lead.question' : 'chat.question')}>
       <p className="small cs-ask-head">
-        <strong>{t('lead.question')}</strong> <ActorChip actor={approval.actor ?? 'lead'} how="asks" />
+        <strong>{t(asker === 'lead' ? 'lead.question' : 'chat.question')}</strong> <ActorChip actor={asker} how="asks" />
       </p>
       <RichText text={q.text} />
       {q.why && <p className="muted small">{q.why}</p>}
+      {/*
+        Its answers to click (2026-10-23), the chat's recommended one first; an answer that carries a command says it
+        runs it, and the bot runs it when it is chosen — nothing for the operator to type.
+      */}
       {q.options.length > 0 && (
         <div className="row cs-options">
-          {q.options.map((o) => (
-            <button key={o} type="button" disabled={busy} onClick={() => void answer(o)}>
-              {o}
+          {q.options.map((o, i) => (
+            <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} disabled={busy} onClick={() => void answer(o)} title={i === 0 ? t('chat.optionRecommended') : undefined}>
+              <span>{o}</span>
+              {q.commands?.[i] && <code className="cs-option-run">{t('chat.optionRuns', { cmd: q.commands[i]! })}</code>}
             </button>
           ))}
         </div>

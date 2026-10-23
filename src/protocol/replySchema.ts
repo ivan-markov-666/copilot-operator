@@ -124,6 +124,21 @@ export const PlanSchema = z.object({
 
 export type PlanReply = z.infer<typeof PlanSchema>;
 
+/**
+ * One answer to a question the chat puts to the operator (operator, 2026-10-23: "answers to click, not only a text field;
+ * and when the chat proposes a command for the user to run by hand, a button behind it, and the bot runs it"): what
+ * the operator clicks, and a command the runner runs when it is chosen. A bare string is the answer alone.
+ */
+export const OptionSchema = z.preprocess(
+  (v) => (typeof v === 'string' ? { answer: v } : v),
+  z.object({
+    answer: z.string().trim().min(1),
+    run: z.string().trim().min(1).optional(),
+    shell: ShellSchema.optional(),
+  }),
+);
+export type ReplyOption = z.infer<typeof OptionSchema>;
+
 export const ReplySchema = z
   .object({
     /**
@@ -143,9 +158,13 @@ export const ReplySchema = z
      * `plan` — in plan mode only: here is the plan, made from what I read; no steps with it, and no change
      * made yet. See `PlanSchema`.
      */
-    status: z.enum(['continue', 'done', 'blocked', 'plan']),
+    status: z.enum(['continue', 'done', 'blocked', 'plan', 'ask']),
     /** Required when `status` is `plan`. */
     plan: PlanSchema.optional(),
+    /** `ask` — a question only the operator can answer (2026-10-23): the question, why, and the answers to click. */
+    question: z.string().optional(),
+    why: z.string().optional(),
+    options: z.array(OptionSchema).default([]),
     steps: z.array(StepSchema).default([]),
     notes: z.string().optional(),
     /**
@@ -179,8 +198,13 @@ export const ReplySchema = z
   })
   .refine((r) => r.status === 'continue' || r.steps.length === 0, {
     message:
-      'status "done", "blocked" and "plan" cannot carry steps: "done" and "blocked" end the task, and "plan" waits for the plan to be approved. ' +
+      'status "done", "blocked", "plan" and "ask" cannot carry steps: "done" and "blocked" end the task, "plan" waits for the plan to be approved and "ask" for the operator\'s answer (a command for an answer goes in its "run"). ' +
       'Send the steps with status "continue".',
+  })
+  .refine((r) => r.status !== 'ask' || ((r.question ?? '').trim().length >= 5 && r.options.length >= 2), {
+    message:
+      'status "ask" requires a "question" for the operator and at least two "options", your recommended one first: ' +
+      '[{ "answer": "what the operator clicks" }, { "answer": "...", "run": "a command the runner runs if this is chosen" }].',
   })
   .refine((r) => r.status !== 'plan' || !!r.plan, {
     message:

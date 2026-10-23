@@ -432,6 +432,10 @@ export const reply = {
   triedThenBlocked(): string[] {
     return [reply.steps('Get-ChildItem'), reply.blocked()];
   },
+  /** A question for the operator (2026-10-23): its answers, the recommended first; an answer may carry a command to run. */
+  ask(question: string, options: Array<string | { answer: string; run?: string }>, why?: string): string {
+    return fenced({ status: 'ask', steps: [], question, ...(why ? { why } : {}), options });
+  },
   /** A plan, in plan mode: what is there, how, the stages, the files, how it will be shown done. */
   plan(over: Partial<{ existing: string; approach: string; steps: string[]; files: string[]; verification: string; risks: string }> = {}): string {
     return fenced({

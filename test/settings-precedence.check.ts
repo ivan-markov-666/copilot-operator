@@ -7,7 +7,7 @@
  *
  *   npm run check:settings-precedence
  */
-import { effectiveModels } from '../src/orchestrator/taskRunner.js';
+import { effectiveModels, modelByHand } from '../src/orchestrator/taskRunner.js';
 import { startHarness, Tally } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
@@ -26,6 +26,78 @@ console.log('--- which model a session runs on ---');
   t.check("the operator's own choice on the session outranks Settings", [e3.model, e3.modelFrom, e3.reviewModel], ['Chosen Here', 'session', 'Reviewer Here']);
   const old = { model: 'Saved Before', review: { enabled: true, model: '' } };
   t.check('an older session, of unknown origin, follows Settings', effectiveModels(old, cfg('Settings Model')).model, 'Settings Model');
+}
+
+/*
+ * Three models in Settings (operator, 2026-10-23: "Model for the worker, Model for the lead, Model for the review"):
+ * the lead of two chats on the lead's, everyone else — the one chat, the worker of two chats — on the worker's; and
+ * each part's own "by hand", the lead's and the review's as the worker's until they are set.
+ */
+console.log("\n--- the worker's, the lead's and the review's model, and each one's \"by hand\" ---");
+{
+  const three = (over: Record<string, unknown> = {}) => ({ copilot: { defaultModel: 'Worker Model', defaultLeadModel: 'Lead Model', defaultReviewModel: 'Review Model', manualModel: false, ...over } }) as never;
+  t.check("the lead of two chats is on Settings' model for the lead", [effectiveModels({ lead: {} }, three()).model, effectiveModels({ lead: {} }, three()).modelFrom], ['Lead Model', 'settings']);
+  t.check("the worker of two chats on Settings' model for the worker, not the lead's", effectiveModels({ workerOf: 's-lead' } as never, three()).model, 'Worker Model');
+  t.check("the one chat on the worker's too", effectiveModels({}, three()).model, 'Worker Model');
+  t.check("with no model for the lead, the lead is on the worker's, as before there were two", effectiveModels({ lead: {} }, three({ defaultLeadModel: '' })).model, 'Worker Model');
+  t.check("the review on the review's", effectiveModels({ lead: {} }, three()).reviewModel, 'Review Model');
+  const chat = { kind: 'chat' as const };
+  t.check('"by hand": each part its own', [
+    modelByHand({ ...chat, lead: {} }, three({ manualModel: true, leadManualModel: false })),
+    modelByHand(chat, three({ manualModel: true, leadManualModel: false })),
+    modelByHand({ ...chat, lead: {} }, three({ manualModel: false, leadManualModel: true })),
+  ], [false, true, true]);
+  t.check("the lead's, not set, is as the worker's", [modelByHand({ ...chat, lead: {} }, three({ manualModel: true })), modelByHand({ ...chat, lead: {} }, three({ manualModel: false }))], [true, false]);
+}
+
+console.log('\n--- two chats, run: the lead put on the lead\'s model, the worker on the worker\'s ---');
+{
+  const h = await startHarness({ settings: { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { manualModel: false, defaultModel: 'Auto', defaultLeadModel: 'Think deeper' } } });
+  try {
+    const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create result.txt holding the word hello.', lead: true });
+    h.chat.script(
+      reply.lead.delegate(
+        { title: 'Write result.txt', goal: 'Create result.txt at the root holding exactly the word hello.', readOnly: false, report: 'What Get-Content prints for the file.' },
+        { understanding: 'Goal: a file result.txt holding hello. Done when the file is there and read back.', todo: [{ title: 'Write result.txt', status: 'running', phase: 'Work' }] },
+      ),
+      reply.steps("Set-Content -Path result.txt -Value 'hello' -Encoding utf8"),
+      reply.done('I wrote result.txt and read it back: it holds hello.'),
+      reply.lead.done(undefined, ['result.txt']),
+    );
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await h.idle();
+    t.check("the lead's conversation on Think deeper, the worker's on Auto", h.chat.modelRequests.slice(0, 2), ['Think deeper', 'Auto']);
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
+console.log("\n--- two chats, no model for the worker in Settings: the worker on the lead's, chosen under the box ---");
+{
+  const h = await startHarness({ settings: { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { manualModel: false } } });
+  try {
+    const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create result.txt holding the word hello.', model: 'Think deeper', lead: true });
+    h.chat.script(
+      reply.lead.delegate(
+        { title: 'Write result.txt', goal: 'Create result.txt at the root holding exactly the word hello.', readOnly: false, report: 'What Get-Content prints for the file.' },
+        { understanding: 'Goal: a file result.txt holding hello. Done when the file is there and read back.', todo: [{ title: 'Write result.txt', status: 'running', phase: 'Work' }] },
+      ),
+      reply.steps("Set-Content -Path result.txt -Value 'hello' -Encoding utf8"),
+      reply.done('I wrote result.txt and read it back: it holds hello.'),
+      reply.lead.done(undefined, ['result.txt']),
+    );
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await h.idle();
+    t.check("both conversations on Think deeper: the worker follows the lead's, as before Settings had one for each", h.chat.modelRequests.slice(0, 2), ['Think deeper', 'Think deeper']);
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
 }
 
 console.log('\n--- a plan with a model, imported and run: the chat is put on the model in Settings ---');

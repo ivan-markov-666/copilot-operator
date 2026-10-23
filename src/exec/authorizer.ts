@@ -12,6 +12,7 @@ import { staticCheck, describeStep, type PolicyConfig, type PolicyDecision } fro
 import type { Confinement } from './confinement.js';
 import { networkFetchReason, networkFetchRefusal } from './network.js';
 import { scriptNetworkReason } from './policy.js';
+import { platformReason } from './platforms.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -34,7 +35,7 @@ export interface StepAuthorizer {
  * command that fetches from the network (see `network.ts`). Absent for an ordinary confirm-mode
  * question.
  */
-export type HeldFor = { network: string };
+export type HeldFor = { network?: string; platform?: string };
 
 export type Ask = (step: Step, ctx: AuthorizeContext, held?: HeldFor) => Promise<PolicyDecision>;
 
@@ -64,15 +65,26 @@ export function makeAuthorizer(cfg: PolicyConfig, ask: Ask, signal?: AbortSignal
       if (blocked) return blocked;
       const cwd = ctx.confinement?.cwd;
       const network = networkFetchReason(step.cmd, cwd) ?? (cwd ? scriptNetworkReason(step.cmd, cwd) : null);
+      // A platform reached with the operator's access (2026-10-23): asked in every mode, unless Settings agree to it.
+      const platform = cfg.platformAccess === 'allow' ? null : platformReason(step.cmd, step.shell);
       if (network) {
         if (cfg.mode === 'unattended' && cfg.networkFetch === 'refuse') return { action: 'skip', reason: networkFetchRefusal(network) };
-        if (cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
-        return await ask(step, ctx, { network });
+        if (!platform && cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
+        return await ask(step, ctx, { network, ...(platform ? { platform } : {}) });
       }
+      if (platform) return await ask(step, ctx, { platform });
       if (cfg.mode === 'unattended') return { action: 'run' };
       return await ask(step, ctx);
     },
   };
+}
+
+/** What the chat is told when a command to a platform was held and nobody was there to allow it. */
+export function platformRefusal(platform: string): string {
+  return (
+    `refused: this command reaches ${platform} with the operator's access, which only the operator may allow, and this run has ` +
+    'nobody to ask. Do the work without it, or say in `notes` what is needed there and end `blocked`.'
+  );
 }
 
 /** The terminal version: Enter runs, `s` skips, `q` aborts. */
@@ -80,7 +92,8 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
   return makeAuthorizer(cfg, async (step, _ctx, held) => {
     print('');
     print(`  step ${step.id}: ${describeStep(step)}`);
-    if (held) print(`  held: ${held.network}`);
+    if (held?.network) print(`  held: ${held.network}`);
+    if (held?.platform) print(`  held: it reaches ${held.platform} with your access`);
     const rl = createInterface({ input: stdin, output: stdout });
     try {
       const answer = (await rl.question('  [Enter] run  [s] skip  [q] abort > ')).trim().toLowerCase();
@@ -104,6 +117,6 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
  */
 export function unattendedAuthorizer(cfg: PolicyConfig): StepAuthorizer {
   return makeAuthorizer({ ...cfg, mode: 'unattended' }, async (_step, _ctx, held) =>
-    held ? { action: 'skip', reason: networkFetchRefusal(held.network) } : { action: 'run' },
+    held?.network ? { action: 'skip', reason: networkFetchRefusal(held.network) } : held?.platform ? { action: 'skip', reason: platformRefusal(held.platform) } : { action: 'run' },
   );
 }

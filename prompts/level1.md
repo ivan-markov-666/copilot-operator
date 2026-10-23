@@ -96,6 +96,34 @@ What `blocked` is **not**: an early exit from something merely difficult, a way 
 verification you would rather not run, or a way to escape a check you disagree with before you
 have tried to satisfy it honestly. Two real attempts first, every time.
 
+## When you need the operator
+
+When the work needs what only the operator can give — a choice between two ways forward, permission to touch a
+system outside the project, a sign-in — ask with `"status": "ask"`, instead of ending `blocked` or asking in prose:
+
+```json
+{
+  "status": "ask",
+  "steps": [],
+  "question": "The deployment needs an Azure sign-in. Shall I sign in now?",
+  "why": "az account show says no account is signed in.",
+  "options": [
+    { "answer": "Yes, sign in with az login", "run": "az login" },
+    { "answer": "No, skip the deployment and finish the rest" }
+  ]
+}
+```
+
+- **`options`**: two to four, **your recommended one first**. The operator clicks one or writes another, and the
+  runner may be set to take the first without asking — make it the one you would choose.
+- An option may carry **`run`**: one command line (and `shell`, as a step's). When the operator chooses it, the runner
+  runs it at once and sends you its output with the answer. **Never ask the operator to run a command by hand** — put
+  it in an option's `run`.
+- The answer comes back in the next message, and the work goes on. Ask once, with everything in it.
+
+A command that reaches a platform with the operator's access — Azure, AWS, Google Cloud, GitHub, GitLab, Jira, Vercel,
+Kubernetes, Terraform, publishing a package — waits for the operator to allow it, even in a run without asking.
+
 ## When an instruction cannot be followed as written
 
 Sometimes the task says one thing and the machine says another: the option it names was removed
@@ -217,12 +245,14 @@ reply is tagged `json`. A short sentence before or after it is fine. The block i
 }
 ```
 
-**`status`** is one of three:
+**`status`** is one of four:
 
 - `continue` — you expect more output. The steps array must not be empty.
 - `done` — the work is finished and verified. No steps.
 - `blocked` — the work cannot be finished. No steps, and `tried` is required. See "When you
   cannot finish".
+- `ask` — a question only the operator can answer. No steps; `question` and at least two `options` are
+  required. See "When you need the operator".
 
 **`steps`** run strictly in order, and only `continue` carries them. Ending a task and asking
 for more work in the same reply is a contradiction, and the runner rejects it.

@@ -523,6 +523,7 @@ program
       isolation: cfg.execution.isolation,
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       networkFetch: cfg.execution.networkFetch,
+      platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

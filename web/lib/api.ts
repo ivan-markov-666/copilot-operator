@@ -653,6 +653,8 @@ export type ModelCatalogue = {
   defaultModel: string;
   /** The model a new session's independent review runs on. Empty means the session's own. */
   defaultReviewModel: string;
+  /** The model the lead of two chats starts on (2026-10-23). Empty leaves its chat on whatever it is. */
+  defaultLeadModel: string;
 };
 
 export type Session = {
@@ -720,13 +722,16 @@ export type Approval = {
   actor?: Actor;
   /** Set when the step was held because it downloads; asked about even in an unattended run. */
   network?: string;
+  /** Set when the step reaches a platform with the operator's access (Azure, AWS, GitHub…); asked about in every run. */
+  platform?: string;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */
   /** `review`: the model of the review's own conversation, best another, stronger one than the work's. */
   model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' };
   /** Set when this is a task's plan waiting for approval (plan mode). */
   plan?: { title: string; plan: TaskPlan };
   /** Two chats: the lead's question for the operator, answered with text. */
-  question?: { text: string; why?: string; options: string[] };
+  /** `commands`: by answer, the command the bot runs when that one is chosen, or null. */
+  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null> };
 };
 
 /** One reply of the lead (two chats): what it decided, and what came of it. */
@@ -1281,6 +1286,7 @@ export const api = {
   models: () => call<ModelCatalogue>('/models'),
   /** Stores the model new sessions start on. An empty name clears it. */
   setDefaultModel: (model: string) => call<{ defaultModel: string }>('/models/default', { method: 'PUT', body: JSON.stringify({ model }) }),
+  setDefaultLeadModel: (model: string) => call<{ defaultLeadModel: string }>('/models/lead-default', { method: 'PUT', body: JSON.stringify({ model }) }),
   setDefaultReviewModel: (model: string) =>
     call<{ defaultReviewModel: string }>('/models/review-default', { method: 'PUT', body: JSON.stringify({ model }) }),
   /** Opens the browser and re-reads the picker. Slow, and refused while a session runs. */

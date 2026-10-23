@@ -641,6 +641,28 @@ the cards, the name on the line "Working…" and along the bottom. While the bot
 (red; amber while paused; on hover who is at work), and the browser tab reads "● Worker at work — copilot-operator" —
 "(1) waiting for you" first when something waits for the operator.
 
+**Platforms, questions with answers to click (2026-10-23).** A command that reaches a platform with the operator's
+access — Azure (`az`, Az PowerShell), AWS, Google Cloud, GitHub (`gh`), GitLab, Jira, Vercel, Netlify, Heroku,
+Cloudflare, Kubernetes, Terraform, Microsoft Graph, Exchange Online, publishing to npm, a container registry, NuGet,
+PyPI and the like (`exec/platforms.ts`, read by the programs and cmdlets a line starts) — waits for the operator in
+every mode, an unattended one too, and is never "run the rest" (`HeldFor.platform`, `PendingApproval.platform`; the
+card says which platform). The chat may ask the operator with `"status": "ask"` (`question`, `why`, at least two
+`options`, its recommended first; `replySchema.ts`, `prompts/level1.md`): a card in the conversation with its answers
+to click, the first highlighted, and a field for another; an answer may carry `run`, a command the runner runs at once
+when it is chosen — the click being its permission, the refusing rules still applying — its output going back with the
+answer. The lead is told to always give answers too. Settings → Execution → "Questions from the bot":
+"Ask me" (default) or "Agree with what the bot proposes" (`execution.questions: agree`, confirmed when chosen):
+platform commands run and every question — the chat's, the lead's — takes the first answer, the conversation saying so.
+
+**Three models, and "Saving..." (2026-10-23).** Settings has a model for the worker (`copilot.defaultModel`: the one
+chat, or the worker of two chats), for the lead (`copilot.defaultLeadModel`, `PUT /api/models/lead-default`; none
+chosen, the worker's) and for the review (`copilot.defaultReviewModel`) — three alike sections (`RoleModelSection`),
+each with the same choices, "Clear", "Read the list from Copilot", when it was read, and its own "Choose the model by
+hand" (`manualModel`, `leadManualModel`, `reviewManualModel`; the last two as the worker's until set). `effectiveModels`
+and `modelByHand` read the part's own; the worker takes its own, else Settings' worker model, else the lead's (as before). Under every section, "saved as
+you type" is gone: a write shows "Saving." "Saving.." "Saving..." round and round for at least 1.6 s (`useSaving`,
+`SavedNote`), after typing stops, a tick or a choice.
+
 **The logo and the icon (2026-10-22).** An aeroplane crossing its orbit, drawn once in `web/lib/brand.ts`: beside the
 name in the bar on top of every page (`app/logo.tsx`, coloured by the theme from `--logo-plane` and `--logo-orbit`:
 dark blue on light, light with a sky-blue orbit on dark), and as files in `docs/brand/` (`logo-light.svg`,

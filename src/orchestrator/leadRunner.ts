@@ -377,9 +377,15 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
        * The worker's model as chosen under the chat's box; with none chosen, the lead's — by hand when the lead's is.
        * A worker with no model of its own would be asked about by hand on every conversation that named one.
        */
+      /*
+       * The worker's model as chosen under the chat's box; with none chosen, Settings' model for the worker (2026-10-23:
+       * three models in Settings — the worker's, the lead's, the review's); with none there either, the lead's, by hand
+       * when the lead's is — as before Settings had one for each.
+       */
       const own = lead2.workerModel?.trim();
-      if (lead2.workerManualModel || (!own && now?.manualModel)) s.manualModel = true;
-      else if (own || now?.model?.trim()) {
+      const fromSettings = (cfg.copilot.defaultModel ?? '').trim();
+      if (lead2.workerManualModel || (!own && !fromSettings && now?.manualModel)) s.manualModel = true;
+      else if (own || (!fromSettings && now?.model?.trim())) {
         s.model = own || now?.model?.trim();
         s.modelSource = 'operator';
       }
@@ -626,12 +632,26 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
         case 'ask': {
           round.question = { text: r.question!, ...(r.why ? { why: r.why } : {}), ...(r.options.length > 0 ? { options: r.options } : {}) };
           await saveLead();
+          /*
+           * Settings agree with what the bot proposes (2026-10-23): the lead's recommended answer, its first, is taken
+           * and said; with no answers given, it is told to go on as it proposes.
+           */
+          if (cfg.execution.questions === 'agree') {
+            const agreed = r.options[0] ?? 'Go on as you propose.';
+            round.question.answer = agreed;
+            round.question.at = new Date().toISOString();
+            await saveLead();
+            sink.event('question-agreed', { round: round.n, question: r.question, answer: agreed },
+              `the lead asked: ${r.question} — answered as it recommends (Settings agree with what the bot proposes): ${agreed}`);
+            markdown = await tell(operatorAnswerMessage(agreed, max - lead.subtasks));
+            break;
+          }
           if (!deps.askQuestion) {
             markdown = await tell(NOBODY_TO_ASK);
             break;
           }
           sink.event('lead-question', { round: round.n, question: r.question }, `the lead asks the operator: ${r.question}`, 'warn');
-          const got = await deps.askQuestion({ sessionId: session.id, taskId: task.id, question: r.question!, ...(r.why ? { why: r.why } : {}), options: r.options });
+          const got = await deps.askQuestion({ sessionId: session.id, taskId: task.id, question: r.question!, ...(r.why ? { why: r.why } : {}), options: r.options, actor: 'lead' });
           if (got === 'stop' || signal?.aborted) return await finish('aborted', 'the operator stopped the task at the lead\'s question');
           round.question.answer = got.answer;
           round.question.at = new Date().toISOString();

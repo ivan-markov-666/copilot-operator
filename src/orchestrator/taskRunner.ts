@@ -34,7 +34,7 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, checkCommandRefusal, commandRefusal, type PolicyConfig } from '../exec/policy.js';
+import { describeStep, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
@@ -149,7 +149,7 @@ export type RunDeps = {
    * The two-chat mode (2026-10-20): the lead's question for the operator, put to them on a card in the conversation; the
    * answer is text, or the operator stops the task. Absent (the terminal), the lead is told nobody can answer.
    */
-  askQuestion?: (ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[] }) => Promise<{ answer: string } | 'stop'>;
+  askQuestion?: (ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; actor?: Actor }) => Promise<{ answer: string } | 'stop'>;
   /** The two-chat mode: the worker's session the run now also speaks for, so its steps and cards are the run's. */
   onWorker?: (workerSessionId: string) => void;
 };
@@ -167,7 +167,7 @@ export type ModelHooks = {
   askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker'; actor?: Actor }) => Promise<'recheck' | 'continue' | 'stop'>;
   /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
   locate?: (name: string) => Promise<ModelLocator | undefined>;
-  renamedDefault?: (which: 'model' | 'review', from: string, to: string) => Promise<void>;
+  renamedDefault?: (which: 'model' | 'lead' | 'review', from: string, to: string) => Promise<void>;
   seen?: (options: ModelOption[], current: string | null) => Promise<void>;
 };
 
@@ -176,7 +176,7 @@ export type ModelHooks = {
  * the line-up read on the way. Returns the sentence that says so, or ''.
  */
 async function followPageModels(
-  which: 'model' | 'review',
+  which: 'model' | 'lead' | 'review',
   wanted: string,
   result: ModelChoice,
   session: Session,
@@ -191,8 +191,8 @@ async function followPageModels(
   if (own) {
     await store
       ?.updateSession(session.id, (s) => {
-        if (which === 'model') s.model = result.matched;
-        else s.review = { ...(s.review ?? {}), model: result.matched } as typeof s.review;
+        if (which === 'review') s.review = { ...(s.review ?? {}), model: result.matched } as typeof s.review;
+        else s.model = result.matched;
       })
       .catch(() => undefined);
   } else {
@@ -796,13 +796,18 @@ export async function openSessionTransport(
  * on every run (operator's rule, 2026-10-06: what is set in Settings outranks the same thing in the JSON).
  */
 export function effectiveModels(
-  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'manualModel'>,
+  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'manualModel' | 'lead'>,
   cfg: Pick<ResolvedConfig, 'copilot'>,
 ): { model: string; reviewModel: string; modelFrom: 'session' | 'settings' | 'plan' | 'none'; reviewModelFrom: 'session' | 'settings' | 'plan' | 'none' } {
   const pick = (own: string, source: 'plan' | 'operator' | undefined, settings: string): [string, 'session' | 'settings' | 'plan' | 'none'] =>
     own && source === 'operator' ? [own, 'session'] : settings ? [settings, 'settings'] : own ? [own, 'plan'] : ['', 'none'];
   // Set by hand in the Copilot window: no name is asked for, neither the session's nor the one in Settings.
-  const [model, modelFrom]: [string, 'session' | 'settings' | 'plan' | 'none'] = session.manualModel ? ['', 'none'] : pick((session.model ?? '').trim(), session.modelSource, (cfg.copilot.defaultModel ?? '').trim());
+  /*
+   * Settings' model for the conversation's part (2026-10-23): the lead's for the lead of two chats — the worker's when
+   * none is chosen for the lead, as before there were two — else the worker's.
+   */
+  const fromSettings = ((session.lead ? cfg.copilot.defaultLeadModel?.trim() || cfg.copilot.defaultModel : cfg.copilot.defaultModel) ?? '').trim();
+  const [model, modelFrom]: [string, 'session' | 'settings' | 'plan' | 'none'] = session.manualModel ? ['', 'none'] : pick((session.model ?? '').trim(), session.modelSource, fromSettings);
   const [reviewModel, reviewModelFrom] = pick((session.review?.model ?? '').trim(), session.reviewModelSource, (cfg.copilot.defaultReviewModel ?? '').trim());
   return { model, reviewModel, modelFrom, reviewModelFrom };
 }
@@ -812,8 +817,10 @@ export function effectiveModels(
  * every run, the session says so ("Set the model by hand" in the chat's picker), or it is a chat that names no
  * model and has none from Settings either — its picker shows "by hand" for that, and what it shows is what happens.
  */
-export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'model' | 'review' | 'modelSource' | 'reviewModelSource'>, cfg: Pick<ResolvedConfig, 'copilot'>): boolean {
-  if (cfg.copilot.manualModel || session.manualModel) return true;
+export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'lead'>, cfg: Pick<ResolvedConfig, 'copilot'>): boolean {
+  // Settings' "by hand" for the conversation's part (2026-10-23): the lead's has its own, absent as the worker's.
+  const settingsSay = session.lead ? (cfg.copilot.leadManualModel ?? cfg.copilot.manualModel) : cfg.copilot.manualModel;
+  if (settingsSay || session.manualModel) return true;
   return session.kind === 'chat' && !effectiveModels(session, cfg).model;
 }
 
@@ -901,7 +908,7 @@ export async function applySessionModel(
   const hand = await withOperatorHand(transport, wanted, result, hooks, session.id, bus, false, asks);
   result = hand.result;
   const goOnAsItIs = hand.goOnAsItIs;
-  const renamed = await followPageModels('model', wanted, result, session, store, hooks, modelFrom);
+  const renamed = await followPageModels(session.lead ? 'lead' : 'model', wanted, result, session, store, hooks, modelFrom);
   if (renamed) bus.publish({ sessionId: session.id, type: 'model-renamed', level: 'warn', message: renamed, data: { asked: wanted, chosen: result.matched } });
 
   bus.publish({
@@ -1205,6 +1212,11 @@ export async function runTask(
   let disputes: Dispute[] = [];
   /** What the runner tells the model in its next message about the reply just processed. */
   let runnerNotes: string[] = [];
+  /*
+   * Commands the operator chose an answer for (2026-10-23): the click is the permission for that one command, once.
+   * The rules that refuse a command still apply to it.
+   */
+  const consented = new Set<string>();
   /** The projects for reference only, watched for the length of the task (see `vcs/referenceGuard.ts`). */
   let reference: ReferenceGuard | null = null;
   /** Steps the chat sent that were not run, for the handoff at the end. */
@@ -2429,7 +2441,8 @@ export async function runTask(
        * hand unless one is named (2026-10-17), and its review is too: asked on a card that says it is the review's
        * and why a different, stronger model is worth choosing for it (operator, 2026-10-20).
        */
-      const reviewByHand = cfg.copilot.manualModel || !!session.manualModel || (session.kind === 'chat' && !model);
+      // The review's own "by hand" in Settings (2026-10-23), absent as the worker's.
+      const reviewByHand = (cfg.copilot.reviewManualModel ?? cfg.copilot.manualModel) || !!session.manualModel || (session.kind === 'chat' && !model);
       const repoDir = trackedRepoOf(session);
       /*
        * What changed, read from git rather than from anybody's account of it.
@@ -2953,6 +2966,69 @@ export async function runTask(
        * approaches that were tried, and that is what the register shows.
        */
       /*
+       * A question only the operator can answer (operator, 2026-10-23: "answers to click, not only a text field; when the
+       * chat proposes a command for the user to run by hand, a button behind it, and the bot runs it"): put to the
+       * operator with its answers — or, Settings agreeing with what the bot proposes, or nobody there to ask, the first,
+       * which the chat recommends. The answer goes back; an answer that carries a command has it run here and now, as
+       * this reply's step, its output going back with the answer.
+       */
+      if (reply.status === 'ask') {
+        const question = (reply.question ?? '').trim();
+        const options = reply.options;
+        const agree = cfg.execution.questions === 'agree' || !deps.askQuestion;
+        let answer = options[0]!.answer;
+        if (agree) {
+          sink.event('question-agreed', { question, answer, why: cfg.execution.questions === 'agree' ? 'settings' : 'nobody to ask' },
+            `the chat asked: ${question} — answered as it recommends (${cfg.execution.questions === 'agree' ? 'Settings agree with what the bot proposes' : 'nobody is there to ask'}): ${answer}`);
+        } else {
+          sink.event('question-asked', { question, options: options.map((o) => o.answer) }, `the chat asks the operator: ${question}`, 'warn');
+          await setTask((t) => {
+            t.status = 'waiting-approval';
+          });
+          const got = await deps.askQuestion!({
+            sessionId: session.id,
+            taskId: task.id,
+            question,
+            ...(reply.why?.trim() ? { why: reply.why.trim() } : {}),
+            options: options.map((o) => o.answer),
+            commands: options.map((o) => o.run ?? null),
+            actor: planning ? 'plan' : 'worker',
+          });
+          await setTask((t) => {
+            t.status = 'running';
+          });
+          if (got === 'stop' || signal?.aborted) return await finish('aborted', 'stopped by the operator at its question', undefined, lastMarkdown);
+          answer = got.answer;
+          sink.event('question-answered', { question, answer }, `the operator answered: ${answer}`);
+        }
+        await record('QUESTION', `${question}\n\nAnswer${agree ? ' (as the chat recommends)' : ''}: ${answer}`);
+        const chosen = options.find((o) => o.answer === answer);
+        if (chosen?.run) {
+          // Run as this reply's one step: through the step loop below, its output reported as any step's.
+          consented.add(chosen.run.trim());
+          const mutable = reply as { status: string; steps: Step[] };
+          mutable.status = 'continue';
+          mutable.steps = [{ id: 1, type: 'command', cmd: chosen.run, ...(chosen.shell ? { shell: chosen.shell } : {}) } as Step];
+          runnerNotes.push(
+            `${agree ? 'The runner took your recommended answer' : 'The operator answered your question'} ("${question}"): "${answer}". ` +
+              'The runner ran the command that answer carries — step 1 below, its output with it. Go on from there.',
+          );
+        } else {
+          const message =
+            `${agree ? 'The runner took your recommended answer' : 'The operator answered your question'} ("${question}"): "${answer}".\n\n` +
+            'Go on with the work from here, in the same format.';
+          await record('ANSWER', message);
+          await pacer.throttleSend();
+          const before = await transport.sendAndConfirm(message);
+          const next = await transport.waitForReply(before);
+          await saveReply('answer', next);
+          lastMarkdown = next.markdown;
+          await pacer.settle();
+          continue;
+        }
+      }
+
+      /*
        * Plan mode: the reply that ends the planning phase — put to the operator or approved by the runner —
        * and the two that do not belong in it. Answered here, in a message of its own, as a repair of the
        * format is: no step runs and nothing is committed in between.
@@ -3196,7 +3272,10 @@ export async function runTask(
           t.status = 'waiting-approval';
         });
         sink.event('step-proposed', { id: step.id, description: describeStep(step) }, `step ${step.id}: ${describeStep(step)}`);
-        const decided = await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement, actor: planning ? 'plan' : 'worker' });
+        // The command of an answer the operator chose (2026-10-23): their click allowed it; the refusing rules still hold.
+        const decided = consented.delete(step.cmd.trim())
+          ? (staticCheck(step, { mode: 'confirm', denyPatterns: cfg.execution.denyPatterns, allowedPrograms: cfg.execution.allowedPrograms }, undefined, confinement) ?? { action: 'run' as const })
+          : await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement, actor: planning ? 'plan' : 'worker' });
         await setTask((t) => {
           t.status = 'running';
         });

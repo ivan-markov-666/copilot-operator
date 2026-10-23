@@ -47,6 +47,11 @@ export type PolicyConfig = {
    * step whatever this says. See `execution.networkFetch` in `schema.ts`.
    */
   networkFetch?: NetworkFetchChoice;
+  /**
+   * A command that reaches a platform with the operator's access (`platforms.ts`): put to the operator in every mode,
+   * or `allow`ed, when Settings say to agree with what the bot proposes (`execution.questions: agree`).
+   */
+  platformAccess?: 'ask' | 'allow';
 };
 
 export type NetworkFetchChoice = 'ask' | 'refuse' | 'run';

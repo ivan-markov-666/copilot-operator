@@ -373,6 +373,19 @@ try {
     t.check('"Cancel": it still asks before each command, and nothing is saved', [await page.locator('#start-mode').inputValue(), (await settingsOf(h)).execution?.mode === 'unattended'], ['confirm', false]);
     await page.locator('#start-mode').selectOption('unattended');
     await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    // The bot's questions (2026-10-23): agreeing with what it proposes is confirmed too, and "Cancel" keeps asking.
+    t.check('"Questions from the bot": "Ask me" by default', await page.locator('#questions').inputValue(), 'ask');
+    await page.locator('#questions').selectOption('agree');
+    const agreeing = page.getByRole('alertdialog');
+    await agreeing.waitFor({ timeout: 5_000 });
+    t.truthy('agreeing with what the bot proposes is confirmed first', ((await agreeing.textContent()) ?? '').includes(en['exec.questionsAgreeConfirm']!.split('.')[0]!), await agreeing.textContent());
+    await agreeing.getByRole('button', { name: en['dialog.cancel']!, exact: true }).click();
+    await agreeing.waitFor({ state: 'detached' });
+    t.check('"Cancel": it still asks', [await page.locator('#questions').inputValue(), (await settingsOf(h)).execution?.questions === 'agree'], ['ask', false]);
+    await page.locator('#questions').selectOption('agree');
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    await waitFor('agreeing to be saved', async () => ((await settingsOf(h)).execution?.questions === 'agree' ? true : null), 10_000).catch(() => undefined);
+    t.check('"OK": saved', (await settingsOf(h)).execution?.questions, 'agree');
     await page.locator('#isolation').selectOption('vm');
     const exec = await waitFor('the three choices to be saved', async () => {
       const e = (await settingsOf(h)).execution ?? {};
@@ -1011,6 +1024,50 @@ try {
    * what each one is for; look at the other options too"): every ⓘ of Settings opens and says something; in Execution,
    * each number's says its default, and each list's names every one of its choices.
    */
+  /*
+   * The three models (operator, 2026-10-23): the worker's, the lead's, the review's — alike, each with the choices the
+   * model for new conversations had, and its own "by hand"; and "Saving." "Saving.." "Saving..." under a section after
+   * a change, where "saved as you type" was.
+   */
+  await scenario('Settings: the worker\'s, the lead\'s and the review\'s model alike, each its own "by hand", and "Saving..." after a change', {}, async (h, page, url) => {
+    // The list read from the scripted chat, as "Read the list from Copilot" does.
+    await h.call('POST', '/models/refresh');
+    await page.goto(url('/settings'));
+    const sections = ['model', 'lead-model', 'review'];
+    await page.locator('section#lead-model select').waitFor();
+    t.check('three sections, in order: the worker, the lead, the review', await page.locator('section.panel h2').evaluateAll((hs) => hs.map((x) => x.textContent ?? '')).then((all) => all.filter((x) => [en['def.modelTitle'], en['def.leadTitle'], en['def.reviewTitle']].includes(x))), [en['def.modelTitle'], en['def.leadTitle'], en['def.reviewTitle']]);
+    const options = async (id: string): Promise<string[]> => await page.locator(`section#${id} select option`).allTextContents();
+    const [worker, lead, review] = await Promise.all(sections.map(options));
+    t.truthy('the same choices in each, the first leaving the chat as it is', JSON.stringify(worker) === JSON.stringify(lead) && JSON.stringify(lead) === JSON.stringify(review) && worker[0] === en['def.modelNone'], { worker, lead, review });
+    const controls = async (id: string): Promise<string[]> => await page.locator(`section#${id} button:not(.info-btn)`).allTextContents();
+    t.check('and the same buttons, the list\'s date, and a "by hand" of its own', [await controls('lead-model'), await controls('review'), await page.locator('section#lead-model .field-after').count(), await page.locator('section input[type="checkbox"][id^="manual-"]').count()], [await controls('model'), await controls('model'), 1, 3]);
+    t.check('no "saved as you type" under any section', await page.getByText('saved as you type').count(), 0);
+
+    await page.locator('section#lead-model select').selectOption('Think deeper');
+    const note = page.locator('section#lead-model .saving');
+    await note.waitFor({ timeout: 3_000 });
+    const seen = new Set<string>();
+    const until = Date.now() + 1_400;
+    while (Date.now() < until) {
+      const text = await note.textContent().catch(() => null);
+      if (text) seen.add(text);
+      await page.waitForTimeout(90);
+    }
+    t.check('"Saving" with its dots going one, two, three', [...seen].filter((x) => /^Saving\.{1,3}$/.test(x)).sort(), ['Saving.', 'Saving..', 'Saving...']);
+    await waitFor('the lead\'s model saved', async () => ((await h.call<{ defaultLeadModel: string }>('GET', '/models')).defaultLeadModel === 'Think deeper' ? true : null), 10_000).catch(() => undefined);
+    t.check("the lead's model saved, the worker's untouched", [(await h.call<{ defaultLeadModel: string; defaultModel: string }>('GET', '/models')).defaultLeadModel, (await h.call<{ defaultModel: string }>('GET', '/models')).defaultModel], ['Think deeper', '']);
+    await note.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => undefined);
+    t.check('and the dots go once it is saved', await note.count(), 0);
+
+    // Each part's own "by hand" (the harness has the worker's off): the lead's ticked, the worker's left as it was.
+    t.check("the lead's and the review's, not set, show the worker's", [await page.locator('#manual-model').isChecked(), await page.locator('#manual-lead-model').isChecked(), await page.locator('#manual-review-model').isChecked()], [false, false, false]);
+    await page.locator('#manual-lead-model').check();
+    await page.locator('section#lead-model .saving').waitFor({ timeout: 3_000 });
+    await waitFor('the lead\'s by hand saved', async () => (((await settingsOf(h)).copilot as { leadManualModel?: boolean } | undefined)?.leadManualModel === true ? true : null), 10_000).catch(() => undefined);
+    const copilot = ((await settingsOf(h)).copilot ?? {}) as { manualModel?: boolean; leadManualModel?: boolean; reviewManualModel?: boolean };
+    t.check("a tick saves that part's alone, with \"Saving...\" under it", [copilot.leadManualModel, copilot.manualModel, copilot.reviewManualModel], [true, false, undefined]);
+  });
+
   await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {
     await page.goto(url('/settings'));
     await page.locator('#execution input#max-iterations').waitFor();
@@ -1514,6 +1571,33 @@ try {
     await waitFor('LIVE to go', async () => (await badge.count()) === 0 || null, 15_000).catch(() => undefined);
     await waitFor('the title to go back', async () => (await page.title()) === 'copilot-operator' || null, 10_000).catch(() => undefined);
     t.check('ended: no LIVE, the tab the name alone, no working line', [await badge.count(), await page.title(), await page.locator('.cs-working').count()], [0, 'copilot-operator', 0]);
+  });
+
+  /*
+   * The chat's question (operator, 2026-10-23: "answers to click; a command the chat wants run by hand is a button,
+   * and the bot runs it"): a card in the conversation, asked by the worker, its recommended answer first and
+   * highlighted, the command an answer carries said on it; clicked, the bot runs it and the work goes on.
+   */
+  await scenario('the chat asks: its answers to click, the recommended first, one that runs a command run by the bot', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Write asked.txt once I agree.', model: 'Think deeper' });
+    h.chat.script(
+      reply.ask('Shall I write asked.txt now?', [{ answer: 'Yes, write it', run: write('asked.txt', 'yes') }, 'Not yet']),
+      reply.done('asked.txt was written by the command of the answer chosen, and read back: it holds yes.'),
+    );
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const card = page.locator('.cs-question');
+    await card.waitFor({ timeout: 30_000 });
+    t.check('the card: the chat asks, and says who', [((await card.locator('.cs-ask-head strong').textContent()) ?? '').trim(), await card.locator('.actor-chip').textContent()], [en['chat.question'], 'Asked by: Worker']);
+    const options = card.locator('.cs-options button');
+    t.check('its answers in order, the first the recommended one, highlighted', [await options.count(), await options.first().getAttribute('title'), ((await options.first().getAttribute('class')) ?? '').includes('primary')], [2, en['chat.optionRecommended'], true]);
+    t.truthy('the answer that carries a command says what it runs', ((await options.first().locator('.cs-option-run').textContent()) ?? '').includes("Set-Content -Path asked.txt"), await options.first().textContent());
+    await options.first().click();
+    await page.locator('.cs-body').getByText('asked.txt was written by the command').waitFor({ timeout: 30_000 });
+    t.check('clicked: the bot ran it, and the work went on to its end', existsSync(join(h.repo, 'asked.txt')) ? readFileSync(join(h.repo, 'asked.txt'), 'utf8').trim() : null, 'yes');
   });
 
   /*

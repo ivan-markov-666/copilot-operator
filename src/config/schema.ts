@@ -129,6 +129,12 @@ export const RunConfigSchema = z.object({
        */
       defaultReviewModel: z.string().default(''),
       /**
+       * The model the lead of two chats starts on (operator, 2026-10-23: "Model for the worker, Model for the lead, Model
+       * for the review" — `defaultModel` being the worker's: the one chat, or the worker of two chats). Empty leaves the
+       * lead's conversation on whatever it is set to.
+       */
+      defaultLeadModel: z.string().default(''),
+      /**
        * Choose the model by hand (operator's workaround, 2026-10-06): at the start of a run, and of a review's
        * conversation, the runner does not touch the picker; a card in the UI asks the operator to choose the
        * model in the Copilot window and press "Ready". A conversation already on the model is not asked about.
@@ -136,6 +142,9 @@ export const RunConfigSchema = z.object({
        * user choosing it by hand, and test the bot itself"); off, the runner chooses the model itself.
        */
       manualModel: z.boolean().default(true),
+      /** The lead's and the review's models chosen by hand, each on its own (2026-10-23); absent, as `manualModel`. */
+      leadManualModel: z.boolean().optional(),
+      reviewManualModel: z.boolean().optional(),
       replyTimeoutSec: z.number().int().positive().default(900),
       signInTimeoutSec: z.number().int().positive().default(900),
       humanWaitSec: z.number().int().positive().default(900),
@@ -184,6 +193,13 @@ export const RunConfigSchema = z.object({
        * there, a fetch included, is put in front of a person anyway.
        */
       networkFetch: z.enum(['ask', 'refuse', 'run']).default('ask'),
+      /**
+       * The bot's questions (operator, 2026-10-23: "an option in Settings to pass over questions — the user always agrees
+       * with what the bot proposes"): `ask` puts them to the operator — a command that reaches a platform with the
+       * operator's access (`exec/platforms.ts`), and a chat's or the lead's question with its answers to click; `agree`
+       * takes what the bot proposes — the command runs, the recommended answer is given — and says so in the chat.
+       */
+      questions: z.enum(['ask', 'agree']).default('ask'),
       /**
        * Plan mode, for every session that does not set its own (see `PlanMode` in session/model.ts): a
        * task's chat first looks at the project read-only and replies with a plan, and the work begins once

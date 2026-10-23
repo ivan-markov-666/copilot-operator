@@ -16,9 +16,9 @@
  * level 2, which Kerrigan takes with her.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
-import { useT, useFmtTime } from '../../lib/i18n';
+import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
 import { InfoTip } from '../popover';
@@ -28,6 +28,7 @@ import { BranchIcon } from '../branchIcon';
 type Isolation = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm';
 type StartMode = 'confirm' | 'unattended';
 type NetworkFetch = 'ask' | 'refuse' | 'run';
+type Questions = 'ask' | 'agree';
 
 /** The longest level 2 a project may have; the server holds it to the same (`MAX_PROJECT_LEVEL2`). */
 const MAX_LEVEL2 = 8000;
@@ -124,8 +125,9 @@ export default function DefaultsPage() {
       <ProjectSection />
       <SkillsSection />
       <LoginSection />
-      <ModelSection {...shared} />
-      <ReviewModelSection {...shared} />
+      <RoleModelSection role="worker" {...shared} />
+      <RoleModelSection role="lead" {...shared} />
+      <RoleModelSection role="review" {...shared} />
       <ExecutionSection />
     </div>
   );
@@ -256,18 +258,71 @@ function whole(text: string): number | null {
   return Number.isInteger(n) ? n : null;
 }
 
-/** The button that does nothing anyone needs, and says so. */
-function SavedNote({ msg, onSave }: { msg: string; onSave?: () => void }) {
+/**
+ * "Saving." "Saving.." "Saving..." under a section while it writes, and a moment after (operator, 2026-10-23: "remove
+ * 'saved as you type' under every section; when the typing stops, or after a tick, a choice from a list, any change,
+ * show 'saving' with its dots going one, two, three, round and round, long enough to be seen"). A write done at once
+ * is still shown for MIN_SAVING_MS, or it would be a flicker nobody could read.
+ */
+const MIN_SAVING_MS = 1600;
+type Track = <T>(work: Promise<T>) => Promise<T>;
+const SavingContext = createContext<Track>((work) => work);
+
+function useSaving(): { saving: boolean; track: Track } {
+  const [count, setCount] = useState(0);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const track = useCallback<Track>(async (work) => {
+    const from = Date.now();
+    setCount((n) => n + 1);
+    try {
+      return await work;
+    } finally {
+      setTimeout(() => {
+        if (alive.current) setCount((n) => Math.max(0, n - 1));
+      }, Math.max(0, MIN_SAVING_MS - (Date.now() - from)));
+    }
+  }, []);
+  return { saving: count > 0, track };
+}
+
+/** One dot, two, three, and round again. */
+function SavingDots() {
+  const [n, setN] = useState(1);
+  useEffect(() => {
+    const id = setInterval(() => setN((x) => (x % 3) + 1), 380);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span className="saving-dots" aria-hidden="true">
+      {'.'.repeat(n)}
+    </span>
+  );
+}
+
+/** Under a section: "Saving..." while it writes, else what the last write said, else nothing. */
+function SavedNote({ msg, saving }: { msg: string; saving?: boolean }) {
   const { t } = useT();
+  if (saving) {
+    return (
+      <div className="row saved-note">
+        <span className="saving small" role="status">
+          {t('def.saving')}
+          <SavingDots />
+        </span>
+      </div>
+    );
+  }
+  if (!msg) return null;
   return (
     <div className="row saved-note">
-      {onSave && (
-        <button className="quiet" onClick={onSave} title={t('def.saveAnywayWhy')}>
-          {t('def.saveAnyway')}
-        </button>
-      )}
       <span className="muted small" role="status">
-        {msg || t('def.savedAutomatically')}
+        {msg}
       </span>
     </div>
   );
@@ -286,6 +341,7 @@ const EMPTY_SKILL: Skill = { name: '', description: '', text: '', projectDir: ''
  */
 function SkillsSection() {
   const { t } = useT();
+  const { saving, track } = useSaving();
   const [list, setList] = useState<Skill[] | null>(null);
   const [limits, setLimits] = useState({ maxText: 8000, maxDescription: 300 });
   const [projects, setProjects] = useState<Array<{ name: string; dir: string }>>([]);
@@ -312,7 +368,7 @@ function SkillsSection() {
     setBusy(true);
     setErr('');
     try {
-      const r = await api.setSkills(next);
+      const r = await track(api.setSkills(next));
       setList(r.skills);
       setMsg(t('skills.saved', { n: r.skills.length }));
       return true;
@@ -350,7 +406,7 @@ function SkillsSection() {
           busy={busy}
         />
       ))}
-      <SavedNote msg={msg} />
+      <SavedNote msg={msg} saving={saving} />
 
       <h3 id="skills-add">{t('skills.addTitle')}</h3>
       <SkillEntry skill={draft} projects={projects} limits={limits} onDraft={setDraft} busy={busy} />
@@ -527,6 +583,7 @@ type Patch = Parameters<typeof api.setProject>[0];
 
 function ProjectSection() {
   const { t } = useT();
+  const { saving, track } = useSaving();
   const [project, setProject] = useState<ProjectDefault | null>(null);
   const [dir, setDir] = useState('');
   const [name, setName] = useState('');
@@ -558,7 +615,7 @@ function ProjectSection() {
     setBusy(true);
     setMsg('');
     try {
-      const p = await api.setProject(patch);
+      const p = await track(api.setProject(patch));
       setProject(p);
       setDir(p.rootDir);
       setMsg(done(p));
@@ -664,7 +721,7 @@ function ProjectSection() {
           removeLabel={t('proj.otherRemove')}
         />
       ))}
-      <SavedNote msg={msg} />
+      <SavedNote msg={msg} saving={saving} />
 
       <h3 id="others">{t('proj.addTitle')}</h3>
       <p className="muted small">{t('proj.othersIntro')}</p>
@@ -938,23 +995,90 @@ function LoginSection() {
   );
 }
 
-function ModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels) {
+/**
+ * The three models (operator, 2026-10-23: "Model for the worker, Model for the lead — and keep Model for the review;
+ * make the three alike, all with the options the model for new conversations has"): each the same picker with the
+ * same choices, "Clear", "Read the list from Copilot", when it was read, and its own "by hand".
+ */
+type ModelRole = 'worker' | 'lead' | 'review';
+type RolePlan = {
+  section: string;
+  pick: string;
+  manualId: string;
+  manualKey: 'manualModel' | 'leadManualModel' | 'reviewManualModel';
+  field: 'defaultModel' | 'defaultLeadModel' | 'defaultReviewModel';
+  title: Key;
+  intro: Key;
+  info: Key;
+  manualWhy: Key;
+  saved: Key;
+  cleared: Key;
+  save: (name: string) => Promise<string>;
+};
+const ROLES: Record<ModelRole, RolePlan> = {
+  worker: {
+    section: 'model',
+    pick: 'default-model',
+    manualId: 'manual-model',
+    manualKey: 'manualModel',
+    field: 'defaultModel',
+    title: 'def.modelTitle',
+    intro: 'def.modelIntro',
+    info: 'def.modelInfo',
+    manualWhy: 'def.manualModelWhy',
+    saved: 'def.modelSaved',
+    cleared: 'def.modelCleared',
+    save: async (name) => (await api.setDefaultModel(name)).defaultModel,
+  },
+  lead: {
+    section: 'lead-model',
+    pick: 'default-lead-model',
+    manualId: 'manual-lead-model',
+    manualKey: 'leadManualModel',
+    field: 'defaultLeadModel',
+    title: 'def.leadTitle',
+    intro: 'def.leadIntro',
+    info: 'def.leadInfo',
+    manualWhy: 'def.leadManualWhy',
+    saved: 'def.leadSaved',
+    cleared: 'def.leadCleared',
+    save: async (name) => (await api.setDefaultLeadModel(name)).defaultLeadModel,
+  },
+  review: {
+    section: 'review',
+    pick: 'default-review-model',
+    manualId: 'manual-review-model',
+    manualKey: 'reviewManualModel',
+    field: 'defaultReviewModel',
+    title: 'def.reviewTitle',
+    intro: 'def.reviewIntro',
+    info: 'def.reviewInfo',
+    manualWhy: 'def.reviewManualWhy',
+    saved: 'def.reviewSaved',
+    cleared: 'def.reviewCleared',
+    save: async (name) => (await api.setDefaultReviewModel(name)).defaultReviewModel,
+  },
+};
+
+function RoleModelSection({ role, catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels & { role: ModelRole }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
+  const plan = ROLES[role];
+  const { saving, track } = useSaving();
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const chosen = catalogue?.defaultModel ?? '';
+  const chosen = catalogue?.[plan.field] ?? '';
 
   /** Chosen is saved. A model picker has no half-typed state to protect. */
   const save = async (name: string) => {
     setBusy(true);
     setMsg('');
     try {
-      const saved = await api.setDefaultModel(name);
-      if (catalogue) setCatalogue({ ...catalogue, defaultModel: saved.defaultModel });
-      setMsg(saved.defaultModel ? t('def.modelSaved', { name: saved.defaultModel }) : t('def.modelCleared'));
+      const saved = await track(plan.save(name));
+      if (catalogue) setCatalogue({ ...catalogue, [plan.field]: saved });
+      setMsg(saved ? t(plan.saved, { name: saved }) : t(plan.cleared));
       setErr('');
     } catch (e) {
       setErr((e as Error).message);
@@ -963,54 +1087,66 @@ function ModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refr
     }
   };
 
-  return (
-    <section className="panel" id="model" aria-labelledby="model-title">
-      <h2 id="model-title">{t('def.modelTitle')}</h2>
-      <p className="muted small">{t('def.modelIntro')}</p>
-      {err && <div className="err">{err}</div>}
+  // The review is best another model than the work's: said when it is the same one.
+  const sameAsWork = role === 'review' && chosen !== '' && chosen === (catalogue?.defaultModel ?? '');
 
-      <Field id="default-model" label={t('def.modelField')} info={t('def.modelInfo')}>
-        <ModelPicker id="default-model" chosen={chosen} onChange={(name) => void save(name)} none={t('def.modelNone')} catalogue={catalogue} disabled={busy || refreshing} />
-        <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
-          {t('proj.clear')}
-        </button>
-        <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
-          {t('model.refresh')}
-        </button>
-      </Field>
-      <p className="muted small field-after">
-        {catalogue?.readAt ? t('model.readAt', { t: fmtTime(catalogue.readAt), n: catalogue.options.length }) : t('model.neverRead')}
-      </p>
-      <ManualModelToggle />
-      <SavedNote msg={msg || refreshMsg} />
-    </section>
+  return (
+    <SavingContext.Provider value={track}>
+      <section className="panel" id={plan.section} aria-labelledby={`${plan.section}-title`}>
+        <h2 id={`${plan.section}-title`}>{t(plan.title)}</h2>
+        <p className="muted small">{t(plan.intro)}</p>
+        {err && <div className="err">{err}</div>}
+
+        <Field id={plan.pick} label={t('def.modelField')} info={t(plan.info)}>
+          <ModelPicker id={plan.pick} chosen={chosen} onChange={(name) => void save(name)} none={t('def.modelNone')} catalogue={catalogue} disabled={busy || refreshing} />
+          <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
+            {t('proj.clear')}
+          </button>
+          {/* The same list, read from the same place: reading it in one section updates the others. */}
+          <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
+            {t('model.refresh')}
+          </button>
+        </Field>
+        <p className="muted small field-after">
+          {catalogue?.readAt ? t('model.readAt', { t: fmtTime(catalogue.readAt), n: catalogue.options.length }) : t('model.neverRead')}
+        </p>
+        {sameAsWork && <p className="why field-after warned-text">{t('def.reviewSame')}</p>}
+        <ManualModelToggle id={plan.manualId} setting={plan.manualKey} why={plan.manualWhy} />
+        <SavedNote msg={msg || refreshMsg} saving={saving} />
+      </section>
+    </SavingContext.Provider>
   );
 }
 
 /**
- * Choose the model by hand (operator's workaround, 2026-10-06): the bot leaves the picker alone and asks, on
- * a card, for the model to be chosen in the Copilot window. Saved into `copilot.manualModel` at once.
+ * Choose the model by hand (operator's workaround, 2026-10-06): the bot leaves the picker alone and asks, on a card,
+ * for the model to be chosen in the Copilot window. Each part has its own since 2026-10-23 — the worker's
+ * `copilot.manualModel`, the lead's and the review's, which are as the worker's until they are set — saved at once.
  */
-function ManualModelToggle() {
+function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan['manualKey']; why: Key }) {
   const { t } = useT();
+  const track = useContext(SavingContext);
   const [on, setOn] = useState<boolean | null>(null);
   const [err, setErr] = useState('');
   useEffect(() => {
     api
       .settings()
       .then((s) => {
+        const copilot = (s.raw.copilot as Record<string, unknown> | undefined) ?? {};
         // Not in the file: the default, which is on since 2026-10-17.
-        const saved = (s.raw.copilot as Record<string, unknown> | undefined)?.manualModel;
-        const byDefault = (s.defaults as { copilot?: { manualModel?: boolean } } | undefined)?.copilot?.manualModel;
-        setOn(typeof saved === 'boolean' ? saved : byDefault !== false);
+        const byDefault = (s.defaults as { copilot?: { manualModel?: boolean } } | undefined)?.copilot?.manualModel !== false;
+        const worker = typeof copilot.manualModel === 'boolean' ? copilot.manualModel : byDefault;
+        const own = copilot[setting];
+        setOn(typeof own === 'boolean' ? own : worker);
       })
       .catch((e) => setErr((e as Error).message));
-  }, []);
+  }, [setting]);
   const save = async (value: boolean) => {
     setOn(value);
     try {
-      const s = await api.settings();
-      await api.saveSettings({ ...s.raw, copilot: { ...((s.raw.copilot as Record<string, unknown>) ?? {}), manualModel: value } });
+      await track(
+        api.settings().then((s) => api.saveSettings({ ...s.raw, copilot: { ...((s.raw.copilot as Record<string, unknown>) ?? {}), [setting]: value } })),
+      );
       setErr('');
     } catch (e) {
       setErr((e as Error).message);
@@ -1019,62 +1155,15 @@ function ManualModelToggle() {
   return (
     <div className="settings-field">
       <div className="field-label check-label">
-        <input id="manual-model" type="checkbox" checked={on === true} disabled={on === null} onChange={(e) => void save(e.target.checked)} />
-        <label htmlFor="manual-model">{t('def.manualModel')}</label>
-        <InfoTip label={t('info.about', { name: t('def.manualModel') })} text={t('def.manualModelWhy')} />
+        <input id={id} type="checkbox" checked={on === true} disabled={on === null} onChange={(e) => void save(e.target.checked)} />
+        <label htmlFor={id}>{t('def.manualModel')}</label>
+        <InfoTip label={t('info.about', { name: t('def.manualModel') })} text={t(why)} />
       </div>
       {err && <div className="err">{err}</div>}
     </div>
   );
 }
 
-function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing, refreshMsg }: SharedModels) {
-  const { t } = useT();
-  const [msg, setMsg] = useState('');
-  const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const chosen = catalogue?.defaultReviewModel ?? '';
-
-  const save = async (name: string) => {
-    setBusy(true);
-    setMsg('');
-    try {
-      const saved = await api.setDefaultReviewModel(name);
-      if (catalogue) setCatalogue({ ...catalogue, defaultReviewModel: saved.defaultReviewModel });
-      setMsg(saved.defaultReviewModel ? t('def.reviewSaved', { name: saved.defaultReviewModel }) : t('def.reviewCleared'));
-      setErr('');
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const sameAsWork = chosen !== '' && chosen === (catalogue?.defaultModel ?? '');
-
-  return (
-    <section className="panel" id="review" aria-labelledby="review-title">
-      <h2 id="review-title">{t('def.reviewTitle')}</h2>
-      <p className="muted small">{t('def.reviewIntro')}</p>
-      {err && <div className="err">{err}</div>}
-
-      <Field id="default-review-model" label={t('def.reviewField')} info={t('def.reviewInfo')}>
-        <ModelPicker id="default-review-model" chosen={chosen} onChange={(name) => void save(name)} none={t('def.reviewNone')} catalogue={catalogue} disabled={busy || refreshing} />
-        <button className="quiet" onClick={() => void save('')} disabled={busy || !chosen}>
-          {t('proj.clear')}
-        </button>
-        {/* The same list, read from the same place: a model chosen here is chosen from what
-            the chat actually offers, and reading it in one section updates the other. */}
-        <button onClick={() => void refreshModels()} disabled={busy || refreshing}>
-          {t('model.refresh')}
-        </button>
-      </Field>
-      {sameAsWork && <p className="why field-after warned-text">{t('def.reviewSame')}</p>}
-      <SavedNote msg={msg || refreshMsg} />
-    </section>
-  );
-}
 
 // ---------------------------------------------------------------------------------------
 // How a task runs
@@ -1090,6 +1179,7 @@ function ReviewModelSection({ catalogue, setCatalogue, refreshModels, refreshing
  */
 function ExecutionSection() {
   const { t } = useT();
+  const { saving, track } = useSaving();
   const [raw, setRaw] = useState<Record<string, unknown> | null>(null);
   // The settings as the last write left them, read synchronously by the next one. See `write`.
   const rawRef = useRef<Record<string, unknown> | null>(null);
@@ -1114,6 +1204,7 @@ function ExecutionSection() {
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [startMode, setStartMode] = useState<StartMode>('confirm');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
+  const [questions, setQuestions] = useState<Questions>('ask');
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
@@ -1155,10 +1246,11 @@ function ExecutionSection() {
         setGapMax(typeof pacing.gapMaxSec === 'number' ? pacing.gapMaxSec : 90);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
         setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch };
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions };
         setIsolation(exec.isolation ?? 'none');
         setStartMode(exec.mode ?? 'confirm');
         setNetworkFetch(exec.networkFetch ?? 'ask');
+        setQuestions(exec.questions ?? 'ask');
       })
       .catch((e) => setErr((e as Error).message));
   }, []);
@@ -1186,7 +1278,7 @@ function ExecutionSection() {
       const next = { ...base, [branch]: { ...((base[branch] as Record<string, unknown>) ?? {}), [key]: value } };
       setMsg('');
       try {
-        await api.saveSettings(next);
+        await track(api.saveSettings(next));
         rawRef.current = next;
         setRaw(next);
         setMsg(t('exec.saved'));
@@ -1210,7 +1302,7 @@ function ExecutionSection() {
   const saveMessageCharsLater = useDebouncedSave((n: number) => write('limits', 'maxMessageChars', n));
   const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
   const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch', value: string) => write('execution', key, value);
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions', value: string) => write('execution', key, value);
 
   /** The number fields, in the order a task meets them. */
   const numbers: Array<{ id: string; label: string; info: string; unit: string; value: number; min: number; max: number; set: (n: number) => void; later: (n: number) => void }> = [
@@ -1385,7 +1477,29 @@ function ExecutionSection() {
           <option value="run">{t('exec.networkFetchRun')}</option>
         </select>
       </Field>
-      <SavedNote msg={msg} />
+
+      {/*
+        The bot's questions (operator, 2026-10-23): put to the operator, with answers to click, or agreed to as the bot
+        proposes — a platform's command run, the recommended answer given. Agreeing is confirmed, as running without
+        asking is.
+      */}
+      <Field id="questions" label={t('exec.questions')} info={t('exec.questionsWhy')}>
+        <select
+          id="questions"
+          value={questions}
+          onChange={async (e) => {
+            const v = e.target.value as Questions;
+            if (v === 'agree' && !(await confirmDialog(t('exec.questionsAgreeConfirm')))) return;
+            setQuestions(v);
+            void saveExecution('questions', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="ask">{t('exec.questionsAsk')}</option>
+          <option value="agree">{t('exec.questionsAgree')}</option>
+        </select>
+      </Field>
+      <SavedNote msg={msg} saving={saving} />
     </section>
   );
 }

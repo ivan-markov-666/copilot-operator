@@ -1200,6 +1200,8 @@ export type PendingApproval = {
    * is asked about even in an unattended run, and "run the rest without asking" does not answer it.
    */
   network?: string;
+  /** Set when the step reaches a platform with the operator's access (2026-10-23): its name, as the card says it. */
+  platform?: string;
   /**
    * Set when this is not a step but a request for the operator's hand: the chat could not be put on the
    * chosen model, and the operator is asked to choose it in the Copilot window (operator's request,
@@ -1219,7 +1221,8 @@ export type PendingApproval = {
    * Set when the lead of a two-chat conversation asks the operator something only a person can answer (2026-10-20): the
    * question, why, and the choices when it gave some. Answered with text (`/approvals/:id/answer`), or the task stopped.
    */
-  question?: { text: string; why?: string; options: string[] };
+  /** `commands`: by answer, the command the bot runs when that one is chosen (2026-10-23), or null. */
+  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null> };
 };
 
 /** One reply of the lead: what it decided, and what came of it. */
