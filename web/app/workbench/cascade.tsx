@@ -16,11 +16,11 @@
  * message and the ones after it gone from the conversation. The model is chosen under the box, as in an IDE.
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type Session, type Skill, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
 import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
-import { useUnattendedWithoutAsking } from '../../lib/useUnattendedWithoutAsking';
 import { confirmDialog } from '../dialog';
 import { BY_HAND, ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
@@ -34,7 +34,6 @@ import { FileIcon } from './fileIcon';
 import { LeadProgress, LedgerChange } from './leadPlan';
 
 const THREAD_KEY = 'cop.chat.thread';
-const MODE_KEY = 'cop.chat.mode';
 /** Plan mode for the next new conversation, as last chosen in this browser. */
 const PLAN_KEY = 'cop.chat.plan';
 /** The review for the next new conversation, as last chosen in this browser: on unless 'off'. */
@@ -62,11 +61,9 @@ export type ChatTurn = { sessionId: string; taskId: string } | 'new' | null;
 
 export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChange, onOpenFolder, onTurn }: { workspace: Workspace | null; composeAsk: number; /** A conversation to show, asked from outside the chat: the running one, from the status bar. */ showThread?: { id: string; n: number } | null; onOpenFile: (path: string) => void; onChange: () => void; onOpenFolder: () => void; onTurn: (turn: ChatTurn) => void }) {
   const { t, locale } = useT();
-  const quietStart = useUnattendedWithoutAsking();
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadId, setThreadId] = useState('');
   const [session, setSession] = useState<Session | null>(null);
-  const [mode, setMode] = useState<'confirm' | 'unattended'>('confirm');
   /** Plan mode for a conversation not started yet; a started one has its own (`Session.planMode`). */
   const [newPlan, setNewPlan] = useState(false);
   /** The review for a conversation not started yet; a started one has its own (`Session.review`). */
@@ -109,13 +106,6 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     setNewPlan(kept(PLAN_KEY) === 'on');
     setNewReview(kept(REVIEW_KEY) !== 'off');
     setNewLead(kept(LEAD_KEY) === 'on');
-    const m = kept(MODE_KEY);
-    if (m === 'confirm' || m === 'unattended') setMode(m);
-    else
-      api
-        .settings()
-        .then((s) => setMode(((s.raw.execution as { mode?: string } | undefined)?.mode === 'unattended' ? 'unattended' : 'confirm')))
-        .catch(() => undefined);
   }, []);
   useEffect(() => {
     if (composeAsk > 0) box.current?.focus();
@@ -261,11 +251,15 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         setSaid(t('chat.noted'));
         return;
       }
-      // Commands run without asking: said once, when a conversation begins, unless Settings say not to ask.
-      if (mode === 'unattended' && fresh && !quietStart && !(await confirmDialog(t('session.unattendedConfirm')))) {
-        setSaid(t('chat.notStartedYet'));
-        return;
-      }
+      /*
+       * How commands run is Settings' alone (operator, 2026-10-23: "remove the drop-down from the chat; it is done only
+       * in Settings"), read as each message goes, so a change there holds from the next one; chosen there, it was
+       * confirmed there. A Settings file that cannot be read asks before each command, the safe side to be wrong on.
+       */
+      const mode = await api
+        .settings()
+        .then((s) => ((s.raw.execution as { mode?: string } | undefined)?.mode === 'unattended' ? ('unattended' as const) : ('confirm' as const)))
+        .catch(() => 'confirm' as const);
       // No question about branches: the chat works on the branch the folder is on.
       const reply = await api.start(r.threadId, mode);
       if (!reply.started) setSaid(t('chat.notStarted', { reason: reply.reason ?? '' }));
@@ -558,29 +552,31 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         ) : (
           <div className="cs-bar">{modelPicker('48%')}</div>
         )}
-        {/* Skills (2026-10-21): offered when Settings have one for this folder or for every project. */}
-        {skillsHere.length > 0 && (
-          <div className="cs-bar">
-            <label htmlFor="cs-skill" className="cs-pick-label">
-              {t('chat.skill')}
-            </label>
-            <select id="cs-skill" value={skill} onChange={(e) => setSkill(e.target.value)} disabled={running} title={t('chat.skillWhy')} style={{ minWidth: 0, maxWidth: '70%' }}>
-              <option value="">{t('chat.skillNone')}</option>
-              {skillsHere.map((k) => (
-                <option key={k.name} value={k.name} title={k.description}>
-                  /{k.name}
-                  {k.description ? ` — ${k.description}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/*
+          Skills (2026-10-21): offered when Settings have one for this folder or for every project — by name alone, what it
+          is for on hover (2026-10-23) — and beside them, always, the way to Settings' skills, to add one or see them all.
+        */}
+        <div className="cs-bar cs-skills">
+          {skillsHere.length > 0 && (
+            <>
+              <label htmlFor="cs-skill" className="cs-pick-label">
+                {t('chat.skill')}
+              </label>
+              <select id="cs-skill" value={skill} onChange={(e) => setSkill(e.target.value)} disabled={running} title={t('chat.skillWhy')} style={{ minWidth: 0, maxWidth: '60%' }}>
+                <option value="">{t('chat.skillNone')}</option>
+                {skillsHere.map((k) => (
+                  <option key={k.name} value={k.name} title={k.description || undefined}>
+                    /{k.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          <Link href="/settings#skills" className="button-link plain small cs-skills-link" title={t('chat.skillsLinkWhy')}>
+            {t('chat.skillsLink')}
+          </Link>
+        </div>
         <div className="cs-bar">
-          <label htmlFor="cs-mode" className="sr-only">{t('chat.mode')}</label>
-          <select id="cs-mode" value={mode} onChange={(e) => { const m = e.target.value as 'confirm' | 'unattended'; setMode(m); keep(MODE_KEY, m); }} disabled={running} title={t('chat.modeWhy')}>
-            <option value="confirm">{t('chat.modeAsk')}</option>
-            <option value="unattended">{t('chat.modeAuto')}</option>
-          </select>
           <label className="cs-plan-toggle" title={t('chat.planModeWhy')}>
             <input type="checkbox" checked={planOn} disabled={running} onChange={(e) => void choosePlan(e.target.checked)} />
             <span>{t('chat.planMode')}</span>
@@ -696,8 +692,8 @@ type Decided = (id: string, ok: boolean) => void;
 
 /**
  * The operator's own message, as it was sent (2026-10-22: "make it easier to see where my prompts are in the chat"):
- * headed "You · Your message 3 · 10:42" in the page's accent, and kept in sight at the top of the conversation while
- * what came of it is read.
+ * headed "You · Your message 3 · 10:42", filled white on the accent, and moving with the conversation (2026-10-23:
+ * it stayed on top, which the operator did not want).
  */
 function UserPrompt({ task, n, onRewind }: { task: Task; n: number; onRewind?: () => void }) {
   const { t } = useT();

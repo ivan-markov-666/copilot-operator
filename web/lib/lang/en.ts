@@ -27,10 +27,6 @@ export const en = {
   'chat.exit': 'exit {code}',
   'chat.input': 'Message to the chat',
   'chat.lookAbove': 'Waiting for an answer on the card at the top.',
-  'chat.mode': 'How commands run',
-  'chat.modeAsk': 'Ask before each command',
-  'chat.modeAuto': 'Run commands without asking',
-  'chat.modeWhy': 'Whether each command the chat sends waits for you, or runs at once; the list of forbidden commands applies either way.',
   'git.title': 'Git',
   'git.refresh': 'Read the folder\'s git again',
   'git.noFolder': 'No project folder is open.',
@@ -95,7 +91,6 @@ export const en = {
   'chat.exchangeWhy': 'Everything between the bot and Copilot for this message, as a JSON file: every message sent, every reply, every command that ran with its whole output and exit code.',
   'chat.newThread': 'New conversation',
   'chat.notStarted': 'It did not start: {reason}',
-  'chat.notStartedYet': 'Not started. The message is kept in the conversation; send another or start it from its session.',
   'chat.noted': 'Added to what it is doing: it gets this with its next report.',
   'chat.openFolder': 'Open a folder',
   'chat.placeholder': 'Ask for a change in {folder}… (Enter sends, Shift+Enter a new line)',
@@ -448,11 +443,12 @@ export const en = {
   'exec.isolationSandbox': 'Windows Sandbox',
   'exec.isolationVm': 'A virtual machine',
   'exec.isolationWhy':
-    'Where the commands Copilot writes run. They run with the rights of the Windows account the bot runs as: they can read and change whatever that account can. What you choose here decides whether a run may go on with nobody watching (“Run commands without asking” under the chat).\n\nNowhere in particular — this account: the default. You can watch and approve every command, but a run with nobody watching is refused: nobody watching and nothing fencing the commands in is too risky.\n\nThis account — I accept unattended runs without isolation: runs with nobody watching are allowed here, on your responsibility; every run records that you accepted it.\n\nA separate low-privilege Windows account, Windows Sandbox, A virtual machine: choose the one you have set the bot up in; runs with nobody watching are then allowed.\n\nThis is your statement, not a check: the bot records it with every run, notes the Windows account it actually runs as, and warns when the two do not match.',
-  'exec.startMode': 'Starting a run without supervision',
-  'exec.startModeAsk': 'Ask "are you sure" every time',
-  'exec.startModeAuto': 'Start it without asking',
-  'exec.startModeWhy': 'What happens when you start a conversation with “Run commands without asking” chosen under the chat\'s box.\n\nAsk "are you sure" every time: the default. The first message of each such conversation asks you to confirm before anything runs.\n\nStart it without asking: you decide once, here, and such conversations simply start.\n\nEither way, forbidden commands are still refused, downloads still follow the choice below, and a run with nobody watching is possible only if “Where the bot runs” above allows it.',
+    'Where the commands Copilot writes run. They run with the rights of the Windows account the bot runs as: they can read and change whatever that account can. What you choose here decides whether a run may go on with nobody watching (“Run commands without asking” under “How commands run”, below).\n\nNowhere in particular — this account: the default. You can watch and approve every command, but a run with nobody watching is refused: nobody watching and nothing fencing the commands in is too risky.\n\nThis account — I accept unattended runs without isolation: runs with nobody watching are allowed here, on your responsibility; every run records that you accepted it.\n\nA separate low-privilege Windows account, Windows Sandbox, A virtual machine: choose the one you have set the bot up in; runs with nobody watching are then allowed.\n\nThis is your statement, not a check: the bot records it with every run, notes the Windows account it actually runs as, and warns when the two do not match.',
+  'exec.startMode': 'How commands run',
+  'exec.startModeAsk': 'Ask before each command',
+  'exec.startModeAuto': 'Run commands without asking',
+  'exec.startModeWhy': 'How the commands Copilot writes are run, for every message of the chat. It is chosen here, and only here.\n\nAsk before each command: the default. Each command waits on a card in the conversation, which says who asks: Run, Run this and the rest, or Skip.\n\nRun commands without asking: the commands run at once. Possible only when “Where the bot runs” above allows runs with nobody watching; otherwise the message does not start, and says why. Chosen, it asks you once to confirm.\n\nEither way, forbidden commands are still refused, and a command that downloads does what is chosen below. A change holds from the next message.',
+  'exec.modeAutoConfirm': 'From the next message on, the commands Copilot writes run without asking you. Forbidden commands are still refused, and a command that downloads does what is chosen below. Run commands without asking?',
   'exec.networkFetch': 'A command that downloads, in a run without supervision',
   'exec.networkFetchAsk': 'Wait for me on the approval screen',
   'exec.networkFetchRefuse': 'Refuse it and tell the chat why — the run never waits',
@@ -509,8 +505,6 @@ export const en = {
   'status.limit-reached': 'limit reached',
 
   // session header
-  'session.unattendedConfirm':
-    'This runs on its own: the commands Copilot writes will be executed without asking you, until the queue is finished. The list of forbidden commands still applies. Start it?',
 
   // approval
   'approval.title': 'Step {n} is waiting for you',
@@ -706,6 +700,8 @@ export const en = {
   'chat.skill': 'Skill',
   'chat.skillNone': 'No skill',
   'chat.skillWhy': 'A skill adds your instructions for this kind of task — written in Settings → Skills — to the message. Starting the message with /its-name does the same.',
+  'chat.skillsLink': '+ Skills',
+  'chat.skillsLinkWhy': 'Add a skill, or see all of them, in Settings',
   'chat.skillUsed': 'Skill: /{name}',
   'chat.skillUnknown': 'There is no skill /{name} for this folder. The ones there are: {names}.',
   'chat.skillNoText': 'Write the message after /{name}: what this task is.',

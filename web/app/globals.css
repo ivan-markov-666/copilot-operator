@@ -29,6 +29,10 @@
   --bad: #ac2a2a;
   --bad-soft: #fbe7e7;
   /* Who works (2026-10-22): plan mode and the reviewer; the lead is the accent, the worker the green of work done. */
+  /* The operator's own messages (2026-10-23): filled, white on the accent, unlike anything else in the chat. */
+  --you-bg: #1670b3;
+  --you-ink: #ffffff;
+  --you-soft: #e8f2fb;
   /* The logo's two colours (2026-10-22): dark blue on light, as drawn. */
   --logo-plane: #0d2a42;
   --logo-orbit: #0d2a42;
@@ -63,6 +67,9 @@
   --warn-soft: #2f281a;
   --bad: #ff8f8f;
   --bad-soft: #3a1f25;
+  --you-bg: #2a72ad;
+  --you-ink: #ffffff;
+  --you-soft: #f0f6fc;
   --logo-plane: #e3eef9;
   --logo-orbit: #5ab6f4;
   --plan: #c4a8ff;
@@ -1096,12 +1103,20 @@ button.linkish:hover { text-decoration: underline; }
 .cs-turn { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .cs-turn:last-child { border-bottom: 0; }
 /*
- * The operator's own messages (2026-10-22: "make it easier to see where my prompts are"): headed "You · Your message
- * 3 · 10:42", edged in the accent, and kept in sight at the top of the chat while what came of each is read.
+ * The operator's own messages (2026-10-22: "make it easier to see where my prompts are"; 2026-10-23: "let it move with
+ * the others, not stay on top, but be easy to notice — another colour if need be"): headed "You · Your message 3 ·
+ * 10:42", and filled — white on the accent — where everything else in the chat is on the panel.
  */
-.cs-user { align-self: flex-end; max-width: 92%; max-height: 45vh; overflow: auto; padding: 6px 12px 8px; border-radius: 12px 12px 2px 12px; background: var(--accent-soft); border: 1px solid var(--accent); border-inline-end-width: 4px; box-shadow: var(--shadow); }
-.cs-user-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 4px; font-size: calc(11.5px * var(--scale)); color: var(--muted); }
-.cs-user-who { color: var(--accent); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.cs-user { align-self: flex-end; max-width: 92%; padding: 6px 12px 8px; border-radius: 12px 12px 2px 12px; background: var(--you-bg); color: var(--you-ink); border: 1px solid var(--you-bg); box-shadow: var(--shadow); }
+.cs-user-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 4px; font-size: calc(11.5px * var(--scale)); color: var(--you-soft); }
+.cs-user-who { color: var(--you-ink); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+/* What sits in it keeps its own look: code on its light chip, links underlined, the buttons edged in white. */
+.cs-user a { color: inherit; text-decoration: underline; }
+.cs-user .rich code, .cs-user pre { color: var(--ink); }
+.cs-user .badge.skill { background: var(--panel); color: var(--ink); border-color: transparent; }
+.cs-user .copy-btn { background: transparent; border-color: rgba(255, 255, 255, 0.5); color: var(--you-ink); }
+.cs-user .cs-fold-toggle { color: var(--you-soft); }
+.cs-user .cs-fold-toggle:hover, .cs-user .cs-fold-toggle:focus-visible { color: var(--you-ink); }
 .cs-user p:first-child, .cs-bot p:first-child, .cs-end p:first-child { margin-top: 0; }
 .cs-user p:last-child, .cs-bot p:last-child, .cs-end p:last-child { margin-bottom: 0; }
 .cs-bot { max-width: 100%; padding: 2px 2px; }
@@ -1125,6 +1140,21 @@ button.linkish:hover { text-decoration: underline; }
 .actor-worker { color: var(--ok); background: var(--ok-soft); }
 .actor-review { color: var(--review); background: var(--review-soft); }
 .wb-statusbar .actor-chip { border-color: transparent; }
+
+/* The way to Settings' skills, beside the skills under the chat's box (2026-10-23). */
+.cs-skills-link { margin-inline-start: auto; padding: 3px 10px; white-space: nowrap; }
+
+/*
+ * A section reached by its address, lit up for a moment (2026-10-23): a ring that pulses three times, and stays while it
+ * is lit when motion is turned off.
+ */
+.spotlight { outline: 2px solid var(--accent); outline-offset: 3px; animation: spotlight 1.2s ease-out 3; }
+.spotlight:focus { outline: 2px solid var(--accent); }
+@keyframes spotlight {
+  0% { box-shadow: 0 0 0 0 var(--accent); }
+  60% { box-shadow: 0 0 0 12px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
 
 /* The logo beside the name, in the bar on top of every page (2026-10-22). */
 .brand-logo { height: 1.7em; width: auto; flex: none; vertical-align: middle; }
@@ -1284,7 +1314,7 @@ button.linkish:hover { text-decoration: underline; }
 :root[data-theme='dark'] .hl-link { color: #7fd8c8; }
 .cs-bar select { width: auto; max-width: 60%; padding: 3px 26px 3px 8px; background-position: right 8px center; font-size: calc(12.5px * var(--scale)); text-overflow: ellipsis; }
 .wb-task-compose { margin: 6px 0 10px; border: 1px solid var(--line); border-radius: 10px; }
-.cs-user-row { display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; position: sticky; top: -10px; z-index: 3; padding: 4px 0 8px; background: linear-gradient(var(--panel) 75%, transparent); }
+.cs-user-row { display: flex; align-items: flex-start; justify-content: flex-end; gap: 4px; }
 .cs-rewind { margin-top: 4px; opacity: 0.55; }
 .cs-user-row:hover .cs-rewind, .cs-rewind:focus-visible { opacity: 1; }
 

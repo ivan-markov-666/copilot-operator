@@ -276,7 +276,9 @@ session page shows a sticky bar with the command and Run / Skip / Abort, and the
 on a promise until one is clicked. Stopping the session aborts every pending approval at
 once. A run that ends for any reason aborts whatever was still pending.
 
-Unattended mode skips the question entirely and is behind a confirmation dialog in the UI.
+Unattended mode skips the question entirely and is behind a confirmation dialog in the UI. For the chat it is chosen
+in Settings → Execution → "How commands run" and nowhere else (2026-10-23: the menu under the chat's box removed):
+"Run commands without asking" asks once to confirm there, and every message reads it as it is sent.
 
 **Plan first** (plan mode, 2026-10-13). Settings → Execution → "Plan first", and per session on its page
 ("As in Settings" by default; `planMode` in a plan's session): off, on with the plan approved by the
@@ -570,6 +572,9 @@ message is sent with one chosen under the chat's box (`#cs-skill`, only the skil
 project) or by starting with `/its-name`; the task keeps the skill as it read then (`Task.skill`), and its opening
 carries it right before the task under "## Skill: <name>" (`skillBlock` in `session/compose.ts`). With two chats the
 lead is given it with the assignment and the worker with every subtask. Kerrigan lists the skills.
+Under the chat's box a skill is listed by its name alone (`/new-test`), what it is for on hover; beside them, always —
+with none yet too — **+ Skills** opens `/settings#skills` (2026-10-23). A section of Settings reached by its address is
+brought into view, given the focus and lit up for a moment, a ring that pulses three times (`useSpotlight`, `.spotlight`).
 
 **The panels (2026-10-21).** The explorer, the editor with its panel and the chat sit in three places; the grip ⠿ in
 each one's head drags onto another to swap the two, or opens a menu of the places (`web/app/workbench/panelGrip.tsx`).
@@ -585,7 +590,9 @@ bother; over what can be clicked, a pointing hand, its fingertip the spot.
 **The editor of VS Code (2026-10-22).** A file opens in Monaco, the editor of VS Code (`monaco-editor` 0.57.0, MIT;
 `codeEditor.tsx`): colours and line numbers, find and replace, several cursors, folding, the minimap, IntelliSense
 for TypeScript, JavaScript, JSON, CSS and HTML from its workers (`workbench/monaco/*.worker.ts`, modules of the page's
-own), VS Code's keys. It is bundled with the page and loaded only when a file is opened; nothing is fetched from the
+own), VS Code's keys. No problem is underlined (2026-10-23): the services check a file alone, without the project's
+`node_modules` or settings, and marked mostly what was not so — their validation is off and
+`renderValidationDecorations: 'off'`; colours, completion and hover stay. It is bundled with the page and loaded only when a file is opened; nothing is fetched from the
 internet. Its theme follows the page's, and its size the text size; it keeps a file's line endings. The file view
 keeps the text: what is typed is handed up, and a text set from outside — read again from disk, "Revert my changes" —
 comes with a new `reset` and replaces the editor's (a value merely handed back is never put back: that scrambled fast
@@ -641,8 +648,9 @@ dark blue on light, light with a sky-blue orbit on dark), and as files in `docs/
 dark blue with a white edge, so it shows on a light browser and a dark one. `check:brand` holds the files to the
 drawing and the icon's colours to WCAG contrast on both.
 
-**The operator's messages (2026-10-22).** Each is headed "You · Your message 3 · 10:42", edged in the accent, and kept
-in sight at the top of the chat (`position: sticky`) while what came of it is read; a long one scrolls inside its box.
+**The operator's messages (2026-10-22).** Each is headed "You · Your message 3 · 10:42" and filled — white on the
+accent (`--you-bg`, `--you-ink`, `--you-soft`) — where everything else in the chat is on the panel; it moves with the
+conversation (kept on top for a day, which the operator did not want, 2026-10-23).
 
 **Skills deleted, the review's model in the chat, what each setting is for (2026-10-21).** Each saved skill has its
 name and "Delete" (red, with a bin) on top of its card; it asks first. With "Review" ticked under the chat, the review's

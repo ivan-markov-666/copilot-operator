@@ -12,6 +12,9 @@
  *
  *   npm run check:actors
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ACTOR_WORDS, actorOfSession } from '../src/orchestrator/taskRunner.js';
 import { makeAuthorizer, type AuthorizeContext } from '../src/exec/authorizer.js';
 import { TASK_FIELD_ON_RERUN } from '../src/session/store.js';
@@ -84,6 +87,32 @@ console.log("\n--- the short time on the operator's own messages ---");
   t.check('today: the hour and minute', fmtClock(new Date(2026, 9, 22, 9, 5).toISOString(), 'en-GB', now), '09:05');
   t.check('another day: with the day', fmtClock(new Date(2026, 9, 21, 9, 5).toISOString(), 'en-GB', now), '21 Oct 09:05');
   t.check('no time, nothing', fmtClock(undefined, 'en-GB', now), '');
+}
+
+/*
+ * The operator's own messages are filled (2026-10-23: "easy to notice — another colour if need be"): their white text
+ * reads on the fill, and the fill stands out of the panel it sits on, in both themes, by WCAG's contrast.
+ */
+console.log("\n--- the operator's messages stand out, and read ---");
+{
+  const css = readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), '..', 'web', 'app', 'globals.css'), 'utf8');
+  const block = (selector: string): string => css.slice(css.indexOf(`${selector} {`), css.indexOf('}', css.indexOf(`${selector} {`)));
+  const token = (b: string, name: string): string => new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, 'i').exec(b)?.[1] ?? '';
+  const lum = (hex: string): number => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const contrast = (a: string, b: string): number => {
+    const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+    return (x! + 0.05) / (y! + 0.05);
+  };
+  for (const [theme, selector] of [['light', ':root'], ['dark', ":root[data-theme='dark']"]] as const) {
+    const b = block(selector);
+    const [fill, ink, soft, panel] = [token(b, 'you-bg'), token(b, 'you-ink'), token(b, 'you-soft'), token(b, 'panel')];
+    t.truthy(`${theme}: its text reads on the fill (≥ 4.5)`, contrast(ink, fill) >= 4.5, `${ink} on ${fill}: ${contrast(ink, fill).toFixed(2)}`);
+    t.truthy(`${theme}: and so does its heading (≥ 4.5)`, contrast(soft, fill) >= 4.5, `${soft} on ${fill}: ${contrast(soft, fill).toFixed(2)}`);
+    t.truthy(`${theme}: the fill stands out of the panel (≥ 3)`, contrast(fill, panel) >= 3, `${fill} on ${panel}: ${contrast(fill, panel).toFixed(2)}`);
+  }
 }
 
 t.finish();

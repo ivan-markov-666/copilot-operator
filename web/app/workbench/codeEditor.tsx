@@ -34,6 +34,16 @@ function loadMonaco(): Promise<Monaco> {
       },
     };
     const monaco = await import('monaco-editor');
+    /*
+     * No problems marked (operator, 2026-10-23: "red underlines where it finds a problem — it does not see node_modules,
+     * it is not an IDE; hide the underlining altogether"): the language services check a file alone, without the
+     * project's packages or settings, so what they found was mostly not so. Their colours, completion and hover stay.
+     */
+    const quiet = { noSemanticValidation: true, noSyntaxValidation: true, noSuggestionDiagnostics: true };
+    monaco.typescript.typescriptDefaults.setDiagnosticsOptions(quiet);
+    monaco.typescript.javascriptDefaults.setDiagnosticsOptions(quiet);
+    monaco.json.jsonDefaults.setDiagnosticsOptions({ ...monaco.json.jsonDefaults.diagnosticsOptions, validate: false });
+    for (const css of [monaco.css.cssDefaults, monaco.css.scssDefaults, monaco.css.lessDefaults]) css.setOptions({ ...css.options, validate: false });
     return monaco;
   })();
   return loading;
@@ -111,6 +121,8 @@ export function CodeEditor({
           tabSize: 2,
           detectIndentation: true,
           fixedOverflowWidgets: true,
+          // And whatever marks a problem all the same — any language's, any service's — is not drawn (2026-10-23).
+          renderValidationDecorations: 'off',
         });
         editorRef.current = editor;
         applyLook(monaco, editor);

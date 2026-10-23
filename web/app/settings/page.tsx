@@ -32,8 +32,53 @@ type NetworkFetch = 'ask' | 'refuse' | 'run';
 /** The longest level 2 a project may have; the server holds it to the same (`MAX_PROJECT_LEVEL2`). */
 const MAX_LEVEL2 = 8000;
 
+/**
+ * A section named by the address — `/settings#skills` from the chat's "+ Skills" — is brought into view and lit up for
+ * a moment (operator, 2026-10-23: "not only lead there: let the skills section be highlighted, to show with motion where
+ * they are"). Any section with an id, so every link to one does the same; waited for, as the page draws its sections
+ * after it reads the settings.
+ */
+function useSpotlight(): void {
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let frame = 0;
+    const light = (): void => {
+      const id = decodeURIComponent(window.location.hash.slice(1));
+      if (!id) return;
+      const until = Date.now() + 5000;
+      cancelAnimationFrame(frame);
+      const look = (): void => {
+        const el = document.getElementById(id);
+        if (!el) {
+          if (Date.now() < until) frame = requestAnimationFrame(look);
+          return;
+        }
+        const still = document.documentElement.dataset.motion === 'reduced' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        el.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+        if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+        el.focus({ preventScroll: true });
+        el.classList.remove('spotlight');
+        // Again from the start when it is asked for again: a class put back at once does not restart the animation.
+        void el.offsetWidth;
+        el.classList.add('spotlight');
+        clearTimeout(timer);
+        timer = setTimeout(() => el.classList.remove('spotlight'), 4200);
+      };
+      look();
+    };
+    light();
+    window.addEventListener('hashchange', light);
+    return () => {
+      window.removeEventListener('hashchange', light);
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  }, []);
+}
+
 export default function DefaultsPage() {
   const { t } = useT();
+  useSpotlight();
   /*
    * One model list for the whole page.
    *
@@ -1307,8 +1352,13 @@ function ExecutionSection() {
         <select
           id="start-mode"
           value={startMode}
-          onChange={(e) => {
+          onChange={async (e) => {
             const v = e.target.value as StartMode;
+            /*
+             * The one place it is chosen (2026-10-23: the chat's own menu removed): running without asking is confirmed
+             * here, once, as the chat used to ask at the first message of every such conversation.
+             */
+            if (v === 'unattended' && !(await confirmDialog(t('exec.modeAutoConfirm')))) return;
             setStartMode(v);
             void saveExecution('mode', v);
           }}

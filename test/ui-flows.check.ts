@@ -360,7 +360,19 @@ try {
     // Chosen after the page read the settings, as another section or another tab would.
     await h.call('PUT', '/models/default', { model: 'Think deeper' });
     await fetchSel.selectOption('refuse');
+    /*
+     * How commands run is chosen here only (operator, 2026-10-23: the chat's menu removed): running without asking is
+     * confirmed first, and "Cancel" keeps asking before each command.
+     */
     await page.locator('#start-mode').selectOption('unattended');
+    const sure = page.getByRole('alertdialog');
+    await sure.waitFor({ timeout: 5_000 });
+    t.truthy('running commands without asking is confirmed first', ((await sure.textContent()) ?? '').includes(en['exec.modeAutoConfirm']!.split('.')[0]!), await sure.textContent());
+    await sure.getByRole('button', { name: en['dialog.cancel']!, exact: true }).click();
+    await sure.waitFor({ state: 'detached' });
+    t.check('"Cancel": it still asks before each command, and nothing is saved', [await page.locator('#start-mode').inputValue(), (await settingsOf(h)).execution?.mode === 'unattended'], ['confirm', false]);
+    await page.locator('#start-mode').selectOption('unattended');
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
     await page.locator('#isolation').selectOption('vm');
     const exec = await waitFor('the three choices to be saved', async () => {
       const e = (await settingsOf(h)).execution ?? {};
@@ -416,7 +428,8 @@ try {
     await input.waitFor();
     await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'README.md' }).waitFor();
     t.truthy('the explorer shows the open folder\'s files, and the chat what it works on', ((await page.locator('.cs-welcome').textContent()) ?? '').includes(h.repo), await page.locator('.cs-welcome').textContent());
-    t.check('commands run as Settings say, here without asking', await page.getByRole('combobox', { name: en['chat.mode']! }).inputValue(), 'unattended');
+    // How commands run is Settings' alone (2026-10-23): the chat has no menu for it, and runs as Settings say (here without asking).
+    t.check('no menu for how commands run under the chat', await page.locator('#cs-mode').count(), 0);
     // No model in Settings: the model is set by hand, the entry that replaced "Whatever the chat is on" (2026-10-17).
     const picker = page.getByRole('combobox', { name: en['chat.model']! });
     t.check('with no model in Settings the picker is on "Set the model by hand", its first entry', [(await picker.locator('option:checked').textContent())?.trim(), (await picker.locator('option').first().textContent())?.trim()], [en['chat.modelByHand'], en['chat.modelByHand']]);
@@ -1064,7 +1077,26 @@ try {
    */
   await scenario('skills: written in Settings, chosen under the box or with /its-name, shown on the message', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
     await h.call('PUT', '/models/default', { model: 'Think deeper' });
-    await page.goto(url('/settings'));
+    /*
+     * The way there from the chat (operator, 2026-10-23): "+ Skills" beside the skills, with none yet too, opens
+     * Settings at its skills, which light up for a moment to show where they are.
+     */
+    await page.goto(url('/'));
+    const toSkills = page.getByRole('link', { name: en['chat.skillsLink']!, exact: true });
+    await toSkills.waitFor();
+    t.check('with no skill yet: no picker, but the way to add one', [await page.locator('#cs-skill').count(), await toSkills.getAttribute('title')], [0, en['chat.skillsLinkWhy']]);
+    await toSkills.click();
+    await waitFor('Settings at its skills', async () => new URL(page.url()).pathname === '/settings' || null, 10_000);
+    const section = page.locator('section#skills');
+    await waitFor('the skills to light up', async () => (await section.getAttribute('class'))?.includes('spotlight') || null, 10_000).catch(() => undefined);
+    t.check('it opens Settings at its skills', [new URL(page.url()).pathname, new URL(page.url()).hash], ['/settings', '#skills']);
+    t.check('which light up, are in view and have the focus', [
+      ((await section.getAttribute('class')) ?? '').includes('spotlight'),
+      await section.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top < window.innerHeight && r.bottom > 0; }),
+      await section.evaluate((el) => document.activeElement === el),
+    ], [true, true, true]);
+    await waitFor('the light to go out', async () => !((await section.getAttribute('class')) ?? '').includes('spotlight') || null, 8_000).catch(() => undefined);
+    t.check('for a moment only', ((await section.getAttribute('class')) ?? '').includes('spotlight'), false);
     const add = page.locator('.skill-new');
     await add.waitFor();
     await add.getByLabel(en['skills.name']!, { exact: true }).fill('new-test');
@@ -1078,7 +1110,10 @@ try {
     await page.goto(url('/'));
     const pick = page.locator('#cs-skill');
     await pick.waitFor();
-    t.check('under the chat\'s box: none, or the skill', await pick.locator('option').allTextContents(), [en['chat.skillNone'], '/new-test — Adding an automated test']);
+    // By name alone (operator, 2026-10-23); what it is for on hover.
+    t.check('under the chat\'s box: none, or the skill, by its name alone', await pick.locator('option').allTextContents(), [en['chat.skillNone'], '/new-test']);
+    t.check('what it is for, on hover', await pick.locator('option').nth(1).getAttribute('title'), 'Adding an automated test');
+    t.check('and beside it, still, the way to Settings', await page.getByRole('link', { name: en['chat.skillsLink']!, exact: true }).count(), 1);
     const input = page.getByRole('textbox', { name: en['chat.input']! });
     await input.fill('/nope do it');
     await input.press('Enter');
@@ -1349,6 +1384,19 @@ try {
     const suggest = page.locator('.suggest-widget .monaco-list-row');
     await suggest.first().waitFor({ timeout: 20_000 }).catch(() => undefined);
     t.truthy('IntelliSense: the members of the type, after the dot', (await suggest.allTextContents()).some((s) => s.startsWith('email')) && (await suggest.allTextContents()).some((s) => s.startsWith('name')), await suggest.allTextContents());
+    await page.keyboard.press('Escape');
+
+    /*
+     * No problems underlined (operator, 2026-10-23: "it does not see node_modules; hide the underlining altogether"):
+     * a package the editor cannot see, and a type that is wrong, are not marked — before, both were, in red.
+     */
+    writeFileSync(join(h.repo, 'wrong.ts'), "import { thing } from 'a-package-in-node-modules';\nconst n: number = 'text';\nexport { thing, n };\n");
+    await files.getByRole('button', { name: 'wrong.ts' }).click();
+    const wrongPane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(wrongPane);
+    // The language service answers within a second or two; given three.
+    await page.waitForTimeout(3_000);
+    t.check('nothing underlined, of any kind', await wrongPane.locator('.squiggly-error, .squiggly-warning, .squiggly-info, .squiggly-hint').count(), 0);
   });
 
   /*
@@ -1434,7 +1482,17 @@ try {
     t.check('idle: no LIVE beside Chat, and the tab is the name alone', [await badge.count(), await page.title()], [0, 'copilot-operator']);
     const head = page.locator('.cs-turn').first().locator('.cs-user-head');
     t.check("the operator's message is headed: You, Your message 1, and its time", [await head.locator('.cs-user-who').textContent(), await head.locator('.cs-user-n').textContent(), /^\d{2}:\d{2}$/.test((await head.locator('time').textContent()) ?? '')], [en['chat.you'], 'Your message 1', true]);
-    t.check('and kept in sight at the top of the chat while what came of it is read', await page.locator('.cs-user-row').first().evaluate((el) => getComputedStyle(el).position), 'sticky');
+    // It moves with the conversation (2026-10-23: it stayed on top, which the operator did not want), and is filled.
+    t.check('it moves with the conversation, not kept on top', await page.locator('.cs-user-row').first().evaluate((el) => getComputedStyle(el).position), 'static');
+    const filled = await page.locator('.cs-user').first().evaluate((el) => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--you-bg)';
+      document.body.append(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      return [getComputedStyle(el).backgroundColor, want, getComputedStyle(el).color];
+    });
+    t.check('and filled in its own colour, white on the accent', [filled[0] === filled[1], filled[2]], [true, 'rgb(255, 255, 255)']);
 
     await h.call('POST', `/sessions/${threadId}/start`, { mode: 'confirm' });
     await badge.waitFor({ timeout: 15_000 });
@@ -1519,7 +1577,7 @@ try {
     const copies = async (i: number): Promise<number> => await ends.nth(i).getByRole('button', { name: en['chat.copySummary']!, exact: true }).count();
     await waitFor('the long ending to be measured', async () => (await copies(0)) === 2, 5_000).catch(() => undefined);
     t.check('a long ending: "Copy" beside it and under it; a short one: beside it only', [await copies(0), await copies(1)], [2, 1]);
-    for (const id of ['cs-model', 'cs-mode', 'cs-thread']) {
+    for (const id of ['cs-model', 'cs-thread']) {
       const room = await page.locator(`#${id}`).evaluate((el) => {
         const s = getComputedStyle(el);
         return { right: parseFloat(s.paddingRight), arrowAt: parseFloat(s.backgroundPositionX) || 0 };
