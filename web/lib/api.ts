@@ -563,7 +563,15 @@ export type Actor = 'plan' | 'lead' | 'worker' | 'review';
 export type Acting = { actor: Actor; since: string; subtask?: number; round?: number };
 
 /** Whether the bot is working, and who in the run going now (answered from memory: polling it is fine). */
-export type Activity = { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean };
+export type Activity = {
+  running: boolean;
+  sessions: number;
+  starting: boolean;
+  acting?: Acting;
+  paused?: boolean;
+  /** How the last message ended, while nothing runs (2026-10-23). */
+  last?: { status: string; at: string };
+};
 
 export type RunMode = 'confirm' | 'unattended';
 export type OnFailure = 'stop' | 'continue';
@@ -1184,6 +1192,9 @@ export const api = {
   startFailureUrl: (id: string) => withToken(`${API}/start/failures/${encodeURIComponent(id)}/report`),
   /** What the bot's console showed, the latest lines, as a text file. */
   terminalUrl: () => withToken(`${API}/terminal`),
+  /** Everything the bot has kept, as a .zip (2026-10-23); with `runs`, every run's records too. */
+  homeExportUrl: (runs: boolean) => withToken(`${API}/home/export${runs ? '?runs=1' : ''}`),
+  homeExportSize: () => call<{ data: number; dataFiles: number; runs: number; runsFiles: number }>('/home/export/size'),
   stop: (id: string) => call<{ stopping: boolean }>(`/sessions/${id}/stop`, { method: 'POST', body: '{}' }),
   /** "Pause": the running work holds at its next message to Copilot or its next command. */
   pause: (id: string) => call<{ paused: boolean }>(`/sessions/${id}/pause`, { method: 'POST', body: '{}' }),

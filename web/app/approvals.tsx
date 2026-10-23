@@ -26,6 +26,8 @@ import { PlanView } from './planView';
 import { ActorChip } from './actor';
 
 const EVERY_MS = 2_000;
+/** How long the tab says how the last message ended once the operator has the page in front of them. */
+const SEEN_MS = 12_000;
 
 export function GlobalApprovals() {
   const { t } = useT();
@@ -71,7 +73,21 @@ export function GlobalApprovals() {
    * bot is at work and who (2026-10-22: "when the bot works, let it show in the tab that says copilot-operator").
    */
   const activity = useActivity();
-  const title = tabTitle(t, approvals.length, activity);
+  /*
+   * The dots of "Working..." go round, and the last message's end is said until the operator has had the page in
+   * front of them for SEEN_MS: kept while they are in another window, gone a moment after they look (2026-10-23).
+   */
+  const [tick, setTick] = useState(0);
+  const lookedAt = useRef(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) lookedAt.current = Date.now();
+      setTick((n) => n + 1);
+    }, 450);
+    return () => clearInterval(id);
+  }, []);
+  const lastAt = activity?.last ? Date.parse(activity.last.at) : 0;
+  const title = tabTitle(approvals.length, activity, (tick % 3) + 1, !!activity?.last && lookedAt.current - lastAt < SEEN_MS);
   useEffect(() => {
     document.title = title;
   }, [title]);

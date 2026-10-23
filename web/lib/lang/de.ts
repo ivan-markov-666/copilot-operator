@@ -252,9 +252,6 @@ export const de: Dictionary = {
   'wb.liveWho': 'Der Bot arbeitet — {who}',
   'wb.livePlain': 'Der Bot arbeitet',
   'wb.livePaused': 'Der Bot ist pausiert',
-  'title.working': 'Am Werk: {who}',
-  'title.workingPlain': 'arbeitet',
-  'title.paused': 'pausiert',
   'chat.you': 'Sie',
   'chat.youN': 'Ihre Nachricht {n}',
   'wb.closeTab': '{name} schließen',
@@ -422,6 +419,10 @@ export const de: Dictionary = {
   'startfail.dismiss': 'Diesen Hinweis schließen',
   'startfail.later': 'Dieser Lauf wurde angenommen und konnte dann nicht beginnen:',
   'sys.terminalWhy': 'Die Konsole des Bots — was npm start oder cop start ausgegeben hat — als Textdatei: die neuesten Zeilen, jede mit ihrer Uhrzeit, ohne Text, der wie ein Geheimnis aussieht. Alles seit dem Start des Bots steht auch im Datenordner unter logs\\terminal.log.',
+  'sys.export': 'Alles exportieren, was der Bot aufbewahrt',
+  'sys.exportWhat': 'Eine .zip des Bot-Ordners: Einstellungen, Gespräche, Skills, Vorlagen für Stufe 2 und Protokolle ({n} Dateien, {size}). Nicht enthalten: der Schlüssel der API, der zu diesem Rechner gehört, und das Edge-Profil, das Ihre Anmeldung bei Microsoft 365 enthält.',
+  'sys.exportRuns': 'Auch die Aufzeichnungen aller Läufe ({n} Dateien, {size})',
+  'sys.exportButton': 'Exportieren (.zip)',
   'exec.autoContinue': 'Nach einem Limit weitermachen',
   'exec.autoContinueUnit': 'Mal pro Aufgabe, dann stoppt sie und wartet auf Sie (0 = am Limit stoppen)',
   'exec.autoContinueWhy':
@@ -695,7 +696,6 @@ export const de: Dictionary = {
   'skills.removeConfirm': 'Den Skill /{name} löschen? Nachrichten, die bereits damit gesendet wurden, behalten ihn.',
   'skills.removeOne': 'Skill /{name} löschen',
   'skills.saved': 'Skills gespeichert: {n}.',
-  'approval.tabTitle': 'wartet auf Sie',
   'approval.waitingHere': 'Ein Schritt wartet auf Ihre Entscheidung',
   'approval.waitingHereWhy':
     'Wird auf jeder Seite angezeigt, solange ein Schritt wartet, damit ein Lauf nie hängend wirkt, nur weil die Seite, die fragt, nicht die geöffnete ist.',

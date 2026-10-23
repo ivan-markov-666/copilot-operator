@@ -768,6 +768,12 @@ try {
     t.check('the default is sent as null, without the copy when it is off', puts[1], { dir: null, copy: false });
     await waitFor('the next-start note gone', async () => (await row.locator('.sys-home-next').count()) === 0, 10_000);
 
+    // Everything the bot keeps, as one .zip (2026-10-23): offered here, its runs only when ticked.
+    const exportLink = page.locator('a.sys-export-link');
+    t.truthy('System offers an export of everything the bot keeps', /\/api\/home\/export(\?token=|$)/.test((await exportLink.getAttribute('href')) ?? ''), await exportLink.getAttribute('href'));
+    await page.locator('#export-runs').check();
+    t.truthy('with every run\'s records when ticked', ((await exportLink.getAttribute('href')) ?? '').includes('runs=1'), await exportLink.getAttribute('href'));
+
     // Another Edge, a run's own, and a look that failed: each said for what it is.
     for (const [holder, key, err] of [
       ['other', 'sys.profileHeld', 1],
@@ -1171,6 +1177,10 @@ try {
     t.check('under the chat\'s box: none, or the skill, by its name alone', await pick.locator('option').allTextContents(), [en['chat.skillNone'], '/new-test']);
     t.check('what it is for, on hover', await pick.locator('option').nth(1).getAttribute('title'), 'Adding an automated test');
     t.check('and beside it, still, the way to Settings', await page.getByRole('link', { name: en['chat.skillsLink']!, exact: true }).count(), 1);
+    // Right beside the menu (operator, 2026-10-23: "closer to the Skills drop-down"), not at the far end of the line.
+    const menuBox = await pick.boundingBox();
+    const linkBox = await page.getByRole('link', { name: en['chat.skillsLink']!, exact: true }).boundingBox();
+    t.truthy('"+ Skills" right after the menu', !!menuBox && !!linkBox && linkBox.x - (menuBox.x + menuBox.width) >= 0 && linkBox.x - (menuBox.x + menuBox.width) <= 12, { menuBox, linkBox });
     const input = page.getByRole('textbox', { name: en['chat.input']! });
     await input.fill('/nope do it');
     await input.press('Enter');
@@ -1555,8 +1565,13 @@ try {
     await badge.waitFor({ timeout: 15_000 });
     await waitFor('who is at work to be said', async () => ((await badge.getAttribute('aria-label')) ?? '').includes(en['actor.worker']!) || null, 15_000).catch(() => undefined);
     t.check('working: LIVE beside Chat, saying who', [await badge.textContent(), await badge.getAttribute('aria-label')], ['LIVE', 'The bot is working — Worker']);
-    await waitFor('the tab to say who', async () => (await page.title()) === '● Worker at work — copilot-operator' || null, 10_000).catch(() => undefined);
-    t.check('the tab says who is at work', await page.title(), '● Worker at work — copilot-operator');
+    // "Working." "Working.." "Working..." in the tab, going round (2026-10-23).
+    const titles = new Set<string>();
+    for (const until = Date.now() + 2_000; Date.now() < until; ) {
+      titles.add(await page.title());
+      await page.waitForTimeout(120);
+    }
+    t.check('the tab says the bot is working, its dots going round', [...titles].filter((x) => /^Working\.{1,3} — copilot-operator$/.test(x)).sort(), ['Working. — copilot-operator', 'Working.. — copilot-operator', 'Working... — copilot-operator']);
     await page.locator('.cs-working .actor-chip').waitFor();
     t.check('the working line and the status bar name the worker', [await page.locator('.cs-working .actor-chip').textContent(), await page.locator('.wb-statusbar .actor-chip').textContent()], [en['actor.worker'], en['actor.worker']]);
 
@@ -1564,13 +1579,13 @@ try {
     const ask = page.locator('.cs-ask');
     await ask.waitFor({ timeout: 20_000 });
     t.check('the command card says who asks', await ask.locator('.actor-chip').textContent(), 'Asked by: Worker');
-    await waitFor('the tab to say something waits', async () => (await page.title()) === '(1) waiting for you — copilot-operator' || null, 10_000).catch(() => undefined);
-    t.check('the tab says first that something waits for the operator', await page.title(), '(1) waiting for you — copilot-operator');
+    await waitFor('the tab to say something waits', async () => (await page.title()) === 'Waiting for you (1) — copilot-operator' || null, 10_000).catch(() => undefined);
+    t.check('the tab says first that something waits for the operator', await page.title(), 'Waiting for you (1) — copilot-operator');
     await ask.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
     await page.locator('.cs-body').getByText('I wrote live.txt holding the word live').waitFor({ timeout: 30_000 });
     await waitFor('LIVE to go', async () => (await badge.count()) === 0 || null, 15_000).catch(() => undefined);
-    await waitFor('the title to go back', async () => (await page.title()) === 'copilot-operator' || null, 10_000).catch(() => undefined);
-    t.check('ended: no LIVE, the tab the name alone, no working line', [await badge.count(), await page.title(), await page.locator('.cs-working').count()], [0, 'copilot-operator', 0]);
+    await waitFor('the tab to say it is done', async () => (await page.title()) === 'Done — copilot-operator' || null, 10_000).catch(() => undefined);
+    t.check('ended: no LIVE, the tab says "Done", no working line', [await badge.count(), await page.title(), await page.locator('.cs-working').count()], [0, 'Done — copilot-operator', 0]);
   });
 
   /*

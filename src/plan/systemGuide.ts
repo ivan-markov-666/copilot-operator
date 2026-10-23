@@ -2098,6 +2098,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Под „Тази машина“: последните редове, отпечатани от конзолата на бота, с часовете им, като текстов файл — това се иска, когато нещо се е объркало и нищо по страниците не казва защо.',
           },
           {
+            key: 'sys.export',
+            kind: 'note',
+            en: 'Export everything the bot keeps',
+            bg: 'Експорт на всичко, което ботът пази',
+            doesEn: 'Under "This machine": one .zip of the bot\'s folder — settings, conversations, skills, level 2 templates, logs — with a checkbox for every run\'s records too; the API\'s key and the Edge profile (the Microsoft 365 sign-in) are never in it, and its manifest.json says so.',
+            doesBg: 'Под „Тази машина“: един .zip на папката на бота — настройки, разговори, skill-ове, шаблони за ниво 2, дневници — с отметка и за записите на всички изпълнения; ключът на API-то и профилът в Edge (входът в Microsoft 365) никога не влизат, и manifest.json го казва.',
+          },
+          {
+            key: 'sys.exportButton',
+            kind: 'link',
+            en: 'Export (.zip)',
+            bg: 'Експорт (.zip)',
+            doesEn: 'Downloads that .zip, named copilot-operator-export-<date>-<time>.zip.',
+            doesBg: 'Сваля този .zip с име copilot-operator-export-<дата>-<час>.zip.',
+          },
+          {
             key: 'sys.home',
             kind: 'note',
             en: 'The bot\'s folder',

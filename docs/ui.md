@@ -641,6 +641,15 @@ the cards, the name on the line "Working…" and along the bottom. While the bot
 (red; amber while paused; on hover who is at work), and the browser tab reads "● Worker at work — copilot-operator" —
 "(1) waiting for you" first when something waits for the operator.
 
+**The tab's title, and the export (2026-10-23).** The browser tab says what stage the bot is at, in English whatever
+the page's language (as the operator asked): "Working." "Working.." "Working..." round again while it works,
+"Starting...", "Paused", "Waiting for you (n)" first when something waits; when it stops, how the last message ended —
+"Done", "Error" (failed), "Stopped", "Blocked", "Limit reached" (`tabTitle`, `OUTCOME_WORDS` in `web/lib/actors.ts`;
+`/api/activity` gives `last`) — until the operator has had the page in front of them for 12 s. System → "Export
+everything the bot keeps" downloads one .zip (`GET /api/home/export`, `?runs=1` for every run's records;
+`config/exportHome.ts`, `util/zip.ts`, written with `zlib` alone): `data/` and a `manifest.json`; never the API's key,
+nor the Edge profile with the Microsoft 365 sign-in.
+
 **Platforms, questions with answers to click (2026-10-23).** A command that reaches a platform with the operator's
 access — Azure (`az`, Az PowerShell), AWS, Google Cloud, GitHub (`gh`), GitLab, Jira, Vercel, Netlify, Heroku,
 Cloudflare, Kubernetes, Terraform, Microsoft Graph, Exchange Online, publishing to npm, a container registry, NuGet,

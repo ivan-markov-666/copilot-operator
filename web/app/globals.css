@@ -1145,7 +1145,8 @@ button.linkish:hover { text-decoration: underline; }
 .wb-statusbar .actor-chip { border-color: transparent; }
 
 /* The way to Settings' skills, beside the skills under the chat's box (2026-10-23). */
-.cs-skills-link { margin-inline-start: auto; padding: 3px 10px; white-space: nowrap; }
+/* Right beside the skills menu (2026-10-23: "closer to the Skills drop-down"), not pushed to the far end. */
+.cs-skills-link { padding: 3px 10px; white-space: nowrap; }
 
 /*
  * A section reached by its address, lit up for a moment (2026-10-23): a ring that pulses three times, and stays while it

@@ -192,6 +192,25 @@ export class OperatorController {
     }
   }
 
+  /** How much an export of the bot's folder would hold (2026-10-23). */
+  @Get('home/export/size')
+  exportSize(): unknown {
+    return this.ops.exportSizes();
+  }
+
+  /** Everything the bot has kept, as a .zip: `data/`, and `runs/` with `?runs=1`. See `config/exportHome.ts`. */
+  @Get('home/export')
+  exportHome(@Query('runs') runs: string | undefined, @Res() res: Response): void {
+    try {
+      const { fileName, content } = this.ops.exportHome(runs === '1' || runs === 'true');
+      res.type('application/zip');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.send(content);
+    } catch (e) {
+      failText(res, e);
+    }
+  }
+
   /** What the bot's console showed, the latest lines, as a text file. See `log/terminal.ts`. */
   @Get('terminal')
   async terminal(@Res() res: Response): Promise<void> {

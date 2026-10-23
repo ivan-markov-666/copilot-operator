@@ -73,12 +73,15 @@ console.log("\n--- the words: the actor's name, the LIVE mark, the tab's title -
   t.check('or that it works, when nobody is named yet', liveText(say, working()), 'The bot is working');
   t.check('or that it is paused', liveText(say, working({ paused: true, acting: { actor: 'worker', since: '' } })), 'The bot is paused');
 
-  t.check('the tab: idle is the name alone', tabTitle(say, 0, idle), 'copilot-operator');
-  t.check('the tab: who is at work', tabTitle(say, 0, working({ acting: { actor: 'lead', since: '' } })), '● Lead at work — copilot-operator');
-  t.check('the tab: the worker on its subtask', tabTitle(say, 0, working({ acting: { actor: 'worker', since: '', subtask: 2 } })), '● Worker · subtask 2 at work — copilot-operator');
-  t.check('the tab: at work, nobody named yet', tabTitle(say, 0, working()), '● working — copilot-operator');
-  t.check('the tab: paused', tabTitle(say, 0, working({ paused: true })), '● paused — copilot-operator');
-  t.check('the tab: what waits for the operator comes first', tabTitle(say, 2, working({ acting: { actor: 'plan', since: '' } })), '(2) waiting for you — copilot-operator');
+  // The tab (operator, 2026-10-23): "Working." "Working.." "Working...", then "Done", "Error" — in English, as asked.
+  t.check('the tab: idle is the name alone', tabTitle(0, idle, 1, false), 'copilot-operator');
+  t.check('the tab: at work, its dots going one, two, three', [1, 2, 3].map((n) => tabTitle(0, working({ acting: { actor: 'worker', since: '', subtask: 6 } }), n, false)), ['Working. — copilot-operator', 'Working.. — copilot-operator', 'Working... — copilot-operator']);
+  t.check('the tab: being started', tabTitle(0, { ...idle, starting: true }, 2, false), 'Starting.. — copilot-operator');
+  t.check('the tab: paused', tabTitle(0, working({ paused: true }), 1, false), 'Paused — copilot-operator');
+  t.check('the tab: what waits for the operator comes first', tabTitle(2, working({ acting: { actor: 'plan', since: '' } }), 1, false), 'Waiting for you (2) — copilot-operator');
+  const ended = (status: string) => tabTitle(0, { ...idle, last: { status, at: '' } }, 1, true);
+  t.check('the tab: how the last message ended', ['done', 'failed', 'aborted', 'blocked', 'limit-reached'].map(ended), ['Done — copilot-operator', 'Error — copilot-operator', 'Stopped — copilot-operator', 'Blocked — copilot-operator', 'Limit reached — copilot-operator']);
+  t.check('until the operator has seen it: then the name alone', tabTitle(0, { ...idle, last: { status: 'done', at: '' } }, 1, false), 'copilot-operator');
 }
 
 console.log("\n--- the short time on the operator's own messages ---");

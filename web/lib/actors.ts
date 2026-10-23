@@ -28,15 +28,30 @@ export function liveText(t: Translate, a: Activity | null | undefined): string {
 
 export const BASE_TITLE = 'copilot-operator';
 
+/** How a message ended, as the tab says it. */
+export const OUTCOME_WORDS: Record<string, string> = { done: 'Done', failed: 'Error', aborted: 'Stopped', blocked: 'Blocked', 'limit-reached': 'Limit reached' };
+
 /**
- * The tab's title: what waits for the operator first, else that the bot is at work and who, else the name alone —
- * "(2) waiting for you — copilot-operator", "● Worker at work — copilot-operator".
+ * The tab's title (operator, 2026-10-23: "while the bot works, 'Working.', 'Working..', 'Working...' and round again;
+ * 'Done' when it stops, 'Error' when the task fails, and other handy words for the stage it is at — the user is to see
+ * it and act"). In English, as asked, whatever the page's language. What waits for the operator comes first; how the
+ * last message ended is said while `showLast` — until the operator has had the page in front of them a while.
  */
-export function tabTitle(t: Translate, waiting: number, a: Activity | null | undefined): string {
-  if (waiting > 0) return `(${waiting}) ${t('approval.tabTitle')} — ${BASE_TITLE}`;
-  if (!isWorking(a)) return BASE_TITLE;
-  const doing = a?.paused ? t('title.paused') : a?.acting ? t('title.working', { who: actorLabel(t, a.acting.actor, a.acting) }) : t('title.workingPlain');
-  return `● ${doing} — ${BASE_TITLE}`;
+export function tabTitle(waiting: number, a: Activity | null | undefined, dots: number, showLast: boolean): string {
+  const trail = '.'.repeat(Math.min(3, Math.max(1, dots)));
+  const word =
+    waiting > 0
+      ? `Waiting for you (${waiting})`
+      : a?.paused
+        ? 'Paused'
+        : a?.running
+          ? `Working${trail}`
+          : a?.starting
+            ? `Starting${trail}`
+            : showLast && a?.last
+              ? (OUTCOME_WORDS[a.last.status] ?? '')
+              : '';
+  return word ? `${word} — ${BASE_TITLE}` : BASE_TITLE;
 }
 
 /** A time short enough for a heading: the hour and minute of today, with the day for another. */

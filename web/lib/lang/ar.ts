@@ -251,9 +251,6 @@ export const ar: Dictionary = {
   'wb.liveWho': 'البوت يعمل — {who}',
   'wb.livePlain': 'البوت يعمل',
   'wb.livePaused': 'البوت متوقف مؤقتًا',
-  'title.working': 'يعمل: {who}',
-  'title.workingPlain': 'يعمل',
-  'title.paused': 'متوقف مؤقتًا',
   'chat.you': 'أنت',
   'chat.youN': 'رسالتك {n}',
   'wb.closeTab': 'إغلاق {name}',
@@ -421,6 +418,10 @@ export const ar: Dictionary = {
   'startfail.dismiss': 'إغلاق هذا الإشعار',
   'startfail.later': 'تم قبول عملية التشغيل هذه ثم تعذر بدؤها:',
   'sys.terminalWhy': 'وحدة تحكم الروبوت — ما طبعه npm start أو cop start — كملف نصي: أحدث الأسطر، كل منها مع وقته، مع إزالة النص الذي يبدو كبيانات سرية. كل شيء منذ بدء تشغيل الروبوت موجود أيضًا في مجلد البيانات، logs\\terminal.log.',
+  'sys.export': 'تصدير كل ما يحتفظ به الروبوت',
+  'sys.exportWhat': 'ملف .zip واحد لمجلد الروبوت: الإعدادات والمحادثات والمهارات وقوالب المستوى 2 والسجلات ({n} ملف، {size}). لا يدخل فيه: مفتاح الواجهة البرمجية الخاص بهذا الجهاز، وملف تعريف Edge الذي يحفظ تسجيل دخولك إلى Microsoft 365.',
+  'sys.exportRuns': 'وسجلات كل عمليات التشغيل أيضًا ({n} ملف، {size})',
+  'sys.exportButton': 'تصدير (.zip)',
   'exec.autoContinue': 'المتابعة بعد بلوغ حد',
   'exec.autoContinueUnit': 'مرة لكل مهمة، ثم تتوقف وتنتظرك (0 = التوقف عند الحد)',
   'exec.autoContinueWhy':
@@ -695,7 +696,6 @@ export const ar: Dictionary = {
   'skills.removeConfirm': 'هل تريد حذف المهارة /{name}؟ تحتفظ بها الرسائل التي أُرسلت بها من قبل.',
   'skills.removeOne': 'حذف المهارة /{name}',
   'skills.saved': 'تم الحفظ: عدد المهارات {n}.',
-  'approval.tabTitle': 'بانتظارك',
   'approval.waitingHere': 'خطوة بانتظار قرارك',
   'approval.waitingHereWhy':
     'يُعرض على كل صفحة أثناء انتظار خطوة، حتى لا تبدو عملية التشغيل عالقة لأن الصفحة التي تسأل ليست الصفحة المفتوحة.',

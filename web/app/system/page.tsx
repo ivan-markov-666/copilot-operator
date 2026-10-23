@@ -138,6 +138,42 @@ function ProfileUse({ doctor }: { doctor: Record<string, unknown> }) {
   }
 }
 
+/** A size as people read it: 12 KB, 3.4 MB. */
+function sizeOf(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Everything the bot has kept, as one .zip (operator, 2026-10-23: "export everything saved so far under this
+ * profile"): its data folder, and every run's records when ticked; the key and the Edge profile never. See
+ * `config/exportHome.ts`.
+ */
+function ExportHome() {
+  const { t } = useT();
+  const [sizes, setSizes] = useState<{ data: number; dataFiles: number; runs: number; runsFiles: number } | null>(null);
+  const [runs, setRuns] = useState(false);
+  useEffect(() => {
+    api.homeExportSize().then(setSizes).catch(() => undefined);
+  }, []);
+  return (
+    <div className="sys-export">
+      <h3>{t('sys.export')}</h3>
+      <p className="muted small">{t('sys.exportWhat', { size: sizes ? sizeOf(sizes.data) : '…', n: sizes?.dataFiles ?? '…' })}</p>
+      <label className="sys-home-copyline small">
+        <input type="checkbox" id="export-runs" checked={runs} onChange={(e) => setRuns(e.target.checked)} />
+        <span>{t('sys.exportRuns', { size: sizes ? sizeOf(sizes.runs) : '…', n: sizes?.runsFiles ?? '…' })}</span>
+      </label>
+      <div className="row" style={{ marginTop: 8 }}>
+        <a className="button-link plain sys-export-link" href={api.homeExportUrl(runs)} download>
+          {t('sys.exportButton')}
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export default function SystemPage() {
   const { t } = useT();
   const [doctor, setDoctor] = useState<Record<string, unknown> | null>(null);
@@ -210,6 +246,7 @@ export default function SystemPage() {
           </a>
         </div>
         <p className="why">{t('sys.terminalWhy')}</p>
+        <ExportHome />
       </div>
 
       <div className="panel">

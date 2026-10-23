@@ -247,9 +247,6 @@ export const en = {
   'wb.liveWho': 'The bot is working — {who}',
   'wb.livePlain': 'The bot is working',
   'wb.livePaused': 'The bot is paused',
-  'title.working': '{who} at work',
-  'title.workingPlain': 'working',
-  'title.paused': 'paused',
   'chat.you': 'You',
   'chat.youN': 'Your message {n}',
   'wb.closeTab': 'Close {name}',
@@ -425,6 +422,10 @@ export const en = {
   'startfail.dismiss': 'Close this notice',
   'startfail.later': 'This run was accepted and then could not begin:',
   'sys.terminalWhy': 'The bot\'s console — what npm start or cop start printed — as a text file: the latest lines, each with its time, secret-shaped text taken out. Everything since the bot started is also in the data folder, logs\\terminal.log.',
+  'sys.export': 'Export everything the bot keeps',
+  'sys.exportWhat': 'One .zip of the bot\'s folder: settings, conversations, skills, level 2 templates and logs ({n} files, {size}). Left out: the API\'s key, which belongs to this machine, and the Edge profile, which holds your Microsoft 365 sign-in.',
+  'sys.exportRuns': 'Every run\'s records too ({n} files, {size})',
+  'sys.exportButton': 'Export (.zip)',
   'exec.autoContinue': 'Keep going after a limit',
   'exec.autoContinueUnit': 'times per task, then it stops and waits for you (0 = stop at the limit)',
   'exec.autoContinueWhy':
@@ -755,7 +756,6 @@ export const en = {
   'proj.otherNotRepo': 'not a git repository',
 
   // running several sessions in turn
-  'approval.tabTitle': 'waiting for you',
   'approval.waitingHere': 'A step is waiting for your decision',
   'approval.waitingHereWhy':
     'Shown on every page while a step waits, so a run never looks stuck because the page that asks is not the one open.',

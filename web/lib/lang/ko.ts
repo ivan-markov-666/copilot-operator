@@ -252,9 +252,6 @@ export const ko: Dictionary = {
   'wb.liveWho': '봇이 작업 중 — {who}',
   'wb.livePlain': '봇이 작업 중',
   'wb.livePaused': '봇이 일시 정지됨',
-  'title.working': '작업 중: {who}',
-  'title.workingPlain': '작업 중',
-  'title.paused': '일시 정지',
   'chat.you': '나',
   'chat.youN': '내 메시지 {n}',
   'wb.closeTab': '{name} 닫기',
@@ -422,6 +419,10 @@ export const ko: Dictionary = {
   'startfail.dismiss': '이 알림 닫기',
   'startfail.later': '이 실행은 수락되었지만 시작할 수 없었습니다:',
   'sys.terminalWhy': '봇의 콘솔(npm start 또는 cop start가 출력한 내용)을 텍스트 파일로 제공합니다. 최신 줄과 각 줄의 시간이 담기며, 비밀 정보처럼 보이는 텍스트는 제거됩니다. 봇이 시작된 이후의 모든 내용은 데이터 폴더의 logs\\terminal.log에도 있습니다.',
+  'sys.export': '봇이 보관하는 모든 것 내보내기',
+  'sys.exportWhat': '봇 폴더를 하나의 .zip으로: 설정, 대화, 스킬, 레벨 2 템플릿, 로그({n}개 파일, {size}). 제외: 이 컴퓨터 전용인 API 키와 Microsoft 365 로그인을 담은 Edge 프로필.',
+  'sys.exportRuns': '모든 실행 기록도 포함({n}개 파일, {size})',
+  'sys.exportButton': '내보내기(.zip)',
   'exec.autoContinue': '한도에 도달한 후에도 계속 진행',
   'exec.autoContinueUnit': '회(작업당), 이후 중지하고 사용자를 기다림(0 = 한도에서 중지)',
   'exec.autoContinueWhy':
@@ -695,7 +696,6 @@ export const ko: Dictionary = {
   'proj.othersSaved': '저장했습니다: 다른 프로젝트 {n}개.',
   'proj.otherRepo': 'git 리포지토리',
   'proj.otherNotRepo': 'git 리포지토리 아님',
-  'approval.tabTitle': '사용자 응답 대기 중',
   'approval.waitingHere': '한 단계가 사용자의 결정을 기다리고 있습니다',
   'approval.waitingHereWhy':
     '단계가 기다리는 동안 모든 페이지에 표시되므로, 묻고 있는 페이지가 열려 있지 않다는 이유로 실행이 멈춘 것처럼 보이는 일이 없습니다.',

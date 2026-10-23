@@ -238,9 +238,6 @@ export const bg: Dictionary = {
   'wb.liveWho': 'Ботът работи — {who}',
   'wb.livePlain': 'Ботът работи',
   'wb.livePaused': 'Ботът е на пауза',
-  'title.working': 'Работи: {who}',
-  'title.workingPlain': 'работи',
-  'title.paused': 'на пауза',
   'chat.you': 'Вие',
   'chat.youN': 'Ваше съобщение {n}',
   'wb.closeTab': 'Затвори {name}',
@@ -416,6 +413,10 @@ export const bg: Dictionary = {
   'startfail.dismiss': 'Затвори съобщението',
   'startfail.later': 'Това пускане беше прието, но после не можа да започне:',
   'sys.terminalWhy': 'Конзолата на бота — каквото са отпечатали npm start или cop start — като текстов файл: последните редове, всеки с часа си, без текст, който прилича на тайна. Всичко от стартирането на бота е и в папката с данни, logs\\terminal.log.',
+  'sys.export': 'Експорт на всичко, което ботът пази',
+  'sys.exportWhat': 'Един .zip на папката на бота: настройки, разговори, skill-ове, шаблони за ниво 2 и дневници ({n} файла, {size}). Не влизат: ключът на API-то, който е само за тази машина, и профилът в Edge, който пази входа ви в Microsoft 365.',
+  'sys.exportRuns': 'И записите на всички изпълнения ({n} файла, {size})',
+  'sys.exportButton': 'Експорт (.zip)',
   'exec.autoContinue': 'Продължавай след лимит',
   'exec.autoContinueUnit': 'пъти на задача, после спира и чака вас (0 = спира на лимита)',
   'exec.autoContinueWhy':
@@ -723,7 +724,6 @@ export const bg: Dictionary = {
   'proj.otherNotRepo': 'не е git хранилище',
 
   // последователно изпълнение на няколко сесии
-  'approval.tabTitle': 'чака вас',
   'approval.waitingHere': 'Стъпка чака вашето решение',
   'approval.waitingHereWhy':
     'Показва се на всяка страница, докато стъпка чака, за да не изглежда пускането забило само защото отворената страница не е тази, която пита.',

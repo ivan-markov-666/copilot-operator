@@ -115,6 +115,8 @@ import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
+import { exportEntries, exportFileName as homeExportName, exportSizes } from '../config/exportHome.js';
+import { createZip } from '../util/zip.js';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
@@ -400,9 +402,18 @@ export class OperatorService {
    * for `activity`, which every page asks on a timer and answers from memory. Gone when the message ends.
    */
   private readonly acting = new Map<string, Acting>();
+  /**
+   * How the last message ended (2026-10-23: the tab reads "Done", "Error" and the like when the work stops, for an
+   * operator in another window): a worker's subtask is not the message.
+   */
+  private lastOutcome: { status: string; at: string; sessionId: string } | null = null;
   private readonly followsActing = this.bus.subscribe('*', (e) => {
     if (e.type === 'acting' && e.data) this.acting.set(e.sessionId, e.data as Acting);
-    else if (e.type === 'task-finished') this.acting.delete(e.sessionId);
+    else if (e.type === 'task-finished') {
+      this.acting.delete(e.sessionId);
+      const status = (e.data as { status?: unknown } | undefined)?.status;
+      if (typeof status === 'string' && !this.workerLeads.has(e.sessionId)) this.lastOutcome = { status, at: e.at, sessionId: e.sessionId };
+    }
   });
   private readonly waiting = new Map<string, Waiting>();
   /**
@@ -1026,6 +1037,20 @@ export class OperatorService {
   }
 
   /** What the bot's console showed: the latest lines kept in memory, as a file. See `log/terminal.ts`. */
+  /** How much an export of the bot's folder would hold (2026-10-23): its data, and its runs' records. */
+  exportSizes(): { data: number; dataFiles: number; runs: number; runsFiles: number } {
+    return exportSizes(this.layout);
+  }
+
+  /**
+   * Everything the bot has kept, as one .zip (operator, 2026-10-23): `data/` — the key and the Edge profile left out,
+   * the manifest says why — and `runs/` when asked for.
+   */
+  exportHome(runs: boolean): { fileName: string; content: Buffer } {
+    const now = new Date();
+    return { fileName: homeExportName(now), content: createZip(exportEntries(this.layout, { runs, version: botVersion(), now })) };
+  }
+
   async terminalReport(): Promise<{ fileName: string; content: string }> {
     const cfg = await this.settings.load();
     const lines = terminalLines({ max: 5_000 });
@@ -1314,7 +1339,7 @@ export class OperatorService {
    * answer a question this one answers from two fields already in memory. A poll that costs a
    * directory walk every few seconds, on every page, to light up a dot would be a bad trade.
    */
-  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean } {
+  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean; last?: { status: string; at: string } } {
     /*
      * A run being started — its version control checked before the browser opens — is not running yet
      * and not idle either: `starting` says so, so "nothing is happening" is not read in that moment.
@@ -1329,6 +1354,8 @@ export class OperatorService {
       starting,
       ...(acting ? { acting } : {}),
       ...(run?.hold?.held ? { paused: true } : {}),
+      // How the last message ended, while nothing runs: what the tab says until the operator has looked.
+      ...(this.running.size === 0 && this.lastOutcome ? { last: { status: this.lastOutcome.status, at: this.lastOutcome.at } } : {}),
     };
   }
 

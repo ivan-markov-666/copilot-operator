@@ -19,7 +19,7 @@ import { reply } from './support/fakeChat.js';
 const t = new Tally();
 type Card = { id: string; sessionId: string; taskId: string; stepId: number; description: string; actor?: string; plan?: unknown; model?: { review?: boolean; role?: string }; question?: { text: string } };
 type Acting = { actor: string; subtask?: number; round?: number };
-type Activity = { running: boolean; starting: boolean; acting?: Acting };
+type Activity = { running: boolean; starting: boolean; acting?: Acting; last?: { status: string } };
 type Task = { id: string; status: string; acting?: Acting };
 
 async function scenario(title: string, settings: Record<string, unknown>, body: (h: Harness) => Promise<void>): Promise<void> {
@@ -95,6 +95,8 @@ await scenario('plan mode, the work, the review: every card says who asks, and t
   await h.idle();
   const done = await taskNow(h, s!.id);
   t.check('done, and nobody is said to be at work any more', [done.status, done.acting, (await activity(h)).acting], ['done', undefined, undefined]);
+  // How the message ended, for the tab to say it (2026-10-23).
+  t.check('the bot says how the last message ended: done', (await activity(h)).last?.status, 'done');
   const said = (await h.call<Array<{ type: string; data?: Acting }>>('GET', `/sessions/${s!.id}/events`)).filter((e) => e.type === 'acting').map((e) => e.data?.actor);
   t.check('the events say who, in turn', said, ['plan', 'worker', 'review', 'worker']);
 });
