@@ -886,7 +886,8 @@ try {
     await page.locator('nav').first().waitFor();
     const navLinks = await page.locator('header nav a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
     t.check('the other pages\' navigation has no Sessions, task register or plan from JSON', navLinks.filter((x) => x === '/sessions' || x === '/history' || x === '/import'), []);
-    t.check('the navigation: the chat, Settings and System, nothing else (2026-10-20)', navLinks.filter((x) => x !== null), ['/', '/settings', '/system']);
+    // The queue between the chat and Settings since 2026-10-24.
+    t.check('the navigation: the chat, the queue, Settings and System, nothing else (2026-10-20; the queue 2026-10-24)', navLinks.filter((x) => x !== null), ['/', '/queue', '/settings', '/system']);
     t.check('the other pages have the logo beside the name too', await page.locator('header .brand-link svg.brand-logo').count(), 1);
     for (const gone of ['/sessions', '/history', '/import', '/level1', '/presets', '/appearance']) {
       const r = await page.request.get(url(gone));
@@ -1072,6 +1073,124 @@ try {
     await waitFor('the lead\'s by hand saved', async () => (((await settingsOf(h)).copilot as { leadManualModel?: boolean } | undefined)?.leadManualModel === true ? true : null), 10_000).catch(() => undefined);
     const copilot = ((await settingsOf(h)).copilot ?? {}) as { manualModel?: boolean; leadManualModel?: boolean; reviewManualModel?: boolean };
     t.check("a tick saves that part's alone, with \"Saving...\" under it", [copilot.leadManualModel, copilot.manualModel, copilot.reviewManualModel], [true, false, undefined]);
+  });
+
+  /*
+   * The model menu's locators (operator, 2026-10-24: "an option in Settings to edit the general locators … help for each
+   * value and how it can be found … an option to keep what the inspection finds"): five fields with their ⓘ and their
+   * defaults shown; a locator checked as it is typed and not saved while something is wrong with it; a good one saved,
+   * shown filled with a name from the list read; "Default" puts the default back; the step pictures saved as ticked.
+   */
+  await scenario("Settings: the model menu's locators, checked as typed, saved, put back to the default; the step pictures", {}, async (h, page, url) => {
+    const { DefaultPickerLocators } = await import('../src/transport/locators.js');
+    await h.call('POST', '/models/refresh');
+    await page.goto(url('/settings'));
+    const section = page.locator('section#picker-locators');
+    await section.locator('#picker-model').waitFor();
+    t.check('the section, after the three models', await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['review', 'picker-locators', 'execution'].includes(id))), ['review', 'picker-locators', 'execution']);
+    const fields = section.locator('input.picker-locator');
+    t.check('five locators, in order, each with its ⓘ', [await fields.evaluateAll((els) => els.map((e) => e.id)), await section.locator('.picker-field .info-btn').count()], [
+      ['picker-button', 'picker-rows', 'picker-model', 'picker-provider', 'picker-providerModel'], 5,
+    ]);
+    t.check('each empty, with its default shown in it', await fields.evaluateAll((els) => els.map((e) => [(e as HTMLInputElement).value, (e as HTMLInputElement).placeholder])), [
+      ['', DefaultPickerLocators.button], ['', DefaultPickerLocators.rows], ['', DefaultPickerLocators.model], ['', DefaultPickerLocators.provider], ['', DefaultPickerLocators.providerModel],
+    ]);
+    // The list read from the scripted chat: Auto first, GPT's "GPT 5.6 Think deeper" in a provider.
+    const noteOf = (id: string) => section.locator(`.picker-field:has(#${id}) .picker-note`);
+    t.check('each template shown filled with a name from the list read', [await noteOf('picker-model').textContent(), await noteOf('picker-provider').textContent(), await noteOf('picker-providerModel').textContent()], [
+      `${en['loc.isDefault']} ${en['loc.example'].replace('{name}', 'Auto')} //div[text()='Auto']/parent::span/parent::span/parent::div`,
+      `${en['loc.isDefault']} ${en['loc.example'].replace('{name}', 'GPT')} //div[text()='GPT']/parent::span/parent::span/parent::div[contains(@aria-haspopup, 'menu')]`,
+      `${en['loc.isDefault']} ${en['loc.example'].replace('{name}', 'GPT 5.6 Think deeper')} //div[text()='GPT 5.6 Think deeper']/parent::span/parent::span/parent::div[not(contains(@aria-haspopup, 'menu'))]`,
+    ]);
+    const saved = async (): Promise<Record<string, string> | undefined> => ((await settingsOf(h)).copilot as { pickerLocators?: Record<string, string> } | undefined)?.pickerLocators;
+    const errorOf = (id: string) => section.locator(`.picker-field:has(#${id}) .err`);
+
+    await page.locator('#picker-model').fill("//div[text()='{$model_name}']/parent:span");
+    t.check('one colon for an axis: said at once', await errorOf('picker-model').textContent(), en['loc.twoColons'].split('{axis}').join('parent'));
+    await page.locator('#picker-model').fill("//div[text()='Think deeper']/parent::span");
+    t.check('no placeholder: said, with the one it needs', await errorOf('picker-model').textContent(), en['loc.noPlaceholder'].replace('{ph}', '{$model_name}'));
+    await page.locator('#picker-model').fill("//div[text()='{$model_name}'");
+    t.truthy('an XPath the browser cannot read: said', ((await errorOf('picker-model').textContent()) ?? '').startsWith(en['loc.badXPath'].replace('{msg}', '')), await errorOf('picker-model').textContent());
+    await page.locator('#picker-button').fill('button[');
+    t.truthy('a CSS selector the browser cannot read: said', ((await errorOf('picker-button').textContent()) ?? '').startsWith(en['loc.badCss'].replace('{msg}', '')), await errorOf('picker-button').textContent());
+    await page.waitForTimeout(1_600);
+    t.check('none of them saved', await saved(), undefined);
+
+    await page.locator('#picker-button').fill('');
+    await page.locator('#picker-model').fill("//b[text()='{$model_name}']/parent::li");
+    t.check('a good one: no error, and shown filled', [await errorOf('picker-model').count(), await noteOf('picker-model').textContent()], [0, `${en['loc.example'].replace('{name}', 'Auto')} //b[text()='Auto']/parent::li`]);
+    await waitFor('the locator saved', async () => ((await saved())?.model ? true : null), 10_000).catch(() => undefined);
+    t.check('saved after the typing stops, the others left out', await saved(), { model: "//b[text()='{$model_name}']/parent::li" });
+    await section.locator('.picker-field:has(#picker-model) button', { hasText: en['loc.default'] }).click();
+    await waitFor('the default put back', async () => ((await saved()) === undefined ? true : null), 10_000).catch(() => undefined);
+    t.check('"Default": the field empty, nothing saved for it', [await page.locator('#picker-model').inputValue(), await saved()], ['', undefined]);
+
+    t.check('the step pictures: off by default', await page.locator('#picker-steps').isChecked(), false);
+    await page.locator('#picker-steps').check();
+    await waitFor('the step pictures saved', async () => (((await settingsOf(h)).copilot as { pickerSteps?: boolean } | undefined)?.pickerSteps === true ? true : null), 10_000).catch(() => undefined);
+    const where = (await section.locator('.picker-dirs').textContent()) ?? '';
+    t.check('ticked, saved; and where they are kept is said', [((await settingsOf(h)).copilot as { pickerSteps?: boolean }).pickerSteps, /_browser/.test(where) && /_models/.test(where)], [true, true]);
+  });
+
+  /*
+   * The queue of tasks (operator, 2026-10-24): written on its page — what to do, its model, where it works, the earlier
+   * tasks it depends on — then run; one that fails takes the one that depends on it with it, the rest are said as they
+   * end, each with its chat to open; "Run again", editing and taking one out.
+   */
+  await scenario('the queue: tasks written with their model and what they depend on, run, one failed and the one after it skipped', { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Auto' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    await h.call('POST', '/models/refresh');
+    await page.goto(url('/queue'));
+    await page.locator('#queue-prompt').waitFor();
+    t.check('"Queue" in the bar, after "Chat", and it is this page', [await page.locator('nav a').evaluateAll((as) => as.map((a) => a.textContent?.trim() ?? '').slice(0, 3)), await page.locator('nav a[aria-current="page"]').textContent()], [[en['nav.workbench'], en['nav.queue'], en['nav.defaults']], en['nav.queue']]);
+    t.check('empty, said so; nothing to run', [await page.locator('#queue').getByText(en['q.empty']).count(), await page.getByRole('button', { name: en['q.run'] }).isDisabled()], [1, true]);
+
+    await page.locator('#queue-prompt').fill('Find the old report and summarise it.');
+    await page.locator('#queue-model').selectOption('Think deeper');
+    await page.locator('#queue-review').uncheck();
+    t.check('nothing earlier to depend on', await page.locator('.queue-depends').getByText(en['q.noEarlier']).count(), 1);
+    await page.getByRole('button', { name: en['q.add'] }).click();
+    await page.locator('.queue-item').first().waitFor();
+    await page.locator('#queue-prompt').fill('Turn the summary into a slide.');
+    await page.locator('#queue-review').uncheck();
+    await page.locator('.queue-dep input').first().check();
+    await page.getByRole('button', { name: en['q.add'] }).click();
+    await page.locator('.queue-item').nth(1).waitFor();
+    const meta = await page.locator('.queue-item .queue-meta').allTextContents();
+    t.check('two tasks, waiting; the first on its model, the second on Settings\' and depending on the first', [
+      await page.locator('.queue-item .queue-status').allTextContents(),
+      meta[0]!.includes('Think deeper'),
+      meta[1]!.includes(en['q.settingsModel']) && meta[1]!.includes(en['q.dependsOnList'].replace('{list}', '#1')),
+    ], [[en['q.waiting'], en['q.waiting']], true, true]);
+    t.check('the form empty again for the next', await page.locator('#queue-prompt').inputValue(), '');
+
+    // Editing a task: its words in the form, under its number; "Cancel" leaves it as it was.
+    await page.locator('.queue-item').nth(1).getByRole('button', { name: en['q.edit'] }).click();
+    t.check('"Edit": the task in the form, under its number', [await page.locator('#queue-add-title').textContent(), await page.locator('#queue-prompt').inputValue()], [en['q.editTitle'].replace('{n}', '2'), 'Turn the summary into a slide.']);
+    await page.getByRole('button', { name: en['q.cancel'] }).click();
+
+    h.chat.script(reply.steps('Get-ChildItem'), reply.blocked());
+    await page.getByRole('button', { name: en['q.run'] }).click();
+    await page.getByRole('button', { name: en['q.stop'] }).waitFor({ timeout: 10_000 }).catch(() => undefined);
+    await waitFor('the queue to end', async () => ((await h.call<{ running: boolean }>('GET', '/queue')).running ? null : true), 60_000).catch(() => undefined);
+    await page.getByRole('button', { name: en['q.run'] }).waitFor({ timeout: 15_000 });
+    await page.locator('.queue-item.is-skipped').waitFor({ timeout: 15_000 });
+    t.check('the first failed, the second skipped for it, and why', [await page.locator('.queue-item .queue-status').allTextContents(), await page.locator('.queue-item').nth(1).locator('.queue-why').textContent()], [
+      [en['q.failed'], en['q.skipped']],
+      'it depends on "Find the old report and summarise it.", which failed',
+    ]);
+    t.check('the one that ran has its chat to open; the skipped one none', [await page.locator('.queue-item').nth(0).getByRole('link', { name: en['q.openChat'] }).count(), await page.locator('.queue-item').nth(1).getByRole('link', { name: en['q.openChat'] }).count()], [1, 0]);
+    t.check('said under the button', await page.locator('.queue-controls [role="status"]').textContent(), en['q.counts'].replace('{waiting}', '0').replace('{done}', '0').replace('{failed}', '2'));
+
+    await page.locator('.queue-item').nth(1).getByRole('button', { name: en['q.again'] }).click();
+    await page.locator('.queue-item.is-waiting').waitFor({ timeout: 5_000 });
+    t.check('"Run again": the skipped one waits again', await page.locator('.queue-item .queue-status').allTextContents(), [en['q.failed'], en['q.waiting']]);
+    await page.locator('.queue-item').nth(0).getByRole('button', { name: en['q.remove'] }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    await waitFor('the first taken out', async () => ((await h.call<{ items: unknown[] }>('GET', '/queue')).items.length === 1 ? true : null), 10_000).catch(() => undefined);
+    const left = (await h.call<{ items: Array<{ prompt: string; dependsOn: string[] }> }>('GET', '/queue')).items;
+    t.check('"Remove": taken out, and the one that depended on it no longer does', left.map((x) => [x.prompt, x.dependsOn]), [['Turn the summary into a slide.', []]]);
+    await page.locator('.queue-item').nth(1).waitFor({ state: 'detached', timeout: 5_000 }).catch(() => undefined);
+    t.check('and the page agrees', await page.locator('.queue-item').count(), 1);
   });
 
   await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {

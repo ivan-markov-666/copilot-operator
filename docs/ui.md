@@ -650,6 +650,31 @@ everything the bot keeps" downloads one .zip (`GET /api/home/export`, `?runs=1` 
 `config/exportHome.ts`, `util/zip.ts`, written with `zlib` alone): `data/` and a `manifest.json`; never the API's key,
 nor the Edge profile with the Microsoft 365 sign-in.
 
+**The model menu's locators (2026-10-24).** Settings → "The model menu's locators" (`#picker-locators`): the model
+button, the rows the names are read from, and three templates written by the operator — a model of the main menu, a
+provider's row (Claude, GPT, or any other the page offers), a model in a provider's menu — with `{$model_name}` /
+`{$provider_name}` where the name goes (`copilot.pickerLocators`; defaults in `DefaultPickerLocators`,
+`transport/locators.ts`). No model or provider is written in the code: "Read the list from Copilot" says where each
+model is, and the templates are filled with its names (`templateTarget`); a provider's row its template does not find
+is found where the list read it; a locator that finds nothing is given up on at once for the ways that do not need it.
+Each field is checked as it is typed (`web/lib/pickerLocators.ts`, the same rules as the bot's, held to them by
+`check:picker-locators`): the placeholder, two colons for an axis, and whether this browser parses it; a good one is
+saved, shown filled with a name from the list. "Keep a picture of every step of choosing a model"
+(`copilot.pickerSteps`) keeps numbered pictures and the menu's HTML; a failed choice always keeps
+`models-select-failed.png/.html/.json`, the last with what each locator found.
+
+**The queue of tasks (2026-10-24).** "Queue" in the bar (`/queue`, `web/app/queue/page.tsx`): tasks written beforehand —
+what to do, a model of its own (empty: "Model for the worker"), where it works ("The folder as it is", or "New branch
+from main"), Review, and the earlier tasks it depends on — run one after another while nobody watches, each in a new
+chat (`OperatorService.runQueue`, `queue/queue.ts`, kept as `data/queue.json`; `GET/PUT /api/queue`, `POST
+/api/queue/run`, `/api/queue/stop`). A task whose dependency failed, was skipped or was stopped is skipped, with why;
+the others still run. A new branch from main is the runner's own version control on that chat (`startFrom: branch`,
+`updateFromRemote`): the server's main is fetched without asking anybody anything, and when it cannot be — a password
+or a key's passphrase nobody is there to type — the local main is used, and the chat is told which (`fromServer` in
+`vcs/taskVcs.ts`); such a chat is not photographed as the folder's chats are, so its work is committed on its branch. A
+queue does not start while a task would wait for a model to be chosen by hand (none of its own, none in Settings);
+one that was running when the bot closed is stopped, with why, when it opens again.
+
 **Platforms, questions with answers to click (2026-10-23).** A command that reaches a platform with the operator's
 access — Azure (`az`, Az PowerShell), AWS, Google Cloud, GitHub (`gh`), GitLab, Jira, Vercel, Netlify, Heroku,
 Cloudflare, Kubernetes, Terraform, Microsoft Graph, Exchange Online, publishing to npm, a container registry, NuGet,

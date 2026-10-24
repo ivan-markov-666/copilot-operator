@@ -16,7 +16,26 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { landed } from './acceptance.js';
-import { Blocker, Css, Label, Model, ModelPicking, OperatorModelLocators, Rename, Sidebar, Signal, Surface, TestId, Upload, Url } from './locators.js';
+import {
+  Blocker,
+  Css,
+  fillLocator,
+  Label,
+  Model,
+  ModelPicking,
+  pageQuery,
+  playwrightSelector,
+  Rename,
+  resolvePickerLocators,
+  Sidebar,
+  Signal,
+  Surface,
+  TestId,
+  Upload,
+  Url,
+  type PickerLocatorKey,
+  type PickerLocators,
+} from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { chatNameForms, parseChatId } from './chatSession.js';
 
@@ -58,8 +77,13 @@ export type TransportOptions = {
   modelSettleMs?: number;
   modelBeforePressMs?: number;
   modelPollMs?: number;
-  /** A numbered picture and the menu's HTML at each step of choosing a model (the diagnosis command sets it). */
+  /**
+   * A numbered picture and the menu's HTML at each step of choosing a model: the diagnosis command sets it, and
+   * Settings' `copilot.pickerSteps` (2026-10-24).
+   */
   modelStepShots?: boolean;
+  /** The model menu's locators saved in Settings (`copilot.pickerLocators`); each one left out is the default. */
+  pickerLocators?: Partial<Record<PickerLocatorKey, string>>;
   modelAppearMs?: number;
   modelAttempts?: number;
   /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
@@ -179,25 +203,33 @@ type MenuRow = {
  * A group's name for the list. Its row reads the group ("GPT") until a model in it is chosen, and then
  * that model's name; then the name comes from its test id (`gptSubMenuModelTrigger-OpenAI` → "GPT").
  */
-/** One of the operator's locators for a model: the model's own, and its group's when it is in one. */
-type OperatorTarget = { model: string; xpath: string; group?: { name: string; xpath: string } };
+/**
+ * The operator's locators for one model: its own, and its provider's when it is in one; each with what it is, for
+ * the record of what was tried.
+ */
+type OperatorTarget = {
+  model: string;
+  locator: string;
+  kind: 'model' | 'providerModel';
+  group?: { name: string; locator: string; at: NonNullable<ModelLocator['group']> };
+};
 
 /**
- * Which of the operator's locators a chosen model is. Groups first, by the word the locator is written
- * with ("Sonnet", "Opus", "GPT-5.6 Sol Think deeper") contained in the name, longest first; then the
- * models at the top, by their name ("Think deeper" is in "GPT-5.6 Sol Think deeper" too, so they come
- * last). Null for a model the operator gave no locator for.
+ * The operator's locators for a model, from the templates in force and where the list read from the page found it
+ * (operator, 2026-10-24): a model of the main menu by the template for those; one in a provider's menu by the
+ * provider's template, with the provider's name as the list read it, and then the template for a model there. Null
+ * when the model's place is not known: the list is read first (see `chooseModel`).
  */
-export function operatorTargetFor(name: string): OperatorTarget | null {
-  const n = ` ${normModel(name)} `;
-  const has = (word: string): boolean => n.includes(` ${normModel(word)} `);
-  const inGroups = OperatorModelLocators.groups
-    .flatMap((g) => g.models.map((m) => ({ model: m.model, xpath: m.xpath, group: { name: g.group, xpath: g.xpath } })))
-    .sort((a, b) => b.model.length - a.model.length);
-  const grouped = inGroups.find((m) => has(m.model));
-  if (grouped) return grouped;
-  const top = OperatorModelLocators.top.find((m) => sameModel(m.model, name));
-  return top ? { model: top.model, xpath: top.xpath } : null;
+export function templateTarget(name: string, place: ModelLocator | undefined, locators: PickerLocators): OperatorTarget | null {
+  if (!place) return null;
+  if (!place.group) return { model: name, locator: fillLocator(locators.model, { model: name }), kind: 'model' };
+  const provider = place.group.name;
+  return {
+    model: name,
+    locator: fillLocator(locators.providerModel, { model: name, provider }),
+    kind: 'providerModel',
+    group: { name: provider, locator: fillLocator(locators.provider, { provider }), at: place.group },
+  };
 }
 
 /** The second line of a group's row: its vendor ("OpenAI", "Anthropic"). */
@@ -392,8 +424,24 @@ export class CopilotTransport {
   private closing = false;
   /** The window went away without `close`: its X pressed, or Edge ended (2026-10-19). */
   private gone = false;
+  /** The model menu's locators in force: Settings' own, else the defaults (see `resolvePickerLocators`). */
+  private readonly locators: PickerLocators;
+  /** Why a locator saved in Settings is not used; said once, at the first choice or reading of the models. */
+  private locatorProblems: string[];
+  /** Whether the rows' locator has been said not to work in the page (see `readMenuRows`). */
+  private rowsLocatorFailed = false;
 
-  constructor(private readonly opts: TransportOptions) {}
+  constructor(private readonly opts: TransportOptions) {
+    const { locators, problems } = resolvePickerLocators(opts.pickerLocators);
+    this.locators = locators;
+    this.locatorProblems = problems;
+  }
+
+  /** Says, once, which locators saved in Settings could not be used and why. */
+  private sayLocatorProblems(): void {
+    for (const problem of this.locatorProblems) this.emit('model-locator-not-used', { problem });
+    this.locatorProblems = [];
+  }
 
   /** A pause of the model picker that ends early, with `StoppedByOperator`, once the run is stopped. */
   private async hold(ms: number): Promise<void> {
@@ -1044,9 +1092,9 @@ Current URL: ${url}`);
     return text.length > 0 ? text.split('\n')[0].trim() : label.replace(Model.buttonLabel, '').trim() || null;
   }
 
+  /** The picker button by the locator in force (Settings' own since 2026-10-24, else `button#gptModeSwitcher`). */
   private modelButton(): Locator {
-    const byId = this.p.locator(Model.button);
-    return byId;
+    return this.p.locator(playwrightSelector(this.locators.button));
   }
 
   /**
@@ -1086,9 +1134,10 @@ Current URL: ${url}`);
    * model, so the run could not choose it and went on Auto (2026-10-05).
    */
   async listModels(): Promise<{ options: ModelOption[]; current: string | null; note?: string }> {
+    this.sayLocatorProblems();
     const button = await this.resolveModelButton();
     if (!button) {
-      return { options: [], current: null, note: 'This chat does not show a model picker, so there is nothing to choose.' };
+      return { options: [], current: null, note: `This chat does not show a model picker, so there is nothing to choose (the picker button's locator: ${this.locators.button}).` };
     }
 
     const current = await this.currentModel();
@@ -1103,6 +1152,9 @@ Current URL: ${url}`);
     const top = this.topRows(shown);
     await this.captureMenu('top', shown);
     await this.closeMenu();
+    if (shown.length === 0) {
+      return { options: [], current, note: `The model menu opened, and its rows' locator found nothing in it (${this.locators.rows}). Settings → "The model menu's locators" has it; the menu is kept as models-top.html/.png.` };
+    }
 
     const strip = (r: MenuRow): ModelOption => ({ name: r.name, raw: r.raw, selected: r.selected, disabled: r.disabled, role: r.role });
     const options: ModelOption[] = top.filter((r) => !r.opensSubmenu).map((r) => ({ ...strip(r), locator: { role: r.role, index: r.index } }));
@@ -1166,18 +1218,34 @@ Current URL: ${url}`);
    * the row that opens it) and its place there (`index`), so the same row can be found again without
    * going by its text. Rows are not merged by name: the group row and the model chosen in it carry the
    * same name once that model is in force.
+   *
+   * The rows are what the rows' locator in force finds (Settings' own since 2026-10-24), an XPath or a CSS selector.
    */
   private async readMenuRows(): Promise<MenuRow[]> {
-    return await this.p.evaluate(
-      ({ roles, selectedAttrs, submenuAttrs }) => {
+    const read = await this.p.evaluate(
+      ({ query, selectedAttrs, submenuAttrs }) => {
         const out: Array<{ name: string; raw: string; selected: boolean; disabled: boolean; role: string; opensSubmenu: boolean; index: number; menuOf: string; testId: string; elId: string }> = [];
-        const selector = roles.map((r) => `[role="${r}"]`).join(',');
+        let found: Element[];
+        try {
+          if (query.xpath) {
+            const snap = document.evaluate(query.text, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+            found = [];
+            for (let i = 0; i < snap.snapshotLength; i += 1) {
+              const node = snap.snapshotItem(i);
+              if (node instanceof Element) found.push(node);
+            }
+          } else {
+            found = Array.from(document.querySelectorAll(query.text));
+          }
+        } catch (e) {
+          return { rows: out, error: String((e as Error)?.message ?? e) };
+        }
         const counted = new Map<Element | null, number>();
         // A menu's key: what labels it (a submenu is labelled by the row that opens it), else a mark put
         // on it here, so a menu with no label is told apart from the others all the same.
         // (Written inline: a named function in here is wrapped by the bundler in a helper the page does not have.)
         const w = window as unknown as { __copMenus?: number };
-        for (const el of Array.from(document.querySelectorAll(selector))) {
+        for (const el of found) {
           // A menu that is closed is still in the DOM, so visibility is what separates
           // what is on screen from what was on screen a moment ago.
           if ((el as HTMLElement).getClientRects().length === 0) continue;
@@ -1213,20 +1281,49 @@ Current URL: ${url}`);
             elId: el.id ?? '',
           });
         }
-        return out;
+        return { rows: out, error: '' };
       },
       {
-        roles: [...Model.optionRoles],
+        query: pageQuery(this.locators.rows),
         selectedAttrs: [...Model.selectedAttributes],
         submenuAttrs: [...Model.submenuAttributes],
       },
     );
+    // Said once: the menu is read many times a choice (whether it is still open, among them).
+    if (read.error && !this.rowsLocatorFailed) {
+      this.rowsLocatorFailed = true;
+      this.emit('model-rows-locator-failed', { locator: this.locators.rows, error: read.error });
+    }
+    return read.rows;
   }
 
   /** The rows of the top menu, read while only it is open: the menu its first row is in. */
   private topRows(rows: MenuRow[]): MenuRow[] {
     const key = rows[0]?.menuOf;
     return key === undefined ? [] : rows.filter((r) => r.menuOf === key);
+  }
+
+  /**
+   * A group's row among the rows read: by its test id; else by the vendor its row names ("OpenAI"), which a choice
+   * does not change; else by its text, as it reads or contains; else by its place.
+   */
+  private groupRowIn(shown: MenuRow[], group: { testId?: string; index: number; name: string; vendor?: string }): MenuRow | undefined {
+    const groups = this.topRows(shown).filter((r) => r.opensSubmenu);
+    return (
+      (group.testId ? groups.find((r) => r.testId === group.testId) : undefined) ??
+      (group.vendor ? groups.find((r) => vendorOf(r) && sameModel(vendorOf(r), group.vendor)) : undefined) ??
+      groups.find((r) => sameModel(r.name, group.name)) ??
+      groups.find((r) => containsModel(r.raw, group.name)) ??
+      groups.find((r) => r.index === group.index)
+    );
+  }
+
+  /** A group's row in the open menu, found where the list read it (see `groupRowIn`), as an element to press. */
+  private async groupRowAt(group: { testId?: string; index: number; name: string; vendor?: string }): Promise<Locator | null> {
+    const row = this.groupRowIn(await this.readMenuRows().catch(() => []), group);
+    if (!row) return null;
+    const el = this.p.locator(`[data-cop-row="${row.menuOf}#${row.index}"]`).first();
+    return (await el.isVisible().catch(() => false)) ? el : null;
   }
 
   /**
@@ -1237,19 +1334,12 @@ Current URL: ${url}`);
    */
   private async openGroup(group: { testId?: string; index: number; name: string; vendor?: string }): Promise<string | null> {
     const shown = await this.readMenuRows();
-    const groups = this.topRows(shown).filter((r) => r.opensSubmenu);
-    // By its test id; else by the vendor its row names ("OpenAI"), which a choice does not change; else by
-    // its text, as it reads or contains; else by its place.
-    const row =
-      (group.testId ? groups.find((r) => r.testId === group.testId) : undefined) ??
-      (group.vendor ? groups.find((r) => vendorOf(r) && sameModel(vendorOf(r), group.vendor)) : undefined) ??
-      groups.find((r) => sameModel(r.name, group.name)) ??
-      groups.find((r) => containsModel(r.raw, group.name)) ??
-      groups.find((r) => r.index === group.index);
+    const row = this.groupRowIn(shown, group);
     if (!row) return null;
     const trigger = this.p.locator(`[data-cop-row="${row.menuOf}#${row.index}"]`).first();
-    // Submenus already on screen are not this group's, whatever opened them.
+    // Submenus already on screen are not this group's, whatever opened them; nor is one labelled by another group's row.
     const before = new Set(shown.filter((r) => r.menuOf !== row.menuOf).map((r) => r.menuOf));
+    const others = new Set(this.topRows(shown).filter((r) => r.opensSubmenu && r.elId && r.elId !== row.elId).map((r) => r.elId));
     const opened = async (ms: number): Promise<string | null> => {
       const started = Date.now();
       do {
@@ -1257,13 +1347,20 @@ Current URL: ${url}`);
         // The menu labelled by this group's row is its own; a build that labels none gets the one that
         // appeared, never one that was already there (2026-10-05: Claude's was taken for GPT's).
         if (row.elId && rows.some((r) => r.menuOf === row.elId)) return row.elId;
-        const fresh = rows.find((r) => !before.has(r.menuOf) && r.menuOf !== row.elId);
+        const fresh = rows.find((r) => !before.has(r.menuOf) && r.menuOf !== row.elId && !others.has(r.menuOf));
         if (fresh && (!row.elId || Date.now() - started > 1_500)) return fresh.menuOf;
         await this.hold(200);
       } while (Date.now() - started < ms);
       return null;
     };
-    // Hover is how these open; a click is the fallback for a build that wants one.
+    /*
+     * A click sent to the element itself first, as a choice opens a group (2026-10-06): the mouse goes to coordinates,
+     * and on a menu that moves while it opens, a hover or a click meant for "GPT" opened "Claude" — read so, the list
+     * had no GPT models, and a run had nowhere to look for them (2026-10-24). Then hover, then the mouse.
+     */
+    await trigger.evaluate((el) => (el as HTMLElement).click(), undefined, { timeout: 3_000 }).catch(() => undefined);
+    const clicked = await opened(4_000);
+    if (clicked) return clicked;
     await trigger.hover({ timeout: 3_000 }).catch(() => undefined);
     const hovered = await opened(4_000);
     if (hovered) return hovered;
@@ -1283,11 +1380,12 @@ Current URL: ${url}`);
   }
 
   /**
-   * The visible row an XPath of `Model` finds for a text, waited for: the one whose own first line is
-   * the text when several contain it ("Think deeper" is in "GPT-5.6 Sol Think deeper" too), else the first.
+   * The visible row a locator finds for a text, waited for — an XPath of `Model`, or the operator's (an XPath or a CSS
+   * selector): the one whose own first line is the text when several contain it ("Think deeper" is in "GPT-5.6 Sol
+   * Think deeper" too), else the first.
    */
-  private async rowByXPath(xpath: string, text: string, waitMs: number): Promise<Locator | null> {
-    const all = this.p.locator(`xpath=${xpath}`);
+  private async rowBy(locator: string, text: string, waitMs: number): Promise<Locator | null> {
+    const all = this.p.locator(playwrightSelector(locator));
     const deadline = Date.now() + waitMs;
     do {
       let first: Locator | null = null;
@@ -1315,18 +1413,18 @@ Current URL: ${url}`);
     await button.click();
     if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
     if (group) {
-      const trigger = await this.rowByXPath(`${Model.groupRowXPath(group)} | ${Model.groupRowByAllText(group)}`, group, 4_000);
+      const trigger = await this.rowBy(`${Model.groupRowXPath(group)} | ${Model.groupRowByAllText(group)}`, group, 4_000);
       if (!trigger) return { problem: `the picker has no "${group}" group.` };
       // Hover is how these open; a click on it is the fallback.
       await trigger.hover({ timeout: 3_000 }).catch(() => undefined);
-      let row = await this.rowByXPath(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
+      let row = await this.rowBy(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
       if (!row) {
         await this.press(trigger).catch(() => undefined);
-        row = await this.rowByXPath(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
+        row = await this.rowBy(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
       }
       return row ? { row } : { problem: `"${name}" is not in the "${group}" group.` };
     }
-    const row = await this.rowByXPath(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
+    const row = await this.rowBy(`${Model.modelRowXPath(name)} | ${Model.modelRowByAllText(name)}`, name, 4_000);
     return row ? { row } : { problem: `"${name}" is not in the picker.` };
   }
 
@@ -1377,12 +1475,26 @@ Current URL: ${url}`);
   }
 
   /**
-   * Chooses a model by the operator's own locators (`OperatorModelLocators`): the picker button, then the
-   * model; for a model in a group, the group first, then — once its models are on screen — the model. The
-   * choice counts only when the model's row is marked chosen, read again the same way.
+   * Chooses a model by the operator's own locators (`templateTarget`): the picker button, then the model; for a model
+   * in a provider's menu, the provider first, then — once its models are on screen — the model. The choice counts
+   * only when the model's row is marked chosen, read again the same way.
+   *
+   * A locator that finds nothing at all, after the whole wait of the first attempt, is not tried five times more
+   * (2026-10-24): it is the locator, not the page being slow, and the ways that do not need it are tried at once. A
+   * provider's row its locator does not find is looked for where the list read it (its test id, its vendor, its
+   * place): its row reads the model chosen in it, once one is (2026-10-05), and its name is then not on it.
    */
   private async chooseByOperatorLocators(name: string, target: OperatorTarget): Promise<ModelChoice> {
     const before = await this.currentModel();
+    // What was looked for, for the record kept when nothing worked (models-select-failed.json).
+    const tried: Array<{ what: string; locator: string }> = [
+      ...(target.group ? [{ what: 'provider', locator: target.group.locator }] : []),
+      { what: target.kind, locator: target.locator },
+    ];
+    const keepFailure = async (): Promise<void> => {
+      const found = await Promise.all(tried.map(async (x) => ({ ...x, found: await this.p.locator(playwrightSelector(x.locator)).count().catch((e: unknown) => `not usable: ${(e as Error).message.split('\n')[0]}`) })));
+      await this.captureMenu('select-failed', await this.readMenuRows().catch(() => []), { asked: name, locators: found }).catch(() => undefined);
+    };
     const textOf = async (el: Locator): Promise<string> => (((await el.innerText().catch(() => '')) ?? '').split('\n')[0] ?? '').trim();
     // A fixed pause after every opening and every press (see `ModelPicking`); the checks give it less.
     const settle = (): Promise<void> => this.hold(this.opts.modelSettleMs ?? ModelPicking.settleMs);
@@ -1421,7 +1533,17 @@ Current URL: ${url}`);
       return el;
     };
     const visible = async (el: Locator | null): Promise<Locator | null> => (el && (await el.isVisible().catch(() => false)) ? el : null);
-    const reach = async (): Promise<{ row: Locator } | { problem: string }> => {
+    /** The provider's row: by its locator, else where the list read it (see above). */
+    const providerRow = async (): Promise<Locator | null> => {
+      const g = target.group!;
+      const byLocator = await this.rowBy(g.locator, g.name, 0);
+      if (byLocator) return byLocator;
+      const atPlace = await this.groupRowAt(g.at);
+      if (atPlace) this.emit('model-step', { step: 'provider found where the list read it, not by its locator', provider: g.name, locator: g.locator });
+      return atPlace;
+    };
+    /** `missing`: what was looked for first was never there, whatever the wait — the locator finds nothing. */
+    const reach = async (): Promise<{ row: Locator } | { problem: string; missing?: boolean }> => {
       const button = await waitThenFind('the picker button', async () => visible(await this.resolveModelButton(1_000)));
       if (!button) return { problem: 'This chat does not show a model picker.' };
       await button.click({ timeout: 5_000 }).catch(() => undefined);
@@ -1429,8 +1551,11 @@ Current URL: ${url}`);
       if (!(await this.waitForPopup())) return { problem: 'The model picker did not open.' };
       this.emit('model-step', { step: 'picker opened' });
       if (target.group) {
-        const group = await waitThenFind(`the "${target.group.name}" group`, () => this.rowByXPath(target.group!.xpath, target.group!.name, 0));
-        if (!group) return { problem: `the "${target.group.name}" row was not found by ${target.group.xpath}` };
+        const group = await waitThenFind(`the "${target.group.name}" provider`, providerRow);
+        if (!group) {
+          await keepFailure();
+          return { problem: `the "${target.group.name}" row was not found by the provider's locator (${target.group.locator}), nor where the list read it; the menu is kept as models-select-failed.html/.png`, missing: true };
+        }
         /*
          * Opened without the mouse first: a mouse click goes to coordinates, and the picker moves while it
          * opens, so on the work machine a press meant for "GPT" (now second) opened "Claude" (now first)
@@ -1446,21 +1571,28 @@ Current URL: ${url}`);
         for (const [how, act] of ways) {
           await act().catch(() => undefined);
           await settle();
-          const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, name, 0));
+          const row = await waitThenFind(`"${target.model}"`, () => this.rowBy(target.locator, name, 0));
           if (row) {
             this.emit('model-step', { step: 'group opened', how, model: await textOf(row) });
             return { row };
           }
+          // Its menu is open and the model's locator finds nothing in it, after the whole wait: the locator's doing.
+          const shownNow = await this.readMenuRows().catch(() => []);
+          if (shownNow.some((r) => r.menuOf !== shownNow[0]?.menuOf)) {
+            this.emit('model-step', { step: "provider's menu open, the model's locator finds nothing in it", how, locator: target.locator });
+            await keepFailure();
+            return { problem: `"${target.model}" was not found in the "${target.group.name}" menu by the locator for a model in a provider's menu (${target.locator}); the menu is kept as models-select-failed.html/.png`, missing: true };
+          }
           this.emit('model-step', { step: 'group not opened', how });
           await this.hold(pause);
         }
-        await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
-        return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (${target.xpath}); the menu is kept as models-select-failed.html/.png` };
+        await keepFailure();
+        return { problem: `"${target.model}" did not appear after opening "${target.group.name}" every way (the locator for a model in a provider's menu: ${target.locator}); the menu is kept as models-select-failed.html/.png` };
       }
-      const row = await waitThenFind(`"${target.model}"`, () => this.rowByXPath(target.xpath, name, 0));
+      const row = await waitThenFind(`"${target.model}"`, () => this.rowBy(target.locator, name, 0));
       if (!row) {
-        await this.captureMenu('select-failed', await this.readMenuRows().catch(() => [])).catch(() => undefined);
-        return { problem: `"${target.model}" was not found by ${target.xpath}; the menu is kept as models-select-failed.html/.png` };
+        await keepFailure();
+        return { problem: `"${target.model}" was not found by the locator for a model of the main menu (${target.locator}); the menu is kept as models-select-failed.html/.png`, missing: true };
       }
       return { row };
     };
@@ -1477,7 +1609,7 @@ Current URL: ${url}`);
       await button.click({ timeout: 5_000 }).catch(() => undefined);
       await settle();
       if (!(await this.waitForPopup())) return false;
-      const group = await waitThenFind(`the "${target.group.name}" group`, () => this.rowByXPath(target.group!.xpath, target.group!.name, 0));
+      const group = await waitThenFind(`the "${target.group.name}" provider`, providerRow);
       if (!group) {
         await this.closeMenu();
         return false;
@@ -1486,12 +1618,13 @@ Current URL: ${url}`);
       await this.p.keyboard.press('ArrowRight');
       this.emit('model-step', { step: 'group opened by the keyboard (ArrowRight)', attempt });
       await settle();
+      // A model's row, which is a menuitemradio or, since 2026-10-23, a menuitem that opens nothing (`Model.modelRowCss`).
       const focused = (): Promise<{ text: string; radio: boolean }> =>
-        this.p.evaluate(() => {
+        this.p.evaluate((modelRow) => {
           const el = document.activeElement as HTMLElement | null;
           const row = el?.closest('[role="menuitemradio"],[role="menuitem"]') as HTMLElement | null;
-          return { text: (row?.innerText ?? '').trim(), radio: !!el?.closest('[role="menuitemradio"]') };
-        });
+          return { text: (row?.innerText ?? '').trim(), radio: !!el?.closest(modelRow) };
+        }, Model.modelRowCss);
       for (let presses = 0; presses < 12; presses += 1) {
         const now = await focused();
         const line = now.text.split('\n')[0]?.trim() ?? '';
@@ -1528,6 +1661,11 @@ Current URL: ${url}`);
         this.emit('model-step', { step: 'not reached', attempt, why });
         await this.closeMenu();
         await settle();
+        // The locator finds nothing: the other ways are tried now, not after five more attempts with it.
+        if (found.missing) {
+          this.emit('model-step', { step: 'the locator finds nothing; the other ways now', attempt });
+          return { ok: false, current: await this.currentModel(), reason: why };
+        }
         /*
          * The keyboard only when the clicks did not get there. Tried first on 2026-10-06, the live page did
          * not move the focus into the submenu (2026-10-07: "model not reached by the keyboard", 6.5 s lost),
@@ -1551,8 +1689,9 @@ Current URL: ${url}`);
       }
       // The names in the model's own menu, read before the press closes it: what a shortened button may mean.
       const siblings: string[] = await found.row
-        .evaluate((el) =>
-          Array.from(el.closest('[role="menu"],[role="listbox"]')?.querySelectorAll('[role="menuitemradio"]') ?? []).map((r) => ((r as HTMLElement).innerText || '').split('\n')[0]!.trim()),
+        .evaluate((el, modelRow) =>
+          Array.from(el.closest('[role="menu"],[role="listbox"]')?.querySelectorAll(modelRow) ?? []).map((r) => ((r as HTMLElement).innerText || '').split('\n')[0]!.trim()),
+          Model.modelRowCss,
         )
         .catch(() => [] as string[]);
       // On the element itself, for the same reason as the group; the mouse only when that does nothing.
@@ -1727,23 +1866,37 @@ Current URL: ${url}`);
       return { ok: true, current: name, by: 'already' };
     }
 
-    // The operator's own locators first, for the models they cover (see `OperatorModelLocators`).
-    const target = operatorTargetFor(name);
+    this.sayLocatorProblems();
+    /*
+     * The operator's own locators first (2026-10-24): the templates in force, filled for this model from where the
+     * list read it — the saved list's place, else the place a fresh reading finds — each place tried once.
+     */
+    const tried = new Set<string>();
+    const byTemplates = async (model: string, place: ModelLocator): Promise<ModelChoice | null> => {
+      const target = templateTarget(model, place, this.locators);
+      if (!target) return null;
+      const key = `${target.group?.locator ?? ''}|${target.locator}`;
+      if (tried.has(key)) return null;
+      tried.add(key);
+      return await this.chooseByOperatorLocators(model, target);
+    };
     let first: ModelChoice | null = null;
-    if (target) {
-      first = await this.chooseByOperatorLocators(name, target);
-      if (first.ok) return first;
-    }
     if (opts.locator) {
+      first = await byTemplates(name, opts.locator);
+      if (first?.ok) return first;
       const second = await this.chooseAt(name, opts.locator);
       if (second.ok) return { ...second, ...(first?.reason ? { locatorMiss: first.reason } : {}) };
       first = first ?? second;
     }
 
-    // The line-up as the page shows it now, each model with its place in it.
-    const read = await this.listModels().catch(() => null);
+    // The line-up as the page shows it now, each model with its place in it. A Stop pressed while it is read stops.
+    const read = await this.listModels().catch((e: unknown) => {
+      if (e instanceof StoppedByOperator) throw e;
+      return null;
+    });
     const options = read?.options ?? [];
     const match = options.find((o) => sameModel(o.name, name)) ?? pageModelFor(name, options);
+    const which = (): string => (tried.size > 0 ? "by the operator's locators" : 'at the saved place');
     if (!match?.locator) {
       const offered = options.filter((o) => !o.disabled).map((o) => o.name);
       return {
@@ -1751,15 +1904,19 @@ Current URL: ${url}`);
         current: await this.currentModel(),
         reason:
           `The picker does not offer "${name}" any more${offered.length > 0 ? `; it offers ${offered.map((o) => `"${o}"`).join(', ')}` : ''}.` +
-          (first?.reason ? ` (${target ? "By the operator's locators" : 'At the place the list was read'}: ${first.reason})` : ''),
+          (first?.reason ? ` (${which().replace(/^./, (c) => c.toUpperCase())}: ${first.reason})` : ''),
         ...(options.length > 0 ? { options } : {}),
       };
     }
+    // Where the list has just read it: its provider and its name as the page shows them now.
+    const fresh = await byTemplates(match.name, match.locator);
+    if (fresh?.ok) return { ...fresh, ...(!sameModel(match.name, name) ? { matched: match.name } : {}), ...(first?.reason ? { locatorMiss: first.reason } : {}), options };
+    if (fresh && !first) first = fresh;
     const chosen = await this.chooseAt(match.name, match.locator);
     return {
       ...chosen,
       // When both ways failed, why the operator's locators did is said too: that is the one to fix.
-      ...(!chosen.ok && first?.reason ? { reason: `${chosen.reason ?? 'not chosen'} (${target ? "by the operator's locators" : 'at the saved place'}: ${first.reason})` } : {}),
+      ...(!chosen.ok && first?.reason ? { reason: `${chosen.reason ?? 'not chosen'} (${which()}: ${first.reason})` } : {}),
       ...(chosen.ok && !sameModel(match.name, name) ? { matched: match.name } : {}),
       ...(chosen.ok ? { by: opts.locator ? 'reread' : 'name' } : {}),
       // Why the saved locator missed, kept: what to look at when the page has changed.

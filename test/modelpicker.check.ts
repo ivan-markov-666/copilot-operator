@@ -13,7 +13,7 @@
  */
 import { chromium, type Page } from 'playwright';
 import { CopilotTransport } from '../src/transport/copilotTransport.js';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Tally } from './support/harness.js';
@@ -160,7 +160,8 @@ try {
     r = await transport.selectModel('GPT 5.6 Think deeper', { locator: deep?.locator });
     t.check('and back again', [r.ok, r.by, r.current], [true, 'locator', 'GPT 5.6 Think deeper']);
     r = await transport.selectModel('Auto', { locator: first.options.find((o) => o.name === 'Auto')?.locator });
-    t.check("and a model of the top menu (by the operator's locators since 2026-10-05)",[r.ok, r.by, r.current, await menuOpen()], [true, 'operator', 'Auto', false]);
+    // A menu not shaped as the work page is: the operator's templates find nothing in it, and its saved place is used.
+    t.check('and a model of the top menu, at its saved place',[r.ok, r.by, r.current, await menuOpen()], [true, 'locator', 'Auto', false]);
 
     // The page moved the models since the list was read: the saved place now holds the other one.
     await page.evaluate(() => {
@@ -244,11 +245,11 @@ try {
     ]);
     const at = (name: string) => list.options.find((o) => o.name === name)?.locator;
     let r = await transport.selectModel('GPT-5.6 Sol Think deeper', { locator: at('GPT-5.6 Sol Think deeper') });
-    t.check('a GPT model chosen at its place, though Claude\'s submenu was open', [r.ok, r.by, r.current, await menuOpen()], [true, 'operator', 'GPT-5.6 Sol Think deeper', false]);
+    t.check('a GPT model chosen at its place, though Claude\'s submenu was open', [r.ok, r.by, r.current, await menuOpen()], [true, 'locator', 'GPT-5.6 Sol Think deeper', false]);
     r = await transport.selectModel('Claude Opus 4.7 Think deeper', { locator: at('Claude Opus 4.7 Think deeper') });
-    t.check('then a Claude one', [r.ok, r.by, r.current], [true, 'operator', 'Claude Opus 4.7 Think deeper']);
+    t.check('then a Claude one', [r.ok, r.by, r.current], [true, 'locator', 'Claude Opus 4.7 Think deeper']);
     r = await transport.selectModel('GPT-5.6 Sol Quick response', { locator: at('GPT-5.6 Sol Quick response') });
-    t.check('and back to GPT, the Claude row now reading the Claude model', [r.ok, r.by, r.current], [true, 'operator', 'GPT-5.6 Sol Quick response']);
+    t.check('and back to GPT, the Claude row now reading the Claude model', [r.ok, r.by, r.current], [true, 'locator', 'GPT-5.6 Sol Quick response']);
     // A name the page splits over two elements: text() sees "Advanced reasoning " only.
     r = await transport.selectModel('Advanced reasoning (Experimental)', { locator: at('Advanced reasoning (Experimental)') });
     t.check('a model whose name is split over two elements', [r.ok, r.by, r.current], [true, 'locator', 'Advanced reasoning (Experimental)']);
@@ -264,40 +265,73 @@ try {
     await page.close();
   }
   /*
-   * The operator's own locators (2026-10-05), on a copy of the work machine's menu: four models at the top,
-   * a Claude group (Sonnet, Opus) and a GPT group, each opened by pressing it; names in nested divs.
+   * The operator's own locators, on a copy of the work machine's menu: four models at the top, a Claude group and a
+   * GPT group, each opened by pressing it; each name in a div two spans down from its row, as on the work page of
+   * 2026-10-24, where the operator's three templates found each row once.
    */
   console.log('\n=== the operator\'s locators, on the work machine\'s menu ===');
   {
-    const { operatorTargetFor } = await import('../src/transport/copilotTransport.js');
+    const { templateTarget } = await import('../src/transport/copilotTransport.js');
+    const { DefaultPickerLocators, fillLocator, pickerLocatorProblem, resolvePickerLocators, playwrightSelector } = await import('../src/transport/locators.js');
     // The button may drop the last word of the name, no more (2026-10-06): "GPT" alone took every GPT model for set.
     const { buttonShows } = await import('../src/transport/modelMatch.js');
+    /** Where each model is, read from the page once, as Settings' list gives a run its places. */
+    const placesOf = async (tr: CopilotTransport) => {
+      const list = await tr.listModels();
+      return (n: string) => list.options.find((o) => o.name === n)?.locator;
+    };
     t.check('what the picker button may show for "GPT-5.6 Sol Think deeper"', [
       buttonShows('GPT-5.6 Sol Think deeper', 'GPT-5.6 Sol Think deeper'), buttonShows('GPT-5.6 Sol Think', 'GPT-5.6 Sol Think deeper'),
       buttonShows('GPT-5.6 Sol', 'GPT-5.6 Sol Think deeper'), buttonShows('GPT', 'GPT-5.6 Sol Think deeper'), buttonShows('Think deeper', 'GPT-5.6 Sol Think deeper'),
     ], [true, true, false, false, false]);
-    const which = (n: string): string | null => {
-      const x = operatorTargetFor(n);
-      return x ? `${x.group ? `${x.group.name} > ` : ''}${x.model}` : null;
-    };
-    t.check('which locator a chosen model is', [
-      which('Auto'), which('Think deeper'), which('Advanced reasoning (Experimental)'),
-      which('Claude Sonnet 4.6'), which('Claude Opus 4.7 Think deeper'),
-      which('GPT-5.6 Sol Think deeper'), which('GPT 5.6 Sol Quick response'), which('Some other model'),
-    ], [
-      'Auto', 'Think deeper', 'Advanced reasoning (Experimental)',
-      'Claude > Sonnet', 'Claude > Opus',
-      'GPT > GPT-5.6 Sol Think deeper', 'GPT > GPT-5.6 Sol Quick response', null,
+    /*
+     * The operator's templates (2026-10-24), filled with the names the list read: no model and no provider is
+     * written in the code, so any the page offers is found the same way.
+     */
+    t.check('the defaults are the operator\'s three templates', [DefaultPickerLocators.model, DefaultPickerLocators.provider, DefaultPickerLocators.providerModel], [
+      "//div[text()='{$model_name}']/parent::span/parent::span/parent::div",
+      "//div[text()='{$provider_name}']/parent::span/parent::span/parent::div[contains(@aria-haspopup, 'menu')]",
+      "//div[text()='{$model_name}']/parent::span/parent::span/parent::div[not(contains(@aria-haspopup, 'menu'))]",
     ]);
+    const target = (n: string, group?: string) => {
+      const x = templateTarget(n, { role: 'menuitem', index: 0, ...(group ? { group: { index: 4, name: group } } : {}) }, DefaultPickerLocators);
+      return x ? [x.kind, x.group?.locator ?? null, x.locator] : null;
+    };
+    t.check('a model of the main menu: its own template, filled', target('Think deeper'), ['model', null, "//div[text()='Think deeper']/parent::span/parent::span/parent::div"]);
+    t.check('a model of a provider: the provider\'s, then the model\'s, both filled', target('Opus 5.5', 'Claude'), [
+      'providerModel',
+      "//div[text()='Claude']/parent::span/parent::span/parent::div[contains(@aria-haspopup, 'menu')]",
+      "//div[text()='Opus 5.5']/parent::span/parent::span/parent::div[not(contains(@aria-haspopup, 'menu'))]",
+    ]);
+    t.check('any provider, not only Claude and GPT', target('Gemini 3 Pro', 'Gemini')?.[1], "//div[text()='Gemini']/parent::span/parent::span/parent::div[contains(@aria-haspopup, 'menu')]");
+    t.check('a model whose place is not known yet has no target: the list is read first', templateTarget('Think deeper', undefined, DefaultPickerLocators), null);
+    t.check('a name with a quote in it does not break the locator open', [
+      fillLocator("//div[text()='{$model_name}']", { model: "Bob's model" }),
+      fillLocator("//div[text()='{$model_name}']", { model: 'say "hi" it\'s' }),
+      fillLocator('//div[text()="{$provider_name}"]', { provider: 'A "B"' }),
+    ], [`//div[text()="Bob's model"]`, `//div[text()=concat('say "hi" it', "'", 's')]`, `//div[text()='A "B"']`]);
+    t.check('what is wrong with a locator, said', [
+      pickerLocatorProblem('model', "//div[text()='Think deeper']/parent::span"),
+      pickerLocatorProblem('provider', "//div[text()='{$model_name}']"),
+      pickerLocatorProblem('model', "//div[text()='{$model_name}']/parent:span/parent:span/parent:div"),
+      pickerLocatorProblem('button', 'button#gptModeSwitcher'),
+      pickerLocatorProblem('providerModel', DefaultPickerLocators.providerModel),
+    ], ['it has no {$model_name}: put it where the name goes', 'it has no {$provider_name}: put it where the name goes', '"parent:" needs two colons: parent::', null, null]);
+    const resolved = resolvePickerLocators({ model: "//b[text()='{$model_name}']", provider: '//b[text()="no placeholder"]', rows: '  ', button: '#other' });
+    t.check("Settings' own where usable, the default where not, and why", [resolved.locators.model, resolved.locators.provider, resolved.locators.rows, resolved.locators.button, resolved.problems], [
+      "//b[text()='{$model_name}']", DefaultPickerLocators.provider, DefaultPickerLocators.rows, '#other',
+      ['the provider locator in Settings is not used, it has no {$provider_name}: put it where the name goes'],
+    ]);
+    t.check('an XPath or a CSS selector, as written', [playwrightSelector('//div'), playwrightSelector('(//div)[2]'), playwrightSelector('button#x'), playwrightSelector('css=#y')], ['xpath=//div', 'xpath=(//div)[2]', 'css=button#x', 'css=#y']);
 
-    const row = (name: string, desc = ''): string => `<div role="menuitemradio" data-name="${name}" aria-checked="false"><div class="c"><div>${name}</div>${desc ? `<div>${desc}</div>` : ''}</div></div>`;
+    const row = (name: string, desc = ''): string => `<div role="menuitemradio" data-name="${name}" aria-checked="false"><span class="c"><span class="n"><div>${name}</div></span>${desc ? `<div>${desc}</div>` : ''}</span></div>`;
     const work = String.raw`<!doctype html><html><body>
 <button id="gptModeSwitcher" aria-label="Model Selector" aria-expanded="false"><span id="shown">Auto</span></button>
 <div id="m365-chat-editor-target-element" contenteditable="true" style="margin-top:200px;min-height:40px">composer</div>
 <div id="menu" role="menu" aria-labelledby="gptModeSwitcher" style="display:none">
   ${row('Auto', 'Decides how long to think')}${row('Quick response', 'Answers right away')}${row('Think deeper', 'Think longer')}${row('Advanced reasoning (Experimental)', 'Slow')}
-  <div role="menuitem" id="claude" aria-haspopup="menu"><div class="c"><div>Claude</div><div>Anthropic</div></div></div>
-  <div role="menuitem" id="gpt" aria-haspopup="menu"><div class="c"><div>GPT</div><div>OpenAI</div></div></div>
+  <div role="menuitem" id="claude" aria-haspopup="menu"><span class="c"><span class="n"><div>Claude</div></span><div>Anthropic</div></span></div>
+  <div role="menuitem" id="gpt" aria-haspopup="menu"><span class="c"><span class="n"><div>GPT</div></span><div>OpenAI</div></span></div>
 </div>
 <div id="sub-claude" role="menu" aria-labelledby="claude" style="display:none">${row('Claude Sonnet 4.6')}${row('Claude Opus 4.7 Think deeper')}</div>
 <div id="sub-gpt" role="menu" aria-labelledby="gpt" style="display:none">${row('GPT-5.6 Sol Quick response')}${row('GPT-5.6 Sol Think deeper')}</div>
@@ -356,20 +390,22 @@ try {
     await page.setContent(work);
     const inForce = async (): Promise<string> => await page.evaluate(() => (window as unknown as { current: () => string }).current());
     const menuOpen = async (): Promise<boolean> => await page.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
+    // Where each model is, as a run has it from the list read in Settings.
+    const at = await placesOf(transport);
     for (const name of ['Claude Sonnet 4.6', 'GPT-5.6 Sol Think deeper', 'Claude Opus 4.7 Think deeper', 'Advanced reasoning (Experimental)', 'GPT-5.6 Sol Quick response', 'Think deeper', 'Quick response', 'Auto']) {
-      const r = await transport.selectModel(name);
+      const r = await transport.selectModel(name, { locator: at(name) });
       t.check(`"${name}": chosen by the operator's locators, and in force`, [r.ok, r.by, await inForce(), await menuOpen()], [true, 'operator', name, false]);
     }
     // Back in a conversation already on its model (2026-10-06): the button is looked at first, and the menu is not opened at all.
     const opensBefore = await page.evaluate(() => (window as unknown as { opens: number }).opens);
     const again = await transport.selectModel('Auto');
     t.check('the model already in force: seen on the button, the menu never opened', [again.ok, again.by, (await page.evaluate(() => (window as unknown as { opens: number }).opens)) - opensBefore], [true, 'already', 0]);
-    await transport.selectModel('GPT-5.6 Sol Think deeper');
+    await transport.selectModel('GPT-5.6 Sol Think deeper', { locator: at('GPT-5.6 Sol Think deeper') });
     const opensGpt = await page.evaluate(() => (window as unknown as { opens: number }).opens);
-    const stay = await transport.selectModel('GPT-5.6 Sol Think deeper');
+    const stay = await transport.selectModel('GPT-5.6 Sol Think deeper', { locator: at('GPT-5.6 Sol Think deeper') });
     // Shortened on the button, which two models of a group can share (2026-10-07): looked at in the menu once, nothing pressed.
     t.check('a grouped model already in force (the button shows it shortened): checked in the menu, not chosen again', [stay.ok, stay.by, (await page.evaluate(() => (window as unknown as { opens: number }).opens)) - opensGpt, await inForce()], [true, 'operator', 1, 'GPT-5.6 Sol Think deeper']);
-    const other = await transport.selectModel('Think deeper');
+    const other = await transport.selectModel('Think deeper', { locator: at('Think deeper') });
     t.check('"Think deeper" is not taken for the GPT model on the button: it is chosen', [other.ok, other.by, await inForce()], [true, 'operator', 'Think deeper']);
     rmSync(transportDir, { recursive: true, force: true });
     await page.close();
@@ -381,8 +417,8 @@ try {
      */
     console.log('\n=== the mouse aimed at "GPT" lands on "Claude" ===');
     const covered = work.replace(
-      '<div role="menuitem" id="claude" aria-haspopup="menu"><div class="c"><div>Claude</div><div>Anthropic</div></div></div>',
-      '<div role="menuitem" id="claude" aria-haspopup="menu" style="position:relative"><div class="c"><div>Claude</div><div>Anthropic</div></div><div style="position:absolute;left:0;right:0;top:100%;height:200px;z-index:5"></div></div>',
+      '<div role="menuitem" id="claude" aria-haspopup="menu"><span class="c"><span class="n"><div>Claude</div></span><div>Anthropic</div></span></div>',
+      '<div role="menuitem" id="claude" aria-haspopup="menu" style="position:relative"><span class="c"><span class="n"><div>Claude</div></span><div>Anthropic</div></span><div style="position:absolute;left:0;right:0;top:100%;height:200px;z-index:5"></div></div>',
     );
     const page2 = await browser.newPage();
     const dir2 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
@@ -390,10 +426,16 @@ try {
     const t2 = new CopilotTransport({ profileDir: '', transportDir: dir2, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3, onEvent: (e, d) => steps.push({ e, d }) });
     (t2 as unknown as { page: Page }).page = page2;
     await page2.setContent(covered);
+    t.truthy('the copy is covered as meant', covered !== work, '');
+    const at2 = await placesOf(t2);
+    // Read with the mouse, GPT's models were Claude's or missing; read with a click on the element, each group's own.
+    t.check('read on it, the list has each group\'s own models', (await t2.listModels()).options.filter((o) => o.group).map((o) => `${o.group} > ${o.name}`), [
+      'Claude > Claude Sonnet 4.6', 'Claude > Claude Opus 4.7 Think deeper', 'GPT > GPT-5.6 Sol Quick response', 'GPT > GPT-5.6 Sol Think deeper',
+    ]);
     const inForce2 = async (): Promise<string> => await page2.evaluate(() => (window as unknown as { current: () => string }).current());
     for (const name of ['GPT-5.6 Sol Think deeper', 'Claude Sonnet 4.6', 'GPT-5.6 Sol Quick response']) {
       steps.length = 0;
-      const r = await t2.selectModel(name);
+      const r = await t2.selectModel(name, { locator: at2(name) });
       t.check(`"${name}": chosen, though the mouse would open Claude`, [r.ok, r.by, await inForce2()], [true, 'operator', name]);
       const how = steps.find((s) => s.e === 'model-selected')?.d?.how ?? steps.find((s) => s.e === 'model-step' && s.d?.step === 'group opened')?.d?.how;
       t.truthy('  its group opened without the mouse (the keyboard, since 2026-10-06), and the record says how', how === 'keyboard' || how === 'click on the element', steps.filter((s) => s.e === 'model-step').map((s) => s.d));
@@ -411,15 +453,16 @@ try {
     const t3 = new CopilotTransport({ profileDir: '', transportDir: dir3, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 4000, modelAttempts: 6, onEvent: (e, d) => steps3.push({ e, d }) });
     (t3 as unknown as { page: Page }).page = page3;
     await page3.setContent(work);
+    const at3 = await placesOf(t3);
     const inForce3 = async (): Promise<string> => await page3.evaluate(() => (window as unknown as { current: () => string }).current());
     await page3.evaluate(() => { (window as unknown as { ignoreClicks: number }).ignoreClicks = 2; });
-    let r3 = await t3.selectModel('GPT-5.6 Sol Think deeper');
+    let r3 = await t3.selectModel('GPT-5.6 Sol Think deeper', { locator: at3('GPT-5.6 Sol Think deeper') });
     const tries = steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length;
     // The clicks first: each attempt spends one ignored press, so the third gets through.
     t.check('two presses ignored: chosen on a later attempt, each attempt on record', [r3.ok, r3.by, await inForce3(), tries], [true, 'operator', 'GPT-5.6 Sol Think deeper', 3]);
     steps3.length = 0;
     await page3.evaluate(() => { (window as unknown as { openDelay: number; keyboardOpens: boolean }).openDelay = 2_000; (window as unknown as { keyboardOpens: boolean }).keyboardOpens = false; });
-    r3 = await t3.selectModel('Claude Opus 4.7 Think deeper');
+    r3 = await t3.selectModel('Claude Opus 4.7 Think deeper', { locator: at3('Claude Opus 4.7 Think deeper') });
     // The operator's rhythm (2026-10-06): not there → wait and look again; there → pause; then the press.
     const rhythm = steps3.filter((x) => x.e === 'model-step').map((x) => String(x.d?.step));
     const waited = rhythm.indexOf('not there yet, waiting');
@@ -430,7 +473,7 @@ try {
     steps3.length = 0;
     await page3.evaluate(() => { (window as unknown as { openDelay: number; ignoreClicks: number }).openDelay = 0; (window as unknown as { ignoreClicks: number }).ignoreClicks = 99; });
     const fullFrom = Date.now();
-    r3 = await t3.selectModel('Quick response');
+    r3 = await t3.selectModel('Quick response', { locator: at3('Quick response') });
     const fullMs = Date.now() - fullFrom;
     t.check('never set: refused after six attempts, saying so', [r3.ok, /not chosen after 6 attempts/.test(r3.reason ?? ''), steps3.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length], [false, true, 6]);
     /*
@@ -441,7 +484,7 @@ try {
     const stop = new AbortController();
     setTimeout(() => stop.abort(), 600);
     const stopFrom = Date.now();
-    r3 = await t3.selectModel('Quick response', { signal: stop.signal });
+    r3 = await t3.selectModel('Quick response', { locator: at3('Quick response'), signal: stop.signal });
     const stopMs = Date.now() - stopFrom;
     const stepsAfterStop = steps3.filter((x) => x.e === 'model-step').map((x) => String(x.d?.step));
     t.check('stopped while choosing: ends with "stopped by the operator"', [r3.ok, r3.reason, stepsAfterStop.at(-1)], [false, 'stopped by the operator', 'stopped by the operator']);
@@ -462,6 +505,7 @@ try {
     const t4 = new CopilotTransport({ profileDir: '', transportDir: dir4, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 300, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 6, onEvent: (e, d) => steps4.push({ e, d }) });
     (t4 as unknown as { page: Page }).page = page4;
     await page4.setContent(work);
+    const at4 = await placesOf(t4);
     // After the first choice in a group, its submenu no longer opens.
     await page4.evaluate(() => {
       const w = window as unknown as { openDelay: number };
@@ -474,7 +518,7 @@ try {
       w.openDelay = 0;
     });
     const started4 = Date.now();
-    const r4 = await t4.selectModel('GPT-5.6 Sol Quick response');
+    const r4 = await t4.selectModel('GPT-5.6 Sol Quick response', { locator: at4('GPT-5.6 Sol Quick response') });
     const took4 = Date.now() - started4;
     const sel = steps4.find((x) => x.e === 'model-selected');
     t.check('chosen at the first attempt, seen on the button, the menu not walked again', [r4.ok, r4.by, sel?.d?.seenOn, steps4.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length], [true, 'operator', 'button', 1]);
@@ -489,11 +533,12 @@ try {
     const t5 = new CopilotTransport({ profileDir: '', transportDir: dir5, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3, onEvent: (e, d) => steps5.push({ e, d }) });
     (t5 as unknown as { page: Page }).page = page5;
     await page5.setContent(work);
+    const at5 = await placesOf(t5);
     await page5.evaluate(() => { (window as unknown as { clickOpens: boolean }).clickOpens = false; });
     const inForce5 = async (): Promise<string> => await page5.evaluate(() => (window as unknown as { current: () => string }).current());
     for (const name of ['GPT-5.6 Sol Think deeper', 'Claude Opus 4.7 Think deeper', 'GPT-5.6 Sol Quick response']) {
       steps5.length = 0;
-      const r5 = await t5.selectModel(name);
+      const r5 = await t5.selectModel(name, { locator: at5(name) });
       // The clicks first (2026-10-07); where only the keyboard opens the group, it is what gets there.
       const opened5 = steps5.find((x) => x.e === 'model-step' && x.d?.step === 'group opened')?.d?.how ?? steps5.find((x) => x.e === 'model-selected')?.d?.how;
       t.check(`"${name}": the group opened by the keyboard, the model chosen`, [r5.ok, await inForce5(), opened5], [true, name, 'keyboard']);
@@ -512,13 +557,156 @@ try {
     const t6 = new CopilotTransport({ profileDir: '', transportDir: dir6, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 3 });
     (t6 as unknown as { page: Page }).page = page6;
     await page6.setContent(claude);
+    const at6 = await placesOf(t6);
     const inForce6 = async (): Promise<string> => await page6.evaluate(() => (window as unknown as { current: () => string }).current());
     for (const name of ['Sonnet 5', 'Sonnet 5.5', 'Opus 5.5', 'Sonnet 5']) {
-      const r6 = await t6.selectModel(name);
+      const r6 = await t6.selectModel(name, { locator: at6(name) });
       t.check(`"${name}": that one, not the other Sonnet`, [r6.ok, await inForce6()], [true, name]);
     }
     rmSync(dir6, { recursive: true, force: true });
     await page6.close();
+
+    /*
+     * The work page of 2026-10-23 (the operator's models-select-failed.json/.html): every row is a `menuitem` —
+     * the models too, which were `menuitemradio` — marked by `aria-checked`, the top ones with test ids of their
+     * own ("gptSubMenuModelTrigger-Magic" is Auto), the groups told apart only by `aria-haspopup`/`aria-expanded`.
+     * Every locator written for `menuitemradio` found nothing, and each run asked the operator to choose by hand.
+     */
+    console.log('\n=== the work menu of 2026-10-23: every row a menuitem ===');
+    const ids: Record<string, string> = { Auto: 'Magic', 'Quick response': 'Chat', 'Think deeper': 'Reasoning', 'Advanced reasoning (Experimental)': 'DeepWork' };
+    let menuitems = claude
+      .replace(row('GPT-5.6 Sol Quick response') + row('GPT-5.6 Sol Think deeper'), row('GPT-5.6 Sol Quick response') + row('GPT-5.6 Sol Think deeper') + row('GPT-6.1 Sol'))
+      .replaceAll('<div role="menuitemradio" data-name=', '<div role="menuitem" tabindex="0" data-name=')
+      .replaceAll('[role=menuitemradio]', '[data-name]')
+      .replaceAll("el.getAttribute('role') === 'menuitemradio'", "el.hasAttribute('data-name')")
+      .replace('<div role="menuitem" id="claude" aria-haspopup="menu">', '<div role="menuitem" id="claude" data-testid="gptSubMenuModelTrigger-Claude" aria-haspopup="menu" aria-expanded="false">')
+      .replace('<div role="menuitem" id="gpt" aria-haspopup="menu">', '<div role="menuitem" id="gpt" data-testid="gptSubMenuModelTrigger-OpenAI" aria-haspopup="menu" aria-expanded="false">');
+    for (const [name, id] of Object.entries(ids)) menuitems = menuitems.replace(`data-name="${name}"`, `data-name="${name}" data-testid="gptSubMenuModelTrigger-${id}"`);
+    t.check('the copy has no menuitemradio left, and every model a test id where the page has one', [menuitems.includes('menuitemradio'), (menuitems.match(/data-testid="gptSubMenuModelTrigger-/g) ?? []).length], [false, 6]);
+    const page7 = await browser.newPage();
+    const dir7 = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const t7 = new CopilotTransport({ profileDir: '', transportDir: dir7, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1500, modelAttempts: 2 });
+    (t7 as unknown as { page: Page }).page = page7;
+    await page7.setContent(menuitems);
+    const inForce7 = async (): Promise<string> => await page7.evaluate(() => (window as unknown as { current: () => string }).current());
+    const menuOpen7 = async (): Promise<boolean> => await page7.evaluate(() => [...document.querySelectorAll('[role=menu]')].some((m) => (m as HTMLElement).style.display !== 'none'));
+    const list7 = await t7.listModels();
+    t.check('the list read from it: four at the top, each group its own', list7.options.map((o) => `${o.group ? `${o.group} > ` : ''}${o.name}`), [
+      'Auto', 'Quick response', 'Think deeper', 'Advanced reasoning (Experimental)',
+      'Claude > Sonnet 5.5', 'Claude > Opus 5.5', 'Claude > Sonnet 5',
+      'GPT > GPT-5.6 Sol Quick response', 'GPT > GPT-5.6 Sol Think deeper', 'GPT > GPT-6.1 Sol',
+    ]);
+    for (const name of ['Think deeper', 'Sonnet 5.5', 'GPT-5.6 Sol Think deeper', 'Opus 5.5', 'Advanced reasoning (Experimental)', 'Quick response', 'Sonnet 5', 'Auto']) {
+      const r7 = await t7.selectModel(name, { locator: list7.options.find((o) => o.name === name)?.locator });
+      t.check(`"${name}": chosen by the operator's locators, and in force`, [r7.ok, r7.by, await inForce7(), await menuOpen7()], [true, 'operator', name, false]);
+    }
+    // Named nowhere in the code (the fixed list of 2026-10-05 had only two GPT-5.6): the same templates, its own name.
+    const r7 = await t7.selectModel('GPT-6.1 Sol', { locator: list7.options.find((o) => o.name === 'GPT-6.1 Sol')?.locator });
+    t.check('"GPT-6.1 Sol", in no list of the code: chosen by the templates all the same', [r7.ok, r7.by, await inForce7(), await menuOpen7()], [true, 'operator', 'GPT-6.1 Sol', false]);
+    // The groups by the keyboard alone: a model is a menuitem that opens nothing, not only a menuitemradio.
+    await page7.evaluate(() => { (window as unknown as { clickOpens: boolean }).clickOpens = false; });
+    for (const name of ['GPT-5.6 Sol Quick response', 'Opus 5.5']) {
+      const r = await t7.selectModel(name, { locator: list7.options.find((o) => o.name === name)?.locator });
+      t.check(`"${name}": its group opened by the keyboard alone, the model chosen`, [r.ok, await inForce7()], [true, name]);
+    }
+    rmSync(dir7, { recursive: true, force: true });
+    await page7.close();
+
+    /*
+     * The operator's own locators, as Settings would have them after the page changed (2026-10-24): another button,
+     * rows with no role at all, names in <b>, and providers the code has never heard of. The defaults find nothing
+     * here; the operator's five find everything, a provider and its models included.
+     */
+    console.log('\n=== another page, read and chosen only by the operator\'s locators from Settings ===');
+    const otherPage = String.raw`<!doctype html><html><body>
+<button id="modelSwitch" aria-label="Choose a model" aria-expanded="false"><span id="shown">Auto</span></button>
+<div id="m365-chat-editor-target-element" contenteditable="true" style="margin-top:200px;min-height:40px">composer</div>
+<ul id="menu" role="menu" style="display:none">
+  <li class="pick" data-name="Auto" aria-checked="true"><b>Auto</b><br><i>Decides</i></li>
+  <li class="pick" data-name="Think deeper" aria-checked="false"><b>Think deeper</b></li>
+  <li class="prov" id="p-gemini" aria-haspopup="menu"><b>Gemini</b><br><i>Google</i></li>
+  <li class="prov" id="p-mistral" aria-haspopup="menu"><b>Mistral</b><br><i>Mistral AI</i></li>
+</ul>
+<ul id="sub-p-gemini" role="menu" aria-labelledby="p-gemini" style="display:none">
+  <li class="pick" data-name="Gemini 3 Pro" aria-checked="false"><b>Gemini 3 Pro</b></li>
+  <li class="pick" data-name="Gemini 3 Flash" aria-checked="false"><b>Gemini 3 Flash</b></li>
+</ul>
+<ul id="sub-p-mistral" role="menu" aria-labelledby="p-mistral" style="display:none">
+  <li class="pick" data-name="Large 3" aria-checked="false"><b>Large 3</b></li>
+  <li class="pick" data-name="Small 3" aria-checked="false"><b>Small 3</b></li>
+</ul>
+<script>
+  let current = 'Auto';
+  const button = document.getElementById('modelSwitch');
+  const menus = [...document.querySelectorAll('ul')];
+  const close = () => { for (const m of menus) m.style.display = 'none'; button.setAttribute('aria-expanded', 'false'); };
+  button.onclick = () => { document.getElementById('menu').style.display = 'block'; button.setAttribute('aria-expanded', 'true'); };
+  for (const p of document.querySelectorAll('.prov')) {
+    const open = () => { for (const m of menus.slice(1)) m.style.display = 'none'; document.getElementById('sub-' + p.id).style.display = 'block'; };
+    p.onclick = open; p.onmouseenter = open;
+  }
+  for (const el of document.querySelectorAll('.pick')) el.onclick = () => {
+    current = el.dataset.name;
+    for (const r of document.querySelectorAll('.pick')) r.setAttribute('aria-checked', String(r.dataset.name === current));
+    document.getElementById('shown').textContent = current;
+    close();
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  window.current = () => current;
+</script></body></html>`;
+    const theirs = {
+      button: '#modelSwitch',
+      rows: "//li[contains(@class, 'pick') or contains(@class, 'prov')]",
+      model: "//b[text()='{$model_name}']/parent::li[contains(@class, 'pick')]",
+      provider: "//b[text()='{$provider_name}']/parent::li[contains(@class, 'prov')]",
+      providerModel: "//b[text()='{$model_name}']/parent::li[contains(@class, 'pick')]",
+    };
+    const make = (pickerLocators?: Record<string, string>, onEvent?: (e: string, d?: Record<string, unknown>) => void) => {
+      const dir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+      return { dir, tr: new CopilotTransport({ profileDir: '', transportDir: dir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1000, modelAttempts: 2, ...(pickerLocators ? { pickerLocators } : {}), ...(onEvent ? { onEvent } : {}) }) };
+    };
+    const page8 = await browser.newPage();
+    await page8.setContent(otherPage);
+    const inForce8 = async (): Promise<string> => await page8.evaluate(() => (window as unknown as { current: () => string }).current());
+    const stock = make();
+    (stock.tr as unknown as { page: Page }).page = page8;
+    const none = await stock.tr.listModels();
+    t.check('with the defaults: no picker found, and the note names the button\'s locator', [none.options.length, /button#gptModeSwitcher/.test(none.note ?? '')], [0, true]);
+    const own = make(theirs);
+    (own.tr as unknown as { page: Page }).page = page8;
+    const list8 = await own.tr.listModels();
+    t.check('with the operator\'s: the list read, each provider its own', list8.options.map((o) => `${o.group ? `${o.group} > ` : ''}${o.name}`), [
+      'Auto', 'Think deeper', 'Gemini > Gemini 3 Pro', 'Gemini > Gemini 3 Flash', 'Mistral > Large 3', 'Mistral > Small 3',
+    ]);
+    for (const name of ['Gemini 3 Flash', 'Think deeper', 'Small 3', 'Gemini 3 Pro', 'Auto']) {
+      const r = await own.tr.selectModel(name, { locator: list8.options.find((o) => o.name === name)?.locator });
+      t.check(`"${name}": chosen by the operator's locators`, [r.ok, r.by, await inForce8()], [true, 'operator', name]);
+    }
+    // A template that finds nothing: given up on at once, the menu kept, with what each locator found.
+    const saidWrong: Array<{ e: string; d?: Record<string, unknown> }> = [];
+    const wrong = make({ ...theirs, model: "//b[text()='{$model_name}']/parent::li[contains(@class, 'nothing')]" }, (e, d) => saidWrong.push({ e, d }));
+    (wrong.tr as unknown as { page: Page }).page = page8;
+    const startedWrong = Date.now();
+    const rw = await wrong.tr.selectModel('Think deeper', { locator: list8.options.find((o) => o.name === 'Think deeper')?.locator });
+    const kept = JSON.parse(readFileSync(join(wrong.dir, 'models-select-failed.json'), 'utf8')) as { asked: string; locators: Array<{ what: string; locator: string; found: number }> };
+    t.check('a template that finds nothing: not chosen, and it is the locator the reason names', [rw.ok, (rw.reason ?? '').includes("parent::li[contains(@class, 'nothing')]")], [false, true]);
+    t.check('  one attempt, not two, and the menu kept with what each locator found', [saidWrong.filter((x) => x.e === 'model-step' && x.d?.step === 'attempt').length, kept.asked, kept.locators.map((l) => [l.what, l.found])], [1, 'Think deeper', [['model', 0]]]);
+    t.truthy('  quickly', Date.now() - startedWrong < 15_000, `${Date.now() - startedWrong} ms`);
+    // One saved without its placeholder is not used: the default is, and the record says why.
+    const saidBroken: Array<{ e: string; d?: Record<string, unknown> }> = [];
+    const broken = make({ ...theirs, provider: "//b[text()='Gemini']" }, (e, d) => saidBroken.push({ e, d }));
+    (broken.tr as unknown as { page: Page }).page = page8;
+    await broken.tr.listModels();
+    t.check('a provider locator without {$provider_name}: not used, and said', saidBroken.filter((x) => x.e === 'model-locator-not-used').map((x) => x.d?.problem), ['the provider locator in Settings is not used, it has no {$provider_name}: put it where the name goes']);
+    // The step pictures Settings can ask for (copilot.pickerSteps → modelStepShots).
+    const shotsDir = mkdtempSync(join(tmpdir(), 'cop-picker-'));
+    const shots = new CopilotTransport({ profileDir: '', transportDir: shotsDir, chatUrl: 'about:blank', channel: 'chromium', headless: true, replyTimeoutMs: 1000, signInTimeoutMs: 1000, modelSettleMs: 50, modelBeforePressMs: 20, modelPollMs: 100, modelAppearMs: 1000, modelAttempts: 2, pickerLocators: theirs, modelStepShots: true });
+    (shots as unknown as { page: Page }).page = page8;
+    await shots.selectModel('Large 3', { locator: list8.options.find((o) => o.name === 'Large 3')?.locator });
+    const pictures = readdirSync(shotsDir).filter((f) => /^models-step-\d\d-/.test(f));
+    t.truthy('with the step pictures on: a picture and the menu\'s HTML at the steps', pictures.some((f) => f.endsWith('.png')) && pictures.some((f) => f.endsWith('.html')), pictures);
+    for (const d of [stock.dir, own.dir, wrong.dir, broken.dir, shotsDir]) rmSync(d, { recursive: true, force: true });
+    await page8.close();
   }
 } finally {
   await browser.close();

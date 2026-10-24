@@ -241,6 +241,14 @@ returned the three thinking modes and no models at all. Every role is now read, 
 opened one at a time from a freshly opened menu, and a submenu's children are identified as
 whatever is on screen that was not on the top level.
 
+**2026-10-23, the work tenant: every row is a `menuitem`.** The choices lost `menuitemradio`; they
+still carry `aria-checked`, and now test ids of their own (`gptSubMenuModelTrigger-Magic` is Auto,
+`-Chat` Quick response, `-Reasoning` Think deeper, `-DeepWork` Advanced reasoning). A group is told
+from a choice only by `aria-haspopup="menu"` and `aria-expanded`. Every locator written for
+`menuitemradio` found no model, and automatic choice failed on every one. A model row is now
+either role that opens nothing (`MODEL_ROW` / `Model.modelRowCss` in `src/transport/locators.ts`);
+`check:modelpicker` has a copy of this menu.
+
 **This list is not in the code and must never be.** It is what one tenant showed on one day;
 another tenant sees other entries, and Microsoft changes them.
 

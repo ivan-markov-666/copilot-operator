@@ -155,6 +155,28 @@ export const RunConfigSchema = z.object({
        * runs/ is a folder on disk. The screenshot and the URL are always kept.
        */
       keepFailurePage: z.boolean().default(false),
+      /**
+       * The model menu's locators (operator, 2026-10-24: "an option in Settings to edit the general locators, so the
+       * user can put the right ones when the page changes"): the picker button, the rows the names are read from, and
+       * the templates for a model of the main menu, a provider's row and a model in a provider's menu, with
+       * `{$model_name}` / `{$provider_name}` where the name goes. Each one left out, or empty, is the default in
+       * `transport/locators.ts`; one that cannot be used is not, and the run says why.
+       */
+      pickerLocators: z
+        .object({
+          button: z.string().optional(),
+          rows: z.string().optional(),
+          model: z.string().optional(),
+          provider: z.string().optional(),
+          providerModel: z.string().optional(),
+        })
+        .optional(),
+      /**
+       * A picture and the menu's HTML at every step of choosing a model, with what each locator found (operator,
+       * 2026-10-24: "an option in Settings to keep this information"), beside the run's other browser files. Off: only
+       * a failed choice keeps the menu (models-select-failed.*).
+       */
+      pickerSteps: z.boolean().default(false),
     })
     .prefault({}),
 

@@ -1,6 +1,8 @@
 /**
  * The browser side of the API. One place that knows the base URL and how errors come back.
  */
+import type { PickerKey } from './pickerLocators';
+
 export const API = process.env.NEXT_PUBLIC_COP_API ?? 'http://127.0.0.1:4000/api';
 
 /** The address of a session's page, with an optional in-page anchor (a task id, `new-task`). */
@@ -125,6 +127,21 @@ export type Workspace = { dir: string; name: string; ok: boolean; isRepo: boolea
 export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string };
 export type ChatThread = { id: string; name: string; createdAt: string; status: 'idle' | 'running' | 'stopping'; turns: number; running: boolean; repoDir: string };
 export type ChatSent = { threadId: string; taskId: string; noted?: boolean; needsStart: boolean };
+/** A task of the queue (2026-10-24), as `src/queue/queue.ts` keeps it. */
+export type QueueItem = {
+  id: string;
+  prompt: string;
+  model: string;
+  dependsOn: string[];
+  branch: 'folder' | 'main';
+  review: boolean;
+  status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
+  why?: string;
+  sessionId?: string;
+  startedAt?: string;
+  endedAt?: string;
+};
+export type Queue = { items: QueueItem[]; running: boolean; updatedAt: string };
 
 export type RepoTree = { ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> };
 export type RepoFile = { ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean };
@@ -1141,7 +1158,14 @@ export type KerriganText = { lang: string; fileName: string; text: string; /** F
 
 export const api = {
   doctor: () => call<Record<string, unknown>>('/doctor'),
-  settings: () => call<{ raw: Record<string, unknown>; defaults: unknown; resolved: Record<string, unknown> }>('/settings'),
+  settings: () =>
+    call<{
+      raw: Record<string, unknown>;
+      defaults: unknown;
+      resolved: Record<string, unknown>;
+      /** The model menu's locators' defaults, and where a choice's pictures are kept (2026-10-24). */
+      picker?: { defaults: Record<PickerKey, string>; dirs: { run: string; read: string } };
+    }>('/settings'),
   /** Writes the whole raw settings object back; the API validates it before saving. */
   saveSettings: (raw: Record<string, unknown>) => call<{ ok: true }>('/settings', { method: 'PUT', body: JSON.stringify(raw) }),
 
@@ -1205,6 +1229,11 @@ export const api = {
     call<Approval[]>(`/approvals${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''}`),
   /** The open project folder, as it is on disk: what it is, its files, one of them. */
   workspace: () => call<Workspace>('/workspace'),
+  /** The queue of tasks (2026-10-24): read, edited as a whole list, run, stopped. */
+  queue: () => call<Queue>('/queue'),
+  setQueue: (items: Array<Omit<QueueItem, 'status'> & { status?: QueueItem['status'] }>) => call<Queue>('/queue', { method: 'PUT', body: JSON.stringify({ items }) }),
+  runQueue: () => call<Queue>('/queue/run', { method: 'POST', body: '{}' }),
+  stopQueue: () => call<Queue>('/queue/stop', { method: 'POST', body: '{}' }),
   workspaceFiles: () => call<{ dir: string; files: string[]; truncated: boolean }>('/workspace/files'),
   workspaceSearch: (q: string, o: { matchCase: boolean; wholeWord: boolean; regex: boolean; include: string; exclude: string }) =>
     call<SearchResult>(

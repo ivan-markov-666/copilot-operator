@@ -15,7 +15,7 @@ import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
-import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture } from '../transport/copilotTransport.js';
+import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions } from '../transport/copilotTransport.js';
 import { buttonShows, normModel } from '../transport/modelMatch.js';
 import { createTransport, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
@@ -513,6 +513,11 @@ export function speakFor(transport: ChatTransport, sessionId: string, opts: { al
   if (opts.alone) speaker.alone = true;
 }
 
+/** The model menu's locators and its step pictures, as Settings have them (2026-10-24), for every window that picks a model. */
+export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'modelStepShots'> {
+  return { ...(cfg.copilot.pickerLocators ? { pickerLocators: cfg.copilot.pickerLocators } : {}), ...(cfg.copilot.pickerSteps ? { modelStepShots: true } : {}) };
+}
+
 export async function openBrowser(
   cfg: ResolvedConfig,
   bus: EventBus,
@@ -532,6 +537,7 @@ export async function openBrowser(
     signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
     humanWaitMs: cfg.copilot.humanWaitSec * 1000,
     keepFailurePage: cfg.copilot.keepFailurePage,
+    ...pickerOptions(cfg),
     onEvent: (event, detail) => {
       const spoken: Record<string, string> = {
         'sign-in-required': 'The chat is asking you to sign in. Do it in the open Edge window; the run is waiting.',
@@ -1334,9 +1340,14 @@ export async function runTask(
     return check;
   };
 
-  /** A chat message's checkpoint and folder (2026-10-17), set where the task starts; read by `finish`. */
-  let chatCheckpoint = session.kind === 'chat' ? task.checkpoint : undefined;
-  const chatDir = session.kind === 'chat' ? session.projectDir?.trim() ?? '' : '';
+  /*
+   * A chat message's checkpoint and folder (2026-10-17), set where the task starts; read by `finish`. Not for a chat on
+   * a branch of the runner's own (a task of the queue on a new branch from main, 2026-10-24): its work is committed on
+   * that branch, and the photograph after it wrote over the task's record of the branch, so nothing was committed.
+   */
+  const photographed = session.kind === 'chat' && !session.vcs?.enabled;
+  let chatCheckpoint = photographed ? task.checkpoint : undefined;
+  const chatDir = photographed ? session.projectDir?.trim() ?? '' : '';
   const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
     // How it ended as reported; the runner's own checks below can still change it, and the final word is written at the end.
     await record(`ENDING: ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
@@ -1978,7 +1989,8 @@ export async function runTask(
       // The operator's new prompt goes out whether or not the attempt it follows reached a conversation.
       ...(task.continuing?.instruction ? { instruction: { text: task.continuing.instruction, fromAttempt: task.continuing.fromAttempt, ended: task.continuing.ended } } : {}),
       workDirNote: workingDirNote(work),
-      vcsNote: session.kind === 'chat' ? CHAT_NOTE : prepared.note,
+      // A chat on a branch of the runner's own (a task of the queue, 2026-10-24) is told about that branch, not the folder's.
+      vcsNote: session.kind === 'chat' && !session.vcs?.enabled ? CHAT_NOTE : prepared.note,
       // What is said about a commit is true only where one happens (live run 2026-10-03: promised with commits off).
       referenceNote: forReference.length > 0 ? referenceNote(forReference, work.cwd) : undefined,
       readOnlyNote: task.readOnly ? readOnlyNote(!!(session.vcs?.enabled && session.vcs.commitOnFinish !== false && trackedRepoOf(session)), artifactPatterns(session.vcs)) : undefined,

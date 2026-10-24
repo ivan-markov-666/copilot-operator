@@ -96,6 +96,18 @@ export const Label = {
  * several shapes rather than one selector. Anything matched inside the popup counts; the
  * button's own text is the current selection.
  */
+/*
+ * A row that chooses a model, and a row that opens a group, as XPath predicates. The models were `menuitemradio`
+ * and the groups `menuitem` until the work page of 2026-10-23 (the operator's models-select-failed.json/.html):
+ * there every row is a `menuitem`, a model told from a group only by opening nothing, and every locator written
+ * for `menuitemradio` found no model at all — each run asked the operator to choose it by hand. Both shapes count.
+ */
+const OPENS_SUBMENU = '@aria-haspopup="menu" or @aria-haspopup="true" or @aria-expanded';
+const MODEL_ROW = `(@role="menuitemradio" or @role="menuitemcheckbox" or @role="menuitem" or @role="option") and not(${OPENS_SUBMENU})`;
+const GROUP_ROW = `@role="menuitem" and (${OPENS_SUBMENU})`;
+const modelByText = (text: string): string => `//div[contains(text(), ${xpathText(text)})]/ancestor-or-self::div[${MODEL_ROW}]`;
+const groupByText = (text: string): string => `//div[contains(text(), ${xpathText(text)})]/ancestor-or-self::div[${GROUP_ROW}]`;
+
 export const Model = {
   /** The picker button. The id has been stable; the aria-label is the fallback. */
   button: 'button#gptModeSwitcher',
@@ -117,53 +129,128 @@ export const Model = {
    * this project is asked to pick actually live.
    */
   submenuAttributes: ['aria-haspopup', 'aria-expanded'],
+  /** A row that chooses a model, as CSS, for the code that runs in the page: either shape (see `MODEL_ROW`). */
+  modelRowCss: ':is([role="menuitemradio"],[role="menuitemcheckbox"],[role="menuitem"],[role="option"]):not([aria-haspopup="menu"],[aria-haspopup="true"],[aria-expanded])',
   /**
    * The operator's locators (2026-10-05), with the text taken from the list read in Settings: a model
    * (in a group's submenu or not) and a group row that opens a submenu ("Claude", "GPT"). The menu is
    * too dynamic for anything else that was tried; change these when the page changes.
    */
-  modelRowXPath: (text: string): string => `//div[contains(text(), ${xpathText(text)})]/ancestor-or-self::div[@role="menuitemradio"]`,
-  groupRowXPath: (text: string): string => `//div[contains(text(), ${xpathText(text)})]/ancestor-or-self::div[@role="menuitem"]`,
+  modelRowXPath: modelByText,
+  groupRowXPath: groupByText,
   /**
    * The same rows by all their text, for a name the page splits over two elements ("Advanced reasoning"
    * and "(Experimental)"), which `text()` sees only the first part of. Asked together with the ones above.
    */
-  modelRowByAllText: (text: string): string => `//div[@role="menuitemradio"][contains(normalize-space(.), ${xpathText(text)})]`,
-  groupRowByAllText: (text: string): string => `//div[@role="menuitem"][contains(normalize-space(.), ${xpathText(text)})]`,
+  modelRowByAllText: (text: string): string => `//div[${MODEL_ROW}][contains(normalize-space(.), ${xpathText(text)})]`,
+  groupRowByAllText: (text: string): string => `//div[${GROUP_ROW}][contains(normalize-space(.), ${xpathText(text)})]`,
 } as const;
 
 /**
- * The operator's locators for the model picker, as given on 2026-10-05, used exactly as they are. The
- * picker button is pressed first; a model at the top is pressed directly; a model in a group is reached
- * by pressing the group ("Claude", "GPT"), waiting for its models, and pressing the one. A model that
- * is none of these is chosen as before (see `selectModel`). Change them here when the page changes.
+ * The model menu's locators, as the operator writes them (2026-10-24: "a mechanism to update the locators, at least
+ * their general forms — an option in Settings to edit them"). Three are templates, written for one name with
+ * `{$model_name}` or `{$provider_name}` where the name goes, and filled with the names the list read from the page:
+ * a model of the main menu (Auto, Think deeper…), a provider's row that opens its own menu (Claude, GPT…), and a model
+ * in a provider's menu (Opus 5.5…). Two are elements: the picker button, and the rows of the open menu, which the
+ * names are read from. No model and no provider is named here: whatever the page offers is found the same way.
+ *
+ * A locator is an XPath when it starts with `/`, `(` or `./`, else a CSS selector. Edited in Settings → "The model
+ * menu's locators"; an empty one is the default below. The ones written for `menuitemradio` before 2026-10-05 and
+ * their fixed list of models (Claude: Sonnet, Opus; GPT: two GPT-5.6) are gone with this.
  */
-export const OperatorModelLocators = {
-  top: [
-    { model: 'Auto', xpath: `//div[contains(text(), 'Auto')]/ancestor-or-self::div[@role="menuitemradio"]` },
-    { model: 'Quick response', xpath: `//div[contains(text(), 'Quick response')]/ancestor-or-self::div[@role="menuitemradio"]` },
-    { model: 'Think deeper', xpath: `//div[contains(text(), 'Think deeper')]/ancestor-or-self::div[@role="menuitemradio"]` },
-    { model: 'Advanced reasoning (Experimental)', xpath: `//div[contains(text(), 'Advanced reasoning (Experimental)')]/ancestor-or-self::div[@role="menuitemradio"]` },
-  ],
-  groups: [
-    {
-      group: 'Claude',
-      xpath: `//div[contains(text(), 'Claude')]/ancestor-or-self::div[@role="menuitem"]`,
-      models: [
-        { model: 'Sonnet', xpath: `//div[contains(text(), 'Sonnet')]/ancestor-or-self::div[@role="menuitemradio"]` },
-        { model: 'Opus', xpath: `//div[contains(text(), 'Opus')]/ancestor-or-self::div[@role="menuitemradio"]` },
-      ],
-    },
-    {
-      group: 'GPT',
-      xpath: `//div[contains(text(), 'GPT')]/ancestor-or-self::div[@role="menuitem"]`,
-      models: [
-        { model: 'GPT-5.6 Sol Quick response', xpath: `//div[contains(text(), 'GPT-5.6 Sol Quick response')]/ancestor-or-self::div[@role="menuitemradio"]` },
-        { model: 'GPT-5.6 Sol Think deeper', xpath: `//div[contains(text(), 'GPT-5.6 Sol Think deeper')]/ancestor-or-self::div[@role="menuitemradio"]` },
-      ],
-    },
-  ],
-} as const;
+export const MODEL_NAME = '{$model_name}';
+export const PROVIDER_NAME = '{$provider_name}';
+export const PICKER_LOCATOR_KEYS = ['button', 'rows', 'model', 'provider', 'providerModel'] as const;
+export type PickerLocatorKey = (typeof PICKER_LOCATOR_KEYS)[number];
+export type PickerLocators = Record<PickerLocatorKey, string>;
+
+export const DefaultPickerLocators: PickerLocators = {
+  button: 'button#gptModeSwitcher',
+  rows: '[role="menuitemradio"],[role="menuitemcheckbox"],[role="option"],[role="radio"],[role="menuitem"]',
+  // The operator's three, each found once ("1 of 1") on the work page of 2026-10-24.
+  model: `//div[text()='${MODEL_NAME}']/parent::span/parent::span/parent::div`,
+  provider: `//div[text()='${PROVIDER_NAME}']/parent::span/parent::span/parent::div[contains(@aria-haspopup, 'menu')]`,
+  providerModel: `//div[text()='${MODEL_NAME}']/parent::span/parent::span/parent::div[not(contains(@aria-haspopup, 'menu'))]`,
+};
+
+/** The placeholder a template must hold; the two elements hold none. */
+export const PickerPlaceholder: Record<PickerLocatorKey, string | null> = {
+  button: null,
+  rows: null,
+  model: MODEL_NAME,
+  provider: PROVIDER_NAME,
+  providerModel: MODEL_NAME,
+};
+
+/** Whether a locator is an XPath: it starts as one does. */
+export function isXPath(locator: string): boolean {
+  return /^\s*(\/|\(|\.\.?\/)/.test(locator);
+}
+
+/** A locator as Playwright takes it: `xpath=` or `css=` in front, unless it names its engine already. */
+export function playwrightSelector(locator: string): string {
+  const s = locator.trim();
+  if (/^(xpath|css)=/.test(s)) return s;
+  return isXPath(s) ? `xpath=${s}` : `css=${s}`;
+}
+
+/** The locator, as it is to be asked in the page itself: which kind, and the text without an engine's name. */
+export function pageQuery(locator: string): { xpath: boolean; text: string } {
+  const s = locator.trim();
+  if (s.startsWith('xpath=')) return { xpath: true, text: s.slice(6) };
+  if (s.startsWith('css=')) return { xpath: false, text: s.slice(4) };
+  return { xpath: isXPath(s), text: s };
+}
+
+/**
+ * What is wrong with a locator written for `key`, said for the operator, or null. A template without its placeholder
+ * would find the same element for every name; an axis written with one colon (`parent:span`) is not XPath. Whether
+ * an XPath parses at all is checked where there is a parser for it: the Settings page tries it in the browser.
+ */
+export function pickerLocatorProblem(key: PickerLocatorKey, locator: string): string | null {
+  const s = locator.trim();
+  if (s === '') return null;
+  const needs = PickerPlaceholder[key];
+  if (needs && !s.includes(needs)) return `it has no ${needs}: put it where the name goes`;
+  const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(s);
+  if (axis && isXPath(s)) return `"${axis[2]}:" needs two colons: ${axis[2]}::`;
+  return null;
+}
+
+/**
+ * The locators in force: each one saved in Settings, else the default. One that cannot be used (see
+ * `pickerLocatorProblem`) is not used, and said in `problems`, so the default works and the run says why.
+ */
+export function resolvePickerLocators(saved?: Partial<Record<PickerLocatorKey, string>> | null): { locators: PickerLocators; problems: string[] } {
+  const locators = { ...DefaultPickerLocators };
+  const problems: string[] = [];
+  for (const key of PICKER_LOCATOR_KEYS) {
+    const own = (saved?.[key] ?? '').trim();
+    if (!own) continue;
+    const problem = pickerLocatorProblem(key, own);
+    if (problem) problems.push(`the ${key} locator in Settings is not used, ${problem}`);
+    else locators[key] = own;
+  }
+  return { locators, problems };
+}
+
+/**
+ * A template with the names put in. A name holding a quote of the kind its placeholder is quoted with is put as an
+ * XPath literal of its own (`concat(…)` when it holds both), so a name never breaks the locator open.
+ */
+export function fillLocator(template: string, names: { model?: string; provider?: string }): string {
+  let out = template;
+  const fill = (placeholder: string, name: string | undefined) => {
+    if (name === undefined) return;
+    out = out
+      .split(`'${placeholder}'`).join(name.includes("'") ? xpathText(name) : `'${name}'`)
+      .split(`"${placeholder}"`).join(name.includes('"') ? xpathText(name) : `"${name}"`)
+      .split(placeholder).join(name);
+  };
+  fill(MODEL_NAME, names.model);
+  fill(PROVIDER_NAME, names.provider);
+  return out;
+}
 
 /**
  * How patiently a model is chosen with those locators (operator's request, 2026-10-06): every element is

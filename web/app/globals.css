@@ -1395,6 +1395,15 @@ button.linkish:hover { text-decoration: underline; }
 .field-control > button { flex: none; white-space: nowrap; }
 .field-control .unit { color: var(--muted); font-size: calc(12.5px * var(--scale)); flex: 1 1 160px; min-width: 0; }
 .field-after { margin: 4px 0 0; }
+/* The model menu's locators (2026-10-24): an XPath is long, so each takes the whole width, in the code font. */
+.picker-field { grid-template-columns: minmax(0, 1fr); }
+.picker-field .field-control > input.picker-locator { flex: 1 1 320px; max-width: none; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); }
+.picker-field > .field-after { grid-column: 1 / -1; }
+.picker-example { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
+.picker-how { margin: 8px 0 4px; }
+.picker-how summary { cursor: var(--cur-pointer); font-weight: 600; font-size: calc(13px * var(--scale)); }
+.picker-how ol { margin: 6px 0 0; padding-inline-start: 22px; display: grid; gap: 4px; }
+.picker-dirs { overflow-wrap: anywhere; }
 .warned-text { color: var(--warn); }
 .saved-note { margin-top: 10px; }
 /* "Saving." "Saving.." "Saving..." (2026-10-23): its dots in a box of their own width, so the words do not move. */
@@ -1657,3 +1666,27 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .md-mermaid { margin: 0 0 1em; text-align: center; overflow-x: auto; }
 .md-mermaid svg { max-width: 100%; height: auto; }
 .md-mermaid.bad { text-align: start; padding: 8px 12px; border: 1px solid var(--bad); border-radius: 6px; background: var(--bad-soft); }
+
+/* The queue of tasks (2026-10-24): one card a task, its number, its status in colour, what it runs on. */
+.queue-page { max-width: 980px; }
+.queue-controls { gap: 12px; align-items: center; margin: 10px 0 12px; }
+.queue-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.queue-item { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
+.queue-item.is-running { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.queue-item.is-editing { border-style: dashed; border-color: var(--accent); }
+.queue-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.queue-n { flex: none; font-weight: 700; color: var(--muted); min-width: 1.6em; }
+.queue-title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.queue-status { flex: none; font-size: calc(11.5px * var(--scale)); font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+.queue-status.s-running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.queue-status.s-done { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+.queue-status.s-failed { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+.queue-status.s-skipped, .queue-status.s-stopped { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.queue-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 0 calc(1.6em + 10px); }
+.queue-why { margin: 4px 0 0 calc(1.6em + 10px); overflow-wrap: anywhere; }
+.queue-actions { gap: 6px; margin: 6px 0 0 calc(1.6em + 10px); flex-wrap: wrap; align-items: center; }
+#queue-add textarea { width: 100%; margin: 4px 0 6px; }
+.queue-depends { border: 0; border-top: 1px solid var(--line); margin: 0; padding: 12px 0; display: grid; gap: 6px; }
+.queue-depends legend { padding: 0; }
+.queue-dep { display: flex; gap: 8px; align-items: baseline; font-weight: 400; cursor: var(--cur-pointer); }
+.queue-folder { overflow-wrap: anywhere; }

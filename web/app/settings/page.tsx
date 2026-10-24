@@ -18,6 +18,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
+import { fillLocator, locatorProblem, PICKER_KEYS, type LocatorProblem, type PickerKey } from '../../lib/pickerLocators';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
@@ -128,6 +129,7 @@ export default function DefaultsPage() {
       <RoleModelSection role="worker" {...shared} />
       <RoleModelSection role="lead" {...shared} />
       <RoleModelSection role="review" {...shared} />
+      <PickerLocatorsSection catalogue={catalogue} />
       <ExecutionSection />
     </div>
   );
@@ -1164,6 +1166,226 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
   );
 }
 
+
+// ---------------------------------------------------------------------------------------
+// The model menu's locators (operator, 2026-10-24)
+// ---------------------------------------------------------------------------------------
+
+const PICKER_FIELDS: Array<{ key: PickerKey; label: Key; why: Key }> = [
+  { key: 'button', label: 'loc.button', why: 'loc.buttonWhy' },
+  { key: 'rows', label: 'loc.rows', why: 'loc.rowsWhy' },
+  { key: 'model', label: 'loc.model', why: 'loc.modelWhy' },
+  { key: 'provider', label: 'loc.provider', why: 'loc.providerWhy' },
+  { key: 'providerModel', label: 'loc.providerModel', why: 'loc.providerModelWhy' },
+];
+
+/**
+ * How the bot finds the model menu in the Copilot window (operator, 2026-10-24: "a mechanism to update the locators,
+ * at least their general forms; an option in Settings to edit them; help for each value and how it can be found; and
+ * an option to keep what the inspection finds"): the picker button, the rows the names are read from, and the three
+ * templates — a model of the main menu, a provider's row, a model in a provider's menu — each with its placeholder
+ * where the name goes. Each is checked here before it is saved and shown filled with a name from the list read; an
+ * empty one is the default, which the field shows.
+ */
+function PickerLocatorsSection({ catalogue }: { catalogue: ModelCatalogue | null }) {
+  const { t } = useT();
+  const { saving, track } = useSaving();
+  const [saved, setSaved] = useState<Record<PickerKey, string> | null>(null);
+  const [defaults, setDefaults] = useState<Record<PickerKey, string> | null>(null);
+  const [dirs, setDirs] = useState<{ run: string; read: string } | null>(null);
+  const [steps, setSteps] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => {
+        const copilot = (s.raw.copilot as Record<string, unknown> | undefined) ?? {};
+        const own = (copilot.pickerLocators as Partial<Record<PickerKey, string>> | undefined) ?? {};
+        setSaved(Object.fromEntries(PICKER_KEYS.map((k) => [k, own[k] ?? ''])) as Record<PickerKey, string>);
+        setDefaults(s.picker?.defaults ?? null);
+        setDirs(s.picker?.dirs ?? null);
+        setSteps(copilot.pickerSteps === true);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  // One write at a time, each on the file as the last one left it (as `ExecutionSection` writes).
+  const write = (change: (copilot: Record<string, unknown>) => Record<string, unknown>): Promise<void> => {
+    const run = async () => {
+      try {
+        const base = (await api.settings()).raw;
+        setMsg('');
+        await track(api.saveSettings({ ...base, copilot: change({ ...((base.copilot as Record<string, unknown>) ?? {}) }) }));
+        setMsg(t('loc.saved'));
+        setErr('');
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    };
+    const done = queue.current.then(run, run);
+    queue.current = done.catch(() => undefined);
+    return done;
+  };
+  const saveLocator = (key: PickerKey, value: string): Promise<void> =>
+    write((copilot) => {
+      const own = { ...((copilot.pickerLocators as Record<string, string> | undefined) ?? {}) };
+      if (value.trim()) own[key] = value.trim();
+      else delete own[key];
+      const next: Record<string, unknown> = { ...copilot, pickerLocators: own };
+      if (Object.keys(own).length === 0) delete next.pickerLocators;
+      return next;
+    });
+
+  // The names an example is filled with: from the list read, else ones the work page had.
+  const top = catalogue?.options.find((o) => !o.group)?.name ?? 'Think deeper';
+  const grouped = catalogue?.options.find((o) => o.group);
+  const provider = grouped?.group ?? 'Claude';
+  const inProvider = grouped?.name ?? 'Opus 5.5';
+  const exampleOf = (key: PickerKey): { name: string; names: { model?: string; provider?: string } } | null =>
+    key === 'model' ? { name: top, names: { model: top } } : key === 'provider' ? { name: provider, names: { provider } } : key === 'providerModel' ? { name: inProvider, names: { model: inProvider, provider } } : null;
+
+  return (
+    <SavingContext.Provider value={track}>
+      <section className="panel" id="picker-locators" aria-labelledby="picker-locators-title">
+        <h2 id="picker-locators-title">{t('loc.title')}</h2>
+        <p className="muted small">{t('loc.intro')}</p>
+        <details className="picker-how">
+          <summary>{t('loc.howTitle')}</summary>
+          <ol className="small">
+            <li>{t('loc.how1')}</li>
+            <li>{t('loc.how2')}</li>
+            <li>{t('loc.how3')}</li>
+            <li>{t('loc.how4')}</li>
+          </ol>
+        </details>
+        {err && <div className="err">{err}</div>}
+        {saved && defaults
+          ? PICKER_FIELDS.map((f) => (
+              <LocatorField
+                key={f.key}
+                field={f.key}
+                label={t(f.label)}
+                why={t(f.why)}
+                initial={saved[f.key]}
+                fallback={defaults[f.key]}
+                example={exampleOf(f.key)}
+                onSave={(v) => saveLocator(f.key, v)}
+              />
+            ))
+          : !err && <p className="muted small">{t('loc.loading')}</p>}
+        <div className="settings-field">
+          <div className="field-label check-label">
+            <input
+              id="picker-steps"
+              type="checkbox"
+              checked={steps}
+              disabled={!saved}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setSteps(on);
+                void write((copilot) => ({ ...copilot, pickerSteps: on }));
+              }}
+            />
+            <label htmlFor="picker-steps">{t('loc.steps')}</label>
+            <InfoTip label={t('info.about', { name: t('loc.steps') })} text={t('loc.stepsWhy')} />
+          </div>
+        </div>
+        {dirs && <p className="muted small field-after picker-dirs">{t('loc.stepsWhere', { run: dirs.run, read: dirs.read })}</p>}
+        <SavedNote msg={msg} saving={saving} />
+      </section>
+    </SavingContext.Provider>
+  );
+}
+
+/**
+ * One locator: typed freely, checked as it is typed, saved a moment after the typing stops when nothing is wrong with
+ * it. Empty is the default, shown in the field; "Default" empties it.
+ */
+function LocatorField({
+  field,
+  label,
+  why,
+  initial,
+  fallback,
+  example,
+  onSave,
+}: {
+  field: PickerKey;
+  label: string;
+  why: string;
+  initial: string;
+  fallback: string;
+  example: { name: string; names: { model?: string; provider?: string } } | null;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const { t } = useT();
+  const [text, setText] = useState(initial);
+  const [problem, setProblem] = useState<LocatorProblem | null>(null);
+  const saveLater = useDebouncedSave<string>((v) => onSave(v));
+  const id = `picker-${field}`;
+  const change = (v: string) => {
+    setText(v);
+    const p = locatorProblem(field, v, document);
+    setProblem(p);
+    if (!p) saveLater(v);
+  };
+  const said = problem
+    ? problem.kind === 'placeholder'
+      ? t('loc.noPlaceholder', { ph: problem.placeholder })
+      : problem.kind === 'colons'
+        ? t('loc.twoColons', { axis: problem.axis })
+        : problem.kind === 'xpath'
+          ? t('loc.badXPath', { msg: problem.message })
+          : t('loc.badCss', { msg: problem.message })
+    : '';
+  const inForce = text.trim() || fallback;
+  return (
+    <div className="settings-field picker-field">
+      <FieldName htmlFor={id} label={label} info={why} />
+      <div className="field-control">
+        <input
+          id={id}
+          type="text"
+          className="picker-locator"
+          spellCheck={false}
+          autoComplete="off"
+          value={text}
+          placeholder={fallback}
+          aria-invalid={problem ? true : undefined}
+          onChange={(e) => change(e.target.value)}
+        />
+        <button
+          className="quiet"
+          disabled={!text}
+          onClick={() => {
+            setText('');
+            setProblem(null);
+            void onSave('');
+          }}
+        >
+          {t('loc.default')}
+        </button>
+      </div>
+      {problem ? (
+        <div className="err field-after" role="alert">
+          {said}
+        </div>
+      ) : (
+        <p className="muted small field-after picker-note">
+          {!text.trim() && <span>{t('loc.isDefault')} </span>}
+          {example && (
+            <>
+              {t('loc.example', { name: example.name })} <code className="picker-example">{fillLocator(inForce, example.names)}</code>
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------------------
 // How a task runs

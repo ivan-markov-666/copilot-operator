@@ -9,11 +9,13 @@
 import { pageModelFor, sameModel } from '../transport/modelMatch.js';
 import { Injectable } from '@nestjs/common';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
-import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW } from '../session/store.js';
+import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, writeFileAtomically } from '../session/store.js';
+import { checkItems, emptyQueue, itemTitle, mainBranchOf, mergeItems, nextStep, skippedBecause, statusOfTask, type Queue, type QueueItem, type QueueStatus } from '../queue/queue.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -28,7 +30,7 @@ import type {
   VersionControl,
 } from '../session/model.js';
 import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type PlanMode, type TaskPlan } from '../session/model.js';
-import { runSession, queuedToRun, failedWhileOpening } from '../orchestrator/taskRunner.js';
+import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
 import { Hold } from '../orchestrator/hold.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
@@ -904,6 +906,8 @@ export class OperatorService {
 
   /** The program is closing: so is the window the chat left open. */
   async onModuleDestroy(): Promise<void> {
+    // The queue's loop lets go; its file still says running, and the next start says what was in flight (`recoverQueue`).
+    this.queueClosing = true;
     await this.closeChatWindow('the program is closing');
   }
 
@@ -1590,6 +1594,204 @@ export class OperatorService {
       });
     }
     return { threadId: session.id, taskId: task.id, needsStart: false };
+  }
+
+  // --- the queue of tasks (2026-10-24) ----------------------------------------------------------------
+  //
+  // Tasks written beforehand, each run in a new chat on its own model while nobody watches; one that failed takes
+  // the tasks that depend on it with it, and the queue goes on with the next. See `queue/queue.ts`.
+
+  private readonly queueFile = join(this.dataDir, 'queue.json');
+  private queueTurn: Promise<unknown> = Promise.resolve();
+  private queueLoop: Promise<void> | null = null;
+  private queueRecovered = false;
+  /** The program is closing: the queue's loop stops where it is. */
+  private queueClosing = false;
+
+  /** The queue as it is on disk; one that cannot be read is an empty one, said in the console. */
+  private async readQueue(): Promise<Queue> {
+    try {
+      const q = JSON.parse(await readFile(this.queueFile, 'utf8')) as Partial<Queue>;
+      return { items: Array.isArray(q.items) ? q.items : [], running: q.running === true, updatedAt: q.updatedAt ?? '' };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.error('[queue] data/queue.json could not be read:', (e as Error).message);
+      return emptyQueue();
+    }
+  }
+
+  /** Changes the queue in a turn of its own, so two changes never write over each other. */
+  private changeQueue(change: (q: Queue) => void): Promise<Queue> {
+    const run = async () => {
+      const q = await this.readQueue();
+      change(q);
+      q.updatedAt = new Date().toISOString();
+      await writeFileAtomically(this.queueFile, JSON.stringify(q, null, 2));
+      return q;
+    };
+    const done = this.queueTurn.then(run, run);
+    this.queueTurn = done.catch(() => undefined);
+    return done;
+  }
+
+  private setQueueItem(q: Queue, id: string, patch: Partial<QueueItem>): void {
+    const item = q.items.find((x) => x.id === id);
+    if (!item) return;
+    Object.assign(item, patch);
+    for (const key of Object.keys(patch) as Array<keyof QueueItem>) if (patch[key] === undefined) delete item[key];
+  }
+
+  /** A queue that was running when the bot last closed: not running now, and its task in flight stopped. */
+  private async recoverQueue(): Promise<void> {
+    if (this.queueRecovered) return;
+    this.queueRecovered = true;
+    const q = await this.readQueue();
+    if (!q.running && !q.items.some((x) => x.status === 'running')) return;
+    await this.changeQueue((x) => {
+      x.running = false;
+      for (const item of x.items) {
+        if (item.status === 'running') Object.assign(item, { status: 'stopped', why: 'the bot was closed while it ran', endedAt: new Date().toISOString() });
+      }
+    });
+  }
+
+  async queue(): Promise<Queue> {
+    await this.recoverQueue();
+    return await this.readQueue();
+  }
+
+  /** The list as the page edits it: added, changed, moved, taken out, put back to wait ("Run again"). */
+  async setQueue(items: unknown): Promise<Queue> {
+    await this.recoverQueue();
+    const checked = checkItems(items, MAX_INSTRUCTION_CHARS);
+    if ('problem' in checked) throw new Error(checked.problem);
+    let problem: string | undefined;
+    const q = await this.changeQueue((x) => {
+      const merged = mergeItems(x.items, checked.items);
+      if ('problem' in merged) problem = merged.problem;
+      else x.items = merged.items;
+    });
+    if (problem) throw new Error(problem);
+    return q;
+  }
+
+  /** Runs the waiting tasks one after another, in the background; the page follows `queue()`. */
+  async runQueue(): Promise<Queue> {
+    await this.init();
+    await this.recoverQueue();
+    if (this.queueLoop) throw new Error('The queue is running already.');
+    const q = await this.readQueue();
+    if (!nextStep(q.items)) throw new Error('No task in the queue is waiting. Add one, or put one back with "Run again".');
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open: open one in the chat first.');
+    const unnamed = this.queueWithoutModel(q.items.filter((x) => x.status === 'waiting'), await this.settings.load());
+    if (unnamed) throw new Error(unnamed);
+    const started = await this.changeQueue((x) => {
+      x.running = true;
+    });
+    this.queueLoop = this.runQueueLoop()
+      .catch((e: unknown) => console.error('[queue] the queue stopped:', (e as Error).stack ?? (e as Error).message))
+      .finally(() => {
+        this.queueLoop = null;
+        void this.changeQueue((x) => {
+          x.running = false;
+        });
+      });
+    return started;
+  }
+
+  /**
+   * Tasks that would wait for the operator to choose their model by hand: none of their own, and no "Model for the
+   * worker" in Settings — a chat that names no model is asked for it by hand (`modelByHand`), and nobody is there.
+   */
+  private queueWithoutModel(items: QueueItem[], cfg: Pick<ResolvedConfig, 'copilot'>): string | null {
+    if ((cfg.copilot.defaultModel ?? '').trim()) return null;
+    const none = items.filter((x) => !x.model.trim());
+    if (none.length === 0) return null;
+    const names = none.map((x) => `"${itemTitle(x)}"`).join(', ');
+    return `${names} ${none.length === 1 ? 'has' : 'have'} no model of ${none.length === 1 ? 'its' : 'their'} own, and Settings have no "Model for the worker": ${none.length === 1 ? 'it' : 'they'} would wait for you to choose one by hand. Choose a model for ${none.length === 1 ? 'it' : 'them'}, or one in Settings.`;
+  }
+
+  /** Stops the queue: the task at work is stopped as the chat's Stop does, and the rest wait. */
+  async stopQueue(): Promise<Queue> {
+    const q = await this.changeQueue((x) => {
+      x.running = false;
+    });
+    const at = q.items.find((x) => x.status === 'running');
+    if (at?.sessionId) await this.stop(at.sessionId).catch(() => undefined);
+    return q;
+  }
+
+  private async runQueueLoop(): Promise<void> {
+    const now = () => new Date().toISOString();
+    for (;;) {
+      if (this.queueClosing) return;
+      const q = await this.readQueue();
+      if (!q.running) return;
+      const step = nextStep(q.items);
+      if (!step) return;
+      if ('skip' in step) {
+        await this.changeQueue((x) => this.setQueueItem(x, step.skip.id, { status: 'skipped', why: skippedBecause(step.because), endedAt: now() }));
+        continue;
+      }
+      const item = step.run;
+      await this.changeQueue((x) => this.setQueueItem(x, item.id, { status: 'running', startedAt: now(), why: undefined, endedAt: undefined, sessionId: undefined }));
+      const ended = await this.runQueueItem(item).catch((e: unknown): { status: QueueStatus; why: string } => ({ status: 'failed', why: (e as Error).message }));
+      await this.changeQueue((x) => this.setQueueItem(x, item.id, { ...ended, endedAt: now() }));
+      // Stopped — from the queue, or the chat's Stop: the rest wait for the operator.
+      if (ended.status === 'stopped') return;
+    }
+  }
+
+  /** One task of the queue, in a new chat, to its end. */
+  private async runQueueItem(item: QueueItem): Promise<{ status: QueueStatus; why?: string; sessionId?: string }> {
+    const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const stillRunning = async () => (await this.readQueue()).running;
+    // Read afresh each time: the browser is let go of by other work while this waits.
+    const holder = (): BrowserHolder | null => this.browser;
+    // The browser may be the chat's, or a reading of the models': the task waits its turn.
+    while (holder()) {
+      if (this.queueClosing || !(await stillRunning())) return { status: 'stopped', why: 'the queue was stopped before it began' };
+      await pause(1_000);
+    }
+    const ws = await this.workspace();
+    if (!ws.ok) return { status: 'failed', why: ws.problem ?? 'no project folder is open' };
+    // Settings may have changed since the queue was started.
+    const unnamed = this.queueWithoutModel([item], await this.settings.load());
+    if (unnamed) return { status: 'failed', why: unnamed };
+    const base = item.branch === 'main' ? await mainBranchOf(ws.dir) : null;
+    if (item.branch === 'main' && !base) return { status: 'failed', why: `${ws.dir} has no main (or master) branch to make a new branch from` };
+    const sent = await this.chatSend({ text: item.prompt, ...(item.model ? { model: item.model } : {}), review: item.review });
+    const sessionId = sent.threadId;
+    await this.store.updateSession(sessionId, (s) => {
+      s.name = `queue: ${itemTitle(item)}`;
+      s.queueItem = item.id;
+      /*
+       * A new branch from main (2026-10-24): the runner's own version control, as a session of the bot's has it — the
+       * branch cut from main, brought up to date from the server first when that needs no password (`updateFromRemote`
+       * asks nobody anything; it fails, and the local main is used), and the work committed on it. The chat is told
+       * which main it was (`noteFor`).
+       */
+      if (base) {
+        s.vcs = { ...DEFAULT_VCS, enabled: true, repoDir: ws.dir, branchMode: 'per-session', commitOnFinish: true, startFrom: 'branch', baseBranch: base, updateFromRemote: true };
+      }
+    });
+    await this.changeQueue((x) => this.setQueueItem(x, item.id, { sessionId }));
+    const cfg = await this.settings.load();
+    const reply = await this.start(sessionId, cfg.execution.mode);
+    if (!reply.started) return { status: 'failed', why: reply.reason ?? 'it did not start', sessionId };
+    // Until its run has ended and its window let the browser go, so the next one can have it.
+    let asked = false;
+    while (this.running.has(sessionId) || (holder()?.kind === 'run' && (holder() as { sessionId?: string }).sessionId === sessionId)) {
+      if (this.queueClosing) return { status: 'stopped', why: 'the bot was closed while it ran', sessionId };
+      if (!asked && !(await stillRunning())) {
+        asked = true;
+        await this.stop(sessionId).catch(() => undefined);
+      }
+      await pause(1_000);
+    }
+    const task = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === sent.taskId);
+    const status = statusOfTask(task?.status);
+    return { status, ...(status !== 'done' ? { why: task?.reason ?? `it ended ${task?.status ?? 'without a record'}` } : {}), sessionId };
   }
 
   // --- skills (2026-10-21) ----------------------------------------------------------------------------
@@ -2479,6 +2681,8 @@ export class OperatorService {
         signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
         humanWaitMs: cfg.copilot.humanWaitSec * 1000,
         keepFailurePage: cfg.copilot.keepFailurePage,
+        // The rows' locator reads the names (Settings' own, 2026-10-24).
+        ...pickerOptions(cfg),
       });
       await this.closeChatWindow('reading the models needs the browser');
       await transport.open();

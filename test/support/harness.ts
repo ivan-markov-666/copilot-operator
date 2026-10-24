@@ -317,6 +317,13 @@ export class Tally {
   }
   finish(): never {
     console.log(`\nfailures: ${this.wrong} (expect 0)`);
+    /*
+     * A moment before exiting, the loop held still (2026-10-24): work the thread pool still had — the last removal of
+     * a check's temporary folder — finished while Node was closing, and it died with "Assertion failed:
+     * !(handle->flags & UV_HANDLE_CLOSING)" (exit 127) after every check had passed, one run in four, which stopped
+     * `check:all` there. Held still, that work ends first, and the exit has nothing left to be in the way of.
+     */
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
     process.exit(this.wrong === 0 ? 0 : 1);
   }
 }

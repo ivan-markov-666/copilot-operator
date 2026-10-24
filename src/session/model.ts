@@ -1033,6 +1033,8 @@ export type Session = {
   lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
   /** A worker's session: the chat session whose lead gives it its subtasks. It is not a conversation of the chat's list. */
   workerOf?: string;
+  /** The task of the queue this chat ran (2026-10-24): `QueueItem.id` in data/queue.json. */
+  queueItem?: string;
   /** The language the workbench was in at the chat's last message, for what its window says at the end (2026-10-19). */
   lang?: string;
   /**

@@ -869,6 +869,32 @@ export type NoteContext = {
  * plain instruction with the reason attached, because a rule without a reason is the kind a
  * model talks itself out of.
  */
+/**
+ * Whether the branch a session started from is the server's code, said to the chat (operator, 2026-10-24: "the bot's
+ * instructions say whether the task is developed on a new branch from main"; "when main asks for a password and
+ * nobody is there to type it, take the local main"). The fetch never asks anybody (`updateFromRemote`), so a server
+ * that wants a password or a key's passphrase fails it, and the local branch is what the work starts from.
+ */
+function fromServer(update: SessionStart['update']): string {
+  if (!update) return '';
+  const local = `\`${update.branch}\``;
+  switch (update.outcome) {
+    case 'updated':
+      return ` It was brought up to date with \`${update.remote}\` first: it is the code on the server.`;
+    case 'up-to-date':
+      return ` It was already the same as \`${update.remote}\`: it is the code on the server.`;
+    case 'fetch-failed':
+      return (
+        ` The server's ${local} could not be fetched${update.detail ? ` (${update.detail})` : ''}: a run never types a password or a key's passphrase, ` +
+        `so it is the local ${local} as this checkout last had it, and the server may have newer commits. Do not try to fetch or pull it.`
+      );
+    case 'no-remote':
+      return ` The repository has no remote: it is the local ${local}.`;
+    default:
+      return ` It was not brought up to date with the server (${update.detail ?? update.outcome}): it is the local ${local}.`;
+  }
+}
+
 export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode: 'per-task', earlier: [] }): string {
   if (!vcs.branch) return '';
   const base = ctx.base
@@ -905,7 +931,7 @@ export function noteFor(repoDir: string, vcs: TaskVcs, ctx: NoteContext = { mode
       : ctx.start?.kind === 'existing-branch'
         ? `This session carries on the existing branch \`${ctx.start.branch}\`: the work already on it is in your working tree. Build on it; do not redo it.`
         : ctx.start?.kind === 'branch'
-        ? `This session started from the ${ctx.start.remote ? 'remote branch' : 'local branch'} \`${ctx.start.branch}\`${ctx.start.remote ? ' (the code on the server, fetched when the run was started)' : ''}, not from any earlier session's work${ctx.start.note ? ` (${ctx.start.note})` : ''}.`
+        ? `This session started from the ${ctx.start.remote ? 'remote branch' : 'local branch'} \`${ctx.start.branch}\`${ctx.start.remote ? ' (the code on the server, fetched when the run was started)' : ''}, not from any earlier session's work${ctx.start.note ? ` (${ctx.start.note})` : ''}.${fromServer(ctx.start.update)}`
         : '';
   return [
     '## Version control',

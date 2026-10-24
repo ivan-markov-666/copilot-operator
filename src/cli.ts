@@ -416,7 +416,10 @@ program
   .option('--steps', 'with --set: print each step of the choice with its time, and keep a picture of each in runs/_models')
   .option('--chat <id-or-address>', 'first open this existing conversation (its id, or its address from the browser), as a task carried on does')
   .action(async (opts: { profile: string; url: string; json?: boolean; set?: string; steps?: boolean; chat?: string }) => {
+    // The model menu's locators saved in Settings (2026-10-24), as a run and "Read the list from Copilot" use them.
+    const saved = await settingsOf(installLayout()).load().catch(() => null);
     const transport = new CopilotTransport({
+      ...(saved?.copilot.pickerLocators ? { pickerLocators: saved.copilot.pickerLocators } : {}),
       profileDir: opts.profile,
       transportDir: join(installLayout().runsDir, '_models'),
       chatUrl: opts.url,

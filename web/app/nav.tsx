@@ -18,6 +18,7 @@ const ICONS: Record<string, ReactNode> = {
   workbench: <path d="M4 5h16v11H9l-5 4zM8 9h8M8 12h5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
   defaults: <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.5 4 1.5 1-1.6 2.8-1.8-.4a7 7 0 0 1-1.5 1.5l.4 1.8L14.7 21l-1-1.5a7 7 0 0 1-3.4 0l-1 1.5-2.8-1.6.4-1.8A7 7 0 0 1 5.4 16l-1.8.4L2 13.6 3.5 12.6V11.4L2 10.4l1.6-2.8 1.8.4A7 7 0 0 1 6.9 6.5l-.4-1.8L9.3 3l1 1.5a7 7 0 0 1 3.4 0l1-1.5 2.8 1.6-.4 1.8a7 7 0 0 1 1.5 1.5l1.8-.4L22 10.4l-1.5 1z" />,
   system: <path d="M4 5h16v10H4zM2 19h20M9 15v4M15 15v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />,
+  queue: <path d="M4 6h16M4 12h16M4 18h10M17 16l3 2-3 2z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />,
 };
 
 /*
@@ -27,6 +28,8 @@ const ICONS: Record<string, ReactNode> = {
  */
 const LINKS: Array<{ href: string; label: Key; icon: keyof typeof ICONS }> = [
   { href: '/', label: 'nav.workbench', icon: 'workbench' },
+  // The queue of tasks (2026-10-24): prepared beforehand, run one after another while nobody watches.
+  { href: '/queue', label: 'nav.queue', icon: 'queue' },
   { href: '/settings', label: 'nav.defaults', icon: 'defaults' },
   { href: '/system', label: 'nav.system', icon: 'system' },
 ];
