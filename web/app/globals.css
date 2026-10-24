@@ -206,6 +206,11 @@ a:hover { text-decoration: underline; }
 .top h1 { font-size: calc(21px * var(--scale)); margin: 0; letter-spacing: -0.01em; }
 .top h1 a { color: var(--accent); }
 .top nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+/*
+ * "Appearance" and "Language" as one item of the bar (operator, 2026-10-24): a wrap takes the two to the next line
+ * together; they part only when one line cannot hold both. Its gap is the bar's own.
+ */
+.nav-pair { display: inline-flex; align-items: center; flex-wrap: wrap; gap: inherit; min-width: 0; max-width: 100%; }
 .top nav a {
   color: var(--muted);
   padding: 6px 10px;
@@ -708,15 +713,8 @@ th, td { position: relative; }
   .wrap { padding: 12px 10px 60px; }
   .top { gap: 8px; margin-bottom: 12px; padding-bottom: 10px; }
   .top h1 { font-size: calc(18px * var(--scale)); }
-  .top nav {
-    width: 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 4px;
-    scrollbar-width: none;
-  }
-  .top nav::-webkit-scrollbar { display: none; }
+  /* Wrapped onto more lines, not scrolled sideways: a page scrolled out of sight was a page that could not be found (2026-10-24). */
+  .top nav { width: 100%; flex-wrap: wrap; row-gap: 6px; }
   .top nav a { flex: none; padding: 6px 9px; font-size: calc(13px * var(--scale)); }
   .panel { padding: 12px; }
   .row { gap: 8px; }
@@ -941,16 +939,18 @@ button.linkish:hover { text-decoration: underline; }
 .wb-main { flex: 1; min-height: 0; }
 .wb { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; color: var(--ink); background: var(--bg); }
 
-.wb-top { display: flex; align-items: center; gap: 12px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.wb-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
 .wb-brand { font-weight: 700; color: var(--accent); white-space: nowrap; }
 .wb-search { flex: 0 1 460px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 auto; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--muted); font-size: calc(13px * var(--scale)); cursor: var(--cur-pointer); min-width: 0; }
 .wb-search span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-search kbd, .wb kbd { font-family: var(--mono); font-size: calc(11px * var(--scale)); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; background: var(--panel); }
-.wb-menu { display: flex; align-items: center; gap: 12px; font-size: calc(13px * var(--scale)); white-space: nowrap; }
+.wb-menu { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; font-size: calc(13px * var(--scale)); min-width: 0; }
+.wb-menu > a { white-space: nowrap; }
 .wb-menu a { color: var(--ink); }
 
 /* The columns are worked out on the page (2026-10-21): the panels can be moved, so which place is wide is not fixed here. */
-.wb-body { display: grid; grid-template-columns: var(--wb-columns, 46px var(--wb-side) 5px minmax(0, 1fr) 5px var(--wb-chat)); min-height: 0; }
+/* Positioned, so a panel laid over the others on a narrow window is held to the body, whatever height the bar above wraps to. */
+.wb-body { position: relative; display: grid; grid-template-columns: var(--wb-columns, 46px var(--wb-side) 5px minmax(0, 1fr) 5px var(--wb-chat)); min-height: 0; }
 /* A panel's grip, its menu of places, and where a dragged one may be let go of. */
 .wb-grip { border: 0; background: transparent; color: var(--muted); padding: 3px 4px; margin-inline-end: 2px; cursor: var(--cur-grab); border-radius: 4px; display: inline-flex; align-items: center; }
 .wb-grip:hover, .wb-grip:focus-visible, .wb-grip[aria-expanded='true'] { color: var(--ink); background: var(--bg-tint); }
@@ -1084,13 +1084,14 @@ button.linkish:hover { text-decoration: underline; }
   .wb-body:not(.no-chat) { grid-template-columns: 46px var(--wb-side) 5px minmax(0, 1fr); }
   .wb-body.no-side:not(.no-chat) { grid-template-columns: 46px minmax(0, 1fr); }
   .wb-body:not(.no-chat) > .wb-split.x:last-of-type { display: none; }
-  .wb-body:not(.no-chat) > .wb-chat { position: fixed; right: 0; top: 40px; bottom: 24px; width: min(420px, 92vw); z-index: 40; border-left: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+  .wb-body:not(.no-chat) > .wb-chat { position: absolute; right: 0; top: 0; bottom: 0; width: min(420px, 92vw); z-index: 40; border-left: 1px solid var(--line-strong); box-shadow: var(--shadow); }
 }
 @media (max-width: 700px) {
-  .wb-menu a { display: none; }
+  /* The search on a line of its own under the links, which stay (2026-10-24: hidden, the queue could not be reached). */
+  .wb-search { order: 9; flex: 1 1 100%; margin: 0; }
   .wb-body, .wb-body.no-chat, .wb-body:not(.no-chat) { grid-template-columns: 46px minmax(0, 1fr); }
   .wb-body > .wb-split.x { display: none; }
-  .wb-body:not(.no-side) > .wb-side { position: fixed; left: 46px; top: 40px; bottom: 24px; width: min(300px, 80vw); z-index: 39; border-right: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+  .wb-body:not(.no-side) > .wb-side { position: absolute; left: 46px; top: 0; bottom: 0; width: min(300px, 80vw); z-index: 39; border-right: 1px solid var(--line-strong); box-shadow: var(--shadow); }
   .wb-body > .wb-center { grid-column: 2; }
 }
 
@@ -1690,3 +1691,35 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .queue-depends legend { padding: 0; }
 .queue-dep { display: flex; gap: 8px; align-items: baseline; font-weight: 400; cursor: var(--cur-pointer); }
 .queue-folder { overflow-wrap: anywhere; }
+
+/* The queue as a picture (2026-10-24): dots on a line, threads arcing over it, left to right as they run. */
+.queue-graph { margin: 4px 0 14px; }
+.queue-graph-head { justify-content: space-between; align-items: center; gap: 10px; }
+.queue-graph-head h3 { margin: 0; font-size: calc(14px * var(--scale)); }
+.queue-graph-names { display: inline-flex; align-items: center; gap: 6px; font-size: calc(13px * var(--scale)); cursor: var(--cur-pointer); }
+.queue-graph-scroll { position: relative; overflow-x: auto; padding: 4px 0 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.queue-graph-scroll svg { display: block; }
+.qg-line { stroke: var(--line-strong); stroke-width: 2; stroke-dasharray: 2 5; stroke-linecap: round; }
+.qg-thread { fill: none; stroke: var(--accent); stroke-width: 2.2; opacity: 0.85; transition: opacity 0.15s; }
+.qg-thread.is-broken { stroke: var(--bad); stroke-dasharray: 6 5; }
+.qg-thread.is-dim, .qg-task.is-dim { opacity: 0.22; }
+.qg-arrowhead { fill: var(--accent); }
+.qg-task { cursor: var(--cur-pointer); outline: none; transition: opacity 0.15s; }
+.qg-task:focus-visible .qg-dot { stroke-width: 3.5; }
+.qg-dot { fill: var(--panel); stroke: var(--line-strong); stroke-width: 2.2; }
+.qg-task:hover .qg-dot { stroke-width: 3.2; }
+.s-running > .qg-dot, .qg-dot.s-running { fill: var(--accent); stroke: var(--accent); }
+.s-done > .qg-dot, .qg-dot.s-done { fill: var(--ok); stroke: var(--ok); }
+.s-failed > .qg-dot, .qg-dot.s-failed { fill: var(--bad); stroke: var(--bad); }
+.s-skipped > .qg-dot, .qg-dot.s-skipped, .s-stopped > .qg-dot, .qg-dot.s-stopped { fill: var(--warn); stroke: var(--warn); }
+.qg-n { text-anchor: middle; font-size: 11px; font-weight: 700; fill: var(--ink); pointer-events: none; }
+.s-running > .qg-n, .s-done > .qg-n, .s-failed > .qg-n, .s-skipped > .qg-n, .s-stopped > .qg-n { fill: #fff; }
+.qg-name { text-anchor: middle; font-size: 12px; fill: var(--ink); pointer-events: none; }
+.qg-pulse { fill: none; stroke: var(--accent); stroke-width: 2; opacity: 0.6; animation: qg-pulse 1.6s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+@keyframes qg-pulse { from { transform: scale(0.8); opacity: 0.7; } to { transform: scale(1.5); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .qg-pulse { animation: none; } }
+.qg-tip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 2.1em; margin: 6px 0 0; font-size: calc(13px * var(--scale)); }
+.qg-tip strong { overflow-wrap: anywhere; }
+.qg-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; padding: 0; }
+.qg-legend li { display: inline-flex; align-items: center; gap: 5px; }
+.queue-prompt { margin: 2px 0 0 calc(1.6em + 10px); color: var(--muted); overflow-wrap: anywhere; }

@@ -15,7 +15,7 @@ import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, writeFileAtomically } from '../session/store.js';
-import { checkItems, emptyQueue, itemTitle, mainBranchOf, mergeItems, nextStep, skippedBecause, statusOfTask, type Queue, type QueueItem, type QueueStatus } from '../queue/queue.js';
+import { checkItems, emptyQueue, itemTitle, mainBranchOf, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type Queue, type QueueItem, type QueueStatus } from '../queue/queue.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -1704,11 +1704,15 @@ export class OperatorService {
    * worker" in Settings — a chat that names no model is asked for it by hand (`modelByHand`), and nobody is there.
    */
   private queueWithoutModel(items: QueueItem[], cfg: Pick<ResolvedConfig, 'copilot'>): string | null {
-    if ((cfg.copilot.defaultModel ?? '').trim()) return null;
-    const none = items.filter((x) => !x.model.trim());
-    if (none.length === 0) return null;
-    const names = none.map((x) => `"${itemTitle(x)}"`).join(', ');
-    return `${names} ${none.length === 1 ? 'has' : 'have'} no model of ${none.length === 1 ? 'its' : 'their'} own, and Settings have no "Model for the worker": ${none.length === 1 ? 'it' : 'they'} would wait for you to choose one by hand. Choose a model for ${none.length === 1 ? 'it' : 'them'}, or one in Settings.`;
+    const said = items.flatMap((x) =>
+      waitsByHand(x, cfg.copilot).map((part) =>
+        part === 'model'
+          ? `"${itemTitle(x)}" has no model of its own, and Settings have no "${x.lead ? 'Model for the lead' : 'Model for the worker'}"`
+          : `"${itemTitle(x)}" is reviewed, with no model for the review of its own, and Settings have no "Model for the review"`,
+      ),
+    );
+    if (said.length === 0) return null;
+    return `${said.join('; ')}: ${said.length === 1 ? 'it' : 'they'} would wait for you to choose a model by hand. Choose the model in the task, or in Settings.`;
   }
 
   /** Stops the queue: the task at work is stopped as the chat's Stop does, and the rest wait. */
@@ -1760,7 +1764,14 @@ export class OperatorService {
     if (unnamed) return { status: 'failed', why: unnamed };
     const base = item.branch === 'main' ? await mainBranchOf(ws.dir) : null;
     if (item.branch === 'main' && !base) return { status: 'failed', why: `${ws.dir} has no main (or master) branch to make a new branch from` };
-    const sent = await this.chatSend({ text: item.prompt, ...(item.model ? { model: item.model } : {}), review: item.review });
+    // As the chat's box sends a first message: the model, the review and its model, or two chats and the worker's model.
+    const sent = await this.chatSend({
+      text: item.prompt,
+      ...(item.model ? { model: item.model } : {}),
+      review: item.review,
+      ...(item.reviewModel ? { reviewModel: item.reviewModel } : {}),
+      ...(item.lead ? { lead: true, ...(item.workerModel ? { workerModel: item.workerModel } : {}) } : {}),
+    });
     const sessionId = sent.threadId;
     await this.store.updateSession(sessionId, (s) => {
       s.name = `queue: ${itemTitle(item)}`;

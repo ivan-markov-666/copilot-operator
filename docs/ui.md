@@ -673,7 +673,16 @@ the others still run. A new branch from main is the runner's own version control
 or a key's passphrase nobody is there to type — the local main is used, and the chat is told which (`fromServer` in
 `vcs/taskVcs.ts`); such a chat is not photographed as the folder's chats are, so its work is committed on its branch. A
 queue does not start while a task would wait for a model to be chosen by hand (none of its own, none in Settings);
-one that was running when the bot closed is stopped, with why, when it opens again.
+one that was running when the bot closed is stopped, with why, when it opens again. A task has a name, and may be
+"Two chats" (a lead on its model, a worker on its own; no review, the lead judges) or reviewed on a model of its own;
+"Depends on" is shown only when there is an earlier task. Above the list, "How the queue runs"
+(`web/app/queue/queueGraph.tsx`): a dot a task, left to right as they run, a thread arcing from a task to each one that
+depends on it (broken and red from one that did not end done), coloured by status; pointing at a dot dims the rest and
+says its task under the picture; "Show all names" writes them under the dots. Plain SVG, at most fifty dots.
+
+**The bars on top in narrow windows (2026-10-24).** Both bars wrap instead of hiding links (the chat's under 700px) or
+scrolling them out of sight (the pages' on a phone); "Appearance" and "Language" are one item (`NavPair`, `.nav-pair`),
+so they move to the next line together and part only when one line cannot hold both. The chat's bar has "Queue".
 
 **Platforms, questions with answers to click (2026-10-23).** A command that reaches a platform with the operator's
 access — Azure (`az`, Az PowerShell), AWS, Google Cloud, GitHub (`gh`), GitLab, Jira, Vercel, Netlify, Heroku,

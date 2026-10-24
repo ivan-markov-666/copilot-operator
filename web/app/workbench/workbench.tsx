@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { api, type GitArea, type Session, type Task, type Workspace } from '../../lib/api';
 import { usePoll } from '../../lib/usePoll';
 import { useT } from '../../lib/i18n';
-import { LanguageSwitcher } from '../languageMenu';
+import { NavPair } from '../nav';
 import { Explorer } from './explorer';
 import { FileView } from './fileView';
 import { GitDiff } from './gitDiff';
@@ -24,7 +24,6 @@ import type { ChatTurn } from './cascade';
 import { BottomPanel } from './bottomPanel';
 import { StatusBar } from './statusBar';
 import { Palette, type PaletteCommand } from './palette';
-import { AppearanceMenu } from './appearanceMenu';
 import { KerriganAbout, KerriganButton } from './kerriganButton';
 import { Logo } from '../logo';
 import { FileIcon } from './fileIcon';
@@ -232,6 +231,7 @@ function WorkbenchInner() {
       { id: 'problems', label: t('wb.cmdProblems'), run: () => { setL({ bottomOpen: true }); setBottomTab('problems'); } },
       ...(
         [
+          ['/queue', 'nav.queue'],
           ['/settings', 'nav.defaults'],
           ['/system', 'nav.system'],
         ] as const
@@ -389,12 +389,13 @@ function WorkbenchInner() {
           <kbd>Ctrl+K</kbd>
         </button>
         <nav className="wb-menu" aria-label={t('nav.label')}>
+          {/* The queue on the chat's screen too (operator, 2026-10-24: "the Queue button is not there on the chat's page"). */}
+          <Link href="/queue">{t('nav.queue')}</Link>
           <Link href="/settings">{t('nav.defaults')}</Link>
           {/* System on the chat's screen too (operator, 2026-10-20), as it is on every other page. */}
           <Link href="/system">{t('nav.system')}</Link>
-          {/* How the page looks, after System and before the language (operator, 2026-10-22: the two swapped). */}
-          <AppearanceMenu />
-          <LanguageSwitcher />
+          {/* How the page looks, after System and before the language (operator, 2026-10-22: the two swapped), the two as one. */}
+          <NavPair />
         </nav>
       </header>
 

@@ -8,17 +8,30 @@ import { usePoll } from '../../lib/usePoll';
 import { ModelPicker } from '../modelPicker';
 import { InfoTip } from '../popover';
 import { confirmDialog } from '../dialog';
+import { QueueGraph } from './queueGraph';
 
 /**
  * The queue of tasks (operator, 2026-10-24: "an option to prepare several tasks that run in a queue"): written
- * beforehand, each with its own model, where it works (the folder as it is, or a new branch from main), whether it is
- * reviewed, and the earlier tasks it depends on; run one after another while nobody watches, each in a new chat. A task
- * whose dependency failed is skipped and the queue goes on with the next (`src/queue/queue.ts`).
+ * beforehand, each with its name, its own model, where it works (the folder as it is, or a new branch from main), one
+ * chat or two (a lead and a worker, with the worker's model), whether it is reviewed and on which model, and the earlier
+ * tasks it depends on; run one after another while nobody watches, each in a new chat. A task whose dependency failed is
+ * skipped and the queue goes on with the next (`src/queue/queue.ts`). The picture above the list shows the order and
+ * the threads between the tasks (`queueGraph.tsx`).
  */
-type Draft = { prompt: string; model: string; dependsOn: string[]; branch: QueueItem['branch']; review: boolean };
+type Draft = {
+  name: string;
+  prompt: string;
+  model: string;
+  dependsOn: string[];
+  branch: QueueItem['branch'];
+  review: boolean;
+  reviewModel: string;
+  lead: boolean;
+  workerModel: string;
+};
 type Edit = Omit<QueueItem, 'status'> & { status?: QueueItem['status'] };
 
-const EMPTY: Draft = { prompt: '', model: '', dependsOn: [], branch: 'folder', review: true };
+const EMPTY: Draft = { name: '', prompt: '', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: '', lead: false, workerModel: '' };
 /** Where the chat keeps the conversation it shows (`workbench/cascade.tsx`): "Open the chat" puts the task's there. */
 const THREAD_KEY = 'cop.chat.thread';
 
@@ -31,8 +44,30 @@ const STATUS: Record<QueueItem['status'], Key> = {
   stopped: 'q.stopped',
 };
 
-const titleOf = (prompt: string): string => prompt.split(/\r?\n/)[0]!.trim().slice(0, 80) || '…';
-const asEdit = (x: QueueItem): Edit => ({ id: x.id, prompt: x.prompt, model: x.model, dependsOn: x.dependsOn, branch: x.branch, review: x.review });
+/** A task's name, or its first line where it has none, as the bot says it (`itemTitle`). */
+const titleOf = (x: Pick<QueueItem, 'name' | 'prompt'>): string => x.name?.trim() || x.prompt.split(/\r?\n/)[0]!.trim().slice(0, 80) || '…';
+const asEdit = (x: QueueItem): Edit => ({
+  id: x.id,
+  ...(x.name ? { name: x.name } : {}),
+  prompt: x.prompt,
+  model: x.model,
+  dependsOn: x.dependsOn,
+  branch: x.branch,
+  review: x.review,
+  ...(x.reviewModel ? { reviewModel: x.reviewModel } : {}),
+  ...(x.lead ? { lead: true } : {}),
+  ...(x.workerModel ? { workerModel: x.workerModel } : {}),
+});
+const fromDraft = (d: Draft): Omit<Edit, 'id'> => ({
+  ...(d.name.trim() ? { name: d.name.trim() } : {}),
+  prompt: d.prompt,
+  model: d.model,
+  dependsOn: d.dependsOn,
+  branch: d.branch,
+  review: !d.lead && d.review,
+  ...(!d.lead && d.review && d.reviewModel ? { reviewModel: d.reviewModel } : {}),
+  ...(d.lead ? { lead: true, ...(d.workerModel ? { workerModel: d.workerModel } : {}) } : {}),
+});
 function newItemId(items: QueueItem[]): string {
   let n = items.length + 1;
   while (items.some((x) => x.id === `q${n}`)) n += 1;
@@ -86,8 +121,8 @@ export default function QueuePage() {
   const submit = async () => {
     const edits = items.map(asEdit);
     const at = editing ? edits.findIndex((x) => x.id === editing) : -1;
-    if (at >= 0) edits[at] = { ...edits[at]!, ...draft };
-    else edits.push({ id: newItemId(items), ...draft });
+    if (at >= 0) edits[at] = { id: edits[at]!.id, ...fromDraft(draft) };
+    else edits.push({ id: newItemId(items), ...fromDraft(draft) });
     if (await save(edits)) {
       setDraft(EMPTY);
       setEditing(null);
@@ -95,8 +130,18 @@ export default function QueuePage() {
   };
   const edit = (x: QueueItem) => {
     setEditing(x.id);
-    setDraft({ prompt: x.prompt, model: x.model, dependsOn: x.dependsOn, branch: x.branch, review: x.review });
-    document.getElementById('queue-prompt')?.focus();
+    setDraft({
+      name: x.name ?? '',
+      prompt: x.prompt,
+      model: x.model,
+      dependsOn: x.dependsOn,
+      branch: x.branch,
+      review: x.review,
+      reviewModel: x.reviewModel ?? '',
+      lead: !!x.lead,
+      workerModel: x.workerModel ?? '',
+    });
+    document.getElementById('queue-name')?.focus();
   };
   const move = (id: string, by: -1 | 1) => {
     const edits = items.map(asEdit);
@@ -107,7 +152,7 @@ export default function QueuePage() {
     void save(edits);
   };
   const remove = async (x: QueueItem) => {
-    if (!(await confirmDialog(t('q.removeConfirm', { title: titleOf(x.prompt) })))) return;
+    if (!(await confirmDialog(t('q.removeConfirm', { title: titleOf(x) })))) return;
     // The tasks that depended on it no longer do: it is not there to wait for.
     void save(items.filter((o) => o.id !== x.id).map((o) => ({ ...asEdit(o), dependsOn: o.dependsOn.filter((d) => d !== x.id) })));
   };
@@ -133,11 +178,23 @@ export default function QueuePage() {
 
   const running = items.findIndex((x) => x.status === 'running');
   const waiting = items.filter((x) => x.status === 'waiting').length;
-  const summary = queue?.running && running >= 0
-    ? t('q.runningNow', { n: running + 1, of: items.length })
-    : t('q.counts', { waiting, done: items.filter((x) => x.status === 'done').length, failed: items.filter((x) => ['failed', 'skipped', 'stopped'].includes(x.status)).length });
+  const summary =
+    queue?.running && running >= 0
+      ? t('q.runningNow', { n: running + 1, of: items.length })
+      : t('q.counts', { waiting, done: items.filter((x) => x.status === 'done').length, failed: items.filter((x) => ['failed', 'skipped', 'stopped'].includes(x.status)).length });
   // What a task may depend on: the tasks before it (all of them, for a new one).
   const earlier = editing ? items.slice(0, Math.max(0, numberOf(editing) - 1)) : items;
+  /*
+   * A task that would wait for a model to be chosen by hand, as the bot judges it (`waitsByHand`): none of its own and
+   * none in Settings for its chat, or for its review. The queue does not start then.
+   */
+  const unnamed =
+    !!catalogue &&
+    items.some(
+      (x) =>
+        x.status === 'waiting' &&
+        ((!x.model && !(x.lead ? catalogue.defaultLeadModel || catalogue.defaultModel : catalogue.defaultModel)) || (!x.lead && x.review && !x.reviewModel && !catalogue.defaultReviewModel)),
+    );
 
   return (
     <div className="queue-page">
@@ -155,8 +212,7 @@ export default function QueuePage() {
             {t('q.byHand')} <Link href="/settings#model">{t('q.byHandLink')}</Link>
           </p>
         )}
-        {/* A task on Settings' model with none there would wait for a choice by hand: the queue does not start (`queueWithoutModel`). */}
-        {catalogue && !catalogue.defaultModel && items.some((x) => x.status === 'waiting' && !x.model) && (
+        {unnamed && (
           <p className="why warned-text queue-no-model">
             {t('q.noModel')} <Link href="/settings#model">{t('q.byHandLink')}</Link>
           </p>
@@ -177,6 +233,7 @@ export default function QueuePage() {
             </span>
           )}
         </div>
+        <QueueGraph items={items} titleOf={titleOf} />
         {!queue ? (
           <p className="muted small">{t('q.loading')}</p>
         ) : items.length === 0 ? (
@@ -188,14 +245,23 @@ export default function QueuePage() {
                 <div className="queue-head">
                   <span className="queue-n">{i + 1}</span>
                   <span className={`queue-status s-${x.status}`}>{t(STATUS[x.status])}</span>
-                  <span className="queue-title">{titleOf(x.prompt)}</span>
+                  <span className="queue-title">{titleOf(x)}</span>
                 </div>
                 <div className="queue-meta small muted">
-                  <span>{x.model || t('q.settingsModel')}</span>
+                  {x.lead ? (
+                    <>
+                      <span>{t('q.leadOn')}</span>
+                      <span>{t('q.leadIs', { model: x.model || t('q.settingsModel') })}</span>
+                      <span>{t('q.workerIs', { model: x.workerModel || t('q.settingsModel') })}</span>
+                    </>
+                  ) : (
+                    <span>{x.model || t('q.settingsModel')}</span>
+                  )}
                   <span>{x.branch === 'main' ? t('q.branchMain') : t('q.branchFolder')}</span>
-                  {x.review && <span>{t('q.reviewOn')}</span>}
+                  {x.review && <span>{x.reviewModel ? t('q.reviewOnModel', { model: x.reviewModel }) : t('q.reviewOn')}</span>}
                   {x.dependsOn.length > 0 && <span>{t('q.dependsOnList', { list: x.dependsOn.map((d) => `#${numberOf(d)}`).join(', ') })}</span>}
                 </div>
+                {x.name && x.name.trim() !== x.prompt.trim() && <div className="small queue-prompt">{x.prompt.split(/\r?\n/)[0]}</div>}
                 {x.why && <div className="small queue-why">{x.why}</div>}
                 <div className="row queue-actions">
                   {x.sessionId && (
@@ -234,17 +300,56 @@ export default function QueuePage() {
 
       <section className="panel" id="queue-add" aria-labelledby="queue-add-title">
         <h2 id="queue-add-title">{editing ? t('q.editTitle', { n: numberOf(editing) }) : t('q.addTitle')}</h2>
+        <div className="settings-field">
+          <div className="field-label">
+            <label htmlFor="queue-name">{t('q.name')}</label>
+            <InfoTip label={t('info.about', { name: t('q.name') })} text={t('q.nameWhy')} />
+          </div>
+          <div className="field-control">
+            <input id="queue-name" type="text" maxLength={80} value={draft.name} placeholder={draft.prompt ? titleOf({ prompt: draft.prompt }) : ''} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          </div>
+        </div>
         <label htmlFor="queue-prompt">{t('q.prompt')}</label>
         <textarea id="queue-prompt" rows={5} value={draft.prompt} onChange={(e) => setDraft({ ...draft, prompt: e.target.value })} />
         <div className="settings-field">
-          <div className="field-label">
-            <label htmlFor="queue-model">{t('q.model')}</label>
-            <InfoTip label={t('info.about', { name: t('q.model') })} text={t('q.modelWhy')} />
-          </div>
-          <div className="field-control">
-            <ModelPicker id="queue-model" chosen={draft.model} onChange={(name) => setDraft({ ...draft, model: name })} none={t('q.modelSettings', { name: catalogue?.defaultModel || '—' })} catalogue={catalogue} />
+          <div className="field-label check-label">
+            <input id="queue-lead" type="checkbox" checked={draft.lead} onChange={(e) => setDraft({ ...draft, lead: e.target.checked })} />
+            <label htmlFor="queue-lead">{t('q.lead')}</label>
+            <InfoTip label={t('info.about', { name: t('q.lead') })} text={t('q.leadWhy')} />
           </div>
         </div>
+        <div className="settings-field">
+          <div className="field-label">
+            <label htmlFor="queue-model">{draft.lead ? t('q.leadModel') : t('q.model')}</label>
+            <InfoTip label={t('info.about', { name: draft.lead ? t('q.leadModel') : t('q.model') })} text={draft.lead ? t('q.leadModelWhy') : t('q.modelWhy')} />
+          </div>
+          <div className="field-control">
+            <ModelPicker
+              id="queue-model"
+              chosen={draft.model}
+              onChange={(name) => setDraft({ ...draft, model: name })}
+              none={t('q.modelSettings', { name: (draft.lead ? catalogue?.defaultLeadModel || catalogue?.defaultModel : catalogue?.defaultModel) || '—' })}
+              catalogue={catalogue}
+            />
+          </div>
+        </div>
+        {draft.lead && (
+          <div className="settings-field">
+            <div className="field-label">
+              <label htmlFor="queue-worker-model">{t('q.workerModel')}</label>
+              <InfoTip label={t('info.about', { name: t('q.workerModel') })} text={t('q.workerModelWhy')} />
+            </div>
+            <div className="field-control">
+              <ModelPicker
+                id="queue-worker-model"
+                chosen={draft.workerModel}
+                onChange={(name) => setDraft({ ...draft, workerModel: name })}
+                none={t('q.modelSettings', { name: catalogue?.defaultModel || draft.model || catalogue?.defaultLeadModel || '—' })}
+                catalogue={catalogue}
+              />
+            </div>
+          </div>
+        )}
         <div className="settings-field">
           <div className="field-label">
             <label htmlFor="queue-branch">{t('q.branch')}</label>
@@ -257,22 +362,43 @@ export default function QueuePage() {
             </select>
           </div>
         </div>
-        <div className="settings-field">
-          <div className="field-label check-label">
-            <input id="queue-review" type="checkbox" checked={draft.review} onChange={(e) => setDraft({ ...draft, review: e.target.checked })} />
-            <label htmlFor="queue-review">{t('q.review')}</label>
-            <InfoTip label={t('info.about', { name: t('q.review') })} text={t('q.reviewWhy')} />
-          </div>
-        </div>
-        <fieldset className="queue-depends">
-          <legend className="field-label">
-            <span className="field-name">{t('q.dependsOn')}</span>
-            <InfoTip label={t('info.about', { name: t('q.dependsOn') })} text={t('q.dependsOnWhy')} />
-          </legend>
-          {earlier.length === 0 ? (
-            <p className="muted small">{t('q.noEarlier')}</p>
-          ) : (
-            earlier.map((o) => (
+        {/* With two chats the lead judges the worker's reports: no review of its own, as in the chat. */}
+        {!draft.lead && (
+          <>
+            <div className="settings-field">
+              <div className="field-label check-label">
+                <input id="queue-review" type="checkbox" checked={draft.review} onChange={(e) => setDraft({ ...draft, review: e.target.checked })} />
+                <label htmlFor="queue-review">{t('q.review')}</label>
+                <InfoTip label={t('info.about', { name: t('q.review') })} text={t('q.reviewWhy')} />
+              </div>
+            </div>
+            {draft.review && (
+              <div className="settings-field">
+                <div className="field-label">
+                  <label htmlFor="queue-review-model">{t('q.reviewModel')}</label>
+                  <InfoTip label={t('info.about', { name: t('q.reviewModel') })} text={t('q.reviewModelWhy')} />
+                </div>
+                <div className="field-control">
+                  <ModelPicker
+                    id="queue-review-model"
+                    chosen={draft.reviewModel}
+                    onChange={(name) => setDraft({ ...draft, reviewModel: name })}
+                    none={t('q.modelSettings', { name: catalogue?.defaultReviewModel || '—' })}
+                    catalogue={catalogue}
+                  />
+                </div>
+              </div>
+            )}
+          </>
+        )}
+        {/* Only where there is an earlier task to depend on (operator, 2026-10-24). */}
+        {earlier.length > 0 && (
+          <fieldset className="queue-depends">
+            <legend className="field-label">
+              <span className="field-name">{t('q.dependsOn')}</span>
+              <InfoTip label={t('info.about', { name: t('q.dependsOn') })} text={t('q.dependsOnWhy')} />
+            </legend>
+            {earlier.map((o) => (
               <label key={o.id} className="queue-dep">
                 <input
                   type="checkbox"
@@ -280,12 +406,12 @@ export default function QueuePage() {
                   onChange={(e) => setDraft({ ...draft, dependsOn: e.target.checked ? [...draft.dependsOn, o.id] : draft.dependsOn.filter((d) => d !== o.id) })}
                 />
                 <span>
-                  #{numberOf(o.id)} {titleOf(o.prompt)}
+                  #{numberOf(o.id)} {titleOf(o)}
                 </span>
               </label>
-            ))
-          )}
-        </fieldset>
+            ))}
+          </fieldset>
+        )}
         <div className="row">
           <button className="primary" onClick={() => void submit()} disabled={busy || !draft.prompt.trim()}>
             {editing ? t('q.save') : t('q.add')}

@@ -806,7 +806,7 @@ try {
     const kerrigan = page.getByRole('button', { name: en['kerrigan.button']!, exact: true });
     await kerrigan.waitFor();
     t.check('the right panel has the chat alone', await page.getByRole('tablist', { name: en['wb.chatPanel']! }).getByRole('tab').allTextContents(), [en['wb.chatTab']]);
-    t.check('the bar on top links Settings and System, and nothing of the sessions', await page.locator('.wb-menu a').allTextContents(), [en['nav.defaults'], en['nav.system']]);
+    t.check('the bar on top links the queue, Settings and System, and nothing of the sessions', await page.locator('.wb-menu a').allTextContents(), [en['nav.queue'], en['nav.defaults'], en['nav.system']]);
     t.check('no "Write in the chat", "Import a plan" or "Ask Kerrigan" on the home screen', await page.locator('.wb-welcome').getByRole('button').allTextContents(), [`${en['kerrigan.button']} ▾`, 'i']);
     // The tab's icon (2026-10-22): the aeroplane, named by the page and served with it.
     const iconHref = await page.locator('head link[rel="icon"]').first().getAttribute('href');
@@ -906,8 +906,8 @@ try {
     const html = (name: string): Promise<string | undefined> => page.evaluate((n) => document.documentElement.dataset[n], name);
     await page.getByRole('button', { name: en['wb.appearance']!, exact: true }).waitFor();
     const order = await page.locator('.wb-menu').evaluate((nav) => Array.from(nav.children).map((c) => (c.textContent ?? '').trim()));
-    // System and Appearance swapped (operator, 2026-10-22): Settings, System, Appearance, then the language.
-    t.check('in the bar on top, after Settings and System, before the language', order.slice(0, 3), [en['nav.defaults'], en['nav.system'], en['nav.appearance']]);
+    // System and Appearance swapped (operator, 2026-10-22): Settings, System, Appearance, then the language; the queue first (2026-10-24).
+    t.check('in the bar on top, after the queue, Settings and System, with the language', [order.slice(0, 3), order[3]!.startsWith(en['nav.appearance']!) && order[3]!.includes('Language')], [[en['nav.queue'], en['nav.defaults'], en['nav.system']], true]);
     t.check('and no longer in the column of icons', await page.locator('.wb-activity').getByRole('button', { name: en['wb.appearance']!, exact: true }).count(), 0);
     // Cursors of the page's own, by the theme; the system's when asked for (2026-10-21).
     t.truthy('the page draws its own cursor', (await page.evaluate(() => getComputedStyle(document.body).cursor)).includes('url('), await page.evaluate(() => getComputedStyle(document.body).cursor));
@@ -981,7 +981,9 @@ try {
     await page.goto(url('/settings'));
     t.check('no page of its own in the navigation', await page.locator('nav a[href="/appearance"]').count(), 0);
     const pages = await page.locator('header nav').first().evaluate((nav) => Array.from(nav.children).map((c) => (c.textContent ?? '').trim()));
-    t.truthy('on the other pages too, after System', pages.indexOf(en['nav.system']!) === pages.indexOf(en['nav.defaults']!) + 1 && pages.indexOf(en['nav.appearance']!) === pages.indexOf(en['nav.system']!) + 1, pages);
+    // After System, Appearance and the language as one (2026-10-24).
+    const pair = pages.findIndex((p) => p.startsWith(en['nav.appearance']!) && p.includes('Language'));
+    t.truthy('on the other pages too, after System, with the language', pages.indexOf(en['nav.system']!) === pages.indexOf(en['nav.defaults']!) + 1 && pair === pages.indexOf(en['nav.system']!) + 1, pages);
     // The old address of Settings goes on to the new one, with its #part.
     await page.goto(url('/defaults#skills'));
     await page.waitForURL(/\/settings(\.html)?#skills$/, { timeout: 10_000 }).catch(() => undefined);
@@ -1133,6 +1135,37 @@ try {
   });
 
   /*
+   * The bars on top in narrow windows (operator, 2026-10-24: "the Queue button is not seen on the chat's page; see that
+   * the navigation wraps well on small screens; Appearance and Language always on one line together, unless there is not
+   * room for both"): every link and both buttons on screen at every width, wrapped rather than hidden or scrolled away,
+   * the two buttons side by side, and no page wider than its window.
+   */
+  await scenario('the bars on top in narrow windows: every link on screen, Appearance and Language together', {}, async (_h, page, url) => {
+    for (const lang of ['en', 'bg']) {
+      await page.evaluate((l) => localStorage.setItem('cop.locale', l), lang).catch(() => undefined);
+      for (const [path, bar] of [['/', '.wb-menu'], ['/settings', '.top nav']] as const) {
+        await page.goto(url(path));
+        await page.locator(`${bar} .nav-pair`).waitFor();
+        for (const width of [360, 480, 640, 900, 1280]) {
+          await page.setViewportSize({ width, height: 800 });
+          await page.waitForTimeout(150);
+          // Written inline: a named function in here is wrapped by the bundler in a helper the page does not have.
+          const seen = await page.evaluate((sel) => {
+            const nav = document.querySelector(sel)!;
+            const parts = [...nav.querySelectorAll(':scope > a'), ...nav.querySelectorAll('.nav-pair > *')];
+            const onScreen = parts.every((el) => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().left >= -1 && el.getBoundingClientRect().right <= window.innerWidth + 1 && getComputedStyle(el).display !== 'none');
+            const [a, b] = [...nav.querySelectorAll('.nav-pair > *')].map((el) => el.getBoundingClientRect());
+            const room = nav.getBoundingClientRect().width >= a!.width + b!.width + 4;
+            return { onScreen, together: !room || Math.abs(a!.top - b!.top) < 4, over: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+          }, bar);
+          t.check(`${lang} ${path} at ${width}px: every link and both buttons on screen, the two together, nothing wider than the window`, [seen.onScreen, seen.together, seen.over <= 1], [true, true, true]);
+        }
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+  });
+
+  /*
    * The queue of tasks (operator, 2026-10-24): written on its page — what to do, its model, where it works, the earlier
    * tasks it depends on — then run; one that fails takes the one that depends on it with it, the rest are said as they
    * end, each with its chat to open; "Run again", editing and taking one out.
@@ -1144,24 +1177,47 @@ try {
     t.check('"Queue" in the bar, after "Chat", and it is this page', [await page.locator('nav a').evaluateAll((as) => as.map((a) => a.textContent?.trim() ?? '').slice(0, 3)), await page.locator('nav a[aria-current="page"]').textContent()], [[en['nav.workbench'], en['nav.queue'], en['nav.defaults']], en['nav.queue']]);
     t.check('empty, said so; nothing to run', [await page.locator('#queue').getByText(en['q.empty']).count(), await page.getByRole('button', { name: en['q.run'] }).isDisabled()], [1, true]);
 
+    // Nothing earlier to depend on: no "Depends on" at all (operator, 2026-10-24: its "no earlier task" said nothing).
+    t.check('the first task: no "Depends on"', await page.locator('.queue-depends').count(), 0);
+    // Two chats: the model is the lead's, the worker's own beside it, and no review of its own (the lead judges).
+    await page.locator('#queue-lead').check();
+    t.check('"Two chats": the lead\'s model, the worker\'s, and no review', [await page.locator('label[for="queue-model"]').textContent(), await page.locator('#queue-worker-model').count(), await page.locator('#queue-review').count()], [en['q.leadModel'], 1, 0]);
+    await page.locator('#queue-lead').uncheck();
+    t.check('one chat: the review, and its model while it is ticked', [await page.locator('#queue-review').isChecked(), await page.locator('#queue-review-model').count(), await page.locator('#queue-worker-model').count()], [true, 1, 0]);
+    await page.locator('#queue-name').fill('Summary');
     await page.locator('#queue-prompt').fill('Find the old report and summarise it.');
     await page.locator('#queue-model').selectOption('Think deeper');
     await page.locator('#queue-review').uncheck();
-    t.check('nothing earlier to depend on', await page.locator('.queue-depends').getByText(en['q.noEarlier']).count(), 1);
+    t.check('unticked, the review\'s model goes', await page.locator('#queue-review-model').count(), 0);
     await page.getByRole('button', { name: en['q.add'] }).click();
     await page.locator('.queue-item').first().waitFor();
     await page.locator('#queue-prompt').fill('Turn the summary into a slide.');
-    await page.locator('#queue-review').uncheck();
+    await page.locator('#queue-lead').check();
+    await page.locator('#queue-worker-model').selectOption('Think deeper');
+    t.check('a second task: "Depends on" offers the first, by its name', await page.locator('.queue-dep').allTextContents(), ['#1 Summary']);
     await page.locator('.queue-dep input').first().check();
     await page.getByRole('button', { name: en['q.add'] }).click();
     await page.locator('.queue-item').nth(1).waitFor();
     const meta = await page.locator('.queue-item .queue-meta').allTextContents();
-    t.check('two tasks, waiting; the first on its model, the second on Settings\' and depending on the first', [
+    t.check('two tasks, waiting; the first by its name, on its model; the second two chats, depending on the first', [
       await page.locator('.queue-item .queue-status').allTextContents(),
+      await page.locator('.queue-item .queue-title').allTextContents(),
       meta[0]!.includes('Think deeper'),
-      meta[1]!.includes(en['q.settingsModel']) && meta[1]!.includes(en['q.dependsOnList'].replace('{list}', '#1')),
-    ], [[en['q.waiting'], en['q.waiting']], true, true]);
-    t.check('the form empty again for the next', await page.locator('#queue-prompt').inputValue(), '');
+      meta[1]!.includes(en['q.leadOn']) && meta[1]!.includes(en['q.workerIs'].replace('{model}', 'Think deeper')) && meta[1]!.includes(en['q.dependsOnList'].replace('{list}', '#1')),
+    ], [[en['q.waiting'], en['q.waiting']], ['Summary', 'Turn the summary into a slide.'], true, true]);
+    const saved = (await h.call<{ items: Array<Record<string, unknown>> }>('GET', '/queue')).items;
+    t.check('kept as written: the name, two chats with the worker\'s model, no review', [saved[0]!.name, saved[0]!.review, saved[1]!.lead, saved[1]!.workerModel, saved[1]!.review], ['Summary', false, true, 'Think deeper', false]);
+    t.check('the form empty again for the next', [await page.locator('#queue-prompt').inputValue(), await page.locator('#queue-name').inputValue()], ['', '']);
+
+    // The picture: a dot a task, a thread from the first to the second, the names when asked for, one on pointing.
+    const graph = page.locator('.queue-graph');
+    t.check('the picture: two dots, numbered, and one thread between them', [await graph.locator('.qg-task').count(), await graph.locator('.qg-n').allTextContents(), await graph.locator('svg[role="img"] path.qg-thread').count()], [2, ['1', '2'], 1]);
+    t.check('no names on it until asked for', await graph.locator('.qg-name').count(), 0);
+    await graph.locator('.qg-task').first().hover();
+    t.check('pointing at a dot: its number and name', ((await graph.locator('.qg-tip strong').textContent()) ?? '').replace(/\s+/g, ' ').trim(), '1. Summary');
+    await page.mouse.move(0, 0);
+    await graph.getByLabel(en['q.showNames']).check();
+    t.check('"Show all names": every name under its dot', await graph.locator('.qg-name').allTextContents(), ['Summary', 'Turn the summa…']);
 
     // Editing a task: its words in the form, under its number; "Cancel" leaves it as it was.
     await page.locator('.queue-item').nth(1).getByRole('button', { name: en['q.edit'] }).click();
@@ -1176,7 +1232,7 @@ try {
     await page.locator('.queue-item.is-skipped').waitFor({ timeout: 15_000 });
     t.check('the first failed, the second skipped for it, and why', [await page.locator('.queue-item .queue-status').allTextContents(), await page.locator('.queue-item').nth(1).locator('.queue-why').textContent()], [
       [en['q.failed'], en['q.skipped']],
-      'it depends on "Find the old report and summarise it.", which failed',
+      'it depends on "Summary", which failed',
     ]);
     t.check('the one that ran has its chat to open; the skipped one none', [await page.locator('.queue-item').nth(0).getByRole('link', { name: en['q.openChat'] }).count(), await page.locator('.queue-item').nth(1).getByRole('link', { name: en['q.openChat'] }).count()], [1, 0]);
     t.check('said under the button', await page.locator('.queue-controls [role="status"]').textContent(), en['q.counts'].replace('{waiting}', '0').replace('{done}', '0').replace('{failed}', '2'));
@@ -2110,7 +2166,7 @@ try {
     await page.goto(url('/'));
     const top = page.locator('.wb-menu');
     await top.getByRole('link', { name: en['nav.system']!, exact: true }).waitFor();
-    t.check('on the chat\'s screen: Settings and System on top', await top.getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href'))), ['/settings', '/system']);
+    t.check('on the chat\'s screen: the queue, Settings and System on top', await top.getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href'))), ['/queue', '/settings', '/system']);
     const button = top.getByRole('button', { name: 'Language', exact: true });
     await button.click();
     const items = page.getByRole('menuitemradio');

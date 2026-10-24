@@ -130,11 +130,17 @@ export type ChatSent = { threadId: string; taskId: string; noted?: boolean; need
 /** A task of the queue (2026-10-24), as `src/queue/queue.ts` keeps it. */
 export type QueueItem = {
   id: string;
+  /** Its name in the list and the picture (2026-10-24); empty: the task's first line. */
+  name?: string;
   prompt: string;
   model: string;
   dependsOn: string[];
   branch: 'folder' | 'main';
   review: boolean;
+  reviewModel?: string;
+  /** Two chats: a lead on `model`, a worker on `workerModel` (2026-10-24). */
+  lead?: boolean;
+  workerModel?: string;
   status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
   why?: string;
   sessionId?: string;

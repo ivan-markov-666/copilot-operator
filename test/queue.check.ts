@@ -12,7 +12,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkItems, mergeItems, nextStep, skippedBecause, statusOfTask, type QueueItem } from '../src/queue/queue.js';
+import { checkItems, itemTitle, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type QueueItem } from '../src/queue/queue.js';
 import { makeDirs, startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
@@ -31,6 +31,26 @@ t.check('a task says something, and not too much', [
   (checkItems([{ id: 'a', prompt: 'x'.repeat(11) }], 10) as { problem: string }).problem,
 ], ['Task 1 says nothing: write what it is to do.', 'Task 1 is 11 characters; a task can be at most 10.']);
 t.check('what is not said is the default: the folder as it is, reviewed, Settings\' model', (checkItems([{ id: 'a', prompt: 'x' }], 1000) as { items: unknown[] }).items, [{ id: 'a', prompt: 'x', model: '', dependsOn: [], branch: 'folder', review: true }]);
+// A name, two chats with the worker's model, the review's model (operator, 2026-10-24).
+t.check('two chats: the worker\'s model kept, no review of its own (the lead judges), whatever is sent', (checkItems([{ id: 'a', name: ' Report ', prompt: 'x', lead: true, workerModel: 'W', review: true, reviewModel: 'R' }], 1000) as { items: unknown[] }).items, [
+  { id: 'a', name: 'Report', prompt: 'x', model: '', dependsOn: [], branch: 'folder', review: false, lead: true, workerModel: 'W' },
+]);
+t.check('one chat, reviewed: the review\'s model kept, no worker\'s', (checkItems([{ id: 'a', prompt: 'x', review: true, reviewModel: 'R', workerModel: 'W' }], 1000) as { items: unknown[] }).items, [
+  { id: 'a', prompt: 'x', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: 'R' },
+]);
+t.check('a name too long is refused', (checkItems([{ id: 'a', name: 'n'.repeat(81), prompt: 'x' }], 1000) as { problem: string }).problem, 'The name of task 1 is longer than 80 characters.');
+t.check('the name, where there is one, is what a task is called', [itemTitle({ name: 'Report', prompt: 'Write it.\nmore' }), itemTitle({ prompt: 'Write it.\nmore' })], ['Report', 'Write it.']);
+const none = {};
+t.check('what would wait for a model chosen by hand: no model anywhere; a review with none; the lead with none', [
+  waitsByHand({ model: '', review: false }, none),
+  waitsByHand({ model: '', review: false }, { defaultModel: 'A' }),
+  waitsByHand({ model: 'A', review: true }, none),
+  waitsByHand({ model: 'A', review: true, reviewModel: 'B' }, none),
+  waitsByHand({ model: 'A', review: true }, { defaultReviewModel: 'B' }),
+  waitsByHand({ model: '', review: false, lead: true }, { defaultLeadModel: 'L' }),
+  waitsByHand({ model: '', review: false, lead: true }, { defaultModel: 'A' }),
+  waitsByHand({ model: '', review: true, lead: true }, none),
+], [['model'], [], ['review'], [], [], [], [], ['model']]);
 
 const ran = [item('a', { status: 'failed', why: 'blocked', sessionId: 's1' }), item('b', { status: 'running', sessionId: 's2' }), item('c')];
 const merged = mergeItems(ran, [
@@ -139,6 +159,17 @@ try {
   t.truthy('and that the server\'s main could not be fetched, so it is the local one, not to be pulled', /The server's `main` could not be fetched.*a run never types a password or a key's passphrase, so it is the local `main`.*Do not try to fetch or pull it\./s.test(second!), second!.slice(0, 2500));
   t.truthy('the chats in the folder as it is are told that', first!.includes("## Working in the operator's folder") && third!.includes("## Working in the operator's folder"), '');
   t.check('"Run again" puts the failed one back to wait', (await h.call<QueueView>('PUT', '/queue', { items: done.items.map((x) => ({ ...x, ...(x.id === 'q1' ? { status: 'waiting' } : {}) })) })).items.map((x) => x.status), ['waiting', 'skipped', 'done', 'done', 'skipped']);
+
+  // Two chats from the queue (2026-10-24): the lead on the task's model, the worker on its own, no review.
+  await h.call('PUT', '/queue', { items: [{ id: 'q6', name: 'Plan it', prompt: 'Plan the migration of the reports.', model: 'Think deeper', lead: true, workerModel: 'GPT 5.6 Think deeper', dependsOn: [], branch: 'folder' }] });
+  h.chat.script(reply.lead.blocked('Nothing was done: this check only looks at how the conversation was made.', 'nothing; this is a check', { understanding: 'A plan of the migration of the reports.' }));
+  await h.call('POST', '/queue/run');
+  const led = await waitFor('the two-chat task to end', async () => {
+    const q = await h!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'waiting' && q.items[0]!.status !== 'running' ? q.items[0]! : null;
+  }, 60_000);
+  const lead = await h.call<SessionView & { lead?: { workerModel?: string }; review?: { enabled: boolean } }>('GET', `/sessions/${led.sessionId}`);
+  t.check('a task of two chats: a lead on its model, the worker\'s model kept for its worker, no review, named', [lead.name, lead.model, lead.lead?.workerModel, lead.review?.enabled], ['queue: Plan it', 'Think deeper', 'GPT 5.6 Think deeper', false]);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
@@ -157,7 +188,7 @@ try {
   const refused = await h2.raw('POST', '/queue/run');
   t.check('a task with no model anywhere: the queue does not start, and says why', [refused.status, (refused.body as { message?: string }).message], [
     400,
-    '"task b" has no model of its own, and Settings have no "Model for the worker": it would wait for you to choose one by hand. Choose a model for it, or one in Settings.',
+    '"task b" has no model of its own, and Settings have no "Model for the worker": it would wait for you to choose a model by hand. Choose the model in the task, or in Settings.',
   ]);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));

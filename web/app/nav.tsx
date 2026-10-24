@@ -34,6 +34,20 @@ const LINKS: Array<{ href: string; label: Key; icon: keyof typeof ICONS }> = [
   { href: '/system', label: 'nav.system', icon: 'system' },
 ];
 
+/**
+ * "Appearance" and "Language", one item of the bar (operator, 2026-10-24: "always on one line together — if they go to
+ * the line below, they go together — unless there is not room for both"): a narrower window wraps them to the next line
+ * as one, and they part only when one line cannot hold the two.
+ */
+export function NavPair() {
+  return (
+    <span className="nav-pair">
+      <AppearanceMenu />
+      <LanguageSwitcher />
+    </span>
+  );
+}
+
 export function SkipLink() {
   const { t } = useT();
   return (
@@ -68,10 +82,9 @@ export function Nav() {
             </span>
           )}
         </Link>,
-        // How the page looks, after System and before the language, as on the chat's screen (operator, 2026-10-22).
-        ...(l.href === '/system' ? [<AppearanceMenu key="appearance" />] : []),
       ])}
-      <LanguageSwitcher />
+      {/* How the page looks, after System and before the language, as on the chat's screen (operator, 2026-10-22). */}
+      <NavPair />
     </nav>
   );
 }
