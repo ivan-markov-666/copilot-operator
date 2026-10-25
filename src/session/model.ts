@@ -140,6 +140,12 @@ export type Task = {
    */
   leftovers?: Array<{ pid: number; name: string; command: string; ports: number[]; by: string }>;
   /**
+   * Set when the attempt ended on a fault of the means rather than of the work (2026-10-25): `transport`, the chat or the
+   * browser failed under it (the runner's catch-all); `shell`, the commands could not be run at all. What a subtask of
+   * two chats reads to say whether it may be tried again (`classifySubtaskEnd`).
+   */
+  failure?: { kind: 'transport' | 'shell'; detail: string };
+  /**
    * The machine's tools as they were when the task ran: the layer under the project's
    * lockfile. Two runs of one plan a day apart got different major versions of everything
    * `npm install` fetched, and this is where that difference is read from.
@@ -507,6 +513,7 @@ export type TaskAttempt = {
   runGroup?: TaskRunGroup;
   /** What the runner stopped that this attempt left running. */
   leftovers?: Task['leftovers'];
+  failure?: Task['failure'];
   /** The machine's tools when this attempt ran. */
   environment?: Task['environment'];
   status: TaskStatus;
@@ -789,6 +796,11 @@ export type TaskContinuation = {
   instruction?: string;
   /** How the attempt being carried on ended, as the chat is told it. See `endingOf`. */
   ended?: TaskEnding;
+  /**
+   * Two chats, after a Stop (2026-10-25): the subtask the operator chose to try again first, by its number, in a fresh
+   * worker's conversation or not; the lead is then told how it went, with the plan and the reports it already has.
+   */
+  retrySubtask?: { n: number; fresh?: boolean };
 };
 
 /** How an attempt ended without the work being done: what is said to the chat that carries it on. */
@@ -1225,6 +1237,75 @@ export type PendingApproval = {
    */
   /** `commands`: by answer, the command the bot runs when that one is chosen (2026-10-23), or null. */
   question?: { text: string; why?: string; options: string[]; commands?: Array<string | null> };
+  /**
+   * Set when a subtask of two chats failed for a technical reason and the operator is asked what to do (2026-10-25):
+   * the subtask, the attempt and the most there may be, why, what the attempt left, and the choices — try it again in
+   * the same worker's conversation or a fresh one, carry on from the folder as it is or put it back to the subtask's
+   * start first (when what changed is not known), or take it as failed and let the lead decide.
+   */
+  retry?: {
+    n: number;
+    title: string;
+    attempt: number;
+    maxAttempts: number;
+    category: SubtaskFailure;
+    reason: string;
+    sideEffects: SideEffects;
+    changed: string[];
+    choices: RetryChoice[];
+  };
+};
+
+/** What the operator, or Settings, may choose for a subtask that failed for a technical reason (2026-10-25). */
+export type RetryChoice = 'same' | 'fresh' | 'continue' | 'restore' | 'accept';
+
+/**
+ * Why a subtask of two chats did not end done (operator's specification, 2026-10-25), which says whether it may be tried
+ * again: only a proven, temporary technical failure is, by itself.
+ *
+ *   TRANSIENT_CHAT_FAILURE           the chat or the browser: an answer that never came, came cut off or out of its
+ *                                    format, a page, tab or connection that failed, a control that could not be used
+ *   COMMAND_INFRASTRUCTURE_FAILURE   the commands could not be run at all (the shell was not there to run them)
+ *   TASK_EVIDENCE_FAILURE            the work itself: a test or build that fails, a blocker, a refused command, a check
+ *   USER_STOPPED                     the operator's Stop, or the window closed by them
+ *   UNKNOWN_SIDE_EFFECT_STATE        a technical failure after something may have changed, and what is not known
+ */
+export type SubtaskFailure = 'TRANSIENT_CHAT_FAILURE' | 'COMMAND_INFRASTRUCTURE_FAILURE' | 'TASK_EVIDENCE_FAILURE' | 'USER_STOPPED' | 'UNKNOWN_SIDE_EFFECT_STATE';
+
+/**
+ * What an attempt left behind (see `sideEffectsOf`): nothing changed in the folder and nothing cut off (`none`); changes
+ * made by commands that finished (`changed`); or something that may have changed and cannot be said (`unknown`).
+ */
+export type SideEffects = 'none' | 'changed' | 'unknown';
+
+/** One attempt at a subtask (2026-10-25): each its own task in the worker's session, all under the subtask's number. */
+export type SubtaskAttempt = {
+  attempt: number;
+  taskId: string;
+  status: TaskStatus;
+  /** Why it did not end done; absent when it did. */
+  category?: SubtaskFailure;
+  /** Why, in a sentence, without what does not belong in a record (tokens, paths of the profile). */
+  reason?: string;
+  /** The worker's conversation it ran in. */
+  chatId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  /** Its commands: how many began, and how many finished (a command cut off began and did not). */
+  commands: { started: number; completed: number };
+  /** Whether it changed the folder; null when that could not be read. */
+  repoChanged: boolean | null;
+  sideEffects?: SideEffects;
+  /** The attempt this one repeats. */
+  retryOf?: number;
+  /** A fresh worker's conversation. */
+  fresh?: boolean;
+  /** It carried on from the folder as the attempt before it left it, rather than from its start. */
+  continued?: boolean;
+  /** The folder put back to the subtask's start before it, by the operator's choice. */
+  restored?: boolean;
+  /** Who chose it: by Settings, by the operator on the card, or after a Stop. */
+  by?: 'settings' | 'operator' | 'after-stop';
 };
 
 /** One reply of the lead: what it decided, and what came of it. */
@@ -1234,8 +1315,20 @@ export type LeadRound = {
   status: 'delegate' | 'plan' | 'ask' | 'done' | 'blocked';
   understanding?: string;
   notes?: string;
-  /** The subtask it gave, by its task in the worker's session. */
-  subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean };
+  /**
+   * The subtask it gave, by its task in the worker's session: the last attempt's, when it was tried again (2026-10-25),
+   * with every attempt in `attempts`, the most it may take in `maxAttempts`, and the report the lead was given.
+   */
+  subtask?: {
+    n: number;
+    taskId: string;
+    title: string;
+    readOnly?: boolean;
+    fresh?: boolean;
+    attempts?: SubtaskAttempt[];
+    maxAttempts?: number;
+    report?: string;
+  };
   /** The question it asked the operator, and the answer it got. */
   question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
   /** This reply made the list of subtasks, or changed it: its version, and how many came and went (see `LeadLedger`). */

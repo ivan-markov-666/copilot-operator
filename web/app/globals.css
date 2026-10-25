@@ -1524,6 +1524,22 @@ button.skill-delete { flex: none; display: inline-flex; align-items: center; gap
 .cs-subtask-body { padding: 6px 10px 10px; }
 .cs-subtask.s-running, .cs-subtask.s-waiting-approval { border-color: var(--accent); }
 .cs-subtask.s-failed, .cs-subtask.s-blocked { border-color: var(--warn); }
+/*
+ * A subtask tried again (2026-10-25): which attempt it is on beside its title; the card that asks what to do after a
+ * technical failure, set apart as the lead's questions are; the attempts before folded, each with its own fold.
+ */
+.cs-subtask > summary .cs-attempt { margin-inline-start: auto; }
+.cs-attempt-why { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 4px 0 8px; }
+.cs-attempt-now { margin-top: 8px; }
+.cs-attempts { margin: 4px 0 8px; border-inline-start: 3px solid var(--line); padding-inline-start: 10px; }
+.cs-attempts > summary, .cs-attempt-line > summary { cursor: var(--cur-pointer); }
+.cs-attempt-line { margin: 6px 0; }
+.cs-attempt-line > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cs-attempt-facts { padding: 4px 0 0 4px; }
+.cs-attempt-facts p { margin: 2px 0; }
+.cs-retry, .cs-retry-after { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+.cs-retry-after { border-width: 1px; }
+.cs-retry-after p { margin: 0 0 6px; }
 .cs-question { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; }
 .cs-question textarea { width: 100%; min-height: 0; margin: 4px 0 8px; }
 .cs-question .cs-options { margin: 8px 0; }

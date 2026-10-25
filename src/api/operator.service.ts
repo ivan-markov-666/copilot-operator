@@ -29,7 +29,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type PlanMode, type TaskPlan } from '../session/model.js';
+import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
 import { Hold } from '../orchestrator/hold.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
@@ -48,8 +48,11 @@ export const MAX_PROJECT_LEVEL2 = 8000;
 
 /** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
 export type Skill = { name: string; description: string; text: string; projectDir: string };
-/** Its instructions: as long as a project's level 2, the longest text the opening carries besides the task. */
-export const MAX_SKILL_TEXT = 8000;
+/*
+ * Its instructions have no limit of their own (operator, 2026-10-25: "remove the limit; say how many characters there
+ * are instead"): the message they go with is held to Settings' `limits.maxMessageChars` like every other — longer, its
+ * beginning goes as text and the whole of it attached.
+ */
 export const MAX_SKILL_DESCRIPTION = 300;
 export const MAX_SKILLS = 50;
 /** What follows `/` at the start of a message: lowercase letters, digits and hyphens, 2 to 40 of them. */
@@ -150,6 +153,8 @@ type Waiting = {
   resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
   /** The lead's question (two chats): the operator's answer, or a stop. */
   resolveAnswer?: (a: { answer: string } | 'stop') => void;
+  /** A subtask that failed for a technical reason (two chats, 2026-10-25): what the operator chose for it, or a stop. */
+  resolveRetry?: (choice: RetryChoice | 'stop') => void;
 };
 
 /** Who has the browser profile: a conversation's run, a read of the model list, or the sign-in. */
@@ -1225,6 +1230,7 @@ export class OperatorService {
       approvePlan: (ask) => this.askPlanApproval(ask, controller.signal),
       // The two-chat mode (2026-10-20): the lead's questions, and the worker the run speaks for too.
       askQuestion: (ask) => this.askLeadQuestion(ask, controller.signal),
+      askSubtaskRetry: (ask) => this.askSubtaskRetry(ask, controller.signal),
       onWorker: (workerId) => this.workerLeads.set(workerId, sessionId),
       hold,
     })
@@ -1807,21 +1813,20 @@ export class OperatorService {
 
   // --- skills (2026-10-21) ----------------------------------------------------------------------------
 
-  /** The skills in Settings, and how long their instructions may be. */
-  async skills(): Promise<{ skills: Skill[]; maxText: number; maxDescription: number }> {
+  /** The skills in Settings, and how long what each is for may be. */
+  async skills(): Promise<{ skills: Skill[]; maxDescription: number }> {
     const cfg = await this.settings.load();
     return {
       skills: (cfg.skills ?? []).map((k) => ({ name: k.name, description: k.description ?? '', text: k.text ?? '', projectDir: k.projectDir ?? '' })),
-      maxText: MAX_SKILL_TEXT,
       maxDescription: MAX_SKILL_DESCRIPTION,
     };
   }
 
   /**
    * Stores the list as given, held to the rules: a name to type after `/` — lowercase, digits and hyphens, each used
-   * once — instructions that are there and not too long, a project that is one of Settings' or every project.
+   * once — instructions that are there, of any length, a project that is one of Settings' or every project.
    */
-  async setSkills(list: Array<Record<string, unknown>>): Promise<{ skills: Skill[]; maxText: number; maxDescription: number }> {
+  async setSkills(list: Array<Record<string, unknown>>): Promise<{ skills: Skill[]; maxDescription: number }> {
     if (!Array.isArray(list)) throw new Error('The skills come as a list.');
     if (list.length > MAX_SKILLS) throw new Error(`There can be at most ${MAX_SKILLS} skills.`);
     const cfg = await this.settings.load();
@@ -1836,7 +1841,6 @@ export class OperatorService {
       if (description.length > MAX_SKILL_DESCRIPTION) throw new Error(`What "${name}" is for is longer than ${MAX_SKILL_DESCRIPTION} characters; one line is enough.`);
       const text = String(k?.text ?? '');
       if (!text.trim()) throw new Error(`The skill "${name}" has no instructions: write what the chat should know and do for this kind of task.`);
-      if (text.length > MAX_SKILL_TEXT) throw new Error(`The instructions of "${name}" are longer than ${MAX_SKILL_TEXT.toLocaleString('en')} characters.`);
       const projectDir = String(k?.projectDir ?? '').trim();
       if (projectDir && !folders.some((f) => sameFolder(f, projectDir))) throw new Error(`The skill "${name}" is for ${projectDir}, which is not one of the projects in Settings.`);
       return { name, description, text, projectDir };
@@ -1977,6 +1981,68 @@ export class OperatorService {
   }
 
   /** The operator's answer to the lead's question. */
+  /**
+   * A subtask of two chats that failed for a technical reason, put to the operator (2026-10-25): a card under the subtask
+   * with why, which attempt it was, what it left, and the choices; it waits until one is chosen, or the task is stopped.
+   * Answered with `answerRetry`; "abort" on the card, a Stop or the end of the run stop the task.
+   */
+  askSubtaskRetry(ask: { sessionId: string; taskId: string; retry: NonNullable<PendingApproval['retry']> }, signal: AbortSignal): Promise<RetryChoice | 'stop'> {
+    return new Promise((resolveRetry) => {
+      if (signal.aborted) {
+        resolveRetry('stop');
+        return;
+      }
+      const approval: PendingApproval = {
+        id: newId('a-'),
+        sessionId: ask.sessionId,
+        taskId: ask.taskId,
+        stepId: 0,
+        description: `Subtask ${ask.retry.n} (${ask.retry.title}) did not finish, attempt ${ask.retry.attempt} of ${ask.retry.maxAttempts}: ${ask.retry.reason || ask.retry.category}`,
+        createdAt: new Date().toISOString(),
+        actor: 'lead',
+        retry: ask.retry,
+      };
+      this.waiting.set(approval.id, { approval, resolve: () => resolveRetry('stop'), resolveRetry });
+      this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
+        message: `subtask ${ask.retry.n} did not finish (attempt ${ask.retry.attempt} of ${ask.retry.maxAttempts}): the operator is asked what to do`, data: { approvalId: approval.id, retry: ask.retry } });
+    });
+  }
+
+  /** The operator's choice for a subtask that failed for a technical reason: one of the card's own. */
+  answerRetry(approvalId: string, choice: string): { ok: boolean; problem?: string } {
+    const w = this.waiting.get(approvalId);
+    if (!w?.resolveRetry || !w.approval.retry) return { ok: false, problem: 'No subtask is waiting for a choice under that id.' };
+    if (!w.approval.retry.choices.includes(choice as RetryChoice)) return { ok: false, problem: `"${choice}" is not one of this card's choices: ${w.approval.retry.choices.join(', ')}.` };
+    this.waiting.delete(approvalId);
+    w.resolveRetry(choice as RetryChoice);
+    this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
+      message: `the operator chose for subtask ${w.approval.retry.n}: ${choice}`, data: { approvalId, retry: choice } });
+    return { ok: true };
+  }
+
+  /**
+   * Two chats, after a Stop (2026-10-25): "do not start a task again by itself after Stop; when the operator carries on in
+   * the same conversation, let a chosen failed subtask be tried again, with the plan and the reports kept". The message
+   * is carried on with that subtask first (`TaskContinuation.retrySubtask`), then the lead goes on; the run is started
+   * as a message of the chat is.
+   */
+  async chatRetrySubtask(threadId: string, taskId: string, n: number, fresh: boolean): Promise<StartReply> {
+    await this.init();
+    const session = await this.store.getSession(threadId);
+    if (!session || session.kind !== 'chat') throw new Error('That conversation is not there any more.');
+    if (this.running.has(threadId)) throw new Error('The conversation is working: stop it first, or let it finish.');
+    const task = session.tasks.find((t) => t.id === taskId);
+    if (!task?.lead) throw new Error('That message is not one of two chats.');
+    if (task.status !== 'aborted') throw new Error('Only a message that was stopped has a subtask to try again: the others carry on by themselves, or end.');
+    const sub = [...task.lead.rounds].reverse().find((r) => r.subtask?.n === n)?.subtask;
+    if (!sub) throw new Error(`The message has no subtask ${n}.`);
+    const last = sub.attempts?.at(-1);
+    if (last?.status === 'done') throw new Error(`Subtask ${n} was done; it is not done again.`);
+    await this.store.rerunTask(threadId, taskId, {}, { fromAttempt: task.attempt ?? 1, stoppedBecause: task.reason, how: 'stopped', retrySubtask: { n, ...(fresh ? { fresh: true } : {}) } });
+    const cfg = await this.settings.load();
+    return await this.start(threadId, cfg.execution.mode);
+  }
+
   answerQuestion(approvalId: string, text: string): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
     if (!w?.resolveAnswer) return { ok: false, problem: 'No question of the lead is waiting under that id.' };

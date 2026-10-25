@@ -29,6 +29,31 @@ understanding, its notes, its plan, each subtask as a fold with the worker's com
 answers, and the result; the panel follows the worker's latest subtask. The worker's model is chosen beside the
 lead's (the lead's when none is), and a model chosen by hand is asked on a card that says which of the two it is for.
 
+**A subtask cut off, tried again (2026-10-25).** With two chats, a subtask that ended for a technical reason is tried
+again under the same number — never counted as another subtask — with the lead's plan, the subtasks done and the
+failed attempt's record kept (`src/orchestrator/subtaskRetry.ts`, the loop in `runSubtask` of `leadRunner.ts`). Each
+attempt is a task of the worker's, on record in `LeadRound.subtask.attempts` (`SubtaskAttempt`: its number, task,
+status, kind of failure, the reason — its first line, with tokens, passwords and the browser profile's path taken out —, the worker's chat, when it began and ended, the
+commands started and finished, whether the folder changed, which attempt it retried). The kinds: the chat broke off
+(`TRANSIENT_CHAT_FAILURE`: no reply in time, a reply unreadable after the repairs, the browser cut off), a command
+could not be run (`COMMAND_INFRASTRUCTURE_FAILURE`), the work was not done (`TASK_EVIDENCE_FAILURE`, never retried by
+this: the lead decides), stopped (`USER_STOPPED`, never restarted by itself) and not known what changed
+(`UNKNOWN_SIDE_EFFECT_STATE`: a command was cut off half way, or the folder was not photographed). Before an attempt
+is tried again, what the last one left decides how: nothing changed — tried again as it was; files changed — the next
+attempt carries on from the folder as it is, told which commands finished, not to run them again; not known — never
+by itself: a card asks to carry on from the folder as it is or to put it back as it was when the subtask began (its
+photograph; what is there now kept), never restored by itself. Settings → "Retrying an interrupted subtask":
+`limits.subtaskRetryMode` (`ask`, the default: a card under the subtask with the reason, the kind, "Attempt 1 of 3",
+"Try again", "Try with a new worker", "Accept as failed"; `same`; `fresh`, a new worker conversation told what the
+subtasks before it did; `lead`), `limits.subtaskRetries` (0–3, default 2) and `limits.subtaskRetryWaitSec` (default
+15; Stop ends the wait). The card is answered with `POST /api/approvals/:id/retry { choice }`. The subtask says
+"Retry 2 of 3" while it runs and "Done at attempt 2" after; its earlier attempts fold under it, each with its own work.
+The lead is sent the last attempt's report and how the others ended, under the same subtask. After Stop nothing is
+restarted; the stopped message's subtask that did not finish has "Try again" and "Try with a new worker" under it,
+which carry the message on with that subtask first, from the folder as it is, on the stopped attempt's record
+(`POST /api/chat/:id/tasks/:taskId/retry-subtask { n, fresh }`, `TaskContinuation.retrySubtask`). One chat is not
+touched by any of it.
+
 
 **Since 2026-10-20 (the second round).** The pages are the chat (`/`), Settings (`/settings`; `/defaults` until 2026-10-22, which goes on to it) and System (`/system`):
 the base prompt's page, the presets' page and the Appearance page went. The base prompt is shown in Settings to read,
@@ -545,8 +570,9 @@ GET    /api/terminal
 GET    /api/workspace                GET /api/workspace/files   GET|PUT /api/workspace/file
 GET    /api/workspace/git            GET /api/workspace/git/commit   GET /api/workspace/git/file
 GET    /api/chat/threads             POST /api/chat { text, threadId?, model?, manualModel?, lang?, planMode?, review?, lead?, workerModel?, workerManualModel? }
-POST   /api/chat/:id/rewind
+POST   /api/chat/:id/rewind          POST /api/chat/:id/tasks/:taskId/retry-subtask { n, fresh } (two chats, after Stop)
 GET    /api/approvals                POST /api/approvals/:id   POST /api/approvals/:id/plan   POST /api/approvals/:id/answer
+POST   /api/approvals/:id/retry      { choice: same | fresh | continue | restore | accept } (a subtask cut off, two chats)
 GET    /api/activity                 running, starting, acting (who is at work), paused
 GET    /api/models                   POST /api/models/refresh   PUT /api/models/default   PUT /api/models/review-default
 POST   /api/login                    POST /api/browse-folder   PUT /api/home (the bot's folder from the next start)

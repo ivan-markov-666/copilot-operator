@@ -17,7 +17,8 @@
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type Session, type Skill, type Story, type StoryEntry, type Task, type Workspace } from '../../lib/api';
+import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
+import type { Key } from '../../lib/lang/types';
 import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
@@ -276,6 +277,24 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     }
   };
   /** "Go back to before this message": the folder as it was then, the message back in the box to write again. */
+  /*
+   * After a Stop (two chats, 2026-10-25): the stopped message carried on, one of its subtasks that did not end tried again
+   * first — at the operator's word only, never by itself — with the lead's plan, the subtasks done and their reports kept.
+   */
+  const retrySubtask = async (task: Task, n: number, freshWorker: boolean) => {
+    if (!session || busy) return;
+    setBusy(true);
+    setSaid('');
+    try {
+      const r = await api.chatRetrySubtask(session.id, task.id, n, freshWorker);
+      if (!r.started) setSaid(r.reason ?? t('retry.notStarted'));
+    } catch (e) {
+      setSaid((e as Error).message);
+    } finally {
+      setBusy(false);
+      void readSession();
+    }
+  };
   const rewind = async (task: Task) => {
     if (!session || busy) return;
     if (!(await confirmDialog(t('chat.rewindConfirm', { n: session.tasks.length - session.tasks.indexOf(task) })))) return;
@@ -482,7 +501,18 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         ) : (
           session.tasks.map((task, i) =>
             session.lead ? (
-              <LeadTurn key={task.id} n={i + 1} session={session} task={task} worker={worker} approvals={approvals} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
+              <LeadTurn
+                key={task.id}
+                n={i + 1}
+                session={session}
+                task={task}
+                worker={worker}
+                approvals={approvals}
+                onDecided={decided}
+                onOpenFile={onOpenFile}
+                onRewind={running || busy ? undefined : () => void rewind(task)}
+                onRetrySubtask={running || busy || task.status !== 'aborted' ? undefined : (k, freshWorker) => void retrySubtask(task, k, freshWorker)}
+              />
             ) : (
               <Turn key={task.id} n={i + 1} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
             ),
@@ -915,6 +945,7 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
   // The plan is asked about here, in the conversation (plan mode, 2026-10-20); the model card stays at the top.
   if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={(ok) => onDecided(approval.id, ok)} /></div>;
   if (approval.question) return <QuestionCard approval={approval} onDecided={onDecided} />;
+  if (approval.retry) return <RetryCard approval={approval} onDecided={onDecided} />;
   if (approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
   return (
     <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
@@ -936,10 +967,12 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
  * reply by reply — how it understood the assignment, its notes, its plan, each subtask with the worker's commands under
  * it, its questions with their answers — and the result, which is the message's summary.
  */
-function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, onRewind }: { n: number; session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void }) {
+function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, onRewind, onRetrySubtask }: { n: number; session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void; onRetrySubtask?: (n: number, fresh: boolean) => void }) {
   const { t } = useT();
   const live = task.status === 'running' || task.status === 'waiting-approval';
   const rounds = task.lead?.rounds ?? [];
+  // A subtask tried again after a Stop comes in a reply of its own: shown there, with the attempts before it under it.
+  const latestOf = new Map(rounds.filter((r) => r.subtask).map((r) => [r.subtask!.n, r.n]));
   const lastPlanRound = rounds.filter((r) => r.status === 'plan').at(-1)?.n;
   const mine = approvals.filter((a) => a.taskId === task.id);
   const working = rounds.at(-1)?.subtask && worker?.tasks.find((x) => x.id === rounds.at(-1)?.subtask?.taskId && (x.status === 'running' || x.status === 'waiting-approval'));
@@ -959,7 +992,9 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
               <PlanView plan={task.plan} />
             </details>
           )}
-          {r.subtask && <SubtaskTurn round={r} worker={worker} approvals={approvals.filter((a) => a.taskId === r.subtask?.taskId)} onDecided={onDecided} onOpenFile={onOpenFile} />}
+          {r.subtask && latestOf.get(r.subtask.n) === r.n && (
+            <SubtaskTurn round={r} worker={worker} approvals={approvals.filter((a) => a.taskId === r.subtask?.taskId)} onDecided={onDecided} onOpenFile={onOpenFile} onRetry={onRetrySubtask ? (fresh) => onRetrySubtask(r.subtask!.n, fresh) : undefined} />
+          )}
           {r.question?.answer !== undefined && (
             <div className="cs-bot cs-lead-qa">
               <p className="cs-who">{t('lead.question')}</p>
@@ -1048,21 +1083,54 @@ function LeadSays({ who, text }: { who: string; text: string }) {
   );
 }
 
-/** One subtask of the lead's, as the worker did it: folded once it ended, open while it runs. */
-function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile }: { round: LeadRound; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void }) {
+/** Why an attempt ended, in words: each kind of technical failure and the others (2026-10-25). */
+const FAILURE_KEY: Record<SubtaskFailure, Key> = {
+  TRANSIENT_CHAT_FAILURE: 'retry.catTransient',
+  COMMAND_INFRASTRUCTURE_FAILURE: 'retry.catCommand',
+  TASK_EVIDENCE_FAILURE: 'retry.catEvidence',
+  USER_STOPPED: 'retry.catStopped',
+  UNKNOWN_SIDE_EFFECT_STATE: 'retry.catUnknown',
+};
+const CHOICE_KEY: Record<RetryChoice, Key> = { same: 'retry.same', fresh: 'retry.fresh', continue: 'retry.continue', restore: 'retry.restore', accept: 'retry.accept' };
+
+/**
+ * One subtask of the lead's, as the worker did it: folded once it ended, open while it runs. Tried more than once
+ * (2026-10-25), it says which attempt it is on, or was done at, and keeps the attempts before under it; one that did not
+ * end after a Stop can be tried again from here.
+ */
+function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile, onRetry }: { round: LeadRound; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRetry?: (fresh: boolean) => void }) {
   const { t } = useT();
   const sub = round.subtask!;
   const task = worker?.tasks.find((x) => x.id === sub.taskId);
   const live = task?.status === 'running' || task?.status === 'waiting-approval';
   const entries = useStoryEntries(worker?.id ?? '', task);
+  const attempts = sub.attempts ?? [];
+  const current = attempts.at(-1);
+  const max = sub.maxAttempts ?? attempts.length;
+  const earlier = attempts.slice(0, -1);
+  const tried = attempts.length > 1;
+  // Ended for a reason of its own — cut off, the chat lost, stopped — and not done: said beside it.
+  const failedNow = !live && !!current && current.status !== 'done' && !!current.category;
+  const canRetry = !!onRetry && !!task && task.status !== 'done' && !live;
   return (
-    <details className={`cs-subtask s-${task?.status ?? 'queued'}`} open={live || approvals.length > 0 || undefined}>
+    <details className={`cs-subtask s-${task?.status ?? 'queued'}`} open={live || approvals.length > 0 || canRetry || undefined}>
       <summary>
         <StatusMark status={task?.status ?? 'queued'} /> <span>{t('lead.subtask', { n: sub.n, title: sub.title })}</span>
         {sub.readOnly && <span className="badge">{t('lead.readOnly')}</span>}
         {sub.fresh && <span className="badge">{t('lead.fresh')}</span>}
+        {/* "Attempt 2 of 3" while it is tried again, "Done at attempt 2" after; never a subtask of its own. */}
+        {live && tried && current && <span className="badge running cs-attempt">{t('retry.retrying', { k: current.attempt, m: max })}</span>}
+        {!live && tried && task?.status === 'done' && current && <span className="badge done cs-attempt">{t('retry.doneAt', { k: current.attempt })}</span>}
+        {failedNow && <span className="badge failed cs-attempt">{t('retry.attempt', { k: current!.attempt, m: max })}</span>}
       </summary>
       <div className="cs-subtask-body">
+        {failedNow && (
+          <p className="small cs-attempt-why">
+            <span className="badge">{t(FAILURE_KEY[current!.category!])}</span> {current!.reason && <span>{current!.reason}</span>}
+          </p>
+        )}
+        {earlier.length > 0 && <EarlierAttempts attempts={earlier} max={max} worker={worker} />}
+        {tried && <p className="cs-who cs-attempt-now">{t('retry.attempt', { k: current!.attempt, m: max })}</p>}
         <StoryLines entries={entries} />
         {approvals.map((a) => (
           <Ask key={a.id} approval={a} onDecided={onDecided} />
@@ -1077,8 +1145,125 @@ function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile }: { roun
             ))}
           </div>
         )}
+        {/*
+          After a Stop (2026-10-25): not tried again by itself. The operator may: the message is carried on with this
+          subtask first, from the folder as it is, then the lead goes on with the plan and the subtasks done kept.
+        */}
+        {canRetry && onRetry && (
+          <div className="cs-retry-after" role="group" aria-label={t('retry.afterStop')}>
+            <p className="muted small">{t('retry.afterStopWhy')}</p>
+            <div className="row">
+              <button type="button" className="primary" onClick={() => onRetry(false)}>
+                {t('retry.same')}
+              </button>
+              <button type="button" onClick={() => onRetry(true)}>
+                {t('retry.fresh')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </details>
+  );
+}
+
+/** The attempts at a subtask before the last, folded: how each ended, what it ran, whether the folder changed; and its work. */
+function EarlierAttempts({ attempts, max, worker }: { attempts: SubtaskAttempt[]; max: number; worker: Session | null }) {
+  const { t } = useT();
+  return (
+    <details className="cs-attempts">
+      <summary className="small">{t('retry.earlier', { n: attempts.length })}</summary>
+      {attempts.map((a) => (
+        <AttemptLine key={a.attempt} attempt={a} max={max} worker={worker} />
+      ))}
+    </details>
+  );
+}
+
+function AttemptLine({ attempt: a, max, worker }: { attempt: SubtaskAttempt; max: number; worker: Session | null }) {
+  const { t } = useT();
+  const clock = useFmtClock();
+  const [open, setOpen] = useState(false);
+  const task = worker?.tasks.find((x) => x.id === a.taskId);
+  return (
+    <details className={`cs-attempt-line s-${a.status}`} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="small">
+        <StatusMark status={a.status} /> <strong>{t('retry.attempt', { k: a.attempt, m: max })}</strong>
+        {a.category && <span className="badge">{t(FAILURE_KEY[a.category])}</span>}
+        {a.fresh && <span className="badge">{t('lead.fresh')}</span>}
+        {a.continued && <span className="badge">{t('retry.continued')}</span>}
+        {a.restored && <span className="badge">{t('retry.restored')}</span>}
+        {a.by === 'after-stop' && <span className="badge">{t('retry.byAfterStop')}</span>}
+      </summary>
+      <div className="cs-attempt-facts small">
+        {a.reason && <p>{t('retry.reason', { reason: a.reason })}</p>}
+        <p className="muted">
+          {t('retry.commands', { started: a.commands.started, completed: a.commands.completed })} ·{' '}
+          {a.repoChanged === true ? t('retry.repoChanged') : a.repoChanged === false ? t('retry.repoSame') : t('retry.repoUnknown')}
+          {a.startedAt && <> · {clock(a.startedAt)}{a.endedAt ? `–${clock(a.endedAt)}` : ''}</>}
+        </p>
+        {open && <AttemptStory sessionId={worker?.id ?? ''} task={task} />}
+      </div>
+    </details>
+  );
+}
+
+/** An earlier attempt's own work, read when its fold is opened. */
+function AttemptStory({ sessionId, task }: { sessionId: string; task: Task | undefined }) {
+  const entries = useStoryEntries(sessionId, task);
+  return <StoryLines entries={entries} />;
+}
+
+/**
+ * A subtask that ended for a technical reason (two chats, 2026-10-25): why, which attempt it was, and what to do — try it
+ * again, with a new worker, or take it as failed and let the lead decide. When a command may have changed the folder
+ * before it was cut off: carry on from the folder as it is, or put it back to how it was when the subtask began — never
+ * by itself.
+ */
+function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const r = approval.retry!;
+  const choose = async (choice: RetryChoice) => {
+    if (choice === 'restore' && !(await confirmDialog(t('retry.restoreConfirm')))) return;
+    setBusy(true);
+    setErr('');
+    let ok = false;
+    try {
+      await api.answerRetry(approval.id, choice);
+      ok = true;
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+      onDecided(approval.id, ok);
+    }
+  };
+  return (
+    <div className="cs-ask cs-retry" role="group" aria-label={t('retry.title', { n: r.n })}>
+      <p className="small cs-ask-head">
+        <strong>{t('retry.title', { n: r.n })}</strong> <ActorChip actor={approval.actor ?? 'lead'} how="asks" />
+      </p>
+      <p className="small">
+        <span className="badge failed">{t('retry.attempt', { k: r.attempt, m: r.maxAttempts })}</span> <span className="badge">{t(FAILURE_KEY[r.category])}</span>
+      </p>
+      {r.reason && <p className="small">{t('retry.reason', { reason: r.reason })}</p>}
+      {r.sideEffects === 'unknown' && <p className="reason small">{t('retry.unknown')}</p>}
+      {r.changed.length > 0 && <p className="muted small">{t('retry.changed', { files: r.changed.slice(0, 8).join(', ') + (r.changed.length > 8 ? ', …' : '') })}</p>}
+      <div className="row">
+        {r.choices.map((c, i) => (
+          <button key={c} type="button" className={i === 0 ? 'primary' : undefined} disabled={busy} onClick={() => void choose(c)}>
+            {t(CHOICE_KEY[c])}
+          </button>
+        ))}
+      </div>
+      {err && (
+        <p className="err" role="alert">
+          {err}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -415,6 +415,26 @@ try {
     await waitFor('the reply wait to be saved', async () => (await settingsOf(h)).copilot?.replyTimeoutSec === 10800, 10_000).catch(() => undefined);
     t.check('saved as 10800', (await settingsOf(h)).copilot?.replyTimeoutSec, 10800);
 
+    // A subtask cut off, with two chats (2026-10-25): "Ask me", 2 and 15 at first; at most 3; the three kept in `limits`.
+    t.check('"Retrying an interrupted subtask": Ask me, 2 and 15 at first', [await page.locator('#subtask-retry-mode').inputValue(), await page.locator('#subtask-retries').inputValue(), await page.locator('#subtask-retry-wait').inputValue()], ['ask', '2', '15']);
+    await page.locator('#subtask-retry-mode').selectOption('fresh');
+    const subRetries = page.locator('#subtask-retries');
+    await subRetries.click();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('9');
+    await page.keyboard.press('Tab');
+    t.check('at most 3 technical retries: 9 becomes 3 when left', await subRetries.inputValue(), '3');
+    const subWait = page.locator('#subtask-retry-wait');
+    await subWait.click();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('30');
+    await page.keyboard.press('Tab');
+    const kept = await waitFor('the three to be saved', async () => {
+      const l = (await settingsOf(h)).limits ?? {};
+      return l.subtaskRetryMode === 'fresh' && l.subtaskRetries === 3 && l.subtaskRetryWaitSec === 30 ? l : null;
+    }, 10_000).catch(async () => (await settingsOf(h)).limits ?? {});
+    t.check('saved in limits', [kept.subtaskRetryMode, kept.subtaskRetries, kept.subtaskRetryWaitSec], ['fresh', 3, 30]);
+
     const retries = page.locator('#retry-blocked');
     await retries.click();
     await page.keyboard.press('Control+A');
@@ -1339,7 +1359,16 @@ try {
     await add.waitFor();
     await add.getByLabel(en['skills.name']!, { exact: true }).fill('new-test');
     await add.getByLabel(en['skills.description']!, { exact: true }).fill('Adding an automated test');
-    await add.getByLabel(en['skills.text']!, { exact: true }).fill('Tests live in tests/e2e, one file per page.');
+    // No limit to the instructions (operator, 2026-10-25): how many characters there are is said under them instead.
+    const instructions = add.getByLabel(en['skills.text']!, { exact: true });
+    const long = 'Keep each test to one behaviour. '.repeat(300);
+    await instructions.fill(long);
+    t.check(
+      'the instructions take more than the 8 000 there were, and say how many there are',
+      [await instructions.getAttribute('maxlength'), (await instructions.inputValue()).length, ((await add.locator('.skill-count').textContent()) ?? '').trim()],
+      [null, long.length, en['skills.count']!.replace('{n}', long.length.toLocaleString('en'))],
+    );
+    await instructions.fill('Tests live in tests/e2e, one file per page.');
     await page.getByRole('button', { name: en['skills.add']!, exact: true }).click();
     await waitFor('the skill to be saved', async () => (await h.call<{ skills: Array<{ name: string }> }>('GET', '/skills')).skills.length === 1, 10_000).catch(() => undefined);
     t.check('added in Settings', (await h.call<{ skills: Array<{ name: string; text: string }> }>('GET', '/skills')).skills.map((k) => [k.name, k.text]), [['new-test', 'Tests live in tests/e2e, one file per page.']]);
@@ -1385,6 +1414,8 @@ try {
     await del.click();
     await page.getByRole('alertdialog').getByRole('button', { name: en['skills.remove']!, exact: true }).click();
     await waitFor('the skill to be deleted', async () => (await h.call<{ skills: unknown[] }>('GET', '/skills')).skills.length === 0, 10_000).catch(() => undefined);
+    // And from the page, which redraws after the answer: under the whole suite's load, a moment after the API.
+    await page.locator('.skill-entry:not(.skill-new)').first().waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
     t.check('answered Delete: gone from the settings and the page', [(await h.call<{ skills: unknown[] }>('GET', '/skills')).skills.length, await page.locator('.skill-entry:not(.skill-new)').count()], [0, 0]);
   });
 
@@ -2155,6 +2186,114 @@ try {
     await page.getByRole('tab', { name: en['wb.terminal']!, exact: true }).click();
     await waitFor('the panel to show the worker\'s command', async () => ((await page.locator('.wb-terminal').textContent()) ?? '').includes('Get-ChildItem'), 10_000).catch(() => undefined);
     t.truthy('the panel follows the worker\'s commands', ((await page.locator('.wb-terminal').textContent()) ?? '').includes('Get-ChildItem'), await page.locator('.wb-terminal').textContent());
+  });
+
+  /*
+   * A subtask cut off, tried again (operator, 2026-10-25): with Settings' "Ask me", a card under the subtask with the
+   * reason, the kind and "Attempt 1 of 3", and its three buttons; still there after the page is reloaded; "Try again"
+   * runs it under the same number — "Retry 2 of 3" while it runs, "Done at attempt 2" after, the attempt before folded
+   * under it with how it ended. Never shown as a subtask of its own.
+   */
+  const retrySettings = { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { retryBlockedInFreshChat: 0, subtaskRetryWaitSec: 0 }, report: { uploadRetries: 0 } };
+  const retryWorkerDone = 'I wrote result.txt in the project folder and read it back: it holds exactly the word hello, as the subtask asked.';
+  const retryLeadDone = 'The work is finished: the worker wrote result.txt and read it back, and it holds exactly the word hello, as the assignment asked.';
+  const cutOff = (): string => {
+    throw new Error('net::ERR_CONNECTION_RESET: the answer stopped coming');
+  };
+  const openThread = async (page: Page, url: (p: string) => string, id: string): Promise<void> => {
+    await page.goto(url('/'));
+    await page.evaluate((x) => localStorage.setItem('cop.chat.thread', x), id);
+    await page.reload();
+  };
+  await scenario('two chats: a subtask cut off asks on a card that outlives a reload, is tried again, its attempts shown', retrySettings, async (h, page, url) => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    h.chat.script(
+      reply.lead.delegate({ title: 'Write result.txt', readOnly: false, goal: 'Create result.txt holding exactly the word hello.' }, { understanding: 'A file result.txt holding hello; said what was done.' }),
+      cutOff,
+      async () => {
+        await held;
+        return reply.steps(write('result.txt', 'hello'));
+      },
+      reply.done(retryWorkerDone),
+      reply.lead.done(retryLeadDone),
+    );
+    const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create result.txt holding hello, and say what was done.', model: 'Think deeper', lead: true });
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await openThread(page, url, sent.threadId);
+    const card = page.locator('.cs-retry');
+    await card.waitFor({ timeout: 30_000 });
+    const sub = page.locator('details.cs-subtask');
+    t.check(
+      'the card: which subtask, "Attempt 1 of 3", the kind of failure, the reason, and its three choices',
+      [
+        (await card.locator('.cs-ask-head strong').textContent())?.trim(),
+        await card.locator('.badge').allTextContents(),
+        ((await card.textContent()) ?? '').includes('ERR_CONNECTION_RESET'),
+        await card.getByRole('button').allTextContents(),
+      ],
+      [en['retry.title']!.replace('{n}', '1'), [en['retry.attempt']!.replace('{k}', '1').replace('{m}', '3'), en['retry.catTransient']], true, [en['retry.same'], en['retry.fresh'], en['retry.accept']]],
+    );
+    // The worker's session is read on its own, every second and a half: its attempt ended a moment before the card.
+    t.truthy('beside the subtask\'s title too: "Attempt 1 of 3"', await appears(sub.locator(':scope > summary .cs-attempt').filter({ hasText: en['retry.attempt']!.replace('{k}', '1').replace('{m}', '3') }), 10_000), await sub.locator(':scope > summary').textContent());
+    // The page reloaded under it (14): the card is asked for again and is there, the run still waiting on it.
+    await page.reload();
+    t.truthy('after a reload, the card is still there', await appears(page.locator('.cs-retry'), 15_000), await page.locator('.cs-lead-turn').textContent().catch(() => ''));
+    await page.locator('.cs-retry').getByRole('button', { name: en['retry.same']!, exact: true }).click();
+    t.truthy('chosen, the card goes', await page.locator('.cs-retry').waitFor({ state: 'detached', timeout: 5_000 }).then(() => true, () => false), '');
+    const retrying = en['retry.retrying']!.replace('{k}', '2').replace('{m}', '3');
+    t.truthy('while it is tried again: "Retry 2 of 3"', await appears(sub.locator(':scope > summary .cs-attempt').filter({ hasText: retrying }), 15_000), await sub.locator(':scope > summary').textContent());
+    t.check('and the attempt before folded under it', ((await sub.locator('.cs-attempts > summary').textContent()) ?? '').trim(), en['retry.earlier']!.replace('{n}', '1'));
+    release();
+    await page.locator('.cs-end').filter({ hasText: 'The work is finished' }).waitFor({ timeout: 30_000 });
+    await waitFor('"Done at attempt 2"', async () => ((await sub.locator(':scope > summary').textContent()) ?? '').includes(en['retry.doneAt']!.replace('{k}', '2')) || null, 10_000).catch(() => undefined);
+    t.check('one subtask, not two: done at attempt 2', [await sub.count(), ((await sub.locator(':scope > summary').textContent()) ?? '').includes(en['retry.doneAt']!.replace('{k}', '2'))], [1, true]);
+    if (!(await sub.evaluate((d) => (d as HTMLDetailsElement).open))) await sub.locator(':scope > summary').first().click();
+    await sub.locator('.cs-attempts > summary').click();
+    const before = sub.locator('.cs-attempt-line').first();
+    t.truthy(
+      'the attempt before: its number, how it ended, what it ran, and that the folder did not change',
+      ((await before.textContent()) ?? '').includes(en['retry.attempt']!.replace('{k}', '1').replace('{m}', '3')) &&
+        ((await before.textContent()) ?? '').includes(en['retry.catTransient']!) &&
+        ((await before.textContent()) ?? '').includes(en['retry.commands']!.replace('{started}', '0').replace('{completed}', '0')) &&
+        ((await before.textContent()) ?? '').includes(en['retry.repoSame']!),
+      await before.textContent(),
+    );
+  });
+
+  /*
+   * After a Stop (2026-10-25): the subtask is not tried again by itself; under it, "Try again" and "Try with a new worker"
+   * carry the message on with it first, under its own number, and the lead goes on.
+   */
+  await scenario('two chats: after Stop, a subtask that did not finish is tried again from under it', retrySettings, async (h, page, url) => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    h.chat.script(
+      reply.lead.delegate({ title: 'Write result.txt', readOnly: false, goal: 'Create result.txt holding exactly the word hello.' }, { understanding: 'A file result.txt holding hello; said what was done.' }),
+      async () => {
+        await held;
+        return reply.steps(write('result.txt', 'hello'));
+      },
+    );
+    const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create result.txt holding hello, and say what was done.', model: 'Think deeper', lead: true });
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await waitFor('the worker to be answering', async () => h.chat.pending === 0 || null, 20_000);
+    await h.call('POST', `/sessions/${sent.threadId}/stop`, {});
+    release();
+    await h.idle();
+    await openThread(page, url, sent.threadId);
+    const group = page.getByRole('group', { name: en['retry.afterStop']! });
+    t.truthy('under the stopped subtask: try it again, or with a new worker', await appears(group, 15_000) && (await group.getByRole('button').allTextContents()).join('|') === [en['retry.same'], en['retry.fresh']].join('|'), await page.locator('.cs-lead-turn').textContent());
+    t.check('nothing was tried again by itself', (await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${sent.threadId}`)).tasks.map((x) => x.status), ['aborted']);
+    h.chat.script(reply.steps(write('result.txt', 'hello')), reply.done(retryWorkerDone), reply.lead.done(retryLeadDone));
+    await group.getByRole('button', { name: en['retry.same']!, exact: true }).click();
+    await page.locator('.cs-end').filter({ hasText: 'The work is finished' }).waitFor({ timeout: 30_000 });
+    const sub = page.locator('details.cs-subtask');
+    await waitFor('"Done at attempt 2"', async () => ((await sub.locator(':scope > summary').textContent()) ?? '').includes(en['retry.doneAt']!.replace('{k}', '2')) || null, 10_000).catch(() => undefined);
+    t.check('done at attempt 2, one subtask, and no "try again" under it any more', [await sub.count(), ((await sub.locator(':scope > summary').textContent()) ?? '').includes(en['retry.doneAt']!.replace('{k}', '2')), await page.getByRole('group', { name: en['retry.afterStop']! }).count()], [1, true, 0]);
+    if (!(await sub.evaluate((d) => (d as HTMLDetailsElement).open))) await sub.locator(':scope > summary').first().click();
+    await sub.locator('.cs-attempts > summary').click();
+    t.truthy('the attempt the Stop ended, kept: "Stopped"', ((await sub.locator('.cs-attempt-line').first().textContent()) ?? '').includes(en['retry.catStopped']!), await sub.locator('.cs-attempt-line').first().textContent());
   });
 
   /*

@@ -763,6 +763,34 @@ export type Approval = {
   /** Two chats: the lead's question for the operator, answered with text. */
   /** `commands`: by answer, the command the bot runs when that one is chosen, or null. */
   question?: { text: string; why?: string; options: string[]; commands?: Array<string | null> };
+  /** Two chats: a subtask that ended for a technical reason, and what to do with it; see the server's `PendingApproval`. */
+  retry?: { n: number; title: string; attempt: number; maxAttempts: number; category: SubtaskFailure; reason: string; sideEffects: SideEffects; changed: string[]; choices: RetryChoice[] };
+};
+
+/** Why a subtask's attempt ended without its work (two chats, 2026-10-25). See `SubtaskFailure` in src/session/model.ts. */
+export type SubtaskFailure = 'TRANSIENT_CHAT_FAILURE' | 'COMMAND_INFRASTRUCTURE_FAILURE' | 'TASK_EVIDENCE_FAILURE' | 'USER_STOPPED' | 'UNKNOWN_SIDE_EFFECT_STATE';
+/** What an attempt left in the folder: nothing, changes the next one carries on from, or not known. */
+export type SideEffects = 'none' | 'changed' | 'unknown';
+/** The operator's answer for a subtask that ended for a technical reason. */
+export type RetryChoice = 'same' | 'fresh' | 'continue' | 'restore' | 'accept';
+/** One attempt at a subtask: each its own task of the worker. See `SubtaskAttempt` on the server. */
+export type SubtaskAttempt = {
+  attempt: number;
+  taskId: string;
+  status: TaskStatus;
+  category?: SubtaskFailure;
+  reason?: string;
+  chatId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  commands: { started: number; completed: number };
+  repoChanged: boolean | null;
+  sideEffects?: SideEffects;
+  retryOf?: number;
+  fresh?: boolean;
+  continued?: boolean;
+  restored?: boolean;
+  by?: 'settings' | 'operator' | 'after-stop';
 };
 
 /** One reply of the lead (two chats): what it decided, and what came of it. */
@@ -772,7 +800,8 @@ export type LeadRound = {
   status: 'delegate' | 'plan' | 'ask' | 'done' | 'blocked';
   understanding?: string;
   notes?: string;
-  subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean };
+  /** `taskId` is the latest attempt's; `attempts` once there was more than one way to end (2026-10-25). */
+  subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean; attempts?: SubtaskAttempt[]; maxAttempts?: number };
   question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
   /** This reply made the list of subtasks or changed it: its version, how many came and went, how many in all. */
   ledger?: { revision: number; added: number; removed: number; total: number };
@@ -883,7 +912,7 @@ export type SearchResult = {
 
 /** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
 export type Skill = { name: string; description: string; text: string; projectDir: string };
-export type SkillList = { skills: Skill[]; maxText: number; maxDescription: number };
+export type SkillList = { skills: Skill[]; maxDescription: number };
 
 /** The chat's folder, the first project, and the others by name. */
 export type ProjectDefault = ProjectEntry & { others: ProjectEntry[] };
@@ -1281,6 +1310,11 @@ export const api = {
     }),
   /** The lead's question (two chats): the operator's answer. */
   answerQuestion: (approvalId: string, text: string) => call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
+  /** A subtask that ended for a technical reason (two chats): try it again, with a new worker, from where it is, or not. */
+  answerRetry: (approvalId: string, choice: RetryChoice) => call<{ ok: boolean }>(`/approvals/${approvalId}/retry`, { method: 'POST', body: JSON.stringify({ choice }) }),
+  /** After a Stop (two chats): the stopped message carried on, its subtask `n` tried again first, by a new worker if `fresh`. */
+  chatRetrySubtask: (threadId: string, taskId: string, n: number, fresh: boolean) =>
+    call<StartReply>(`/chat/${threadId}/tasks/${taskId}/retry-subtask`, { method: 'POST', body: JSON.stringify({ n, fresh }) }),
   /** Back to before a message: the folder as it was then; that message and the ones after it taken out. */
   chatRewind: (threadId: string, taskId: string) =>
     call<{ ok: boolean; message: string; text: string; safety?: string }>(`/chat/${threadId}/rewind`, { method: 'POST', body: JSON.stringify({ taskId }) }),

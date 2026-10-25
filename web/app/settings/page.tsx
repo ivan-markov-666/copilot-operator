@@ -30,6 +30,8 @@ type Isolation = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm
 type StartMode = 'confirm' | 'unattended';
 type NetworkFetch = 'ask' | 'refuse' | 'run';
 type Questions = 'ask' | 'agree';
+/** Two chats: what is done with a subtask that ended for a technical reason (`limits.subtaskRetryMode`, 2026-10-25). */
+type SubtaskRetryMode = 'ask' | 'same' | 'fresh' | 'lead';
 
 /** The longest level 2 a project may have; the server holds it to the same (`MAX_PROJECT_LEVEL2`). */
 const MAX_LEVEL2 = 8000;
@@ -345,7 +347,7 @@ function SkillsSection() {
   const { t } = useT();
   const { saving, track } = useSaving();
   const [list, setList] = useState<Skill[] | null>(null);
-  const [limits, setLimits] = useState({ maxText: 8000, maxDescription: 300 });
+  const [limits, setLimits] = useState({ maxDescription: 300 });
   const [projects, setProjects] = useState<Array<{ name: string; dir: string }>>([]);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -357,7 +359,7 @@ function SkillsSection() {
       .skills()
       .then((r) => {
         setList(r.skills);
-        setLimits({ maxText: r.maxText, maxDescription: r.maxDescription });
+        setLimits({ maxDescription: r.maxDescription });
       })
       .catch((e: unknown) => setErr((e as Error).message));
     api
@@ -445,7 +447,7 @@ function SkillEntry({
 }: {
   skill: Skill;
   projects: Array<{ name: string; dir: string }>;
-  limits: { maxText: number; maxDescription: number };
+  limits: { maxDescription: number };
   onChange?: (skill: Skill) => Promise<boolean>;
   onDraft?: (skill: Skill) => void;
   onRemove?: () => void;
@@ -517,12 +519,11 @@ function SkillEntry({
         </div>
       </div>
       <div className="project-level2">
-        <FieldName htmlFor={`${id}-text`} label={t('skills.text')} info={t('skills.textInfo', { n: limits.maxText.toLocaleString() })} />
+        <FieldName htmlFor={`${id}-text`} label={t('skills.text')} info={t('skills.textInfo')} />
         <textarea
           id={`${id}-text`}
           className="prose"
           rows={5}
-          maxLength={limits.maxText}
           value={shown.text}
           onChange={(e) => {
             const next = edit({ text: e.target.value });
@@ -534,7 +535,8 @@ function SkillEntry({
           }}
           placeholder={t('skills.textPlaceholder')}
         />
-        <span className="muted small">{t('skills.count', { n: shown.text.length.toLocaleString(), max: limits.maxText.toLocaleString() })}</span>
+        {/* How long they are, with no limit (operator, 2026-10-25): the message they go with is held to Settings' own. */}
+        <span className="muted small skill-count">{t('skills.count', { n: shown.text.length.toLocaleString() })}</span>
       </div>
     </div>
   );
@@ -1427,6 +1429,10 @@ function ExecutionSection() {
   const [startMode, setStartMode] = useState<StartMode>('confirm');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
   const [questions, setQuestions] = useState<Questions>('ask');
+  /** A subtask cut off for a technical reason (two chats, 2026-10-25): what is done, how many times, after how long. */
+  const [subRetryMode, setSubRetryMode] = useState<SubtaskRetryMode>('ask');
+  const [subRetries, setSubRetries] = useState(2);
+  const [subRetryWait, setSubRetryWait] = useState(15);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
 
@@ -1452,6 +1458,9 @@ function ExecutionSection() {
           autoContinue?: number;
           maxSubtasks?: number;
           maxMessageChars?: number;
+          subtaskRetryMode?: SubtaskRetryMode;
+          subtaskRetries?: number;
+          subtaskRetryWaitSec?: number;
         };
         setAutoContinue(typeof limits.autoContinue === 'number' ? limits.autoContinue : 3);
         setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
@@ -1461,6 +1470,9 @@ function ExecutionSection() {
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         setSubtasks(typeof limits.maxSubtasks === 'number' ? limits.maxSubtasks : 20);
         setMessageChars(typeof limits.maxMessageChars === 'number' ? limits.maxMessageChars : 120_000);
+        setSubRetryMode(limits.subtaskRetryMode ?? 'ask');
+        setSubRetries(typeof limits.subtaskRetries === 'number' ? limits.subtaskRetries : 2);
+        setSubRetryWait(typeof limits.subtaskRetryWaitSec === 'number' ? limits.subtaskRetryWaitSec : 15);
         const pacing = ((s.raw.pacing as Record<string, unknown>) ?? {}) as { gapEnabled?: boolean; gapSec?: number; gapRandom?: boolean; gapMaxSec?: number };
         setGapOn(pacing.gapEnabled === true);
         setGapSec(typeof pacing.gapSec === 'number' ? pacing.gapSec : 60);
@@ -1522,6 +1534,8 @@ function ExecutionSection() {
   const saveSubtasksLater = useDebouncedSave((n: number) => write('limits', 'maxSubtasks', n));
   const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
   const saveMessageCharsLater = useDebouncedSave((n: number) => write('limits', 'maxMessageChars', n));
+  const saveSubRetriesLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetries', n));
+  const saveSubRetryWaitLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetryWaitSec', n));
   const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
   const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
   const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions', value: string) => write('execution', key, value);
@@ -1720,6 +1734,57 @@ function ExecutionSection() {
           <option value="ask">{t('exec.questionsAsk')}</option>
           <option value="agree">{t('exec.questionsAgree')}</option>
         </select>
+      </Field>
+
+      {/*
+        A subtask cut off for a technical reason (operator, 2026-10-25): the chat's reply lost, a command that could not
+        start — tried again, the plan and the subtasks done kept. Only two chats have subtasks; one chat is untouched.
+        A subtask the operator stopped, a refused command or work that was not done are never tried again by this.
+      */}
+      <h3 id="subtask-retry">{t('exec.subRetryTitle')}</h3>
+      <p className="muted small">{t('exec.subRetryIntro')}</p>
+      <Field id="subtask-retry-mode" label={t('exec.subRetryMode')} info={t('exec.subRetryModeWhy')}>
+        <select
+          id="subtask-retry-mode"
+          value={subRetryMode}
+          onChange={(e) => {
+            const v = e.target.value as SubtaskRetryMode;
+            setSubRetryMode(v);
+            void write('limits', 'subtaskRetryMode', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="ask">{t('exec.subRetryAsk')}</option>
+          <option value="same">{t('exec.subRetrySame')}</option>
+          <option value="fresh">{t('exec.subRetryFresh')}</option>
+          <option value="lead">{t('exec.subRetryLead')}</option>
+        </select>
+      </Field>
+      <Field id="subtask-retries" label={t('exec.subRetries')} info={t('exec.subRetriesWhy')} unit={t('exec.subRetriesUnit')}>
+        <BoundedNumber
+          id="subtask-retries"
+          value={subRetries}
+          min={0}
+          max={3}
+          onChange={(n) => {
+            setSubRetries(n);
+            saveSubRetriesLater(n);
+          }}
+          disabled={!raw}
+        />
+      </Field>
+      <Field id="subtask-retry-wait" label={t('exec.subRetryWait')} info={t('exec.subRetryWaitWhy')} unit={t('exec.subRetryWaitUnit')}>
+        <BoundedNumber
+          id="subtask-retry-wait"
+          value={subRetryWait}
+          min={0}
+          max={600}
+          onChange={(n) => {
+            setSubRetryWait(n);
+            saveSubRetryWaitLater(n);
+          }}
+          disabled={!raw}
+        />
       </Field>
       <SavedNote msg={msg} saving={saving} />
     </section>

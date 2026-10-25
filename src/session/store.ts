@@ -120,6 +120,8 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   artifactsKept: 'archived',
   vcs: 'archived',
   leftovers: 'archived',
+  // The fault of the means an attempt ended on (2026-10-25) is that attempt's.
+  failure: 'archived',
   environment: 'archived',
   handoff: 'archived',
   plan: 'archived',
@@ -599,6 +601,7 @@ export class SessionStore {
           runId: t.runId,
           runGroup: t.runGroup,
           leftovers: t.leftovers,
+          failure: t.failure,
           environment: t.environment,
           status: t.status,
           startedAt: t.startedAt,
@@ -685,6 +688,7 @@ export class SessionStore {
       // What this attempt left running and the machine it ran on are this attempt's, as the rest:
       // left in place, the next attempt's list was added to this one's and read as its own.
       t.leftovers = undefined;
+      t.failure = undefined;
       t.environment = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.

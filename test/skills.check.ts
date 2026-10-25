@@ -55,10 +55,13 @@ await scenario('Settings: the list and its rules', async (h) => {
   t.truthy('a name that cannot be typed after / is refused', (await refusal(h, 'PUT', '/skills', { skills: [{ ...TEST_SKILL, name: 'New Test!' }] })).includes('cannot be a skill\'s name'), await refusal(h, 'PUT', '/skills', { skills: [{ ...TEST_SKILL, name: 'New Test!' }] }));
   t.truthy('a name used twice is refused', (await refusal(h, 'PUT', '/skills', { skills: [TEST_SKILL, TEST_SKILL] })).includes('Two skills are named'), '');
   t.truthy('no instructions: refused', (await refusal(h, 'PUT', '/skills', { skills: [{ ...TEST_SKILL, text: '  ' }] })).includes('has no instructions'), '');
-  t.truthy('instructions too long: refused', (await refusal(h, 'PUT', '/skills', { skills: [{ ...TEST_SKILL, text: 'x'.repeat(8001) }] })).includes('longer than'), '');
+  // No limit to their length (operator, 2026-10-25): 20 000 characters, more than the 8 000 there were, are kept whole.
+  const long = `${TEST_SKILL.text}\n${'Keep each test to one behaviour. '.repeat(700)}`;
+  const kept = await h.call<{ skills: Skill[] }>('PUT', '/skills', { skills: [{ ...TEST_SKILL, text: long }] });
+  t.check('long instructions: kept whole, with no limit said', [kept.skills[0]?.text.length, long.length > 20_000, 'maxText' in kept], [long.length, true, false]);
   t.truthy('a project that is not in Settings: refused', (await refusal(h, 'PUT', '/skills', { skills: [{ ...TEST_SKILL, projectDir: 'C:\\nowhere' }] })).includes('not one of the projects'), '');
-  const saved = await h.call<{ skills: Skill[]; maxText: number }>('PUT', '/skills', { skills: [{ ...TEST_SKILL, name: 'New-Test' }] });
-  t.check('saved, the name in lowercase, with the limit of its instructions', [saved.skills.map((k) => k.name), saved.maxText], [['new-test'], 8000]);
+  const saved = await h.call<{ skills: Skill[] }>('PUT', '/skills', { skills: [{ ...TEST_SKILL, name: 'New-Test' }] });
+  t.check('saved, the name in lowercase', saved.skills.map((k) => k.name), ['new-test']);
   t.check('and read back', (await h.call<{ skills: Skill[] }>('GET', '/skills')).skills[0]?.text, TEST_SKILL.text);
 });
 

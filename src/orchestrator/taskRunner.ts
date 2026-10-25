@@ -53,7 +53,7 @@ import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
 import { contractConflicts, readsTreeClean } from './contract.js';
 import { commitFiles, treeFingerprint } from '../vcs/git.js';
-import type { TaskStats } from '../session/model.js';
+import type { PendingApproval, RetryChoice, TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -150,6 +150,11 @@ export type RunDeps = {
    * answer is text, or the operator stops the task. Absent (the terminal), the lead is told nobody can answer.
    */
   askQuestion?: (ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; actor?: Actor }) => Promise<{ answer: string } | 'stop'>;
+  /**
+   * Two chats (2026-10-25): what to do with a subtask that failed for a technical reason, asked of the operator on a card
+   * under the subtask (`sessionId`/`taskId`: the worker's attempt it is shown at). Absent: nobody is there to ask.
+   */
+  askSubtaskRetry?: (ask: { sessionId: string; taskId: string; retry: NonNullable<PendingApproval['retry']> }) => Promise<RetryChoice | 'stop'>;
   /** The two-chat mode: the worker's session the run now also speaks for, so its steps and cards are the run's. */
   onWorker?: (workerSessionId: string) => void;
 };
@@ -3642,6 +3647,14 @@ export async function runTask(
      * says so, with the process that died and where the report is.
      */
     const crash = /has been closed/i.test(message) ? await transport.recentCrash().catch(() => null) : null;
+    /*
+     * A fault of the means, not of the work (2026-10-25): what ended it here is the chat, the browser or the runner's own
+     * dealing with them, never a check or the chat's report. A subtask of two chats reads it to say whether it may be
+     * tried again (`classifySubtaskEnd`).
+     */
+    await setTask((t) => {
+      t.failure = { kind: 'transport', detail: (crash ? `${describeCrash(crash)}. Then: ${message}` : message).slice(0, 400) };
+    }).catch(() => undefined);
     return await finish('failed', crash ? `${describeCrash(crash)}. Then: ${message}` : message);
   }
 }

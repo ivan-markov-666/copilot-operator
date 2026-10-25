@@ -523,6 +523,16 @@ export const RunConfigSchema = z.object({
        */
       maxSubtasks: z.number().int().min(1).max(100).default(20),
       /*
+       * A subtask of two chats that failed for a technical reason (operator's specification, 2026-10-25; see
+       * `orchestrator/subtaskRetry.ts`): `ask` puts it to the operator on a card; `same` tries it again in the same
+       * worker's conversation, `fresh` in a new one — by themselves only for a proven, temporary fault of the chat; `lead`
+       * gives the lead the report, as before. At most `subtaskRetries` times more (0 to 3), `subtaskRetryWaitSec` apart.
+       * Settings → "Retrying an interrupted subtask". Only for two chats.
+       */
+      subtaskRetryMode: z.enum(['ask', 'same', 'fresh', 'lead']).default('ask'),
+      subtaskRetries: z.number().int().min(0).max(3).default(2),
+      subtaskRetryWaitSec: z.number().int().min(0).max(600).default(15),
+      /*
        * How many genuinely different approaches the chat must have tried before it may end a task
        * "blocked". The reply format's own floor is 2 (replySchema.ts); this raises it. A "blocked"
        * with fewer is sent back asking for another approach (see taskRunner.ts). Settings → Execution.

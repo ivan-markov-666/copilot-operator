@@ -430,6 +430,22 @@ export class OperatorController {
     return this.ops.decide(id, body.action);
   }
 
+  /** A subtask that failed for a technical reason (two chats, 2026-10-25): one of its card's choices. */
+  @Post('approvals/:id/retry')
+  answerRetry(@Param('id') id: string, @Body() body: { choice?: unknown }): unknown {
+    const result = this.ops.answerRetry(id, typeof body?.choice === 'string' ? body.choice : '');
+    if (!result.ok) throw new BadRequestException(result.problem);
+    return result;
+  }
+
+  /** After a Stop (two chats, 2026-10-25): the stopped message carried on with one of its subtasks tried again first. */
+  @Post('chat/:id/tasks/:taskId/retry-subtask')
+  chatRetrySubtask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { n?: unknown; fresh?: unknown } = {}): Promise<unknown> {
+    const n = Number(body?.n);
+    if (!Number.isInteger(n) || n < 1) throw new BadRequestException('n, the subtask\'s number, is required');
+    return this.ops.chatRetrySubtask(id, taskId, n, body?.fresh === true).catch(fail);
+  }
+
   /** The lead's question (two chats): the operator's answer, as text. Stopping the task is `approvals/:id` with abort. */
   @Post('approvals/:id/answer')
   answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown }): unknown {

@@ -26,7 +26,7 @@ import type { ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { RunLog } from '../log/runLog.js';
 import { gapFrom, Pacer } from '../util/pacing.js';
-import { takeAfter, takeCheckpoint } from '../session/checkpoint.js';
+import { restoreCheckpoint, takeAfter, takeCheckpoint } from '../session/checkpoint.js';
 import { commitFiles } from '../vcs/git.js';
 import { buildStory } from '../session/story.js';
 import { operatorNotesSection, whyItStopped } from '../session/compose.js';
@@ -34,8 +34,9 @@ import { describeDeviations } from '../protocol/replySchema.js';
 import { leadFormatErrorMessage, parseLeadReply, UNDERSTANDING_FIRST, type Subtask } from '../protocol/leadSchema.js';
 import { describePlan, planFrom } from './planMode.js';
 import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
+import { classifySubtaskEnd, describeAttempts, FAILURE_WORDS, retryMessage, retryPlan, sanitizedReason, sideEffectsOf, stepFacts, stepsOf, type RetryMode, type StepFacts } from './subtaskRetry.js';
 import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
-import type { Acting, Actor, LeadRecord, LeadRound, Session, Task, TaskLimit, TaskPlan } from '../session/model.js';
+import type { Acting, Actor, LeadRecord, LeadRound, RetryChoice, Session, SubtaskAttempt, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
 /** The facts the assignment is sent with. */
@@ -125,6 +126,21 @@ export function subtaskPrompt(sub: Subtask, n: number): string {
   ].join('\n');
 }
 
+/** A subtask as the lead gave it: what the worker is sent for it, once it has its number. */
+type Given = { title: string; readOnly: boolean; fresh: boolean; prompt: (n: number) => string };
+
+function givenOf(sub: Subtask): Given {
+  return { title: sub.title, readOnly: sub.readOnly, fresh: sub.freshWorker, prompt: (n) => subtaskPrompt(sub, n) };
+}
+
+/**
+ * What the lead is told when it carries on after a Stop and the operator had one subtask tried again first (2026-10-25):
+ * the usual "continue", then that subtask's report under its own number.
+ */
+export function afterStopRetryMessage(continuation: string, n: number, report: string): string {
+  return [continuation, '', `Before you go on: the operator had subtask ${n} tried again after the Stop, under its own number — it is not a new subtask. Its report:`, '', report].join('\n');
+}
+
 /** How a subtask ended, in the report's words. */
 function endedAs(status: TaskOutcome['status']): string {
   switch (status) {
@@ -203,6 +219,11 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     sink.event('acting', acting, `at work now: ${ACTOR_WORDS[actor]}${more.subtask ? ` (subtask ${more.subtask})` : ''}`);
   };
   const max = Math.max(1, cfg.limits.maxSubtasks ?? 20);
+  /*
+   * The most subtasks this attempt may have given in all: `max`, and as many again as the attempt before had given when a
+   * subtask is tried again after a Stop, its record carried on (2026-10-25).
+   */
+  let limit = max;
   const lead: LeadRecord = { rounds: [], subtasks: 0, maxSubtasks: max };
   const saveLead = async (): Promise<void> => {
     const copy = JSON.parse(JSON.stringify(lead)) as LeadRecord;
@@ -400,16 +421,20 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     return worker;
   };
 
-  /** The worker's report of a subtask, as the lead is given it. */
-  const reportOf = async (workerId: string, taskId: string, out: TaskOutcome, n: number, title: string): Promise<string> => {
+  /** The worker's report of a subtask, as the lead is given it: its last attempt's, with how the earlier ones went. */
+  const reportOf = async (workerId: string, taskId: string, out: TaskOutcome, n: number, title: string, tries?: { attempts: SubtaskAttempt[]; maxAttempts: number }): Promise<string> => {
     const w = await store.getSession(workerId);
     const t = w?.tasks.find((x) => x.id === taskId);
-    const story = t?.runId ? await buildStory(cfg.resolved.runsDir, t.runId, t, false).catch(() => null) : null;
-    const steps = (story?.entries ?? []).flatMap((e) => (e.kind === 'step' ? [e] : e.kind === 'review' ? e.entries.filter((x) => x.kind === 'step') : [])) as Array<Extract<NonNullable<typeof story>['entries'][number], { kind: 'step' }>>;
+    const steps = await stepsOfTask(t);
     const commands = steps.slice(-25).map((s) => `- \`${s.command.replace(/\s+/g, ' ').slice(0, 160)}\` → ${s.exitCode ?? s.outcome ?? '?'}`);
     const files = (t?.vcs?.files ?? []).map((f) => f.path);
+    const last = tries?.attempts.at(-1);
+    const attempts = tries ? describeAttempts(tries.attempts, tries.maxAttempts) : '';
     return [
       `Report of subtask ${n} (${title}): ${endedAs(out.status)}.`,
+      // Which kind of ending it was (2026-10-25), and the attempts, when it was tried more than once.
+      ...(last?.category ? ['', `It ended for this reason: ${FAILURE_WORDS[last.category]}.`] : []),
+      ...(attempts ? ['', attempts] : []),
       '',
       '### The worker\'s report',
       (t?.summary ?? out.summary ?? '').trim() || '(the worker gave no summary)',
@@ -419,43 +444,86 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       files.length > 0 ? `Files it changed: ${files.join(', ')}.` : 'It changed no file.',
       ...((t?.deviations?.length ?? 0) > 0 ? ['', describeDeviations(t!.deviations!)] : []),
       '',
-      `Subtasks left: ${max - lead.subtasks} of ${max}.`,
+      `Subtasks left: ${limit - lead.subtasks} of ${limit}.`,
       // Its own list, as it sent it last, to send again with the next subtask (2026-10-21).
-      ...(lead.ledger ? ['', describeLedger(lead.ledger, lead.subtasks, max)] : []),
+      ...(lead.ledger ? ['', describeLedger(lead.ledger, lead.subtasks, limit)] : []),
       'Reply in the lead\'s format: the next subtask, the plan, a question for the operator, or the result.',
     ].join('\n');
   };
 
-  /** One subtask: to the worker's conversation, carried out there as a task, and back to the lead with its report. */
-  const runSubtask = async (sub: Subtask, round: LeadRound): Promise<{ report: string } | 'stopped'> => {
-    lead.subtasks += 1;
-    const n = lead.subtasks;
+  /** The steps of a worker's task, as its run folder has them. */
+  const stepsOfTask = async (t: Task | undefined): Promise<ReturnType<typeof stepsOf>> => {
+    const story = t?.runId ? await buildStory(cfg.resolved.runsDir, t.runId, t, false).catch(() => null) : null;
+    return stepsOf(story?.entries ?? []);
+  };
+
+  /*
+   * Trying a subtask again (operator's specification, 2026-10-25; see `subtaskRetry.ts`): as Settings say, at most so
+   * many times more, so far apart. Only for two chats.
+   */
+  const retrying = {
+    mode: (cfg.limits.subtaskRetryMode ?? 'ask') as RetryMode,
+    maxAttempts: 1 + Math.max(0, Math.min(3, cfg.limits.subtaskRetries ?? 2)),
+    waitMs: Math.max(0, cfg.limits.subtaskRetryWaitSec ?? 15) * 1000,
+  };
+  /** A pause the run's Stop ends. */
+  const pauseFor = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      if (ms <= 0 || signal?.aborted) return resolve();
+      const timer = setTimeout(resolve, ms);
+      signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+
+  /** What the subtasks done before this one reported, for a fresh worker's conversation, which has not seen them. */
+  const predecessors = (before: number): Array<{ n: number; title: string; report: string }> =>
+    lead.rounds.flatMap((r) =>
+      r.subtask && r.subtask.n < before && r.subtask.report && (r.subtask.attempts?.at(-1)?.status ?? 'done') === 'done' ? [{ n: r.subtask.n, title: r.subtask.title, report: r.subtask.report }] : [],
+    );
+
+  /** One attempt at a subtask: a task of the worker's, in its conversation (a fresh one when asked), carried out there. */
+  const runAttempt = async (given: Given, n: number, attempt: number, prompt: string, fresh: boolean): Promise<{ out: TaskOutcome; done: Task; workerId: string } | { stopped: true; taskId: string }> => {
     let worker = await workerSession();
-    if (sub.freshWorker && worker.chat) {
+    if (fresh && worker.chat) {
       worker = await store.updateSession(worker.id, (s) => {
         s.chat = undefined;
         s.contractSent = false;
         s.modelByHand = undefined;
       });
-      sink.event('worker-fresh', { n }, `subtask ${n} goes to a fresh worker conversation`);
+      sink.event('worker-fresh', { n, attempt }, `subtask ${n}${attempt > 1 ? `, attempt ${attempt},` : ''} goes to a fresh worker conversation`);
     }
-    const made = await store.addTask(worker.id, { title: `${n}. ${sub.title}`, level2: '', prompt: subtaskPrompt(sub, n), reviewEnabled: false, readOnly: sub.readOnly, ...(task.skill ? { skill: task.skill } : {}) });
+    const made = await store.addTask(worker.id, {
+      title: attempt > 1 ? `${n}. ${given.title} (attempt ${attempt})` : `${n}. ${given.title}`,
+      level2: '',
+      prompt,
+      reviewEnabled: false,
+      readOnly: given.readOnly,
+      ...(task.skill ? { skill: task.skill } : {}),
+    });
     await store.updateTask(worker.id, made.id, (t) => {
       t.fromLead = { sessionId: session.id, taskId: task.id, n };
     });
-    round.subtask = { n, taskId: made.id, title: sub.title, ...(sub.readOnly ? { readOnly: true } : {}), ...(sub.freshWorker ? { fresh: true } : {}) };
+    // The attempt at work is the subtask's task the chat shows, from its first command.
+    const sub = currentRound!.subtask!;
+    sub.taskId = made.id;
+    sub.attempts = [
+      ...(sub.attempts ?? []).filter((a) => a.attempt !== attempt),
+      { attempt, taskId: made.id, status: 'running', startedAt: new Date().toISOString(), commands: { started: 0, completed: 0 }, repoChanged: null, ...(fresh ? { fresh: true } : {}) },
+    ];
     await saveLead();
-    sink.event('subtask-given', { n, taskId: made.id, title: sub.title, readOnly: sub.readOnly, fresh: sub.freshWorker }, `subtask ${n} to the worker: ${sub.title}`);
+    sink.event(attempt > 1 ? 'subtask-retried' : 'subtask-given', { n, taskId: made.id, title: given.title, attempt, readOnly: given.readOnly, fresh }, attempt > 1 ? `subtask ${n} tried again, attempt ${attempt} of ${sub.maxAttempts}: ${given.title}` : `subtask ${n} to the worker: ${given.title}`);
     await actingNow('worker', { subtask: n });
 
     // To the worker's conversation, in the same window.
     speakFor(transport, worker.id);
-    const fresh = !worker.chat;
+    const freshChat = !worker.chat;
     await enterSessionConversation(transport, worker, { closeOnFailure: false });
-    const model = await applySessionModel(transport, worker, bus, cfg, store, deps.models, fresh, signal);
+    const model = await applySessionModel(transport, worker, bus, cfg, store, deps.models, freshChat, signal);
     if (model.refused) {
       speakFor(transport, session.id);
-      if (signal?.aborted) return 'stopped';
+      if (signal?.aborted) return { stopped: true, taskId: made.id };
       throw new Error(`The worker's conversation could not be put on its model: ${model.refused}`);
     }
     const current = (await store.getSession(worker.id)) as Session;
@@ -478,10 +546,152 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     const out = await runTask(counted, current, subtask, { ...deps, approvePlan: undefined });
     speakFor(transport, session.id);
     if (transport.closedOutside()) throw new WindowClosed();
-    if (signal?.aborted) return 'stopped';
-    sink.event('subtask-ended', { n, status: out.status }, `subtask ${n} ${out.status}`);
-    await actingNow('lead');
+    if (signal?.aborted) return { stopped: true, taskId: made.id };
+    sink.event('subtask-ended', { n, status: out.status, attempt }, `subtask ${n}${attempt > 1 ? ` (attempt ${attempt})` : ''} ${out.status}`);
+    const done = ((await store.getSession(worker.id))?.tasks.find((x) => x.id === made.id) ?? subtask) as Task;
+    return { out, done, workerId: worker.id };
+  };
 
+  /** The round whose subtask is being worked: an attempt writes itself on it. */
+  let currentRound: LeadRound | null = null;
+
+  /**
+   * One subtask, to its end: tried, and tried again when it failed for a technical reason and Settings, or the operator
+   * on its card, say so (2026-10-25) — under the same number, never counted as another subtask, each attempt on record —
+   * then back to the lead with the report of its last attempt and how the others went. `resume`: after a Stop, the
+   * subtask the operator chose to try again, with the attempts it already had, carried on from the folder as it is.
+   */
+  const runSubtask = async (given: Given, round: LeadRound, resume?: { n: number; fresh: boolean; from: NonNullable<LeadRound['subtask']>; firstPrompt: string }): Promise<{ report: string } | 'stopped'> => {
+    let n: number;
+    if (resume) n = resume.n;
+    else {
+      lead.subtasks += 1;
+      n = lead.subtasks;
+    }
+    const firstPrompt = resume ? resume.firstPrompt : given.prompt(n);
+    round.subtask = {
+      n,
+      taskId: resume?.from.taskId ?? '',
+      title: given.title,
+      ...(given.readOnly ? { readOnly: true } : {}),
+      ...(given.fresh ? { fresh: true } : {}),
+      attempts: [...(resume?.from.attempts ?? [])],
+      maxAttempts: Math.max(retrying.maxAttempts, (resume?.from.attempts?.length ?? 0) + 1),
+    };
+    currentRound = round;
+    const sub = round.subtask;
+    await saveLead();
+
+    let attempt = (sub.attempts?.length ?? 0) + 1;
+    let how: { fresh: boolean; continued: boolean; restored: boolean; by?: SubtaskAttempt['by'] } = resume ? { fresh: resume.fresh, continued: true, restored: false, by: 'after-stop' } : { fresh: given.fresh, continued: false, restored: false };
+    // What the attempt before left, for the next one's message: what finished, what was cut off, what changed so far.
+    let previous: { why: string; done: StepFacts['done']; cutOff: string[] } | undefined;
+    let changedSoFar: string[] = [];
+    if (resume && resume.from.attempts?.length) {
+      const last = resume.from.attempts.at(-1)!;
+      const w = lead.workerSessionId ? await store.getSession(lead.workerSessionId) : null;
+      const lastTask = w?.tasks.find((x) => x.id === last.taskId);
+      const facts = stepFacts(await stepsOfTask(lastTask));
+      previous = { why: last.reason ? `${FAILURE_WORDS[last.category ?? 'USER_STOPPED']}: ${last.reason}` : FAILURE_WORDS[last.category ?? 'USER_STOPPED'], done: facts.done, cutOff: facts.cutOff };
+      changedSoFar = [...new Set(resume.from.attempts.flatMap((a) => (w?.tasks.find((x) => x.id === a.taskId)?.vcs?.files ?? []).map((f) => f.path)))];
+    }
+    let ended: { out: TaskOutcome; done: Task; workerId: string } | undefined;
+
+    for (;;) {
+      const prompt =
+        attempt === 1 || !previous
+          ? firstPrompt
+          : retryMessage(firstPrompt, { n, attempt, maxAttempts: sub.maxAttempts!, why: previous.why, continued: how.continued, restored: how.restored, fresh: how.fresh, done: previous.done, cutOff: previous.cutOff, changed: changedSoFar, predecessors: predecessors(n) });
+      let one: Awaited<ReturnType<typeof runAttempt>>;
+      try {
+        one = await runAttempt(given, n, attempt, prompt, how.fresh);
+      } catch (e) {
+        // Its record closed, not left "running": the window closed by the operator, or the chat failing under the lead.
+        const open = sub.attempts?.find((a) => a.attempt === attempt && a.status === 'running');
+        if (open) {
+          const theirs = e instanceof WindowClosed || e instanceof StoppedSend || !!signal?.aborted;
+          Object.assign(open, { status: theirs ? 'aborted' : 'failed', category: theirs ? 'USER_STOPPED' : 'TRANSIENT_CHAT_FAILURE', reason: sanitizedReason((e as Error).message), endedAt: new Date().toISOString() });
+          await saveLead().catch(() => undefined);
+        }
+        throw e;
+      }
+      const mark = sub.attempts!.find((a) => a.attempt === attempt)!;
+      Object.assign(mark, { ...(how.continued && attempt > 1 ? { continued: true } : {}), ...(how.restored ? { restored: true } : {}), ...(attempt > 1 ? { retryOf: attempt - 1 } : {}), ...(how.by ? { by: how.by } : {}) });
+      if ('stopped' in one) {
+        Object.assign(mark, { status: 'aborted', category: 'USER_STOPPED', reason: 'stopped by the operator', endedAt: new Date().toISOString() });
+        await saveLead();
+        return 'stopped';
+      }
+      ended = one;
+      const facts = stepFacts(await stepsOfTask(one.done));
+      const category = classifySubtaskEnd(one.done);
+      const side = sideEffectsOf(one.done, facts);
+      const workerNow = await store.getSession(one.workerId);
+      Object.assign(mark, {
+        status: one.done.status,
+        ...(category ? { category: category !== 'TASK_EVIDENCE_FAILURE' && category !== 'USER_STOPPED' && side.state === 'unknown' ? 'UNKNOWN_SIDE_EFFECT_STATE' : category } : {}),
+        ...(category ? { reason: sanitizedReason(one.done.reason ?? one.out.reason) } : {}),
+        ...(workerNow?.chat?.chatId ? { chatId: workerNow.chat.chatId } : {}),
+        endedAt: new Date().toISOString(),
+        commands: { started: facts.started, completed: facts.completed },
+        repoChanged: one.done.vcs?.commit ? side.changed.length > 0 : null,
+        sideEffects: side.state,
+      } satisfies Partial<SubtaskAttempt>);
+      changedSoFar = [...new Set([...changedSoFar, ...side.changed])];
+      await saveLead();
+
+      const plan = retryPlan({ category, sideEffects: side.state, mode: retrying.mode, attempt, maxAttempts: sub.maxAttempts!, canAsk: !!deps.askSubtaskRetry });
+      if (category && category !== 'TASK_EVIDENCE_FAILURE') {
+        sink.event('subtask-attempt-failed', { n, attempt, category: mark.category, sideEffects: side.state, plan: plan.do }, `subtask ${n}, attempt ${attempt} of ${sub.maxAttempts}: ${FAILURE_WORDS[mark.category!]} (${side.why})${plan.do === 'lead' ? ` — to the lead: ${plan.why}` : ''}`, 'warn');
+      }
+      if (plan.do === 'lead') break;
+      let choice: RetryChoice;
+      let by: SubtaskAttempt['by'];
+      if (plan.do === 'ask') {
+        const got = await deps.askSubtaskRetry!({
+          sessionId: one.workerId,
+          taskId: one.done.id,
+          retry: { n, title: given.title, attempt, maxAttempts: sub.maxAttempts!, category: plan.category, reason: mark.reason ?? '', sideEffects: side.state, changed: side.changed, choices: plan.choices },
+        });
+        if (got === 'stop' || signal?.aborted) return 'stopped';
+        if (got === 'accept') {
+          sink.event('subtask-retry-declined', { n, attempt }, `subtask ${n}: the operator takes it as failed; the lead decides`);
+          break;
+        }
+        choice = got;
+        by = 'operator';
+      } else {
+        choice = plan.choice;
+        by = 'settings';
+      }
+      /*
+       * What the next attempt starts from. Put back to the subtask's start only at the operator's word — never by itself;
+       * carried on from the folder as it is when something changed, the commands that finished not to be run again.
+       */
+      let restored = false;
+      if (choice === 'restore') {
+        const firstTask = (await store.getSession(one.workerId))?.tasks.find((x) => x.id === sub.attempts![0]!.taskId);
+        const cp = firstTask?.checkpoint;
+        const back = cp && chatDir ? await restoreCheckpoint(chatDir, cp) : { ok: false as const, problem: 'the subtask\'s start was not photographed' };
+        if (!back.ok) {
+          sink.event('subtask-restore-failed', { n, problem: back.problem }, `subtask ${n}: the folder could not be put back to the subtask's start (${back.problem}); the lead decides`, 'error');
+          break;
+        }
+        restored = true;
+        changedSoFar = [];
+        sink.event('subtask-restored', { n, safety: back.safety }, `subtask ${n}: the folder put back to how it was when the subtask began, at the operator's word (what it was is kept as ${back.safety.slice(0, 8)})`);
+      }
+      how = { fresh: choice === 'fresh', continued: !restored && (choice === 'continue' || side.state === 'changed'), restored, by };
+      previous = { why: `${FAILURE_WORDS[mark.category ?? 'TRANSIENT_CHAT_FAILURE']}${mark.reason ? `: ${mark.reason}` : ''}`, done: facts.done, cutOff: facts.cutOff };
+      if (retrying.waitMs > 0) {
+        sink.event('subtask-retry-wait', { n, ms: retrying.waitMs }, `subtask ${n} is tried again in ${Math.round(retrying.waitMs / 1000)} s`);
+        await pauseFor(retrying.waitMs);
+        if (signal?.aborted) return 'stopped';
+      }
+      attempt += 1;
+    }
+
+    await actingNow('lead');
     // Back to the lead's conversation.
     const leadNow = (await store.getSession(session.id)) as Session;
     await enterSessionConversation(transport, leadNow, { closeOnFailure: false });
@@ -490,7 +700,11 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       if (signal?.aborted) return 'stopped';
       throw new Error(`The lead's conversation could not be put on its model again: ${back.refused}`);
     }
-    return { report: await reportOf(worker.id, made.id, out, n, sub.title) };
+    const report = await reportOf(ended!.workerId, ended!.done.id, ended!.out, n, given.title, { attempts: sub.attempts!, maxAttempts: sub.maxAttempts! });
+    // Kept with the subtask: what a fresh worker trying a later one is told was done before it.
+    sub.report = report.slice(0, 6000);
+    await saveLead();
+    return { report };
   };
 
   try {
@@ -524,7 +738,42 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
         s.contractSent = true;
       });
     }
-    markdown = await tell(assignment);
+    /*
+     * After a Stop, the subtask the operator chose to try again (2026-10-25): first, under its own number, on the record
+     * the stopped attempt left — its rounds, its list of subtasks, the subtasks given, its worker — carried on from the
+     * folder as it is; then the lead is told to carry on, with that subtask's report.
+     */
+    const retryFirst = carryingOn ? task.continuing?.retrySubtask : undefined;
+    const before = retryFirst ? task.attempts?.at(-1)?.lead : undefined;
+    const from = before && retryFirst ? [...before.rounds].reverse().find((r) => r.subtask?.n === retryFirst.n)?.subtask : undefined;
+    if (retryFirst && before && from) {
+      lead.rounds = JSON.parse(JSON.stringify(before.rounds)) as LeadRound[];
+      lead.subtasks = before.subtasks;
+      if (before.ledger) lead.ledger = before.ledger;
+      if (before.workerSessionId) lead.workerSessionId = before.workerSessionId;
+      limit = before.subtasks + max;
+      lead.maxSubtasks = limit;
+      const w = before.workerSessionId ? await store.getSession(before.workerSessionId) : null;
+      const firstId = from.attempts?.[0]?.taskId ?? from.taskId;
+      const firstTask = w?.tasks.find((x) => x.id === firstId);
+      // A subtask from before there were attempts: its one attempt, as its task had it.
+      const attempts: SubtaskAttempt[] = from.attempts?.length
+        ? from.attempts
+        : [{ attempt: 1, taskId: from.taskId, status: firstTask?.status ?? 'aborted', category: 'USER_STOPPED', reason: 'stopped by the operator', commands: { started: 0, completed: 0 }, repoChanged: null }];
+      const round: LeadRound = { n: lead.rounds.length + 1, at: new Date().toISOString(), status: 'delegate', notes: `Subtask ${retryFirst.n} tried again after the Stop, at the operator's word.` };
+      lead.rounds.push(round);
+      await saveLead();
+      sink.event('subtask-retry-after-stop', { n: retryFirst.n, fresh: !!retryFirst.fresh }, `subtask ${retryFirst.n} is tried again after the Stop, at the operator's word${retryFirst.fresh ? ', by a fresh worker' : ''}`);
+      const ran = await runSubtask(
+        { title: from.title, readOnly: !!from.readOnly, fresh: !!retryFirst.fresh, prompt: () => firstTask?.prompt ?? '' },
+        round,
+        { n: retryFirst.n, fresh: !!retryFirst.fresh, from: { ...from, attempts }, firstPrompt: firstTask?.prompt ?? '' },
+      );
+      if (ran === 'stopped') return await finish('aborted', 'stopped by the operator');
+      markdown = await tell(afterStopRetryMessage(assignment, retryFirst.n, ran.report));
+    } else {
+      markdown = await tell(assignment);
+    }
 
     const maxFormat = Math.max(0, cfg.limits.maxFormatRetries ?? 2);
     let formatRetries = 0;
@@ -572,7 +821,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       };
       lead.rounds.push(round);
       // Its list of subtasks, as this reply sends it (2026-10-21); the subtask given now is the running one.
-      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < max ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
+      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < limit ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
       const listed = nextLedger(lead.ledger, r.todo, round.at, giving);
       lead.ledger = listed.ledger;
       if (listed.change) {
@@ -591,11 +840,11 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
 
       switch (r.status) {
         case 'delegate': {
-          if (lead.subtasks >= max) {
-            markdown = await tell(noSubtasksLeft(max));
+          if (lead.subtasks >= limit) {
+            markdown = await tell(noSubtasksLeft(limit));
             break;
           }
-          const ran = await runSubtask(r.subtask!, round);
+          const ran = await runSubtask(givenOf(r.subtask!), round);
           if (ran === 'stopped') return await finish('aborted', 'stopped by the operator');
           markdown = await tell(ran.report);
           break;
@@ -626,7 +875,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           await setTask((t) => {
             if (t.plan) t.plan.approved = approved;
           });
-          markdown = await tell(leadPlanApproved(approved, max - lead.subtasks));
+          markdown = await tell(leadPlanApproved(approved, limit - lead.subtasks));
           break;
         }
         case 'ask': {
@@ -643,7 +892,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             await saveLead();
             sink.event('question-agreed', { round: round.n, question: r.question, answer: agreed },
               `the lead asked: ${r.question} — answered as it recommends (Settings agree with what the bot proposes): ${agreed}`);
-            markdown = await tell(operatorAnswerMessage(agreed, max - lead.subtasks));
+            markdown = await tell(operatorAnswerMessage(agreed, limit - lead.subtasks));
             break;
           }
           if (!deps.askQuestion) {
@@ -657,7 +906,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           round.question.at = new Date().toISOString();
           await saveLead();
           sink.event('lead-question-answered', { round: round.n }, 'the operator answered the lead');
-          markdown = await tell(operatorAnswerMessage(got.answer, max - lead.subtasks));
+          markdown = await tell(operatorAnswerMessage(got.answer, limit - lead.subtasks));
           break;
         }
         case 'done': {
