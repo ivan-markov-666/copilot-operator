@@ -12,6 +12,7 @@ import { useId, useState } from 'react';
 import type { Key } from '../lib/lang/types';
 import type { Parked, ParkedAnswerInput, RetryChoice } from '../lib/api';
 import { useFmtTime, useT } from '../lib/i18n';
+import { useChoice } from '../lib/useChoice';
 import { CopyButton } from './copyButton';
 import { PlanView } from './planView';
 import { RichText } from './richText';
@@ -31,22 +32,13 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
   const fmtTime = useFmtTime();
   const id = useId();
   const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  // From the press, its other answers off and the one pressed marked; given back only when it did not arrive.
+  const { locked, err, choose, mark } = useChoice();
   // Answered here: said at once, before the record is read again.
   const [sent, setSent] = useState<'' | 'answered' | 'stopped'>('');
   const a = parked.approval;
-  const send = async (answer: ParkedAnswerInput) => {
-    setBusy(true);
-    setErr('');
-    try {
-      await onAnswer(answer);
-      setSent('stop' in answer ? 'stopped' : 'answered');
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+  const send = async (which: string, answer: ParkedAnswerInput) => {
+    if (await choose(which, () => onAnswer(answer))) setSent('stop' in answer ? 'stopped' : 'answered');
   };
   if (parked.answer || sent) {
     return (
@@ -66,12 +58,12 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           <label htmlFor={`${id}-note`} className="small">
             {t('pk.note')}
           </label>
-          <textarea id={`${id}-note`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={busy} />
+          <textarea id={`${id}-note`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={locked} />
           <div className="row">
-            <button type="button" className="primary" disabled={busy} onClick={() => void send({ decision: 'approve', ...(text.trim() ? { note: text.trim() } : {}) })}>
+            <button type="button" className="primary" {...mark('approve')} onClick={() => void send('approve', { decision: 'approve', ...(text.trim() ? { note: text.trim() } : {}) })}>
               {t('pk.approve')}
             </button>
-            <button type="button" disabled={busy || !text.trim()} onClick={() => void send({ decision: 'revise', note: text.trim() })} title={text.trim() ? undefined : t('pk.reviseWhy')}>
+            <button type="button" {...mark('revise')} disabled={locked || !text.trim()} onClick={() => void send('revise', { decision: 'revise', note: text.trim() })} title={text.trim() ? undefined : t('pk.reviseWhy')}>
               {t('pk.revise')}
             </button>
           </div>
@@ -87,7 +79,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           {a.question.options.length > 0 && (
             <div className="row cs-options">
               {a.question.options.map((o, i) => (
-                <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} disabled={busy} onClick={() => void send({ answer: o })}>
+                <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} {...mark(`option-${i}`)} onClick={() => void send(`option-${i}`, { answer: o })}>
                   {o}
                 </button>
               ))}
@@ -96,9 +88,9 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           <label htmlFor={`${id}-answer`} className="small">
             {t('lead.answer')}
           </label>
-          <textarea id={`${id}-answer`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={busy} />
+          <textarea id={`${id}-answer`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={locked} />
           <div className="row">
-            <button type="button" className="primary" disabled={busy || !text.trim()} onClick={() => void send({ answer: text.trim() })}>
+            <button type="button" className="primary" {...mark('written')} disabled={locked || !text.trim()} onClick={() => void send('written', { answer: text.trim() })}>
               {t('lead.send')}
             </button>
           </div>
@@ -113,7 +105,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           {a.retry.sideEffects === 'unknown' && <p className="reason small">{t('retry.unknown')}</p>}
           <div className="row">
             {a.retry.choices.map((c, i) => (
-              <button key={c} type="button" className={i === 0 ? 'primary' : undefined} disabled={busy} onClick={() => void send({ choice: c })}>
+              <button key={c} type="button" className={i === 0 ? 'primary' : undefined} {...mark(c)} onClick={() => void send(c, { choice: c })}>
                 {t(CHOICE[c])}
               </button>
             ))}
@@ -125,10 +117,10 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           <pre className="cs-out">{a.description}</pre>
           {a.platform && <p className="reason small">{t('approval.platform', { platform: a.platform })}</p>}
           <div className="row">
-            <button type="button" className="primary" disabled={busy} onClick={() => void send({ decision: 'run' })}>
+            <button type="button" className="primary" {...mark('run')} onClick={() => void send('run', { decision: 'run' })}>
               {t('pk.run')}
             </button>
-            <button type="button" disabled={busy} onClick={() => void send({ decision: 'skip' })}>
+            <button type="button" {...mark('skip')} onClick={() => void send('skip', { decision: 'skip' })}>
               {t('pk.skip')}
             </button>
           </div>
@@ -138,14 +130,14 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
         <>
           <p className="small">{t(parked.kind === 'model' ? 'pk.modelWhy' : 'pk.passwordWhy')}</p>
           <div className="row">
-            <button type="button" className="primary" disabled={busy} onClick={() => void send({ resume: true })}>
+            <button type="button" className="primary" {...mark('resume')} onClick={() => void send('resume', { resume: true })}>
               {t('pk.resume')}
             </button>
           </div>
         </>
       )}
       <div className="row pk-stop">
-        <button type="button" className="quiet" disabled={busy} onClick={() => void send({ stop: true })}>
+        <button type="button" className="quiet" {...mark('stop')} onClick={() => void send('stop', { stop: true })}>
           {t('pk.stop')}
         </button>
       </div>

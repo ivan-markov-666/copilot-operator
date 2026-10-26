@@ -667,6 +667,14 @@ the cards, the name on the line "Working…" and along the bottom. While the bot
 (red; amber while paused; on hover who is at work), and the browser tab reads "● Worker at work — copilot-operator" —
 "(1) waiting for you" first when something waits for the operator.
 
+**A card answered (2026-10-26).** From the press, every answer of a card that waits for the operator is off:
+- the kinds of card: a command, a model, a plan, a question (its offered answers and the one written out), a subtask's choices, the two buttons under a subtask after a Stop, and a queue task set aside;
+- the answer chosen is marked (`data-chosen`: `sending`, then `sent`) and kept at full strength, its edge pulsing while it is on its way and ticked once given;
+- it stays so until the card goes, and a second press sends nothing;
+- only an answer that did not arrive turns them all back on, with its error on the card (`web/lib/useChoice.ts`).
+
+A card answered goes at once, in the chat and in the banner on top alike. A read of the list that was already on its way when the answer went does not bring it back. In the "New branch from main" window, the name and the two choices are off while the branch is being made.
+
 **The tab's title, and the export (2026-10-23).** The browser tab says what stage the bot is at, in English whatever
 the page's language (as the operator asked): "Working." "Working.." "Working..." round again while it works,
 "Starting...", "Paused", "Waiting for you (n)" first when something waits; when it stops, how the last message ended —

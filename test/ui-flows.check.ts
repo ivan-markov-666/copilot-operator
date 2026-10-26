@@ -1490,7 +1490,19 @@ try {
     await chat.close();
     t.check('"Ask for another plan" waits for a note', await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isDisabled(), true);
     await row.getByLabel(en['pk.note']!).fill('Keep it short.');
+    // Pressed (2026-10-26): its other answers and the note off, "Approve" marked, while the answer goes.
+    let releaseAnswer!: () => void;
+    const answerHeld = new Promise<void>((r) => (releaseAnswer = r));
+    const parkedAnswers = /\/api\/queue\/items\/[^/]+\/answer$/;
+    await page.route(parkedAnswers, async (r) => {
+      await answerHeld;
+      await r.fallback();
+    });
     await row.getByRole('button', { name: en['pk.approve']!, exact: true }).click();
+    await row.locator('.pk [data-chosen="sending"]').waitFor({ timeout: 5_000 });
+    t.check('approving: "Approve" marked, "Ask for another plan", "Stop" and the note off', [await row.getByRole('button', { name: en['pk.approve']!, exact: true }).getAttribute('data-chosen'), await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isDisabled(), await row.getByRole('button', { name: en['pk.stop']!, exact: true }).isDisabled(), await row.getByLabel(en['pk.note']!).isDisabled()], ['sending', true, true, true]);
+    releaseAnswer();
+    await page.unroute(parkedAnswers);
     await waitFor('the task to wait to carry on', async () => ((await row.locator('.queue-status').textContent())?.trim() === en['q.waiting'] ? true : null), 10_000).catch(() => undefined);
     const after = (await h.call<{ items: Array<{ status: string; resume?: boolean }> }>('GET', '/queue')).items[0]!;
     t.check('approved: it waits to carry on first, and the card has gone', [after.status, after.resume, (await row.locator('.queue-status').textContent())?.trim(), await row.locator('.pk').count()], ['waiting', true, en['q.waiting'], 0]);
@@ -2078,6 +2090,103 @@ try {
   });
 
   /*
+   * A card answered (operator, 2026-10-26: "when one of the possibilities is chosen, make the other inputs for the same
+   * thing inactive"): from the press every answer of the card is off, the one chosen marked and at full strength, until
+   * the card goes; a second press sends nothing; an answer that did not arrive gives them all back, its error on the
+   * card. In the banner on top, a read of the list already on its way when the answer went does not bring the card
+   * back with its answers on again.
+   */
+  await scenario('a card answered: its other answers off at once, the one chosen marked; given back only when it did not arrive', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Write which.txt as I say.', model: 'Think deeper' });
+    h.chat.script(reply.ask('Which word goes in which.txt?', ['first', 'second']), reply.done('The operator chose the second word for which.txt, and nothing else was asked for in this message.'));
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const card = page.locator('.cs-question');
+    await card.waitFor({ timeout: 30_000 });
+    const options = card.locator('.cs-options button');
+    const box = card.locator('textarea');
+    const send = card.getByRole('button', { name: en['lead.send']!, exact: true });
+    const stop = card.getByRole('button', { name: en['lead.stop']!, exact: true });
+    const offNow = async (): Promise<boolean[]> => [await options.nth(0).isDisabled(), await options.nth(1).isDisabled(), await box.isDisabled(), await send.isDisabled(), await stop.isDisabled()];
+    await box.fill('my own words');
+    let posts = 0;
+    let fail = true;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const answers = /\/api\/approvals\/[^/?]+\/answer$/;
+    await page.route(answers, async (r) => {
+      posts += 1;
+      if (fail) return r.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ statusCode: 400, message: 'The answer did not arrive.', error: 'Bad Request' }) });
+      await held;
+      await r.fallback();
+    });
+    // Did not arrive: every answer back on, nothing marked, why said on the card.
+    await options.nth(1).click();
+    await card.locator('.err').waitFor({ timeout: 5_000 });
+    t.check('an answer that did not arrive: all of them on again, none marked, why said', [await offNow(), await card.locator('[data-chosen]').count(), ((await card.locator('.err').textContent()) ?? '').trim()], [[false, false, false, false, false], 0, 'The answer did not arrive.']);
+    // On its way: the others off, the box too, the one chosen marked; a second press sends nothing.
+    fail = false;
+    await options.nth(1).dblclick();
+    await card.locator('[data-chosen="sending"]').waitFor({ timeout: 5_000 });
+    t.check('chosen: every answer off, the box too, the one chosen marked "on its way"', [await offNow(), await options.nth(1).getAttribute('data-chosen'), await card.locator('[data-chosen]').count(), await card.locator('.err').count()], [[true, true, true, true, true], 'sending', 1, 0]);
+    t.check('the one chosen at full strength, the others faded', [await options.nth(1).evaluate((b) => getComputedStyle(b).opacity), await options.nth(0).evaluate((b) => getComputedStyle(b).opacity)], ['1', '0.45']);
+    await sleep(500);
+    t.check('pressed twice, sent once (and once before, that did not arrive)', posts, 2);
+    release();
+    await card.waitFor({ state: 'detached', timeout: 10_000 });
+    await page.locator('.cs-body').getByText('The operator chose the second word for which.txt').waitFor({ timeout: 30_000 });
+    await page.unroute(answers);
+    await h.idle();
+
+    // The banner on top, on another page: a command of a conversation that asks before each one.
+    const second = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Write b.txt.', model: 'Think deeper' });
+    h.chat.script(reply.steps(write('b.txt', 'b')), reply.done('b.txt was written by the command the operator let run, holding the letter b.'));
+    let decided = false;
+    let stale = '';
+    const lists = /\/api\/approvals(\?|$)/;
+    await page.route(lists, async (r) => {
+      if (r.request().method() !== 'GET') return r.fallback();
+      // After the answer, every read of the list is one made before it: the card still in it.
+      if (decided && stale) return r.fulfill({ status: 200, contentType: 'application/json', body: stale });
+      const res = await r.fetch();
+      const body = await res.text();
+      if (!decided && body.includes('b.txt')) stale = body;
+      await r.fulfill({ response: res, body }).catch(() => undefined);
+    });
+    let releaseDecide!: () => void;
+    const decideHeld = new Promise<void>((r) => (releaseDecide = r));
+    const decides = /\/api\/approvals\/[^/?]+$/;
+    await page.route(decides, async (r) => {
+      if (r.request().method() !== 'POST') return r.fallback();
+      decided = true;
+      await decideHeld;
+      await r.fallback();
+    });
+    await h.call('POST', `/sessions/${second.threadId}/start`, { mode: 'confirm' });
+    await page.goto(url('/settings'));
+    const banner = page.locator('.approval-banner .approval', { hasText: 'b.txt' });
+    await banner.waitFor({ timeout: 30_000 });
+    await waitFor('a read of the list with the card in it', async () => stale !== '' || null, 10_000);
+    const run = banner.getByRole('button', { name: en['approval.run']!, exact: true });
+    await run.click();
+    await banner.locator('[data-chosen="sending"]').waitFor({ timeout: 5_000 });
+    const buttons = banner.getByRole('button');
+    t.check('in the banner: Run marked, and none of its answers on', [await run.getAttribute('data-chosen'), (await buttons.evaluateAll((bs) => bs.map((b) => (b as HTMLButtonElement).disabled))).every(Boolean), await buttons.count()], ['sending', true, 4]);
+    releaseDecide();
+    t.truthy('answered, the card goes', await banner.waitFor({ state: 'detached', timeout: 5_000 }).then(() => true, () => false), await page.locator('.approval-banner').count());
+    let back = 0;
+    for (const until = Date.now() + 4_500; Date.now() < until; await sleep(150)) back = Math.max(back, await banner.count());
+    t.check('and the reads made before the answer do not bring it back', back, 0);
+    await page.unroute(lists);
+    await page.unroute(decides);
+    await h.idle();
+    t.check('the command ran', existsSync(join(h.repo, 'b.txt')), true);
+  });
+
+  /*
    * "Pause" turns into "Continue" (operator, 2026-10-20): pressed, the work holds and the chat and the status bar
    * say so; "Continue" goes on to the end.
    */
@@ -2590,7 +2699,38 @@ try {
     t.truthy('under the stopped subtask: try it again, or with a new worker', await appears(group, 15_000) && (await group.getByRole('button').allTextContents()).join('|') === [en['retry.same'], en['retry.fresh']].join('|'), await page.locator('.cs-lead-turn').textContent());
     t.check('nothing was tried again by itself', (await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${sent.threadId}`)).tasks.map((x) => x.status), ['aborted']);
     h.chat.script(reply.steps(write('result.txt', 'hello')), reply.done(retryWorkerDone), reply.lead.done(retryLeadDone));
-    await group.getByRole('button', { name: en['retry.same']!, exact: true }).click();
+    /*
+     * Pressed (2026-10-26): both off and the one pressed marked while it goes, once however often it is pressed; and not
+     * on again between the answer and the next read of the conversation, held here a while.
+     */
+    let tries = 0;
+    let releaseRetry!: () => void;
+    const retryHeld = new Promise<void>((r) => (releaseRetry = r));
+    const retries = /\/api\/chat\/[^/]+\/tasks\/[^/]+\/retry-subtask$/;
+    await page.route(retries, async (r) => {
+      tries += 1;
+      await retryHeld;
+      await r.fallback();
+    });
+    const same = group.getByRole('button', { name: en['retry.same']!, exact: true });
+    const fresh = group.getByRole('button', { name: en['retry.fresh']!, exact: true });
+    await same.dblclick();
+    await group.locator('[data-chosen="sending"]').waitFor({ timeout: 5_000 });
+    t.check('pressed: both off, the one pressed marked', [await same.isDisabled(), await fresh.isDisabled(), await same.getAttribute('data-chosen'), await fresh.getAttribute('data-chosen')], [true, true, 'sending', null]);
+    const reads = new RegExp(`/api/sessions/${sent.threadId}$`);
+    await page.route(reads, async (r) => {
+      if (r.request().method() === 'GET') await sleep(2_000);
+      await r.fallback();
+    });
+    releaseRetry();
+    let onAgain = false;
+    for (const until = Date.now() + 1_800; Date.now() < until; await sleep(100)) {
+      const states = await group.getByRole('button').evaluateAll((bs) => bs.map((b) => (b as HTMLButtonElement).disabled)).catch(() => [] as boolean[]);
+      if (states.some((off) => !off)) onAgain = true;
+    }
+    t.check('and not on again before the conversation is read; sent once', [onAgain, tries], [false, 1]);
+    await page.unroute(reads);
+    await page.unroute(retries);
     await page.locator('.cs-end').filter({ hasText: 'The work is finished' }).waitFor({ timeout: 30_000 });
     const sub = page.locator('details.cs-subtask');
     await waitFor('"Done at attempt 2"', async () => ((await sub.locator(':scope > summary').textContent()) ?? '').includes(en['retry.doneAt']!.replace('{k}', '2')) || null, 10_000).catch(() => undefined);

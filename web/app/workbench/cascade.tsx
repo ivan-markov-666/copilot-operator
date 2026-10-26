@@ -23,6 +23,7 @@ import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useChosenSkill } from '../../lib/chosenSkill';
 import { useDots } from '../../lib/useDots';
+import { useChoice } from '../../lib/useChoice';
 import { useActivity } from '../../lib/activity';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
@@ -308,12 +309,14 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * After a Stop (two chats, 2026-10-25): the stopped message carried on, one of its subtasks that did not end tried again
    * first — at the operator's word only, never by itself — with the lead's plan, the subtasks done and their reports kept.
    */
-  const retrySubtask = async (task: Task, n: number, freshWorker: boolean) => {
-    if (!session || busy) return;
+  const retrySubtask = async (task: Task, n: number, freshWorker: boolean): Promise<boolean> => {
+    if (!session || busy) return false;
     setBusy(true);
     setSaid('');
+    let started = false;
     try {
       const r = await api.chatRetrySubtask(session.id, task.id, n, freshWorker);
+      started = r.started;
       if (!r.started) setSaid(r.reason ?? t('retry.notStarted'));
     } catch (e) {
       setSaid((e as Error).message);
@@ -321,6 +324,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       setBusy(false);
       void readSession();
     }
+    return started;
   };
   const rewind = async (task: Task) => {
     if (!session || busy) return;
@@ -600,7 +604,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
                 onDecided={decided}
                 onOpenFile={onOpenFile}
                 onRewind={running || busy ? undefined : () => void rewind(task)}
-                onRetrySubtask={running || busy || task.status !== 'aborted' ? undefined : (k, freshWorker) => void retrySubtask(task, k, freshWorker)}
+                // Not hidden while one is on its way (2026-10-26): its buttons stay, off, the one pressed marked; hidden, they came back on between the answer and the next read.
+                onRetrySubtask={running || task.status !== 'aborted' ? undefined : (k, freshWorker) => retrySubtask(task, k, freshWorker)}
               />
             ) : (
               <Turn key={task.id} n={i + 1} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
@@ -1046,17 +1051,14 @@ function Command({ step }: { step: Extract<StoryEntry, { kind: 'step' }> }) {
 /** A command waiting to be run, asked about where it was asked for. */
 function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
   const { t } = useT();
-  const [busy, setBusy] = useState(false);
+  const { err, choose, mark } = useChoice();
   const answer = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
-    setBusy(true);
-    let ok = false;
-    try {
-      await api.decide(approval.id, action);
-      ok = true;
-    } finally {
-      setBusy(false);
-      onDecided(approval.id, ok);
-    }
+    onDecided(
+      approval.id,
+      await choose(action, async () => {
+        await api.decide(approval.id, action);
+      }),
+    );
   };
   // The plan is asked about here, in the conversation (plan mode, 2026-10-20); the model card stays at the top.
   if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={(ok) => onDecided(approval.id, ok)} /></div>;
@@ -1073,10 +1075,15 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
       {/* A platform reached with the operator's own access (2026-10-23): said, and never run on "the rest". */}
       {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
       <div className="row">
-        <button type="button" className="primary" disabled={busy} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
-        {!approval.network && !approval.platform && <button type="button" disabled={busy} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
-        <button type="button" disabled={busy} onClick={() => void answer('skip')}>{t('chat.askSkip')}</button>
+        <button type="button" className="primary" {...mark('run')} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
+        {!approval.network && !approval.platform && <button type="button" {...mark('run-all')} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
+        <button type="button" {...mark('skip')} onClick={() => void answer('skip')}>{t('chat.askSkip')}</button>
       </div>
+      {err && (
+        <p className="err" role="alert">
+          {err}
+        </p>
+      )}
     </div>
   );
 }
@@ -1086,7 +1093,7 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
  * reply by reply — how it understood the assignment, its notes, its plan, each subtask with the worker's commands under
  * it, its questions with their answers — and the result, which is the message's summary.
  */
-function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, onRewind, onRetrySubtask }: { n: number; session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void; onRetrySubtask?: (n: number, fresh: boolean) => void }) {
+function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, onRewind, onRetrySubtask }: { n: number; session: Session; task: Task; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRewind?: () => void; onRetrySubtask?: (n: number, fresh: boolean) => Promise<boolean> }) {
   const { t } = useT();
   const live = task.status === 'running' || task.status === 'waiting-approval';
   const rounds = task.lead?.rounds ?? [];
@@ -1242,8 +1249,9 @@ const CHOICE_KEY: Record<RetryChoice, Key> = { same: 'retry.same', fresh: 'retry
  * (2026-10-25), it says which attempt it is on, or was done at, and keeps the attempts before under it; one that did not
  * end after a Stop can be tried again from here.
  */
-function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile, onRetry }: { round: LeadRound; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRetry?: (fresh: boolean) => void }) {
+function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile, onRetry }: { round: LeadRound; worker: Session | null; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onRetry?: (fresh: boolean) => Promise<boolean> }) {
   const { t } = useT();
+  const again = useChoice();
   const sub = round.subtask!;
   const task = worker?.tasks.find((x) => x.id === sub.taskId);
   const live = task?.status === 'running' || task?.status === 'waiting-approval';
@@ -1297,10 +1305,10 @@ function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile, onRetry 
           <div className="cs-retry-after" role="group" aria-label={t('retry.afterStop')}>
             <p className="muted small">{t('retry.afterStopWhy')}</p>
             <div className="row">
-              <button type="button" className="primary" onClick={() => onRetry(false)}>
+              <button type="button" className="primary" {...again.mark('same')} onClick={() => void again.choose('same', () => onRetry(false))}>
                 {t('retry.same')}
               </button>
-              <button type="button" onClick={() => onRetry(true)}>
+              <button type="button" {...again.mark('fresh')} onClick={() => void again.choose('fresh', () => onRetry(true))}>
                 {t('retry.fresh')}
               </button>
             </div>
@@ -1366,23 +1374,16 @@ function AttemptStory({ sessionId, task }: { sessionId: string; task: Task | und
  */
 function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
   const { t } = useT();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  const { err, choose: answer, mark } = useChoice();
   const r = approval.retry!;
   const choose = async (choice: RetryChoice) => {
     if (choice === 'restore' && !(await confirmDialog(t('retry.restoreConfirm')))) return;
-    setBusy(true);
-    setErr('');
-    let ok = false;
-    try {
-      await api.answerRetry(approval.id, choice);
-      ok = true;
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-      onDecided(approval.id, ok);
-    }
+    onDecided(
+      approval.id,
+      await answer(choice, async () => {
+        await api.answerRetry(approval.id, choice);
+      }),
+    );
   };
   return (
     <div className="cs-ask cs-retry" role="group" aria-label={t('retry.title', { n: r.n })}>
@@ -1403,7 +1404,7 @@ function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Dec
       </div>
       <div className="row">
         {r.choices.map((c, i) => (
-          <button key={c} type="button" className={i === 0 ? 'primary' : undefined} disabled={busy} onClick={() => void choose(c)}>
+          <button key={c} type="button" className={i === 0 ? 'primary' : undefined} {...mark(c)} onClick={() => void choose(c)}>
             {t(CHOICE_KEY[c])}
           </button>
         ))}
@@ -1422,37 +1423,28 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
   const { t } = useT();
   const id = useId();
   const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  const { locked, err, choose, mark } = useChoice();
   const q = approval.question!;
   // The lead's question, or since 2026-10-23 the chat's own.
   const asker = approval.actor ?? 'lead';
-  const answer = async (value: string) => {
+  // `which`: the answer's own button, an offered answer by its place or the one written out.
+  const answer = async (which: string, value: string) => {
     if (!value.trim()) return;
-    setBusy(true);
-    setErr('');
-    let ok = false;
-    try {
-      await api.answerQuestion(approval.id, value);
-      ok = true;
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-      onDecided(approval.id, ok);
-    }
+    onDecided(
+      approval.id,
+      await choose(which, async () => {
+        await api.answerQuestion(approval.id, value);
+      }),
+    );
   };
   const stop = async () => {
     if (!(await confirmDialog(t('lead.stopConfirm')))) return;
-    setBusy(true);
-    let ok = false;
-    try {
-      await api.decide(approval.id, 'abort');
-      ok = true;
-    } finally {
-      setBusy(false);
-      onDecided(approval.id, ok);
-    }
+    onDecided(
+      approval.id,
+      await choose('stop', async () => {
+        await api.decide(approval.id, 'abort');
+      }),
+    );
   };
   return (
     <div className="cs-ask cs-question" role="group" aria-label={t(asker === 'lead' ? 'lead.question' : 'chat.question')}>
@@ -1471,7 +1463,7 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
       {q.options.length > 0 && (
         <div className="row cs-options">
           {q.options.map((o, i) => (
-            <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} disabled={busy} onClick={() => void answer(o)} title={i === 0 ? t('chat.optionRecommended') : undefined}>
+            <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} {...mark(`option-${i}`)} onClick={() => void answer(`option-${i}`, o)} title={i === 0 ? t('chat.optionRecommended') : undefined}>
               <span>{o}</span>
               {q.commands?.[i] && <code className="cs-option-run">{t('chat.optionRuns', { cmd: q.commands[i]! })}</code>}
             </button>
@@ -1481,12 +1473,12 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
       <label htmlFor={`${id}-answer`} className="small">
         {t('lead.answer')}
       </label>
-      <textarea id={`${id}-answer`} className="prose" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('lead.answerPlaceholder')} disabled={busy} />
+      <textarea id={`${id}-answer`} className="prose" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('lead.answerPlaceholder')} disabled={locked} />
       <div className="row">
-        <button type="button" className="primary" disabled={busy || !text.trim()} onClick={() => void answer(text)}>
+        <button type="button" className="primary" {...mark('written')} disabled={locked || !text.trim()} onClick={() => void answer('written', text)}>
           {t('lead.send')}
         </button>
-        <button type="button" className="danger" disabled={busy} onClick={() => void stop()}>
+        <button type="button" className="danger" {...mark('stop')} onClick={() => void stop()}>
           {t('lead.stop')}
         </button>
       </div>

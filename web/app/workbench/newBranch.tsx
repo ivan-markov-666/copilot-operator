@@ -123,7 +123,7 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
                     <p>{t(plan.fetched!.auth ? 'nb.fetchAuth' : 'nb.fetchFailed', { remote: plan.remote ?? 'origin', detail: plan.fetched!.detail ?? '' })}</p>
                     <p className="small">{plan.lastFetched ? t('nb.lastFetched', { target: plan.target ?? '', at: fmtTime(plan.lastFetched) }) : t('nb.lastKnown', { target: plan.target ?? '' })}</p>
                     <div className="row">
-                      <button type="button" onClick={() => void read(true)}>
+                      <button type="button" onClick={() => void read(true)} disabled={making}>
                         {t('nb.tryAgain')}
                       </button>
                     </div>
@@ -137,7 +137,8 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
                   <label htmlFor="nb-name" className="field-label">
                     {t('nb.name')}
                   </label>
-                  <input id="nb-name" type="text" dir="ltr" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
+                  {/* Its name and what comes along are not changed while the branch is made (2026-10-26): off until it is, or did not work. */}
+                  <input id="nb-name" type="text" dir="ltr" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} disabled={making} />
                 </div>
                 {dirty > 0 && (
                   <fieldset className="nb-dirty">
@@ -151,13 +152,13 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
                       {files.length > 8 && <li className="muted">{t('nb.more', { n: files.length - 8 })}</li>}
                     </ul>
                     <label className="nb-choice">
-                      <input type="radio" name="nb-carry" checked={carry === 'take'} onChange={() => setCarry('take')} disabled={conflict} />
+                      <input type="radio" name="nb-carry" checked={carry === 'take'} onChange={() => setCarry('take')} disabled={conflict || making} />
                       <span>
                         <strong>{t('nb.take')}</strong> <span className="muted small">{t('nb.takeWhy')}</span>
                       </span>
                     </label>
                     <label className="nb-choice">
-                      <input type="radio" name="nb-carry" checked={carry === 'aside'} onChange={() => setCarry('aside')} />
+                      <input type="radio" name="nb-carry" checked={carry === 'aside'} onChange={() => setCarry('aside')} disabled={making} />
                       <span>
                         <strong>{t('nb.aside')}</strong> <span className="muted small">{t('nb.asideWhy')}</span>
                       </span>

@@ -329,6 +329,20 @@ button.danger:hover:not(:disabled) { background: var(--bad-soft); border-color: 
 button.quiet { border-color: transparent; background: transparent; color: var(--muted); }
 button.quiet:hover:not(:disabled) { color: var(--accent); }
 button:disabled { opacity: 0.45; cursor: var(--cur-not); }
+/*
+ * The answer chosen on a card (2026-10-26): every answer off from the press, the one chosen kept at full strength and
+ * marked, its edge going round while it is on its way, ticked once given.
+ */
+button[data-chosen]:disabled { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
+button[data-chosen='sending']:disabled { animation: chosen-pulse 1.2s ease-in-out infinite; }
+button[data-chosen='sent']::before { content: '✓'; margin-inline-end: 6px; font-weight: 700; }
+@keyframes chosen-pulse {
+  0%, 100% { outline-color: var(--accent); }
+  50% { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button[data-chosen='sending']:disabled { animation: none; }
+}
 
 .badge {
   display: inline-block;

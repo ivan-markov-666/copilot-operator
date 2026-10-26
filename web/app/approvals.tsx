@@ -20,6 +20,7 @@ import { api, type Approval } from '../lib/api';
 import { useT, useFmtTime } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { usePoll } from '../lib/usePoll';
+import { useChoice } from '../lib/useChoice';
 import { useActivity } from '../lib/activity';
 import { tabTitle } from '../lib/actors';
 import { PlanView } from './planView';
@@ -38,11 +39,16 @@ export function GlobalApprovals() {
   /** Sessions that are conversations of the workbench's chat, which asks about their steps itself. */
   const chats = useRef<Set<string>>(new Set());
   const askedFor = useRef('');
+  /*
+   * A card answered here goes at once, as in the chat, and a read already on its way when the answer went does not
+   * bring it back (2026-10-26): back, it came with its answers on again, to be pressed a second time.
+   */
+  const answered = useRef(new Set<string>());
 
   const load = useCallback(async () => {
     try {
       const waiting = await api.approvals();
-      setApprovals(waiting);
+      setApprovals(waiting.filter((a) => !answered.current.has(a.id)));
       /*
        * Session names only when there is something to name, so an idle interface asks for one list,
        * and at most once per set of unknown sessions. The names used to sit in the callback's own
@@ -67,6 +73,13 @@ export function GlobalApprovals() {
   }, []);
 
   usePoll(load, EVERY_MS);
+  const decided = (id: string, ok: boolean) => {
+    if (ok) {
+      answered.current.add(id);
+      setApprovals((list) => list.filter((a) => a.id !== id));
+    }
+    void load();
+  };
 
   /*
    * The tab says so too, for an operator whose attention is in another window: what waits for them first, else that the
@@ -111,7 +124,7 @@ export function GlobalApprovals() {
       <h2>{t('approval.waitingHere')}</h2>
       <p className="small">{t('approval.waitingHereWhy')}</p>
       {shown.map((a) => (
-        <ApprovalCard key={a.id} approval={a} sessionName={names[a.sessionId] ?? a.sessionId} onDecided={() => void load()} />
+        <ApprovalCard key={a.id} approval={a} sessionName={names[a.sessionId] ?? a.sessionId} onDecided={(ok) => decided(a.id, ok)} />
       ))}
     </section>
   );
@@ -121,31 +134,20 @@ export function GlobalApprovals() {
  * One waiting step: the command in full, which session is asking, and the four answers. The session's
  * name is on every card because, in a run of several, which session is asking is half the question.
  */
-function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName: string; onDecided: () => void }) {
+function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName: string; onDecided: (ok: boolean) => void }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  // A ref, not only `busy`: a double click's second press lands before the re-render that disables.
-  const deciding = useRef(false);
+  // Said on the card when it did not arrive: a decision lost leaves the step waiting, and pressing again with no idea
+  // why the first press did nothing is the worst way to find out.
+  const { err, choose, mark } = useChoice();
 
   const decide = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
-    if (deciding.current) return;
     if (action === 'run-all' && !(await confirmDialog(t('approval.runAllConfirm')))) return;
-    deciding.current = true;
-    setBusy(true);
-    setErr('');
-    try {
-      await api.decide(approval.id, action);
-    } catch (e) {
-      // Said on the card: a decision that did not arrive leaves the step waiting, and pressing
-      // again with no idea why the first press did nothing is the worst way to find out.
-      setErr((e as Error).message);
-    } finally {
-      deciding.current = false;
-      setBusy(false);
-      onDecided();
-    }
+    onDecided(
+      await choose(action, async () => {
+        await api.decide(approval.id, action);
+      }),
+    );
   };
 
   // Not a step: a task's plan, waiting to be approved before the work starts (plan mode, 2026-10-13).
@@ -191,7 +193,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
           </p>
         )}
         <div className="row">
-          <button className="primary" disabled={busy} onClick={() => void decide('run')}>
+          <button className="primary" {...mark('run')} onClick={() => void decide('run')}>
             {t(m.manual ? 'approval.manualReady' : 'approval.modelChosen')}
           </button>
           {/*
@@ -199,11 +201,11 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
             on, and only the record differed. Kept where the bot could not choose it, where they are different answers.
           */}
           {!m.manual && (
-            <button disabled={busy} onClick={() => void decide('skip')}>
+            <button {...mark('skip')} onClick={() => void decide('skip')}>
               {t('approval.modelAsItIs')}
             </button>
           )}
-          <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
+          <button className="danger" {...mark('abort')} onClick={() => void decide('abort')}>
             {t('approval.modelStop')}
           </button>
         </div>
@@ -228,18 +230,18 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
         </p>
       )}
       <div className="row">
-        <button className="primary" disabled={busy} onClick={() => void decide('run')}>
+        <button className="primary" {...mark('run')} onClick={() => void decide('run')}>
           {t('approval.run')}
         </button>
         {!approval.network && !approval.platform && (
-          <button disabled={busy} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
+          <button {...mark('run-all')} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
             {t('approval.runAll')}
           </button>
         )}
-        <button disabled={busy} onClick={() => void decide('skip')}>
+        <button {...mark('skip')} onClick={() => void decide('skip')}>
           {t('approval.skip')}
         </button>
-        <button className="danger" disabled={busy} onClick={() => void decide('abort')}>
+        <button className="danger" {...mark('abort')} onClick={() => void decide('abort')}>
           {t('approval.abort')}
         </button>
       </div>
@@ -256,32 +258,20 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
   const { t } = useT();
   const fmtTime = useFmtTime();
   const [note, setNote] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const deciding = useRef(false);
+  const { locked, err, setErr, choose, mark } = useChoice();
   const p = approval.plan!;
 
   const decide = async (action: 'approve' | 'revise' | 'stop') => {
-    if (deciding.current) return;
     if (action === 'revise' && !note.trim()) {
       setErr(t('pm.reviseNeedsNote'));
       return;
     }
     if (action === 'stop' && !(await confirmDialog(t('pm.stopConfirm')))) return;
-    deciding.current = true;
-    setBusy(true);
-    setErr('');
-    let ok = false;
-    try {
-      await api.decidePlan(approval.id, action, note);
-      ok = true;
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      deciding.current = false;
-      setBusy(false);
-      onDecided(ok);
-    }
+    onDecided(
+      await choose(action, async () => {
+        await api.decidePlan(approval.id, action, note);
+      }),
+    );
   };
 
   return (
@@ -302,7 +292,7 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
         onChange={(e) => setNote(e.target.value)}
         placeholder={t('pm.notePlaceholder')}
         style={{ minHeight: 70 }}
-        disabled={busy}
+        disabled={locked}
       />
       {err && (
         <p className="err" role="alert">
@@ -310,13 +300,13 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
         </p>
       )}
       <div className="row">
-        <button className="primary" disabled={busy} onClick={() => void decide('approve')}>
+        <button className="primary" {...mark('approve')} onClick={() => void decide('approve')}>
           {t('pm.approve')}
         </button>
-        <button disabled={busy} onClick={() => void decide('revise')} title={t('pm.reviseWhy')}>
+        <button {...mark('revise')} onClick={() => void decide('revise')} title={t('pm.reviseWhy')}>
           {t('pm.revise')}
         </button>
-        <button className="danger" disabled={busy} onClick={() => void decide('stop')}>
+        <button className="danger" {...mark('stop')} onClick={() => void decide('stop')}>
           {t('pm.stop')}
         </button>
       </div>
