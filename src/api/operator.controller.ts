@@ -15,6 +15,8 @@ import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { CHANGED_ON_DISK } from '../session/workspace.js';
 import { join } from 'node:path';
 import { DefaultPickerLocators, type PickerLocators } from '../transport/locators.js';
+import { platformTools } from '../exec/platforms.js';
+import { readOnlyCapable } from '../exec/readOnly.js';
 
 function fail(e: unknown): never {
   // A settings file or a policy lock that cannot be used is not the request's fault, and every route
@@ -72,14 +74,25 @@ export class OperatorController {
   // --- settings ---------------------------------------------------------------------------
 
   @Get('settings')
-  async settings(): Promise<{ raw: Record<string, unknown>; defaults: unknown; resolved: unknown; picker: { defaults: PickerLocators; dirs: { run: string; read: string } } }> {
+  async settings(): Promise<{
+    raw: Record<string, unknown>;
+    defaults: unknown;
+    resolved: unknown;
+    picker: { defaults: PickerLocators; dirs: { run: string; read: string } };
+    programs: { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
+  }> {
     const [raw, defaults, resolved] = await Promise.all([this.ops.settings.raw(), this.ops.settings.defaults(), this.ops.settings.load()]);
     /*
      * The model menu's locators (2026-10-24): their defaults, which Settings shows and puts back, and where the
      * pictures of a choice are kept — a run's beside its browser's other files, a reading of the list in its own.
      */
     const picker = { defaults: DefaultPickerLocators, dirs: { run: join(resolved.resolved.runsDir, '_browser'), read: join(resolved.resolved.runsDir, '_models') } };
-    return { raw, defaults, resolved: resolved.resolved, picker };
+    /*
+     * The programs the bot may start (2026-10-26): which of them reach a platform with the operator's access, which can
+     * be set to read only, and the list in force, which a policy lock may have narrowed.
+     */
+    const programs = { platforms: platformTools(), readOnly: readOnlyCapable(), inForce: resolved.execution.allowedPrograms };
+    return { raw, defaults, resolved: resolved.resolved, picker, programs };
   }
 
   @Put('settings')

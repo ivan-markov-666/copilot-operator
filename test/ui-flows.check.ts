@@ -40,6 +40,7 @@ import { setTransportFactory, type ChatTransport } from '../src/transport/chatTr
 import { dict } from '../web/lib/strings.js';
 import { LANGUAGES } from '../web/lib/lang/languages.js';
 import { RIGHT_TO_LEFT } from '../web/lib/themeScript.js';
+import { RunConfigSchema } from '../src/config/schema.js';
 
 const t = new Tally();
 const root = join(import.meta.dirname, '..');
@@ -1591,6 +1592,98 @@ try {
     }
     t.truthy('every ⓘ on the page opens', n >= 25, n);
     t.check('and says more than a few words', thin, []);
+  });
+
+  /*
+   * The programs the bot may start (operator, 2026-10-26: "a way to add and switch off the programs the bot uses; az, for
+   * reference only"): a name with a folder said and not saved; az added from Settings goes on the list read only, under
+   * the platforms with its name and the note on signing in; "Ask me each time" saved; gh, with no rule, only asked
+   * about; one taken off after asking; the last never; the defaults put back.
+   */
+  await scenario('Settings: programs the bot may start — az added read only, its mode, one taken off, the defaults back', {}, async (h, page, url) => {
+    type Exec = { allowedPrograms?: string[]; readOnlyPrograms?: string[] };
+    const settings = async (): Promise<Exec> => (await h.call<{ raw: { execution?: Exec } }>('GET', '/settings')).raw.execution ?? {};
+    const defaults = RunConfigSchema.parse({}).execution.allowedPrograms;
+    await page.goto(url('/settings'));
+    const section = page.locator('#programs');
+    await section.locator('.prog-chip').first().waitFor();
+    t.check('the list as the bot comes with it, as chips', await section.locator('.prog-chip code').count(), defaults.length);
+    const add = section.locator('#prog-add');
+    const addButton = section.getByRole('button', { name: en['prog.addButton']!, exact: true });
+    await add.fill('C:\\tools\\az.exe');
+    await addButton.click();
+    await section.locator('.err').waitFor();
+    t.check('a name with a folder: said, and nothing saved', [((await section.locator('.err').textContent()) ?? '').trim(), (await settings()).allowedPrograms], [en['prog.badName'], undefined]);
+    await add.fill('az');
+    await add.press('Enter');
+    const mode = section.locator('#prog-mode-az');
+    await mode.waitFor();
+    await waitFor('az to be saved', async () => ((await settings()).allowedPrograms?.includes('az') ? true : null), 10_000);
+    const saved = await settings();
+    const row = section.locator('.prog-platform').filter({ has: page.locator('#prog-mode-az') });
+    t.check('az added: on the list, read only, under the platforms with its name, the note on signing in shown', [saved.allowedPrograms?.length, saved.readOnlyPrograms, await mode.inputValue(), ((await row.textContent()) ?? '').includes('Azure (az)'), await section.locator('.prog-note').count()], [defaults.length + 1, ['az'], 'read-only', true, 1]);
+    t.check('its two ways, the ask one first', await mode.locator('option').allTextContents(), [en['prog.modeAsk'], en['prog.modeReadOnly']]);
+    await mode.selectOption('ask');
+    await waitFor('the mode to be saved', async () => ((await settings()).readOnlyPrograms?.length === 0 ? true : null), 10_000);
+    t.check('"Ask me each time": not read only any more, the note gone, az still on the list', [(await settings()).readOnlyPrograms, await section.locator('.prog-note').count(), (await settings()).allowedPrograms?.includes('az')], [[], 0, true]);
+    await add.fill('gh');
+    await addButton.click();
+    await section.locator('#prog-mode-gh').waitFor();
+    t.check('gh, with no rule: asked about each time, with no "read only" to choose', [await section.locator('#prog-mode-gh').inputValue(), await section.locator('#prog-mode-gh option').count()], ['ask', 1]);
+    await add.fill('GH.exe');
+    await addButton.click();
+    await waitFor('"already on the list"', async () => (((await section.locator('.err').textContent().catch(() => '')) ?? '').includes('gh') ? true : null), 5_000).catch(() => undefined);
+    t.check('the same program again: said, not added twice', [((await section.locator('.err').textContent()) ?? '').trim(), (await settings()).allowedPrograms?.filter((x) => x === 'gh').length], [en['prog.already']!.replace('{name}', 'gh'), 1]);
+    // Taken off after asking; a command that starts it is refused from then on.
+    const tar = section.locator('.prog-chip').filter({ has: page.locator('code', { hasText: /^tar$/ }) });
+    await tar.getByRole('button').click();
+    const confirm = page.getByRole('alertdialog');
+    await confirm.waitFor();
+    await confirm.getByRole('button', { name: en['prog.removeOk']!, exact: true }).click();
+    await waitFor('tar to be taken off', async () => ((await settings()).allowedPrograms?.includes('tar') === false ? true : null), 10_000);
+    t.check('tar taken off, after asking', [(await settings()).allowedPrograms?.includes('tar'), await tar.count()], [false, 0]);
+    // The last one stays: an empty list would let a command start anything.
+    const raw = (await h.call<{ raw: Record<string, unknown> }>('GET', '/settings')).raw;
+    await h.call('PUT', '/settings', { ...raw, execution: { ...((raw.execution as Record<string, unknown>) ?? {}), allowedPrograms: ['git'], readOnlyPrograms: [] } });
+    await page.reload();
+    await section.locator('.prog-chip').first().waitFor();
+    const lastOne = section.locator('.prog-chip').getByRole('button');
+    t.check('one left: its ✕ off, saying why', [await section.locator('.prog-chip').count(), await lastOne.isDisabled(), await lastOne.getAttribute('title')], [1, true, en['prog.lastWhy']]);
+    await section.getByRole('button', { name: en['prog.restore']!, exact: true }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    await waitFor('the defaults back', async () => ((await settings()).allowedPrograms === undefined ? true : null), 10_000);
+    await waitFor('the chips back', async () => ((await section.locator('.prog-chip').count()) === defaults.length ? true : null), 10_000).catch(() => undefined);
+    t.check('the defaults back: the lists gone from the file, the chips as the bot comes with them', [(await settings()).allowedPrograms, (await settings()).readOnlyPrograms, await section.locator('.prog-chip').count()], [undefined, undefined, defaults.length]);
+  });
+
+  /*
+   * az set to read only, in the conversation (2026-10-26): a command that changes something is refused and the chat is
+   * told why, with nobody asked; one the bot cannot read waits on a card that says so, in a run without asking too, and
+   * is skipped there. Nothing here starts az.
+   */
+  await scenario('az read only in the chat: a change refused back to the chat, one that cannot be read asked on a card that says so', { execution: { mode: 'unattended', isolation: 'none-accepted', allowedPrograms: [...RunConfigSchema.parse({}).execution.allowedPrograms, 'az'], readOnlyPrograms: ['az'] } }, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: "Look at the web app's log.", model: 'Think deeper' });
+    h.chat.script(
+      reply.steps('az webapp create -n app -g rg -p plan'),
+      reply.steps('az webapp log tail -n app -g rg'),
+      reply.done('The change was refused because az is read only here, and the log was not read: the operator skipped it.'),
+    );
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const card = page.locator('.cs-ask').filter({ hasText: 'az webapp log tail' });
+    await card.waitFor({ timeout: 30_000 });
+    // What the chat is sent of a step goes in the attached report, with the message.
+    const told = h.chat.sent.map((m) => [m.text, ...Object.values(m.attached)].join('\n')).find((x) => x.includes('az webapp create')) ?? '';
+    t.truthy('the change was refused, and the chat told why, with nobody asked', /changes something, and az is set to read only here/.test(told), told.slice(0, 400));
+    t.check('the card: Azure, the read-only note, and no "run the rest"', [((await card.textContent()) ?? '').includes('Azure (az)'), await card.locator('.cs-read-only').textContent(), await card.getByRole('button', { name: en['chat.askRunAll']!, exact: true }).count()], [true, en['approval.readOnly'], 0]);
+    await card.getByRole('button', { name: en['chat.askSkip']!, exact: true }).click();
+    await page.locator('.cs-body').getByText('The change was refused because az is read only here').waitFor({ timeout: 30_000 });
+    await h.idle();
+    const approvals = await h.call<unknown[]>('GET', '/approvals');
+    t.check('skipped: nothing waits any more', approvals.length, 0);
   });
 
   /*

@@ -39,7 +39,7 @@ import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
 import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../protocol/reviewSchema.js';
 import { repoState, workingTreePaths } from '../vcs/git.js';
-import { describeStep, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
+import { describeStep, checkAccessRefusal, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
@@ -250,10 +250,11 @@ export function checkRefusalForOperator(why: string): string {
   return text;
 }
 
-export function lineRefusal(command: string, shell: Shell, cwd: string, cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms'>, roots: string[]): string | null {
+export function lineRefusal(command: string, shell: Shell, cwd: string, cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms' | 'readOnlyPrograms'> & { questions?: 'ask' | 'agree' }, roots: string[]): string | null {
   return (
-    commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms) ??
+    commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms, process.env, undefined, cfg.readOnlyPrograms ?? []) ??
     confinementRefusal(command, { roots, cwd }) ??
+    checkAccessRefusal(command, shell, cfg) ??
     (PACKAGE_RUNNER.test(command) ? null : networkFetchReason(command, cwd))
   );
 }
@@ -1779,6 +1780,7 @@ export async function runTask(
     mode: deps.currentMode?.() ?? cfg.execution.mode,
     networkFetch: cfg.execution.networkFetch,
     allowedPrograms: cfg.execution.allowedPrograms,
+    readOnlyPrograms: cfg.execution.readOnlyPrograms,
     denyPatterns: cfg.execution.denyPatterns,
     cwd: work.cwd,
     lock: cfg.policyLock,

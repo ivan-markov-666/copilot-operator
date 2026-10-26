@@ -223,6 +223,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
       </div>
       <pre style={{ margin: '8px 0' }}>{approval.description}</pre>
       {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
+      {approval.readOnly && <p className="reason small">{t('approval.readOnly')}</p>}
       {approval.network && <p className="reason small">{t('approval.network')}</p>}
       {err && (
         <p className="err" role="alert">

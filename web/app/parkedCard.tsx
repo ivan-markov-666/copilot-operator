@@ -116,6 +116,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
         <>
           <pre className="cs-out">{a.description}</pre>
           {a.platform && <p className="reason small">{t('approval.platform', { platform: a.platform })}</p>}
+          {a.readOnly && <p className="reason small">{t('approval.readOnly')}</p>}
           <div className="row">
             <button type="button" className="primary" {...mark('run')} onClick={() => void send('run', { decision: 'run' })}>
               {t('pk.run')}

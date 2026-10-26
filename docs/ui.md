@@ -803,6 +803,29 @@ answer. The lead is told to always give answers too. Settings → Execution → 
 "Ask me" (default) or "Agree with what the bot proposes" (`execution.questions: agree`, confirmed when chosen):
 platform commands run and every question — the chat's, the lead's — takes the first answer, the conversation saying so.
 
+**Programs, and read only (2026-10-26).** Settings has a section, "Programs the bot may start", for the allowlist (`execution.allowedPrograms`), which used to be in the settings file only. A program is added by name (folder and `.exe` dropped) and taken off with its ✕ after a confirm. The last one cannot be taken off, since an empty list turns the gate off. "Put back the defaults" removes both keys from the file. A policy lock that narrows the list is said there.
+
+Programs that reach a platform (`platformTools()`) are listed as rows with a mode:
+- "Ask me each time", as before;
+- where a rule exists (`exec/readOnly.ts`, `readOnlyCapable()`: az today), "Only for reference (read only)" (`execution.readOnlyPrograms`). A program that can be read only is added that way.
+
+Under read only, `az`'s own words decide. The scanner now records each invocation's arguments (`HeadScan.calls`), and the command is the words before the first option, judged by its verb:
+- **Runs without a card:** reading, `list`, `show`, `query`, `exists`, `wait`, `what-if`, `get-…`, `list-…`, `show-…`.
+- **Refused, the reason sent to the chat** (`commandRefusal`, so steps, the scripts a line runs and checks alike):
+  - a change, a sign-in or sign-out (`login`, `logout`, `acr login`), `account set`;
+  - a secret (keys, tokens, credentials, secrets, connection strings, app settings, publishing profiles);
+  - `rest`, a download, `interactive`.
+- **On a card with the read-only note** (`HeldFor.readOnly`, `PendingApproval.readOnly`), in every mode, Settings' agreement or not:
+  - a verb known neither way;
+  - a word built at run time;
+  - `az` named where its words cannot be read (a string, `cmd /c`, `Start-Process`).
+
+  Inside a script, and in a check, such a command is refused instead, since nobody can be asked there. A check that reaches a platform in "Ask me each time" mode is now refused too (`checkAccessRefusal`), unless Settings agree: it used to run unasked.
+
+The operator signs in with `az login` in their own terminal. The bot's commands use that sign-in and never see a password, and the token cache is outside the project (`confinement.ts`).
+
+The limit: this reads the command line, and only an account with the Reader role makes "read only" certain.
+
 **Three models, and "Saving..." (2026-10-23).** Settings has a model for the worker (`copilot.defaultModel`: the one
 chat, or the worker of two chats), for the lead (`copilot.defaultLeadModel`, `PUT /api/models/lead-default`; none
 chosen, the worker's) and for the review (`copilot.defaultReviewModel`) — three alike sections (`RoleModelSection`),

@@ -133,6 +133,7 @@ export default function DefaultsPage() {
       <RoleModelSection role="review" {...shared} />
       <PickerLocatorsSection catalogue={catalogue} />
       <ExecutionSection />
+      <ProgramsSection />
     </div>
   );
 }
@@ -1786,6 +1787,174 @@ function ExecutionSection() {
           disabled={!raw}
         />
       </Field>
+      <SavedNote msg={msg} saving={saving} />
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// Programs (operator, 2026-10-26): the programs a command may start, added and taken off here
+// ---------------------------------------------------------------------------------------
+
+/** A program's name as a terminal takes it: no folder, no spaces. */
+const PROGRAM_NAME = /^[a-z0-9][a-z0-9._+-]*$/;
+type ProgramMode = 'ask' | 'read-only';
+type ProgramsInfo = { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
+
+/**
+ * The programs a command may start (`execution.allowedPrograms`), which used to be in the settings file only: added and
+ * taken off here (operator, 2026-10-26: "a way to add and switch off the programs the bot uses"). A program that
+ * reaches a platform with the operator's access is asked about on a card every time, or, where its commands can be
+ * read, set to read only, for reference (`execution.readOnlyPrograms`), so it looks and never changes; added, such a
+ * program starts so. Taken off, a command that starts it is refused and the chat told why. The last one stays: an
+ * empty list would let a command start anything.
+ */
+function ProgramsSection() {
+  const { t } = useT();
+  const { saving, track } = useSaving();
+  const [list, setList] = useState<string[] | null>(null);
+  const [readOnly, setReadOnly] = useState<string[]>([]);
+  const [defaults, setDefaults] = useState<string[]>([]);
+  const [info, setInfo] = useState<ProgramsInfo>({ platforms: {}, readOnly: [], inForce: [] });
+  const [draft, setDraft] = useState('');
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const read = useCallback(async () => {
+    const s = await api.settings();
+    const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { allowedPrograms?: unknown; readOnlyPrograms?: unknown };
+    const fallback = ((s.defaults as { execution?: { allowedPrograms?: string[] } } | null)?.execution?.allowedPrograms ?? []).slice();
+    setDefaults(fallback);
+    setList(Array.isArray(exec.allowedPrograms) ? (exec.allowedPrograms as string[]) : fallback);
+    setReadOnly(Array.isArray(exec.readOnlyPrograms) ? (exec.readOnlyPrograms as string[]) : []);
+    if (s.programs) setInfo(s.programs);
+  }, []);
+  useEffect(() => {
+    read().catch((e: unknown) => setErr((e as Error).message));
+  }, [read]);
+
+  /** Both lists in one write, from the file as it is now; `null` puts back the defaults. */
+  const save = async (programs: string[] | null, readOnlyNext: string[]): Promise<boolean> => {
+    setErr('');
+    setMsg('');
+    try {
+      const base = (await api.settings()).raw;
+      const exec = { ...((base.execution as Record<string, unknown>) ?? {}) };
+      if (programs === null) {
+        delete exec.allowedPrograms;
+        delete exec.readOnlyPrograms;
+      } else {
+        exec.allowedPrograms = programs;
+        exec.readOnlyPrograms = readOnlyNext;
+      }
+      await track(api.saveSettings({ ...base, execution: exec }));
+      await read();
+      setMsg(t('prog.saved', { n: (programs ?? defaults).length }));
+      return true;
+    } catch (e) {
+      setErr((e as Error).message);
+      return false;
+    }
+  };
+
+  const all = list ?? [];
+  const add = async () => {
+    const name = draft.trim().toLowerCase().replace(/\.(exe|cmd|bat|com)$/, '');
+    if (!PROGRAM_NAME.test(name)) return setErr(t('prog.badName'));
+    if (all.includes(name)) return setErr(t('prog.already', { name }));
+    // One that can be read is added read only: the safe side, which the operator asked for (2026-10-26).
+    const next = info.readOnly.includes(name) ? [...readOnly.filter((x) => x !== name), name] : readOnly;
+    if (await save([...all, name], next)) setDraft('');
+  };
+  const remove = async (name: string) => {
+    if (!(await confirmDialog(t('prog.removeConfirm', { name }), { okLabel: t('prog.removeOk'), danger: true }))) return;
+    await save(
+      all.filter((x) => x !== name),
+      readOnly.filter((x) => x !== name),
+    );
+  };
+  const setMode = (name: string, mode: ProgramMode) => save(all, mode === 'read-only' ? [...readOnly.filter((x) => x !== name), name] : readOnly.filter((x) => x !== name));
+  const restore = async () => {
+    if (!(await confirmDialog(t('prog.restoreConfirm')))) return;
+    await save(null, []);
+  };
+
+  const onPlatform = all.filter((p) => info.platforms[p]);
+  const others = all.filter((p) => !info.platforms[p]);
+  // Named here, but a policy lock on the machine does not let them run.
+  const locked = list && info.inForce.length > 0 ? all.filter((p) => !info.inForce.includes(p)) : [];
+  const last = all.length <= 1;
+  const removeButton = (name: string) => (
+    <button type="button" className="quiet prog-remove" onClick={() => void remove(name)} disabled={!list || last} aria-label={t('prog.removeOne', { name })} title={last ? t('prog.lastWhy') : t('prog.removeOne', { name })}>
+      ✕
+    </button>
+  );
+
+  return (
+    <section className="panel" id="programs" aria-labelledby="programs-title">
+      <h2 id="programs-title">{t('prog.title')}</h2>
+      <p className="muted small">{t('prog.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      {locked.length > 0 && <p className="reason small">{t('prog.locked', { list: locked.join(', ') })}</p>}
+      {onPlatform.length > 0 && (
+        <>
+          <h3 id="programs-platforms">{t('prog.platforms')}</h3>
+          {onPlatform.map((p) => (
+            <div className="settings-field prog-platform" key={p}>
+              <div className="field-label">
+                <label htmlFor={`prog-mode-${p}`}>
+                  <code>{p}</code> <span className="muted">{info.platforms[p]}</span>
+                </label>
+                <InfoTip label={t('info.about', { name: p })} text={t('prog.modeWhy')} />
+              </div>
+              <div className="field-control">
+                <select id={`prog-mode-${p}`} value={readOnly.includes(p) ? 'read-only' : 'ask'} onChange={(e) => void setMode(p, e.target.value as ProgramMode)} disabled={!list}>
+                  <option value="ask">{t('prog.modeAsk')}</option>
+                  {info.readOnly.includes(p) && <option value="read-only">{t('prog.modeReadOnly')}</option>}
+                </select>
+                {removeButton(p)}
+              </div>
+            </div>
+          ))}
+          {onPlatform.some((p) => readOnly.includes(p)) && <p className="small prog-note">{t('prog.readOnlyNote')}</p>}
+        </>
+      )}
+      <h3 id="programs-others">{t('prog.others')}</h3>
+      <ul className="prog-chips">
+        {others.map((p) => (
+          <li key={p} className="prog-chip">
+            <code>{p}</code>
+            {removeButton(p)}
+          </li>
+        ))}
+      </ul>
+      <Field id="prog-add" label={t('prog.add')} info={t('prog.addWhy')}>
+        <input
+          id="prog-add"
+          type="text"
+          dir="ltr"
+          spellCheck={false}
+          autoComplete="off"
+          value={draft}
+          placeholder="az"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void add();
+            }
+          }}
+          disabled={!list}
+        />
+        <button type="button" className="primary" onClick={() => void add()} disabled={!list || !draft.trim()}>
+          {t('prog.addButton')}
+        </button>
+      </Field>
+      <div className="row">
+        <button type="button" onClick={() => void restore()} disabled={!list}>
+          {t('prog.restore')}
+        </button>
+      </div>
       <SavedNote msg={msg} saving={saving} />
     </section>
   );

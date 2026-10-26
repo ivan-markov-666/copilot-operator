@@ -811,6 +811,8 @@ export type Approval = {
   network?: string;
   /** Set when the step reaches a platform with the operator's access (Azure, AWS, GitHub…); asked about in every run. */
   platform?: string;
+  /** Set when its program is set to read only and this command could not be read as only reading: why, in English. */
+  readOnly?: string;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */
   /** `review`: the model of the review's own conversation, best another, stronger one than the work's. */
   model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' };
@@ -1256,6 +1258,11 @@ export const api = {
       resolved: Record<string, unknown>;
       /** The model menu's locators' defaults, and where a choice's pictures are kept (2026-10-24). */
       picker?: { defaults: Record<PickerKey, string>; dirs: { run: string; read: string } };
+      /**
+       * The programs the bot may start (2026-10-26): the platform each reaches with the operator's access, by program;
+       * the ones that can be set to read only; the list in force, which a policy lock may have narrowed.
+       */
+      programs?: { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
     }>('/settings'),
   /** Writes the whole raw settings object back; the API validates it before saving. */
   saveSettings: (raw: Record<string, unknown>) => call<{ ok: true }>('/settings', { method: 'PUT', body: JSON.stringify(raw) }),

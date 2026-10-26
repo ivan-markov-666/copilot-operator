@@ -1155,6 +1155,7 @@ export class OperatorService {
       // Read once per run like the rest of the policy: a change in Settings applies from the next start.
       networkFetch: cfg.execution.networkFetch,
       platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
+      readOnlyPrograms: cfg.execution.readOnlyPrograms,
     };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
@@ -2612,12 +2613,13 @@ export class OperatorService {
           ...(ctx.actor ? { actor: ctx.actor } : {}),
           ...(held?.network ? { network: held.network } : {}),
           ...(held?.platform ? { platform: held.platform } : {}),
+          ...(held?.readOnly ? { readOnly: held.readOnly } : {}),
         };
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });
         this.parkLater(approval);
         this.bus.publish({ sessionId: approval.sessionId, taskId: approval.taskId, type: 'approval-requested', level: 'warn',
           message: held
-            ? `held for the operator — ${[held.platform ? `it reaches ${held.platform} with the operator's access` : '', held.network ?? ''].filter(Boolean).join('; ')}: ${approval.description}`
+            ? `held for the operator — ${[held.platform ? `it reaches ${held.platform} with the operator's access` : '', held.readOnly ? `set to read only, and ${held.readOnly}` : '', held.network ?? ''].filter(Boolean).join('; ')}: ${approval.description}`
             : `waiting for approval: ${approval.description}`,
           data: { ...approval } });
       }),

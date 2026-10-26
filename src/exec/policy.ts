@@ -21,6 +21,8 @@ import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js'
 import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
 import { ownScriptRefusal, scriptFileRefusal } from './scriptFiles.js';
+import { readOnlyRefusal, readOnlyUnaskedRefusal, readOnlyUnclearRefusal, readOnlyVerdict } from './readOnly.js';
+import { platformReason } from './platforms.js';
 
 /*
  * `by: 'operator'` marks a decision a person made on the approval screen or at the terminal; without
@@ -52,6 +54,11 @@ export type PolicyConfig = {
    * or `allow`ed, when Settings say to agree with what the bot proposes (`execution.questions: agree`).
    */
   platformAccess?: 'ask' | 'allow';
+  /**
+   * Programs on the allowlist set to read only (2026-10-26): their commands that only read run without a card, the ones
+   * that change something are refused, the ones that cannot be read are asked about in every mode. See `readOnly.ts`.
+   */
+  readOnlyPrograms?: string[];
 };
 
 export type NetworkFetchChoice = 'ask' | 'refuse' | 'run';
@@ -125,6 +132,8 @@ export function commandRefusal(
    * task passes it: the implementer's steps and checks, and the reviewer's steps and derived checks.
    */
   confinement?: Confinement,
+  /** Programs set to read only: a command of theirs that changes something is refused. See `readOnly.ts`. */
+  readOnlyPrograms: string[] = [],
 ): string | null {
   // The built-in refusals first, because the operator's list can add to them and must not be
   // able to stand in for them: a config written before they existed, or edited since, still gets
@@ -150,6 +159,9 @@ export function commandRefusal(
   // program that is simply not part of this project's toolchain. See `programs.ts`.
   const offlist = programRefusal(command, allowedPrograms, shell);
   if (offlist) return offlist;
+  // A program on the list but set to read only, asked to change something (2026-10-26).
+  const writes = readOnlyRefusal(command, shell, readOnlyPrograms);
+  if (writes) return writes;
   const trap = findShellExecuteTrap(command, shell, env);
   if (trap) return trap;
   /*
@@ -163,7 +175,9 @@ export function commandRefusal(
       repositoryInternalsRefusal(text) ??
       (matchDenyPattern(text, denyPatterns) ? `matches deny pattern /${matchDenyPattern(text, denyPatterns)}/` : null) ??
       confinementRefusal(text, confinement) ??
-      programRefusal(text, allowedPrograms),
+      programRefusal(text, allowedPrograms) ??
+      // Inside a script nothing is put to the operator command by command: one that cannot be read as reading is refused.
+      readOnlyUnaskedRefusal(text, undefined, readOnlyPrograms),
     );
   }
   return null;
@@ -178,14 +192,29 @@ export function commandRefusal(
 export function checkCommandRefusal(
   command: string,
   shell: Shell,
-  cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms'>,
+  cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms' | 'readOnlyPrograms'> & { questions?: 'ask' | 'agree' },
   confinement: Confinement,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const refusal = commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms, env, confinement);
+  const refusal = commandRefusal(command, shell, cfg.denyPatterns, cfg.allowedPrograms, env, confinement, cfg.readOnlyPrograms ?? []);
   if (refusal) return refusal;
+  const access = checkAccessRefusal(command, shell, cfg);
+  if (access) return access;
   const network = networkFetchReason(command, confinement.cwd) ?? scriptNetworkReason(command, confinement.cwd);
   return network ? networkFetchRefusal(network) : null;
+}
+
+/**
+ * A check reaching a platform with the operator's access, which a step puts to the operator every time (2026-10-26):
+ * a check has nobody to put it to, so it is refused unless Settings agree with what the bot proposes. A program set to
+ * read only passes with a command that only reads; one that cannot be read as reading is refused.
+ */
+export function checkAccessRefusal(command: string, shell: Shell, cfg: Pick<PolicyConfig, 'readOnlyPrograms'> & { questions?: 'ask' | 'agree' }): string | null {
+  const reading = readOnlyVerdict(command, shell, cfg.readOnlyPrograms);
+  if (reading?.kind === 'unclear') return readOnlyUnclearRefusal(reading.program, reading.why);
+  const platform = cfg.questions === 'agree' ? null : platformReason(command, shell, reading?.kind === 'reads' ? new Set(reading.programs) : undefined);
+  if (!platform) return null;
+  return `refused: this check reaches ${platform} with the operator's access, which only the operator may allow, and a check runs with nobody asked. Check it another way, or do it in a step, where it is put to the operator.`;
 }
 
 /** A fetch inside a script the line runs — held or refused exactly as one on the line would be. */
@@ -256,7 +285,7 @@ export function staticCheck(
   }
   // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`
   // are shell-specific, so screening for one interpreter and running in another finds nothing.
-  const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env, confinement);
+  const reason = commandRefusal(step.cmd, effectiveShell(step.shell), cfg.denyPatterns, cfg.allowedPrograms, env, confinement, cfg.readOnlyPrograms ?? []);
   if (reason) return { action: 'skip', reason };
 
   /*

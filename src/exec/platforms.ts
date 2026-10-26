@@ -68,13 +68,25 @@ const REGISTRIES: Array<[RegExp, string]> = [
   [/(?:^|[\s;|&(])cargo(?:\.exe)?\s+(?:publish|yank|login)\b/i, 'crates.io'],
 ];
 
+/** The platform tools, by program, as the card names each (for Settings' list of programs, 2026-10-26). */
+export function platformTools(): Record<string, string> {
+  return { ...TOOLS };
+}
+
+/** The platform a program reaches, as the card names it, or null. */
+export function platformOf(program: string): string | null {
+  return TOOLS[program.toLowerCase()] ?? null;
+}
+
 /**
  * The platform a command reaches with the operator's access, as the card names it, or null. `Connect-AzAccount` is
- * Azure; `npm publish` the npm registry; `az login; gh repo list` the first one met.
+ * Azure; `npm publish` the npm registry; `az login; gh repo list` the first one met. `reading`: programs set to read
+ * only whose every command on this line only reads (`readOnly.ts`), which are not asked about.
  */
-export function platformReason(command: string, shell?: string): string | null {
+export function platformReason(command: string, shell?: string, reading?: ReadonlySet<string>): string | null {
   for (const head of commandHeads(command, shell)) {
     const program = externalProgram(head);
+    if (program && reading?.has(program.toLowerCase())) continue;
     if (program && TOOLS[program.toLowerCase()]) return TOOLS[program.toLowerCase()]!;
     const bare = head.replace(/^.*[\\/]/, '').replace(/^['"]|['"]$/g, '');
     // Cmdlets are matched as written (`Get-AzVM`, not `get-azvm`, keeps Az apart from words that start so), and

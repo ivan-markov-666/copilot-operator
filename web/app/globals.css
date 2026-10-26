@@ -1491,6 +1491,12 @@ button.linkish:hover { text-decoration: underline; }
 .cs-ledger-change { font-style: italic; }
 /* Skills (2026-10-21): the name after its slash, as it is typed in the chat; a new one set apart. */
 .skill-entry { margin-bottom: 10px; }
+/* The programs the bot may start (2026-10-26): the ones that reach a platform as rows with their mode, the rest as chips. */
+.prog-platform code, .prog-chip code { font-family: var(--mono); font-size: calc(13px * var(--scale)); }
+.prog-chips { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; padding: 0; }
+.prog-chip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 2px 1px 10px; background: var(--bg-tint); }
+.prog-remove { padding: 2px 7px; line-height: 1; }
+.prog-note { border-inline-start: 3px solid var(--accent); padding: 6px 10px; background: var(--accent-soft); border-radius: 6px; margin: 8px 0; }
 .skill-slash { font-family: var(--mono); color: var(--muted); padding: 0 2px; align-self: center; }
 /* The / and the name on one line, however narrow the column. */
 .input-with-buttons.skill-name-box { flex-wrap: nowrap; }

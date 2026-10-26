@@ -12,7 +12,8 @@ import { staticCheck, describeStep, type PolicyConfig, type PolicyDecision } fro
 import type { Confinement } from './confinement.js';
 import { networkFetchReason, networkFetchRefusal } from './network.js';
 import { scriptNetworkReason } from './policy.js';
-import { platformReason } from './platforms.js';
+import { platformOf, platformReason } from './platforms.js';
+import { readOnlyUnclearRefusal, readOnlyVerdict } from './readOnly.js';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
@@ -35,7 +36,14 @@ export interface StepAuthorizer {
  * command that fetches from the network (see `network.ts`). Absent for an ordinary confirm-mode
  * question.
  */
-export type HeldFor = { network?: string; platform?: string };
+export type HeldFor = {
+  network?: string;
+  platform?: string;
+  /** A program set to read only, whose command could not be read as only reading: why (`readOnly.ts`, 2026-10-26). */
+  readOnly?: string;
+  /** That program. */
+  readOnlyProgram?: string;
+};
 
 export type Ask = (step: Step, ctx: AuthorizeContext, held?: HeldFor) => Promise<PolicyDecision>;
 
@@ -65,14 +73,25 @@ export function makeAuthorizer(cfg: PolicyConfig, ask: Ask, signal?: AbortSignal
       if (blocked) return blocked;
       const cwd = ctx.confinement?.cwd;
       const network = networkFetchReason(step.cmd, cwd) ?? (cwd ? scriptNetworkReason(step.cmd, cwd) : null);
-      // A platform reached with the operator's access (2026-10-23): asked in every mode, unless Settings agree to it.
-      const platform = cfg.platformAccess === 'allow' ? null : platformReason(step.cmd, step.shell);
+      /*
+       * A platform reached with the operator's access (2026-10-23): asked in every mode, unless Settings agree to it. A
+       * program set to read only (2026-10-26) is not asked about when the line only reads with it; when it cannot be
+       * read as reading, it is asked about in every mode, Settings' agreement or not — the operator said it must not write.
+       */
+      const reading = readOnlyVerdict(step.cmd, step.shell, cfg.readOnlyPrograms);
+      const unclear = reading?.kind === 'unclear' ? reading : null;
+      const platform = unclear
+        ? (platformReason(step.cmd, step.shell) ?? platformOf(unclear.program) ?? unclear.program)
+        : cfg.platformAccess === 'allow'
+          ? null
+          : platformReason(step.cmd, step.shell, reading?.kind === 'reads' ? new Set(reading.programs) : undefined);
+      const held: HeldFor = { ...(platform ? { platform } : {}), ...(unclear ? { readOnly: unclear.why, readOnlyProgram: unclear.program } : {}) };
       if (network) {
         if (cfg.mode === 'unattended' && cfg.networkFetch === 'refuse') return { action: 'skip', reason: networkFetchRefusal(network) };
         if (!platform && cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
-        return await ask(step, ctx, { network, ...(platform ? { platform } : {}) });
+        return await ask(step, ctx, { network, ...held });
       }
-      if (platform) return await ask(step, ctx, { platform });
+      if (platform) return await ask(step, ctx, held);
       if (cfg.mode === 'unattended') return { action: 'run' };
       return await ask(step, ctx);
     },
@@ -94,6 +113,7 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
     print(`  step ${step.id}: ${describeStep(step)}`);
     if (held?.network) print(`  held: ${held.network}`);
     if (held?.platform) print(`  held: it reaches ${held.platform} with your access`);
+    if (held?.readOnly) print(`  held: ${held.readOnlyProgram ?? 'the program'} is set to read only, and this could not be read as only reading (${held.readOnly})`);
     const rl = createInterface({ input: stdin, output: stdout });
     try {
       const answer = (await rl.question('  [Enter] run  [s] skip  [q] abort > ')).trim().toLowerCase();
@@ -117,6 +137,12 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
  */
 export function unattendedAuthorizer(cfg: PolicyConfig): StepAuthorizer {
   return makeAuthorizer({ ...cfg, mode: 'unattended' }, async (_step, _ctx, held) =>
-    held?.network ? { action: 'skip', reason: networkFetchRefusal(held.network) } : held?.platform ? { action: 'skip', reason: platformRefusal(held.platform) } : { action: 'run' },
+    held?.network
+      ? { action: 'skip', reason: networkFetchRefusal(held.network) }
+      : held?.readOnly
+        ? { action: 'skip', reason: readOnlyUnclearRefusal(held.readOnlyProgram ?? 'the program', held.readOnly) }
+        : held?.platform
+          ? { action: 'skip', reason: platformRefusal(held.platform) }
+          : { action: 'run' },
   );
 }

@@ -1074,6 +1074,8 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
       </div>
       {/* A platform reached with the operator's own access (2026-10-23): said, and never run on "the rest". */}
       {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
+      {/* A program set to read only, with a command the bot could not read as only reading (2026-10-26). */}
+      {approval.readOnly && <p className="reason small cs-read-only">{t('approval.readOnly')}</p>}
       <div className="row">
         <button type="button" className="primary" {...mark('run')} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
         {!approval.network && !approval.platform && <button type="button" {...mark('run-all')} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}

@@ -25,12 +25,15 @@ import { createHash } from 'node:crypto';
 import { DANGEROUS_TECHNIQUES } from './dangerous.js';
 import { describeIsolation, type IsolationPosture } from './isolation.js';
 import type { NetworkFetchChoice } from './policy.js';
+import { readOnlyCapable } from './readOnly.js';
 
 export type PolicyManifest = {
   collectedAt: string;
   /** Whether a person saw each step. */
   mode: 'confirm' | 'unattended';
   allowlist: { enforced: boolean; count: number; digest: string; programs: string[] };
+  /** The programs on it set to read only (2026-10-26): a command of theirs that changes something is refused. */
+  readOnly: string[];
   /**
    * Whether a file the chat provided could be executed.
    *
@@ -92,6 +95,8 @@ export type ManifestInput = {
   /** The operator's choice for fetches in an unattended run. Absent means `ask`. */
   networkFetch?: NetworkFetchChoice;
   allowedPrograms: string[];
+  /** The programs set to read only; only those on the list with a rule are in force (`readOnly.ts`). */
+  readOnlyPrograms?: string[];
   denyPatterns: string[];
   cwd: string;
   lock?: { applied: boolean; changes: string[] };
@@ -99,6 +104,13 @@ export type ManifestInput = {
   /** The project folders commands were held to; empty when there was no project to hold them to. */
   confinedTo?: string[];
 };
+
+/** The programs set to read only that a rule reads and, with the gate on, the list names: the ones in force. */
+function readOnlyInForce(readOnly: string[], allowed: string[]): string[] {
+  const capable = new Set(readOnlyCapable());
+  const listed = new Set(allowed.map((p) => p.trim().toLowerCase()));
+  return [...new Set(readOnly.map((p) => p.trim().toLowerCase()))].filter((p) => capable.has(p) && (listed.size === 0 || listed.has(p)));
+}
 
 export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessEnv = process.env): PolicyManifest {
   const names = DANGEROUS_TECHNIQUES.map((t) => t.name);
@@ -113,6 +125,7 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
       digest: digestOf(input.allowedPrograms),
       programs: [...input.allowedPrograms],
     },
+    readOnly: readOnlyInForce(input.readOnlyPrograms ?? [], input.allowedPrograms),
     chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command',
     networkFetch: networkFetchStatement(input.mode, input.networkFetch),
     denyPatterns: { count: input.denyPatterns.length, digest: digestOf(input.denyPatterns) },
@@ -134,6 +147,7 @@ export function describePolicyManifest(m: PolicyManifest): string {
   return [
     `mode        : ${m.mode}${m.mode === 'unattended' ? ' (no person saw the steps as they ran)' : ' (a person approved each step)'}`,
     `allowlist   : ${m.allowlist.enforced ? `${m.allowlist.count} programs, digest ${m.allowlist.digest}` : 'NOT ENFORCED — any program could be started'}`,
+    `read only   : ${m.readOnly.length ? `${m.readOnly.join(', ')} — a command that changes something, signs in or out or shows a secret is refused` : 'none'}`,
     `chat files : ${m.chatFiles}`,
     `downloads   : ${m.networkFetch}`,
     `deny list   : ${m.denyPatterns.count} patterns, digest ${m.denyPatterns.digest}`,

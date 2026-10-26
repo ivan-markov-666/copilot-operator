@@ -312,6 +312,13 @@ export const RunConfigSchema = z.object({
           // ordinary Windows inspection and housekeeping a build or test reaches for
           'where', 'findstr', 'tasklist', 'taskkill', 'netstat', 'robocopy', 'xcopy', 'tar', 'curl', 'docker', 'docker-compose',
         ]),
+      /**
+       * Programs on the list above set to read only, "for reference" (operator, 2026-10-26): a command of theirs that only
+       * reads runs without a card, one that changes something, signs in or out or shows a secret is refused, one that
+       * cannot be read is asked about in every mode. Only programs with a rule (`exec/readOnly.ts`: az) can be; others
+       * named here are ignored.
+       */
+      readOnlyPrograms: z.array(z.string()).default([]),
       denyPatterns: z
         .array(z.string())
         .default([

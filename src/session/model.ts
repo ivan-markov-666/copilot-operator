@@ -1255,6 +1255,11 @@ export type PendingApproval = {
   /** Set when the step reaches a platform with the operator's access (2026-10-23): its name, as the card says it. */
   platform?: string;
   /**
+   * Set when the program is set to read only and this command could not be read as only reading (2026-10-26): why.
+   * Asked in every mode, Settings' agreement or not; it may change something.
+   */
+  readOnly?: string;
+  /**
    * Set when this is not a step but a request for the operator's hand: the chat could not be put on the
    * chosen model, and the operator is asked to choose it in the Copilot window (operator's request,
    * 2026-10-06). Answers: run = "I chose it, check and go on"; skip = "go on with the model it is on";

@@ -45,9 +45,20 @@
 export type HeadScan = {
   /** The name at the head of every command invocation, in the order they appear, as written. */
   heads: string[];
+  /**
+   * Every invocation with a literal head, with its arguments as the shell reads them: quotes resolved, and `dynamic`
+   * for one known only when it runs — a variable, a subexpression, a nested command, `--%`. For a program whose own
+   * words decide what it does, `az vm list` against `az vm delete` (`readOnly.ts`, 2026-10-26).
+   */
+  calls: CommandCall[];
   /** Why the line could not be read with certainty, when it could not. See the file comment. */
   uncertain?: string;
 };
+
+/** One argument of an invocation. */
+export type CallArg = { literal: string; dynamic: boolean };
+/** One invocation: its head as written, and its arguments up to the end of its pipeline element. */
+export type CommandCall = { head: string; args: CallArg[] };
 
 /** Scans a command line as the shell that will run it reads it. */
 export function scanCommandHeads(command: string, shell: string = 'pwsh'): HeadScan {
@@ -89,6 +100,7 @@ type Word = { literal: string; end: number; dynamic: boolean };
 
 class PowerShellScan {
   private readonly heads: string[] = [];
+  private readonly calls: CommandCall[] = [];
   private uncertain?: string;
   private depth = 0;
 
@@ -96,7 +108,15 @@ class PowerShellScan {
 
   run(): HeadScan {
     this.statements(0, null);
-    return this.uncertain ? { heads: this.heads, uncertain: this.uncertain } : { heads: this.heads };
+    return this.uncertain ? { heads: this.heads, calls: this.calls, uncertain: this.uncertain } : { heads: this.heads, calls: this.calls };
+  }
+
+  /** A literal head: recorded, with the invocation its arguments are read into. */
+  private record(head: string): CommandCall {
+    this.heads.push(head);
+    const call: CommandCall = { head, args: [] };
+    this.calls.push(call);
+    return call;
   }
 
   private fail(why: string): void {
@@ -232,7 +252,7 @@ class PowerShellScan {
       if (BLOCK_KEYWORDS.has(lower)) return this.keywordRest(word.end);
     }
     if (word.dynamic) this.fail(`the command "${word.literal}" is built from a variable, so which program it starts is known only when it runs`);
-    else if (word.literal) this.heads.push(word.literal);
+    else if (word.literal) return this.commandArgs(word.end, this.record(word.literal));
     return this.commandArgs(word.end);
   }
 
@@ -272,12 +292,15 @@ class PowerShellScan {
     }
     const word = this.readWord(i);
     if (word.dynamic) this.fail(`the program "${word.literal}" is built from a variable, so which program it starts is known only when it runs`);
-    else if (word.literal) this.heads.push(word.literal);
+    else if (word.literal) return this.commandArgs(word.end, this.record(word.literal));
     return this.commandArgs(word.end);
   }
 
-  /** A command's arguments, up to the end of its pipeline element. Nested statements are read. */
-  private commandArgs(i: number): number {
+  /**
+   * A command's arguments, up to the end of its pipeline element. Nested statements are read. With `call`, each
+   * argument is recorded on it: a word or a quoted string as it reads, anything else as known only when it runs.
+   */
+  private commandArgs(i: number, call?: CommandCall): number {
     for (;;) {
       i = this.skip(i);
       const c = this.at(i);
@@ -285,6 +308,7 @@ class PowerShellScan {
       if (isTerminator(c)) return i;
       // `--%` hands the rest of the line to the program untouched, up to a pipe or a newline.
       if (c === '-' && n === '-' && this.at(i + 2) === '%') {
+        call?.args.push({ literal: '--%', dynamic: true });
         while (i < this.s.length && this.at(i) !== '\n' && this.at(i) !== '|') i += 1;
         continue;
       }
@@ -297,12 +321,21 @@ class PowerShellScan {
         i += 1;
         continue;
       }
+      // A quoted argument is read as a word is, so the program gets the text it will get: `'vm' 'list'` is `vm list`.
+      if (isSingleQuote(c) || isDoubleQuote(c)) {
+        const word = this.readWord(i);
+        call?.args.push({ literal: word.literal, dynamic: word.dynamic });
+        i = word.end > i ? word.end : i + 1;
+        continue;
+      }
       const nested = this.nested(i, 'statements');
       if (nested !== null) {
+        call?.args.push({ literal: this.s.slice(i, nested), dynamic: true });
         i = nested;
         continue;
       }
       const word = this.readWord(i);
+      if (word.end > i) call?.args.push({ literal: word.literal, dynamic: word.dynamic });
       i = word.end > i ? word.end : i + 1;
     }
   }
@@ -683,6 +716,7 @@ class PowerShellScan {
  */
 function scanCmd(src: string): HeadScan {
   const heads: string[] = [];
+  const calls: CommandCall[] = [];
   let uncertain: string | undefined;
   const fail = (why: string): void => {
     uncertain ??= why;
@@ -767,6 +801,7 @@ function scanCmd(src: string): HeadScan {
       continue;
     }
     heads.push(literal);
+    calls.push({ head: literal, args: tokens.slice(k + 1).map((t) => ({ literal: t.replace(/"/g, ''), dynamic: /%[^%\s]+%|![^!\s]+!/.test(t) })) });
   }
-  return uncertain ? { heads, uncertain } : { heads };
+  return uncertain ? { heads, calls, uncertain } : { heads, calls };
 }

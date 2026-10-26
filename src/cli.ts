@@ -527,6 +527,7 @@ program
       lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
       networkFetch: cfg.execution.networkFetch,
       platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
+      readOnlyPrograms: cfg.execution.readOnlyPrograms,
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

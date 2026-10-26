@@ -50,6 +50,12 @@ check('and the prose says so plainly', describePolicyManifest(open).includes('NO
 check('unattended is named as unwatched', describePolicyManifest(open).includes('no person saw the steps'), true);
 check('and that no file can come from the chat', describePolicyManifest(open).includes('no file step'), true);
 
+console.log('\n--- the programs set to read only are recorded (2026-10-26) ---');
+check('none by default, and said so', [JSON.stringify(safe.readOnly), describePolicyManifest(safe).includes('read only   : none')].join(' '), '[] true');
+const reading = collectPolicyManifest({ ...base, allowedPrograms: ['node', 'az', 'gh'], readOnlyPrograms: ['AZ', 'gh', 'kubectl'] }, env);
+check('only those a rule reads and the list names: az', JSON.stringify(reading.readOnly), '["az"]');
+check('and the prose says what is refused', describePolicyManifest(reading).includes('read only   : az — a command that changes something'), true);
+
 console.log('\n--- the built-in floor is fingerprinted ---');
 check('every technique is counted', safe.builtIn.count, DANGEROUS_TECHNIQUES.length);
 check('and digested', safe.builtIn.digest, digestOf(DANGEROUS_TECHNIQUES.map((t) => t.name)));
