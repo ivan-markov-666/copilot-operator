@@ -163,6 +163,18 @@ export const DANGEROUS_TECHNIQUES: DangerousTechnique[] = [
     why: 'a file opened through its registered handler, or a URL opened in the browser, runs whatever Windows has registered for it under this runner. Start the program itself, by name, with the file as its argument.',
   },
   {
+    name: 'credential-capture',
+    /*
+     * Git asks the operator for a password through its own window (2026-10-26, `stepEnv.ts`), and the answer goes from
+     * the window straight to git. A step that ran the window itself, or a credential helper, or set git's or ssh's own
+     * password and ssh programs, could put up the same window with its own question and catch the answer in its output
+     * — which goes to the chat. Git asks for what it needs by itself: `git push`, `git fetch`, `git pull` and
+     * `git clone` are not touched by this.
+     */
+    pattern: /\b(?:git|ssh)-askpass\b|\b(?:GIT_ASKPASS|SSH_ASKPASS(?:_REQUIRE)?|GIT_SSH_COMMAND|GIT_SSH|GCM_[A-Z_]+)\b|\bcore\.(?:askpass|sshCommand)\b|\bcredential\.(?:helper|[\w.-]*\.helper)\b|\bgit-credential(?:-[\w-]+)?\b|\bgit(?:\.exe)?(?:\s+-[-\w.=]+(?:\s+[^\s-][^\s]*)?)*\s+credential(?:-[\w-]+)?\b/i,
+    why: 'the password Git asks for goes from its own window straight to git; a step that runs that window, a credential helper or git\'s password settings itself could catch what the operator types. Run git itself — push, fetch, pull, clone — and Git asks for what it needs in its own window.',
+  },
+  {
     name: 'obfuscated-name',
     /*
      * Not a technique but the shape of hiding one, and worth more than chasing names.

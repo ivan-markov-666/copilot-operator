@@ -10,6 +10,7 @@ import { ModelPicker } from '../modelPicker';
 import { InfoTip } from '../popover';
 import { confirmDialog } from '../dialog';
 import { QueueGraph } from './queueGraph';
+import { ParkedCard } from '../parkedCard';
 
 /**
  * The queue of tasks (operator, 2026-10-24: "an option to prepare several tasks that run in a queue"): written
@@ -31,10 +32,12 @@ type Draft = {
   lead: boolean;
   workerModel: string;
   skill: string;
+  /** "Plan first" (2026-10-26): on for a new task. */
+  plan: boolean;
 };
 type Edit = Omit<QueueItem, 'status'> & { status?: QueueItem['status'] };
 
-const EMPTY: Draft = { name: '', prompt: '', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: '', lead: false, workerModel: '', skill: '' };
+const EMPTY: Draft = { name: '', prompt: '', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: '', lead: false, workerModel: '', skill: '', plan: true };
 /** Where the chat keeps the conversation it shows (`workbench/cascade.tsx`): "Open the chat" puts the task's there. */
 const THREAD_KEY = 'cop.chat.thread';
 
@@ -45,6 +48,7 @@ const STATUS: Record<QueueItem['status'], Key> = {
   failed: 'q.failed',
   skipped: 'q.skipped',
   stopped: 'q.stopped',
+  parked: 'q.parked',
 };
 
 /** A task's name, or its first line where it has none, as the bot says it (`itemTitle`). */
@@ -61,6 +65,7 @@ const asEdit = (x: QueueItem): Edit => ({
   ...(x.lead ? { lead: true } : {}),
   ...(x.workerModel ? { workerModel: x.workerModel } : {}),
   ...(x.skill ? { skill: x.skill } : {}),
+  ...(x.plan ? { plan: true } : {}),
 });
 const fromDraft = (d: Draft): Omit<Edit, 'id'> => ({
   ...(d.name.trim() ? { name: d.name.trim() } : {}),
@@ -72,6 +77,7 @@ const fromDraft = (d: Draft): Omit<Edit, 'id'> => ({
   ...(!d.lead && d.review && d.reviewModel ? { reviewModel: d.reviewModel } : {}),
   ...(d.lead ? { lead: true, ...(d.workerModel ? { workerModel: d.workerModel } : {}) } : {}),
   ...(d.skill ? { skill: d.skill } : {}),
+  ...(d.plan ? { plan: true } : {}),
 });
 /** The skills a task of the open folder may carry: the ones for every project and the ones for it, as the chat offers them. */
 const folderKey = (d: string): string => d.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
@@ -95,6 +101,27 @@ export default function QueuePage() {
   const [busy, setBusy] = useState(false);
 
   const read = useCallback(() => api.queue().then(setQueue).catch((e) => setErr((e as Error).message)), []);
+  /*
+   * How long a task may wait for the operator before it is set aside and the queue goes on (operator, 2026-10-26: "every
+   * question in a queue has a timeout — say 2 minutes — since I may not be at the computer"). Saved as it is left.
+   */
+  const [parkAfter, setParkAfter] = useState('');
+  const shownParkAfter = parkAfter !== '' ? parkAfter : String(queue?.parkAfterSec ?? 120);
+  const saveParkAfter = async () => {
+    if (parkAfter === '') return;
+    const sec = Number(parkAfter);
+    if (!Number.isFinite(sec) || sec < 0) {
+      setParkAfter('');
+      return;
+    }
+    try {
+      setQueue(await api.setQueueSettings(Math.round(sec)));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setParkAfter('');
+    }
+  };
   usePoll(read, queue?.running ? 2000 : 6000);
   useEffect(() => {
     api.models().then(setCatalogue).catch(() => undefined);
@@ -158,6 +185,7 @@ export default function QueuePage() {
       lead: !!x.lead,
       workerModel: x.workerModel ?? '',
       skill: x.skill ?? '',
+      plan: !!x.plan,
     });
     document.getElementById('queue-name')?.focus();
   };
@@ -245,6 +273,27 @@ export default function QueuePage() {
           </p>
         )}
         {queue?.busy && <BusyLine busy={queue.busy} running={queue.running} />}
+        <div className="settings-field queue-park-after">
+          <div className="field-label">
+            <label htmlFor="queue-park-after">{t('q.parkAfter')}</label>
+            <InfoTip label={t('info.about', { name: t('q.parkAfter') })} text={t('q.parkAfterWhy')} />
+          </div>
+          <div className="field-control">
+            <input
+              id="queue-park-after"
+              type="number"
+              min={0}
+              max={86400}
+              value={shownParkAfter}
+              onChange={(e) => setParkAfter(e.target.value)}
+              onBlur={() => void saveParkAfter()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveParkAfter();
+              }}
+            />{' '}
+            <span className="muted small">{t('q.parkAfterUnit')}</span>
+          </div>
+        </div>
         <div className="row queue-controls">
           {queue?.running || stopping ? (
             <button onClick={() => void act(api.stopQueue)} disabled={busy || stopping} aria-busy={stopping || undefined}>
@@ -296,9 +345,17 @@ export default function QueuePage() {
                   {x.review && <span>{x.reviewModel ? t('q.reviewOnModel', { model: x.reviewModel }) : t('q.reviewOn')}</span>}
                   {x.dependsOn.length > 0 && <span>{t('q.dependsOnList', { list: x.dependsOn.map((d) => `#${numberOf(d)}`).join(', ') })}</span>}
                   {x.skill && <span className="queue-skill">{t('q.skillIs', { name: x.skill })}</span>}
+                  {x.plan && <span>{t('q.planOn')}</span>}
+                  {x.branchName && <span className="queue-skill" title={x.branchFrom ? t('q.branchFromWhy', { from: x.branchFrom }) : undefined}>{t('q.branchIs', { name: x.branchName })}</span>}
                 </div>
                 {x.name && x.name.trim() !== x.prompt.trim() && <div className="small queue-prompt">{x.prompt.split(/\r?\n/)[0]}</div>}
                 {x.why && <div className="small queue-why">{x.why}</div>}
+                {/* Set aside while it waited for the operator (2026-10-26): what it waits for, to answer now. */}
+                {x.status === 'parked' && x.waitsFor && (
+                  <div className="queue-parked">
+                    <ParkedCard parked={x.waitsFor} onAnswer={async (answer) => setQueue(await api.answerParked(x.id, answer))} />
+                  </div>
+                )}
                 <div className="row queue-actions">
                   {x.sessionId && (
                     <Link href="/" onClick={() => remember(x.sessionId!)}>
@@ -347,6 +404,14 @@ export default function QueuePage() {
         </div>
         <label htmlFor="queue-prompt">{t('q.prompt')}</label>
         <textarea id="queue-prompt" rows={5} value={draft.prompt} onChange={(e) => setDraft({ ...draft, prompt: e.target.value })} />
+        {/* Plan first (2026-10-26): every task approved before its work, the lead's plan with two chats. */}
+        <div className="settings-field">
+          <div className="field-label check-label">
+            <input id="queue-plan" type="checkbox" checked={draft.plan} onChange={(e) => setDraft({ ...draft, plan: e.target.checked })} />
+            <label htmlFor="queue-plan">{t('q.plan')}</label>
+            <InfoTip label={t('info.about', { name: t('q.plan') })} text={t('q.planWhy')} />
+          </div>
+        </div>
         <div className="settings-field">
           <div className="field-label check-label">
             <input id="queue-lead" type="checkbox" checked={draft.lead} onChange={(e) => setDraft({ ...draft, lead: e.target.checked })} />
@@ -470,6 +535,12 @@ export default function QueuePage() {
               </label>
             ))}
           </fieldset>
+        )}
+        {/* A task on a new branch from main has its branch made as it is added: the remote may ask for a password now. */}
+        {busy && draft.branch === 'main' && (
+          <p className="small muted queue-preparing" role="status">
+            {t('q.preparing')}
+          </p>
         )}
         <div className="row">
           <button className="primary" onClick={() => void submit()} disabled={busy || !draft.prompt.trim()} title={startsAfter ? t('q.addAfterWhy') : undefined}>

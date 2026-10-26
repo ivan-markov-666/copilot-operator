@@ -64,12 +64,23 @@ const FORCED: Record<string, string> = {
 /** Names a step must never be given, even if the operator lists them: the bot's own keys. */
 const NEVER = /^(NEXT_PUBLIC_COP_|COP_)/i;
 
-export function stepEnvironment(from: NodeJS.ProcessEnv = process.env, extra: string[] = []): NodeJS.ProcessEnv {
+/**
+ * `askpass`: Git for Windows' own password window (operator, 2026-10-26: "if the chat works with git and a password is
+ * needed, the bot stops, a window opens for the operator to type it, and the work goes on; every time one is asked").
+ * Set, not passed: ssh and git ask through it — and Git Credential Manager through its own window — so a `git push` or
+ * `git fetch` a step runs asks the operator there, and the answer goes from the window straight to git, never through
+ * the step's output. No terminal prompt: a step has none. See `remoteAuth.ts`; a step that names any of this itself
+ * is refused (`dangerous.ts`, credential-capture).
+ */
+export function stepEnvironment(from: NodeJS.ProcessEnv = process.env, extra: string[] = [], askpass?: string): NodeJS.ProcessEnv {
   const wanted = new Set([...PASSED, ...extra].map((n) => n.toLowerCase()));
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(from)) {
     if (v === undefined || NEVER.test(k)) continue;
     if (wanted.has(k.toLowerCase()) || PASSED_BY_SHAPE.test(k)) out[k] = v;
   }
-  return { ...out, ...FORCED };
+  const asking = askpass
+    ? { GIT_ASKPASS: askpass, SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'auto', DISPLAY: from.DISPLAY || 'needs-to-be-defined' }
+    : {};
+  return { ...out, ...FORCED, ...asking };
 }

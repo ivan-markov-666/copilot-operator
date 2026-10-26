@@ -146,6 +146,12 @@ export type Task = {
    */
   failure?: { kind: 'transport' | 'shell'; detail: string };
   /**
+   * A task of the queue that waited for the operator longer than the queue allows (2026-10-26): set aside, so the
+   * queue went on with the next task, with what it waited for kept — to be answered when the operator is back — and,
+   * once answered, carried on from where it stopped. See `Parked`.
+   */
+  parked?: Parked;
+  /**
    * The machine's tools as they were when the task ran: the layer under the project's
    * lockfile. Two runs of one plan a day apart got different major versions of everything
    * `npm install` fetched, and this is where that difference is read from.
@@ -507,8 +513,35 @@ export function tidyVcsPlan(plan: TaskVcsPlan | undefined): TaskVcsPlan | undefi
 /** One note from the operator to the chat about a task: see `Task.notes`. */
 export type TaskNote = { id: string; text: string; at: string; sentAt?: string; attempt?: number };
 
+/**
+ * What a task of the queue waited for when it was set aside (operator, 2026-10-26: "every question in a queue has a
+ * timeout, since the operator may not be at the computer; the work on that task stops and the next one starts; the
+ * question is kept to be answered later"): a plan to approve, a question of the chat or the lead, a subtask cut off, a
+ * command waiting for the operator's word, a model to choose by hand, or a password Git asked for.
+ */
+export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | 'password';
+
+/** The operator's answer to it, given later; `resume` for what needs only the operator to be there again. */
+export type ParkedAnswer =
+  | { kind: 'plan'; decision: 'approve' | 'revise'; note?: string }
+  | { kind: 'question'; answer: string }
+  | { kind: 'retry'; choice: RetryChoice }
+  | { kind: 'command'; decision: 'run' | 'skip' }
+  | { kind: 'resume' };
+
+export type Parked = {
+  kind: ParkedKind;
+  at: string;
+  /** The card as it waited: what was asked, shown again for the answer. */
+  approval: PendingApproval;
+  /** The operator's answer, and when it was given; the task carries on with it at its next turn in the queue. */
+  answer?: ParkedAnswer & { at: string };
+};
+
 export type TaskAttempt = {
   runId?: string;
+  /** What the attempt waited for when the queue set it aside (2026-10-26), with the answer given. */
+  parked?: Parked;
   /** The run this attempt belonged to. */
   runGroup?: TaskRunGroup;
   /** What the runner stopped that this attempt left running. */
@@ -783,7 +816,12 @@ export type TaskContinuation = {
    * `failed`: the attempt ended failed or blocked, and the operator gave a new prompt to carry the work
    * on from where it got to (2026-10-13) — in its chat and on its branch, told how it ended and why.
    */
-  how?: 'limit' | 'interrupted' | 'stopped' | 'failed';
+  /** `parked`: a task of the queue set aside while it waited for the operator, carried on once answered (2026-10-26). */
+  how?: 'limit' | 'interrupted' | 'stopped' | 'failed' | 'parked';
+  /** For `how: 'parked'`: what it waited for. The answer goes with the operator's notes. */
+  parkedFor?: ParkedKind;
+  /** For `how: 'parked'` and a plan sent back: the attempt plans again first. */
+  replan?: boolean;
   interruption?: Interruption;
   /** For `how: 'limit'`: which setting, when the attempt recorded it. */
   limit?: TaskLimit;

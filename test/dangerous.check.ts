@@ -117,6 +117,38 @@ console.log('\n--- the operator list adds, it does not subtract ---');
 check('an operator pattern still refuses', commandRefusal('Remove-Item C:\\data -Recurse', 'pwsh', ['Remove-Item[^|]*-Recurse']) !== null, true);
 check('an empty operator list keeps the built-ins', commandRefusal('certutil -decode a.b64 a.js', 'pwsh', []) !== null, true);
 
+/*
+ * Git asks the operator for a password in its own window (2026-10-26), and the answer goes straight to git. A step that
+ * named the window, a credential helper or git's and ssh's password settings itself could put up the same window with
+ * its own question and catch the answer in its output. Git itself is the job, and asks for what it needs.
+ */
+console.log('\n--- Git\'s password window: asked for by git, never by a step ---');
+for (const [what, line] of [
+  ['the password window run by hand', '& "C:\\Program Files\\Git\\mingw64\\bin\\git-askpass.exe" "Password for github:"'],
+  ['the ssh one', 'ssh-askpass "Enter passphrase"'],
+  ['its variable read or set', '$env:GIT_ASKPASS = "C:\\tools\\ask.cmd"; git push'],
+  ['ssh\'s, the same', '$env:SSH_ASKPASS="x"; git fetch'],
+  ['ssh swapped for another program', '$env:GIT_SSH_COMMAND = "ssh -v"; git fetch'],
+  ['a credential helper set for one command', 'git -c credential.helper="!f() { cat > pw.txt; }; f" push'],
+  ['or for good', 'git config --global credential.helper store'],
+  ['git\'s own askpass setting', 'git config core.askPass C:\\tools\\ask.exe'],
+  ['the credentials asked for directly', 'git credential fill'],
+  ['through a helper of git\'s', 'git credential-manager get'],
+  ['the helper program by name', 'git-credential-manager.exe erase'],
+] as Array<[string, string]>) {
+  check(what, dangerousRefusal(line)?.startsWith('refused: credential-capture') ?? false, true);
+}
+for (const [what, line] of [
+  ['git push', 'git push origin task/login-test'],
+  ['git fetch', 'git -C C:\\Projects\\app fetch origin main'],
+  ['git pull', 'git pull --ff-only'],
+  ['git clone', 'git clone https://github.com/example/app.git'],
+  ['a commit that talks about credentials', 'git commit -m "Store the API credentials in the vault"'],
+  ['a log searched for the word', 'git log --grep credential --oneline'],
+] as Array<[string, string]>) {
+  check(what, dangerousRefusal(line), null);
+}
+
 console.log('\n--- every technique says what it is and why ---');
 check('all named', DANGEROUS_TECHNIQUES.every((d) => d.name.trim() !== ''), true);
 check('all explained', DANGEROUS_TECHNIQUES.every((d) => d.why.trim().length > 30), true);

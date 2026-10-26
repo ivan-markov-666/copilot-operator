@@ -12,15 +12,22 @@
  *   chat is told which it was;
  * - a task may carry one of Settings' skills, sent with it as the chat's box sends one (2026-10-25);
  * - a task added while something else works — a message of the chat, sent there directly — starts after it
- *   (2026-10-25): the queue waits for the browser to be free before it takes the next task.
+ *   (2026-10-25): the queue waits for the browser to be free before it takes the next task;
+ * - a task that waits for the operator longer than the queue allows — a plan to approve, a question, a command, a
+ *   model to choose, a password — is set aside ("parked") with what it waits for kept, and the queue goes on with the
+ *   next (2026-10-26). Answered later, it carries on from where it stopped, before the others waiting; the tasks that
+ *   depend on it wait for it rather than being skipped. A task "on a new branch from main" has its branch made when it
+ *   is added, brought up to the remote's main when it starts if nothing is on it yet.
  *
  * Kept as `data/queue.json` (see `OperatorService.queue`). This module is the part that needs no browser: the shape,
  * the checks of an edit, and which task is next.
  */
 import { branchExists } from '../vcs/git.js';
+import type { ParkedAnswer, ParkedKind, PendingApproval, RetryChoice } from '../session/model.js';
 
 export type QueueBranch = 'folder' | 'main';
-export type QueueStatus = 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
+/** `parked`: set aside while it waited for the operator, until answered (2026-10-26). */
+export type QueueStatus = 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped' | 'parked';
 
 export type QueueItem = {
   id: string;
@@ -45,6 +52,20 @@ export type QueueItem = {
   workerModel?: string;
   /** One of Settings' skills, by its name, sent with the task as `/its-name` sends it in the chat (2026-10-25). */
   skill?: string;
+  /** "Plan first" (2026-10-26): the plan, the lead's with two chats, is approved by the operator before the work. */
+  plan?: boolean;
+  /**
+   * The branch made for it when it was added (2026-10-26), for a task "on a new branch from main", and the commit of
+   * the remote's main it was made at. Given by the bot, not by the operator.
+   */
+  branchName?: string;
+  branchBase?: string;
+  /** What it was made from: the remote's main as fetched then (`origin/main`), or the local main when it could not be. */
+  branchFrom?: string;
+  /** Parked, and what it waits for, as the queue's page shows it (2026-10-26). The answer goes to the task's record. */
+  waitsFor?: { kind: ParkedKind; at: string; approval: PendingApproval };
+  /** Answered after it was parked: it carries on from where it stopped, at the queue's next turn, before the others. */
+  resume?: boolean;
   status: QueueStatus;
   /** Why it failed, was skipped or stopped, in a sentence. */
   why?: string;
@@ -61,7 +82,21 @@ export type Queue = {
   updatedAt: string;
   /** What has the browser now, other than the queue's own task: its next task starts after it. Said, never kept. */
   busy?: QueueBusy;
+  /**
+   * How long a task may wait for the operator before it is set aside and the queue goes on (2026-10-26), in seconds;
+   * 0 waits as long as it takes. Default `DEFAULT_PARK_AFTER_SEC`.
+   */
+  parkAfterSec?: number;
 };
+
+export const DEFAULT_PARK_AFTER_SEC = 120;
+export const MAX_PARK_AFTER_SEC = 24 * 60 * 60;
+
+/** How long a task waits for the operator before it is parked, in milliseconds; null: as long as it takes. */
+export function parkAfterMs(q: Pick<Queue, 'parkAfterSec'>): number | null {
+  const sec = typeof q.parkAfterSec === 'number' && Number.isFinite(q.parkAfterSec) ? Math.max(0, Math.min(MAX_PARK_AFTER_SEC, Math.round(q.parkAfterSec))) : DEFAULT_PARK_AFTER_SEC;
+  return sec === 0 ? null : sec * 1000;
+}
 
 /** Work that has the browser: a message of the chat (its conversation and what it is), a reading of the models, the sign-in. */
 export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' };
@@ -99,7 +134,7 @@ export function checkItems(items: unknown, maxPromptChars: number): { items: Arr
     const late = dependsOn.find((d) => !seen.has(d));
     if (late) return { problem: `Task ${n} depends on ${items.some((o) => (o as { id?: unknown })?.id === late) ? 'a task after it' : `"${late}", which is not in the queue`}: a task can depend only on tasks before it.` };
     const branch = x.branch === 'main' ? 'main' : 'folder';
-    const status = typeof x.status === 'string' && ['waiting', 'running', 'done', 'failed', 'skipped', 'stopped'].includes(x.status) ? (x.status as QueueStatus) : undefined;
+    const status = typeof x.status === 'string' && ['waiting', 'running', 'done', 'failed', 'skipped', 'stopped', 'parked'].includes(x.status) ? (x.status as QueueStatus) : undefined;
     const text = (v: unknown): string => String(v ?? '').trim();
     const name = text(x.name);
     if (name.length > MAX_QUEUE_NAME) return { problem: `The name of task ${n} is longer than ${MAX_QUEUE_NAME} characters.` };
@@ -119,6 +154,7 @@ export function checkItems(items: unknown, maxPromptChars: number): { items: Arr
       ...(lead ? { lead: true } : {}),
       ...(lead && text(x.workerModel) ? { workerModel: text(x.workerModel) } : {}),
       ...(skill ? { skill } : {}),
+      ...(x.plan === true ? { plan: true } : {}),
       ...(status ? { status } : {}),
     });
     seen.add(id);
@@ -141,7 +177,15 @@ export function mergeItems(current: QueueItem[], edited: Array<Omit<QueueItem, '
     if (!was) return { ...x, status: 'waiting' };
     const again = x.status === 'waiting' && was.status !== 'waiting';
     const given = asGiven(x);
+    // "Run again" starts it over, on a branch made for it again when it is one of its own.
     if (again) return { ...given, status: 'waiting' };
+    // A parked task keeps what it waits for; its answer is given on its card, not by an edit of the list.
+    if (was.status === 'parked') return { ...was, ...given, status: 'parked' };
+    // Where it works changed: the branch made for it no longer is its.
+    if (was.branch !== given.branch) {
+      const { branchName: _name, branchBase: _base, ...rest } = was;
+      return { ...rest, ...given, status: was.status };
+    }
     // What the runs gave it stays; what the operator gives it is the edit's, a field left out of it gone.
     const kept: Partial<QueueItem> = { ...was };
     for (const key of GIVEN) delete kept[key];
@@ -151,7 +195,7 @@ export function mergeItems(current: QueueItem[], edited: Array<Omit<QueueItem, '
 }
 
 /** What the operator gives a task, apart from what its runs give it. */
-const GIVEN = ['id', 'name', 'prompt', 'model', 'dependsOn', 'branch', 'review', 'reviewModel', 'lead', 'workerModel', 'skill'] as const;
+const GIVEN = ['id', 'name', 'prompt', 'model', 'dependsOn', 'branch', 'review', 'reviewModel', 'lead', 'workerModel', 'skill', 'plan'] as const;
 function asGiven(x: Omit<QueueItem, 'status'> & { status?: QueueStatus }): Omit<QueueItem, 'status'> {
   const out: Record<string, unknown> = {};
   for (const key of GIVEN) if (x[key] !== undefined) out[key] = x[key];
@@ -182,10 +226,16 @@ export function waitsByHand(
  */
 export function nextStep(items: QueueItem[]): { run: QueueItem } | { skip: QueueItem; because: QueueItem } | null {
   const byId = new Map(items.map((x) => [x.id, x]));
+  // An answered parked task first (2026-10-26): it carries on from where it stopped, before the others waiting.
+  const resumed = items.find((x) => x.status === 'waiting' && x.resume);
+  if (resumed) return { run: resumed };
   for (const item of items) {
     if (item.status !== 'waiting') continue;
-    const blocker = item.dependsOn.map((d) => byId.get(d)).find((d) => !d || d.status !== 'done');
+    const needs = item.dependsOn.map((d) => byId.get(d));
+    const blocker = needs.find((d) => !d || d.status === 'failed' || d.status === 'skipped' || d.status === 'stopped');
     if (blocker) return { skip: item, because: blocker };
+    // One it needs is parked, or waits to carry on: this one waits for it, rather than being skipped.
+    if (needs.some((d) => d!.status !== 'done')) continue;
     return { run: item };
   }
   return null;
@@ -206,4 +256,35 @@ export function statusOfTask(taskStatus: string | undefined): QueueStatus {
 export async function mainBranchOf(dir: string): Promise<string | null> {
   for (const name of ['main', 'master']) if (await branchExists(dir, name)) return name;
   return null;
+}
+
+/** What a parked task waits for, in the words the queue's page and its log use (2026-10-26). */
+export const PARKED_WORDS: Record<ParkedKind, string> = {
+  plan: 'its plan, to approve',
+  question: 'an answer to its question',
+  retry: 'what to do with a subtask that was cut off',
+  command: 'your word on a command',
+  model: 'the model, to be chosen by hand',
+  password: 'a password Git asked for',
+};
+
+/** The operator's answer to a parked task, held to what its card offered, or why it cannot be taken. */
+export function parkedAnswerFrom(p: { kind: ParkedKind; approval: PendingApproval }, input: Record<string, unknown>): ParkedAnswer | { problem: string } {
+  const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  switch (p.kind) {
+    case 'plan':
+      if (input.decision === 'approve') return { kind: 'plan', decision: 'approve', ...(text(input.note) ? { note: text(input.note) } : {}) };
+      if (input.decision === 'revise') return text(input.note) ? { kind: 'plan', decision: 'revise', note: text(input.note) } : { problem: 'Say what to change in the plan.' };
+      return { problem: 'A plan is approved, or sent back for another.' };
+    case 'question':
+      return text(input.answer) ? { kind: 'question', answer: text(input.answer) } : { problem: 'Write the answer first.' };
+    case 'retry': {
+      const choices = p.approval.retry?.choices ?? [];
+      return typeof input.choice === 'string' && choices.includes(input.choice as RetryChoice) ? { kind: 'retry', choice: input.choice as RetryChoice } : { problem: `Choose one of: ${choices.join(', ')}.` };
+    }
+    case 'command':
+      return input.decision === 'run' || input.decision === 'skip' ? { kind: 'command', decision: input.decision } : { problem: 'A command is run or skipped.' };
+    default:
+      return { kind: 'resume' };
+  }
 }

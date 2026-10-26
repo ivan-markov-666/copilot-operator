@@ -123,6 +123,29 @@ export type ChangesCheck =
 
 /** The project folder the workbench has open; see `session/workspace.ts`. */
 export type Workspace = { dir: string; name: string; ok: boolean; isRepo: boolean; branch?: string; problem?: string };
+/** "New branch from main" (2026-10-26): what it would start from. See `NewBranchPlan` in src/vcs/newBranch.ts. */
+export type NewBranchPlan = {
+  ok: boolean;
+  problem?: string;
+  repoDir: string;
+  branch?: string | null;
+  head?: string;
+  remote?: string;
+  target?: string;
+  targetCommit?: string;
+  targetSubject?: string;
+  fetched?: { ok: boolean; detail?: string; auth?: boolean; asked: boolean };
+  lastFetched?: string;
+  changed: string[];
+  untracked: string[];
+  suggested?: string;
+  fingerprint?: string;
+};
+/** What is not committed: taken to the new branch, or put aside on a branch of its own. */
+export type NewBranchCarry = 'take' | 'aside';
+export type NewBranchResult =
+  | { ok: true; branch: string; commit: string; target: string; saved?: { branch: string; commit: string; files: number }; carried: number; result: string }
+  | { ok: false; problem: string; conflict?: boolean };
 /** `version` is a fingerprint of the file as read; saving over it is refused once the file changed on disk. */
 export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string };
 export type ChatThread = { id: string; name: string; createdAt: string; status: 'idle' | 'running' | 'stopping'; turns: number; running: boolean; repoDir: string };
@@ -143,15 +166,38 @@ export type QueueItem = {
   workerModel?: string;
   /** One of Settings' skills, by its name, sent with the task (2026-10-25). */
   skill?: string;
-  status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
+  /** "Plan first" (2026-10-26): its plan, the lead's with two chats, approved by the operator before the work. */
+  plan?: boolean;
+  /** The branch made for it when it was added, the commit it was made at, and what from (2026-10-26). */
+  branchName?: string;
+  branchBase?: string;
+  branchFrom?: string;
+  /** Parked: what it waits for (2026-10-26). See `Parked`. */
+  waitsFor?: Parked;
+  /** Answered after it was parked: it carries on at the queue's next turn, before the others. */
+  resume?: boolean;
+  /** `parked`: set aside while it waited for the operator, until answered (2026-10-26). */
+  status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped' | 'parked';
   why?: string;
   sessionId?: string;
   startedAt?: string;
   endedAt?: string;
 };
+/** What a task of the queue waited for when it was set aside (2026-10-26). See `Parked` in src/session/model.ts. */
+export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | 'password';
+export type Parked = { kind: ParkedKind; at: string; approval: Approval; answer?: { kind: string; at: string } };
+/** The operator's answer to it, as the card sends it; `{ stop: true }` stops the task. */
+export type ParkedAnswerInput =
+  | { decision: 'approve' | 'revise'; note?: string }
+  | { answer: string }
+  | { choice: RetryChoice }
+  | { decision: 'run' | 'skip' }
+  | { resume: true }
+  | { stop: true };
 /** What has the browser now, other than the queue's own task: the queue's next task starts after it (2026-10-25). */
 export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' };
-export type Queue = { items: QueueItem[]; running: boolean; updatedAt: string; busy?: QueueBusy };
+/** `parkAfterSec`: how long a task may wait for the operator before it is set aside (2026-10-26); 0: as long as it takes. */
+export type Queue = { items: QueueItem[]; running: boolean; updatedAt: string; busy?: QueueBusy; parkAfterSec?: number };
 
 export type RepoTree = { ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> };
 export type RepoFile = { ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean };
@@ -328,6 +374,8 @@ export type Task = {
   review?: TaskReview;
   /** The plan this attempt made before changing anything (plan mode). */
   plan?: TaskPlan;
+  /** A task of the queue set aside while it waited for the operator, and the answer once given (2026-10-26). */
+  parked?: Parked;
   /** Who is at work on it right now; gone when the attempt ends. */
   acting?: Acting;
   /** The operator's notes to the chat about this task; each goes out with the task's next message. */
@@ -596,6 +644,8 @@ export type Activity = {
   starting: boolean;
   acting?: Acting;
   paused?: boolean;
+  /** Git asks for a password in its own window, and the work waits for it (2026-10-26). */
+  password?: boolean;
   /** How the last message ended, while nothing runs (2026-10-23). */
   last?: { status: string; at: string };
 };
@@ -726,6 +776,8 @@ export type Session = {
   lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
   /** A worker's session: the lead's it works for. */
   workerOf?: string;
+  /** A conversation the queue made for one of its tasks: that task's id in the queue (2026-10-24). */
+  queueItem?: string;
   /** The name of the plan this session was imported from, offered as the run's name. */
   planName?: string;
   vcs?: VersionControl;
@@ -1268,11 +1320,19 @@ export const api = {
     call<Approval[]>(`/approvals${sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''}`),
   /** The open project folder, as it is on disk: what it is, its files, one of them. */
   workspace: () => call<Workspace>('/workspace'),
+  /** "New branch from main": `fetch` fetches the remote's main first, which may wait for Git's own password window. */
+  newBranchPreview: (fetch: boolean) => call<NewBranchPlan>('/workspace/new-branch/preview', { method: 'POST', body: JSON.stringify({ fetch }) }, { timeoutMs: null }),
+  newBranchCreate: (name: string, carry: NewBranchCarry, fingerprint: string) =>
+    call<NewBranchResult>('/workspace/new-branch', { method: 'POST', body: JSON.stringify({ name, carry, fingerprint }) }, { timeoutMs: null }),
   /** The queue of tasks (2026-10-24): read, edited as a whole list, run, stopped. */
   queue: () => call<Queue>('/queue'),
   setQueue: (items: Array<Omit<QueueItem, 'status'> & { status?: QueueItem['status'] }>) => call<Queue>('/queue', { method: 'PUT', body: JSON.stringify({ items }) }),
   runQueue: () => call<Queue>('/queue/run', { method: 'POST', body: '{}' }),
   stopQueue: () => call<Queue>('/queue/stop', { method: 'POST', body: '{}' }),
+  /** How long a task may wait for the operator before the queue sets it aside and goes on (2026-10-26). */
+  setQueueSettings: (parkAfterSec: number) => call<Queue>('/queue/settings', { method: 'PUT', body: JSON.stringify({ parkAfterSec }) }),
+  /** The answer to a task the queue set aside while it waited; it carries on at the queue's next turn. */
+  answerParked: (itemId: string, answer: ParkedAnswerInput) => call<Queue>(`/queue/items/${encodeURIComponent(itemId)}/answer`, { method: 'POST', body: JSON.stringify(answer) }),
   workspaceFiles: () => call<{ dir: string; files: string[]; truncated: boolean }>('/workspace/files'),
   workspaceSearch: (q: string, o: { matchCase: boolean; wholeWord: boolean; regex: boolean; include: string; exclude: string }) =>
     call<SearchResult>(

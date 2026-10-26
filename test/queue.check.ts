@@ -120,6 +120,12 @@ try {
   ];
   const saved = await h.call<QueueView>('PUT', '/queue', { items });
   t.check('saved: five tasks waiting, not running', [saved.items.map((x) => x.status), saved.running], [['waiting', 'waiting', 'waiting', 'waiting', 'waiting'], false]);
+  // Its branch made when it was added (2026-10-26), not checked out: the server's main out of reach, the local main.
+  const q3 = saved.items[2] as QueueItem;
+  t.check('the task on a new branch from main has its branch already, made from the local main, the folder untouched', [
+    q3.branchName, q3.branchFrom, q3.branchBase === h.git('rev-parse', 'main'), h.git('rev-parse', '--verify', `refs/heads/${q3.branchName}`) === h.git('rev-parse', 'main'), h.git('rev-parse', '--abbrev-ref', 'HEAD'),
+  ], ['queue/q3-create-c.txt-holding-exactly-the-word-c', 'main', true, true, 'main']);
+  t.check('and the others none', saved.items.filter((x) => x.id !== 'q3').map((x) => (x as QueueItem).branchName ?? null), [null, null, null, null]);
   t.truthy('kept in the bot\'s data folder', existsSync(join(h.dataDir, 'queue.json')), '');
 
   const texts: string[] = [];
@@ -157,14 +163,14 @@ try {
   ]]);
   const [, onMain, inFolder] = sessions;
   t.check('its own model, chosen by the bot; Settings\' where it has none', [onMain!.model, inFolder!.model ?? '', h.chat.modelRequests.filter((m) => m !== 'Auto')], ['Think deeper', '', ['Think deeper']]);
-  t.check('"new branch from main": the runner\'s version control, from main', [onMain!.vcs?.enabled, onMain!.vcs?.startFrom, onMain!.vcs?.baseBranch, inFolder!.vcs?.enabled], [true, 'branch', 'main', false]);
+  t.check('"new branch from main": the runner\'s version control, on the branch made for it', [onMain!.vcs?.enabled, onMain!.vcs?.startFrom, (onMain!.vcs as { existingBranch?: string } | undefined)?.existingBranch, inFolder!.vcs?.enabled], [true, 'existing-branch', 'queue/q3-create-c.txt-holding-exactly-the-word-c', false]);
   const branch = onMain!.tasks[0]!.vcs?.branch ?? '';
-  t.truthy('its work committed on a branch of its own, made from main', /^cop\//.test(branch) && h.git('show', `${branch}:c.txt`).trim() === 'c' && h.git('merge-base', '--is-ancestor', 'main', branch) === '', { branch });
+  t.truthy('its work committed on a branch of its own, made from main', branch === 'queue/q3-create-c.txt-holding-exactly-the-word-c' && h.git('show', `${branch}:c.txt`).trim() === 'c' && h.git('merge-base', '--is-ancestor', 'main', branch) === '', { branch });
   t.check('the next one, "the folder as it is", worked on that branch, and committed nothing', [h.git('rev-parse', '--abbrev-ref', 'HEAD'), readFileSync(join(h.repo, 'd.txt'), 'utf8').trim(), h.git('status', '--porcelain')], [branch, 'd', '?? d.txt']);
 
   const [first, second, third] = texts;
-  t.truthy('the chat on the new branch is told so, not the folder\'s rule', second!.includes('## Version control') && second!.includes('started from the local branch `main`') && !second!.includes("## Working in the operator's folder"), second!.slice(0, 2000));
-  t.truthy('and that the server\'s main could not be fetched, so it is the local one, not to be pulled', /The server's `main` could not be fetched.*a run never types a password or a key's passphrase, so it is the local `main`.*Do not try to fetch or pull it\./s.test(second!), second!.slice(0, 2500));
+  t.truthy('the chat on the new branch is told so, not the folder\'s rule', second!.includes('## Version control') && second!.includes('on the existing branch `queue/q3-create-c.txt-holding-exactly-the-word-c`') && !second!.includes("## Working in the operator's folder"), second!.slice(0, 2000));
+  t.truthy('and that the server\'s main could not be fetched, so it is the local one, not to be pulled', /made from the local `main`: the server's main could not be fetched without asking for a password, and a run never types one\. Do not try to fetch or pull it\./.test(second!), second!.slice(0, 2500));
   t.truthy('the chats in the folder as it is are told that', first!.includes("## Working in the operator's folder") && third!.includes("## Working in the operator's folder"), '');
   t.check('"Run again" puts the failed one back to wait', (await h.call<QueueView>('PUT', '/queue', { items: done.items.map((x) => ({ ...x, ...(x.id === 'q1' ? { status: 'waiting' } : {}) })) })).items.map((x) => x.status), ['waiting', 'skipped', 'done', 'done', 'skipped']);
 
@@ -235,14 +241,148 @@ try {
   await h?.stop();
 }
 
+console.log('\n--- a task that waits for the operator: set aside, the queue goes on, answered later, carried on ---');
+let hp: Harness | null = null;
+try {
+  // Asking before each command, so a command waits on a card as a plan does.
+  hp = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'confirm' }, copilot: { defaultModel: 'Auto' } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  type Parked = { kind: string; approval: { plan?: unknown; description: string }; answer?: { kind: string } };
+  type Sess = { id: string; chat?: { chatId: string }; tasks: Array<{ id: string; status: string; parked?: Parked; plan?: { approved?: { by: string; note?: string } }; attempts?: Array<{ parked?: Parked }> }> };
+  const settled = await hp.call<QueueView & { parkAfterSec?: number }>('PUT', '/queue/settings', { parkAfterSec: 2 });
+  t.check('the wait before a task is set aside: set on the queue', settled.parkAfterSec, 2);
+  t.check('a wait that is not a number of seconds is refused', (await hp.raw('PUT', '/queue/settings', { parkAfterSec: -1 })).status, 400);
+  await hp.call('PUT', '/queue', { items: [
+    { id: 'p1', name: 'Planned', prompt: 'Write plan.txt holding plan.', model: '', dependsOn: [], branch: 'folder', review: false, plan: true },
+    { id: 'p2', name: 'Independent', prompt: 'Write two.txt holding two.', model: '', dependsOn: [], branch: 'folder', review: false },
+    { id: 'p3', name: 'After the plan', prompt: 'Write three.txt holding three.', model: '', dependsOn: ['p1'], branch: 'folder', review: false },
+  ] });
+  const chats: Record<string, string> = {};
+  hp.chat.script(
+    (m) => {
+      chats.p1 = m.chatId;
+      return reply.plan({ files: ['plan.txt'] });
+    },
+    (m) => {
+      chats.p2 = m.chatId;
+      return reply.steps(write('two.txt', 'two'));
+    },
+  );
+  await hp.call('POST', '/queue/run');
+  // p2's command waits on its card too; answered here, so only the plan is left unanswered.
+  const card = await waitFor('p2\'s command to wait', async () => (await hp!.call<Array<{ id: string; description: string }>>('GET', '/approvals')).find((a) => a.description.includes('two.txt')) ?? null, 60_000);
+  hp.chat.script(reply.done('I wrote two.txt holding the word two and read it back to check that it is there.'));
+  await hp.call('POST', `/approvals/${card.id}`, { action: 'run' });
+  const first = await waitFor('the queue to go round once', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running ? q : null;
+  }, 120_000);
+  t.check('the plan unanswered: set aside; the independent task done; the one that needs it waiting, not skipped', first.items.map((x) => x.status), ['parked', 'done', 'waiting']);
+  const parkedItem = first.items[0] as QueueItem;
+  t.check('the queue keeps what it waits for, and says so', [parkedItem.waitsFor?.kind, parkedItem.why, !!(parkedItem.waitsFor?.approval as { plan?: unknown } | undefined)?.plan], ['plan', 'waits for you: its plan, to approve', true]);
+  const s1 = await hp.call<Sess>('GET', `/sessions/${parkedItem.sessionId}`);
+  t.check('and so does the task\'s record', [s1.tasks[0]!.status, s1.tasks[0]!.parked?.kind, s1.tasks[0]!.parked?.answer ?? null], ['aborted', 'plan', null]);
+  t.check('an answer that does not fit the card is refused', (await hp.raw('POST', '/queue/items/p1/answer', { decision: 'revise' })).status, 400);
+  const answered = await hp.call<QueueView>('POST', '/queue/items/p1/answer', { decision: 'approve', note: 'Keep it short.' });
+  t.check('answered: it waits to carry on, first', [answered.items[0]!.status, (answered.items[0] as QueueItem).resume], ['waiting', true]);
+
+  let resumed = '';
+  hp.chat.script(
+    (m) => {
+      resumed = m.text;
+      chats.p1again = m.chatId;
+      return reply.steps(write('plan.txt', 'plan'));
+    },
+    reply.done('I wrote plan.txt holding the word plan, as the approved plan said, and read it back.'),
+    (m) => {
+      chats.p3 = m.chatId;
+      return reply.steps(write('three.txt', 'three'));
+    },
+    reply.done('I wrote three.txt holding the word three and read it back to check that it is there.'),
+  );
+  // Both commands wait on their cards: answered as they come.
+  await hp.call('POST', '/queue/run');
+  for (const file of ['plan.txt', 'three.txt']) {
+    const c = await waitFor(`${file}'s command to wait`, async () => (await hp!.call<Array<{ id: string; description: string }>>('GET', '/approvals')).find((a) => a.description.includes(file)) ?? null, 60_000);
+    await hp.call('POST', `/approvals/${c.id}`, { action: 'run' });
+  }
+  const second = await waitFor('the queue to end', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 120_000);
+  t.check('carried on and done; then the one that needed it', second.items.map((x) => x.status), ['done', 'done', 'done']);
+  const s2 = await hp.call<Sess>('GET', `/sessions/${parkedItem.sessionId}`);
+  t.check('in its own chat and conversation, its plan approved by the operator with the note', [second.items[0]!.sessionId === parkedItem.sessionId, chats.p1again === chats.p1, s2.tasks[0]!.plan?.approved?.by, s2.tasks[0]!.plan?.approved?.note], [true, true, 'operator', 'Keep it short.']);
+  t.truthy('told why it was set aside, and the answer', resumed.includes('set aside so that the queue') && resumed.includes('The operator approved your plan.') && resumed.includes('Keep it short.'), resumed.slice(0, 1500));
+  t.check('the attempt that waited keeps what it waited for and the answer', [s2.tasks[0]!.attempts?.at(-1)?.parked?.kind, s2.tasks[0]!.attempts?.at(-1)?.parked?.answer?.kind, s2.tasks[0]!.parked ?? null], ['plan', 'plan', null]);
+  t.check('the files written, each by its own task', [readFileSync(join(hp.repo, 'plan.txt'), 'utf8').trim(), readFileSync(join(hp.repo, 'two.txt'), 'utf8').trim(), readFileSync(join(hp.repo, 'three.txt'), 'utf8').trim()], ['plan', 'two', 'three']);
+
+  // A command that waited, approved on its card later: when its chat sends it again, it runs without asking.
+  await hp.call('PUT', '/queue', { items: [{ id: 'c1', name: 'A command', prompt: 'Write cmd.txt holding cmd.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  hp.chat.script(reply.steps(write('cmd.txt', 'cmd')));
+  await hp.call('POST', '/queue/run');
+  const cmdParked = await waitFor('the command to be set aside', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? (q.items[0] as QueueItem) : null;
+  }, 120_000);
+  t.check('a command unanswered: set aside, with what it asked', [cmdParked.waitsFor?.kind, (cmdParked.waitsFor?.approval as { description?: string } | undefined)?.description?.includes('cmd.txt')], ['command', true]);
+  await hp.call('POST', '/queue/items/c1/answer', { decision: 'run' });
+  let again = '';
+  hp.chat.script(
+    (m) => {
+      again = m.text;
+      return reply.steps(write('cmd.txt', 'cmd'));
+    },
+    reply.done('I wrote cmd.txt holding the word cmd and read it back to check that it is there.'),
+  );
+  let cards = 0;
+  await hp.call('POST', '/queue/run');
+  const ran = await waitFor('the approved command to run', async () => {
+    cards = Math.max(cards, (await hp!.call<unknown[]>('GET', '/approvals')).length);
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'waiting' && q.items[0]!.status !== 'running' ? q.items[0]! : null;
+  }, 120_000);
+  t.check('sent again, it ran without asking, and the task was done', [ran.status, cards, readFileSync(join(hp.repo, 'cmd.txt'), 'utf8').trim()], ['done', 0, 'cmd']);
+  t.truthy('the chat was told it is approved now', again.includes('The command you were waiting to run is approved now'), again.slice(0, 1200));
+
+  // Two chats: the lead's question unanswered, set aside; answered, the lead is told the answer in its own conversation.
+  await hp.call('PUT', '/queue', { items: [{ id: 'l1', name: 'Led', prompt: 'Find where done.txt should go, and say it.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, lead: true }] });
+  hp.chat.script(reply.lead.ask('Should done.txt go at the root, or in a folder of its own?', ['at the root', 'in a folder'], { understanding: 'Where done.txt should go, said in a sentence.' }));
+  await hp.call('POST', '/queue/run');
+  const asked = await waitFor('the lead\'s question to be set aside', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? (q.items[0] as QueueItem) : null;
+  }, 120_000);
+  t.check('the lead\'s question unanswered: set aside, with the question', [asked.waitsFor?.kind, (asked.waitsFor?.approval as { question?: { text: string } } | undefined)?.question?.text], ['question', 'Should done.txt go at the root, or in a folder of its own?']);
+  t.check('an empty answer is refused', (await hp.raw('POST', '/queue/items/l1/answer', { answer: '  ' })).status, 400);
+  await hp.call('POST', '/queue/items/l1/answer', { answer: 'at the root' });
+  let toLead = '';
+  hp.chat.script((m) => {
+    toLead = m.text;
+    return reply.lead.done('done.txt goes at the root of the project, as the operator answered when asked; nothing else was needed.');
+  });
+  await hp.call('POST', '/queue/run');
+  const led = await waitFor('the led task to end', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'waiting' && q.items[0]!.status !== 'running' ? q.items[0]! : null;
+  }, 120_000);
+  t.check('answered, the lead carried on and ended it', led.status, 'done');
+  t.truthy('the lead was told why it stopped, its question and the answer', toLead.startsWith('Continue assignment') && toLead.includes('set aside so that the queue') && toLead.includes('You asked: Should done.txt go at the root') && toLead.includes('The operator answers: at the root'), toLead.slice(0, 1500));
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await hp?.stop();
+}
+
 console.log('\n--- the bot closed while the queue ran ---');
 let h2: Harness | null = null;
 try {
   const dirs = await makeDirs();
-  writeFileSync(join(dirs.dataDir, 'queue.json'), JSON.stringify({ running: true, updatedAt: '', items: [item('a', { status: 'running', sessionId: 'gone' }), item('b')] }), 'utf8');
+  writeFileSync(join(dirs.dataDir, 'queue.json'), JSON.stringify({ running: true, updatedAt: '', items: [item('a', { status: 'running', sessionId: 'gone' }), item('b'), item('c', { status: 'parked', sessionId: 's-c', why: 'waits for you: its plan, to approve' })] }), 'utf8');
   h2 = await startHarness({ dirs, own: true });
   const q = await h2.call<QueueView>('GET', '/queue');
-  t.check('opened again: not running, the task in flight stopped and why, the rest waiting', [q.running, q.items.map((x) => x.status), q.items[0]!.why], [false, ['stopped', 'waiting'], 'the bot was closed while it ran']);
+  t.check('opened again: not running, the task in flight stopped and why, the rest waiting, a parked one still parked', [q.running, q.items.map((x) => x.status), q.items[0]!.why, q.items[2]!.why], [false, ['stopped', 'waiting', 'parked'], 'the bot was closed while it ran', 'waits for you: its plan, to approve']);
+  await h2.call('PUT', '/queue', { items: [{ id: 'b', prompt: 'task b', model: '', dependsOn: [], branch: 'folder', review: false }] });
   // No model of its own and none in Settings: it would wait for somebody to choose one by hand, and nobody is there.
   const refused = await h2.raw('POST', '/queue/run');
   t.check('a task with no model anywhere: the queue does not start, and says why', [refused.status, (refused.body as { message?: string }).message], [

@@ -23,6 +23,11 @@ import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { runStep, type RunResult } from '../exec/runner.js';
+import { askpassProgram } from '../vcs/remoteAuth.js';
+
+/** Git's own password window on this machine, looked for once (2026-10-26); null where Git has none. */
+let askpassFound: Promise<string | null> | null = null;
+const askpassOnce = (): Promise<string | null> => (askpassFound ??= askpassProgram().catch(() => null));
 import { availableShells, detectShells, effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell, type ShellProblem } from '../exec/shells.js';
 import { runChecks, failureMessage, failureRedactions, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck, withAttemptIds } from './derivedChecks.js';
@@ -1842,7 +1847,8 @@ export async function runTask(
      * the way a read-only task is wherever the task has a branch of its own.
      */
     const planMode: PlanMode = session.planMode ?? cfg.execution.planMode ?? 'off';
-    let planning = planMode !== 'off' && !task.continuing;
+    // A continued task does not plan again, unless its plan was sent back while the queue had it set aside (2026-10-26).
+    let planning = planMode !== 'off' && (!task.continuing || task.continuing.replan === true);
     await actingNow(planning ? 'plan' : 'worker');
     const planEnforced = planning && onOwnBranch;
     let planVersion = 0;
@@ -3330,10 +3336,22 @@ export async function runTask(
             idleTimeoutMs: idle * 1000,
             logPath: log.path('steps', `${iterations}-${step.id}.log`),
             passEnv: cfg.execution.passEnv,
+            // A git of the step that needs a password asks for it in Git's own window, which the bot never reads.
+            ...((await askpassOnce()) ? { askpass: (await askpassOnce()) as string } : {}),
           },
           {
             signal,
             tracker,
+            // The step waits for the operator: said, so the chat shows where to look (2026-10-26).
+            onPasswordWindow: (open) =>
+              sink.event(
+                'password-window',
+                { id: step.id, open },
+                open
+                  ? `step ${step.id} waits: Git asks for a password in its own window — type it there; the bot never reads it`
+                  : `step ${step.id}: Git's password window closed`,
+                open ? 'warn' : 'info',
+              ),
             onHeartbeat: ({ elapsedMs, idleMs, lastLine }) =>
               sink.event('step-heartbeat', { id: step.id, elapsedMs, idleMs, lastLine },
                 `step ${step.id} still running: ${Math.round(elapsedMs / 1000)}s elapsed, ${Math.round(idleMs / 1000)}s since output${lastLine ? ` — ${lastLine.slice(0, 60)}` : ''}`),

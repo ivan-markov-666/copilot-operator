@@ -160,6 +160,16 @@ function level2Block(level2: string): string {
  * failed, that the files are as its work left them, and — after the bot stopped under it — which of
  * the steps it had just asked for actually ran.
  */
+/** What a task of the queue waited for when it was set aside, as the chat that carries it on is told it (2026-10-26). */
+const PARKED_FOR: Record<NonNullable<TaskContinuation['parkedFor']>, string> = {
+  plan: 'for the operator to approve your plan',
+  question: 'for the operator\'s answer to a question',
+  retry: 'for the operator to say what to do with a subtask that was cut off',
+  command: 'for the operator\'s word on a command',
+  model: 'for the operator to choose the model by hand',
+  password: 'for a password Git asked for in its own window',
+};
+
 export function whyItStopped(c: TaskContinuation): string {
   if (c.how === 'failed') return describeEnding(c.fromAttempt, c.ended, c.stoppedBecause);
   if (c.how === 'interrupted') {
@@ -168,6 +178,14 @@ export function whyItStopped(c: TaskContinuation): string {
       'The runner stopped unexpectedly while this task was in progress — the program was closed, the machine went off or it ' +
       'crashed; nothing you did failed — and it has now started again. The files are as your work left them, and what had ' +
       `changed is committed on this branch.${where}`.trimEnd()
+    );
+  }
+  if (c.how === 'parked') {
+    const what = c.parkedFor ? PARKED_FOR[c.parkedFor] : 'for the operator';
+    return (
+      `It waited ${what}, and was set aside so that the queue's other tasks could run while nobody was there — not because ` +
+      'anything failed. The operator has answered now: the answer is below. The files are as you left them, and what had ' +
+      'changed is committed on this branch.'
     );
   }
   if (c.how === 'stopped') {

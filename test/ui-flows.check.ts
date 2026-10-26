@@ -758,6 +758,67 @@ try {
   });
 
   /*
+   * "New branch from main" (operator, 2026-10-26): beside the skills; its window fetches the remote's main and says
+   * what the branch starts from; changes that cannot be taken across are said, and putting them aside is chosen; made,
+   * the folder is on the new branch, the work kept, and the next message starts a new conversation.
+   */
+  await scenario('"New branch from main": the window, a change that cannot come along put aside, the branch made', {}, async (h, page, url) => {
+    const remote = join(h.base, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    h.git('remote', 'add', 'origin', remote);
+    h.git('push', '-q', '-u', 'origin', 'main');
+    // Somebody else moves the remote's main on, changing README.md.
+    const other = join(h.base, 'other');
+    execFileSync('git', ['clone', '-q', '--config', 'core.autocrlf=false', remote, other], { stdio: 'ignore' });
+    writeFileSync(join(other, 'README.md'), 'moved on by the team\n');
+    execFileSync('git', ['-C', other, '-c', 'user.name=Team', '-c', 'user.email=team@example.com', 'commit', '-q', '-am', 'the team moved main on']);
+    execFileSync('git', ['-C', other, 'push', '-q', 'origin', 'main']);
+    const theirs = execFileSync('git', ['-C', other, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    // And here, the same file changed and not committed, with a new file.
+    writeFileSync(join(h.repo, 'README.md'), 'mine, not committed\n');
+    writeFileSync(join(h.repo, 'notes.txt'), 'my notes\n');
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'An earlier conversation.', model: 'Think deeper' });
+    await page.goto(url('/'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const open = page.getByRole('button', { name: en['nb.button']!, exact: true });
+    await open.waitFor();
+    t.truthy('beside the skills, under the chat\'s box', (await page.locator('.cs-skills .cs-new-branch').count()) === 1, await page.locator('.cs-skills').textContent());
+    await open.click();
+    const box = page.getByRole('dialog', { name: en['nb.title']! });
+    await box.waitFor();
+    await box.locator('#nb-name').waitFor({ timeout: 30_000 });
+    t.check('read: what it starts from, the branch now, a free name, what is not committed', [
+      ((await box.locator('.nb-from').textContent()) ?? '').includes(en['nb.from']!.replace('{target}', 'origin/main').replace('{commit}', theirs.slice(0, 8))),
+      ((await box.textContent()) ?? '').includes(en['nb.now']!.replace('{branch}', 'main')),
+      /^task\/\d{8}-\d{4}$/.test(await box.locator('#nb-name').inputValue()),
+      ((await box.locator('.nb-dirty legend').textContent()) ?? '').trim(),
+      await box.locator('.nb-files code').allTextContents(),
+    ], [true, true, true, en['nb.dirty']!.replace('{n}', '2'), ['README.md', 'notes.txt']]);
+    await box.locator('#nb-name').fill('task/login-test');
+    t.check('"Take them" chosen at first', await box.getByRole('radio', { name: new RegExp(en['nb.take']!) }).isChecked(), true);
+    await box.getByRole('button', { name: en['nb.make']!, exact: true }).click();
+    await box.locator('.err').waitFor({ timeout: 30_000 });
+    t.check('they cannot come along: said, "Put them aside" chosen, and nothing moved', [
+      ((await box.locator('.err').textContent()) ?? '').startsWith('The uncommitted changes cannot be taken to the new branch'),
+      await box.getByRole('radio', { name: new RegExp(en['nb.aside']!) }).isChecked(),
+      h.git('symbolic-ref', '--short', 'HEAD'),
+      readFileSync(join(h.repo, 'README.md'), 'utf8'),
+    ], [true, true, 'main', 'mine, not committed\n']);
+    await box.getByRole('button', { name: en['nb.make']!, exact: true }).click();
+    await box.waitFor({ state: 'detached', timeout: 30_000 });
+    const saved = h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/saved/');
+    t.check('made: on the new branch at the remote\'s main, the folder clean, the changes kept on a branch of their own', [
+      h.git('symbolic-ref', '--short', 'HEAD'),
+      h.git('rev-parse', 'HEAD'),
+      h.git('status', '--porcelain'),
+      h.git('show', `${saved}:README.md`),
+      h.git('show', `${saved}:notes.txt`),
+    ], ['task/login-test', theirs, '', 'mine, not committed', 'my notes']);
+    t.truthy('said in the chat, and the next message starts a new conversation', ((await page.locator('.cs-body').textContent()) ?? '').includes('The folder is on the new branch task/login-test') && (await page.locator('#cs-thread').inputValue()) === '', await page.locator('.cs-body').textContent());
+  });
+
+  /*
    * Renaming a conversation (operator, 2026-10-26): ✎ beside the list, the name in a box where the list was; Enter or
    * ✓ keeps it, Escape or ✕ leaves it; an empty name cannot be saved; none on a new chat not begun.
    */
@@ -1285,6 +1346,8 @@ try {
     await page.locator('#queue-model').selectOption('Think deeper');
     await page.locator('#queue-review').uncheck();
     t.check('unticked, the review\'s model goes', await page.locator('#queue-review-model').count(), 0);
+    // Not about plans: the work at once ("Plan first" is on for a new task since 2026-10-26).
+    await page.locator('#queue-plan').uncheck();
     await page.getByRole('button', { name: en['q.add'] }).click();
     await page.locator('.queue-item').first().waitFor();
     await page.locator('#queue-prompt').fill('Turn the summary into a slide.');
@@ -1292,6 +1355,8 @@ try {
     await page.locator('#queue-worker-model').selectOption('Think deeper');
     t.check('a second task: "Depends on" offers the first, by its name', await page.locator('.queue-dep').allTextContents(), ['#1 Summary']);
     await page.locator('.queue-dep input').first().check();
+    // Not about plans: the work at once ("Plan first" is on for a new task since 2026-10-26).
+    await page.locator('#queue-plan').uncheck();
     await page.getByRole('button', { name: en['q.add'] }).click();
     await page.locator('.queue-item').nth(1).waitFor();
     const meta = await page.locator('.queue-item .queue-meta').allTextContents();
@@ -1378,6 +1443,8 @@ try {
     await page.locator('#queue-prompt').fill('Add a test for the login page.');
     await page.locator('#queue-model').selectOption('Think deeper');
     await page.locator('#queue-review').uncheck();
+    // Not about plans: the work at once ("Plan first" is on for a new task since 2026-10-26).
+    await page.locator('#queue-plan').uncheck();
     await page.locator('#queue-skill').selectOption('new-test');
     const add = page.getByRole('button', { name: en['q.addAfter']!, exact: true });
     t.truthy('"Add" says it starts after the work in progress', await appears(add, 5_000), await page.locator('#queue-add .row button').allTextContents());
@@ -1393,6 +1460,40 @@ try {
     t.truthy('once the message ended, the task ran and was done, sent with its skill', queueText.includes('## Skill: new-test'), queueText.slice(-500));
     await busy.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
     t.check('and nothing is said to be working any more', await busy.count(), 0);
+  });
+
+  /*
+   * A task of the queue that waits for the operator (operator, 2026-10-26): its plan unanswered for as long as the queue
+   * allows, it is set aside — "Waits for you", its plan kept on its card on the queue's page and under its message in
+   * its chat — and approved there later, it waits to carry on first.
+   */
+  await scenario('the queue: a plan nobody approves in time is set aside, its card kept, approved later', { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Auto' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    await h.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+    await h.call('PUT', '/queue', { items: [{ id: 'p1', name: 'Planned', prompt: 'Write plan.txt holding plan.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, plan: true }] });
+    h.chat.script(reply.plan({ files: ['plan.txt'] }));
+    await h.call('POST', '/queue/run');
+    await waitFor('the plan to be set aside', async () => ((await h.call<{ running: boolean; items: Array<{ status: string }> }>('GET', '/queue')).items[0]!.status === 'parked' ? true : null), 60_000);
+    await page.goto(url('/queue'));
+    const row = page.locator('.queue-item').first();
+    await row.locator('.pk').waitFor();
+    t.check('the wait before a task is set aside, as set', await page.locator('#queue-park-after').inputValue(), '2');
+    t.check('"Waits for you", and its plan on its card', [(await row.locator('.queue-status').textContent())?.trim(), await row.locator('.pk .plan-view').count(), (await row.locator('.pk-head strong').textContent())?.trim()], [en['q.parked'], 1, en['pk.title']]);
+    t.check('"Plan first" is on for a new task', await page.locator('#queue-plan').isChecked(), true);
+    // Under its message in its chat too.
+    const sessionId = (await h.call<{ items: Array<{ sessionId?: string }> }>('GET', '/queue')).items[0]!.sessionId!;
+    const chat = await page.context().newPage();
+    await chat.goto(url('/'));
+    await chat.evaluate((id) => localStorage.setItem('cop.chat.thread', id), sessionId);
+    await chat.reload();
+    await chat.locator('.cs-parked .pk').waitFor({ timeout: 15_000 });
+    t.check('in its chat, the same card under its message', await chat.locator('.cs-parked .pk').getByRole('button', { name: en['pk.approve']!, exact: true }).count(), 1);
+    await chat.close();
+    t.check('"Ask for another plan" waits for a note', await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isDisabled(), true);
+    await row.getByLabel(en['pk.note']!).fill('Keep it short.');
+    await row.getByRole('button', { name: en['pk.approve']!, exact: true }).click();
+    await waitFor('the task to wait to carry on', async () => ((await row.locator('.queue-status').textContent())?.trim() === en['q.waiting'] ? true : null), 10_000).catch(() => undefined);
+    const after = (await h.call<{ items: Array<{ status: string; resume?: boolean }> }>('GET', '/queue')).items[0]!;
+    t.check('approved: it waits to carry on first, and the card has gone', [after.status, after.resume, (await row.locator('.queue-status').textContent())?.trim(), await row.locator('.pk').count()], ['waiting', true, en['q.waiting'], 0]);
   });
 
   // "Stop the queue" pressed while its task works (2026-10-26, as the chat's "Stop"): off, its dots going round, until it has stopped.

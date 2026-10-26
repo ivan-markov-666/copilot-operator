@@ -330,6 +330,21 @@ export class OperatorController {
     return this.ops.workspaceGit().catch(fail);
   }
 
+  /**
+   * A new branch from main, from the chat (2026-10-26): what it would start from — `fetch` true fetches the remote's
+   * main first, through Git's own password window when it asks — and then the branch made, the uncommitted changes
+   * taken to it (`carry: take`) or put aside (`carry: aside`), after checking the folder is what the preview read.
+   */
+  @Post('workspace/new-branch/preview')
+  newBranchPreview(@Body() body: { fetch?: unknown } = {}): Promise<unknown> {
+    return this.ops.newBranchPreview(body?.fetch !== false).catch(fail);
+  }
+
+  @Post('workspace/new-branch')
+  newBranchCreate(@Body() body: { name?: unknown; carry?: unknown; fingerprint?: unknown } = {}): Promise<unknown> {
+    return this.ops.newBranchCreate(body ?? {}).catch(fail);
+  }
+
   /** Everything the branch changed against `base` (a branch of the list it gives), as a pull request shows it. Read-only. */
   @Get('workspace/git/branch')
   workspaceBranch(@Query('base') base?: string): Promise<unknown> {
@@ -405,6 +420,18 @@ export class OperatorController {
   @Post('queue/stop')
   stopQueue(): Promise<unknown> {
     return this.ops.stopQueue().catch(fail);
+  }
+
+  /** The queue's own settings (2026-10-26): how long a task may wait for the operator before it is set aside. */
+  @Put('queue/settings')
+  setQueueSettings(@Body() body: { parkAfterSec?: unknown } = {}): Promise<unknown> {
+    return this.ops.setQueueSettings(body ?? {}).catch(fail);
+  }
+
+  /** The operator's answer to a task the queue set aside while it waited (2026-10-26); `{ stop: true }` stops it. */
+  @Post('queue/items/:id/answer')
+  answerParked(@Param('id') id: string, @Body() body: Record<string, unknown> = {}): Promise<unknown> {
+    return this.ops.answerParked(id, body ?? {}).catch(fail);
   }
 
   /** Back to before a message: the folder as it was then, that message and the ones after it taken out. */

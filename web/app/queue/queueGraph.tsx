@@ -23,6 +23,7 @@ const STATUS: Record<QueueItem['status'], Key> = {
   failed: 'q.failed',
   skipped: 'q.skipped',
   stopped: 'q.stopped',
+  parked: 'q.parked',
 };
 
 const NAMES_KEY = 'cop.queue.names';

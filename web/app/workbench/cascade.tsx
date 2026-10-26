@@ -23,6 +23,7 @@ import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useChosenSkill } from '../../lib/chosenSkill';
 import { useDots } from '../../lib/useDots';
+import { useActivity } from '../../lib/activity';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
 import { BY_HAND, ModelPicker } from '../modelPicker';
@@ -35,6 +36,8 @@ import { PlanView } from '../planView';
 import { StatusMark } from './workbench';
 import { FileIcon } from './fileIcon';
 import { LeadProgress, LedgerChange } from './leadPlan';
+import { NewBranchButton } from './newBranch';
+import { ParkedCard } from '../parkedCard';
 
 const THREAD_KEY = 'cop.chat.thread';
 /** Plan mode for the next new conversation, as last chosen in this browser. */
@@ -452,6 +455,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * as the other choices under the box are.
    */
   const paused = running && !!session?.paused;
+  const activity = useActivity();
   const togglePause = async () => {
     if (!session) return;
     const on = !session.paused;
@@ -604,6 +608,12 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
           )
         )}
         {paused && <p className="cs-system cs-paused" role="status">{t('chat.pausedNote')}</p>}
+        {/* Git asks for a password in its own window (2026-10-26): the work waits for it; said where to look. */}
+        {running && activity?.password && (
+          <p className="cs-system cs-password" role="alert">
+            {t('chat.passwordWaiting')}
+          </p>
+        )}
         {said && <p className="cs-system" role="status">{said}</p>}
       </div>
 
@@ -694,6 +704,19 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
           <Link href="/settings#skills" className="button-link plain small cs-skills-link" title={t('chat.skillsLinkWhy')}>
             {t('chat.skillsLink')}
           </Link>
+          {/*
+            A new branch from the remote's main for the next task (operator, 2026-10-26), beside the skills; made, the
+            next message starts a new conversation on it.
+          */}
+          <NewBranchButton
+            workspace={workspace}
+            running={anyRunning}
+            onMade={(result) => {
+              fresh();
+              setSaid(`${result} ${t('nb.madeChat')}`);
+              onChange();
+            }}
+          />
         </div>
         <div className="cs-bar">
           <label className="cs-plan-toggle" title={t('chat.planModeWhy')}>
@@ -876,6 +899,7 @@ function Turn({ n, session, task, approvals, onDecided, onOpenFile, onRewind }: 
         </p>
       )}
       {!live && task.status !== 'queued' && <Ending task={task} />}
+      {!live && <ParkedHere session={session} task={task} />}
       {/*
         Everything that passed between the bot and Copilot for this message, and nothing of the others: every message
         sent, every reply, every command with its whole output, every attempt (2026-10-18). See taskExchange.ts.
@@ -1126,6 +1150,7 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
         </p>
       )}
       {!live && task.status !== 'queued' && <Ending task={task} />}
+      {!live && <ParkedHere session={session} task={task} />}
       {!live && (task.lead?.evidence?.length ?? 0) > 0 && (
         <div className="cs-evidence">
           <p className="cs-who">{t('lead.evidence')}</p>
@@ -1160,6 +1185,20 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * A message of a conversation the queue made, set aside while it waited for the operator (2026-10-26): what it waits
+ * for, to answer here as on the queue's page; the task carries on at the queue's next turn.
+ */
+function ParkedHere({ session, task }: { session: Session; task: Task }) {
+  if (!task.parked || !session.queueItem) return null;
+  const item = session.queueItem;
+  return (
+    <div className="cs-parked">
+      <ParkedCard parked={task.parked} onAnswer={async (answer) => void (await api.answerParked(item, answer))} />
+    </div>
   );
 }
 

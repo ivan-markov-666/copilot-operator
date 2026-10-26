@@ -42,7 +42,9 @@ export function tabTitle(waiting: number, a: Activity | null | undefined, dots: 
   const word =
     waiting > 0
       ? `Waiting for you (${waiting})`
-      : a?.paused
+      : a?.password
+        ? 'Waiting for your password'
+        : a?.paused
         ? 'Paused'
         : a?.running
           ? `Working${trail}`

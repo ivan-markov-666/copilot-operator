@@ -15,11 +15,13 @@ import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, writeFileAtomically } from '../session/store.js';
-import { checkItems, emptyQueue, itemTitle, mainBranchOf, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type Queue, type QueueBusy, type QueueItem, type QueueStatus } from '../queue/queue.js';
+import { checkItems, emptyQueue, itemTitle, mergeItems, nextStep, parkAfterMs, parkedAnswerFrom, skippedBecause, statusOfTask, waitsByHand, MAX_PARK_AFTER_SEC, PARKED_WORDS, type Queue, type QueueBusy, type QueueItem, type QueueStatus } from '../queue/queue.js';
+import { branchStart, makeQueueBranch, refreshQueueBranch } from '../queue/queueBranch.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
   Task,
+  ParkedKind,
   Level2Preset,
   PendingApproval,
   SessionEvent,
@@ -100,7 +102,7 @@ import { searchWorkspace, type SearchOptions, type SearchResult } from '../sessi
 import { restoreCheckpoint } from '../session/checkpoint.js';
 import { readInterruption } from '../session/interruption.js';
 import { baseRefOf, commitInterrupted, nextAttemptBranch, repoDirOf, trackedRepoOf, sessionBranchName } from '../vcs/taskVcs.js';
-import { changedFilesBetween, fileAt, git, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
+import { branchExists, changedFilesBetween, fileAt, git, repoUnusableReason, type ChangedFile } from '../vcs/git.js';
 import { makeAuthorizer, type StepAuthorizer } from '../exec/authorizer.js';
 import type { PolicyDecision } from '../exec/policy.js';
 import { pickFolder, type FolderPick } from './folderPicker.js';
@@ -121,6 +123,9 @@ import { sessionRoots } from '../exec/confinement.js';
 import { dirtyPolicy } from '../vcs/snapshot.js';
 import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
+import { createNewBranch, planNewBranch, type NewBranchPlan, type NewBranchResult } from '../vcs/newBranch.js';
+import { askpassProgram, closePasswordWindows } from '../vcs/remoteAuth.js';
+import { planApprovedMessage, planReviseMessage } from '../orchestrator/planMode.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
 import { exportEntries, exportFileName as homeExportName, exportSizes } from '../config/exportHome.js';
@@ -417,10 +422,22 @@ export class OperatorService {
    * operator in another window): a worker's subtask is not the message.
    */
   private lastOutcome: { status: string; at: string; sessionId: string } | null = null;
+  /** Where Git asks the operator for a password now, in its own window (2026-10-26): the step waits for it. */
+  private readonly passwordAsked = new Map<string, string>();
   private readonly followsActing = this.bus.subscribe('*', (e) => {
     if (e.type === 'acting' && e.data) this.acting.set(e.sessionId, e.data as Acting);
-    else if (e.type === 'task-finished') {
+    else if (e.type === 'password-window') {
+      const open = (e.data as { open?: unknown; id?: unknown } | undefined)?.open === true;
+      if (open) this.passwordAsked.set(e.sessionId, e.at);
+      else this.passwordAsked.delete(e.sessionId);
+      // In the queue, a password nobody types sets the task aside, as an unanswered card does (2026-10-26).
+      if (open) {
+        const step = Number((e.data as { id?: unknown } | undefined)?.id) || 0;
+        this.parkLater({ id: `pw-${e.sessionId}`, sessionId: e.sessionId, taskId: e.taskId ?? '', stepId: step, description: 'Git asked for a password in its own window', createdAt: e.at }, 'password');
+      } else this.unparkLater(`pw:${e.sessionId}`);
+    } else if (e.type === 'task-finished') {
       this.acting.delete(e.sessionId);
+      this.passwordAsked.delete(e.sessionId);
       const status = (e.data as { status?: unknown } | undefined)?.status;
       if (typeof status === 'string' && !this.workerLeads.has(e.sessionId)) this.lastOutcome = { status, at: e.at, sessionId: e.sessionId };
     }
@@ -1358,7 +1375,7 @@ export class OperatorService {
    * answer a question this one answers from two fields already in memory. A poll that costs a
    * directory walk every few seconds, on every page, to light up a dot would be a bad trade.
    */
-  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean; last?: { status: string; at: string } } {
+  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean; password?: boolean; last?: { status: string; at: string } } {
     /*
      * A run being started — its version control checked before the browser opens — is not running yet
      * and not idle either: `starting` says so, so "nothing is happening" is not read in that moment.
@@ -1373,6 +1390,8 @@ export class OperatorService {
       starting,
       ...(acting ? { acting } : {}),
       ...(run?.hold?.held ? { paused: true } : {}),
+      // Git asks for a password in its own window, and the work waits for it (2026-10-26).
+      ...(this.passwordAsked.size > 0 ? { password: true } : {}),
       // How the last message ended, while nothing runs: what the tab says until the operator has looked.
       ...(this.running.size === 0 && this.lastOutcome ? { last: { status: this.lastOutcome.status, at: this.lastOutcome.at } } : {}),
     };
@@ -1418,6 +1437,43 @@ export class OperatorService {
     await this.init();
     const cfg = await this.settings.load();
     return await workspaceInfo(cfg.project?.rootDir ?? '', cfg.project?.name ?? '');
+  }
+
+  // --- a new branch from main, from the chat (2026-10-26) --------------------------------------------------------
+
+  /** Why the folder's branch may not be changed now: a task at work, or the queue between its tasks. */
+  private branchBusy(): string | null {
+    if (this.running.size > 0 || this.browser?.kind === 'run') return 'A task is working: stop it or let it finish first; the branch is not changed under it.';
+    if (this.queueLoop) return 'The queue is running: stop it first; the branch is not changed under its tasks.';
+    return null;
+  }
+
+  /**
+   * What a new branch from main would start from (see `vcs/newBranch.ts`). With `fetch`, the remote's main is fetched
+   * first — through Git's own password window when the remote asks for one, which the bot never reads; without, what
+   * was last fetched here.
+   */
+  async newBranchPreview(fetch: boolean): Promise<NewBranchPlan> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open: open one first.');
+    const busy = this.branchBusy();
+    if (busy) throw new Error(busy);
+    return await planNewBranch(ws.dir, { fetch, askpass: fetch ? await askpassProgram() : null });
+  }
+
+  /** The branch made and checked out, the uncommitted changes taken to it or put aside, as the operator chose. */
+  async newBranchCreate(input: { name?: unknown; carry?: unknown; fingerprint?: unknown }): Promise<NewBranchResult> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open: open one first.');
+    const busy = this.branchBusy();
+    if (busy) throw new Error(busy);
+    return await createNewBranch(ws.dir, {
+      name: typeof input.name === 'string' ? input.name : '',
+      carry: input.carry === 'aside' ? 'aside' : 'take',
+      fingerprint: typeof input.fingerprint === 'string' ? input.fingerprint : '',
+      // The saved branch under the bot's own prefix, as its other branches are.
+      prefix: DEFAULT_VCS.branchPrefix,
+    });
   }
 
   /** The open folder's code, searched as VS Code's Search view does (2026-10-21, see `workspaceSearch.ts`). */
@@ -1628,12 +1684,25 @@ export class OperatorService {
   private queueRecovered = false;
   /** The program is closing: the queue's loop stops where it is. */
   private queueClosing = false;
+  /** The session of the queue's task at work now (2026-10-26): where a wait for the operator is timed, to park it. */
+  private readonly queueAtWork = new Set<string>();
+  /** The timers of the waits of the queue's task at work: a card, by its id; a password window, by `pw:` and the session. */
+  private readonly parkTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Commands the operator approved on a parked task's card, run without asking when its chat sends them again. */
+  private readonly approvedAhead = new Map<string, string[]>();
+  /** Branches made for tasks of the queue, one edit of the list at a time. */
+  private branchTurn: Promise<unknown> = Promise.resolve();
 
   /** The queue as it is on disk; one that cannot be read is an empty one, said in the console. */
   private async readQueue(): Promise<Queue> {
     try {
       const q = JSON.parse(await readFile(this.queueFile, 'utf8')) as Partial<Queue>;
-      return { items: Array.isArray(q.items) ? q.items : [], running: q.running === true, updatedAt: q.updatedAt ?? '' };
+      return {
+        items: Array.isArray(q.items) ? q.items : [],
+        running: q.running === true,
+        updatedAt: q.updatedAt ?? '',
+        ...(typeof q.parkAfterSec === 'number' ? { parkAfterSec: q.parkAfterSec } : {}),
+      };
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') console.error('[queue] data/queue.json could not be read:', (e as Error).message);
       return emptyQueue();
@@ -1646,6 +1715,7 @@ export class OperatorService {
       const q = await this.readQueue();
       change(q);
       q.updatedAt = new Date().toISOString();
+      delete q.busy;
       await writeFileAtomically(this.queueFile, JSON.stringify(q, null, 2));
       return q;
     };
@@ -1661,7 +1731,10 @@ export class OperatorService {
     for (const key of Object.keys(patch) as Array<keyof QueueItem>) if (patch[key] === undefined) delete item[key];
   }
 
-  /** A queue that was running when the bot last closed: not running now, and its task in flight stopped. */
+  /**
+   * A queue that was running when the bot last closed: not running now, and its task in flight stopped. A parked task
+   * stays parked, with what it waits for, and an answered one still carries on at the queue's next turn (2026-10-26).
+   */
   private async recoverQueue(): Promise<void> {
     if (this.queueRecovered) return;
     this.queueRecovered = true;
@@ -1714,7 +1787,50 @@ export class OperatorService {
       else x.items = merged.items;
     });
     if (problem) throw new Error(problem);
-    return await this.withBusy(q);
+    return await this.withBusy(await this.makeQueueBranches(q));
+  }
+
+  /**
+   * The branches of the tasks "on a new branch from main" that have none yet (2026-10-26), made now, while the operator
+   * is at the page: the remote's main fetched once — through Git's own window if it asks for a password — and a branch
+   * made at it for each, not checked out. A branch that cannot be made now is made when the task starts.
+   */
+  private makeQueueBranches(q: Queue): Promise<Queue> {
+    const run = async (): Promise<Queue> => {
+      const need = q.items.filter((x) => x.branch === 'main' && x.status === 'waiting' && !x.branchName);
+      if (need.length === 0) return q;
+      const ws = await this.workspace();
+      if (!ws.ok || !ws.isRepo) return q;
+      const start = await branchStart(ws.dir, await askpassProgram());
+      const made: Array<{ id: string; patch: Partial<QueueItem> }> = [];
+      for (const item of need) {
+        if ('problem' in start) {
+          made.push({ id: item.id, patch: { why: `no branch could be made for it yet (${start.problem}); one is made when it starts` } });
+          continue;
+        }
+        const branch = await makeQueueBranch(ws.dir, item.id, itemTitle(item), start);
+        made.push({ id: item.id, patch: 'problem' in branch ? { why: `no branch could be made for it yet (${branch.problem}); one is made when it starts` } : { branchName: branch.branch, branchBase: branch.base, branchFrom: start.from, why: undefined } });
+      }
+      return await this.changeQueue((x) => {
+        for (const m of made) {
+          const item = x.items.find((i) => i.id === m.id);
+          // Still a task that needs it: an edit meanwhile may have taken it out or changed where it works.
+          if (item && item.branch === 'main' && !item.branchName) this.setQueueItem(x, m.id, m.patch);
+        }
+      });
+    };
+    const done = this.branchTurn.then(run, run);
+    this.branchTurn = done.catch(() => undefined);
+    return done;
+  }
+
+  /** The queue's own settings, from its page (2026-10-26): how long a task may wait for the operator before it is parked. */
+  async setQueueSettings(input: { parkAfterSec?: unknown }): Promise<Queue> {
+    const sec = Number(input?.parkAfterSec);
+    if (!Number.isFinite(sec) || sec < 0 || sec > MAX_PARK_AFTER_SEC) throw new Error(`The wait is a number of seconds, from 0 (as long as it takes) to ${MAX_PARK_AFTER_SEC}.`);
+    return await this.withBusy(await this.changeQueue((x) => {
+      x.parkAfterSec = Math.round(sec);
+    }));
   }
 
   /** Runs the waiting tasks one after another, in the background; the page follows `queue()`. */
@@ -1726,7 +1842,7 @@ export class OperatorService {
     if (!nextStep(q.items)) throw new Error('No task in the queue is waiting. Add one, or put one back with "Run again".');
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open: open one in the chat first.');
-    const unnamed = this.queueWithoutModel(q.items.filter((x) => x.status === 'waiting'), await this.settings.load());
+    const unnamed = this.queueWithoutModel(q.items.filter((x) => x.status === 'waiting' && !x.resume), await this.settings.load());
     if (unnamed) throw new Error(unnamed);
     const started = await this.changeQueue((x) => {
       x.running = true;
@@ -1768,6 +1884,98 @@ export class OperatorService {
     return await this.withBusy(q);
   }
 
+  // --- a task of the queue set aside while it waits for the operator (2026-10-26) ---------------------------------
+  //
+  // Operator: "if I run a queue, every question has a timeout, since I may not be at the computer to answer; the work
+  // on that task stops and the next one starts; the question is kept, for me to answer later, and everything is kept
+  // even when the program is closed." A card of the task at work — a plan, a question, a subtask cut off, a command, a
+  // model to choose — or Git's password window, unanswered for as long as the queue allows: the task is stopped as
+  // Stop stops it (its work committed on its branch), the card kept on its record, and the queue goes on.
+
+  /** What a card asks for, as a parked task keeps it. */
+  private parkedKindOf(a: PendingApproval): ParkedKind {
+    return a.plan ? 'plan' : a.question ? 'question' : a.retry ? 'retry' : a.model ? 'model' : 'command';
+  }
+
+  /** A card of the queue's task at work, timed: unanswered for as long as the queue allows, the task is parked. */
+  private parkLater(approval: PendingApproval, kind: ParkedKind = this.parkedKindOf(approval)): void {
+    const key = this.runKey(approval.sessionId);
+    if (!this.queueAtWork.has(key)) return;
+    const timerKey = kind === 'password' ? `pw:${approval.sessionId}` : approval.id;
+    void this.readQueue().then((q) => {
+      const ms = parkAfterMs(q);
+      if (ms === null || this.parkTimers.has(timerKey)) return;
+      const timer = setTimeout(() => {
+        this.parkTimers.delete(timerKey);
+        const still = kind === 'password' ? this.passwordAsked.has(approval.sessionId) : this.waiting.has(approval.id);
+        if (still) void this.park(key, approval, kind, ms).catch((e: unknown) => console.error('[queue] the task could not be set aside:', (e as Error).message));
+      }, ms);
+      timer.unref?.();
+      this.parkTimers.set(timerKey, timer);
+    });
+  }
+
+  private unparkLater(timerKey: string): void {
+    const timer = this.parkTimers.get(timerKey);
+    if (timer) clearTimeout(timer);
+    this.parkTimers.delete(timerKey);
+  }
+
+  /** The queue's task at work set aside: what it waits for kept on its record and on the queue's, then stopped. */
+  private async park(key: string, approval: PendingApproval, kind: ParkedKind, waitedMs: number): Promise<void> {
+    if (!this.queueAtWork.has(key)) return;
+    const s = await this.store.getSession(key);
+    const task = s?.tasks.find((t) => t.status === 'running' || t.status === 'waiting-approval');
+    if (!s || !task) return;
+    const at = new Date().toISOString();
+    await this.store.updateSession(key, (x) => {
+      const t = x.tasks.find((y) => y.id === task.id);
+      if (t) t.parked = { kind, at, approval };
+    });
+    await this.changeQueue((x) => {
+      const item = x.items.find((i) => i.sessionId === key && i.status === 'running');
+      if (item) this.setQueueItem(x, item.id, { waitsFor: { kind, at, approval } });
+    });
+    this.bus.publish({ sessionId: key, taskId: task.id, type: 'task-parked', level: 'warn', data: { kind },
+      message: `set aside after waiting ${Math.round(waitedMs / 1000)} s for the operator (${kind}); the queue goes on with the next task, and what it waits for is kept to be answered later` });
+    // Git's own window, left on screen by the step it asked for: closed, so it does not ask for nothing.
+    if (kind === 'password') {
+      const ask = await askpassProgram();
+      if (ask) await closePasswordWindows(ask, new Date(Date.parse(approval.createdAt) - 5_000)).catch(() => 0);
+    }
+    await this.stop(key).catch(() => undefined);
+  }
+
+  /**
+   * The operator's answer to a parked task, given when they are back (2026-10-26): kept on the task's record, and the
+   * task waits to carry on from where it stopped — at the queue's next turn, before the others; when the queue is not
+   * running, when it is run. `stop` leaves it stopped.
+   */
+  async answerParked(itemId: string, input: Record<string, unknown>): Promise<Queue> {
+    await this.recoverQueue();
+    const q = await this.readQueue();
+    const item = q.items.find((x) => x.id === itemId);
+    if (!item) throw new Error('That task is not in the queue any more.');
+    if (item.status !== 'parked' || !item.sessionId) throw new Error('That task is not waiting for an answer.');
+    const s = await this.store.getSession(item.sessionId);
+    const task = s?.tasks.find((t) => t.parked && !t.parked.answer);
+    if (!s || !task?.parked) throw new Error('What that task waited for is not on its record any more; run it again.');
+    if (input?.stop === true) {
+      return await this.withBusy(await this.changeQueue((x) => this.setQueueItem(x, itemId, { status: 'stopped', why: 'stopped by the operator at its card', waitsFor: undefined })));
+    }
+    const answer = parkedAnswerFrom(task.parked, input);
+    if ('problem' in answer) throw new Error(answer.problem);
+    await this.store.updateSession(s.id, (x) => {
+      const t = x.tasks.find((y) => y.id === task.id);
+      if (t?.parked) t.parked.answer = { ...answer, at: new Date().toISOString() };
+    });
+    const next = await this.changeQueue((x) =>
+      this.setQueueItem(x, itemId, { status: 'waiting', resume: true, why: x.running ? 'answered: it carries on after the task at work' : 'answered: it carries on when the queue is run' }),
+    );
+    this.bus.publish({ sessionId: s.id, taskId: task.id, type: 'task-answered', level: 'info', message: `the operator answered what the task waited for (${task.parked.kind}); it carries on at the queue's next turn` });
+    return await this.withBusy(next);
+  }
+
   private async runQueueLoop(): Promise<void> {
     const now = () => new Date().toISOString();
     for (;;) {
@@ -1791,15 +1999,18 @@ export class OperatorService {
         continue;
       }
       const item = step.run;
-      await this.changeQueue((x) => this.setQueueItem(x, item.id, { status: 'running', startedAt: now(), why: undefined, endedAt: undefined, sessionId: undefined }));
+      // An answered parked task keeps its chat: it carries on there.
+      await this.changeQueue((x) =>
+        this.setQueueItem(x, item.id, { status: 'running', startedAt: now(), why: undefined, endedAt: undefined, waitsFor: undefined, resume: undefined, ...(item.resume ? {} : { sessionId: undefined }) }),
+      );
       const ended = await this.runQueueItem(item).catch((e: unknown): { status: QueueStatus; why: string } => ({ status: 'failed', why: (e as Error).message }));
       await this.changeQueue((x) => this.setQueueItem(x, item.id, { ...ended, endedAt: now() }));
-      // Stopped — from the queue, or the chat's Stop: the rest wait for the operator.
+      // Stopped — from the queue, or the chat's Stop: the rest wait for the operator. Parked: the queue goes on.
       if (ended.status === 'stopped') return;
     }
   }
 
-  /** One task of the queue, in a new chat, to its end. */
+  /** One task of the queue, in a new chat — or, answered after it was parked, in its own — to its end. */
   private async runQueueItem(item: QueueItem): Promise<{ status: QueueStatus; why?: string; sessionId?: string }> {
     const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const stillRunning = async () => (await this.readQueue()).running;
@@ -1812,36 +2023,70 @@ export class OperatorService {
     }
     const ws = await this.workspace();
     if (!ws.ok) return { status: 'failed', why: ws.problem ?? 'no project folder is open' };
-    // Settings may have changed since the queue was started.
-    const unnamed = this.queueWithoutModel([item], await this.settings.load());
-    if (unnamed) return { status: 'failed', why: unnamed };
-    const base = item.branch === 'main' ? await mainBranchOf(ws.dir) : null;
-    if (item.branch === 'main' && !base) return { status: 'failed', why: `${ws.dir} has no main (or master) branch to make a new branch from` };
-    // As the chat's box sends a first message: the model, the review and its model, or two chats and the worker's model.
-    const sent = await this.chatSend({
-      text: item.prompt,
-      ...(item.model ? { model: item.model } : {}),
-      review: item.review,
-      ...(item.reviewModel ? { reviewModel: item.reviewModel } : {}),
-      ...(item.lead ? { lead: true, ...(item.workerModel ? { workerModel: item.workerModel } : {}) } : {}),
-      ...(item.skill ? { skill: item.skill } : {}),
-    });
-    const sessionId = sent.threadId;
-    await this.store.updateSession(sessionId, (s) => {
-      s.name = `queue: ${itemTitle(item)}`;
-      s.queueItem = item.id;
-      /*
-       * A new branch from main (2026-10-24): the runner's own version control, as a session of the bot's has it — the
-       * branch cut from main, brought up to date from the server first when that needs no password (`updateFromRemote`
-       * asks nobody anything; it fails, and the local main is used), and the work committed on it. The chat is told
-       * which main it was (`noteFor`).
-       */
-      if (base) {
-        s.vcs = { ...DEFAULT_VCS, enabled: true, repoDir: ws.dir, branchMode: 'per-session', commitOnFinish: true, startFrom: 'branch', baseBranch: base, updateFromRemote: true };
-      }
-    });
-    await this.changeQueue((x) => this.setQueueItem(x, item.id, { sessionId }));
     const cfg = await this.settings.load();
+
+    let sessionId: string;
+    let taskId: string;
+    if (item.resume && item.sessionId) {
+      const carried = await this.resumeParked(item.sessionId, ws.dir);
+      if ('problem' in carried) return { status: 'failed', why: carried.problem, sessionId: item.sessionId };
+      sessionId = item.sessionId;
+      taskId = carried.taskId;
+    } else {
+      // Settings may have changed since the queue was started.
+      const unnamed = this.queueWithoutModel([item], cfg);
+      if (unnamed) return { status: 'failed', why: unnamed };
+      // Its own branch, made when it was added (2026-10-26): brought up to the remote's main if nothing is on it yet.
+      let branchName = item.branch === 'main' && ws.isRepo ? item.branchName : undefined;
+      if (branchName && item.branchBase) {
+        if (!(await branchExists(ws.dir, branchName))) branchName = undefined;
+        else {
+          const fresh = await refreshQueueBranch(ws.dir, branchName, item.branchBase);
+          if (fresh.moved) await this.changeQueue((x) => this.setQueueItem(x, item.id, { branchBase: fresh.base, branchFrom: 'origin/main' }));
+        }
+      }
+      // Not made when it was added — no repository then, or no main to make it from: made now, asking nobody anything.
+      let branchFrom = item.branchFrom;
+      if (item.branch === 'main' && ws.isRepo && !branchName) {
+        const start = await branchStart(ws.dir, null);
+        if ('problem' in start) return { status: 'failed', why: `no branch could be made for it: ${start.problem}` };
+        const made = await makeQueueBranch(ws.dir, item.id, itemTitle(item), start);
+        if ('problem' in made) return { status: 'failed', why: `no branch could be made for it: ${made.problem}` };
+        branchName = made.branch;
+        branchFrom = start.from;
+        await this.changeQueue((x) => this.setQueueItem(x, item.id, { branchName: made.branch, branchBase: made.base, branchFrom: start.from }));
+      }
+      if (item.branch === 'main' && !ws.isRepo) return { status: 'failed', why: `${ws.dir} is not a git repository, so there is no main to make a branch from` };
+      // As the chat's box sends a first message: the model, plan first, the review and its model, two chats, the skill.
+      const sent = await this.chatSend({
+        text: item.prompt,
+        ...(item.model ? { model: item.model } : {}),
+        ...(item.plan ? { planMode: true } : {}),
+        review: item.review,
+        ...(item.reviewModel ? { reviewModel: item.reviewModel } : {}),
+        ...(item.lead ? { lead: true, ...(item.workerModel ? { workerModel: item.workerModel } : {}) } : {}),
+        ...(item.skill ? { skill: item.skill } : {}),
+      });
+      sessionId = sent.threadId;
+      taskId = sent.taskId;
+      await this.store.updateSession(sessionId, (s) => {
+        s.name = `queue: ${itemTitle(item)}`;
+        s.queueItem = item.id;
+        // The runner's own version control on the branch made for it, its work committed there (`existing-branch`).
+        if (branchName) s.vcs = { ...DEFAULT_VCS, enabled: true, repoDir: ws.dir, commitOnFinish: true, startFrom: 'existing-branch', existingBranch: branchName };
+      });
+      // Where its branch came from, told with its opening message: the local main when the server's could not be read.
+      if (branchName) {
+        await this.store.addTaskNote(
+          sessionId,
+          taskId,
+          branchFrom && branchFrom !== 'origin/main'
+            ? `This task works on its own branch ${branchName}, made from the local \`${branchFrom}\`: the server's main could not be fetched without asking for a password, and a run never types one. Do not try to fetch or pull it.`
+            : `This task works on its own branch ${branchName}, made from the server's main (${branchFrom ?? 'origin/main'}). Do not switch to another branch.`,
+        ).catch(() => undefined);
+      }
+      await this.changeQueue((x) => this.setQueueItem(x, item.id, { sessionId }));
+    }
     /*
      * A message of the chat sent meanwhile has the browser: this one starts after it, never refused for it. The browser
      * is looked at and taken in the same moment — `start` takes it before it awaits anything.
@@ -1850,21 +2095,97 @@ export class OperatorService {
       if (this.queueClosing || !(await stillRunning())) return { status: 'stopped', why: 'the queue was stopped before it began', sessionId };
       await pause(1_000);
     }
-    const reply = await this.start(sessionId, cfg.execution.mode);
-    if (!reply.started) return { status: 'failed', why: reply.reason ?? 'it did not start', sessionId };
-    // Until its run has ended and its window let the browser go, so the next one can have it.
-    let asked = false;
-    while (this.running.has(sessionId) || (holder()?.kind === 'run' && (holder() as { sessionId?: string }).sessionId === sessionId)) {
-      if (this.queueClosing) return { status: 'stopped', why: 'the bot was closed while it ran', sessionId };
-      if (!asked && !(await stillRunning())) {
-        asked = true;
-        await this.stop(sessionId).catch(() => undefined);
+    this.queueAtWork.add(sessionId);
+    try {
+      const reply = await this.start(sessionId, cfg.execution.mode);
+      if (!reply.started) return { status: 'failed', why: reply.reason ?? 'it did not start', sessionId };
+      // Until its run has ended and its window let the browser go, so the next one can have it.
+      let asked = false;
+      while (this.running.has(sessionId) || (holder()?.kind === 'run' && (holder() as { sessionId?: string }).sessionId === sessionId)) {
+        if (this.queueClosing) return { status: 'stopped', why: 'the bot was closed while it ran', sessionId };
+        if (!asked && !(await stillRunning())) {
+          asked = true;
+          await this.stop(sessionId).catch(() => undefined);
+        }
+        await pause(1_000);
       }
-      await pause(1_000);
+    } finally {
+      this.queueAtWork.delete(sessionId);
     }
-    const task = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === sent.taskId);
+    const task = (await this.store.getSession(sessionId))?.tasks.find((t) => t.id === taskId);
+    // Set aside while it waited for the operator: what for, said; the card is on its record and on the queue's.
+    if (task?.parked && !task.parked.answer) {
+      // Its ending says so, rather than "stopped by the operator": nobody stopped it.
+      const why = `waits for you: ${PARKED_WORDS[task.parked.kind]}`;
+      await this.store.updateSession(sessionId, (x) => {
+        const t = x.tasks.find((y) => y.id === taskId);
+        if (t) t.reason = `set aside by the queue while it waited for you; it ${why}`;
+      });
+      return { status: 'parked', why, sessionId };
+    }
     const status = statusOfTask(task?.status);
     return { status, ...(status !== 'done' ? { why: task?.reason ?? `it ended ${task?.status ?? 'without a record'}` } : {}), sessionId };
+  }
+
+  /**
+   * A parked task, answered, carried on in its own chat from where it stopped (2026-10-26): the answer does what it
+   * says — a plan approved stays approved, a plan sent back is made again first, a command approved runs without asking
+   * when its chat sends it again, a subtask cut off is tried again as chosen — and it goes to the chat as the operator's
+   * note with the attempt that carries the task on.
+   */
+  private async resumeParked(sessionId: string, dir: string): Promise<{ taskId: string } | { problem: string }> {
+    const s = await this.store.getSession(sessionId);
+    const task = s?.tasks.find((t) => t.parked?.answer);
+    const p = task?.parked;
+    const a = p?.answer;
+    if (!s || !task || !p || !a) return { problem: 'its answer is not on its record any more; run it again' };
+    const continuing: NonNullable<Task['continuing']> = { fromAttempt: task.attempt ?? 1, stoppedBecause: task.reason, how: 'parked', parkedFor: p.kind };
+    let note = '';
+    let approvedPlan: TaskPlan | undefined;
+    const command = p.approval.description.replace(/^\[[\w-]+\]\s*/, '');
+    if (a.kind === 'plan') {
+      if (a.decision === 'approve' && p.approval.plan) {
+        approvedPlan = { ...p.approval.plan.plan, approved: { by: 'operator', at: a.at, ...(a.note?.trim() ? { note: a.note.trim() } : {}) } };
+        note = planApprovedMessage(approvedPlan.approved!);
+      } else {
+        continuing.replan = true;
+        note = planReviseMessage(a.note?.trim() || 'Make the plan more concrete: name the files and the stages.', p.approval.plan?.plan.version ?? 1);
+      }
+    } else if (a.kind === 'question') {
+      note = `You asked: ${p.approval.question?.text ?? ''}\n\nThe operator answers: ${a.answer}`;
+    } else if (a.kind === 'retry' && p.approval.retry) {
+      const r = p.approval.retry;
+      if (a.choice === 'accept') note = `Subtask ${r.n} (${r.title}) is taken as failed, at the operator's word: decide what to do next without it.`;
+      else {
+        if (a.choice === 'restore') {
+          const worker = await this.store.getSession(p.approval.sessionId);
+          const cp = worker?.tasks.find((t) => t.id === p.approval.taskId)?.checkpoint;
+          const back = cp ? await restoreCheckpoint(dir, cp) : { ok: false as const, problem: 'the subtask\'s start was not photographed' };
+          if (!back.ok) return { problem: `the folder could not be put back to the subtask's start (${back.problem}); answer it again with another choice` };
+        }
+        continuing.retrySubtask = { n: r.n, ...(a.choice === 'fresh' ? { fresh: true } : {}) };
+      }
+    } else if (a.kind === 'command') {
+      if (a.decision === 'run') {
+        this.approvedAhead.set(sessionId, [...(this.approvedAhead.get(sessionId) ?? []), command.trim()]);
+        note = `The command you were waiting to run is approved now: ${command}\n\nSend it again and it runs.`;
+      } else note = `The command ${command} is not approved: do without it.`;
+    } else {
+      note =
+        p.kind === 'password'
+          ? 'The operator is here now: run again the git command that waited for a password; Git asks for it in its own window, which the operator answers.'
+          : 'The operator is here now: the model is chosen by hand in the Copilot window when it is asked for.';
+    }
+    await this.store.rerunTask(sessionId, task.id, {}, continuing);
+    if (approvedPlan) {
+      await this.store.updateSession(sessionId, (x) => {
+        const t = x.tasks.find((y) => y.id === task.id);
+        if (t) t.plan = approvedPlan;
+      });
+    }
+    if (note) await this.store.addTaskNote(sessionId, task.id, note);
+    this.bus.publish({ sessionId, taskId: task.id, type: 'task-resumed', level: 'info', message: `carried on with the operator's answer to what it waited for (${p.kind})` });
+    return { taskId: task.id };
   }
 
   // --- skills (2026-10-21) ----------------------------------------------------------------------------
@@ -1995,6 +2316,7 @@ export class OperatorService {
         approval,
         resolve: (d) => resolveAnswer(d.action === 'run' ? 'recheck' : d.action === 'skip' ? 'continue' : 'stop'),
       });
+      this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, type: 'approval-requested', level: 'warn',
         message: `choose "${ask.asked}" in the Copilot window, then answer on the card`, data: { approvalId: approval.id, model: approval.model } });
     });
@@ -2031,6 +2353,7 @@ export class OperatorService {
         resolve: () => resolveAnswer('stop'),
         resolveAnswer,
       });
+      this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
         message: `the lead asks the operator: ${ask.question}`, data: { approvalId: approval.id, question: approval.question } });
     });
@@ -2059,6 +2382,7 @@ export class OperatorService {
         retry: ask.retry,
       };
       this.waiting.set(approval.id, { approval, resolve: () => resolveRetry('stop'), resolveRetry });
+      this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
         message: `subtask ${ask.retry.n} did not finish (attempt ${ask.retry.attempt} of ${ask.retry.maxAttempts}): the operator is asked what to do`, data: { approvalId: approval.id, retry: ask.retry } });
     });
@@ -2137,6 +2461,7 @@ export class OperatorService {
         resolve: (d) => resolveAnswer(d.action === 'run' ? { decision: 'approve' } : { decision: 'stop' }),
         resolvePlan: resolveAnswer,
       });
+      this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
         message: `the plan of "${ask.title}" (version ${ask.plan.version}) is waiting for you to approve it`, data: { approvalId: approval.id, plan: true } });
     });
@@ -2267,6 +2592,15 @@ export class OperatorService {
           resolvePromise({ action: 'run' });
           return;
         }
+        // Approved on the card of the task while the queue had it set aside (2026-10-26): once, as it was approved.
+        const ahead = this.approvedAhead.get(this.runKey(ctx.sessionId ?? '')) ?? this.approvedAhead.get(ctx.sessionId ?? '');
+        const at = ahead ? ahead.indexOf(step.cmd.trim()) : -1;
+        if (ahead && at >= 0) {
+          ahead.splice(at, 1);
+          this.bus.publish({ sessionId: ctx.sessionId ?? '', taskId: ctx.taskId, type: 'approval-decided', level: 'info', message: `run without asking: the operator approved it on the task's card while the queue had it set aside: ${step.cmd}` });
+          resolvePromise({ action: 'run' });
+          return;
+        }
 
         const approval: PendingApproval = {
           id: newId('a-'),
@@ -2280,6 +2614,7 @@ export class OperatorService {
           ...(held?.platform ? { platform: held.platform } : {}),
         };
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });
+        this.parkLater(approval);
         this.bus.publish({ sessionId: approval.sessionId, taskId: approval.taskId, type: 'approval-requested', level: 'warn',
           message: held
             ? `held for the operator — ${[held.platform ? `it reaches ${held.platform} with the operator's access` : '', held.network ?? ''].filter(Boolean).join('; ')}: ${approval.description}`

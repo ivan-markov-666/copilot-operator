@@ -733,6 +733,47 @@ text, why it asks, the answers it offers, numbered) and, on the record, the ques
 list of subtasks (by phase, each with its mark); the evidence the lead's result rests on; what a command card asks
 about; and what the card of a subtask cut off says.
 
+**A new branch from main; Git's password window (2026-10-26).** "⎇ New branch from main" beside the chat's skills
+(`web/app/workbench/newBranch.tsx`, `src/vcs/newBranch.ts`; `POST /api/workspace/new-branch/preview { fetch }`, then
+`POST /api/workspace/new-branch { name, carry, fingerprint }`) fetches the remote's main and opens a window: what the new
+branch starts from (`origin/main` and its commit), the branch the folder is on now, a free name (`task/<date>-<time>`),
+and what is not committed, with the choice to take it along — refused by Git, nothing moved, when the remote's main
+changed the same files, and then putting it aside is chosen — or to put it aside, kept whole as a commit on
+`cop/saved/<when>` (temporary index, checked to hold every change) before the folder is left clean. The new branch does
+not track main; nothing is deleted; half a merge or rebase, no remote or a task at work refuse it, saying why; a remote
+that could not be fetched offers "Try again" and the main last fetched here. Made, the next message starts a new
+conversation. A fetch the operator presses for asks for a password through Git for Windows' own window (`git-askpass.exe`,
+or Git Credential Manager's), found next to git (`src/vcs/remoteAuth.ts`): the operator types it there and it goes
+straight to git; the bot reads only what `git fetch` prints, and nothing is stored. The chat's own commands do the same
+(`stepEnvironment(…, askpass)`): a `git push` or `git fetch` that needs a password opens that window every time one is
+asked; while it is open the step waits for the operator, its idle clock held (`runStep` looks for the window after a few
+quiet seconds and before calling a quiet step hung, `passwordWindowOpen`), the event `password-window` is said, and
+`GET /api/activity` has `password: true`, so the chat says where to look and the tab reads "Waiting for your password".
+A window nobody answers for as long as the step's idle limit — a run with nobody there — ends the step, saying so, and
+is closed.
+A step that names the window, a credential helper or git's and ssh's password settings itself is refused
+(`credential-capture` in `exec/dangerous.ts`): it could put up the same window and catch the answer.
+
+**A task of the queue that waits for you is set aside (2026-10-26).** Every wait of the queue's task at work for the
+operator — its plan to approve, a question of the chat or the lead, a subtask cut off, a command, a model to choose by
+hand, Git's password window — is timed (`parkLater` in `OperatorService`; "When a task waits for you" on the queue's
+page, `Queue.parkAfterSec`, 120 s by default, 0 waits as long as it takes, `PUT /api/queue/settings`). Unanswered in
+time, the task is set aside: what it waits for is kept on its record (`Task.parked`, archived with its attempt) and on
+the queue's (`QueueItem.waitsFor`, status `parked`, "Waits for you"), the task is stopped as Stop stops it — its work
+committed on its branch — and the queue goes on with the next; tasks that depend on it wait for it instead of being
+skipped (`nextStep`). Its card (`web/app/parkedCard.tsx`) is on the queue's page and under its message in its chat:
+approve the plan or ask for another (with a note), the answers offered or one written, the subtask's choices, run or
+skip the command, "Carry on — I am here", or "Stop this task" (`POST /api/queue/items/:id/answer`). Answered, the task
+goes first at the queue's next turn (`QueueItem.resume`) and carries on in its own conversation and on its own branch
+(`TaskContinuation.how: 'parked'`): told why it waited and the answer, as the operator's note; a plan approved stays
+approved, a plan sent back is made again first (`replan`), a command approved runs without asking when its chat sends it
+again, a subtask is tried again as chosen. Everything is on disk, so a queue closed with tasks set aside opens with them
+still waiting. "Plan first" (`QueueItem.plan`, on for a new task) puts every task's plan — the lead's, with two chats —
+before the operator. A task "on a new branch from main" has its branch made when it is added (`queue/<id>-<name>`, at the
+remote's main fetched then, Git's own window asking for a password if the remote wants one; `src/queue/queueBranch.ts`),
+brought up to the remote's main at its start when nothing is on it yet and that needs no password, and the run works on
+it as an existing branch.
+
 **"Stop" pressed (2026-10-26).** The chat's "Stop" is off at once and reads "Stopping." "Stopping.." "Stopping..." going
 round (`web/lib/useDots.ts`) while the answer Copilot is writing is waited for, until the work has stopped; a press the
 API refused gives it back. "Stop the queue" does the same while its task at work is stopping.

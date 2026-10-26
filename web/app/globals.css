@@ -1227,6 +1227,17 @@ button.linkish:hover { text-decoration: underline; }
 .wb-problems li.seen { opacity: 0.6; }
 .wb-seen { flex: none; }
 .cs-new { flex: none; padding: 4px 10px; font-size: calc(13px * var(--scale)); }
+/* "New branch from main" (2026-10-26): beside the skills; its window, with the choices for what is not committed. */
+.cs-new-branch[aria-disabled="true"] { opacity: .55; cursor: var(--cur-not); }
+.nb .settings-field { margin: 10px 0; }
+.nb .settings-field input { width: 100%; font-family: var(--mono); }
+.nb-from { margin: 6px 0 2px; overflow-wrap: anywhere; }
+.nb-warn { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 10px; margin: 6px 0 10px; }
+.nb-warn p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.nb-dirty { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.nb-dirty legend { padding: 0 4px; font-weight: 600; }
+.nb-files { margin: 0 0 8px; padding-inline-start: 18px; max-height: 9em; overflow: auto; }
+.nb-choice { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; font-weight: 400; cursor: var(--cur-pointer); }
 /* Renaming the conversation (2026-10-26): its name in a box where the list was, with ✓ and ✕. */
 .cs-rename { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; margin: 0; }
 .cs-rename input { flex: 1; min-width: 0; padding: 4px 8px; font-size: calc(13px * var(--scale)); }
@@ -1244,6 +1255,8 @@ button.linkish:hover { text-decoration: underline; }
 .cs-system { color: var(--muted); font-size: calc(12.5px * var(--scale)); margin: 0; }
 /* Paused (2026-10-20): said where the conversation ends, in the colour of a warning, so it is not taken for stuck. */
 .cs-paused { color: var(--warn, var(--muted)); font-weight: 600; }
+/* Git asks for a password in its own window (2026-10-26): where to look, set apart. */
+.cs-password { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 10px; font-weight: 600; }
 .cs-welcome h3 { margin: 4px 0; }
 .cs-examples { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
 .cs-examples button { display: block; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); text-align: left; text-decoration: none; }
@@ -1706,6 +1719,19 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .queue-status.s-done { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
 .queue-status.s-failed { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
 .queue-status.s-skipped, .queue-status.s-stopped { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+/* Set aside while it waited for the operator (2026-10-26): what it waits for, to answer on its card. */
+.queue-status.s-parked { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.queue-item.is-parked { border-color: var(--accent); border-style: dashed; }
+.queue-parked { margin: 8px 0 0 calc(1.6em + 10px); }
+.queue-park-after .field-control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.queue-park-after input { width: 7em; }
+.pk { border: 2px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; }
+.pk-head { margin: 0 0 6px; overflow-wrap: anywhere; }
+.pk textarea { width: 100%; min-height: 0; margin: 4px 0 8px; }
+.pk .cs-options { margin: 8px 0; }
+.pk-stop { margin-top: 8px; }
+.pk-answered { margin: 6px 0; color: var(--ok); font-weight: 600; }
+.cs-parked { margin: 8px 0; }
 .queue-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 0 calc(1.6em + 10px); }
 .queue-why { margin: 4px 0 0 calc(1.6em + 10px); overflow-wrap: anywhere; }
 .queue-actions { gap: 6px; margin: 6px 0 0 calc(1.6em + 10px); flex-wrap: wrap; align-items: center; }
@@ -1740,6 +1766,7 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .s-done > .qg-dot, .qg-dot.s-done { fill: var(--ok); stroke: var(--ok); }
 .s-failed > .qg-dot, .qg-dot.s-failed { fill: var(--bad); stroke: var(--bad); }
 .s-skipped > .qg-dot, .qg-dot.s-skipped, .s-stopped > .qg-dot, .qg-dot.s-stopped { fill: var(--warn); stroke: var(--warn); }
+.s-parked > .qg-dot, .qg-dot.s-parked { fill: var(--accent-soft); stroke: var(--accent); stroke-dasharray: 3 2; }
 .qg-n { text-anchor: middle; font-size: 11px; font-weight: 700; fill: var(--ink); pointer-events: none; }
 .s-running > .qg-n, .s-done > .qg-n, .s-failed > .qg-n, .s-skipped > .qg-n, .s-stopped > .qg-n { fill: #fff; }
 .qg-name { text-anchor: middle; font-size: 12px; fill: var(--ink); pointer-events: none; }

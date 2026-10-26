@@ -28,6 +28,11 @@ import { StringDecoder } from 'node:string_decoder';
 import { effectiveShell, invocationFor, missingShellProblem, resolveShell, type ResolvedShell, type Shell, type ShellProblem } from './shells.js';
 import { stopTree, type ProcessTracker } from './processes.js';
 import { stepEnvironment } from './stepEnv.js';
+import { closePasswordWindows, passwordWindowOpen } from '../vcs/remoteAuth.js';
+
+/** How long a step is quiet before Git's password window is looked for, and how often then. */
+const PASSWORD_QUIET_MS = 3_000;
+const PASSWORD_PROBE_MS = 2_000;
 
 export type { Shell } from './shells.js';
 
@@ -50,6 +55,8 @@ export type RunRequest = {
   env?: NodeJS.ProcessEnv;
   /** Variables to pass beyond the fixed set, by name. See `stepEnv.ts`. */
   passEnv?: string[];
+  /** Git's own password window, for a step whose git asks for one (2026-10-26). See `stepEnv.ts`. */
+  askpass?: string;
 };
 
 export type RunResult = {
@@ -226,7 +233,20 @@ export async function runStep(
    * whole output (an output check does) without the runner holding the whole output in memory. It
    * is called from the stream's handler, so it has to be quick.
    */
-  opts: { signal?: AbortSignal; onHeartbeat?: Heartbeat; heartbeatMs?: number; onOutput?: OutputListener; tracker?: ProcessTracker } = {},
+  opts: {
+    signal?: AbortSignal;
+    onHeartbeat?: Heartbeat;
+    heartbeatMs?: number;
+    onOutput?: OutputListener;
+    tracker?: ProcessTracker;
+    /**
+     * Git's password window, opened and closed while the step runs (2026-10-26): the step waits for the operator, and
+     * its idle clock is held meanwhile. `passwordProbe` says whether one is open now, one started since the step; the
+     * default looks at the machine's processes (`passwordWindowOpen`), only after a few quiet seconds.
+     */
+    onPasswordWindow?: (open: boolean) => void;
+    passwordProbe?: (sinceMs: number) => Promise<boolean>;
+  } = {},
 ): Promise<RunResult> {
   // Every clock goes through `timerDelay`: a delay Node cannot hold would fire after 1 ms.
   const hardTimeoutMs = timerDelay(req.hardTimeoutMs, DEFAULT_HARD_TIMEOUT_MS);
@@ -290,7 +310,7 @@ export async function runStep(
       cwd: req.cwd,
       // Named, not inherited: a step must not see the bot's own token or whatever else the
       // operator's shell holds. See `stepEnv.ts`.
-      env: stepEnvironment(req.env ?? process.env, req.passEnv),
+      env: stepEnvironment(req.env ?? process.env, req.passEnv, req.askpass),
       // True for `cmd`, whose command line `invocationFor` has already written in full: quoted again
       // here, every double quote in a step would reach `cmd` as `\"`, which it does not understand.
       windowsVerbatimArguments,
@@ -309,6 +329,8 @@ export async function runStep(
       clearInterval(heartbeat);
       clearTimeout(hardTimer);
       clearInterval(idleTimer);
+      clearInterval(passwordTimer);
+      if (passwordOpen) opts.onPasswordWindow?.(false);
       opts.signal?.removeEventListener('abort', onAbort);
       log.end(`\n# outcome=${outcome} exit=${exitCode} durationMs=${Date.now() - startedAt}\n`);
       resolve({
@@ -443,10 +465,70 @@ export async function runStep(
       stop('hard-timeout', -1, `hard timeout after ${Math.round(hardTimeoutMs / 1000)}s`);
     }, hardTimeoutMs);
 
+    /*
+     * While Git's password window is open the step is waiting for the operator, not hung (2026-10-26): its idle clock is
+     * held, and the caller is told when the window opens and when it closes, so the chat can say where to look. Looked
+     * for when the step has been quiet a while, and always before a quiet step is stopped as hung. The time the window
+     * was open never counts: the clock starts again when it closes. A window nobody answers for as long as the idle
+     * limit — a run with nobody there — ends the step, and is closed.
+     */
+    let passwordOpen = false;
+    let passwordSince = 0;
+    let probing = false;
+    const probe = opts.passwordProbe ?? passwordWindowOpen;
+    /** Whether the step is to be held: the window open now, or closed just now. */
+    const lookForPassword = async (): Promise<boolean> => {
+      const open = await probe(startedAt);
+      if (settled) return true;
+      if (open) {
+        if (!passwordOpen) {
+          passwordOpen = true;
+          passwordSince = Date.now();
+          opts.onPasswordWindow?.(true);
+        }
+        if (Date.now() - passwordSince >= idleTimeoutMs) return false;
+        lastOutputAt = Date.now();
+        return true;
+      }
+      if (passwordOpen) {
+        passwordOpen = false;
+        lastOutputAt = Date.now();
+        opts.onPasswordWindow?.(false);
+        return true;
+      }
+      return false;
+    };
+
     const idleTimer = setInterval(() => {
       if (Date.now() - lastOutputAt < idleTimeoutMs) return;
-      stop('idle-timeout', -1, `no output for ${Math.round(idleTimeoutMs / 1000)}s, treating as hung`);
+      const hung = (): void => {
+        if (!passwordOpen) return stop('idle-timeout', -1, `no output for ${Math.round(idleTimeoutMs / 1000)}s, treating as hung`);
+        // Nobody answered Git's password window: the step ends, and the window, left behind by its process tree, is closed.
+        stop('idle-timeout', -1, `Git's password window was not answered for ${Math.round(idleTimeoutMs / 1000)}s`);
+        if (req.askpass) void closePasswordWindows(req.askpass, new Date(startedAt - 1000));
+      };
+      if (!req.askpass) return hung();
+      if (probing) return;
+      probing = true;
+      void lookForPassword()
+        .then((held) => {
+          if (!held && !settled) hung();
+        })
+        .catch(() => hung())
+        .finally(() => {
+          probing = false;
+        });
     }, Math.min(idleTimeoutMs, 30_000));
+
+    const passwordTimer = setInterval(() => {
+      if (!req.askpass || probing || settled || Date.now() - lastOutputAt < PASSWORD_QUIET_MS) return;
+      probing = true;
+      void lookForPassword()
+        .catch(() => undefined)
+        .finally(() => {
+          probing = false;
+        });
+    }, PASSWORD_PROBE_MS);
 
     const heartbeat = setInterval(() => {
       opts.onHeartbeat?.({

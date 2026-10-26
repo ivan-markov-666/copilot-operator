@@ -122,6 +122,8 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   leftovers: 'archived',
   // The fault of the means an attempt ended on (2026-10-25) is that attempt's.
   failure: 'archived',
+  // What an attempt waited for when the queue set it aside, and the answer, are that attempt's (2026-10-26).
+  parked: 'archived',
   environment: 'archived',
   handoff: 'archived',
   plan: 'archived',
@@ -602,6 +604,7 @@ export class SessionStore {
           runGroup: t.runGroup,
           leftovers: t.leftovers,
           failure: t.failure,
+          ...(t.parked ? { parked: t.parked } : {}),
           environment: t.environment,
           status: t.status,
           startedAt: t.startedAt,
@@ -689,6 +692,7 @@ export class SessionStore {
       // left in place, the next attempt's list was added to this one's and read as its own.
       t.leftovers = undefined;
       t.failure = undefined;
+      t.parked = undefined;
       t.environment = undefined;
       // The branch of the finished attempt stays in the repository and stays on the record
       // above; the next attempt gets its own, cut from the same commit this one started at.
