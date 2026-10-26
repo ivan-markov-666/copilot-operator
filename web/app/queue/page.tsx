@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api, type ModelCatalogue, type Queue, type QueueItem, type Workspace } from '../../lib/api';
+import { api, type ModelCatalogue, type Queue, type QueueBusy, type QueueItem, type Skill, type Workspace } from '../../lib/api';
 import { useT, type Key } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { ModelPicker } from '../modelPicker';
@@ -16,7 +16,8 @@ import { QueueGraph } from './queueGraph';
  * chat or two (a lead and a worker, with the worker's model), whether it is reviewed and on which model, and the earlier
  * tasks it depends on; run one after another while nobody watches, each in a new chat. A task whose dependency failed is
  * skipped and the queue goes on with the next (`src/queue/queue.ts`). The picture above the list shows the order and
- * the threads between the tasks (`queueGraph.tsx`).
+ * the threads between the tasks (`queueGraph.tsx`). A task may carry one of Settings' skills; one added while a message of
+ * the chat works starts after it (2026-10-25).
  */
 type Draft = {
   name: string;
@@ -28,10 +29,11 @@ type Draft = {
   reviewModel: string;
   lead: boolean;
   workerModel: string;
+  skill: string;
 };
 type Edit = Omit<QueueItem, 'status'> & { status?: QueueItem['status'] };
 
-const EMPTY: Draft = { name: '', prompt: '', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: '', lead: false, workerModel: '' };
+const EMPTY: Draft = { name: '', prompt: '', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: '', lead: false, workerModel: '', skill: '' };
 /** Where the chat keeps the conversation it shows (`workbench/cascade.tsx`): "Open the chat" puts the task's there. */
 const THREAD_KEY = 'cop.chat.thread';
 
@@ -57,6 +59,7 @@ const asEdit = (x: QueueItem): Edit => ({
   ...(x.reviewModel ? { reviewModel: x.reviewModel } : {}),
   ...(x.lead ? { lead: true } : {}),
   ...(x.workerModel ? { workerModel: x.workerModel } : {}),
+  ...(x.skill ? { skill: x.skill } : {}),
 });
 const fromDraft = (d: Draft): Omit<Edit, 'id'> => ({
   ...(d.name.trim() ? { name: d.name.trim() } : {}),
@@ -67,7 +70,10 @@ const fromDraft = (d: Draft): Omit<Edit, 'id'> => ({
   review: !d.lead && d.review,
   ...(!d.lead && d.review && d.reviewModel ? { reviewModel: d.reviewModel } : {}),
   ...(d.lead ? { lead: true, ...(d.workerModel ? { workerModel: d.workerModel } : {}) } : {}),
+  ...(d.skill ? { skill: d.skill } : {}),
 });
+/** The skills a task of the open folder may carry: the ones for every project and the ones for it, as the chat offers them. */
+const folderKey = (d: string): string => d.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
 function newItemId(items: QueueItem[]): string {
   let n = items.length + 1;
   while (items.some((x) => x.id === `q${n}`)) n += 1;
@@ -80,6 +86,7 @@ export default function QueuePage() {
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
   const [ws, setWs] = useState<Workspace | null>(null);
   const [byHand, setByHand] = useState(false);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   /** The task being edited, or null while a new one is written. */
   const [editing, setEditing] = useState<string | null>(null);
@@ -91,6 +98,7 @@ export default function QueuePage() {
   useEffect(() => {
     api.models().then(setCatalogue).catch(() => undefined);
     api.workspace().then(setWs).catch(() => undefined);
+    api.skills().then((r) => setSkills(r.skills)).catch(() => undefined);
     // Chosen by hand in Settings, every task of the queue would wait for the operator: said here.
     api
       .settings()
@@ -118,14 +126,22 @@ export default function QueuePage() {
       setBusy(false);
     }
   };
+  /*
+   * Added while something else works — a message sent from the chat, say (operator, 2026-10-25: "I think of another
+   * task for after it, go to Queue and add it; it starts after the one running") — the queue is started with it, and
+   * its first task waits for that work to end. Otherwise "Run the queue" starts it, as before.
+   */
+  const startsAfter = !!queue?.busy && !queue.running && !editing;
   const submit = async () => {
     const edits = items.map(asEdit);
     const at = editing ? edits.findIndex((x) => x.id === editing) : -1;
     if (at >= 0) edits[at] = { id: edits[at]!.id, ...fromDraft(draft) };
     else edits.push({ id: newItemId(items), ...fromDraft(draft) });
+    const after = startsAfter;
     if (await save(edits)) {
       setDraft(EMPTY);
       setEditing(null);
+      if (after) await act(api.runQueue);
     }
   };
   const edit = (x: QueueItem) => {
@@ -140,6 +156,7 @@ export default function QueuePage() {
       reviewModel: x.reviewModel ?? '',
       lead: !!x.lead,
       workerModel: x.workerModel ?? '',
+      skill: x.skill ?? '',
     });
     document.getElementById('queue-name')?.focus();
   };
@@ -176,6 +193,9 @@ export default function QueuePage() {
     }
   };
 
+  const skillsHere = skills.filter((k) => !k.projectDir || (ws?.ok && folderKey(k.projectDir) === folderKey(ws.dir)));
+  // A skill a task was given that this folder no longer offers is still shown, so an edit does not drop it unseen.
+  const skillChoices = draft.skill && !skillsHere.some((k) => k.name === draft.skill) ? [...skillsHere, { name: draft.skill, description: '', text: '', projectDir: '' }] : skillsHere;
   const running = items.findIndex((x) => x.status === 'running');
   const waiting = items.filter((x) => x.status === 'waiting').length;
   const summary =
@@ -217,6 +237,7 @@ export default function QueuePage() {
             {t('q.noModel')} <Link href="/settings#model">{t('q.byHandLink')}</Link>
           </p>
         )}
+        {queue?.busy && <BusyLine busy={queue.busy} running={queue.running} />}
         <div className="row queue-controls">
           {queue?.running ? (
             <button onClick={() => void act(api.stopQueue)} disabled={busy}>
@@ -260,6 +281,7 @@ export default function QueuePage() {
                   <span>{x.branch === 'main' ? t('q.branchMain') : t('q.branchFolder')}</span>
                   {x.review && <span>{x.reviewModel ? t('q.reviewOnModel', { model: x.reviewModel }) : t('q.reviewOn')}</span>}
                   {x.dependsOn.length > 0 && <span>{t('q.dependsOnList', { list: x.dependsOn.map((d) => `#${numberOf(d)}`).join(', ') })}</span>}
+                  {x.skill && <span className="queue-skill">{t('q.skillIs', { name: x.skill })}</span>}
                 </div>
                 {x.name && x.name.trim() !== x.prompt.trim() && <div className="small queue-prompt">{x.prompt.split(/\r?\n/)[0]}</div>}
                 {x.why && <div className="small queue-why">{x.why}</div>}
@@ -391,6 +413,29 @@ export default function QueuePage() {
             )}
           </>
         )}
+        {/*
+          One of Settings' skills (operator, 2026-10-25), as the chat's box offers them: the ones for every project and for
+          the open folder; and beside them, always, the way to Settings' skills.
+        */}
+        <div className="settings-field">
+          <div className="field-label">
+            <label htmlFor="queue-skill">{t('q.skill')}</label>
+            <InfoTip label={t('info.about', { name: t('q.skill') })} text={t('q.skillWhy')} />
+          </div>
+          <div className="field-control queue-skill-pick">
+            <select id="queue-skill" value={draft.skill} onChange={(e) => setDraft({ ...draft, skill: e.target.value })}>
+              <option value="">{t('chat.skillNone')}</option>
+              {skillChoices.map((k) => (
+                <option key={k.name} value={k.name} title={k.description || undefined}>
+                  /{k.name}
+                </option>
+              ))}
+            </select>
+            <Link href="/settings#skills" className="button-link plain small" title={t('chat.skillsLinkWhy')}>
+              {t('chat.skillsLink')}
+            </Link>
+          </div>
+        </div>
         {/* Only where there is an earlier task to depend on (operator, 2026-10-24). */}
         {earlier.length > 0 && (
           <fieldset className="queue-depends">
@@ -413,8 +458,8 @@ export default function QueuePage() {
           </fieldset>
         )}
         <div className="row">
-          <button className="primary" onClick={() => void submit()} disabled={busy || !draft.prompt.trim()}>
-            {editing ? t('q.save') : t('q.add')}
+          <button className="primary" onClick={() => void submit()} disabled={busy || !draft.prompt.trim()} title={startsAfter ? t('q.addAfterWhy') : undefined}>
+            {editing ? t('q.save') : startsAfter ? t('q.addAfter') : t('q.add')}
           </button>
           {editing && (
             <button
@@ -430,5 +475,33 @@ export default function QueuePage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/**
+ * What works now, other than the queue's own task (2026-10-25): a message of the chat, with the way to it; a reading of
+ * the models; the sign-in. The queue waits for it, or would; a task added now starts after it.
+ */
+function BusyLine({ busy, running }: { busy: QueueBusy; running: boolean }) {
+  const { t } = useT();
+  const what = busy.kind === 'chat' ? t('q.busyChat', { title: busy.title }) : busy.kind === 'models' ? t('q.busyModels') : t('q.busyLogin');
+  return (
+    <p className="small queue-busy" role="status">
+      <span className="wb-live" aria-hidden="true" /> {t(running ? 'q.busyRunning' : 'q.busyIdle', { what })}{' '}
+      {busy.kind === 'chat' && (
+        <Link
+          href="/"
+          onClick={() => {
+            try {
+              window.localStorage.setItem(THREAD_KEY, busy.sessionId);
+            } catch {
+              /* the chat opens on its last one */
+            }
+          }}
+        >
+          {t('q.openChat')}
+        </Link>
+      )}
+    </p>
   );
 }

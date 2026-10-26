@@ -6,7 +6,9 @@
  *
  * - the rules, without a browser: what an edit may hold, what a "Run again" puts back, which task is next;
  * - a queue of five run end to end through the API with the scripted chat (test/support/fakeChat.ts);
- * - a queue that was running when the bot closed is not running when it opens again.
+ * - a queue that was running when the bot closed is not running when it opens again;
+ * - a task with a skill (2026-10-25): kept as it is named, refused when Settings have no such skill, sent with it;
+ * - a task added while a message of the chat works starts after it (2026-10-25), waiting as a task that waits.
  *
  *   npm run check:queue
  */
@@ -38,6 +40,12 @@ t.check('two chats: the worker\'s model kept, no review of its own (the lead jud
 t.check('one chat, reviewed: the review\'s model kept, no worker\'s', (checkItems([{ id: 'a', prompt: 'x', review: true, reviewModel: 'R', workerModel: 'W' }], 1000) as { items: unknown[] }).items, [
   { id: 'a', prompt: 'x', model: '', dependsOn: [], branch: 'folder', review: true, reviewModel: 'R' },
 ]);
+// A skill (2026-10-25): as typed after "/" or as Settings list it; whether it is there is the server's to say.
+t.check('a skill kept by its name, in lowercase, without its "/"', (checkItems([{ id: 'a', prompt: 'x', review: false, skill: ' /New-Test ' }], 1000) as { items: Array<{ skill?: string }> }).items[0]!.skill, 'new-test');
+t.check('and changed or dropped by an edit, as the rest of what the operator gives', [
+  (mergeItems([item('a', { skill: 'new-test' })], [{ id: 'a', prompt: 'task a', model: '', dependsOn: [], branch: 'folder', review: false, skill: 'db-migration' }]) as { items: QueueItem[] }).items[0]!.skill,
+  (mergeItems([item('a', { skill: 'new-test' })], [{ id: 'a', prompt: 'task a', model: '', dependsOn: [], branch: 'folder', review: false }]) as { items: QueueItem[] }).items[0]!.skill,
+], ['db-migration', undefined]);
 t.check('a name too long is refused', (checkItems([{ id: 'a', name: 'n'.repeat(81), prompt: 'x' }], 1000) as { problem: string }).problem, 'The name of task 1 is longer than 80 characters.');
 t.check('the name, where there is one, is what a task is called', [itemTitle({ name: 'Report', prompt: 'Write it.\nmore' }), itemTitle({ prompt: 'Write it.\nmore' })], ['Report', 'Write it.']);
 const none = {};
@@ -170,6 +178,57 @@ try {
   }, 60_000);
   const lead = await h.call<SessionView & { lead?: { workerModel?: string }; review?: { enabled: boolean } }>('GET', `/sessions/${led.sessionId}`);
   t.check('a task of two chats: a lead on its model, the worker\'s model kept for its worker, no review, named', [lead.name, lead.model, lead.lead?.workerModel, lead.review?.enabled], ['queue: Plan it', 'Think deeper', 'GPT 5.6 Think deeper', false]);
+
+  /*
+   * A skill, and a task added while a message sent from the chat works (operator, 2026-10-25: "I think of another task
+   * for after it, go to Queue and add it; the new one starts after the one running"): it waits as a task that waits,
+   * the page is told what works, and it starts once that has ended — with its skill.
+   */
+  const skill = { name: 'new-test', description: 'Adding an automated test', text: 'Tests live in tests/e2e, one file per page.', projectDir: '' };
+  const unknown = await h.raw('PUT', '/queue', { items: [{ id: 'q7', prompt: 'Add a test for the login page.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, skill: 'new-test' }] });
+  t.check('a skill Settings do not have: refused, and said', [unknown.status, (unknown.body as { message?: string }).message], [400, 'Task 1 is sent with the skill "new-test", which is not in Settings → Skills.']);
+  await h.call('PUT', '/skills', { skills: [skill] });
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  let queueText = '';
+  const order: string[] = [];
+  h.chat.script(
+    async () => {
+      await held;
+      order.push('chat');
+      return reply.steps(write('chat.txt', 'chat'));
+    },
+    reply.done('I wrote chat.txt in the project folder, holding the word chat, as the message asked.'),
+    (m) => {
+      order.push('queue');
+      queueText = m.text;
+      return reply.done('I wrote the test for the login page in tests/e2e, as the skill says.');
+    },
+  );
+  const sent = await h.call<{ threadId: string; taskId: string }>('POST', '/chat', { text: 'Create chat.txt holding the word chat.', model: 'Think deeper' });
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  const busy = await waitFor('the queue to see the chat at work', async () => {
+    const q = await h!.call<QueueView & { busy?: { kind: string; sessionId?: string; title?: string } }>('GET', '/queue');
+    return q.busy ? q.busy : null;
+  }, 20_000);
+  t.check('while a message of the chat works, the queue says what works', busy, { kind: 'chat', sessionId: sent.threadId, title: 'Create chat.txt holding the word chat.' });
+  await h.call('PUT', '/queue', { items: [{ id: 'q7', prompt: 'Add a test for the login page.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, skill: '/new-test' }] });
+  const started = await h.call<QueueView & { busy?: { kind: string } }>('POST', '/queue/run');
+  t.check('added and run while it works: the queue runs, and says what it waits for', [started.running, started.busy?.kind], [true, 'chat']);
+  await new Promise((r) => setTimeout(r, 2_500));
+  const meanwhile = await h.call<QueueView>('GET', '/queue');
+  t.check('meanwhile the task waits, as a task that waits, and no chat of its own was made', [meanwhile.items[0]!.status, meanwhile.items[0]!.sessionId ?? null], ['waiting', null]);
+  release();
+  const after = await waitFor('the queued task to end', async () => {
+    const q = await h!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'waiting' && q.items[0]!.status !== 'running' ? q.items[0]! : null;
+  }, 60_000);
+  const chatSession = await h.call<{ tasks: Array<{ status: string; finishedAt?: string }> }>('GET', `/sessions/${sent.threadId}`);
+  t.check('the message of the chat done, then the queued task, in that order', [chatSession.tasks[0]!.status, after.status, order], ['done', 'done', ['chat', 'queue']]);
+  t.truthy('the queued task began after the message had ended', !!after.startedAt && !!chatSession.tasks[0]!.finishedAt && after.startedAt >= chatSession.tasks[0]!.finishedAt, { started: after.startedAt, chatEnded: chatSession.tasks[0]!.finishedAt });
+  t.truthy('and was sent with its skill', queueText.includes('## Skill: new-test') && queueText.includes('Tests live in tests/e2e, one file per page.'), queueText.slice(-600));
+  const qs = await h.call<{ skill?: { name: string } ; tasks: Array<{ skill?: { name: string } }> }>('GET', `/sessions/${after.sessionId}`);
+  t.check('its message keeps the skill it was sent with', qs.tasks[0]!.skill?.name, 'new-test');
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

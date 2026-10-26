@@ -15,7 +15,7 @@ import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, writeFileAtomically } from '../session/store.js';
-import { checkItems, emptyQueue, itemTitle, mainBranchOf, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type Queue, type QueueItem, type QueueStatus } from '../queue/queue.js';
+import { checkItems, emptyQueue, itemTitle, mainBranchOf, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type Queue, type QueueBusy, type QueueItem, type QueueStatus } from '../queue/queue.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -1662,7 +1662,22 @@ export class OperatorService {
 
   async queue(): Promise<Queue> {
     await this.recoverQueue();
-    return await this.readQueue();
+    return await this.withBusy(await this.readQueue());
+  }
+
+  /**
+   * The queue as the page is shown it: with what has the browser now, when it is not the queue's own task (2026-10-25)
+   * — a message working in the chat, a reading of the models, the sign-in. The queue's next task starts after it.
+   */
+  private async withBusy(q: Queue): Promise<Queue> {
+    const holder = this.browser;
+    if (!holder) return q;
+    if (holder.kind !== 'run') return { ...q, busy: { kind: holder.kind } };
+    if (q.items.some((x) => x.status === 'running' && x.sessionId === holder.sessionId)) return q;
+    const s = await this.store.getSession(holder.sessionId);
+    const at = s?.tasks.find((t) => t.status === 'running' || t.status === 'waiting-approval') ?? s?.tasks.find((t) => t.status === 'queued');
+    const busy: QueueBusy = { kind: 'chat', sessionId: holder.sessionId, title: at?.title ?? s?.name.replace(/^chat: /, '') ?? '' };
+    return { ...q, busy };
   }
 
   /** The list as the page edits it: added, changed, moved, taken out, put back to wait ("Run again"). */
@@ -1670,6 +1685,13 @@ export class OperatorService {
     await this.recoverQueue();
     const checked = checkItems(items, MAX_INSTRUCTION_CHARS);
     if ('problem' in checked) throw new Error(checked.problem);
+    // A skill is one of Settings' (2026-10-25); whether it is for the folder is said when the task runs, in its chat.
+    const { skills } = await this.skills();
+    const unknown = checked.items.findIndex((x) => x.skill && !skills.some((k) => k.name === x.skill));
+    if (unknown >= 0) {
+      const name = checked.items[unknown]!.skill!;
+      throw new Error(`Task ${unknown + 1} is sent with the skill "${name}", which is not in Settings → Skills${skills.length > 0 ? `; there are ${skills.map((k) => k.name).join(', ')}` : ''}.`);
+    }
     let problem: string | undefined;
     const q = await this.changeQueue((x) => {
       const merged = mergeItems(x.items, checked.items);
@@ -1677,7 +1699,7 @@ export class OperatorService {
       else x.items = merged.items;
     });
     if (problem) throw new Error(problem);
-    return q;
+    return await this.withBusy(q);
   }
 
   /** Runs the waiting tasks one after another, in the background; the page follows `queue()`. */
@@ -1702,7 +1724,7 @@ export class OperatorService {
           x.running = false;
         });
       });
-    return started;
+    return await this.withBusy(started);
   }
 
   /**
@@ -1728,7 +1750,7 @@ export class OperatorService {
     });
     const at = q.items.find((x) => x.status === 'running');
     if (at?.sessionId) await this.stop(at.sessionId).catch(() => undefined);
-    return q;
+    return await this.withBusy(q);
   }
 
   private async runQueueLoop(): Promise<void> {
@@ -1741,6 +1763,16 @@ export class OperatorService {
       if (!step) return;
       if ('skip' in step) {
         await this.changeQueue((x) => this.setQueueItem(x, step.skip.id, { status: 'skipped', why: skippedBecause(step.because), endedAt: now() }));
+        continue;
+      }
+      /*
+       * Its turn comes when the browser is free (operator, 2026-10-25: "I add a task while one sent from the chat runs;
+       * the new one starts after it"): whatever has it — a message of the chat, a reading of the models, the sign-in —
+       * ends first. It waits as a task that waits, so it can still be edited, moved or taken out, and the queue is read
+       * again before it is taken.
+       */
+      if (this.browser) {
+        await new Promise((r) => setTimeout(r, 1_000));
         continue;
       }
       const item = step.run;
@@ -1777,6 +1809,7 @@ export class OperatorService {
       review: item.review,
       ...(item.reviewModel ? { reviewModel: item.reviewModel } : {}),
       ...(item.lead ? { lead: true, ...(item.workerModel ? { workerModel: item.workerModel } : {}) } : {}),
+      ...(item.skill ? { skill: item.skill } : {}),
     });
     const sessionId = sent.threadId;
     await this.store.updateSession(sessionId, (s) => {
@@ -1794,6 +1827,14 @@ export class OperatorService {
     });
     await this.changeQueue((x) => this.setQueueItem(x, item.id, { sessionId }));
     const cfg = await this.settings.load();
+    /*
+     * A message of the chat sent meanwhile has the browser: this one starts after it, never refused for it. The browser
+     * is looked at and taken in the same moment — `start` takes it before it awaits anything.
+     */
+    while (holder()) {
+      if (this.queueClosing || !(await stillRunning())) return { status: 'stopped', why: 'the queue was stopped before it began', sessionId };
+      await pause(1_000);
+    }
     const reply = await this.start(sessionId, cfg.execution.mode);
     if (!reply.started) return { status: 'failed', why: reply.reason ?? 'it did not start', sessionId };
     // Until its run has ended and its window let the browser go, so the next one can have it.

@@ -141,13 +141,17 @@ export type QueueItem = {
   /** Two chats: a lead on `model`, a worker on `workerModel` (2026-10-24). */
   lead?: boolean;
   workerModel?: string;
+  /** One of Settings' skills, by its name, sent with the task (2026-10-25). */
+  skill?: string;
   status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped';
   why?: string;
   sessionId?: string;
   startedAt?: string;
   endedAt?: string;
 };
-export type Queue = { items: QueueItem[]; running: boolean; updatedAt: string };
+/** What has the browser now, other than the queue's own task: the queue's next task starts after it (2026-10-25). */
+export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' };
+export type Queue = { items: QueueItem[]; running: boolean; updatedAt: string; busy?: QueueBusy };
 
 export type RepoTree = { ref: string; label: string; path: string; entries: Array<{ name: string; path: string; type: 'dir' | 'file'; size?: number }> };
 export type RepoFile = { ref: string; label: string; path: string; text: string | null; binary: boolean; tooLarge: boolean };

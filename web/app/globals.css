@@ -1707,6 +1707,11 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .queue-depends legend { padding: 0; }
 .queue-dep { display: flex; gap: 8px; align-items: baseline; font-weight: 400; cursor: var(--cur-pointer); }
 .queue-folder { overflow-wrap: anywhere; }
+/* What works now, other than the queue's own task, and that its next one starts after it (2026-10-25). */
+.queue-busy { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 6px 0; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); overflow-wrap: anywhere; }
+.queue-skill-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.queue-skill-pick select { min-width: 0; max-width: 100%; }
+.queue-skill { font-family: var(--mono); }
 
 /* The queue as a picture (2026-10-24): dots on a line, threads arcing over it, left to right as they run. */
 .queue-graph { margin: 4px 0 14px; }

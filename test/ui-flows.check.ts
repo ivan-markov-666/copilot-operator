@@ -1269,6 +1269,56 @@ try {
     t.check('and the page agrees', await page.locator('.queue-item').count(), 1);
   });
 
+  /*
+   * The queue while a message sent from the chat works (operator, 2026-10-25: "I think of another task for after it, go
+   * to Queue and add it; the new one starts after the one running"), and a task's skill: what works is said above the
+   * list, "Add" reads that it starts after it and starts the queue, the task waits as a task that waits, then runs, with
+   * its skill, and the list says so.
+   */
+  await scenario('the queue while the chat works: a task added starts after it, with its skill', { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Auto' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    await h.call('POST', '/models/refresh');
+    await h.call('PUT', '/skills', { skills: [{ name: 'new-test', description: 'Adding an automated test', text: 'Tests live in tests/e2e, one file per page.', projectDir: '' }] });
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let queueText = '';
+    h.chat.script(
+      async () => {
+        await held;
+        return reply.steps(write('chat.txt', 'chat'));
+      },
+      reply.done('I wrote chat.txt in the project folder, holding the word chat, as the message asked.'),
+      (m) => {
+        queueText = m.text;
+        return reply.done('I wrote the test for the login page in tests/e2e, as the skill says.');
+      },
+    );
+    const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create chat.txt holding the word chat.', model: 'Think deeper' });
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/queue'));
+    const busy = page.locator('.queue-busy');
+    t.truthy('what works in the chat is said above the list, with the way to it', await appears(busy, 15_000) && ((await busy.textContent()) ?? '').includes(en['q.busyIdle']!.replace('{what}', en['q.busyChat']!.replace('{title}', 'Create chat.txt holding the word chat.'))) && (await busy.getByRole('link', { name: en['q.openChat']! }).count()) === 1, await busy.textContent().catch(() => ''));
+    // The skill, as the chat's box offers it: none, or one of Settings'; and the way to Settings' skills beside it.
+    t.check('the skill: none, or /new-test; "+ Skills" beside it', [await page.locator('#queue-skill option').allTextContents(), await page.locator('.queue-skill-pick a').getAttribute('href')], [[en['chat.skillNone'], '/new-test'], '/settings#skills']);
+    await page.locator('#queue-prompt').fill('Add a test for the login page.');
+    await page.locator('#queue-model').selectOption('Think deeper');
+    await page.locator('#queue-review').uncheck();
+    await page.locator('#queue-skill').selectOption('new-test');
+    const add = page.getByRole('button', { name: en['q.addAfter']!, exact: true });
+    t.truthy('"Add" says it starts after the work in progress', await appears(add, 5_000), await page.locator('#queue-add .row button').allTextContents());
+    await add.click();
+    await page.locator('.queue-item').first().waitFor();
+    await waitFor('the queue to be running', async () => ((await h.call<{ running: boolean }>('GET', '/queue')).running ? true : null), 10_000).catch(() => undefined);
+    await page.getByRole('button', { name: en['q.stop']! }).waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.check('added and started: the task waits, and its skill is shown', [await page.locator('.queue-item .queue-status').allTextContents(), ((await page.locator('.queue-item .queue-meta').textContent()) ?? '').includes(en['q.skillIs']!.replace('{name}', 'new-test')), (await h.call<{ items: Array<{ skill?: string }> }>('GET', '/queue')).items[0]!.skill], [[en['q.waiting']], true, 'new-test']);
+    await waitFor('the line to say the queue waits', async () => ((await busy.textContent().catch(() => '')) ?? '').includes(en['q.busyRunning']!.split('{what}')[0]!) || null, 10_000).catch(() => undefined);
+    t.truthy('the line says the queue waits for it', ((await busy.textContent()) ?? '').includes(en['q.busyRunning']!.replace('{what}', en['q.busyChat']!.replace('{title}', 'Create chat.txt holding the word chat.'))), await busy.textContent());
+    release();
+    await page.locator('.queue-item.is-done').waitFor({ timeout: 60_000 });
+    t.truthy('once the message ended, the task ran and was done, sent with its skill', queueText.includes('## Skill: new-test'), queueText.slice(-500));
+    await busy.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+    t.check('and nothing is said to be working any more', await busy.count(), 0);
+  });
+
   await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {
     await page.goto(url('/settings'));
     await page.locator('#execution input#max-iterations').waitFor();

@@ -706,6 +706,17 @@ one that was running when the bot closed is stopped, with why, when it opens aga
 depends on it (broken and red from one that did not end done), coloured by status; pointing at a dot dims the rest and
 says its task under the picture; "Show all names" writes them under the dots. Plain SVG, at most fifty dots.
 
+**A task's skill, and a task added while the chat works (2026-10-25).** A queue task may carry one of Settings' skills
+(`QueueItem.skill`, the "Skill" field with "+ Skills" beside it; the ones for every project and for the open folder),
+sent with it as `/its-name` sends it in the chat; one Settings do not have is refused when the list is saved, and one
+that is not for the folder fails its task with why when it runs. The queue takes its next task only when the browser
+is free: a message sent from the chat, a reading of the models or the sign-in ends first, and meanwhile the task waits
+as a task that waits — it can still be edited, moved or taken out. `GET /api/queue` says what has the browser
+(`Queue.busy`: the chat's conversation and its message, the models, the sign-in; never kept in the file), and the page
+says it above the list, with "Open the chat". While something works and the queue is not running, "Add to the queue"
+reads "Add, to start after it": it adds the task and starts the queue, whose first waiting task begins as soon as that
+work has ended.
+
 **The bars on top in narrow windows (2026-10-24).** Both bars wrap instead of hiding links (the chat's under 700px) or
 scrolling them out of sight (the pages' on a phone); "Appearance" and "Language" are one item (`NavPair`, `.nav-pair`),
 so they move to the next line together and part only when one line cannot hold both. The chat's bar has "Queue".

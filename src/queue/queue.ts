@@ -9,7 +9,10 @@
  *   task skipped for it — is skipped, and the queue goes on with the next one that does not;
  * - a task works in the folder as it is, or on a new branch made from main. The server's main is fetched without a
  *   password or a key's passphrase, which nobody is there to type; when it cannot be, the local main is used, and the
- *   chat is told which it was.
+ *   chat is told which it was;
+ * - a task may carry one of Settings' skills, sent with it as the chat's box sends one (2026-10-25);
+ * - a task added while something else works — a message of the chat, sent there directly — starts after it
+ *   (2026-10-25): the queue waits for the browser to be free before it takes the next task.
  *
  * Kept as `data/queue.json` (see `OperatorService.queue`). This module is the part that needs no browser: the shape,
  * the checks of an edit, and which task is next.
@@ -40,6 +43,8 @@ export type QueueItem = {
    */
   lead?: boolean;
   workerModel?: string;
+  /** One of Settings' skills, by its name, sent with the task as `/its-name` sends it in the chat (2026-10-25). */
+  skill?: string;
   status: QueueStatus;
   /** Why it failed, was skipped or stopped, in a sentence. */
   why?: string;
@@ -54,7 +59,12 @@ export type Queue = {
   /** The queue is being run: one task at a time until none is waiting, or it is stopped. */
   running: boolean;
   updatedAt: string;
+  /** What has the browser now, other than the queue's own task: its next task starts after it. Said, never kept. */
+  busy?: QueueBusy;
 };
+
+/** Work that has the browser: a message of the chat (its conversation and what it is), a reading of the models, the sign-in. */
+export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' };
 
 export const MAX_QUEUE_ITEMS = 50;
 
@@ -94,6 +104,8 @@ export function checkItems(items: unknown, maxPromptChars: number): { items: Arr
     const name = text(x.name);
     if (name.length > MAX_QUEUE_NAME) return { problem: `The name of task ${n} is longer than ${MAX_QUEUE_NAME} characters.` };
     const lead = x.lead === true;
+    // As typed after "/" in the chat, or as Settings list it: whether it is there is the server's to say.
+    const skill = text(x.skill).replace(/^\//, '').toLowerCase();
     out.push({
       id,
       ...(name ? { name } : {}),
@@ -106,6 +118,7 @@ export function checkItems(items: unknown, maxPromptChars: number): { items: Arr
       ...(!lead && text(x.reviewModel) ? { reviewModel: text(x.reviewModel) } : {}),
       ...(lead ? { lead: true } : {}),
       ...(lead && text(x.workerModel) ? { workerModel: text(x.workerModel) } : {}),
+      ...(skill ? { skill } : {}),
       ...(status ? { status } : {}),
     });
     seen.add(id);
@@ -138,7 +151,7 @@ export function mergeItems(current: QueueItem[], edited: Array<Omit<QueueItem, '
 }
 
 /** What the operator gives a task, apart from what its runs give it. */
-const GIVEN = ['id', 'name', 'prompt', 'model', 'dependsOn', 'branch', 'review', 'reviewModel', 'lead', 'workerModel'] as const;
+const GIVEN = ['id', 'name', 'prompt', 'model', 'dependsOn', 'branch', 'review', 'reviewModel', 'lead', 'workerModel', 'skill'] as const;
 function asGiven(x: Omit<QueueItem, 'status'> & { status?: QueueStatus }): Omit<QueueItem, 'status'> {
   const out: Record<string, unknown> = {};
   for (const key of GIVEN) if (x[key] !== undefined) out[key] = x[key];
