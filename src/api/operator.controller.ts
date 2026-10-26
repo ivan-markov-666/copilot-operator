@@ -100,10 +100,11 @@ export class OperatorController {
 
   /** Kerrigan, the persona to give another chat: what copilot-operator is and how a task is best written for it. */
   @Get('kerrigan')
-  kerrigan(@Query('lang') lang?: string): Promise<unknown> {
+  kerrigan(@Query('lang') lang?: string, @Query('skill') skill?: string): Promise<unknown> {
     // Any language code of the interface: in one she is not written out in, the page fills in the controls' names.
     const code = typeof lang === 'string' && /^[a-z]{2,3}$/.test(lang) ? lang : 'en';
-    return this.ops.kerrigan(code).catch(fail);
+    // `skill`: the one chosen beside her button, whose instructions go with her text (2026-10-26).
+    return this.ops.kerrigan(code, typeof skill === 'string' && skill.trim() ? skill : undefined).catch(fail);
   }
 
   // --- the chat's conversations (sessions of kind `chat`) -------------------------------------

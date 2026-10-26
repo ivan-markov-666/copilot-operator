@@ -719,6 +719,82 @@ try {
   });
 
   /*
+   * Kerrigan with a skill (operator, 2026-10-26: "a second Skill drop-down beside Kerrigan's; chosen in either, it
+   * changes in the other; the skill, when chosen, goes with Kerrigan's text"): the two choices are one, both ways, and
+   * what is copied or saved carries the skill, its instructions whole; a message sent with it lets it go in both.
+   */
+  await scenario('Kerrigan with a skill: the Skill beside her and the chat\'s change together, and her text carries it', { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Think deeper' } }, async (h, page, url) => {
+    await h.call('PUT', '/skills', { skills: [{ name: 'new-test', description: 'Adding an automated test', text: 'Tests live in tests/e2e, one file per page.', projectDir: '' }] });
+    await page.goto(url('/'));
+    const beside = page.locator('#kerrigan-skill');
+    const chat = page.locator('#cs-skill');
+    await beside.waitFor();
+    await chat.waitFor();
+    t.check('beside Kerrigan, as under the chat\'s box: none, or /new-test', [await beside.locator('option').allTextContents(), await chat.locator('option').allTextContents(), await beside.inputValue(), await chat.inputValue()], [[en['chat.skillNone'], '/new-test'], [en['chat.skillNone'], '/new-test'], '', '']);
+    await beside.selectOption('new-test');
+    t.check('chosen beside Kerrigan: chosen in the chat too', await chat.inputValue(), 'new-test');
+    await chat.selectOption('');
+    t.check('none in the chat: none beside Kerrigan', await beside.inputValue(), '');
+    await chat.selectOption('new-test');
+    t.check('chosen in the chat: chosen beside Kerrigan', await beside.inputValue(), 'new-test');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    const kerrigan = page.getByRole('button', { name: en['kerrigan.button']!, exact: true });
+    await kerrigan.click();
+    await page.getByRole('menu', { name: en['kerrigan.menu']! }).getByRole('menuitem', { name: en['kerrigan.copy']! }).click();
+    await page.locator('.kerrigan [role="status"]').waitFor({ timeout: 10_000 });
+    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    t.truthy('copied: her text with the skill, its instructions whole', copied.includes('## The skill chosen: `/new-test`') && copied.includes('Tests live in tests/e2e, one file per page.'), copied.slice(copied.indexOf('## The skill chosen'), copied.indexOf('## The skill chosen') + 400));
+    await kerrigan.click();
+    const [file] = await Promise.all([page.waitForEvent('download'), page.getByRole('menu').getByRole('menuitem', { name: en['kerrigan.save']! }).click()]);
+    t.check('saved: a file named for the skill', file.suggestedFilename(), 'kerrigan-copilot-operator.new-test.en.md');
+    // A message sent with it lets it go, in both.
+    h.chat.script(reply.done('I looked at the folder: it holds README.md and nothing else the message names.'));
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Say what is in the folder.');
+    await input.press('Enter');
+    await waitFor('the choice to be let go', async () => ((await beside.inputValue()) === '' ? true : null), 10_000).catch(() => undefined);
+    t.check('sent with it: none chosen any more, beside Kerrigan and in the chat', [await beside.inputValue(), await chat.inputValue()], ['', '']);
+    await page.locator('.cs-end').first().waitFor({ timeout: 30_000 });
+  });
+
+  /*
+   * Renaming a conversation (operator, 2026-10-26): ✎ beside the list, the name in a box where the list was; Enter or
+   * ✓ keeps it, Escape or ✕ leaves it; an empty name cannot be saved; none on a new chat not begun.
+   */
+  await scenario('a conversation renamed: ✎ beside the list, Enter keeps the name, Escape leaves it', {}, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Look at the project and say what it is.', model: 'Think deeper' });
+    await page.goto(url('/'));
+    t.check('a new chat not begun: nothing to rename', await page.getByRole('button', { name: en['chat.rename']!, exact: true }).count(), 0);
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const pencil = page.getByRole('button', { name: en['chat.rename']!, exact: true });
+    await pencil.waitFor();
+    const shown = async (): Promise<string> => ((await page.locator('#cs-thread option:checked').textContent()) ?? '').trim();
+    t.check('the conversation by its first message, and ✎ beside it', [await shown(), (await pencil.textContent())?.trim()], ['Look at the project and say what it is.', '✎']);
+    await pencil.click();
+    const box = page.getByRole('textbox', { name: en['chat.renameLabel']!, exact: true });
+    t.check('✎: the name in a box, chosen whole, where the list was', [await box.inputValue(), await box.evaluate((el) => document.activeElement === el && (el as HTMLInputElement).selectionStart === 0 && (el as HTMLInputElement).selectionEnd === (el as HTMLInputElement).value.length), await page.locator('#cs-thread').count()], ['Look at the project and say what it is.', true, 0]);
+    await box.fill('   ');
+    t.check('an empty name cannot be saved', await page.getByRole('button', { name: en['chat.renameSave']!, exact: true }).isDisabled(), true);
+    await box.fill('Project tour');
+    await box.press('Escape');
+    t.check('Escape: the list again, the name as it was', [await page.locator('#cs-thread').count(), await shown(), (await h.call<{ name: string }>('GET', `/sessions/${threadId}`)).name], [1, 'Look at the project and say what it is.', 'chat: Look at the project and say what it is.']);
+    await pencil.click();
+    await box.fill('Project tour');
+    await box.press('Enter');
+    await page.locator('#cs-thread').waitFor({ timeout: 5_000 });
+    t.check('Enter: kept, and the list calls it so', [await shown(), (await h.call<{ name: string }>('GET', `/sessions/${threadId}`)).name], ['Project tour', 'Project tour']);
+    await page.reload();
+    await page.locator('#cs-thread').waitFor();
+    await waitFor('the list to read again', async () => ((await shown()) === 'Project tour' ? true : null), 10_000).catch(() => undefined);
+    t.check('and after a reload', await shown(), 'Project tour');
+    await pencil.click();
+    await box.fill('Never kept');
+    await page.getByRole('button', { name: en['chat.renameCancel']!, exact: true }).click();
+    t.check('✕: left as it was', [await shown(), (await h.call<{ name: string }>('GET', `/sessions/${threadId}`)).name], ['Project tour', 'Project tour']);
+  });
+
+  /*
    * System (2026-10-22): no Desktop row; whose Edge has the profile, said by whose it is — the chat's own window, kept
    * open between messages, was shown as "a run would fail; close that window"; and the bot's folder, chosen there for
    * the next start. The API under the check is a clone, which keeps its records in the clone, so the page is shown an
@@ -1319,6 +1395,31 @@ try {
     t.check('and nothing is said to be working any more', await busy.count(), 0);
   });
 
+  // "Stop the queue" pressed while its task works (2026-10-26, as the chat's "Stop"): off, its dots going round, until it has stopped.
+  await scenario('the queue stopped while its task works: "Stopping the queue." until it has stopped', { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Auto' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    h.chat.script(async () => {
+      await answered;
+      return reply.steps(write('q.txt', 'q'));
+    });
+    await h.call('PUT', '/queue', { items: [{ id: 'q1', prompt: 'Create q.txt holding q.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false }] });
+    await page.goto(url('/queue'));
+    await page.getByRole('button', { name: en['q.run']!, exact: true }).click();
+    const stopQueue = page.getByRole('button', { name: en['q.stop']!, exact: true });
+    await stopQueue.waitFor({ timeout: 10_000 });
+    await waitFor('the task to be answering', async () => (h.chat.pending === 0 ? true : null), 20_000).catch(() => undefined);
+    await stopQueue.click();
+    const button = page.locator('.queue-controls button').first();
+    const word = en['q.stopping']!;
+    await waitFor('the button to say it is stopping', async () => (((await button.textContent()) ?? '').startsWith(word) ? true : null), 10_000).catch(() => undefined);
+    t.check('pressed: off, "Stopping the queue" with its dots', [await button.isDisabled(), /^Stopping the queue\.{1,3}$/.test(((await button.textContent()) ?? '').trim())], [true, true]);
+    answer();
+    await page.locator('.queue-item.is-stopped').waitFor({ timeout: 30_000 });
+    await page.getByRole('button', { name: en['q.run']!, exact: true }).waitFor({ timeout: 10_000 });
+    t.check('stopped: the task says so, and "Run the queue" is back', [await page.locator('.queue-item .queue-status').allTextContents(), await page.getByRole('button', { name: en['q.run']!, exact: true }).isDisabled()], [[en['q.stopped']], true]);
+  });
+
   await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {
     await page.goto(url('/settings'));
     await page.locator('#execution input#max-iterations').waitFor();
@@ -1837,6 +1938,10 @@ try {
     t.check('the command card says who asks', await ask.locator('.actor-chip').textContent(), 'Asked by: Worker');
     await waitFor('the tab to say something waits', async () => (await page.title()) === 'Waiting for you (1) — copilot-operator' || null, 10_000).catch(() => undefined);
     t.check('the tab says first that something waits for the operator', await page.title(), 'Waiting for you (1) — copilot-operator');
+    // What the card asks about, to copy (operator, 2026-10-26: "see whether other blocks of the chat lack a copy button").
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    await ask.getByRole('button', { name: en['chat.copyAsked']!, exact: true }).click();
+    t.check('"Copy" on the card: what it asks about, as shown', (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), ((await ask.locator('pre.cs-out').textContent()) ?? '').replace(/\r\n/g, '\n'));
     await ask.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
     await page.locator('.cs-body').getByText('I wrote live.txt holding the word live').waitFor({ timeout: 30_000 });
     await waitFor('LIVE to go', async () => (await badge.count()) === 0 || null, 15_000).catch(() => undefined);
@@ -1908,6 +2013,42 @@ try {
     t.check('"Continue": the work went on to its end', readFileSync(join(h.repo, 'later.txt'), 'utf8').trim(), 'later');
     await waitFor('the buttons to go', async () => (await pause.count()) + (await resume.count()) === 0, 10_000).catch(() => undefined);
     t.check('ended: neither button is left, nor the note', [await pause.count(), await resume.count(), await page.locator('.cs-paused').count()], [0, 0, 0]);
+  });
+
+  /*
+   * "Stop" pressed (operator, 2026-10-26): it is off at once and reads "Stopping." "Stopping.." "Stopping..." going
+   * round, while the answer Copilot is writing is waited for; then the work has stopped and it goes.
+   */
+  await scenario('"Stop" pressed: off at once, "Stopping." with its dots going round, until the work has stopped', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    let answer!: () => void;
+    const answered = new Promise<void>((r) => (answer = r));
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create later.txt holding later.', model: 'Think deeper' });
+    h.chat.script(async () => {
+      await answered;
+      return reply.steps(write('later.txt', 'later'));
+    });
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const stopButton = page.getByRole('button', { name: en['chat.stop']!, exact: true });
+    await stopButton.waitFor({ timeout: 15_000 });
+    await waitFor('the chat to be writing its answer', async () => (h.chat.pending === 0 ? true : null), 15_000).catch(() => undefined);
+    await stopButton.click();
+    const stoppingButton = page.locator('.cs-actions button.cs-stop');
+    const seen: string[] = [];
+    for (const until = Date.now() + 2_400; Date.now() < until; await sleep(60)) {
+      const label = ((await stoppingButton.textContent().catch(() => '')) ?? '').trim();
+      if (label && seen.at(-1) !== label) seen.push(label);
+    }
+    const word = en['chat.stoppingNow']!;
+    t.check('pressed: off at once', [await stoppingButton.isDisabled(), await stoppingButton.getAttribute('aria-busy')], [true, 'true']);
+    t.truthy('"Stopping." then "Stopping.." then "Stopping...", and again from the start', seen[0] === `${word}.` && seen.join('|').includes(`${word}.|${word}..|${word}...|${word}.`), seen);
+    answer();
+    await waitFor('the work to stop', async () => ((await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${threadId}`)).tasks[0]!.status === 'aborted' ? true : null), 30_000).catch(() => undefined);
+    await stoppingButton.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+    t.check('stopped: the message ended so, and the button has gone', [(await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${threadId}`)).tasks[0]!.status, await stoppingButton.count()], ['aborted', 0]);
   });
 
   /*
@@ -2203,6 +2344,13 @@ try {
       await progress.locator('.cs-todo').evaluateAll((els) => els.map((el) => [el.querySelector('.cs-todo-mark')?.textContent, el.querySelector('.cs-todo-title')?.textContent])),
       [['✓', 'Survey the project'], ['○', 'Write done.txt'], ['○', 'Read it back'], ['○', 'Say it in one sentence']],
     );
+    // "Copy" on the lead's list, its question and its answer (operator, 2026-10-26).
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    const clipboard = async (): Promise<string> => (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    await progress.getByRole('button', { name: en['lead.copyList']!, exact: true }).click();
+    t.truthy('the list copied, by phase, each with its mark', /## Survey\n✓ Survey the project/.test(await clipboard()) && (await clipboard()).includes('○ Write done.txt'), await clipboard());
+    await card.getByRole('button', { name: en['chat.copyQuestion']!, exact: true }).click();
+    t.check('the question waiting copied, with why it is asked and the answers it offers', await clipboard(), 'Should done.txt go at the root, or in a folder of its own?\nthe assignment names a folder that is there twice\n1. at the root\n2. in a folder');
     t.truthy('the lead\'s question, with its choices',((await card.textContent()) ?? '').includes('Should done.txt go at the root') && (await card.getByRole('button', { name: 'at the root', exact: true }).count()) === 1, await card.textContent());
     /*
      * Answered, the card goes at once (2026-10-20: it stayed, answered, until the next read of the list) — here every
@@ -2231,6 +2379,11 @@ try {
     release();
     await page.locator('.cs-end').getByText('Nothing needed writing').waitFor({ timeout: 30_000 });
     t.truthy('asked and answered, on the record of the message', ((await page.locator('.cs-lead-qa').textContent()) ?? '').includes('at the root'), await page.locator('.cs-lead-qa').textContent());
+    const qa = page.locator('.cs-lead-qa');
+    await qa.getByRole('button', { name: en['chat.copyQuestion']!, exact: true }).click();
+    const copiedQuestion = await clipboard();
+    await qa.getByRole('button', { name: en['chat.copyAnswer']!, exact: true }).click();
+    t.check('on the record, the question and the answer each copied', [copiedQuestion, await clipboard()], ['Should done.txt go at the root, or in a folder of its own?', 'at the root']);
     t.check('the worker is not a conversation of the list', await page.locator('#cs-thread option').count(), 2);
     t.check('the started conversation shows how it began: "Two chats" ticked and fixed', [await two.isChecked(), await two.isDisabled()], [true, true]);
     await page.getByRole('tab', { name: en['wb.terminal']!, exact: true }).click();
@@ -2280,7 +2433,7 @@ try {
         (await card.locator('.cs-ask-head strong').textContent())?.trim(),
         await card.locator('.badge').allTextContents(),
         ((await card.textContent()) ?? '').includes('ERR_CONNECTION_RESET'),
-        await card.getByRole('button').allTextContents(),
+        await card.locator('.row').getByRole('button').allTextContents(),
       ],
       [en['retry.title']!.replace('{n}', '1'), [en['retry.attempt']!.replace('{k}', '1').replace('{m}', '3'), en['retry.catTransient']], true, [en['retry.same'], en['retry.fresh'], en['retry.accept']]],
     );

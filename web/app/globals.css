@@ -1227,6 +1227,10 @@ button.linkish:hover { text-decoration: underline; }
 .wb-problems li.seen { opacity: 0.6; }
 .wb-seen { flex: none; }
 .cs-new { flex: none; padding: 4px 10px; font-size: calc(13px * var(--scale)); }
+/* Renaming the conversation (2026-10-26): its name in a box where the list was, with ✓ and ✕. */
+.cs-rename { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; margin: 0; }
+.cs-rename input { flex: 1; min-width: 0; padding: 4px 8px; font-size: calc(13px * var(--scale)); }
+.cs-rename-btn { flex: none; }
 /*
  * "New chat" off (2026-10-20): while a task runs, and on a new chat not begun yet. Not `disabled`, which takes the
  * pointer and the focus away, so the reason could not be shown: it is said beside the button on hover and on focus.
@@ -1340,6 +1344,9 @@ button.linkish:hover { text-decoration: underline; }
 .info-btn:hover, .info-btn[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .kerrigan { margin: 14px 0; }
 .kerrigan .row { align-items: center; }
+/* The skill that goes with her text (2026-10-26), the chat's own choice, beside her button. */
+.kerrigan-skill { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.kerrigan-skill select { min-width: 0; max-width: 100%; }
 /* System → the bot's folder: the copy checkbox beside its sentence, which wraps beside it rather than under the box. */
 .sys-home-copyline { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
 .sys-home-copyline input { margin-top: 3px; flex: none; }

@@ -211,6 +211,21 @@ try {
   t.check('the conversations, newest first', threads.map((x) => x.name), ['chat: A different question in a new conversation.', 'chat: Create hi.txt holding exactly the word hi.']);
   t.check('a message to a conversation that is not there is refused', (await h.raw('POST', '/chat', { text: 'hello', threadId: 'nope' })).status >= 400, true);
 
+  // Renamed (operator, 2026-10-26): what the list calls it; the conversation in Copilot keeps its own name.
+  type Named = { name: string; chat?: { name?: string; chatId?: string } };
+  const named = await h.call<Named>('GET', `/sessions/${other.threadId}`);
+  const renamed = await h.call<Named>('PUT', `/sessions/${other.threadId}`, { name: '  Questions about four  ' });
+  t.check('renamed: the list calls it so, and Copilot\'s conversation keeps its own name', [renamed.name, (await h.call<Thread[]>('GET', '/chat/threads')).find((x) => x.id === other.threadId)?.name, renamed.chat?.name], ['Questions about four', 'Questions about four', named.chat?.name]);
+  t.check('a name too long is refused, and an empty one changes nothing', [(await h.raw('PUT', `/sessions/${other.threadId}`, { name: 'n'.repeat(121) })).status, (await h.call<Named>('PUT', `/sessions/${other.threadId}`, { name: '   ' })).name], [400, 'Questions about four']);
+  let renamedChat = '';
+  await h.call<Sent>('POST', '/chat', { text: 'Write five.txt holding exactly five.', threadId: other.threadId });
+  h.chat.script((m) => {
+    renamedChat = m.chatId;
+    return reply.steps(write('five.txt', 'five'));
+  }, reply.done());
+  const afterRename = (await h.run(other.threadId)).tasks.at(-1) as Full;
+  t.check('and the next message goes on in the same conversation of Copilot', [afterRename.status, renamedChat, file('five.txt')], ['done', named.chat?.chatId, 'five']);
+
   t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
   t.check('every scripted reply was used', h.chat.pending, 0);
 } catch (e) {
@@ -320,6 +335,19 @@ try {
   t.check('in German: her own file, the names left to the page', [kd.lang, kd.fileName, kd.filled, kd.text.split('\n')[0]], ['de', 'kerrigan-copilot-operator.de.md', false, '# Kerrigan — a helper for copilot-operator']);
   t.truthy('as ⟦key⟧, each a key of the dictionary', kd.text.includes('**"⟦chat.newChat⟧"**') && !/⟦[^⟧]*[^\w.-⟧][^⟧]*⟧/.test(kd.text), kd.text.slice(0, 400));
   t.check('a code that is not a language: English', (await h.call<Kerrigan>('GET', '/kerrigan?lang=x!y')).lang, 'en');
+
+  // A skill chosen beside her button (operator, 2026-10-26): it goes with her text, its instructions whole.
+  t.check('with no skill chosen, none is said to be', k.text.includes('## The skill chosen'), false);
+  const instructions = 'Tests live in tests/e2e, one file per page.\n```ts\ntest(\'it opens\', () => {});\n```';
+  await h.call('PUT', '/skills', { skills: [{ name: 'new-test', description: 'Adding an automated test', text: instructions, projectDir: '' }] });
+  const ks = await h.call<Kerrigan>('GET', '/kerrigan?lang=en&skill=new-test');
+  const chosenPart = ks.text.slice(ks.text.indexOf('## The skill chosen'), ks.text.indexOf('## How you help'));
+  t.check('with one: its own file, and its part after the skills', [ks.fileName, ks.text.indexOf('## The skills') < ks.text.indexOf('## The skill chosen: `/new-test`')], ['kerrigan-copilot-operator.new-test.en.md', true]);
+  t.truthy('its name, what it is for, where to choose it, and its instructions whole, fenced past their own fence', chosenPart.includes('`/new-test` (every project) — Adding an automated test') && chosenPart.includes('**"Skill"**') && chosenPart.includes(`\`\`\`\`text\n${instructions}\n\`\`\`\``), chosenPart);
+  const ksb = await h.call<Kerrigan>('GET', '/kerrigan?lang=bg&skill=/New-Test');
+  t.truthy('in Bulgarian too, the name as typed after "/" or in capitals', ksb.fileName === 'kerrigan-copilot-operator.new-test.bg.md' && ksb.text.includes('## Избраният skill: `/new-test`') && ksb.text.includes(instructions), ksb.fileName);
+  t.check('a skill Settings do not have: refused', (await h.raw('GET', '/kerrigan?lang=en&skill=nope')).status, 400);
+  await h.call('PUT', '/skills', { skills: [] });
 
   /*
    * The projects (2026-10-20): each with its branch now and the level 2 the operator wrote for it, saved in Settings

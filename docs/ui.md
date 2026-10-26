@@ -717,6 +717,26 @@ says it above the list, with "Open the chat". While something works and the queu
 reads "Add, to start after it": it adds the task and starts the queue, whose first waiting task begins as soon as that
 work has ended.
 
+**A conversation renamed; Kerrigan with a skill (2026-10-26).** "✎" beside the chat's list of conversations puts the
+open one's name in a box where the list was (`cascade.tsx`): Enter or ✓ keeps it (`PUT /api/sessions/:id { name }`, at
+most 120 characters, any time, working or not), Escape or ✕ leaves it. The conversation in Copilot keeps its own name
+(`Session.chat.name`), which is how the bot finds it again. Beside Kerrigan's button, "Skill" offers the skills for every
+project and for the open folder; it is the same choice as "Skill" under the chat's box (`web/lib/chosenSkill.ts`):
+chosen in either, it changes in the other, and a message sent with it lets it go in both. Chosen, Kerrigan's text carries
+it (`GET /api/kerrigan?lang=&skill=`, `chosenSkillPart` in `plan/kerrigan.ts`): its name, what it is for, where to
+choose it, and its instructions whole, fenced past any fence of their own; the file is named for it
+(`kerrigan-copilot-operator.<skill>.<lang>.md`).
+
+**"Copy" on every block of the chat (2026-10-26).** Besides the operator's messages, the chat's replies, the commands
+with their output, the endings and the plans, these have "Copy" now: the lead's question waiting for an answer (its
+text, why it asks, the answers it offers, numbered) and, on the record, the question and the answer each; the lead's
+list of subtasks (by phase, each with its mark); the evidence the lead's result rests on; what a command card asks
+about; and what the card of a subtask cut off says.
+
+**"Stop" pressed (2026-10-26).** The chat's "Stop" is off at once and reads "Stopping." "Stopping.." "Stopping..." going
+round (`web/lib/useDots.ts`) while the answer Copilot is writing is waited for, until the work has stopped; a press the
+API refused gives it back. "Stop the queue" does the same while its task at work is stopping.
+
 **The bars on top in narrow windows (2026-10-24).** Both bars wrap instead of hiding links (the chat's under 700px) or
 scrolling them out of sight (the pages' on a phone); "Appearance" and "Language" are one item (`NavPair`, `.nav-pair`),
 so they move to the next line together and part only when one line cannot hold both. The chat's bar has "Queue".

@@ -46,6 +46,9 @@ import { type PlanCheck } from '../plan/schema.js';
 /** The longest level 2 a project may have: Kerrigan carries each one whole. */
 export const MAX_PROJECT_LEVEL2 = 8000;
 
+/** The longest name a conversation or a session may be given (2026-10-26). */
+export const MAX_SESSION_NAME = 120;
+
 /** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
 export type Skill = { name: string; description: string; text: string; projectDir: string };
 /*
@@ -587,6 +590,12 @@ export class OperatorService {
     if (patch.active !== undefined && this.running.has(id)) {
       throw new Error('This session is running; its status can be changed once it has stopped.');
     }
+    /*
+     * A conversation renamed (operator, 2026-10-26: "an option to rename the chats"): any time, working or not — it is
+     * what the list calls it. The conversation in Copilot keeps its own name (`Session.chat.name`), which is how the bot
+     * finds it again.
+     */
+    if (patch.name !== undefined && patch.name.trim().length > MAX_SESSION_NAME) throw new Error(`A name can be at most ${MAX_SESSION_NAME} characters.`);
     const updated = await this.store.updateSession(id, (s) => {
       const before = { model: s.model, manualModel: s.manualModel };
       if (patch.name !== undefined) s.name = patch.name.trim() || s.name;
@@ -1478,7 +1487,7 @@ export class OperatorService {
    * operator wrote for it. Nothing is sent anywhere: the page saves it or copies it. See `plan/kerrigan.ts`; in a
    * language she is not written out in, the page fills in the names of the controls (`filled: false`).
    */
-  async kerrigan(lang: string): Promise<{ lang: string; fileName: string; text: string; filled: boolean }> {
+  async kerrigan(lang: string, skill?: string): Promise<{ lang: string; fileName: string; text: string; filled: boolean }> {
     const cfg = await this.settings.load();
     const p = await this.project();
     const projects = [
@@ -1487,7 +1496,12 @@ export class OperatorService {
     ];
     // The skills, each with the name of the project it is for.
     const nameOf = (dir: string): string => [{ name: p.name || p.rootDir, rootDir: p.rootDir }, ...p.others].find((x) => x.rootDir && sameFolder(x.rootDir, dir))?.name ?? dir;
-    const skills = (await this.skills()).skills.map((k) => ({ name: k.name, description: k.description, ...(k.projectDir ? { project: nameOf(k.projectDir) } : {}) }));
+    const all = (await this.skills()).skills;
+    const skills = all.map((k) => ({ name: k.name, description: k.description, ...(k.projectDir ? { project: nameOf(k.projectDir) } : {}) }));
+    // The skill chosen beside her button (2026-10-26): its instructions go with her text.
+    const asked = skill?.trim().replace(/^\//, '').toLowerCase();
+    const chosen = asked ? all.find((k) => k.name === asked) : undefined;
+    if (asked && !chosen) throw new Error(`There is no skill called "${asked}" in Settings → Skills.`);
     const text = kerriganPersona(lang, {
       version: botVersion(),
       skills,
@@ -1497,8 +1511,9 @@ export class OperatorService {
       maxReviewRounds: cfg.limits.maxReviewRounds ?? 2,
       maxSubtasks: cfg.limits.maxSubtasks ?? 20,
       projects,
+      ...(chosen ? { chosenSkill: { name: chosen.name, description: chosen.description, text: chosen.text, ...(chosen.projectDir ? { project: nameOf(chosen.projectDir) } : {}) } } : {}),
     });
-    return { lang, fileName: kerriganFileName(lang), text, filled: lang === 'en' || lang === 'bg' };
+    return { lang, fileName: kerriganFileName(lang, chosen?.name), text, filled: lang === 'en' || lang === 'bg' };
   }
 
   /** The chat's conversations, newest first. */

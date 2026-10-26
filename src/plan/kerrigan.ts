@@ -49,6 +49,11 @@ export type KerriganFacts = {
   projects?: KerriganProject[];
   /** The skills in Settings (2026-10-21). */
   skills?: KerriganSkill[];
+  /**
+   * The skill chosen beside her button (operator, 2026-10-26: "the skill, when one is chosen, goes with Kerrigan's
+   * text"): the tasks she helps write are of its kind, and go with it. Its instructions whole, as the bot sends them.
+   */
+  chosenSkill?: KerriganSkill & { text: string };
 };
 
 /** The control names of every screen, by their dictionary key. */
@@ -152,12 +157,39 @@ function skillsPart(lang: string, skills: KerriganSkill[]): string {
   ].join('\n');
 }
 
+/** The skill chosen for the tasks she helps write, and its instructions as the bot sends them; none chosen, nothing. */
+function chosenSkillPart(lang: string, k: KerriganFacts['chosenSkill']): string {
+  if (!k) return '';
+  const bg = WRITTEN(lang) === 'bg';
+  const Q = (key: string) => quoted(lang, key);
+  // Fenced with more backticks than any run in the instructions, so they are shown as they are, whatever they hold.
+  const longest = Math.max(0, ...(k.text.match(/`+/g) ?? []).map((x) => x.length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  const where = k.project ? ` (${k.project})` : bg ? ' (всички проекти)' : ' (every project)';
+  const what = k.description.trim() ? ` — ${k.description.trim()}` : '';
+  return [
+    '',
+    '',
+    bg ? `## Избраният skill: \`/${k.name}\`` : `## The skill chosen: \`/${k.name}\``,
+    '',
+    bg
+      ? `Човекът е избрал skill-а \`/${k.name}\`${where}${what} за задачите, които пише с теб. Пиши всяка задача от този вид така, че да върви с него: кажи да го избере в ${Q('chat.skill')} под полето на чата или да започне съобщението с \`/${k.name}\`. Ботът изпраща инструкциите му със съобщението, така че в съобщението остава само особеното за задачата и нищо, което им противоречи. Инструкциите му, както ботът ги изпраща:`
+      : `The person chose the skill \`/${k.name}\`${where}${what} for the tasks they write with you. Write each task of its kind to go with it: say to choose it in ${Q('chat.skill')} under the chat's box, or to start the message with \`/${k.name}\`. The bot sends its instructions with the message, so the message holds only what is particular to the task, and nothing that goes against them. Its instructions, as the bot sends them:`,
+    '',
+    `${fence}text`,
+    k.text.trim(),
+    fence,
+  ].join('\n');
+}
+
 export function kerriganPersona(lang: string, facts: KerriganFacts): string {
   return WRITTEN(lang) === 'bg' ? bgText(facts) : enText(lang, facts);
 }
 
-export function kerriganFileName(lang: string): string {
-  return `kerrigan-copilot-operator.${/^[a-z]{2,3}(-[A-Za-z0-9]+)?$/.test(lang) ? lang : 'en'}.md`;
+export function kerriganFileName(lang: string, skill?: string): string {
+  // With a skill chosen, its name in the file's, so the two are told apart in a folder (2026-10-26).
+  const named = skill && /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/.test(skill) ? `.${skill}` : '';
+  return `kerrigan-copilot-operator${named}.${/^[a-z]{2,3}(-[A-Za-z0-9]+)?$/.test(lang) ? lang : 'en'}.md`;
 }
 
 function enText(lang: string, f: KerriganFacts): string {
@@ -202,7 +234,7 @@ ${projectsPart(lang, f.projects ?? [])}
 
 ## The skills
 
-${skillsPart(lang, f.skills ?? [])}
+${skillsPart(lang, f.skills ?? [])}${chosenSkillPart(lang, f.chosenSkill)}
 
 ## How you help
 
@@ -272,7 +304,7 @@ ${projectsPart('bg', f.projects ?? [])}
 
 ## Skill-овете
 
-${skillsPart('bg', f.skills ?? [])}
+${skillsPart('bg', f.skills ?? [])}${chosenSkillPart('bg', f.chosenSkill)}
 
 ## Как помагаш
 

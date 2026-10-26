@@ -9,6 +9,7 @@
  */
 import type { LeadLedger, LeadRecord, LeadRound, LeadTodo } from '../../lib/api';
 import { useT } from '../../lib/i18n';
+import { CopyButton } from '../copyButton';
 
 const MARK: Record<LeadTodo['status'] | 'stopped', string> = { done: '✓', running: '●', planned: '○', blocked: '⊘', failed: '✗', stopped: '■' };
 const SAID = { done: 'lead.todo.done', running: 'lead.todo.running', planned: 'lead.todo.planned', blocked: 'lead.todo.blocked', failed: 'lead.todo.failed', stopped: 'lead.todo.stopped' } as const;
@@ -56,9 +57,16 @@ function LedgerList({ ledger, live }: { ledger: LeadLedger; live: boolean }) {
     const rest = ledger.items.filter((i) => !i.phase);
     if (rest.length > 0) groups.push({ phase: t('lead.otherPhase'), items: rest });
   }
+  // The list as text, by phase, each with its mark (2026-10-26): to paste into a ticket or another chat.
+  const asText = groups
+    .map((g) => [...(g.phase ? [`## ${g.phase}`] : []), ...g.items.map((i) => `${MARK[i.status === 'running' && !live ? 'stopped' : i.status]} ${i.title}${i.n ? ` (#${i.n})` : ''}`)].join('\n'))
+    .join('\n\n');
   return (
     <details className="cs-ledger">
       <summary>{t('lead.ledgerList', { v: ledger.revision })}</summary>
+      <div className="cs-copy-row">
+        <CopyButton text={asText} what="lead.copyList" />
+      </div>
       {groups.map((g) => (
         <div key={g.phase || '-'} className="cs-ledger-group">
           {g.phase && <p className="cs-ledger-phase">{g.phase}</p>}

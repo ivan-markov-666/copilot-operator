@@ -5,10 +5,12 @@
  * the clipboard; the Kerrigan persona, which explains to the chats what copilot-operator is and in what form a task is
  * best given; wished for, not required — the chat must work well without her"). The text is the persona, in the
  * language of the page, for a conversation with any chat the operator likes; nothing here sends it anywhere, and the
- * bot's own chat never needs it. Read when the menu opens, so the copy happens straight from the press.
+ * bot's own chat never needs it. Read when the menu opens, so the copy happens straight from the press. A skill chosen
+ * beside it goes with her text (2026-10-26), the same choice as under the chat's box.
  */
-import { useState } from 'react';
-import { api, type KerriganText } from '../../lib/api';
+import { useEffect, useState } from 'react';
+import { api, type KerriganText, type Skill, type Workspace } from '../../lib/api';
+import { useChosenSkill } from '../../lib/chosenSkill';
 import { useT, type Key } from '../../lib/i18n';
 import { copyText } from '../copyButton';
 import { InfoTip, usePopover } from '../popover';
@@ -36,10 +38,22 @@ export function KerriganAbout() {
   );
 }
 
-export function KerriganButton() {
+export function KerriganButton({ workspace }: { workspace?: Workspace | null }) {
   const { t, locale } = useT();
   const pop = usePopover('below');
   const [said, setSaid] = useState('');
+  /*
+   * The skill that goes with her text (operator, 2026-10-26: "a second Skill drop-down beside Kerrigan's; chosen in
+   * either, it changes in the other"): the chat's own choice, offered as the chat offers it — the skills for every
+   * project and for the open folder.
+   */
+  const [skill, setSkill] = useChosenSkill();
+  const [skills, setSkills] = useState<Skill[]>([]);
+  useEffect(() => {
+    api.skills().then((r) => setSkills(r.skills)).catch(() => undefined);
+  }, []);
+  const folderKey = (d: string): string => d.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+  const skillsHere = skills.filter((k) => !k.projectDir || (workspace?.ok && folderKey(k.projectDir) === folderKey(workspace.dir)));
 
   /*
    * Read each time the menu opens: she carries the projects of Settings with their branches, which change. In a language
@@ -48,7 +62,7 @@ export function KerriganButton() {
    */
   const read = async (): Promise<KerriganText | null> => {
     try {
-      const got = await api.kerrigan(locale);
+      const got = await api.kerrigan(locale, skill || undefined);
       const filled = got.filled ? got : { ...got, text: got.text.replace(/⟦([\w.-]+)⟧/g, (_, key: string) => t(key as Key)) };
       return filled;
     } catch (e) {
@@ -86,6 +100,22 @@ export function KerriganButton() {
           {t('kerrigan.button')} <span aria-hidden="true">▾</span>
         </button>
         <InfoTip label={t('kerrigan.infoLabel')} text={t('kerrigan.info')} />
+        {skillsHere.length > 0 && (
+          <span className="kerrigan-skill">
+            <label htmlFor="kerrigan-skill" className="cs-pick-label">
+              {t('chat.skill')}
+            </label>
+            <select id="kerrigan-skill" value={skill} onChange={(e) => setSkill(e.target.value)}>
+              <option value="">{t('chat.skillNone')}</option>
+              {skillsHere.map((k) => (
+                <option key={k.name} value={k.name} title={k.description || undefined}>
+                  /{k.name}
+                </option>
+              ))}
+            </select>
+            <InfoTip label={t('info.about', { name: t('chat.skill') })} text={t('kerrigan.skillWhy')} />
+          </span>
+        )}
       </div>
       {pop.open && (
         <div ref={pop.panel} id={pop.id} role="menu" aria-label={t('kerrigan.menu')} className="pop menu" style={pop.style}>

@@ -21,6 +21,8 @@ import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogu
 import type { Key } from '../../lib/lang/types';
 import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
+import { useChosenSkill } from '../../lib/chosenSkill';
+import { useDots } from '../../lib/useDots';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
 import { BY_HAND, ModelPicker } from '../modelPicker';
@@ -90,7 +92,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   const [reading, setReading] = useState(false);
   /** The skills of Settings (2026-10-21), and the one chosen for the next message ('' for none). */
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [skill, setSkill] = useState('');
+  // The same choice as beside Kerrigan's button (2026-10-26): chosen in either, it changes in both.
+  const [skill, setSkill] = useChosenSkill();
   const box = useRef<HTMLTextAreaElement | null>(null);
   const running = !!session && session.status !== 'idle';
   /*
@@ -186,6 +189,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     setThreadId(id);
     keep(THREAD_KEY, id);
     setSaid('');
+    // A name being written is of the conversation it was opened on.
+    setRenaming(null);
   };
   /** The conversation's model, with the button that reads the list again; as wide as `maxWidth` lets it. */
   const modelPicker = (maxWidth: string) => (
@@ -213,6 +218,25 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     choose('');
     setSession(null);
     box.current?.focus();
+  };
+  /*
+   * Renaming the conversation (operator, 2026-10-26): in place of the list, its name in a box — Enter or "Save" keeps
+   * it, Escape or "Cancel" leaves it as it was. Any time, working or not. The conversation in Copilot keeps its own name.
+   */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const shownName = (name: string): string => name.replace(/^chat: /, '');
+  const rename = async () => {
+    const name = renaming?.trim() ?? '';
+    if (!session || !name) return;
+    try {
+      const s = await api.updateSession(session.id, { name });
+      setSession((x) => (x && x.id === s.id ? { ...x, name: s.name } : x));
+      setThreads((list) => list.map((x) => (x.id === s.id ? { ...x, name: s.name } : x)));
+      setRenaming(null);
+      setSaid('');
+    } catch (e) {
+      setSaid((e as Error).message);
+    }
   };
 
   const send = async () => {
@@ -440,8 +464,28 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       void readSession();
     }
   };
+  /*
+   * Pressed, "Stop" is off and says it is stopping — "Stopping." "Stopping.." "Stopping..." going round (operator,
+   * 2026-10-26) — until the work has stopped; a press the API refused gives it back.
+   */
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!running) setStopping(false);
+  }, [running]);
+  useEffect(() => {
+    setStopping(false);
+  }, [session?.id]);
+  const stopDots = useDots(stopping);
   const stop = () => {
-    if (session) void api.stop(session.id).then(() => setSaid(t('chat.stopping'))).catch((e: unknown) => setSaid((e as Error).message));
+    if (!session || stopping) return;
+    setStopping(true);
+    void api
+      .stop(session.id)
+      .then(() => setSaid(t('chat.stopping')))
+      .catch((e: unknown) => {
+        setStopping(false);
+        setSaid((e as Error).message);
+      });
   };
 
   const last = session?.tasks.at(-1);
@@ -457,15 +501,56 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   return (
     <div className="cs">
       <div className="cs-head">
-        <label htmlFor="cs-thread" className="sr-only">{t('chat.thread')}</label>
-        <select id="cs-thread" dir="auto" value={threadId} onChange={(e) => choose(e.target.value)}>
-          <option value="">{t('chat.newThread')}</option>
-          {threads.map((x) => (
-            <option key={x.id} value={x.id}>
-              {x.name.replace(/^chat: /, '')}
-            </option>
-          ))}
-        </select>
+        {renaming !== null && session ? (
+          <form
+            className="cs-rename"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void rename();
+            }}
+          >
+            <label htmlFor="cs-rename" className="sr-only">{t('chat.renameLabel')}</label>
+            <input
+              id="cs-rename"
+              type="text"
+              dir="auto"
+              maxLength={120}
+              value={renaming}
+              autoFocus
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setRenaming(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setRenaming(null);
+                }
+              }}
+            />
+            <button type="submit" className="wb-icon-btn" disabled={!renaming.trim()} title={t('chat.renameSave')} aria-label={t('chat.renameSave')}>
+              ✓
+            </button>
+            <button type="button" className="wb-icon-btn" onClick={() => setRenaming(null)} title={t('chat.renameCancel')} aria-label={t('chat.renameCancel')}>
+              ✕
+            </button>
+          </form>
+        ) : (
+          <>
+            <label htmlFor="cs-thread" className="sr-only">{t('chat.thread')}</label>
+            <select id="cs-thread" dir="auto" value={threadId} onChange={(e) => choose(e.target.value)}>
+              <option value="">{t('chat.newThread')}</option>
+              {threads.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {shownName(x.name)}
+                </option>
+              ))}
+            </select>
+            {session && (
+              <button type="button" className="wb-icon-btn cs-rename-btn" onClick={() => setRenaming(shownName(session.name))} title={t('chat.rename')} aria-label={t('chat.rename')}>
+                ✎
+              </button>
+            )}
+          </>
+        )}
         {/*
           A button with its name on it (2026-10-18: "a 'New chat' button, where the tasks run in a new Copilot chat"): it
           was a bare "+". The next message opens a new conversation in Copilot; this one stays in the list beside it.
@@ -638,8 +723,15 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
               </button>
             )}
             {running && (
-              <button type="button" className="danger" onClick={stop}>
-                {t('chat.stop')}
+              <button type="button" className="danger cs-stop" onClick={stop} disabled={stopping} aria-busy={stopping || undefined}>
+                {stopping ? (
+                  <>
+                    {t('chat.stoppingNow')}
+                    <span className="saving-dots">{stopDots}</span>
+                  </>
+                ) : (
+                  t('chat.stop')
+                )}
               </button>
             )}
             <button type="button" className="primary" disabled={busy || !text.trim() || !workspace?.ok} onClick={() => void send()} title={t('chat.sendWhy')}>
@@ -951,6 +1043,9 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
     <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
       <p className="small cs-ask-head"><strong>{t('chat.askTitle')}</strong> {approval.actor && <ActorChip actor={approval.actor} how="asks" />}</p>
       <pre className="cs-out">{approval.description}</pre>
+      <div className="cs-copy-row">
+        <CopyButton text={approval.description} what="chat.copyAsked" />
+      </div>
       {/* A platform reached with the operator's own access (2026-10-23): said, and never run on "the rest". */}
       {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
       <div className="row">
@@ -999,8 +1094,15 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
             <div className="cs-bot cs-lead-qa">
               <p className="cs-who">{t('lead.question')}</p>
               <RichText text={r.question.text} />
+              {/* Each with its "Copy" (operator, 2026-10-26: "a copy button for the lead's questions too"). */}
+              <div className="cs-copy-row">
+                <CopyButton text={r.question.text} what="chat.copyQuestion" />
+              </div>
               <p className="cs-who">{t('lead.answered')}</p>
               <RichText text={r.question.answer} />
+              <div className="cs-copy-row">
+                <CopyButton text={r.question.answer} what="chat.copyAnswer" />
+              </div>
             </div>
           )}
         </Fragment>
@@ -1034,6 +1136,9 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
               </li>
             ))}
           </ul>
+          <div className="cs-copy-row">
+            <CopyButton text={task.lead!.evidence!.map((e) => `- ${e}`).join('\n')} what="chat.copyEvidence" />
+          </div>
         </div>
       )}
       {task.runId && (
@@ -1251,6 +1356,12 @@ function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Dec
       {r.reason && <p className="small">{t('retry.reason', { reason: r.reason })}</p>}
       {r.sideEffects === 'unknown' && <p className="reason small">{t('retry.unknown')}</p>}
       {r.changed.length > 0 && <p className="muted small">{t('retry.changed', { files: r.changed.slice(0, 8).join(', ') + (r.changed.length > 8 ? ', …' : '') })}</p>}
+      <div className="cs-copy-row">
+        <CopyButton
+          text={[t('retry.title', { n: r.n }), `${r.title}`, `${t('retry.attempt', { k: r.attempt, m: r.maxAttempts })} · ${t(FAILURE_KEY[r.category])}`, r.reason ? t('retry.reason', { reason: r.reason }) : '', r.changed.length > 0 ? t('retry.changed', { files: r.changed.join(', ') }) : ''].filter(Boolean).join('\n')}
+          what="chat.copyCard"
+        />
+      </div>
       <div className="row">
         {r.choices.map((c, i) => (
           <button key={c} type="button" className={i === 0 ? 'primary' : undefined} disabled={busy} onClick={() => void choose(c)}>
@@ -1311,6 +1422,9 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
       </p>
       <RichText text={q.text} />
       {q.why && <p className="muted small">{q.why}</p>}
+      <div className="cs-copy-row">
+        <CopyButton text={[q.text, q.why ?? '', ...q.options.map((o, i) => `${i + 1}. ${o}`)].filter(Boolean).join('\n')} what="chat.copyQuestion" />
+      </div>
       {/*
         Its answers to click (2026-10-23), the chat's recommended one first; an answer that carries a command says it
         runs it, and the bot runs it when it is chosen — nothing for the operator to type.

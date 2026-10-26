@@ -503,7 +503,7 @@ function Welcome({ workspace, problem }: { workspace: Workspace | null; problem:
       <h2>{workspace?.ok ? workspace.name : t('wb.welcome')}</h2>
       <p className="muted">{workspace?.ok ? t('wb.welcomeChat', { dir: workspace.dir }) : t('wb.welcomeWhy')}</p>
       {problem && <p className="err small">{problem}</p>}
-      <KerriganButton />
+      <KerriganButton workspace={workspace} />
       <KerriganAbout />
       <p className="muted small">{t('wb.keys')}</p>
     </div>

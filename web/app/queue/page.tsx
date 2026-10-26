@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { api, type ModelCatalogue, type Queue, type QueueBusy, type QueueItem, type Skill, type Workspace } from '../../lib/api';
 import { useT, type Key } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
+import { useDots } from '../../lib/useDots';
 import { ModelPicker } from '../modelPicker';
 import { InfoTip } from '../popover';
 import { confirmDialog } from '../dialog';
@@ -197,6 +198,12 @@ export default function QueuePage() {
   // A skill a task was given that this folder no longer offers is still shown, so an edit does not drop it unseen.
   const skillChoices = draft.skill && !skillsHere.some((k) => k.name === draft.skill) ? [...skillsHere, { name: draft.skill, description: '', text: '', projectDir: '' }] : skillsHere;
   const running = items.findIndex((x) => x.status === 'running');
+  /*
+   * Stopped while a task of it works: "Stop the queue" is off and says it is stopping, its dots going round, until that
+   * task has stopped (2026-10-26, as the chat's "Stop").
+   */
+  const stopping = !!queue && !queue.running && running >= 0;
+  const stopDots = useDots(stopping);
   const waiting = items.filter((x) => x.status === 'waiting').length;
   const summary =
     queue?.running && running >= 0
@@ -239,9 +246,16 @@ export default function QueuePage() {
         )}
         {queue?.busy && <BusyLine busy={queue.busy} running={queue.running} />}
         <div className="row queue-controls">
-          {queue?.running ? (
-            <button onClick={() => void act(api.stopQueue)} disabled={busy}>
-              {t('q.stop')}
+          {queue?.running || stopping ? (
+            <button onClick={() => void act(api.stopQueue)} disabled={busy || stopping} aria-busy={stopping || undefined}>
+              {stopping ? (
+                <>
+                  {t('q.stopping')}
+                  <span className="saving-dots">{stopDots}</span>
+                </>
+              ) : (
+                t('q.stop')
+              )}
             </button>
           ) : (
             <button className="primary" onClick={() => void act(api.runQueue)} disabled={busy || waiting === 0 || !queue}>

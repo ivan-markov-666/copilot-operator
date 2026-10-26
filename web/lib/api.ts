@@ -1350,7 +1350,8 @@ export const api = {
    * Kerrigan, the persona to give another chat (2026-10-20): what copilot-operator is and how a task is best written
    * for its chat, in the page's language, with the name to save it under.
    */
-  kerrigan: (lang: string) => call<KerriganText>(`/kerrigan?lang=${encodeURIComponent(lang)}`),
+  /** `skill`: the one chosen beside her button, whose instructions go with her text (2026-10-26). */
+  kerrigan: (lang: string, skill?: string) => call<KerriganText>(`/kerrigan?lang=${encodeURIComponent(lang)}${skill ? `&skill=${encodeURIComponent(skill)}` : ''}`),
   /** One task's whole exchange with Copilot — messages, replies, commands and their output — as a JSON file. */
   taskExchangeUrl: (id: string, taskId: string) => withToken(`${API}/sessions/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}/exchange`),
   /** The projects: the chat's folder first, then the others, each with its branch and its level 2. */
