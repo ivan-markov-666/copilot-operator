@@ -1,6 +1,6 @@
 {
   "name": "copilot-operator",
-  "version": "0.1.68",
+  "version": "0.1.69",
   "private": false,
   "type": "module",
   "description": "Automates a Microsoft 365 Copilot chat: sends prompts, extracts commands, runs them, reports back.",
