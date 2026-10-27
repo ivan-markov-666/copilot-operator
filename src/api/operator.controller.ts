@@ -364,6 +364,12 @@ export class OperatorController {
     return this.ops.workspaceBranch(base || undefined).catch(fail);
   }
 
+  /** The two numbers on the Git button: files not committed, and files on this branch against `base`. Read-only. */
+  @Get('workspace/git/counts')
+  workspaceGitCounts(@Query('base') base?: string): Promise<unknown> {
+    return this.ops.workspaceGitCounts(base || undefined).catch(fail);
+  }
+
   @Get('workspace/git/commit')
   workspaceCommit(@Query('sha') sha?: string): Promise<unknown> {
     if (!sha) throw new BadRequestException('sha is required');

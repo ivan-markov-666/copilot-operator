@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type BranchChanges, type GitArea, type GitFile, type Workspace, type WorkspaceGit } from '../../lib/api';
 import { BranchSection } from './branchChanges';
+import { useGitBase } from '../../lib/gitBase';
 import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
 import type { SideView, Tab } from './workbench';
@@ -163,26 +164,10 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
   const [commitFiles, setCommitFiles] = useState<Map<string, GitFile[] | string>>(new Map());
   /*
    * Everything the branch changed, as a pull request shows it (2026-10-22), against the branch chosen for this folder
-   * — kept in this browser — or the one a pull request would go into.
+   * — kept in this browser, the same choice the Git button counts against — or the one a pull request would go into.
    */
   const [branch, setBranch] = useState<BranchChanges | null>(null);
-  const baseKey = `cop.git.base:${workspace?.dir ?? ''}`;
-  const [base, setBase] = useState('');
-  useEffect(() => {
-    try {
-      setBase(window.localStorage.getItem(baseKey) ?? '');
-    } catch {
-      setBase('');
-    }
-  }, [baseKey]);
-  const chooseBase = (b: string): void => {
-    setBase(b);
-    try {
-      window.localStorage.setItem(baseKey, b);
-    } catch {
-      /* kept for this visit only */
-    }
-  };
+  const [base, chooseBase] = useGitBase(workspace?.dir ?? '');
   const read = useCallback(
     () =>
       Promise.all([api.workspaceGit(), api.workspaceBranch(base || undefined)])

@@ -659,6 +659,62 @@ try {
   });
 
   /*
+   * Two numbers on the Git button (operator, 2026-10-27: "two counters stuck to the Git button: one the changed files
+   * not committed, the other all the files changed on this branch"): above, the files not committed; below, every file
+   * "On this branch" lists, against the branch it is compared with; neither shown at 0; another base chosen in the
+   * view moves the second at once.
+   */
+  await scenario('the Git button: the files not committed above, the files on this branch below, as the Git view counts them', {}, async (h, page, url) => {
+    const counted = page.waitForResponse((r) => r.url().includes('/api/workspace/git/counts'));
+    await page.goto(url('/'));
+    await counted;
+    await page.waitForTimeout(300);
+    const gitButton = page.getByRole('button', { name: en['wb.viewCommits']!, exact: true });
+    const numbers = async (): Promise<string[][]> => [await gitButton.locator('.wb-act-badge.uncommitted').allTextContents(), await gitButton.locator('.wb-act-badge.branch').allTextContents()];
+    t.check('a clean main with no other branch: no number on the button', [await numbers(), await gitButton.getAttribute('title')], [[[], []], en['wb.viewCommits']]);
+
+    const commit = (m: string): string => h.git('-c', 'user.name=op', '-c', 'user.email=op@example.com', 'commit', '-q', '-m', m);
+    h.git('checkout', '-q', '-b', 'feature');
+    writeFileSync(join(h.repo, 'a.txt'), 'a\n', 'utf8');
+    writeFileSync(join(h.repo, 'b.txt'), 'b\n', 'utf8');
+    h.git('add', '-A');
+    commit('feature work');
+    h.git('branch', 'other');
+    writeFileSync(join(h.repo, 'a.txt'), 'a\nmore\n', 'utf8');
+    writeFileSync(join(h.repo, 'c.txt'), 'c\n', 'utf8');
+    await waitFor('the numbers to be read again', async () => (JSON.stringify(await numbers()) === JSON.stringify([['2'], ['3']]) ? true : null), 15_000).catch(() => undefined);
+    const uncommittedSaid = en['git.badgeUncommitted']!.replace('{n}', '2');
+    const branchSaid = en['git.badgeBranch']!.replace('{n}', '3').replace('{base}', 'main');
+    t.check(
+      'two files not committed (one changed, one new), three on the branch against main; the button says which is which',
+      [await numbers(), await gitButton.getAttribute('title'), ((await page.locator(`#${(await gitButton.getAttribute('aria-describedby'))!}`).textContent()) ?? '').trim()],
+      [[['2'], ['3']], `${en['wb.viewCommits']} · ${uncommittedSaid} · ${branchSaid}`, `${uncommittedSaid} · ${branchSaid}`],
+    );
+    const [act, bar, icon, above, below] = await Promise.all([gitButton.boundingBox(), page.locator('.wb-activity').boundingBox(), gitButton.locator('svg').boundingBox(), gitButton.locator('.wb-act-badge.uncommitted').boundingBox(), gitButton.locator('.wb-act-badge.branch').boundingBox()]);
+    // The icon's line runs down its middle; a number covering it would hide what the button is.
+    const stem = icon!.x + icon!.width / 2 + 1;
+    t.check(
+      'stuck to the button, on its right, clear of the icon\'s line: not committed above, the branch below, inside the bar',
+      [above!.y + above!.height <= below!.y, above!.y >= act!.y - 1, below!.y + below!.height <= act!.y + act!.height + 1, above!.x >= stem, below!.x >= stem, Math.max(above!.x + above!.width, below!.x + below!.width) <= bar!.x + bar!.width],
+      [true, true, true, true, true, true],
+    );
+
+    await gitButton.click();
+    const branch = page.locator('.wb-side .wb-branch');
+    const filter = branch.getByRole('tablist', { name: en['git.filter']! });
+    await filter.waitFor({ timeout: 15_000 });
+    t.check('the Git view counts the same', await filter.getByRole('tab').allTextContents(), [en['git.filterAll']!.replace('{n}', '3'), en['git.filterCommitted']!.replace('{n}', '2'), en['git.filterUncommitted']!.replace('{n}', '2')]);
+    await page.locator('#wb-branch-base').selectOption('other');
+    await waitFor('the branch number against "other"', async () => (JSON.stringify(await numbers()) === JSON.stringify([['2'], ['2']]) ? true : null), 4_000).catch(() => undefined);
+    t.check('another base chosen in the view: the branch number follows it at once', [await numbers(), (await gitButton.getAttribute('title'))?.includes(en['git.badgeBranch']!.replace('{n}', '2').replace('{base}', 'other'))], [[['2'], ['2']], true]);
+
+    h.git('add', '-A');
+    commit('more');
+    await waitFor('the numbers after the commit', async () => (JSON.stringify(await numbers()) === JSON.stringify([[], ['2']]) ? true : null), 15_000).catch(() => undefined);
+    t.check('all committed: no number above; the branch still has its two against "other"', await numbers(), [[], ['2']]);
+  });
+
+  /*
    * The conversation open in the chat is forgotten only when the API no longer has it (2026-10-20). Any failed read
    * forgot it: the page reloaded while its first read was out, or the bot was restarting, and the chat came back on a
    * new conversation — the checks that open one through this browser's storage and reload failed on it.
@@ -732,6 +788,11 @@ try {
     const chat = page.locator('#cs-skill');
     await beside.waitFor();
     await chat.waitFor();
+    // Its name, the list and its ⓘ on one line, the ⓘ to the right of the list, as Kerrigan's is of her button (2026-10-27).
+    const box = async (l: ReturnType<typeof page.locator>) => (await l.boundingBox())!;
+    const [list, skillInfo, skillName, her, herInfo] = await Promise.all([box(beside), box(page.locator('.kerrigan-skill .info-btn')), box(page.locator('.kerrigan-skill label')), box(page.getByRole('button', { name: en['kerrigan.button']!, exact: true })), box(page.locator('.kerrigan > .row > .info-btn'))]);
+    const middle = (b: { y: number; height: number }): number => Math.round(b.y + b.height / 2);
+    t.check('the Skill\'s ⓘ to the right of its list and on its line, its name to the left, as Kerrigan\'s ⓘ is to hers', [skillInfo.x >= list.x + list.width, Math.abs(middle(skillInfo) - middle(list)) <= 3, skillName.x + skillName.width <= list.x, Math.abs(middle(skillName) - middle(list)) <= 3, herInfo.x >= her.x + her.width, Math.abs(middle(herInfo) - middle(her)) <= 3], [true, true, true, true, true, true]);
     t.check('beside Kerrigan, as under the chat\'s box: none, or /new-test', [await beside.locator('option').allTextContents(), await chat.locator('option').allTextContents(), await beside.inputValue(), await chat.inputValue()], [[en['chat.skillNone'], '/new-test'], [en['chat.skillNone'], '/new-test'], '', '']);
     await beside.selectOption('new-test');
     t.check('chosen beside Kerrigan: chosen in the chat too', await chat.inputValue(), 'new-test');
@@ -2216,6 +2277,176 @@ try {
     await options.first().click();
     await page.locator('.cs-body').getByText('asked.txt was written by the command').waitFor({ timeout: 30_000 });
     t.check('clicked: the bot ran it, and the work went on to its end', existsSync(join(h.repo, 'asked.txt')) ? readFileSync(join(h.repo, 'asked.txt'), 'utf8').trim() : null, 'yes');
+  });
+
+  /*
+   * The chat follows its newest (operator, 2026-10-27: "the chat scrolls down by itself, so the user sees the latest;
+   * scrolled up to older events, the automatic scrolling stops until the user scrolls back to the very bottom; opening
+   * 'The subtasks in the plan', and every fold like it, must not change that: we keep seeing the latest").
+   */
+  await scenario('the chat follows its newest: "The subtasks in the plan" opened keeps it there, scrolled up it stays put, back at the bottom it follows again', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    const long = Array.from({ length: 30 }, (_, i) => `Point ${i + 1}: the assignment, understood at length, so that the conversation is taller than the chat.`).join('\n\n');
+    let releaseWorker!: () => void;
+    const workerHeld = new Promise<void>((r) => (releaseWorker = r));
+    const todo = ['Survey the project', 'Write a.txt', 'Write b.txt', 'Write c.txt', 'Read them back', 'Say what was done'].map((title, i) => ({ title, status: i === 0 ? 'running' : 'planned' }));
+    h.chat.script(
+      reply.lead.delegate({ title: 'Survey the project' }, { understanding: long, todo }),
+      async () => {
+        await workerHeld;
+        return reply.steps('Get-ChildItem -Name');
+      },
+      reply.done('The project folder holds README.md at its root, and nothing else that the assignment names.'),
+      reply.lead.done('The survey was all there was to do: the folder holds README.md and nothing else the assignment names.'),
+    );
+    await page.goto(url('/'));
+    await page.getByRole('checkbox', { name: en['chat.lead']! }).check();
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Say at length what the assignment is, then survey the project.');
+    await input.press('Enter');
+    const body = page.locator('.cs-body');
+    const fold = page.locator('.cs-lead-progress details.cs-ledger');
+    await fold.waitFor({ timeout: 30_000 });
+    const gap = async (): Promise<number> => await body.evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+    await waitFor('the chat at its newest', async () => ((await gap()) <= 24 ? true : null), 10_000).catch(() => undefined);
+    t.check('taller than the chat, and shown at its newest', [await body.evaluate((el) => el.scrollHeight > el.clientHeight * 1.5), (await gap()) <= 24], [true, true]);
+    await fold.locator('summary').click();
+    await waitFor('the list to open', async () => ((await fold.locator('.cs-todo').count()) === 6 ? true : null), 5_000).catch(() => undefined);
+    await sleep(300);
+    t.check('"The subtasks in the plan" opened: its list open, and the chat still at its newest', [await fold.evaluate((d) => (d as HTMLDetailsElement).open), await fold.locator('.cs-todo').count(), (await gap()) <= 24], [true, 6, true]);
+
+    // Scrolled up by the operator, to read: it stays on what they are reading while the work goes on and adds to it.
+    const box = (await body.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -900);
+    await waitFor('the wheel to scroll', async () => ((await gap()) > 300 ? true : null), 5_000).catch(() => undefined);
+    const reading = async (): Promise<string> => await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.textContent?.slice(0, 80) ?? '', [box.x + 40, box.y + box.height / 2]);
+    const before = await reading();
+    t.truthy('scrolled up by the operator, away from the newest', (await gap()) > 300 && before.startsWith('Point '), `${await gap()}px from the bottom, reading "${before}"`);
+    releaseWorker();
+    await page.locator('.cs-lead-turn > .cs-end').waitFor({ timeout: 30_000 });
+    await sleep(500);
+    t.check('the work went on to its end below; the chat stayed on what the operator was reading', [await reading(), (await gap()) > 300], [before, true]);
+
+    // Back at the very bottom: following again, the next message and its answer in view as they come.
+    await page.mouse.wheel(0, 100_000);
+    await waitFor('back at the bottom', async () => ((await gap()) <= 24 ? true : null), 5_000).catch(() => undefined);
+    h.chat.script(reply.lead.done('Asked again: still nothing to change, the folder holds README.md alone at its root.', [], { understanding: 'Say once more what is in the folder; nothing to change.' }));
+    await input.fill('And once more, say what is there.');
+    await input.press('Enter');
+    await body.getByText('Asked again: still nothing to change').waitFor({ timeout: 30_000 });
+    await sleep(300);
+    t.check('back at the bottom, it follows again: the next answer at the newest', (await gap()) <= 24, true);
+  });
+
+  /*
+   * A question brings itself into view (operator, 2026-10-27: "if the bot asks something — a command to run, a question,
+   * anything — the chat moves to it, wherever the user had scrolled; a big label in the centre, 'Waiting for the user's
+   * action', well seen, that needs no button and goes when the user answers; the rest of the screen darkened, only the
+   * place that waits left lit"). Typing in the chat's box when a card comes, the box keeps the keyboard.
+   */
+  await scenario('a question brings itself into view wherever the chat was scrolled; "Waiting for the user\'s action" over the darkened rest until it is answered', { execution: { mode: 'confirm' } }, async (h, page, url) => {
+    const long = Array.from({ length: 30 }, (_, i) => `Line ${i + 1} of what the folder holds, said at length so the conversation is taller than the chat.`).join('\n\n');
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Say at length what the folder holds.', model: 'Think deeper' });
+    h.chat.script(reply.done(long));
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'confirm' });
+    await h.idle();
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const body = page.locator('.cs-body');
+    await body.getByText('Line 30 of what the folder holds').waitFor({ timeout: 30_000 });
+    const box = (await body.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -100_000);
+    await waitFor('the chat at its top', async () => ((await body.evaluate((el) => el.scrollTop)) === 0 ? true : null), 5_000).catch(() => undefined);
+    t.check('scrolled to the top, nothing waiting: no label, nothing darkened', [await body.evaluate((el) => el.scrollTop), await page.locator('.awaiting').count()], [0, 0]);
+
+    h.chat.script(reply.steps(write('q.txt', 'q')), reply.done('q.txt was written by the command the operator let run, holding the letter q.'));
+    await h.call('POST', '/chat', { text: 'Write q.txt.', threadId });
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'confirm' });
+    const card = page.locator('.cs-ask');
+    const label = page.locator('.awaiting-label');
+    await card.waitFor({ timeout: 30_000 });
+    await label.waitFor({ timeout: 5_000 });
+    await sleep(400);
+    const [c, b, l, ring] = await Promise.all([card.boundingBox(), body.boundingBox(), label.boundingBox(), page.locator('.awaiting-ring').first().boundingBox()]);
+    t.check(
+      'the card brought into view though the chat was at its top, and given the keyboard',
+      [c!.y >= b!.y - 1 && c!.y + c!.height <= b!.y + b!.height + 1, (await page.evaluate(() => document.activeElement?.getAttribute('data-awaits') ?? '')) === (await card.getAttribute('data-awaits'))],
+      [true, true],
+    );
+    const apart = (p: { x: number; y: number; width: number; height: number }, q: { x: number; y: number; width: number; height: number }): boolean => p.x + p.width <= q.x || q.x + q.width <= p.x || p.y + p.height <= q.y || q.y + q.height <= p.y;
+    t.check(
+      '"Waiting for the user\'s action": large, off the card, with nothing to press',
+      [((await label.textContent()) ?? '').trim(), parseFloat(await label.evaluate((el) => getComputedStyle(el).fontSize)) >= 24, apart(l!, c!), await page.locator('.awaiting button').count()],
+      [en['awaiting.title'], true, true, 0],
+    );
+    t.check(
+      'the rest darkened, the card left lit inside a ring, and nothing of it takes a click',
+      [await page.locator('.awaiting-shade').count(), ring!.x <= c!.x && ring!.y <= c!.y && ring!.x + ring!.width >= c!.x + c!.width && ring!.y + ring!.height >= c!.y + c!.height, await page.locator('.awaiting').evaluate((el) => getComputedStyle(el).pointerEvents)],
+      [1, true, 'none'],
+    );
+    await card.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
+    await label.waitFor({ state: 'detached', timeout: 10_000 });
+    t.check('answered: the label and the darkening go by themselves', await page.locator('.awaiting').count(), 0);
+    await body.getByText('q.txt was written by the command').waitFor({ timeout: 30_000 });
+    await h.idle();
+
+    // Writing in the chat's box when the next card comes: the box keeps the keyboard, so nothing typed goes to the card.
+    let releaseR!: () => void;
+    const heldR = new Promise<void>((r) => (releaseR = r));
+    h.chat.script(
+      async () => {
+        await heldR;
+        return reply.steps(write('r.txt', 'r'));
+      },
+      reply.done('r.txt was written by the command the operator let run, holding the letter r.'),
+    );
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Write r.txt.');
+    await input.press('Enter');
+    await waitFor('the box to be free again', async () => ((await input.isEnabled()) && (await input.inputValue()) === '' ? true : null), 10_000);
+    await input.click();
+    await page.keyboard.type('and then ');
+    releaseR();
+    await page.locator('.cs-ask').waitFor({ timeout: 30_000 });
+    await label.waitFor({ timeout: 5_000 });
+    await sleep(300);
+    await page.keyboard.type('more');
+    t.check('typing when the card came: the box kept the keyboard and every letter', [await page.evaluate(() => document.activeElement?.id ?? ''), await input.inputValue()], ['cs-input', 'and then more']);
+    await page.locator('.cs-ask').getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
+    await body.getByText('r.txt was written by the command').waitFor({ timeout: 30_000 });
+  });
+
+  /*
+   * A question in a conversation the chat does not show, with the chat's panel closed (2026-10-27): the panel opens on
+   * the conversation that asks, its card lit.
+   */
+  await scenario('a question in a conversation not shown, the chat closed: the chat opens on the conversation that asks', { execution: { mode: 'confirm' } }, async (h, page, url) => {
+    const a = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Say hello.', model: 'Think deeper' });
+    h.chat.script(reply.done('Hello: nothing was asked for but a greeting, and nothing in the folder was changed.'));
+    await h.call('POST', `/sessions/${a.threadId}/start`, { mode: 'confirm' });
+    await h.idle();
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), a.threadId);
+    await page.reload();
+    await page.locator('.cs-body').getByText('Hello: nothing was asked for').waitFor({ timeout: 30_000 });
+    await page.locator('.wb-chat-tabs').getByRole('button', { name: en['wb.toggleChat']!, exact: true }).click();
+    t.check('the chat closed', await page.locator('aside.wb-chat').isHidden(), true);
+
+    const b = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Write c.txt.', model: 'Think deeper' });
+    h.chat.script(reply.steps(write('c.txt', 'c')), reply.done('c.txt was written by the command the operator let run, holding the letter c.'));
+    await h.call('POST', `/sessions/${b.threadId}/start`, { mode: 'confirm' });
+    const card = page.locator('.cs-ask');
+    await card.waitFor({ timeout: 30_000 });
+    await waitFor('the conversation that asks to be the one shown', async () => ((await page.locator('#cs-thread').inputValue()) === b.threadId ? true : null), 10_000).catch(() => undefined);
+    await page.locator('.awaiting-label').waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.check('the chat opened, on the conversation that asks, its card lit', [await page.locator('aside.wb-chat').isVisible(), await page.locator('#cs-thread').inputValue(), await page.locator('.awaiting-label').count()], [true, b.threadId, 1]);
+    await card.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
+    await page.locator('.cs-body').getByText('c.txt was written by the command').waitFor({ timeout: 30_000 });
   });
 
   /*

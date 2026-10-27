@@ -33,6 +33,8 @@ export const bg: Dictionary = {
   'git.filterAll': 'Всички {n}',
   'git.filterCommitted': 'Комитнати {n}',
   'git.filterUncommitted': 'Некомитнати {n}',
+  'git.badgeUncommitted': 'Некомитнати файлове: {n}',
+  'git.badgeBranch': 'Променени файлове на този клон, сравнен с {base}: {n}',
   'git.legend': 'има промени, които още не са комитнати',
   'git.allCommitted': 'Всичко е комитнато.',
   'git.noneCommitted': 'Нищо от това още не е комитнато.',
@@ -989,6 +991,7 @@ export const bg: Dictionary = {
 
   // последователно изпълнение на няколко сесии
   'approval.waitingHere': 'Стъпка чака вашето решение',
+  'awaiting.title': 'Изчаква се действие от потребителя',
   'approval.waitingHereWhy':
     'Показва се на всяка страница, докато стъпка чака, за да не изглежда пускането забило само защото отворената страница не е тази, която пита.',
 };

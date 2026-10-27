@@ -41,7 +41,7 @@ import { buildStory, type Story } from '../session/story.js';
 import { buildTaskExchange } from '../session/taskExchange.js';
 import { chatNotice } from '../session/chatNotice.js';
 import { kerriganFileName, kerriganPersona } from '../plan/kerrigan.js';
-import { branchChanges, workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
+import { branchChanges, gitCounts, workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
 import { chatCode } from '../transport/chatSession.js';
 import { type PlanCheck } from '../plan/schema.js';
 
@@ -1525,6 +1525,13 @@ export class OperatorService {
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
     return await branchChanges(ws.dir, base);
+  }
+
+  /** The two numbers on the Git button: files not committed, and files on this branch against `base` (see `gitCounts`). */
+  async workspaceGitCounts(base?: string): Promise<Awaited<ReturnType<typeof gitCounts>>> {
+    const ws = await this.workspace();
+    if (!ws.ok) return { isRepo: false, uncommitted: 0, branch: null };
+    return await gitCounts(ws.dir, base);
   }
 
   async workspaceCommit(sha: string): Promise<Awaited<ReturnType<typeof workspaceCommit>>> {

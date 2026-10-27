@@ -4,8 +4,8 @@
  * The line along the workbench's bottom, as an IDE has: the open folder and its branch, the model of the conversation
  * open in the chat, what is running now and how far into its limits it is, and how many steps wait for an answer.
  */
-import { useEffect, useState } from 'react';
-import { api, type Session, type Workspace } from '../../lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { api, type Approval, type Session, type Workspace } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useNow } from '../../lib/useNow';
@@ -13,10 +13,14 @@ import { workedMs } from '../../lib/paused';
 import { BranchIcon } from '../branchIcon';
 import { ActorChip } from '../actor';
 
-export function StatusBar({ sessions, session, workspace, onShowThread }: { sessions: Session[]; session?: Session; workspace: Workspace | null; onShowThread: (sessionId: string) => void }) {
+/**
+ * `onApprovals`: the steps waiting, each time they are read, so the workbench can open the chat on a new one
+ * (2026-10-27); `onShowWaiting`: what "N waiting" opens.
+ */
+export function StatusBar({ sessions, session, workspace, onShowThread, onApprovals, onShowWaiting }: { sessions: Session[]; session?: Session; workspace: Workspace | null; onShowThread: (sessionId: string) => void; onApprovals?: (list: Approval[]) => void; onShowWaiting?: (approval: Approval) => boolean }) {
   const { t } = useT();
   const now = useNow(true, 5000);
-  const [waiting, setWaiting] = useState(0);
+  const [waiting, setWaiting] = useState<Approval[]>([]);
   const [limits, setLimits] = useState<{ iterations: number; minutes: number }>({ iterations: 60, minutes: 240 });
 
   useEffect(() => {
@@ -28,7 +32,19 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
       })
       .catch(() => undefined);
   }, []);
-  usePoll(() => api.approvals().then((a) => setWaiting(a.length)).catch(() => undefined), 3000);
+  const told = useRef(onApprovals);
+  told.current = onApprovals;
+  usePoll(
+    () =>
+      api
+        .approvals()
+        .then((a) => {
+          setWaiting(a);
+          told.current?.(a);
+        })
+        .catch(() => undefined),
+    3000,
+  );
 
   // The lead's conversation rather than its worker's, which is hidden from the list and works for it.
   const runningSession = sessions.find((s) => s.status !== 'idle' && !s.workerOf) ?? sessions.find((s) => s.status !== 'idle');
@@ -66,9 +82,20 @@ export function StatusBar({ sessions, session, workspace, onShowThread }: { sess
         <span>{t('wb.idle')}</span>
       )}
       <span className="grow" />
-      {waiting > 0 && (
-        <button type="button" className="wb-status-btn warn" onClick={() => document.querySelector('.approval-banner')?.scrollIntoView({ block: 'start' })}>
-          {t('wb.waiting', { n: waiting })}
+      {/*
+        What waits: in the chat, the conversation that asks (2026-10-27); the banner on top for the rest. It went to the
+        banner only, which on the workbench shows no chat's question, and did nothing for those.
+      */}
+      {waiting.length > 0 && (
+        <button
+          type="button"
+          className="wb-status-btn warn"
+          onClick={() => {
+            const first = waiting[0]!;
+            if (first.model || !onShowWaiting?.(first)) document.querySelector('.approval-banner')?.scrollIntoView({ block: 'start' });
+          }}
+        >
+          {t('wb.waiting', { n: waiting.length })}
         </button>
       )}
       {session && <span title={t('wb.modelNow')}>{session.modelInUse ?? session.model ?? t('wb.modelDefault')}</span>}

@@ -12,7 +12,8 @@
  */
 import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import Link from 'next/link';
-import { api, type GitArea, type Session, type Task, type Workspace } from '../../lib/api';
+import { api, type Approval, type GitArea, type GitCounts, type Session, type Task, type Workspace } from '../../lib/api';
+import { useGitBase } from '../../lib/gitBase';
 import { usePoll } from '../../lib/usePoll';
 import { useT } from '../../lib/i18n';
 import { NavPair } from '../nav';
@@ -20,7 +21,7 @@ import { Explorer } from './explorer';
 import { FileView } from './fileView';
 import { GitDiff } from './gitDiff';
 import { ChatPanel } from './chatPanel';
-import type { ChatTurn } from './cascade';
+import { chatThreadShown, type ChatTurn } from './cascade';
 import { BottomPanel } from './bottomPanel';
 import { StatusBar } from './statusBar';
 import { Palette, type PaletteCommand } from './palette';
@@ -176,6 +177,28 @@ function WorkbenchInner() {
   const toChat = () => {
     setL({ chatOpen: true });
     setComposeAsk((n) => n + 1);
+  };
+  /*
+   * A question that appears opens the chat on the conversation that asks (operator, 2026-10-27: "if the bot asks
+   * something, the focus moves to the question"): the chat's panel opened if it was closed, the conversation shown if
+   * another one was. Once for each card, and for the first new one when there are several, so two conversations asking
+   * at once do not pass the chat back and forth. The card is then brought into view and lit (see `awaiting.tsx`).
+   */
+  const greeted = useRef(new Set<string>());
+  const showAsking = (a: Approval): boolean => {
+    const s = sessions?.find((x) => x.id === a.sessionId);
+    if (!s) return false;
+    setL({ chatOpen: true });
+    // A worker's step is shown in its lead's conversation.
+    const thread = s.workerOf ?? s.id;
+    if (chatThreadShown() !== thread) setShowThread((v) => ({ id: thread, n: (v?.n ?? 0) + 1 }));
+    return true;
+  };
+  const onApprovals = (list: Approval[]): void => {
+    // Only once the conversation is known: one not read yet is greeted with the next list.
+    const fresh = list.filter((a) => !greeted.current.has(a.id) && !!sessions?.some((x) => x.id === a.sessionId));
+    for (const a of fresh) greeted.current.add(a.id);
+    if (fresh[0]) showAsking(fresh[0]);
   };
   /** A message of the conversation open in the chat, brought into view: from the problems. */
   const showMessage = (taskId: string) => {
@@ -400,7 +423,7 @@ function WorkbenchInner() {
       </header>
 
       <div className={`wb-body${layout.sideOpen ? '' : ' no-side'}${layout.chatOpen ? '' : ' no-chat'}`}>
-        <ActivityBar side={side} sideOpen={layout.sideOpen} onSide={(v) => { if (v === side && layout.sideOpen) setL({ sideOpen: false }); else { setSide(v); setL({ sideOpen: true }); } }} chatOpen={layout.chatOpen} onChat={() => setL({ chatOpen: !layout.chatOpen })} />
+        <ActivityBar side={side} sideOpen={layout.sideOpen} onSide={(v) => { if (v === side && layout.sideOpen) setL({ sideOpen: false }); else { setSide(v); setL({ sideOpen: true }); } }} chatOpen={layout.chatOpen} onChat={() => setL({ chatOpen: !layout.chatOpen })} workspace={workspace} />
 
         {layout.order.map((a) => {
           const i = shown.indexOf(a);
@@ -414,7 +437,7 @@ function WorkbenchInner() {
         })}
       </div>
 
-      <StatusBar sessions={sessions ?? []} session={chatSession} workspace={workspace} onShowThread={(id) => { setL({ chatOpen: true }); setShowThread((v) => ({ id, n: (v?.n ?? 0) + 1 })); }} />
+      <StatusBar sessions={sessions ?? []} session={chatSession} workspace={workspace} onShowThread={(id) => { setL({ chatOpen: true }); setShowThread((v) => ({ id, n: (v?.n ?? 0) + 1 })); }} onApprovals={onApprovals} onShowWaiting={showAsking} />
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
       {quickOpen && (
         <QuickOpen
@@ -430,20 +453,76 @@ function WorkbenchInner() {
 const clamp = (n: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, n));
 
 /** The column of icons on the far left: the explorer's two views, the chat beside the work, and how the page looks. */
-function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat }: { side: SideView; sideOpen: boolean; onSide: (v: SideView) => void; chatOpen: boolean; onChat: () => void }) {
+function ActivityBar({ side, sideOpen, onSide, chatOpen, onChat, workspace }: { side: SideView; sideOpen: boolean; onSide: (v: SideView) => void; chatOpen: boolean; onChat: () => void; workspace: Workspace | null }) {
   const { t } = useT();
-  const item = (v: SideView, label: string, icon: ReactNode) => (
-    <button type="button" className={`wb-act${sideOpen && side === v ? ' on' : ''}`} aria-pressed={sideOpen && side === v} aria-label={label} title={label} onClick={() => onSide(v)}>
+  // `more`: what the button's numbers say, in its title and read after its name; the name itself stays the view's.
+  const item = (v: SideView, label: string, icon: ReactNode, more?: { said: string; badges: ReactNode }) => (
+    <button
+      type="button"
+      className={`wb-act${sideOpen && side === v ? ' on' : ''}`}
+      aria-pressed={sideOpen && side === v}
+      aria-label={label}
+      aria-describedby={more?.said ? `wb-act-${v}-said` : undefined}
+      title={more?.said ? `${label} · ${more.said}` : label}
+      onClick={() => onSide(v)}
+    >
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         {icon}
       </svg>
+      {more?.badges}
+      {more?.said && (
+        <span id={`wb-act-${v}-said`} className="sr-only">
+          {more.said}
+        </span>
+      )}
     </button>
+  );
+  /*
+   * Two numbers stuck to the Git button (operator, 2026-10-27): above, the files not committed; below, every file
+   * changed on this branch, committed or not, against the branch the Git view compares it with. Read every five
+   * seconds, as the chat changes the folder; a number that is 0 is not shown, as an IDE's is not.
+   */
+  const ok = !!workspace?.ok;
+  const [base] = useGitBase(ok ? workspace!.dir : '');
+  const [counts, setCounts] = useState<GitCounts | null>(null);
+  const readCounts = useCallback(
+    () =>
+      api
+        .workspaceGitCounts(base || undefined)
+        .then(setCounts)
+        .catch(() => setCounts(null)),
+    [base],
+  );
+  useEffect(() => {
+    setCounts(null);
+    if (ok) void readCounts();
+  }, [readCounts, ok, workspace?.dir]);
+  usePoll(readCounts, 5_000, ok);
+  const open = counts?.isRepo ? counts.uncommitted : 0;
+  const onBranch = counts?.isRepo ? (counts.branch ?? 0) : 0;
+  const openSaid = t('git.badgeUncommitted', { n: open });
+  const branchSaid = t('git.badgeBranch', { n: onBranch, base: counts?.base ?? '' });
+  const gitSaid = [...(open > 0 ? [openSaid] : []), ...(onBranch > 0 ? [branchSaid] : [])].join(' · ');
+  const short = (n: number): string => (n > 99 ? '99+' : String(n));
+  const gitBadges = (
+    <>
+      {open > 0 && (
+        <span className="wb-act-badge uncommitted" aria-hidden="true">
+          {short(open)}
+        </span>
+      )}
+      {onBranch > 0 && (
+        <span className="wb-act-badge branch" aria-hidden="true">
+          {short(onBranch)}
+        </span>
+      )}
+    </>
   );
   return (
     <nav className="wb-activity" aria-label={t('wb.views')}>
       {item('files', t('wb.viewFiles'), <path d="M4 4h6l2 2h8v14H4z" />)}
       {item('search', t('wb.search'), <><circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></>)}
-      {item('commits', t('wb.viewCommits'), <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6" /></>)}
+      {item('commits', t('wb.viewCommits'), <><circle cx="12" cy="12" r="3" /><path d="M12 3v6M12 15v6" /></>, { said: gitSaid, badges: gitBadges })}
       <span className="grow" />
       <button type="button" className={`wb-act${chatOpen ? ' on' : ''}`} aria-pressed={chatOpen} aria-label={t('wb.toggleChat')} title={`${t('wb.toggleChat')} (Ctrl+L)`} onClick={onChat}>
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">

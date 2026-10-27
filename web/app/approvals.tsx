@@ -120,7 +120,8 @@ export function GlobalApprovals() {
   if (shown.length === 0) return null;
 
   return (
-    <section className="approval-banner" role="alert" aria-live="assertive">
+    // Waiting for the operator (2026-10-27): lit while the rest is darkened, under "Waiting for the user's action".
+    <section className="approval-banner" role="alert" aria-live="assertive" data-awaits={`banner:${shown.map((a) => a.id).join(',')}`} tabIndex={-1}>
       <h2>{t('approval.waitingHere')}</h2>
       <p className="small">{t('approval.waitingHereWhy')}</p>
       {shown.map((a) => (

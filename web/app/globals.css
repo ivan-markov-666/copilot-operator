@@ -982,6 +982,14 @@ button.linkish:hover { text-decoration: underline; }
 .wb-act { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-left: 2px solid transparent; border-radius: 6px; background: none; color: var(--muted); cursor: var(--cur-pointer); padding: 0; }
 .wb-act:hover { color: var(--ink); }
 .wb-act.on { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+/*
+ * The Git button's two numbers (2026-10-27), on the icon's right: above, the files not committed, in the colour of
+ * the "not committed" mark of "On this branch"; below, every file changed on this branch. The button's title says them.
+ */
+.wb-act { position: relative; }
+.wb-act-badge { position: absolute; right: -3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; font: 700 10px / 13px system-ui, sans-serif; text-align: center; pointer-events: none; box-sizing: border-box; }
+.wb-act-badge.uncommitted { top: 1px; background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+.wb-act-badge.branch { bottom: 1px; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); }
 
 .wb-side { overflow: auto; background: var(--panel); min-width: 0; }
 .wb-side-head { display: flex; align-items: center; gap: 4px; padding: 8px 10px 4px; }
@@ -1371,9 +1379,13 @@ button.linkish:hover { text-decoration: underline; }
 .info-btn:hover, .info-btn[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .kerrigan { margin: 14px 0; }
 .kerrigan .row { align-items: center; }
-/* The skill that goes with her text (2026-10-26), the chat's own choice, beside her button. */
-.kerrigan-skill { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
-.kerrigan-skill select { min-width: 0; max-width: 100%; }
+/*
+ * The skill that goes with her text (2026-10-26), the chat's own choice, beside her button: its name, the list, and
+ * its ⓘ to the right of the list, on one line, as her own ⓘ is to the right of her button (2026-10-27). A select is
+ * a whole line wide everywhere else, which put the name above the list and the ⓘ under it.
+ */
+.kerrigan-skill { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.kerrigan-skill select { width: auto; min-width: 0; max-width: 100%; }
 /* System → the bot's folder: the copy checkbox beside its sentence, which wraps beside it rather than under the box. */
 .sys-home-copyline { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
 .sys-home-copyline input { margin-top: 3px; flex: none; }
@@ -1808,3 +1820,41 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .qg-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; padding: 0; }
 .qg-legend li { display: inline-flex; align-items: center; gap: 5px; }
 .queue-prompt { margin: 2px 0 0 calc(1.6em + 10px); color: var(--muted); overflow-wrap: anywhere; }
+
+/*
+ * "Waiting for the user's action" (2026-10-27, see awaiting.tsx): while a card waits for the operator, the rest of the
+ * window is darkened, the card left lit with a ring around it, and the label set over the darkened part. Over the
+ * panels and the banner, under a dialog and a menu; nothing of it takes a click.
+ */
+.awaiting { position: fixed; inset: 0; z-index: 45; pointer-events: none; }
+.awaiting-dim { position: absolute; inset: 0; display: block; }
+.awaiting-shade { fill: rgba(4, 12, 22, 0.6); }
+/* The ring says where the keyboard was put; the card's own focus outline inside it would be a second ring. */
+[data-awaits]:focus { outline: none; }
+.awaiting-ring { fill: none; stroke: var(--warn); stroke-width: 3; }
+.awaiting-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: max-content;
+  padding: 18px 28px;
+  border: 3px solid var(--warn);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  font-size: calc(26px * var(--scale));
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+}
+.awaiting-dot { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); }
+@media (prefers-reduced-motion: no-preference) {
+  .awaiting-dot { animation: awaiting-pulse 1.4s ease-in-out infinite; }
+  .awaiting-ring { animation: awaiting-ring 1.4s ease-in-out infinite; }
+}
+@keyframes awaiting-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
+@keyframes awaiting-ring { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.35; } }

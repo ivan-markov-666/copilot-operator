@@ -34,6 +34,8 @@ export const ko: Dictionary = {
   'git.filterAll': '전체 {n}',
   'git.filterCommitted': '커밋됨 {n}',
   'git.filterUncommitted': '커밋 안 됨 {n}',
+  'git.badgeUncommitted': '커밋 안 된 파일: {n}',
+  'git.badgeBranch': '이 브랜치에서 변경된 파일({base}와 비교): {n}',
   'git.legend': '아직 커밋되지 않은 변경 사항이 있음',
   'git.allCommitted': '모두 커밋되었습니다.',
   'git.noneCommitted': '아직 아무것도 커밋되지 않았습니다.',
@@ -961,6 +963,7 @@ export const ko: Dictionary = {
   'proj.otherRepo': 'git 리포지토리',
   'proj.otherNotRepo': 'git 리포지토리 아님',
   'approval.waitingHere': '한 단계가 사용자의 결정을 기다리고 있습니다',
+  'awaiting.title': '사용자의 작업을 기다리는 중',
   'approval.waitingHereWhy':
     '단계가 기다리는 동안 모든 페이지에 표시되므로, 묻고 있는 페이지가 열려 있지 않다는 이유로 실행이 멈춘 것처럼 보이는 일이 없습니다.',
 };

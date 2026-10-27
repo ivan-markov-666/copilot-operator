@@ -94,13 +94,24 @@ function addCounts(files: GitFile[], out: string): void {
   }
 }
 
-async function diffFiles(dir: string, args: string[]): Promise<GitFile[]> {
+/** The files a diff names, with their letters; their lines are left at 0. */
+async function diffNames(dir: string, args: string[]): Promise<GitFile[]> {
   const names = await gitBytes(dir, ['diff', '--name-status', '-M', '-z', ...args]);
-  if (!names.ok) return [];
-  const files = nameStatus(names.stdout.toString('utf8'));
+  return names.ok ? nameStatus(names.stdout.toString('utf8')) : [];
+}
+
+async function diffFiles(dir: string, args: string[]): Promise<GitFile[]> {
+  const files = await diffNames(dir, args);
+  if (files.length === 0) return files;
   const counts = await gitBytes(dir, ['diff', '--numstat', '-M', '-z', ...args]);
   if (counts.ok) addCounts(files, counts.stdout.toString('utf8'));
   return files;
+}
+
+/** The files git does not track, as `ls-files` names them: ignored ones left out. */
+async function untrackedPaths(dir: string): Promise<string[]> {
+  const others = await gitBytes(dir, ['ls-files', '--others', '--exclude-standard', '-z']);
+  return others.ok ? others.stdout.toString('utf8').split('\0').filter(Boolean) : [];
 }
 
 /** A file git does not track yet: all of it added, counted in lines when it is text. */
@@ -131,8 +142,7 @@ export async function workspaceGit(dir: string): Promise<WorkspaceGit> {
   const unstaged = await diffFiles(dir, []);
   // In conflict: git's `U` in `--name-status`, said as the IDE says it.
   for (const f of [...staged, ...unstaged]) if (f.status === 'U') f.status = '!';
-  const others = await gitBytes(dir, ['ls-files', '--others', '--exclude-standard', '-z']);
-  const fresh = others.ok ? others.stdout.toString('utf8').split('\0').filter(Boolean).sort().slice(0, 2000) : [];
+  const fresh = (await untrackedPaths(dir)).sort().slice(0, 2000);
   const changes = [...unstaged, ...(await Promise.all(fresh.map((p) => untracked(dir, p))))];
 
   let upstream: WorkspaceGit['upstream'];
@@ -220,21 +230,43 @@ async function defaultBase(dir: string, refs: string[]): Promise<string | undefi
  * not track among them — marked with whether it is in a commit of the branch, and what of it is not committed. `base`
  * must be one of the branches there are; left out, the one a pull request would go into. Read-only.
  */
+/**
+ * The branch and what it is compared with: the branches there are, the one chosen — `base` when it is one of them,
+ * else the one a pull request would go into — and where the branch left it; or why there is nothing to compare.
+ */
+async function branchBase(dir: string, base?: string): Promise<{ branch?: string; bases: string[]; base?: string; mergeBase?: string; problem?: string }> {
+  const branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || undefined;
+  const named = branch ? { branch } : {};
+  if (!(await hasHead(dir))) return { ...named, bases: [], problem: 'no-commit' };
+  const bases = await branchRefs(dir, branch ?? '');
+  // Only a branch the list names: nothing else of the request reaches git.
+  const chosen = base && bases.includes(base) ? base : await defaultBase(dir, bases);
+  if (!chosen) return { ...named, bases, problem: 'no-base' };
+  const mb = await git(dir, ['merge-base', chosen, 'HEAD']);
+  if (!mb.ok || !mb.stdout) return { ...named, bases, base: chosen, problem: 'no-common' };
+  return { ...named, bases, base: chosen, mergeBase: mb.stdout.trim() };
+}
+
+/**
+ * The files "On this branch" lists: the whole branch against where it left the base, the files git does not track
+ * (as added), and the ones committed on it and undone since in the working tree — still the branch's, nothing of
+ * them left against the base. One list for the view and for the number on the Git button, so the two agree.
+ */
+function branchList(net: GitFile[], fresh: GitFile[], committed: GitFile[]): GitFile[] {
+  const files: GitFile[] = [...net, ...fresh.map((f) => ({ ...f, status: 'A' }))];
+  const listed = new Set(files.map((f) => f.path));
+  for (const c of committed) if (!listed.has(c.path)) files.push({ ...c, added: 0, removed: 0 });
+  return files;
+}
+
 export async function branchChanges(dir: string, base?: string): Promise<BranchChanges> {
   const none: BranchChanges = { dir, isRepo: false, bases: [], ahead: 0, behind: 0, commits: [], files: [], moreFiles: false };
   if (!dir || !looksLikeRepo(dir)) return none;
-  const branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout || undefined;
-  const out: BranchChanges = { ...none, isRepo: true, ...(branch ? { branch } : {}) };
-  if (!(await hasHead(dir))) return { ...out, problem: 'no-commit' };
-  const bases = await branchRefs(dir, branch ?? '');
-  out.bases = bases;
-  // Only a branch the list names: nothing else of the request reaches git.
-  const chosen = base && bases.includes(base) ? base : await defaultBase(dir, bases);
-  if (!chosen) return { ...out, problem: 'no-base' };
-  out.base = chosen;
-  const mb = await git(dir, ['merge-base', chosen, 'HEAD']);
-  if (!mb.ok || !mb.stdout) return { ...out, problem: 'no-common' };
-  const mergeBase = mb.stdout.trim();
+  const found = await branchBase(dir, base);
+  const out: BranchChanges = { ...none, isRepo: true, ...(found.branch ? { branch: found.branch } : {}), bases: found.bases, ...(found.base ? { base: found.base } : {}) };
+  if (found.problem || !found.mergeBase || !found.base) return { ...out, problem: found.problem ?? 'no-common' };
+  const chosen = found.base;
+  const mergeBase = found.mergeBase;
   out.mergeBase = mergeBase;
   const counts = await git(dir, ['rev-list', '--left-right', '--count', `${chosen}...HEAD`]);
   const [behind = '0', ahead = '0'] = counts.stdout.split(/\s+/);
@@ -248,13 +280,10 @@ export async function branchChanges(dir: string, base?: string): Promise<BranchC
   const net = await diffFiles(dir, [mergeBase]);
   const staged = new Set((await diffFiles(dir, ['--cached', 'HEAD'])).flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]));
   const unstaged = new Set((await diffFiles(dir, [])).flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]));
-  const others = await gitBytes(dir, ['ls-files', '--others', '--exclude-standard', '-z']);
-  const fresh = others.ok ? others.stdout.toString('utf8').split('\0').filter(Boolean) : [];
+  const fresh = await untrackedPaths(dir);
   const inCommits = new Set(committed.flatMap((f) => [f.path, ...(f.oldPath ? [f.oldPath] : [])]));
 
-  const files: GitFile[] = [...net, ...(await Promise.all(fresh.slice(0, MAX_BRANCH_FILES).map((p) => untracked(dir, p)))).map((f) => ({ ...f, status: 'A' }))];
-  // Committed on the branch and undone since in the working tree: still the branch's, nothing of it left against the base.
-  for (const c of committed) if (!files.some((f) => f.path === c.path)) files.push({ ...c, added: 0, removed: 0 });
+  const files = branchList(net, await Promise.all(fresh.slice(0, MAX_BRANCH_FILES).map((p) => untracked(dir, p))), committed);
   const untrackedSet = new Set(fresh);
   const marked: BranchFile[] = files.map((f) => {
     const keys = [f.path, ...(f.oldPath ? [f.oldPath] : [])];
@@ -267,6 +296,31 @@ export async function branchChanges(dir: string, base?: string): Promise<BranchC
   out.files = marked.slice(0, MAX_BRANCH_FILES);
   out.moreFiles = marked.length > MAX_BRANCH_FILES || fresh.length > MAX_BRANCH_FILES;
   return out;
+}
+
+/**
+ * The two numbers on the Git button (operator, 2026-10-27: "two counters stuck to the Git button: one the changed
+ * files not committed, the other all the files changed on this branch"):
+ *
+ * - `uncommitted`: the files with something not committed — staged, not staged, not tracked by git — each once;
+ * - `branch`: every file "On this branch" lists against `base` (as the view chooses it), committed or not; null when
+ *   there is nothing to compare with, and `problem` says why.
+ *
+ * Names only, no lines counted and no file read, so it can be read every few seconds. Read-only.
+ */
+export type GitCounts = { isRepo: boolean; uncommitted: number; branch: number | null; base?: string; problem?: string };
+
+export async function gitCounts(dir: string, base?: string): Promise<GitCounts> {
+  if (!dir || !looksLikeRepo(dir)) return { isRepo: false, uncommitted: 0, branch: null };
+  const head = await hasHead(dir);
+  const staged = await diffNames(dir, ['--cached', head ? 'HEAD' : EMPTY_TREE]);
+  const unstaged = await diffNames(dir, []);
+  const fresh = await untrackedPaths(dir);
+  const uncommitted = new Set([...staged, ...unstaged].map((f) => f.path).concat(fresh)).size;
+  const found = await branchBase(dir, base);
+  if (found.problem || !found.mergeBase) return { isRepo: true, uncommitted, branch: null, ...(found.base ? { base: found.base } : {}), problem: found.problem ?? 'no-common' };
+  const files = branchList(await diffNames(dir, [found.mergeBase]), fresh.map((path) => ({ status: 'U', path, added: 0, removed: 0 })), await diffNames(dir, [found.mergeBase, 'HEAD']));
+  return { isRepo: true, uncommitted, branch: files.length, ...(found.base ? { base: found.base } : {}) };
 }
 
 /** One commit: who, when, what it says, and the files it changed (a first commit against nothing). */

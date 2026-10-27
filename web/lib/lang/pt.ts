@@ -34,6 +34,8 @@ export const pt: Dictionary = {
   'git.filterAll': 'Todos {n}',
   'git.filterCommitted': 'Com commit {n}',
   'git.filterUncommitted': 'Sem commit {n}',
+  'git.badgeUncommitted': 'Arquivos sem commit: {n}',
+  'git.badgeBranch': 'Arquivos alterados neste ramo, comparado com {base}: {n}',
   'git.legend': 'tem alterações ainda sem commit',
   'git.allCommitted': 'Tudo tem commit.',
   'git.noneCommitted': 'Nada disto tem commit ainda.',
@@ -951,5 +953,6 @@ export const pt: Dictionary = {
   'skills.removeOne': 'Eliminar a skill /{name}',
   'skills.saved': 'Skills guardadas: {n}.',
   'approval.waitingHere': 'Um passo está à espera da sua decisão',
+  'awaiting.title': 'Aguardando uma ação do usuário',
   'approval.waitingHereWhy': 'Mostrado em todas as páginas enquanto um passo espera, para que uma execução nunca pareça encravada por a página que pergunta não ser a que está aberta.',
 };

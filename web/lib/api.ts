@@ -1024,6 +1024,8 @@ export type WorkspaceGit = {
   moreCommits: boolean;
 };
 export type GitArea = 'staged' | 'changes' | 'commit' | 'branch';
+/** The two numbers on the Git button (2026-10-27): files not committed; files on this branch, null with nothing to compare. */
+export type GitCounts = { isRepo: boolean; uncommitted: number; branch: number | null; base?: string; problem?: string };
 /** A file the branch changed, as a pull request lists it, and what of it is not committed yet (2026-10-22). */
 export type BranchFile = GitFile & { committed: boolean; uncommitted?: 'staged' | 'changes' | 'untracked' | 'mixed' };
 /** Everything the branch changed against a base: its commits and what is not committed yet together. */
@@ -1366,6 +1368,8 @@ export const api = {
   workspaceGit: () => call<WorkspaceGit>('/workspace/git'),
   /** Everything the branch changed against `base` (one of the branches it lists), as a pull request shows it. */
   workspaceBranch: (base?: string) => call<BranchChanges>(`/workspace/git/branch${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  /** The two numbers on the Git button: files not committed, and files on this branch against `base`. */
+  workspaceGitCounts: (base?: string) => call<GitCounts>(`/workspace/git/counts${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   workspaceCommit: (sha: string) => call<GitCommit & { body: string; files: GitFile[] }>(`/workspace/git/commit?sha=${encodeURIComponent(sha)}`),
   /** A file of those lists, as it was before and after: for the side-by-side view. */
   workspaceGitFile: (area: GitArea, path: string, commit?: string) =>

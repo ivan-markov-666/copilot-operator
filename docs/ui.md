@@ -638,6 +638,18 @@ the pull request shows it: where the branch began against the file as it is now 
 commits are marked in "Commits", with a line where it left the base. The base asked for must be one of the branches
 listed; nothing else of the request reaches git.
 
+**Two numbers on the Git button (2026-10-27).** The Git button in the column of icons has two numbers on its right.
+The top one counts the files not committed yet, each file once: staged, not staged, and the files git does not track.
+The bottom one counts every file "On this branch" lists, committed or not, against the base "Compared with" names.
+Both numbers come from `gitCounts` in `session/workspaceGit.ts`, through `GET /api/workspace/git/counts?base=`:
+- it reads names only, so the button can read it every five seconds;
+- it uses the same base resolution (`branchBase`) as the view, so its numbers are the view's own;
+- it uses the same file list (`branchList`) as the view, so they agree.
+
+The base is one choice for the view and the button (`lib/gitBase.ts`, kept per folder in this browser), so choosing
+another in the view moves the bottom number at once. A number that is 0 is not shown. The button's tooltip, and what
+a screen reader reads after its name, say both numbers in words; the button's name stays "Git".
+
 **The clock stops while paused (2026-10-21).** `Hold` keeps each pause from "Pause" pressed to "Continue" — from
 the press, not from the point the work holds at a little later — and the runner takes them off a task's minutes
 against `maxRunMinutes`; the task keeps how long it was paused (`pausedMs`). A running session's pauses come with it
@@ -674,6 +686,21 @@ the cards, the name on the line "Working…" and along the bottom. While the bot
 - only an answer that did not arrive turns them all back on, with its error on the card (`web/lib/useChoice.ts`).
 
 A card answered goes at once, in the chat and in the banner on top alike. A read of the list that was already on its way when the answer went does not bring it back. In the "New branch from main" window, the name and the two choices are off while the branch is being made.
+
+**The chat follows its newest (2026-10-27).** The chat stays at its bottom as anything is added to it (`web/lib/useFollowBottom.ts`). It watches its children's sizes, so a new line, a command's output, or a fold opened anywhere ("The subtasks in the plan", a subtask, a command, a long message) keeps the newest in view. Only the reader scrolling up stops it. The element's own moves are told apart from the reader's by where they left it. Back at the very bottom, it follows again.
+
+**Waiting for the user's action (2026-10-27).** Whatever waits for the operator carries a `data-awaits` mark with an id of its own:
+- in the chat, every card of `Ask` (a command, a plan, a question, commands handed over, a subtask's choices);
+- Git's password notice;
+- the approvals banner.
+
+When such a card appears:
+- the chat brings it into view, even when the reader had scrolled up. While it waits, following keeps its top in view rather than the very bottom;
+- the workbench opens the chat on the conversation that asks, if the panel was closed or showed another conversation. This happens once per card, for the first new one. "N waiting" in the status bar goes there too;
+- `AwaitingSpotlight` (`web/app/awaiting.tsx`, on every page) darkens the rest of the window with an SVG mask that has a hole and a ring around each card. It shows "Waiting for the user's action" large over the darkened part, where it covers no card. It takes no click and needs no button. It goes when the card goes;
+- the card gets the keyboard, unless the operator is typing in a field. There, a card's button would take their next Enter.
+
+A queue task set aside is not marked: the work does not wait for it.
 
 **The tab's title, and the export (2026-10-23).** The browser tab says what stage the bot is at, in English whatever
 the page's language (as the operator asked): "Working." "Working.." "Working..." round again while it works,

@@ -270,6 +270,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'Горе на всяка страница: по една карта за всяка чакаща стъпка, със сесията ѝ (връзка) и точната команда. Разделът на браузъра показва „(n) чака вас“.',
           },
           {
+            key: 'awaiting.title',
+            kind: 'note',
+            en: "Waiting for the user's action",
+            bg: 'Изчаква се действие от потребителя',
+            doesEn:
+              "While anything waits for you — a command to run or skip, a question, a plan, commands handed over to run yourself, a subtask's choices, the model to choose by hand, Git's password window — the rest of the window is darkened, the card is left lit inside a ring, and this label is shown large over the darkened part. It needs no button: it goes when you answer. Nothing is blocked; you can still click and read everything. The chat opens on the conversation that asks and moves to the card, even when it was closed or scrolled up; the keyboard goes to the card unless you are typing somewhere.",
+            doesBg:
+              'Докато нещо чака вас — команда за изпълнение или пропускане, въпрос, план, команди, предадени ви да ги пуснете сами, избор за подзадача, модел за избиране на ръка, прозорецът на Git за парола — останалата част от прозореца се затъмнява, картата остава осветена в рамка и този надпис се показва голям над затъмненото. Не иска бутон: изчезва, когато отговорите. Нищо не е блокирано; пак можете да натискате и четете всичко. Чатът се отваря на разговора, който пита, и отива на картата, дори да е бил затворен или скролнат нагоре; клавиатурата отива на картата, освен ако пишете някъде.',
+          },
+          {
             key: 'approval.run',
             kind: 'button',
             en: 'Run',
@@ -551,8 +561,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Git',
             bg: 'Git',
-            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes, each file with its letter (M modified, A added, D deleted, R renamed, U untracked, ! in conflict) and its lines, and the branch\'s commits; a file opens its two versions side by side, a commit opens to its files. Read-only.',
-            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените — всеки файл с буквата си (M променен, A добавен, D изтрит, R преименуван, U непроследен, ! в конфликт) и редовете си — и комитите на клона; файл отваря двете си версии една до друга, комит се разгъва до файловете си. Само чете.',
+            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes, each file with its letter (M modified, A added, D deleted, R renamed, U untracked, ! in conflict) and its lines, and the branch\'s commits; a file opens its two versions side by side, a commit opens to its files. Read-only. Two numbers on the button: above, the files not committed yet; below, every file changed on this branch, committed or not, against the branch "Compared with" names (a number that is 0 is not shown; the button\'s tooltip says both).',
+            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените — всеки файл с буквата си (M променен, A добавен, D изтрит, R преименуван, U непроследен, ! в конфликт) и редовете си — и комитите на клона; файл отваря двете си версии една до друга, комит се разгъва до файловете си. Само чете. Две числа върху бутона: горе — файловете, които още не са комитнати; долу — всички файлове, променени на този клон, комитнати или не, спрямо клона в „Сравнен с“ (число 0 не се показва; подсказката на бутона казва и двете).',
           },
           {
             key: 'wb.refresh',

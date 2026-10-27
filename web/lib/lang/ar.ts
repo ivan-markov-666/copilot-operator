@@ -34,6 +34,8 @@ export const ar: Dictionary = {
   'git.filterAll': 'الكل {n}',
   'git.filterCommitted': 'مودَعة {n}',
   'git.filterUncommitted': 'غير مودَعة {n}',
+  'git.badgeUncommitted': 'ملفات غير مودَعة: {n}',
+  'git.badgeBranch': 'الملفات المتغيّرة في هذا الفرع، مقارنةً بـ {base}: {n}',
   'git.legend': 'فيه تغييرات لم تُودَع بعد',
   'git.allCommitted': 'كل شيء مودَع.',
   'git.noneCommitted': 'لم يُودَع شيء من ذلك بعد.',
@@ -961,6 +963,7 @@ export const ar: Dictionary = {
   'skills.removeOne': 'حذف المهارة /{name}',
   'skills.saved': 'تم الحفظ: عدد المهارات {n}.',
   'approval.waitingHere': 'خطوة بانتظار قرارك',
+  'awaiting.title': 'بانتظار إجراء من المستخدم',
   'approval.waitingHereWhy':
     'يُعرض على كل صفحة أثناء انتظار خطوة، حتى لا تبدو عملية التشغيل عالقة لأن الصفحة التي تسأل ليست الصفحة المفتوحة.',
 };

@@ -71,6 +71,8 @@ export const fr: Dictionary = {
   'git.filterAll': 'Tous {n}',
   'git.filterCommitted': 'Commités {n}',
   'git.filterUncommitted': 'Non commités {n}',
+  'git.badgeUncommitted': 'Fichiers non commités : {n}',
+  'git.badgeBranch': 'Fichiers modifiés sur cette branche, comparée à {base} : {n}',
   'git.legend': 'a des modifications pas encore commitées',
   'git.allCommitted': 'Tout est commité.',
   'git.noneCommitted': 'Rien de cela n’est encore commité.',
@@ -951,5 +953,6 @@ export const fr: Dictionary = {
   'skills.removeOne': 'Supprimer le skill /{name}',
   'skills.saved': 'Skills enregistrés : {n}.',
   'approval.waitingHere': 'Une étape attend votre décision',
+  'awaiting.title': 'En attente d\'une action de l\'utilisateur',
   'approval.waitingHereWhy': 'Affiché sur chaque page tant qu’une étape attend, pour qu’une exécution ne semble jamais bloquée parce que la page qui pose la question n’est pas celle qui est ouverte.',
 };

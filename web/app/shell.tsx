@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Nav } from './nav';
 import { GlobalApprovals } from './approvals';
+import { AwaitingSpotlight } from './awaiting';
 import { StartFailureBanner } from './startFailure';
 import { Logo } from './logo';
 
@@ -24,6 +25,8 @@ export function Shell({ children }: { children: ReactNode }) {
         <main id="main" className="wb-main">
           {children}
         </main>
+        {/* What waits for the operator, lit, the rest darkened (2026-10-27). */}
+        <AwaitingSpotlight />
       </div>
     );
   }
@@ -43,6 +46,7 @@ export function Shell({ children }: { children: ReactNode }) {
       {/* And a run that was accepted and then could not begin, with what happened as a file. */}
       <StartFailureBanner />
       <main id="main">{children}</main>
+      <AwaitingSpotlight />
     </div>
   );
 }

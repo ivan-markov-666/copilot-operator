@@ -42,6 +42,8 @@ export const en = {
   'git.filterAll': 'All {n}',
   'git.filterCommitted': 'Committed {n}',
   'git.filterUncommitted': 'Not committed {n}',
+  'git.badgeUncommitted': 'Files not committed: {n}',
+  'git.badgeBranch': 'Files changed on this branch, compared with {base}: {n}',
   'git.legend': 'has changes not committed yet',
   'git.allCommitted': 'Everything is committed.',
   'git.noneCommitted': 'Nothing of it is committed yet.',
@@ -1021,6 +1023,7 @@ export const en = {
 
   // running several sessions in turn
   'approval.waitingHere': 'A step is waiting for your decision',
+  'awaiting.title': 'Waiting for the user\'s action',
   'approval.waitingHereWhy':
     'Shown on every page while a step waits, so a run never looks stuck because the page that asks is not the one open.',
 };

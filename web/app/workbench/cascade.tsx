@@ -64,6 +64,9 @@ const kept = (key: string): string => {
   }
 };
 
+/** The conversation the chat shows, as it keeps it; '' on a new chat. */
+export const chatThreadShown = (): string => kept(THREAD_KEY);
+
 /** What the chat shows: its latest message, `'new'` while it is on a new chat with nothing in it, or null. */
 export type ChatTurn = { sessionId: string; taskId: string } | 'new' | null;
 
@@ -616,7 +619,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         {paused && <p className="cs-system cs-paused" role="status">{t('chat.pausedNote')}</p>}
         {/* Git asks for a password in its own window (2026-10-26): the work waits for it; said where to look. */}
         {running && activity?.password && (
-          <p className="cs-system cs-password" role="alert">
+          <p className="cs-system cs-password" role="alert" data-awaits={`password:${session?.id ?? ''}`} tabIndex={-1}>
             {t('chat.passwordWaiting')}
           </p>
         )}
@@ -1049,6 +1052,13 @@ function Command({ step }: { step: Extract<StoryEntry, { kind: 'step' }> }) {
   );
 }
 
+/**
+ * What marks a card that waits for the operator (2026-10-27): the chat brings it into view when it appears, and while
+ * it is on the screen the rest is darkened under "Waiting for the user's action" (see `awaiting.tsx`). Focusable, so
+ * the keyboard can be put on it.
+ */
+const awaits = (approval: Approval): { 'data-awaits': string; tabIndex: number } => ({ 'data-awaits': approval.id, tabIndex: -1 });
+
 /** A command waiting to be run, asked about where it was asked for. */
 function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
   const { t } = useT();
@@ -1062,13 +1072,13 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
     );
   };
   // The plan is asked about here, in the conversation (plan mode, 2026-10-20); the model card stays at the top.
-  if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={(ok) => onDecided(approval.id, ok)} /></div>;
+  if (approval.plan) return <div className="cs-plan-ask" {...awaits(approval)}><PlanCard approval={approval} onDecided={(ok) => onDecided(approval.id, ok)} /></div>;
   if (approval.question?.handoff) return <HandoffQuestion approval={approval} onDecided={onDecided} />;
   if (approval.question) return <QuestionCard approval={approval} onDecided={onDecided} />;
   if (approval.retry) return <RetryCard approval={approval} onDecided={onDecided} />;
   if (approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
   return (
-    <div className="cs-ask" role="group" aria-label={t('chat.askTitle')}>
+    <div className="cs-ask" role="group" aria-label={t('chat.askTitle')} {...awaits(approval)}>
       <p className="small cs-ask-head"><strong>{t('chat.askTitle')}</strong> {approval.actor && <ActorChip actor={approval.actor} how="asks" />}</p>
       <pre className="cs-out">{approval.description}</pre>
       <div className="cs-copy-row">
@@ -1390,7 +1400,7 @@ function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Dec
     );
   };
   return (
-    <div className="cs-ask cs-retry" role="group" aria-label={t('retry.title', { n: r.n })}>
+    <div className="cs-ask cs-retry" role="group" aria-label={t('retry.title', { n: r.n })} {...awaits(approval)}>
       <p className="small cs-ask-head">
         <strong>{t('retry.title', { n: r.n })}</strong> <ActorChip actor={approval.actor ?? 'lead'} how="asks" />
       </p>
@@ -1451,7 +1461,7 @@ function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecide
     );
   };
   return (
-    <div className="cs-ask cs-handoff" role="group" aria-label={t('ho.title')}>
+    <div className="cs-ask cs-handoff" role="group" aria-label={t('ho.title')} {...awaits(approval)}>
       <p className="small cs-ask-head">
         <strong>{t('ho.title')}</strong> <ActorChip actor={approval.actor ?? 'worker'} how="asks" />
       </p>
@@ -1509,7 +1519,7 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
     );
   };
   return (
-    <div className="cs-ask cs-question" role="group" aria-label={t(asker === 'lead' ? 'lead.question' : 'chat.question')}>
+    <div className="cs-ask cs-question" role="group" aria-label={t(asker === 'lead' ? 'lead.question' : 'chat.question')} {...awaits(approval)}>
       <p className="small cs-ask-head">
         <strong>{t(asker === 'lead' ? 'lead.question' : 'chat.question')}</strong> <ActorChip actor={asker} how="asks" />
       </p>

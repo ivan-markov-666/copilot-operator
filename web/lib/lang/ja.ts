@@ -71,6 +71,8 @@ export const ja: Dictionary = {
   'git.filterAll': 'すべて {n}',
   'git.filterCommitted': 'コミット済み {n}',
   'git.filterUncommitted': '未コミット {n}',
+  'git.badgeUncommitted': '未コミットのファイル: {n}',
+  'git.badgeBranch': 'このブランチで変更されたファイル（{base} と比較）: {n}',
   'git.legend': 'まだコミットされていない変更があります',
   'git.allCommitted': 'すべてコミット済みです。',
   'git.noneCommitted': 'まだ何もコミットされていません。',
@@ -951,5 +953,6 @@ export const ja: Dictionary = {
   'skills.removeOne': 'スキル /{name} を削除',
   'skills.saved': '保存しました: スキル {n} 件。',
   'approval.waitingHere': 'ステップがあなたの判断を待っています',
+  'awaiting.title': 'ユーザーの操作を待っています',
   'approval.waitingHereWhy': 'ステップが待機している間はすべてのページに表示されます。確認を求めているページが開かれていないために、実行が止まっているように見えることを防ぐためです。',
 };
