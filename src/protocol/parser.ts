@@ -263,8 +263,8 @@ export function parseReply(markdown: string, opts: ParseOptions): ParseResult {
       // model that writes "Край" under an explanation of why it cannot finish has ended the
       // task, not completed it, and reading that as `done` would file a failure as a success.
       const blocked = reply.status === 'blocked';
-      // A plan waits for its approval, a question for its answer: the stop word in either does not end the task.
-      const plan = reply.status === 'plan' || reply.status === 'ask';
+      // A plan waits for its approval, a question for its answer, a handoff for the operator's run: the stop word in none of them ends the task.
+      const plan = reply.status === 'plan' || reply.status === 'ask' || reply.status === 'handoff';
 
       return {
         ok: true,

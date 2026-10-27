@@ -41,6 +41,7 @@ import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../pro
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, checkAccessRefusal, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
+import { handoffCard, handoffResultMessage, HANDOFF_NOBODY } from './handoff.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { confinementRefusal, isWithin, sessionRoots, type Confinement } from '../exec/confinement.js';
@@ -58,7 +59,7 @@ import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
 import { contractConflicts, readsTreeClean } from './contract.js';
 import { commitFiles, treeFingerprint } from '../vcs/git.js';
-import type { PendingApproval, RetryChoice, TaskStats } from '../session/model.js';
+import type { HandoffCard, PendingApproval, RetryChoice, TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -154,7 +155,17 @@ export type RunDeps = {
    * The two-chat mode (2026-10-20): the lead's question for the operator, put to them on a card in the conversation; the
    * answer is text, or the operator stops the task. Absent (the terminal), the lead is told nobody can answer.
    */
-  askQuestion?: (ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; actor?: Actor }) => Promise<{ answer: string } | 'stop'>;
+  askQuestion?: (ask: {
+    sessionId: string;
+    taskId: string;
+    question: string;
+    why?: string;
+    options: string[];
+    commands?: Array<string | null>;
+    /** Commands the chat hands to the operator to run themselves (2026-10-26); answered with what they printed, or not run. */
+    handoff?: HandoffCard;
+    actor?: Actor;
+  }) => Promise<{ answer: string; ran?: boolean } | 'stop'>;
   /**
    * Two chats (2026-10-25): what to do with a subtask that failed for a technical reason, asked of the operator on a card
    * under the subtask (`sessionId`/`taskId`: the worker's attempt it is shown at). Absent: nobody is there to ask.
@@ -2990,6 +3001,43 @@ export async function runTask(
        * what the reply said, at greater length and one message later. The reason carries the
        * approaches that were tried, and that is what the register shows.
        */
+      /*
+       * Commands the operator runs themselves (operator, 2026-10-26: "the script is made, but the user runs it; the bot
+       * gives the commands for the user to run and the result it expects"). Never answered for the operator, Settings'
+       * agreement or not: only their own run of it has anything to say. With nobody to ask, the chat is told so. What
+       * they printed, or that they did not run it, goes back, and the work goes on.
+       */
+      if (reply.status === 'handoff' && reply.handoff) {
+        const card = handoffCard(reply.handoff, work.cwd, confinement.roots, cfg.execution.denyPatterns);
+        const why = reply.handoff.why?.trim() || 'Run these commands yourself, and send what they print.';
+        let message = HANDOFF_NOBODY;
+        await record('HANDOFF', `${why}\n\nin ${card.cwd}:\n${card.commands.join('\n')}\n\nexpected: ${card.expect}${card.files.length ? `\n\nscripts: ${card.files.map((f) => `${f.path}${f.sha256 ? ` (sha256 ${f.sha256})` : f.problem ? ` (${f.problem})` : ''}`).join(', ')}` : ''}`);
+        if (deps.askQuestion) {
+          sink.event('handoff-asked', { commands: card.commands, cwd: card.cwd, files: card.files.map((f) => ({ path: f.path, sha256: f.sha256 })) }, `the chat hands the operator commands to run themselves: ${card.commands.join(' ; ')}`, 'warn');
+          await setTask((t) => {
+            t.status = 'waiting-approval';
+          });
+          const got = await deps.askQuestion({ sessionId: session.id, taskId: task.id, question: why, options: [], handoff: card, actor: planning ? 'plan' : 'worker' });
+          await setTask((t) => {
+            t.status = 'running';
+          });
+          if (got === 'stop' || signal?.aborted) return await finish('aborted', 'stopped by the operator at the commands handed over', undefined, lastMarkdown);
+          const ran = got.ran !== false;
+          sink.event('handoff-answered', { ran }, ran ? 'the operator ran the commands and sent what they printed' : 'the operator did not run the commands');
+          message = handoffResultMessage(card, ran, got.answer);
+        } else {
+          sink.event('handoff-nobody', { commands: card.commands }, 'the chat handed over commands to run, and nobody is here to run them', 'warn');
+        }
+        await record('HANDOFF RESULT', message);
+        await pacer.throttleSend();
+        const before = await transport.sendAndConfirm(message);
+        const next = await transport.waitForReply(before);
+        await saveReply('handoff', next);
+        lastMarkdown = next.markdown;
+        await pacer.settle();
+        continue;
+      }
+
       /*
        * A question only the operator can answer (operator, 2026-10-23: "answers to click, not only a text field; when the
        * chat proposes a command for the user to run by hand, a button behind it, and the bot runs it"): put to the

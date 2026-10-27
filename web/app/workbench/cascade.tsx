@@ -24,6 +24,7 @@ import { usePoll } from '../../lib/usePoll';
 import { useChosenSkill } from '../../lib/chosenSkill';
 import { useDots } from '../../lib/useDots';
 import { useChoice } from '../../lib/useChoice';
+import { HandoffDetails } from '../handoffView';
 import { useActivity } from '../../lib/activity';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
@@ -1062,6 +1063,7 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
   };
   // The plan is asked about here, in the conversation (plan mode, 2026-10-20); the model card stays at the top.
   if (approval.plan) return <div className="cs-plan-ask"><PlanCard approval={approval} onDecided={(ok) => onDecided(approval.id, ok)} /></div>;
+  if (approval.question?.handoff) return <HandoffQuestion approval={approval} onDecided={onDecided} />;
   if (approval.question) return <QuestionCard approval={approval} onDecided={onDecided} />;
   if (approval.retry) return <RetryCard approval={approval} onDecided={onDecided} />;
   if (approval.model) return <p className="cs-system small">{t('chat.lookAbove')}</p>;
@@ -1410,6 +1412,64 @@ function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Dec
             {t(CHOICE_KEY[c])}
           </button>
         ))}
+      </div>
+      {err && (
+        <p className="err" role="alert">
+          {err}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Commands the chat hands to the operator to run themselves (operator, 2026-10-26): run in their own terminal, what they
+ * printed pasted and sent back; or not run, with a word or none; or the task stopped. Never answered for them.
+ */
+function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
+  const { t } = useT();
+  const id = useId();
+  const [text, setText] = useState('');
+  const { locked, err, choose, mark } = useChoice();
+  const q = approval.question!;
+  const send = async (ran: boolean) => {
+    if (ran && !text.trim()) return;
+    onDecided(
+      approval.id,
+      await choose(ran ? 'ran' : 'not-run', async () => {
+        await api.answerQuestion(approval.id, text, ran);
+      }),
+    );
+  };
+  const stop = async () => {
+    if (!(await confirmDialog(t('lead.stopConfirm')))) return;
+    onDecided(
+      approval.id,
+      await choose('stop', async () => {
+        await api.decide(approval.id, 'abort');
+      }),
+    );
+  };
+  return (
+    <div className="cs-ask cs-handoff" role="group" aria-label={t('ho.title')}>
+      <p className="small cs-ask-head">
+        <strong>{t('ho.title')}</strong> <ActorChip actor={approval.actor ?? 'worker'} how="asks" />
+      </p>
+      <HandoffDetails card={q.handoff!} why={q.text} />
+      <label htmlFor={`${id}-out`} className="small">
+        {t('ho.output')}
+      </label>
+      <textarea id={`${id}-out`} className="prose" rows={5} dir="ltr" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('ho.outputPlaceholder')} disabled={locked} />
+      <div className="row">
+        <button type="button" className="primary" {...mark('ran')} disabled={locked || !text.trim()} onClick={() => void send(true)}>
+          {t('ho.send')}
+        </button>
+        <button type="button" {...mark('not-run')} onClick={() => void send(false)} title={t('ho.notRunWhy')}>
+          {t('ho.notRun')}
+        </button>
+        <button type="button" className="danger" {...mark('stop')} onClick={() => void stop()}>
+          {t('lead.stop')}
+        </button>
       </div>
       {err && (
         <p className="err" role="alert">

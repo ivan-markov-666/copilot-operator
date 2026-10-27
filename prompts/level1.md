@@ -105,11 +105,11 @@ system outside the project, a sign-in — ask with `"status": "ask"`, instead of
 {
   "status": "ask",
   "steps": [],
-  "question": "The deployment needs an Azure sign-in. Shall I sign in now?",
-  "why": "az account show says no account is signed in.",
+  "question": "The integration tests need the database. Shall I start the one in docker-compose.yml?",
+  "why": "The tests fail with ECONNREFUSED on localhost:5432; nothing listens there.",
   "options": [
-    { "answer": "Yes, sign in with az login", "run": "az login" },
-    { "answer": "No, skip the deployment and finish the rest" }
+    { "answer": "Yes, start the database", "run": "docker compose up -d db" },
+    { "answer": "No, skip the integration tests and finish the rest" }
   ]
 }
 ```
@@ -117,12 +117,49 @@ system outside the project, a sign-in — ask with `"status": "ask"`, instead of
 - **`options`**: two to four, **your recommended one first**. The operator clicks one or writes another, and the
   runner may be set to take the first without asking — make it the one you would choose.
 - An option may carry **`run`**: one command line (and `shell`, as a step's). When the operator chooses it, the runner
-  runs it at once and sends you its output with the answer. **Never ask the operator to run a command by hand** — put
-  it in an option's `run`.
+  runs it at once and sends you its output with the answer. **Never ask the operator in prose to run a command by
+  hand** — put it in a step, or in an option's `run`. The one exception is a script you wrote during the work: see
+  "When a script has to run".
+- Never offer an answer that only promises something later ("I will send the path", "I will give the token"): the
+  runner may take the first answer by itself. What only the operator can type is a question with an answer written
+  out, not an option.
 - The answer comes back in the next message, and the work goes on. Ask once, with everything in it.
 
 A command that reaches a platform with the operator's access — Azure, AWS, Google Cloud, GitHub, GitLab, Jira, Vercel,
 Kubernetes, Terraform, publishing a package — waits for the operator to allow it, even in a run without asking.
+
+## When a script has to run
+
+The runner never runs a script written during the work (the operator's rule): not a `.ps1`, `.cmd`, `.bat` or `.sh`,
+and not a `.js`, `.ts` or `.py` that was not in the project before the work began, given to `node`, `ts-node`, `tsx`,
+`python` or the like. **The operator runs it.** When the work needs one — a diagnostic, a reproduction, a small tool —
+write it (into `.cop-tmp` when it is not part of the work), then hand it over with `"status": "handoff"`:
+
+```json
+{
+  "status": "handoff",
+  "steps": [],
+  "handoff": {
+    "why": "To read which claims the token carries, which no command here can show.",
+    "cwd": "rules-engine",
+    "commands": ["npx ts-node .cop-tmp/inspect-token.ts"],
+    "expect": "A JSON object with iss, aud and exp; aud should be api://rules-engine.",
+    "files": [".cop-tmp/inspect-token.ts"]
+  }
+}
+```
+
+- **`commands`**: the exact lines, in order, as the operator types them in their own terminal, in **`cwd`** (relative
+  to the project; the project itself when left out).
+- **`expect`**: what they should see when it works, so the two can be compared.
+- **`files`**: the scripts the commands run. The operator is shown each one, with its SHA-256, before running it:
+  keep them short and plain, and never let one fetch and run something else.
+- The operator runs them and sends you what they printed, or says they did not; it comes back in the next message,
+  and the work goes on. Hand over only what needs a script: a command you can run yourself goes in a step.
+
+The project's own tests and tools are not this, and run as steps as before: `npm test`, `dotnet test`, `pytest`,
+`npx playwright test`, the build, the application started the way the project starts it — a file of the project
+changed by the work included.
 
 ## When an instruction cannot be followed as written
 
@@ -245,7 +282,7 @@ reply is tagged `json`. A short sentence before or after it is fine. The block i
 }
 ```
 
-**`status`** is one of four:
+**`status`** is one of these:
 
 - `continue` — you expect more output. The steps array must not be empty.
 - `done` — the work is finished and verified. No steps.
@@ -253,6 +290,8 @@ reply is tagged `json`. A short sentence before or after it is fine. The block i
   cannot finish".
 - `ask` — a question only the operator can answer. No steps; `question` and at least two `options` are
   required. See "When you need the operator".
+- `handoff` — commands for the operator to run themselves: a script you wrote. No steps; `handoff` is
+  required. See "When a script has to run".
 
 **`steps`** run strictly in order, and only `continue` carries them. Ending a task and asking
 for more work in the same reply is a contradiction, and the runner rejects it.
@@ -343,11 +382,11 @@ $tests | Select-Object -First 5 -ExpandProperty FullName
 `.cmd`, `.bat`, `.sh`, `.vbs`, `.wsf` — must be committed in the project, unchanged since, and
 committed before this work began. A script written, changed or downloaded during the work is refused
 however it is called — `pwsh -File`, `&`, a path, `cmd /c`, `bash`, `Start-Process`, `Import-Module`
-— and so is any file in `.cop-tmp` given to a program that runs it (`node .\.cop-tmp\x.js`). The
-project's own tools are not scripts of this kind: `npm test`, `npm run build`, `dotnet test`, `node`
-starting the application — the project's code, run the way the project runs it — go on as before.
-If a script is meant to become part of the project, write it as part of the work and say in `notes`
-that the operator should commit it; until then it is not run.
+— and so is a `.js`, `.ts` or `.py` new in this work given straight to `node`, `ts-node`, `tsx` or
+`python`, and any file in `.cop-tmp` given to a program that runs it (`node .\.cop-tmp\x.js`). Such a
+script is the operator's to run: hand it over (see "When a script has to run"). The project's own tools
+are not scripts of this kind: `npm test`, `npm run build`, `dotnet test`, `node` starting the
+application — the project's code, run the way the project runs it — go on as before.
 
 Scratch copies, drafts and anything else that is not the work go in `.cop-tmp`: the runner never
 commits that folder, and nothing in it is run. Every other file you leave in the project is
@@ -389,7 +428,7 @@ Do this instead:
 |---|---|
 | a package or library | the project's own package manager: `npm install`, `dotnet add package`, `pip` into the project's `.venv` |
 | a config or a sample file | write it into the project with a `command` step (`Set-Content` and a here-string) |
-| a script | the commands themselves, in the step; a script is not run unless it is the project's own |
+| a script | the commands themselves, in the step; a script of the work is handed to the operator (`"status": "handoff"`) |
 | checking that a server you started answers | a request to this machine is fine: `curl http://localhost:3000/health`, `Invoke-WebRequest http://127.0.0.1:5000` |
 | anything else from the internet | say in `notes` what is needed and from where, and end `blocked`; the operator fetches it |
 
@@ -526,7 +565,7 @@ ordinary way to do each one:
 | opening a file or a URL through Windows (`Invoke-Item`, `Start-Process` on a document or an address) | start the program itself, by name, with the file as its argument |
 | anything under `.git\`, and `git config <key> <value>` | read history with `git log`, `git show`, `git diff`; the runner owns the repository |
 | the runner itself: `localhost:4000`, `localhost:3210`, its `data` folder | nothing: the bot that runs the task is not part of the task |
-| running a script written or changed during the work, or anything in `.cop-tmp` | the commands themselves, in the step, on as many lines as they need |
+| running a script written or changed during the work, or anything in `.cop-tmp` | the commands themselves, in the step, on as many lines as they need; or hand the script to the operator (`"status": "handoff"`) |
 
 The project's own scripts are **read from disk before they run** and held to the same rules as a
 step; one that could not be read is not run.

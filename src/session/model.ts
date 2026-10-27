@@ -522,9 +522,24 @@ export type TaskNote = { id: string; text: string; at: string; sentAt?: string; 
 export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | 'password';
 
 /** The operator's answer to it, given later; `resume` for what needs only the operator to be there again. */
+/**
+ * Commands the chat handed to the operator to run themselves (2026-10-26): the lines, the folder, what should be seen,
+ * the script files they run read from disk with their SHA-256, and the lines the runner would refuse outright.
+ */
+export type HandoffCard = {
+  commands: string[];
+  cwd: string;
+  expect: string;
+  files: Array<{ path: string; sha256?: string; text?: string; cut?: boolean; problem?: string }>;
+  /** The folder is outside the project. */
+  outside?: boolean;
+  /** By line, the reason the runner would refuse it. */
+  warnings?: string[];
+};
+
 export type ParkedAnswer =
   | { kind: 'plan'; decision: 'approve' | 'revise'; note?: string }
-  | { kind: 'question'; answer: string }
+  | { kind: 'question'; answer: string; /** A handoff: whether the operator ran the commands. */ ran?: boolean }
   | { kind: 'retry'; choice: RetryChoice }
   | { kind: 'command'; decision: 'run' | 'skip' }
   | { kind: 'resume' };
@@ -1279,7 +1294,7 @@ export type PendingApproval = {
    * question, why, and the choices when it gave some. Answered with text (`/approvals/:id/answer`), or the task stopped.
    */
   /** `commands`: by answer, the command the bot runs when that one is chosen (2026-10-23), or null. */
-  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null> };
+  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; handoff?: HandoffCard };
   /**
    * Set when a subtask of two chats failed for a technical reason and the operator is asked what to do (2026-10-25):
    * the subtask, the attempt and the most there may be, why, what the attempt left, and the choices — try it again in

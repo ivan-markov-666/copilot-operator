@@ -280,7 +280,7 @@ export function staticCheck(
    * a script in one step and run it in the next. See `scriptFiles.ts`.
    */
   if (confinement) {
-    const own = ownScriptRefusal(step.cmd, confinement.cwd, confinement.workStartedAt);
+    const own = ownScriptRefusal(step.cmd, confinement.cwd, confinement.workStartedAt, effectiveShell(step.shell));
     if (own) return { action: 'skip', reason: own };
   }
   // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`

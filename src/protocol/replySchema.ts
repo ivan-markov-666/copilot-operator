@@ -139,6 +139,23 @@ export const OptionSchema = z.preprocess(
 );
 export type ReplyOption = z.infer<typeof OptionSchema>;
 
+/**
+ * Commands the operator runs themselves (operator, 2026-10-26: "the script is made, but the user runs it; the bot gives
+ * the commands for the user to run and the result it expects"): a script written during the work is never run by the
+ * runner (`scriptFiles.ts`), so the chat hands it over — the lines in order, the folder, what should be seen, and the
+ * script files they run, which the card shows with their SHA-256 so the operator reads what they run.
+ */
+export const HandoffSchema = z.object({
+  why: z.string().trim().min(1).optional(),
+  /** The folder the commands are typed in, relative to the project; the project itself when left out. */
+  cwd: z.string().trim().min(1).optional(),
+  commands: z.array(z.preprocess(asText, z.string().trim().min(1))).min(1, 'handoff.commands needs at least one command for the operator to run.'),
+  expect: z.string().trim().min(5, 'handoff.expect must say what the operator should see when it works.'),
+  /** The script files the commands run, relative to the project. */
+  files: z.array(z.preprocess(asText, z.string().trim().min(1))).default([]),
+});
+export type Handoff = z.infer<typeof HandoffSchema>;
+
 export const ReplySchema = z
   .object({
     /**
@@ -158,13 +175,15 @@ export const ReplySchema = z
      * `plan` — in plan mode only: here is the plan, made from what I read; no steps with it, and no change
      * made yet. See `PlanSchema`.
      */
-    status: z.enum(['continue', 'done', 'blocked', 'plan', 'ask']),
+    status: z.enum(['continue', 'done', 'blocked', 'plan', 'ask', 'handoff']),
     /** Required when `status` is `plan`. */
     plan: PlanSchema.optional(),
     /** `ask` — a question only the operator can answer (2026-10-23): the question, why, and the answers to click. */
     question: z.string().optional(),
     why: z.string().optional(),
     options: z.array(OptionSchema).default([]),
+    /** `handoff` — a script written during the work, for the operator to run themselves (2026-10-26). */
+    handoff: HandoffSchema.optional(),
     steps: z.array(StepSchema).default([]),
     notes: z.string().optional(),
     /**
@@ -198,13 +217,18 @@ export const ReplySchema = z
   })
   .refine((r) => r.status === 'continue' || r.steps.length === 0, {
     message:
-      'status "done", "blocked", "plan" and "ask" cannot carry steps: "done" and "blocked" end the task, "plan" waits for the plan to be approved and "ask" for the operator\'s answer (a command for an answer goes in its "run"). ' +
+      'status "done", "blocked", "plan", "ask" and "handoff" cannot carry steps: "done" and "blocked" end the task, "plan" waits for the plan to be approved, "ask" for the operator\'s answer (a command for an answer goes in its "run") and "handoff" for what the operator\'s own run of its commands printed. ' +
       'Send the steps with status "continue".',
   })
   .refine((r) => r.status !== 'ask' || ((r.question ?? '').trim().length >= 5 && r.options.length >= 2), {
     message:
       'status "ask" requires a "question" for the operator and at least two "options", your recommended one first: ' +
       '[{ "answer": "what the operator clicks" }, { "answer": "...", "run": "a command the runner runs if this is chosen" }].',
+  })
+  .refine((r) => r.status !== 'handoff' || !!r.handoff, {
+    message:
+      'status "handoff" requires a "handoff" object: { "why": what it is for, "cwd": the folder, relative to the project, ' +
+      '"commands": [the exact lines the operator types, in order], "expect": what they should see when it works, "files": [the scripts they run] }.',
   })
   .refine((r) => r.status !== 'plan' || !!r.plan, {
     message:

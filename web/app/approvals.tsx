@@ -154,6 +154,29 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
   if (approval.plan) return <PlanCard approval={approval} sessionName={sessionName} onDecided={onDecided} />;
 
   /*
+   * Not a step either: a question of the chat's or the lead's, commands handed over for the operator to run, a subtask's
+   * choices (2026-10-26). Answered in the conversation, where its card is whole; up here it said Run, Skip and Abort,
+   * and any of them stopped the task.
+   */
+  if (approval.question || approval.retry) {
+    return (
+      <div className="approval">
+        <div className="row">
+          <strong>{t(approval.question?.handoff ? 'ho.title' : 'approval.inChat')}</strong>
+          {approval.actor && <ActorChip actor={approval.actor} how="asks" />}
+          <span className="muted small">{fmtTime(approval.createdAt)}</span>
+        </div>
+        <p className="small">{t('approval.inChatWhy')}</p>
+        <div className="row">
+          <Link href="/" className="button-link">
+            {t('approval.openChat', { name: sessionName })}
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  /*
    * Not a step: the chat could not be put on the chosen model, and the operator is asked to choose it in
    * the Copilot window, then say so here (2026-10-06). The run waits on this card in every mode.
    */

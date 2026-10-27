@@ -1583,6 +1583,16 @@ button.skill-delete { flex: none; display: inline-flex; align-items: center; gap
 .cs-question { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; }
 .cs-question textarea { width: 100%; min-height: 0; margin: 4px 0 8px; }
 .cs-question .cs-options { margin: 8px 0; }
+/* Commands handed to the operator to run themselves (2026-10-26): the lines, the folder, the scripts with their SHA-256. */
+.cs-handoff { padding: 10px 12px; }
+.cs-handoff textarea, .pk .ho-details + label + textarea { width: 100%; min-height: 0; margin: 4px 0 8px; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); }
+.ho-details .ho-commands { white-space: pre-wrap; word-break: break-word; }
+.ho-folder code, .ho-file code { font-family: var(--mono); word-break: break-all; }
+.ho-files { margin: 6px 0 8px; display: grid; gap: 4px; }
+.ho-file > summary { cursor: var(--cur-pointer); }
+.ho-file .cs-out { max-height: 320px; overflow: auto; }
+.ho-sha { word-break: break-all; margin: 4px 0; }
+.ho-warn ul { margin: 4px 0 0; padding-inline-start: 18px; }
 .cs-evidence { margin: 6px 0; font-size: calc(13px * var(--scale)); }
 .cs-evidence ul { margin: 0; padding-inline-start: 20px; }
 .cs-pick-label { font-size: calc(12px * var(--scale)); color: var(--muted); font-weight: 600; margin: 0; white-space: nowrap; }

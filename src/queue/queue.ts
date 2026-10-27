@@ -277,6 +277,11 @@ export function parkedAnswerFrom(p: { kind: ParkedKind; approval: PendingApprova
       if (input.decision === 'revise') return text(input.note) ? { kind: 'plan', decision: 'revise', note: text(input.note) } : { problem: 'Say what to change in the plan.' };
       return { problem: 'A plan is approved, or sent back for another.' };
     case 'question':
+      // Commands handed over (2026-10-26): what they printed, or that the operator did not run them, with a word or none.
+      if (p.approval.question?.handoff) {
+        if (input.ran === false) return { kind: 'question', answer: text(input.answer), ran: false };
+        return text(input.answer) ? { kind: 'question', answer: text(input.answer), ran: true } : { problem: 'Paste what the commands printed first.' };
+      }
       return text(input.answer) ? { kind: 'question', answer: text(input.answer) } : { problem: 'Write the answer first.' };
     case 'retry': {
       const choices = p.approval.retry?.choices ?? [];

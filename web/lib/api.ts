@@ -187,9 +187,22 @@ export type QueueItem = {
 export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | 'password';
 export type Parked = { kind: ParkedKind; at: string; approval: Approval; answer?: { kind: string; at: string } };
 /** The operator's answer to it, as the card sends it; `{ stop: true }` stops the task. */
+/**
+ * Commands the chat handed to the operator to run themselves (2026-10-26): the lines, the folder, what should be seen,
+ * the scripts they run with their SHA-256, the lines the bot would refuse. See the server's `HandoffCard`.
+ */
+export type HandoffCard = {
+  commands: string[];
+  cwd: string;
+  expect: string;
+  files: Array<{ path: string; sha256?: string; text?: string; cut?: boolean; problem?: string }>;
+  outside?: boolean;
+  warnings?: string[];
+};
+
 export type ParkedAnswerInput =
   | { decision: 'approve' | 'revise'; note?: string }
-  | { answer: string }
+  | { answer: string; /** A handoff: false when the operator did not run the commands. */ ran?: boolean }
   | { choice: RetryChoice }
   | { decision: 'run' | 'skip' }
   | { resume: true }
@@ -820,7 +833,7 @@ export type Approval = {
   plan?: { title: string; plan: TaskPlan };
   /** Two chats: the lead's question for the operator, answered with text. */
   /** `commands`: by answer, the command the bot runs when that one is chosen, or null. */
-  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null> };
+  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; handoff?: HandoffCard };
   /** Two chats: a subtask that ended for a technical reason, and what to do with it; see the server's `PendingApproval`. */
   retry?: { n: number; title: string; attempt: number; maxAttempts: number; category: SubtaskFailure; reason: string; sideEffects: SideEffects; changed: string[]; choices: RetryChoice[] };
 };
@@ -1380,7 +1393,9 @@ export const api = {
       }),
     }),
   /** The lead's question (two chats): the operator's answer. */
-  answerQuestion: (approvalId: string, text: string) => call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
+  /** `ran`: for commands handed over, false when the operator did not run them. */
+  answerQuestion: (approvalId: string, text: string, ran?: boolean) =>
+    call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify(ran === undefined ? { text } : { text, ran }) }),
   /** A subtask that ended for a technical reason (two chats): try it again, with a new worker, from where it is, or not. */
   answerRetry: (approvalId: string, choice: RetryChoice) => call<{ ok: boolean }>(`/approvals/${approvalId}/retry`, { method: 'POST', body: JSON.stringify({ choice }) }),
   /** After a Stop (two chats): the stopped message carried on, its subtask `n` tried again first, by a new worker if `fresh`. */

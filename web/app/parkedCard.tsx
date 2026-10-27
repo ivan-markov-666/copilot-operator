@@ -16,6 +16,7 @@ import { useChoice } from '../lib/useChoice';
 import { CopyButton } from './copyButton';
 import { PlanView } from './planView';
 import { RichText } from './richText';
+import { HandoffDetails } from './handoffView';
 
 const CHOICE: Record<RetryChoice, Key> = { same: 'retry.same', fresh: 'retry.fresh', continue: 'retry.continue', restore: 'retry.restore', accept: 'retry.accept' };
 const WHAT: Record<Parked['kind'], Key> = {
@@ -69,7 +70,25 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           </div>
         </>
       )}
-      {parked.kind === 'question' && a.question && (
+      {/* Commands handed over (2026-10-26): what they printed, pasted; or not run. */}
+      {parked.kind === 'question' && a.question?.handoff && (
+        <>
+          <HandoffDetails card={a.question.handoff} why={a.question.text} />
+          <label htmlFor={`${id}-out`} className="small">
+            {t('ho.output')}
+          </label>
+          <textarea id={`${id}-out`} className="prose" rows={4} dir="ltr" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('ho.outputPlaceholder')} disabled={locked} />
+          <div className="row">
+            <button type="button" className="primary" {...mark('ran')} disabled={locked || !text.trim()} onClick={() => void send('ran', { answer: text.trim(), ran: true })}>
+              {t('ho.send')}
+            </button>
+            <button type="button" {...mark('not-run')} onClick={() => void send('not-run', { answer: text.trim(), ran: false })} title={t('ho.notRunWhy')}>
+              {t('ho.notRun')}
+            </button>
+          </div>
+        </>
+      )}
+      {parked.kind === 'question' && a.question && !a.question.handoff && (
         <>
           <RichText text={a.question.text} />
           {a.question.why && <p className="muted small">{a.question.why}</p>}

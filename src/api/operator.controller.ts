@@ -489,8 +489,8 @@ export class OperatorController {
 
   /** The lead's question (two chats): the operator's answer, as text. Stopping the task is `approvals/:id` with abort. */
   @Post('approvals/:id/answer')
-  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown }): unknown {
-    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '');
+  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown; ran?: unknown }): unknown {
+    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '', body?.ran === false ? false : undefined);
     if (!result.ok) throw new BadRequestException(result.problem);
     return result;
   }

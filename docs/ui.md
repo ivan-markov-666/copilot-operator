@@ -826,6 +826,32 @@ The operator signs in with `az login` in their own terminal. The bot's commands 
 
 The limit: this reads the command line, and only an account with the Reader role makes "read only" certain.
 
+**A script the chat wrote is the operator's to run (2026-10-26).** The operator's words: "the script is made, but the user runs it; the bot gives the commands for the user to run and the result it expects". Tests run as before, and `.cop-tmp` stays closed to the runner.
+
+`ownScriptRefusal` (`exec/scriptFiles.ts`) now refuses three things, and each refusal tells the chat to hand the script over:
+- shell scripts that are not the project's own, as before;
+- a file of code new in the work, given straight to a runtime (`codeFilesRun`, `writtenDuringTheWork`): `node`, `ts-node`, `tsx`, `python`, `deno`, `bun` and the like, also through `npx`. A file counts as new when it was added to git by the runner or after the work began, or, if it is not committed, was made on disk after then;
+- anything in `.cop-tmp`, as before.
+
+Still allowed:
+- a file of the project changed by the work, so the application still starts;
+- `node --test`, `npm test`, `npx playwright test`, `dotnet test` and the like.
+
+The chat hands a script over with `"status": "handoff"` (`HandoffSchema`): `commands`, `cwd`, `expect`, `why` and `files`. The runner (`orchestrator/handoff.ts`) does three things:
+- puts the card to the operator through `askQuestion`, as `PendingApproval.question.handoff`;
+- never answers it for them, even when Settings agree with what the bot proposes;
+- with nobody to ask, tells the chat so (`HANDOFF_NOBODY`).
+
+The card is "Run this yourself" (`HandoffQuestion` in the chat, `HandoffDetails` in `web/app/handoffView.tsx`). It shows:
+- why it is needed, the folder, and the commands in order with "Copy";
+- what should be seen;
+- the lines the bot itself would refuse, marked;
+- each script, read from disk and folded, with its SHA-256 and its text.
+
+The operator pastes what the commands printed and presses "Send what it printed", which needs some text. Or they press "I did not run it", where a word is optional, or "Stop the task". The chat gets `handoffResultMessage`: the output fenced next to what it expected, or that the commands were not run.
+
+A queue task set aside at such a card is answered on its card in the same words (`parkedAnswerFrom`, `resumeParked`). Up in the banner, on other pages, a question or a handoff now links to the chat ("Open the chat"). Its Run, Skip and Abort buttons used to stop the task. The contract (`prompts/level1.md`, "When a script has to run") says all this to the chat. It also tells the chat never to offer an answer that only promises something later.
+
 **Three models, and "Saving..." (2026-10-23).** Settings has a model for the worker (`copilot.defaultModel`: the one
 chat, or the worker of two chats), for the lead (`copilot.defaultLeadModel`, `PUT /api/models/lead-default`; none
 chosen, the worker's) and for the review (`copilot.defaultReviewModel`) — three alike sections (`RoleModelSection`),

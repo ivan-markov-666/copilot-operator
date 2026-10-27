@@ -119,7 +119,30 @@ mkdirSync(loose, { recursive: true });
 writeFileSync(join(loose, 'x.ps1'), 'Write-Output x');
 t.truthy('outside a git repository nothing tells a script apart: refused', ownScriptRefusal('pwsh -File .\\x.ps1', loose, began)?.includes('not in a git repository') === true, short(ownScriptRefusal('pwsh -File .\\x.ps1', loose, began)));
 const message = refused('pwsh -NoProfile -File .\\new.ps1') ?? '';
-t.truthy('the reason tells the chat what to do instead', message.includes('in the step itself') && message.includes('several lines') && message.includes('"notes"'), message);
+t.truthy('the reason tells the chat what to do instead: the step itself, or hand it to the operator', message.includes('in the step itself') && message.includes('several lines') && message.includes('"handoff"'), message);
+
+/*
+ * A file of code written during the work, given straight to a runtime (operator, 2026-10-26: "the script is made, but the
+ * user runs it"): refused, the chat told to hand it over. A file of the project changed by the work still runs — the
+ * application started after a change is the work — and so do the tests, as before.
+ */
+console.log('\n--- a file of code written during the work is the operator\'s to run ---');
+await new Promise((r) => setTimeout(r, 2_100));
+const workBegan = new Date().toISOString();
+writeFileSync(join(repo, 'tools', 'inspect.ts'), 'console.log(1)');
+writeFileSync(join(repo, 'diag.py'), 'print(1)');
+writeFileSync(join(repo, 'scripts.js'), 'console.log("changed by the work")');
+const code = (cmd: string): string | null => ownScriptRefusal(cmd, repo, workBegan);
+for (const cmd of ['npx ts-node tools/inspect.ts', 'npx tsx tools\\inspect.ts', 'node tools/inspect.ts', '& node .\\tools\\inspect.ts', 'python diag.py', 'py .\\diag.py', 'deno run tools/inspect.ts']) {
+  t.truthy(`refused, to hand over: ${cmd}`, /a script written during this work[\s\S]*"handoff"/.test(code(cmd) ?? ''), short(code(cmd)));
+}
+for (const cmd of ['node scripts.js', 'node --test tools/inspect.ts', 'npm test', 'npx playwright test tools/inspect.ts', 'node --version', 'python -m pytest', 'npx tsx src/missing.ts']) {
+  t.check(`runs: ${cmd}`, code(cmd), null);
+}
+as('copilot-operator@localhost', 'add', 'tools/inspect.ts');
+as('copilot-operator@localhost', 'commit', '-q', '-m', 'the runner commits the work');
+t.truthy('committed by the runner during the work: still the work\'s',code('node tools/inspect.ts')?.includes('added by copilot-operator') === true, short(code('node tools/inspect.ts')));
+git('checkout', '-q', '--', 'scripts.js');
 
 console.log('\n--- in the step gate, for the chat; the operator\'s checks are theirs ---');
 const shipped = RunConfigSchema.parse({}).execution;

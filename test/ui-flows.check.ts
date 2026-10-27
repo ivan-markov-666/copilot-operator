@@ -31,6 +31,7 @@
  * scenarios whose title has that text.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page, type Response as PwResponse } from 'playwright';
@@ -1684,6 +1685,41 @@ try {
     await h.idle();
     const approvals = await h.call<unknown[]>('GET', '/approvals');
     t.check('skipped: nothing waits any more', approvals.length, 0);
+  });
+
+  /*
+   * A script the chat wrote is the operator's to run (operator, 2026-10-26): the runner refuses it, the chat hands it
+   * over, and the card says what to run, where, what should be seen, with the script and its SHA-256 to read first;
+   * "Send what it printed" waits for what was pasted, and the chat gets it.
+   */
+  await scenario('"Run this yourself": a script the chat wrote, handed over with its commands and SHA-256, its output sent back', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Find out which claims the token carries.', model: 'Think deeper' });
+    const run = 'npx tsx tools/inspect.ts';
+    h.chat.script(
+      reply.steps("New-Item -ItemType Directory -Force tools | Out-Null; Set-Content -NoNewline -Path tools/inspect.ts -Value 'console.log(42)'", run),
+      reply.handoff([run], 'It prints 42.', { why: 'To read the claims, which no command here can show.', files: ['tools/inspect.ts'] }),
+      reply.done('The inspection printed 42 when the operator ran it themselves, as expected, so the claims are the ones the script reads.'),
+    );
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const card = page.locator('.cs-handoff');
+    await card.waitFor({ timeout: 30_000 });
+    t.check('the card: "Run this yourself", why, the commands, what should be seen', [((await card.locator('.cs-ask-head strong').textContent()) ?? '').trim(), ((await card.textContent()) ?? '').includes('To read the claims'), ((await card.locator('.ho-commands').textContent()) ?? '').trim(), ((await card.textContent()) ?? '').includes('It prints 42.')], [en['ho.title'], true, run, true]);
+    const file = card.locator('details.ho-file');
+    await file.locator('summary').click();
+    const sha = createHash('sha256').update(readFileSync(join(h.repo, 'tools', 'inspect.ts'))).digest('hex');
+    t.check('the script, folded, with its SHA-256 and its text', [((await file.locator('summary code').textContent()) ?? '').trim(), ((await file.locator('.ho-sha').textContent()) ?? '').includes(sha), ((await file.locator('pre').textContent()) ?? '').trim()], ['tools/inspect.ts', true, 'console.log(42)']);
+    const send = card.getByRole('button', { name: en['ho.send']!, exact: true });
+    t.check('"Send what it printed" waits for what was pasted', await send.isDisabled(), true);
+    await card.getByLabel(en['ho.output']!).fill('42');
+    await send.click();
+    await card.waitFor({ state: 'detached', timeout: 10_000 });
+    await page.locator('.cs-body').getByText('The inspection printed 42 when the operator ran it themselves').waitFor({ timeout: 30_000 });
+    const told = h.chat.sent.map((m) => m.text).find((x) => x.includes('The operator ran the commands you handed over')) ?? '';
+    t.truthy('the chat got what was pasted, beside what it expected', told.includes('```\n42\n```') && told.includes('You expected: It prints 42.'), told.slice(0, 400));
   });
 
   /*

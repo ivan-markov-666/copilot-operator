@@ -31,6 +31,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { gitSync, RUNNER_EMAIL } from '../vcs/git.js';
+import { scanCommandHeads } from './commandHeads.js';
 
 /** Larger than this is not a step's script; it is not read, and running it is refused. */
 const MAX_SCRIPT_BYTES = 256 * 1024;
@@ -160,12 +161,79 @@ export function notTheProjects(file: string, since?: string): string | null {
   return null;
 }
 
+/** The runtimes a file of code is given to, by the program's name. */
+const CODE_RUNTIMES = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'ts-node-esm', 'python', 'python3', 'pythonw', 'py', 'deno', 'bun', 'ruby', 'perl', 'php']);
+/** What a package runner starts that runs a file of code: `npx ts-node x.ts`, `npx tsx x.ts`. */
+const RUN_THROUGH = new Set(['npx', 'pnpx', 'bunx']);
+const CODE_FILE = /\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|py|pyw|rb|pl|php)$/i;
+
+/**
+ * The files of code a line gives straight to a runtime (2026-10-26): `node tools/x.js`, `npx ts-node tools/x.ts`,
+ * `tsx x.ts`, `python x.py`, `deno run x.ts`, as full paths. The first argument that is not a switch is the file; a
+ * line whose first one is not a file of code (`node --version`, `python -m pytest`) gives none. The project's test
+ * runners are not this (operator, 2026-10-26: "tests as before"): `node --test` is left alone, as are `npm test`,
+ * `npx playwright test` and the rest, which are not runtimes given a file.
+ */
+export function codeFilesRun(command: string, cwd: string, shell?: string): string[] {
+  const files = new Set<string>();
+  for (const call of scanCommandHeads(command, shell ?? 'pwsh').calls) {
+    let program = call.head.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd)$/i, '').toLowerCase();
+    let args = call.args;
+    if (RUN_THROUGH.has(program)) {
+      const first = args.findIndex((a) => !a.literal.startsWith('-'));
+      if (first < 0) continue;
+      program = args[first]!.literal.toLowerCase();
+      args = args.slice(first + 1);
+    }
+    if (!CODE_RUNTIMES.has(program)) continue;
+    if (args.some((a) => /^--test\b/.test(a.literal))) continue;
+    const rest = (program === 'deno' || program === 'bun') && args[0]?.literal === 'run' ? args.slice(1) : args;
+    const file = rest.find((a) => !a.literal.startsWith('-'));
+    if (!file || file.dynamic || !CODE_FILE.test(file.literal)) continue;
+    files.add(isAbsolute(file.literal) ? file.literal : resolve(cwd, file.literal));
+  }
+  return [...files];
+}
+
+/**
+ * Why a file of code was written during this work, or null when it was the project's before the work began: added
+ * to the repository by someone else before then, or, not committed, made on disk before then. A file of the project
+ * changed by the work is still the project's — the application started after a change is the work, run the way the
+ * project runs it; a file that was not there is a script the work wrote.
+ */
+export function writtenDuringTheWork(file: string, since?: string): string | null {
+  if (!existsSync(file)) return null;
+  const began = since ? Date.parse(since) : NaN;
+  const top = gitSync(dirname(file), ['rev-parse', '--show-toplevel']);
+  if (top.ok && top.stdout) {
+    const rel = relative(top.stdout, file);
+    const path = rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel.replace(/\\/g, '/') : file;
+    const added = gitSync(top.stdout, ['log', '--diff-filter=A', '--format=%ae%x09%ct', '-1', '--', path]);
+    if (added.ok && added.stdout.trim()) {
+      const [email = '', time = ''] = added.stdout.trim().split('\t');
+      if (email.trim().toLowerCase() === RUNNER_EMAIL) return 'it was added by copilot-operator, so it was written during the work';
+      if (Number.isFinite(began) && Number(time) * 1000 >= began - 1000) return 'it was added after this work began';
+      return null;
+    }
+  }
+  if (!Number.isFinite(began)) return 'it is not committed, and nothing tells when it was written';
+  let born = NaN;
+  try {
+    born = statSync(file).birthtimeMs;
+  } catch {
+    /* unreadable: the runtime will say so */
+  }
+  return Number.isFinite(born) && born >= began - 1000 ? 'it was made after this work began and is not committed' : null;
+}
+
 /**
  * Why a chat's step must not run a script, or null: a shell script that is not one of the project's own (see
- * `notTheProjects`), or any file in `.cop-tmp` given to a program that runs it. Only for the chat's steps, the
- * implementer's and the reviewer's: the operator's own checks are theirs to point at whatever they choose.
+ * `notTheProjects`), a file of code written during the work given to a runtime (see `writtenDuringTheWork`), or any
+ * file in `.cop-tmp` given to a program that runs it. Every one of them is the operator's to run (2026-10-26), and the
+ * chat is told to hand it over. Only for the chat's steps, the implementer's and the reviewer's: the operator's own
+ * checks are theirs to point at whatever they choose.
  */
-export function ownScriptRefusal(command: string, cwd: string, since?: string): string | null {
+export function ownScriptRefusal(command: string, cwd: string, since?: string, shell?: string): string | null {
   // A file of code in it, given to a program that runs files — not its output written there (`node x.js > .cop-tmp\out.txt`).
   const scratch = new RegExp(
     String.raw`\b${RUNS_A_FILE}(?:\.exe|\.cmd)?\b[^|;\n]*?(?:^|[\s'"=(,:])(?:\.[\\/])?(?:[^\s'"|;]*[\\/])?\.cop-tmp[\\/][^\s'"|;]*\.(?:ps1|psm1|cmd|bat|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|rb|pl|php|vbs|vbe|wsf|sh|jar|dll|exe|csx)\b`,
@@ -173,18 +241,28 @@ export function ownScriptRefusal(command: string, cwd: string, since?: string): 
   );
   const why = (file: string, reason: string): string =>
     `refused: ${relative(cwd, file) || file} is not one of the project's own scripts — ${reason}. A script written or ` +
-    'changed during the work is not run, nor anything in .cop-tmp (the operator\'s rule). Put what it does in the ' +
-    'step itself: a command may be several lines. If the script is meant to be part of the project, say so in "notes", ' +
-    'and the operator can commit it.';
+    'changed during the work is run by the operator, not by the runner, nor is anything in .cop-tmp (the operator\'s rule). ' +
+    HAND_IT_OVER;
+  if (scratch.test(command)) {
+    return 'refused: this runs a file in .cop-tmp, the folder for scratch files — the runner runs nothing there (the operator\'s rule). ' + HAND_IT_OVER;
+  }
   for (const file of shellScriptsRun(command, cwd)) {
     const reason = notTheProjects(file, since);
     if (reason) return why(file, reason);
   }
-  if (scratch.test(command)) {
-    return (
-      'refused: this runs a file in .cop-tmp, the folder for scratch files — nothing there is run (the operator\'s rule). ' +
-      'Put what it does in the step itself: a command may be several lines.'
-    );
+  for (const file of codeFilesRun(command, cwd, shell)) {
+    const reason = writtenDuringTheWork(file, since);
+    if (reason) {
+      return (
+        `refused: ${relative(cwd, file) || file} is a script written during this work — ${reason} — and such a script is run by ` +
+        'the operator, not by the runner (the operator\'s rule). ' + HAND_IT_OVER + ' The project\'s tests run as steps, as before.'
+      );
+    }
   }
   return null;
 }
+
+/** What the chat is told to do instead (2026-10-26). */
+const HAND_IT_OVER =
+  'Put what it does in the step itself — a command may be several lines — or hand it to the operator with status "handoff": ' +
+  'the commands, the folder, what they should see and the script; the operator runs it and you get what it printed.';

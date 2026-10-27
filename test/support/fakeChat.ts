@@ -436,6 +436,10 @@ export const reply = {
   ask(question: string, options: Array<string | { answer: string; run?: string }>, why?: string): string {
     return fenced({ status: 'ask', steps: [], question, ...(why ? { why } : {}), options });
   },
+  /** Commands handed to the operator to run themselves (2026-10-26): the lines, what should be seen, and the rest. */
+  handoff(commands: string[], expect: string, extra: { why?: string; cwd?: string; files?: string[] } = {}): string {
+    return fenced({ status: 'handoff', steps: [], handoff: { commands, expect, ...extra } });
+  },
   /** A plan, in plan mode: what is there, how, the stages, the files, how it will be shown done. */
   plan(over: Partial<{ existing: string; approach: string; steps: string[]; files: string[]; verification: string; risks: string }> = {}): string {
     return fenced({

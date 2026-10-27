@@ -31,7 +31,8 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
+import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type HandoffCard, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
+import { handoffResultMessage } from '../orchestrator/handoff.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
 import { Hold } from '../orchestrator/hold.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
@@ -160,7 +161,7 @@ type Waiting = {
   resolve: (d: PolicyDecision) => void;
   resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
   /** The lead's question (two chats): the operator's answer, or a stop. */
-  resolveAnswer?: (a: { answer: string } | 'stop') => void;
+  resolveAnswer?: (a: { answer: string; ran?: boolean } | 'stop') => void;
   /** A subtask that failed for a technical reason (two chats, 2026-10-25): what the operator chose for it, or a stop. */
   resolveRetry?: (choice: RetryChoice | 'stop') => void;
 };
@@ -2153,7 +2154,8 @@ export class OperatorService {
         note = planReviseMessage(a.note?.trim() || 'Make the plan more concrete: name the files and the stages.', p.approval.plan?.plan.version ?? 1);
       }
     } else if (a.kind === 'question') {
-      note = `You asked: ${p.approval.question?.text ?? ''}\n\nThe operator answers: ${a.answer}`;
+      const handed = p.approval.question?.handoff;
+      note = handed ? handoffResultMessage(handed, a.ran !== false, a.answer) : `You asked: ${p.approval.question?.text ?? ''}\n\nThe operator answers: ${a.answer}`;
     } else if (a.kind === 'retry' && p.approval.retry) {
       const r = p.approval.retry;
       if (a.choice === 'accept') note = `Subtask ${r.n} (${r.title}) is taken as failed, at the operator's word: decide what to do next without it.`;
@@ -2329,9 +2331,9 @@ export class OperatorService {
    * answered or the task is stopped.
    */
   askLeadQuestion(
-    ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; actor?: Actor },
+    ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; handoff?: HandoffCard; actor?: Actor },
     signal: AbortSignal,
-  ): Promise<{ answer: string } | 'stop'> {
+  ): Promise<{ answer: string; ran?: boolean } | 'stop'> {
     return new Promise((resolveAnswer) => {
       if (signal.aborted) {
         resolveAnswer('stop');
@@ -2342,11 +2344,19 @@ export class OperatorService {
         sessionId: ask.sessionId,
         taskId: ask.taskId,
         stepId: 0,
-        description: `${(ask.actor ?? 'lead') === 'lead' ? 'The lead asks' : 'The chat asks'}: ${ask.question}`,
+        description: ask.handoff
+          ? `The chat hands over commands to run yourself: ${ask.handoff.commands.join(' ; ')}`
+          : `${(ask.actor ?? 'lead') === 'lead' ? 'The lead asks' : 'The chat asks'}: ${ask.question}`,
         createdAt: new Date().toISOString(),
         // The lead's, or since 2026-10-23 the chat's own (plan mode's or the worker's).
         actor: ask.actor ?? 'lead',
-        question: { text: ask.question, ...(ask.why ? { why: ask.why } : {}), options: ask.options, ...(ask.commands?.some(Boolean) ? { commands: ask.commands } : {}) },
+        question: {
+          text: ask.question,
+          ...(ask.why ? { why: ask.why } : {}),
+          options: ask.options,
+          ...(ask.commands?.some(Boolean) ? { commands: ask.commands } : {}),
+          ...(ask.handoff ? { handoff: ask.handoff } : {}),
+        },
       };
       this.waiting.set(approval.id, {
         approval,
@@ -2424,12 +2434,15 @@ export class OperatorService {
     return await this.start(threadId, cfg.execution.mode);
   }
 
-  answerQuestion(approvalId: string, text: string): { ok: boolean; problem?: string } {
+  answerQuestion(approvalId: string, text: string, ran?: boolean): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
     if (!w?.resolveAnswer) return { ok: false, problem: 'No question of the lead is waiting under that id.' };
-    if (!text.trim()) return { ok: false, problem: 'Write the answer first.' };
+    // Commands handed over (2026-10-26): what they printed, or that the operator did not run them, with a word or none.
+    const handed = !!w.approval.question?.handoff;
+    if (handed && ran !== false && !text.trim()) return { ok: false, problem: 'Paste what the commands printed first.' };
+    if (!handed && !text.trim()) return { ok: false, problem: 'Write the answer first.' };
     this.waiting.delete(approvalId);
-    w.resolveAnswer({ answer: text.trim() });
+    w.resolveAnswer(handed ? { answer: text.trim(), ran: ran !== false } : { answer: text.trim() });
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
       message: 'the operator answered the lead', data: { approvalId, question: true } });
     return { ok: true };
