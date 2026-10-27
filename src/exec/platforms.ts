@@ -8,7 +8,8 @@
  * Read by the programs a line starts (`commandHeads`, as the shell reads it), not by words anywhere in it: a file
  * that mentions `az` is not a command to Azure.
  */
-import { commandHeads, externalProgram } from './programs.js';
+import { commandHeads, externalProgram, startProcessTargets } from './programs.js';
+import { scanCommandHeads } from './commandHeads.js';
 
 /** Platform command-line tools, by the program's name. */
 const TOOLS: Record<string, string> = {
@@ -93,6 +94,44 @@ export function platformReason(command: string, shell?: string, reading?: Readon
     // case-insensitively for the verbs that sign in.
     for (const [pattern, name] of CMDLETS) if (pattern.test(bare) || pattern.test(bare.toLowerCase())) return name;
   }
+  /*
+   * What a package runner or Start-Process starts (audit, 2026-10-27): `npx vercel deploy`, `npm exec -- vercel`,
+   * `pnpm dlx netlify deploy`, `Start-Process gh -ArgumentList …` reach the platform as the program itself does.
+   */
+  for (const program of startedPrograms(command, shell)) {
+    if (reading?.has(program)) continue;
+    if (TOOLS[program]) return TOOLS[program]!;
+  }
   for (const [pattern, name] of REGISTRIES) if (pattern.test(command)) return name;
   return null;
+}
+
+const RUNNERS: Record<string, ReadonlySet<string> | null> = { npx: null, pnpx: null, bunx: null, npm: new Set(['exec', 'x']), pnpm: new Set(['exec', 'dlx']), yarn: new Set(['exec', 'dlx']) };
+
+/** The programs a package runner and Start-Process are given to start, by name. */
+function startedPrograms(command: string, shell?: string): string[] {
+  const out: string[] = [];
+  const name = (word: string): string => word.replace(/^.*[\\/]/, '').replace(/^['"]|['"]$/g, '').replace(/\.(?:exe|cmd|ps1)$/i, '').replace(/@[^@/]*$/, '').toLowerCase();
+  for (const call of scanCommandHeads(command, shell ?? 'pwsh').calls) {
+    const runner = name(call.head);
+    if (!(runner in RUNNERS)) continue;
+    let args = call.args.map((a) => a.literal);
+    const words = RUNNERS[runner];
+    if (words) {
+      if (!words.has((args[0] ?? '').toLowerCase())) continue;
+      args = args.slice(1);
+    }
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!;
+      if (a === '--') continue;
+      if (a.startsWith('-')) {
+        if (/^(?:-p|--package)$/.test(a)) out.push(name(args[++i] ?? ''));
+        continue;
+      }
+      out.push(name(a));
+      break;
+    }
+  }
+  for (const target of startProcessTargets(command)) out.push(name(target));
+  return out.filter(Boolean);
 }

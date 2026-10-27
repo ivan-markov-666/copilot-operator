@@ -112,7 +112,15 @@ export const LeadReplySchema = z
      * `done` — the result, in the form the assignment asked for (`answer`). `blocked` — it cannot be taken further
      * without the operator (`summary`, `needed`).
      */
-    status: z.enum(['delegate', 'plan', 'ask', 'done', 'blocked']),
+    /*
+     * A status of the worker's said by the lead (operator's specification, 2026-10-27: an unsupported "handoff" cost a
+     * format retry that said only "invalid option"): the lead is told whose it is and what to do instead.
+     */
+    status: z.enum(['delegate', 'plan', 'ask', 'done', 'blocked'], {
+      message:
+        'status is one of "delegate", "plan", "ask", "done", "blocked". "handoff" and "continue" are the worker\'s: the worker writes a ' +
+        'script and hands it to the operator itself, so delegate the subtask that needs one; a question for the operator is status "ask".',
+    }),
     understanding: prose,
     notes: prose,
     plan: PlanSchema.optional(),

@@ -183,6 +183,15 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
     await app.close();
     throw new Error(`copilot-operator api will not start: ${runsAcl.reason}`);
   }
+  /*
+   * The browser profile holds the signed-in Microsoft 365 session. In %LOCALAPPDATA% it is the operator's alone; in a
+   * home chosen elsewhere (`C:\Projects\bot`) it took that folder's permissions, which on a drive's own folders let
+   * every local account change it (audit, 2026-10-27). Narrowed as data/ and runs/ are — said, not refused, when it
+   * cannot be, so the bot still starts.
+   */
+  await mkdir(cfg.resolved.profileDir, { recursive: true }).catch(() => undefined);
+  const profileAcl = secureDataDir(cfg.resolved.profileDir);
+  if (!profileAcl.ok) console.warn(`  warning: the browser profile (${cfg.resolved.profileDir}) could not be made the operator's alone: ${profileAcl.reason}`);
   for (const [name, dir] of [['data', dataDir], ['runs', cfg.resolved.runsDir]] as Array<[string, string]>) {
     if (/onedrive/i.test(dir) || /^\\\\/.test(dir)) {
       console.warn(`  warning: the ${name} folder (${dir}) is under OneDrive or on a network share; keep the bot's records on a local disk (COP_DATA_DIR, runsDir)`);

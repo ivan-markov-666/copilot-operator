@@ -87,6 +87,36 @@ export async function changedSince(dir: string, before: Checkpoint, id: string):
 }
 
 /**
+ * Adds to the safety record what `git clean -f -d` would remove now: the record photographed the folder through the
+ * .gitignore of then, and a file it ignored is not in it. The record as it now is, or why it could not be kept.
+ */
+async function keepWhatCleanTakes(dir: string, ref: string, safety: string): Promise<{ commit: string } | { problem: string }> {
+  // `clean` has no -z: one name a line, quoted C-style only where it holds a quote, a backslash or a control character.
+  const doomed = await git(dir, ['-c', 'core.quotePath=false', 'clean', '-n', '-d'], 60_000);
+  if (!doomed.ok) return { problem: `git could not tell which files going back removes: ${doomed.stderr.split('\n')[0]}. Nothing was removed.` };
+  const unquote = (p: string): string => (p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1).replace(/\\(["\\])/g, '$1') : p);
+  const paths = doomed.stdout.split(/\r?\n/).filter((l) => l.startsWith('Would remove ')).map((l) => unquote(l.slice('Would remove '.length)));
+  if (paths.length === 0) return { commit: safety };
+  const kept = new Set((await git(dir, ['ls-tree', '-r', '--name-only', '-z', safety], 60_000)).stdout.split('\0').filter(Boolean));
+  const missing = paths.filter((p) => (p.endsWith('/') ? ![...kept].some((k) => k.startsWith(p)) : !kept.has(p)));
+  if (missing.length === 0) return { commit: safety };
+  const scratch = await mkdtemp(join(tmpdir(), 'cop-checkpoint-'));
+  const env = { ...process.env, GIT_INDEX_FILE: join(scratch, 'index') };
+  try {
+    const problem = 'the files going back would remove could not be kept first, so nothing was removed';
+    if (!(await git(dir, ['read-tree', safety], 60_000, env)).ok) return { problem: `${problem}.` };
+    const add = await git(dir, ['add', '-f', '--', ...missing], 120_000, env);
+    if (!add.ok) return { problem: `${problem} (${add.stderr.split('\n')[0]}).` };
+    const tree = await git(dir, ['write-tree'], 60_000, env);
+    const commit = tree.ok ? await git(dir, [...AUTHOR, 'commit-tree', tree.stdout, '-p', safety, '-m', 'files going back removes, kept with the folder as it was']) : tree;
+    if (!commit.ok || !(await git(dir, ['update-ref', ref, commit.stdout])).ok) return { problem: `${problem}.` };
+    return { commit: commit.stdout };
+  } finally {
+    await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
  * Puts the folder back as `cp` photographed it: its branch checked out at its commit, its working tree with the
  * same uncommitted changes. The folder as it is now is photographed first, under `refs/copilot-operator/safety/`.
  */
@@ -105,6 +135,17 @@ export async function restoreCheckpoint(dir: string, cp: Checkpoint): Promise<{ 
       : await step(['checkout', '--force', '--detach', cp.head], `${cp.head.slice(0, 8)} could not be checked out`)) ??
     // At the commit it was on: a commit made after it, by the chat or by hand, is undone here (kept in the safety record).
     (cp.branch ? await step(['reset', '--hard', cp.head], `${cp.branch} could not be put back at ${cp.head.slice(0, 8)}`) : null) ??
+    /*
+     * What git would remove now and the safety record does not hold — a file the .gitignore of now ignored, and the
+     * .gitignore put back does not (audit, 2026-10-27: a `.env` the chat had ignored went for good) — is added to the
+     * record first, so the clean below loses nothing.
+     */
+    (await (async () => {
+      const kept = await keepWhatCleanTakes(dir, `refs/copilot-operator/safety/${stamp}`, safety.commit);
+      if ('problem' in kept) return kept.problem;
+      safety.commit = kept.commit;
+      return null;
+    })()) ??
     // Files made since that git does not track go; ignored ones (builds, installs) stay.
     (await step(['clean', '-f', '-d'], 'the files made since could not be removed')) ??
     // And the uncommitted changes as they were, untracked files included.

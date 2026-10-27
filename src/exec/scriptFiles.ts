@@ -29,9 +29,11 @@
  * nothing is run from `.cop-tmp`. What a step does it says in the step itself, which may be several lines.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { gitSync, RUNNER_EMAIL } from '../vcs/git.js';
-import { scanCommandHeads } from './commandHeads.js';
+import { scanCommandHeads, type CallArg, type CommandCall } from './commandHeads.js';
+import { packageScriptsRun, packageScriptWritten, writesPackageScripts } from './npmScripts.js';
+import { DEFAULT_SCRIPT_RULES, kindForChat, kindOfFile, type ScriptKind, type ScriptRule, type ScriptRules } from './scriptKinds.js';
 
 /** Larger than this is not a step's script; it is not read, and running it is refused. */
 const MAX_SCRIPT_BYTES = 256 * 1024;
@@ -143,7 +145,7 @@ const inScratch = (path: string): boolean => path.split(/[\\/]+/).some((part) =>
  * last committed by someone other than the runner and, when `since` is known, before the work began.
  */
 export function notTheProjects(file: string, since?: string): string | null {
-  if (inScratch(file)) return `it is in ${SCRATCH}, the folder for scratch files, and nothing there is run`;
+  if (inScratch(file)) return `it is in ${SCRATCH}, the folder for scratch files`;
   if (!existsSync(file)) return 'it does not exist';
   const top = gitSync(dirname(file), ['rev-parse', '--show-toplevel']);
   if (!top.ok || !top.stdout) return 'it is not in a git repository, so nothing tells it apart from a script written during the work';
@@ -165,32 +167,103 @@ export function notTheProjects(file: string, since?: string): string | null {
 const CODE_RUNTIMES = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'ts-node-esm', 'python', 'python3', 'pythonw', 'py', 'deno', 'bun', 'ruby', 'perl', 'php']);
 /** What a package runner starts that runs a file of code: `npx ts-node x.ts`, `npx tsx x.ts`. */
 const RUN_THROUGH = new Set(['npx', 'pnpx', 'bunx']);
+/** A package manager's word that makes it a package runner: `npm exec`, `pnpm exec`, `pnpm dlx`, `yarn dlx`, `yarn exec`. */
+const RUNNER_WORDS: Record<string, ReadonlySet<string>> = { npm: new Set(['exec', 'x']), pnpm: new Set(['exec', 'dlx']), yarn: new Set(['exec', 'dlx']) };
+/** A package runner's switches that take the next word: `--package tsx`, `-p tsx`. */
+const RUNNER_VALUE = /^(?:-p|--package|-w|--workspace|--prefix|-C|--dir|--cwd|--filter|-F)$/;
+/** A runtime's switches whose value is a file of code it loads before the one it runs: `node -r ./hook.js x.js`. */
+const LOADS_CODE = /^(?:-r|--require|--import|--loader|--experimental-loader|--preload)$/;
+/** A runtime's other switches that take the next word, which is not the file it runs. */
+const RUNTIME_VALUE = /^(?:-m|--title|--env-file|--inspect-port|--max-old-space-size|--conditions|-C|--input-type|--tsconfig|--project|-P)$/;
 const CODE_FILE = /\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|py|pyw|rb|pl|php)$/i;
+
+const programOf = (head: string): string => head.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd)$/i, '').toLowerCase();
+
+/** `Start-Process node -ArgumentList 'tools/x.js'`: the program it starts and the words it is given, as a call of its own. */
+function startedProcesses(command: string): CommandCall[] {
+  const calls: CommandCall[] = [];
+  for (const m of command.matchAll(/\b(?:Start-Process|saps)\b([^|;\n]*)/gi)) {
+    const words = [...m[1]!.matchAll(/"([^"]*)"|'([^']*)'|([^\s,]+)/g)].map((w) => w[1] ?? w[2] ?? w[3] ?? '');
+    let program: string | undefined;
+    const args: CallArg[] = [];
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i]!;
+      if (/^-(?:FilePath|f)$/i.test(w)) program = words[++i];
+      else if (/^-(?:ArgumentList|Args|a)$/i.test(w)) {
+        while (i + 1 < words.length && !/^-[A-Za-z]+$/.test(words[i + 1]!)) args.push({ literal: words[++i]!, dynamic: /^\$/.test(words[i]!) });
+        // A value that is itself a list of words: `-ArgumentList 'tools/x.js --flag'`.
+        if (args.length === 1 && /\s/.test(args[0]!.literal)) args.splice(0, 1, ...args[0]!.literal.split(/\s+/).map((l) => ({ literal: l, dynamic: false })));
+      } else if (/^-[A-Za-z]+$/.test(w)) {
+        // A switch of Start-Process's own (`-Wait`, `-NoNewWindow`, `-WorkingDirectory dir`): its value is skipped where it has one.
+        if (/^-(?:WorkingDirectory|RedirectStandard\w+|Verb|WindowStyle|Credential)$/i.test(w)) i++;
+      } else if (program === undefined) program = w;
+    }
+    if (program) calls.push({ head: program, args });
+  }
+  return calls;
+}
 
 /**
  * The files of code a line gives straight to a runtime (2026-10-26): `node tools/x.js`, `npx ts-node tools/x.ts`,
- * `tsx x.ts`, `python x.py`, `deno run x.ts`, as full paths. The first argument that is not a switch is the file; a
- * line whose first one is not a file of code (`node --version`, `python -m pytest`) gives none. The project's test
- * runners are not this (operator, 2026-10-26: "tests as before"): `node --test` is left alone, as are `npm test`,
+ * `tsx x.ts`, `python x.py`, `deno run x.ts`, as full paths — and since the audit of 2026-10-27 every way of saying it
+ * found then: a package runner named as a word of npm, pnpm or yarn (`npm exec -- tsx x.ts`), a runner's switch with a
+ * value (`npx --package tsx tsx x.ts`), a file loaded before the one run (`node -r ./hook.js x.js`) and a runtime
+ * started with Start-Process (`Start-Process node -ArgumentList x.js`). The first argument that is not a switch is the
+ * file; a line whose first one is not a file of code (`node --version`, `python -m pytest`) gives none. The project's
+ * test runners are not this (operator, 2026-10-26: "tests as before"): `node --test` is left alone, as are `npm test`,
  * `npx playwright test` and the rest, which are not runtimes given a file.
  */
 export function codeFilesRun(command: string, cwd: string, shell?: string): string[] {
   const files = new Set<string>();
-  for (const call of scanCommandHeads(command, shell ?? 'pwsh').calls) {
-    let program = call.head.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd)$/i, '').toLowerCase();
+  const add = (literal: string): void => void files.add(isAbsolute(literal) ? literal : resolve(cwd, literal));
+  for (const call of [...scanCommandHeads(command, shell ?? 'pwsh').calls, ...startedProcesses(command)]) {
+    let program = programOf(call.head);
     let args = call.args;
+    // `npm exec -- tsx x.ts`, `pnpm dlx tsx x.ts`: from here on, a package runner.
+    if (RUNNER_WORDS[program]?.has(args[0]?.literal.toLowerCase() ?? '')) {
+      program = 'npx';
+      args = args.slice(1);
+    }
     if (RUN_THROUGH.has(program)) {
-      const first = args.findIndex((a) => !a.literal.startsWith('-'));
+      let first = -1;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i]!.literal;
+        if (a === '--') continue;
+        if (a.startsWith('-')) {
+          if (RUNNER_VALUE.test(a)) i++;
+          continue;
+        }
+        first = i;
+        break;
+      }
       if (first < 0) continue;
-      program = args[first]!.literal.toLowerCase();
+      program = programOf(args[first]!.literal);
       args = args.slice(first + 1);
     }
     if (!CODE_RUNTIMES.has(program)) continue;
     if (args.some((a) => /^--test\b/.test(a.literal))) continue;
     const rest = (program === 'deno' || program === 'bun') && args[0]?.literal === 'run' ? args.slice(1) : args;
-    const file = rest.find((a) => !a.literal.startsWith('-'));
+    let file: CallArg | undefined;
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i]!;
+      const [flag, inline] = a.literal.startsWith('-') && a.literal.includes('=') ? [a.literal.slice(0, a.literal.indexOf('=')), a.literal.slice(a.literal.indexOf('=') + 1)] : [a.literal, undefined];
+      if (flag === '--') continue;
+      if (flag.startsWith('-')) {
+        if (LOADS_CODE.test(flag)) {
+          const value = inline ?? rest[++i]?.literal;
+          if (value && CODE_FILE.test(value) && /^(?:\.|[A-Za-z]:|[\\/])|[\\/]/.test(value)) add(value);
+        } else if (inline === undefined && RUNTIME_VALUE.test(flag)) {
+          // `python -m pytest`: a module, not a file — the line runs no file of its own.
+          if (flag === '-m') break;
+          i++;
+        }
+        continue;
+      }
+      file = a;
+      break;
+    }
     if (!file || file.dynamic || !CODE_FILE.test(file.literal)) continue;
-    files.add(isAbsolute(file.literal) ? file.literal : resolve(cwd, file.literal));
+    add(file.literal);
   }
   return [...files];
 }
@@ -226,43 +299,166 @@ export function writtenDuringTheWork(file: string, since?: string): string | nul
   return Number.isFinite(born) && born >= began - 1000 ? 'it was made after this work began and is not committed' : null;
 }
 
-/**
- * Why a chat's step must not run a script, or null: a shell script that is not one of the project's own (see
- * `notTheProjects`), a file of code written during the work given to a runtime (see `writtenDuringTheWork`), or any
- * file in `.cop-tmp` given to a program that runs it. Every one of them is the operator's to run (2026-10-26), and the
- * chat is told to hand it over. Only for the chat's steps, the implementer's and the reviewer's: the operator's own
- * checks are theirs to point at whatever they choose.
- */
-export function ownScriptRefusal(command: string, cwd: string, since?: string, shell?: string): string | null {
-  // A file of code in it, given to a program that runs files — not its output written there (`node x.js > .cop-tmp\out.txt`).
-  const scratch = new RegExp(
-    String.raw`\b${RUNS_A_FILE}(?:\.exe|\.cmd)?\b[^|;\n]*?(?:^|[\s'"=(,:])(?:\.[\\/])?(?:[^\s'"|;]*[\\/])?\.cop-tmp[\\/][^\s'"|;]*\.(?:ps1|psm1|cmd|bat|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|rb|pl|php|vbs|vbe|wsf|sh|jar|dll|exe|csx)\b`,
+/** One script a line runs, judged: whose it is, and which of the operator's boxes decides it (2026-10-27). */
+export type ScriptRun = {
+  /** The file, in full; for a script of package.json, the package.json. */
+  file: string;
+  /** Its kind; null for one no box decides: the Windows Script Host's, or a file in .cop-tmp of no kind at all. */
+  kind: ScriptKind | null;
+  /** Why it was written during the work, or null when it is the project's own. */
+  written: string | null;
+  /** A shell script, run by a shell or the script host (`shellScriptsRun`), as opposed to a file of code given to a runtime. */
+  shell?: boolean;
+  /** A script of package.json: its name, and its command line (null when package.json has none by that name). */
+  script?: { name: string; command: string | null };
+};
+
+/** A file in .cop-tmp given to a program that runs files — not output written there (`node x.js > .cop-tmp\out.txt`). */
+const SCRATCH_RUN = new RegExp(
+  String.raw`\b${RUNS_A_FILE}(?:\.exe|\.cmd)?\b[^|;\n]*?(?:^|[\s'"=(,:])((?:\.[\\/])?(?:[^\s'"|;]*[\\/])?\.cop-tmp[\\/][^\s'"|;]*\.(?:ps1|psm1|cmd|bat|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|rb|pl|php|vbs|vbe|wsf|sh|jar|dll|exe|csx))\b`,
+  'gi',
+);
+
+/** Whether the line itself writes a file by that name: a cmdlet, an alias or a redirection naming it. */
+function writesFileNamed(command: string, file: string): boolean {
+  const name = basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(
+    String.raw`\b(Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Rename-Item|Tee-Object|sc|ac|cp|copy|mv|move|ren|ni|tee)\b[^|;\n]*${name}\b|>\s*["']?[^\s"']*${name}\b`,
     'i',
-  );
-  const why = (file: string, reason: string): string =>
-    `refused: ${relative(cwd, file) || file} is not one of the project's own scripts — ${reason}. A script written or ` +
-    'changed during the work is run by the operator, not by the runner, nor is anything in .cop-tmp (the operator\'s rule). ' +
-    HAND_IT_OVER;
-  if (scratch.test(command)) {
-    return 'refused: this runs a file in .cop-tmp, the folder for scratch files — the runner runs nothing there (the operator\'s rule). ' + HAND_IT_OVER;
-  }
+  ).test(command);
+}
+
+/** A script the line writes and runs at once: never run, whatever the boxes say, since nothing could be read before it ran. */
+const SAME_LINE = 'this same line writes it';
+
+/**
+ * Every script the line runs, each judged: a shell script (`shellScriptsRun`) by `notTheProjects`, a file of code given
+ * to a runtime (`codeFilesRun`) by `writtenDuringTheWork`, anything else in .cop-tmp a program is given, and the scripts
+ * of package.json it runs (`npmScripts.ts`).
+ */
+export function scriptsRun(command: string, cwd: string, since?: string, shell?: string): ScriptRun[] {
+  const out: ScriptRun[] = [];
+  const seen = new Set<string>();
+  const first = (file: string): boolean => {
+    const key = file.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
   for (const file of shellScriptsRun(command, cwd)) {
-    const reason = notTheProjects(file, since);
-    if (reason) return why(file, reason);
+    if (first(file)) out.push({ file, kind: kindOfFile(file, /\.jse?$/i.test(file)), written: notTheProjects(file, since), shell: true });
   }
   for (const file of codeFilesRun(command, cwd, shell)) {
-    const reason = writtenDuringTheWork(file, since);
-    if (reason) {
-      return (
-        `refused: ${relative(cwd, file) || file} is a script written during this work — ${reason} — and such a script is run by ` +
-        'the operator, not by the runner (the operator\'s rule). ' + HAND_IT_OVER + ' The project\'s tests run as steps, as before.'
-      );
+    if (!first(file)) continue;
+    const written = inScratch(file) ? `it is in ${SCRATCH}, the folder for scratch files` : writesFileNamed(command, file) ? SAME_LINE : writtenDuringTheWork(file, since);
+    out.push({ file, kind: kindOfFile(file), written });
+  }
+  for (const m of command.matchAll(SCRATCH_RUN)) {
+    const file = resolve(cwd, m[1]!);
+    if (first(file)) out.push({ file, kind: kindOfFile(file), written: `it is in ${SCRATCH}, the folder for scratch files` });
+  }
+  const sameLine = writesPackageScripts(command);
+  for (const run of packageScriptsRun(command, cwd, shell)) {
+    const written = packageScriptWritten(run, since, sameLine);
+    // No such script and nothing writes it: npm says so, and nothing runs.
+    if (run.command === null && written === null) continue;
+    out.push({ file: run.pkg, kind: 'npm', written: written === 'this same line writes it into package.json' ? SAME_LINE : written, script: { name: run.name, command: run.command } });
+  }
+  return out;
+}
+
+/** No box decides it: the project's own may run, the work's may not. */
+const FIXED: ScriptRule = { own: true, written: false };
+
+/** How a script is named in a refusal. */
+function named(run: ScriptRun, cwd: string): string {
+  const path = relative(cwd, run.file) || run.file;
+  return run.script ? `the script "${run.script.name}" of ${path}` : path;
+}
+
+/** The most of one script read for the card. */
+const MAX_SHOWN_BYTES = 64 * 1024;
+
+/** A script's text as the gate and the card read it, or why it cannot be. */
+export function scriptText(run: ScriptRun): { text: string; cut?: boolean } | { problem: string } {
+  if (run.script) return run.script.command === null ? { problem: 'package.json has no script by that name' } : { text: run.script.command };
+  try {
+    const size = statSync(run.file).size;
+    if (size > MAX_SCRIPT_BYTES) return { problem: `it is ${Math.round(size / 1024)} KB, larger than a step's script` };
+    const text = readFileSync(run.file, 'utf8');
+    return text.length > MAX_SHOWN_BYTES ? { text: text.slice(0, MAX_SHOWN_BYTES), cut: true } : { text };
+  } catch {
+    return { problem: 'it does not exist yet' };
+  }
+}
+
+export type ScriptGateOptions = {
+  /** The operator's boxes (Settings, "Scripts"); the defaults when absent. */
+  rules?: ScriptRules;
+  /** The reviewer's step: told to check another way, since a review hands nothing over. */
+  reviewer?: boolean;
+  /**
+   * The gate a script the bot wrote is read through when its box lets it run: its text, as the line's own. Absent,
+   * nothing is read here (a `.ps1`'s text is read by `scriptFileRefusal` in every case).
+   */
+  screen?: (run: ScriptRun, text: string) => string | null;
+};
+
+/**
+ * Why a chat's step must not run a script, or null (2026-10-21, boxes since 2026-10-27). Each script the line runs is
+ * the project's own or the work's (`scriptsRun`); the operator's box for its kind says whether either may run. A box
+ * left empty is a refusal, and the chat is told to hand the script over; a script of the work let run is read through
+ * `screen` first. A script written and run in one line is refused whatever the boxes say. Only for the chat's steps,
+ * the implementer's and the reviewer's: the operator's own checks are theirs to point at whatever they choose.
+ */
+export function ownScriptRefusal(command: string, cwd: string, since?: string, shell?: string, opts: ScriptGateOptions = {}): string | null {
+  const rules = opts.rules ?? DEFAULT_SCRIPT_RULES;
+  const instead = opts.reviewer ? REVIEW_INSTEAD : HAND_IT_OVER;
+  for (const run of scriptsRun(command, cwd, since, shell)) {
+    const rule = run.kind ? rules[run.kind] : FIXED;
+    const name = named(run, cwd);
+    if (run.written === null) {
+      if (!rule.own && run.kind) {
+        return `refused: ${name} is one of the project's own scripts, and the operator does not let the runner run the project's own scripts of this kind (${kindForChat(run.kind)}; the operator's rule). ${instead}`;
+      }
+      continue;
+    }
+    if (run.written === SAME_LINE) {
+      return `refused: ${name} is written and run in this same line, so nothing could read it before it ran. Write it in one step and run it in the next. ${instead}`;
+    }
+    if (!rule.written) {
+      if (run.shell) {
+        return (
+          `refused: ${name} is not one of the project's own scripts — ${run.written}. A script written or changed during the work is run by ` +
+          `the operator, not by the runner, nor is anything in ${SCRATCH} (the operator's rule). ${instead}`
+        );
+      }
+      if (run.written.includes(SCRATCH)) {
+        return `refused: this runs a file in ${SCRATCH}, the folder for scratch files — the runner does not run the scripts written there (the operator's rule). ${instead}`;
+      }
+      return `refused: ${name} is a script written during this work — ${run.written} — and such a script is run by the operator, not by the runner (the operator's rule). ${instead} The project's tests run as steps, as before.`;
+    }
+    // The work's, and the operator lets this kind run: what is in it passes the gate the line passed.
+    if (opts.screen) {
+      const read = scriptText(run);
+      if ('problem' in read) return `refused: ${name} cannot be read before it runs — ${read.problem}. Write it in an earlier step, then run it.`;
+      const reason = opts.screen(run, read.text);
+      if (reason) return `${reason} (in ${name}, written during this work)`;
     }
   }
   return null;
+}
+
+/** The scripts of the work a line runs that the operator's boxes let run: shown on the card that asks about them. */
+export function writtenScriptsLetRun(command: string, cwd: string, since: string | undefined, shell: string | undefined, rules: ScriptRules): ScriptRun[] {
+  return scriptsRun(command, cwd, since, shell).filter((r) => r.written !== null && r.written !== SAME_LINE && r.kind !== null && rules[r.kind].written);
 }
 
 /** What the chat is told to do instead (2026-10-26). */
 const HAND_IT_OVER =
   'Put what it does in the step itself — a command may be several lines — or hand it to the operator with status "handoff": ' +
   'the commands, the folder, what they should see and the script; the operator runs it and you get what it printed.';
+
+/** What the reviewer is told instead: a review hands nothing over. */
+const REVIEW_INSTEAD =
+  'A review runs commands only: check what it would show with commands of your own, written out in the step itself, or say in a finding that the operator has to run it.';

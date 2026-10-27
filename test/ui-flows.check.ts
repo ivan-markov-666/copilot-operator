@@ -31,7 +31,6 @@
  * scenarios whose title has that text.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page, type Response as PwResponse } from 'playwright';
@@ -366,15 +365,28 @@ try {
      * How commands run is chosen here only (operator, 2026-10-23: the chat's menu removed): running without asking is
      * confirmed first, and "Cancel" keeps asking before each command.
      */
-    await page.locator('#start-mode').selectOption('unattended');
+    t.check('three ways to run commands (2026-10-27)', await page.locator('#start-mode option').allTextContents(), [en['exec.startModeAsk'], en['exec.startModeAutoAsk'], en['exec.startModeAuto']]);
+    await page.locator('#start-mode').selectOption('unattended-ask');
     const sure = page.getByRole('alertdialog');
     await sure.waitFor({ timeout: 5_000 });
     t.truthy('running commands without asking is confirmed first', ((await sure.textContent()) ?? '').includes(en['exec.modeAutoConfirm']!.split('.')[0]!), await sure.textContent());
     await sure.getByRole('button', { name: en['dialog.cancel']!, exact: true }).click();
     await sure.waitFor({ state: 'detached' });
     t.check('"Cancel": it still asks before each command, and nothing is saved', [await page.locator('#start-mode').inputValue(), (await settingsOf(h)).execution?.mode === 'unattended'], ['confirm', false]);
+    // Everything without asking, the bot's own scripts too: confirmed in words of its own, saved as both settings.
     await page.locator('#start-mode').selectOption('unattended');
-    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    const all = page.getByRole('alertdialog');
+    await all.waitFor({ timeout: 5_000 });
+    t.truthy('running the bot\'s scripts without asking too is confirmed in its own words', ((await all.textContent()) ?? '').includes(en['exec.modeAutoAllConfirm']!.split(',')[0]!) && ((await all.textContent()) ?? '').includes('scripts the bot wrote'), await all.textContent());
+    await all.getByRole('button', { name: 'OK' }).click();
+    await waitFor('both to be saved', async () => {
+      const e = (await settingsOf(h)).execution as { mode?: string; writtenScripts?: string } | undefined;
+      return e?.mode === 'unattended' && e.writtenScripts === 'run' ? true : null;
+    }, 10_000).catch(() => undefined);
+    t.check('"everything without asking": mode and the bot\'s scripts saved', [((await settingsOf(h)).execution as { writtenScripts?: string } | undefined)?.writtenScripts, (await settingsOf(h)).execution?.mode], ['run', 'unattended']);
+    await page.locator('#start-mode').selectOption('unattended-ask');
+    await waitFor('the bot\'s scripts asked again', async () => (((await settingsOf(h)).execution as { writtenScripts?: string } | undefined)?.writtenScripts === 'ask' ? true : null), 10_000).catch(() => undefined);
+    t.check('back to "except scripts the bot wrote": no dialog from an unattended mode, the scripts asked again', [await page.getByRole('alertdialog').count(), ((await settingsOf(h)).execution as { writtenScripts?: string } | undefined)?.writtenScripts], [0, 'ask']);
     // The bot's questions (2026-10-23): agreeing with what it proposes is confirmed too, and "Cancel" keeps asking.
     t.check('"Questions from the bot": "Ask me" by default', await page.locator('#questions').inputValue(), 'ask');
     await page.locator('#questions').selectOption('agree');
@@ -396,7 +408,7 @@ try {
     t.check('raw.execution holds them', [exec.networkFetch, exec.mode, exec.isolation], ['refuse', 'unattended', 'vm']);
     await page.reload();
     await waitFor('the settings to load again', async () => !(await fetchSel.isDisabled()), 10_000);
-    t.check('after a reload the selects show them', [await fetchSel.inputValue(), await page.locator('#start-mode').inputValue(), await page.locator('#isolation').inputValue()], ['refuse', 'unattended', 'vm']);
+    t.check('after a reload the selects show them', [await fetchSel.inputValue(), await page.locator('#start-mode').inputValue(), await page.locator('#isolation').inputValue()], ['refuse', 'unattended-ask', 'vm']);
 
     const minutes = page.locator('#max-minutes');
     await minutes.click();
@@ -1670,6 +1682,9 @@ try {
     const section = page.locator('#programs');
     await section.locator('.prog-chip').first().waitFor();
     t.check('the list as the bot comes with it, as chips', await section.locator('.prog-chip code').count(), defaults.length);
+    const shown = await section.locator('.prog-chip code').allTextContents();
+    t.check('in the order of their names (2026-10-27), whatever the file\'s order', shown, [...shown].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })));
+    t.truthy('…which is not the file\'s own', shown.join() !== defaults.filter((p) => shown.includes(p)).join(), shown.slice(0, 6));
     const add = section.locator('#prog-add');
     const addButton = section.getByRole('button', { name: en['prog.addButton']!, exact: true });
     await add.fill('C:\\tools\\az.exe');
@@ -1750,10 +1765,11 @@ try {
 
   /*
    * A script the chat wrote is the operator's to run (operator, 2026-10-26): the runner refuses it, the chat hands it
-   * over, and the card says what to run, where, what should be seen, with the script and its SHA-256 to read first;
-   * "Send what it printed" waits for what was pasted, and the chat gets it.
+   * over, and the card says what to run, where, what should be seen, with the script in full and where it is, and its
+   * revision; "Send the script back for a correction" opens a note that must be written first; "I ran it — send the
+   * output" waits for what was pasted, and the chat gets it; the conversation keeps the card, answered (2026-10-27).
    */
-  await scenario('"Run this yourself": a script the chat wrote, handed over with its commands and SHA-256, its output sent back', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+  await scenario('"Run this yourself": a script the chat wrote, handed over in full as revision 1, its output sent back, kept in the history', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
     const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Find out which claims the token carries.', model: 'Think deeper' });
     const run = 'npx tsx tools/inspect.ts';
     h.chat.script(
@@ -1771,16 +1787,87 @@ try {
     t.check('the card: "Run this yourself", why, the commands, what should be seen', [((await card.locator('.cs-ask-head strong').textContent()) ?? '').trim(), ((await card.textContent()) ?? '').includes('To read the claims'), ((await card.locator('.ho-commands').textContent()) ?? '').trim(), ((await card.textContent()) ?? '').includes('It prints 42.')], [en['ho.title'], true, run, true]);
     const file = card.locator('details.ho-file');
     await file.locator('summary').click();
-    const sha = createHash('sha256').update(readFileSync(join(h.repo, 'tools', 'inspect.ts'))).digest('hex');
-    t.check('the script, folded, with its SHA-256 and its text', [((await file.locator('summary code').textContent()) ?? '').trim(), ((await file.locator('.ho-sha').textContent()) ?? '').includes(sha), ((await file.locator('pre').textContent()) ?? '').trim()], ['tools/inspect.ts', true, 'console.log(42)']);
+    t.check('the script, folded, with where it is in full and its text; no SHA-256 any more', [((await file.locator('summary code').textContent()) ?? '').trim(), ((await file.locator('.ho-abs code').textContent()) ?? '').trim(), ((await file.locator('pre').textContent()) ?? '').trim(), await card.locator('.ho-sha').count()], ['tools/inspect.ts', join(h.repo, 'tools', 'inspect.ts'), 'console.log(42)', 0]);
+    t.check('revision 1, and what it should do besides, "not said" where the chat said nothing', [((await card.locator('.ho-revision').textContent()) ?? '').trim(), await card.locator('.ho-said').count(), ((await card.locator('.ho-declared').textContent()) ?? '').includes(en['ho.notSaid']!)], [en['ho.revision']!.replace('{n}', '1'), 4, true]);
+    // Sent back for a correction: a note first, which may not be empty; opened and closed again here, nothing sent.
+    const revise = card.getByRole('button', { name: en['ho.revise']!, exact: true });
+    await revise.click();
+    const sendBack = card.getByRole('button', { name: en['ho.reviseSend']!, exact: true });
+    t.check('"Send the script back for a correction": the note "What needs correcting?", required, its button off while empty', [await card.getByLabel(en['ho.reviseNote']!).getAttribute('aria-required'), await sendBack.isDisabled(), await revise.getAttribute('aria-expanded')], ['true', true, 'true']);
+    await card.getByLabel(en['ho.reviseNote']!).fill('Print only the names.');
+    t.check('written, it can be sent', await sendBack.isDisabled(), false);
+    await revise.click();
+    t.check('pressed again, the note is put away, nothing sent', [await sendBack.count(), (await h.call<unknown[]>('GET', '/approvals')).length], [0, 1]);
+    t.check('"I will not run it" is there beside them', await card.getByRole('button', { name: en['ho.notRun']!, exact: true }).count(), 1);
     const send = card.getByRole('button', { name: en['ho.send']!, exact: true });
-    t.check('"Send what it printed" waits for what was pasted', await send.isDisabled(), true);
+    t.check('"I ran it — send the output" waits for what was pasted', await send.isDisabled(), true);
     await card.getByLabel(en['ho.output']!).fill('42');
     await send.click();
     await card.waitFor({ state: 'detached', timeout: 10_000 });
     await page.locator('.cs-body').getByText('The inspection printed 42 when the operator ran it themselves').waitFor({ timeout: 30_000 });
     const told = h.chat.sent.map((m) => m.text).find((x) => x.includes('The operator ran the commands you handed over')) ?? '';
     t.truthy('the chat got what was pasted, beside what it expected', told.includes('```\n42\n```') && told.includes('You expected: It prints 42.'), told.slice(0, 400));
+    const record = page.locator('.ho-record');
+    await record.first().waitFor({ timeout: 15_000 });
+    t.check('the conversation keeps the card: revision 1, run by you, what it printed', [((await record.locator(':scope > details > summary').textContent()) ?? '').replace(/\s+/g, ' ').trim(), ((await record.locator('pre').last().textContent()) ?? '').trim()], [`${en['ho.historyTitle']!.replace('{n}', '1')} · ${en['ho.historyRan']}`, '42']);
+  });
+
+  /*
+   * Which scripts the bot may run (operator, 2026-10-27): a row for each kind, in the order of its name; the box for the
+   * project's on and the bot's off as shipped; a box ticked saved at once and shown after a reload, with the note; the
+   * defaults put back after asking.
+   */
+  await scenario('Settings: scripts the bot may run — the rows by name, a box ticked and kept, the defaults back', {}, async (h, page, url) => {
+    type Exec = { scripts?: Record<string, { own?: boolean; written?: boolean }> };
+    const settings = async (): Promise<Exec> => (await h.call<{ raw: { execution?: Exec } }>('GET', '/settings')).raw.execution ?? {};
+    await page.goto(url('/settings'));
+    const section = page.locator('#scripts');
+    await section.locator('tbody tr').first().waitFor();
+    const names = (await section.locator('tbody th').allTextContents()).map((x) => x.replace(/\s+\.\S.*$/, '').trim());
+    t.check('a row for each kind, in the order of their names', names, [...names].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' })));
+    t.check('eight kinds, package.json\'s scripts among them', [names.length, names.includes(en['scr.npm']!)], [8, true]);
+    const ts = section.locator('#scr-ts-written');
+    await waitFor('the boxes to be read', async () => !(await ts.isDisabled()), 10_000);
+    t.check('as shipped: the project\'s on, the bot\'s off, for every kind', [await section.locator('input[id$="-own"]:checked').count(), await section.locator('input[id$="-written"]:checked').count()], [8, 0]);
+    t.check('no note while none of the bot\'s may run', await section.locator('.prog-note').count(), 0);
+    await ts.check();
+    await waitFor('the box to be saved', async () => ((await settings()).scripts?.ts?.written === true ? true : null), 10_000).catch(() => undefined);
+    t.check('the bot\'s TypeScript ticked: saved, the note shown', [(await settings()).scripts?.ts?.written, await section.locator('.prog-note').count()], [true, 1]);
+    await section.locator('#scr-ps1-own').uncheck();
+    await waitFor('the other box to be saved', async () => ((await settings()).scripts?.ps1?.own === false ? true : null), 10_000).catch(() => undefined);
+    await page.reload();
+    await waitFor('the boxes to be read again', async () => !(await section.locator('#scr-ts-written').isDisabled().catch(() => true)), 10_000);
+    t.check('after a reload: both kept', [await section.locator('#scr-ts-written').isChecked(), await section.locator('#scr-ps1-own').isChecked()], [true, false]);
+    t.check('the ⓘ beside each column', await section.locator('thead .scripts-head button').count(), 2);
+    await section.getByRole('button', { name: en['scr.restore']!, exact: true }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
+    await waitFor('the defaults back', async () => ((await settings()).scripts === undefined ? true : null), 10_000).catch(() => undefined);
+    t.check('the defaults back: gone from the file, the boxes as shipped', [(await settings()).scripts, await section.locator('input[id$="-written"]:checked').count()], [undefined, 0]);
+  });
+
+  /*
+   * A script the bot wrote, its box ticked, in a run without asking but for the bot's scripts (2026-10-27): the step that
+   * runs it waits on a card with the script in full; allowed, it runs, and the chat gets what it printed.
+   */
+  await scenario('the bot\'s script, its box ticked: on a card with its text, then run', { execution: { mode: 'unattended', isolation: 'none-accepted', scripts: { js: { written: true } }, writtenScripts: 'ask' } }, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Add two and two with a script.', model: 'Think deeper' });
+    h.chat.script(
+      reply.steps("New-Item -ItemType Directory -Force tools | Out-Null; Set-Content -NoNewline -Path tools/count.js -Value 'console.log(2 + 2)'"),
+      reply.steps('node tools/count.js'),
+      reply.done('The script the bot wrote printed 4 when the operator allowed it, which is two and two.'),
+    );
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const card = page.locator('.cs-ask').filter({ has: page.locator('.cs-written-scripts') });
+    await card.waitFor({ timeout: 30_000 });
+    t.check('the card says it runs a script the bot wrote, and shows it in full', [((await card.locator('.cs-written-scripts .reason').textContent()) ?? '').trim(), ((await card.locator('.cs-written-scripts summary code').textContent()) ?? '').replace(/\\/g, '/').trim(), ((await card.locator('.cs-written-scripts pre').textContent()) ?? '').trim()], [en['approval.scripts'], 'tools/count.js', 'console.log(2 + 2)']);
+    await card.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
+    await page.locator('.cs-body').getByText('The script the bot wrote printed 4').waitFor({ timeout: 30_000 });
+    const told = h.chat.sent.map((m) => [m.text, ...Object.values(m.attached)].join('\n')).find((x) => x.includes('node tools/count.js')) ?? '';
+    t.truthy('allowed, it ran: what it printed went to the chat', /\b4\b/.test(told), told.slice(0, 400));
   });
 
   /*

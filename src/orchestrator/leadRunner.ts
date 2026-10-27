@@ -35,7 +35,7 @@ import { leadFormatErrorMessage, parseLeadReply, UNDERSTANDING_FIRST, type Subta
 import { describePlan, planFrom } from './planMode.js';
 import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
 import { classifySubtaskEnd, describeAttempts, FAILURE_WORDS, retryMessage, retryPlan, sanitizedReason, sideEffectsOf, stepFacts, stepsOf, type RetryMode, type StepFacts } from './subtaskRetry.js';
-import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
+import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, redactsMessages, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
 import type { Acting, Actor, LeadRecord, LeadRound, RetryChoice, Session, SubtaskAttempt, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
@@ -286,11 +286,14 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     return stopped;
   };
   // No message to the lead longer than Settings allow as text: the rest goes attached (2026-10-22).
-  const leadChat = limitsMessageLength(holdsWhilePaused(transport, holdHere), {
+  const leadChat = redactsMessages(limitsMessageLength(holdsWhilePaused(transport, holdHere), {
     max: cfg.limits.maxMessageChars,
     dir: log.path('messages'),
     onLong: ({ chars, max, file }) =>
       sink.event('message-long', { chars, max, file, lead: true }, `a message to the lead of ${chars} characters is over the ${max} sent as text: its beginning is sent, the whole of it attached as ${file}`, 'warn'),
+  }), {
+    patterns: cfg.report.redactPatterns,
+    onRedacted: (hits) => sink.event('message-redacted', { redactions: hits, lead: true }, `secrets taken out of a message to the lead before it was sent: ${hits.map((h) => `${h.name} ×${h.count}`).join(', ')}`, 'warn'),
   });
 
   let sent = 0;

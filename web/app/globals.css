@@ -1509,6 +1509,14 @@ button.linkish:hover { text-decoration: underline; }
 .prog-chip { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 2px 1px 10px; background: var(--bg-tint); }
 .prog-remove { padding: 2px 7px; line-height: 1; }
 .prog-note { border-inline-start: 3px solid var(--accent); padding: 6px 10px; background: var(--accent-soft); border-radius: 6px; margin: 8px 0; }
+/* Scripts the bot may run (2026-10-27): one row a kind, the two boxes in columns of their own. */
+.scripts-table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; }
+.scripts-table th, .scripts-table td { text-align: start; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.scripts-table thead th { font-weight: 600; font-size: calc(12.5px * var(--scale)); }
+.scripts-table tbody th { font-weight: 400; }
+.scripts-table td { text-align: center; width: 22%; }
+.scripts-table input[type='checkbox'] { width: auto; }
+.scripts-head { display: inline-flex; align-items: center; gap: 4px; }
 .skill-slash { font-family: var(--mono); color: var(--muted); padding: 0 2px; align-self: center; }
 /* The / and the name on one line, however narrow the column. */
 .input-with-buttons.skill-name-box { flex-wrap: nowrap; }
@@ -1603,7 +1611,18 @@ button.skill-delete { flex: none; display: inline-flex; align-items: center; gap
 .ho-files { margin: 6px 0 8px; display: grid; gap: 4px; }
 .ho-file > summary { cursor: var(--cur-pointer); }
 .ho-file .cs-out { max-height: 320px; overflow: auto; }
-.ho-sha { word-break: break-all; margin: 4px 0; }
+.ho-abs { word-break: break-all; margin: 4px 0; }
+/* Revise and resubmit (2026-10-27): the revision on the card, what the chat says it does, the note field, the history. */
+.ho-revision { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-weight: 600; }
+.ho-revision-new { border-color: var(--warn); color: var(--warn); }
+.ho-declared { margin: 6px 0; display: grid; gap: 2px; }
+.ho-said { margin: 0; }
+.ho-seen { margin: 4px 0; }
+.ho-revise { margin: 6px 0 0; }
+.ho-revise textarea { width: 100%; min-height: 0; margin: 4px 0 8px; }
+.ho-record > details > summary { cursor: var(--cur-pointer); }
+.ho-record-revise > details > summary strong, .ho-record-declined > details > summary strong { color: var(--warn); }
+.cs-written-scripts { margin: 6px 0; display: grid; gap: 4px; }
 .ho-warn ul { margin: 4px 0 0; padding-inline-start: 18px; }
 .cs-evidence { margin: 6px 0; font-size: calc(13px * var(--scale)); }
 .cs-evidence ul { margin: 0; padding-inline-start: 20px; }

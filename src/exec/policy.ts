@@ -20,9 +20,13 @@ import { inlineCodeRefusal, programRefusal } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
 import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
-import { ownScriptRefusal, scriptFileRefusal } from './scriptFiles.js';
+import { ownScriptRefusal, scriptFileRefusal, type ScriptRun } from './scriptFiles.js';
+import type { ScriptRules, WrittenScriptsChoice } from './scriptKinds.js';
+import { existsSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { readOnlyRefusal, readOnlyUnaskedRefusal, readOnlyUnclearRefusal, readOnlyVerdict } from './readOnly.js';
 import { platformReason } from './platforms.js';
+import { scanCommandHeads } from './commandHeads.js';
 
 /*
  * `by: 'operator'` marks a decision a person made on the approval screen or at the terminal; without
@@ -59,6 +63,16 @@ export type PolicyConfig = {
    * that change something are refused, the ones that cannot be read are asked about in every mode. See `readOnly.ts`.
    */
   readOnlyPrograms?: string[];
+  /**
+   * The operator's boxes for scripts (2026-10-27): for each kind, whether the project's own may run and whether the
+   * bot's may. Absent, the defaults: the project's run, the bot's are handed over. See `scriptKinds.ts`.
+   */
+  scripts?: ScriptRules;
+  /**
+   * What an unattended run does with a script the bot wrote that its box lets run: put it on a card with its text first
+   * (`ask`, the default), or run it as any other step (`run`). A run that asks before every step asks about these too.
+   */
+  writtenScripts?: WrittenScriptsChoice;
 };
 
 export type NetworkFetchChoice = 'ask' | 'refuse' | 'run';
@@ -83,6 +97,45 @@ export function matchDenyPattern(text: string, patterns: string[]): string | nul
 }
 
 
+/** `git config`'s switches that read, and the ones that take the next word as their value. */
+const GIT_CONFIG_READS = /^(?:--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l|get|list)$/;
+const GIT_CONFIG_VALUE = /^(?:--type|-t|--file|-f|--blob|--default|--comment|--value)$/;
+const GIT_CONFIG_WRITES = /^(?:set|unset|edit|rename-section|remove-section|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section)$/;
+
+/** Whether a line runs `git config` in any form that is not plainly a read: one key looked up, or a listing. */
+function gitConfigWrites(command: string): boolean {
+  for (const call of scanCommandHeads(command, 'pwsh').calls) {
+    if (call.head.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase() !== 'git') continue;
+    const args = call.args;
+    let i = 0;
+    // git's own options before the subcommand: `-C dir`, `-c k=v`, `--git-dir x`, `--no-pager`.
+    while (i < args.length && args[i]!.literal.startsWith('-')) i += /^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)$/.test(args[i]!.literal) ? 2 : 1;
+    if (args[i]?.literal.toLowerCase() !== 'config') continue;
+    const rest = args.slice(i + 1);
+    if (rest.some((a) => a.dynamic)) return true;
+    let reads = false;
+    const words: string[] = [];
+    for (let k = 0; k < rest.length; k++) {
+      const w = rest[k]!.literal;
+      const flag = w.includes('=') && w.startsWith('-') ? w.slice(0, w.indexOf('=')) : w;
+      if (GIT_CONFIG_WRITES.test(flag)) return true;
+      if (GIT_CONFIG_READS.test(flag)) {
+        reads = true;
+        continue;
+      }
+      if (flag.startsWith('-')) {
+        if (!w.includes('=') && GIT_CONFIG_VALUE.test(flag)) k++;
+        continue;
+      }
+      words.push(w);
+    }
+    // `git config user.name` looks one key up; with a value after it, it sets one.
+    if (!reads && words.length !== 1) return true;
+    if (reads && words.length > 2) return true;
+  }
+  return false;
+}
+
 /**
  * A step that reaches into the repository's own machinery: a path inside `.git`, or a git setting
  * written to stay. Built in, like `dangerous.ts`, because the operator's deny list is editable and
@@ -97,8 +150,21 @@ export function matchDenyPattern(text: string, patterns: string[]): string | nul
  * contract already tells the chat to use git commands, never the folder.
  */
 export function repositoryInternalsRefusal(command: string): string | null {
-  const intoGitDir = /(^|[\s'"=(\\/,;])\.git[\\/]/i.test(command);
-  const setting = /\bgit\s+(?:-C\s+\S+\s+)?config\s+(?:(?:--(?:local|global|system|worktree)|--file\s+\S+)\s+)?(?:(?:set|unset)\s+)?[A-Za-z][\w.-]*\s+[^\s|;-]/i.test(command);
+  /*
+   * A path inside `.git`, and since the audit of 2026-10-27 the folder itself in a line that goes into it or writes:
+   * `Set-Location .git; Add-Content config …` and `Add-Content (Join-Path .git config) …` reached the config with no
+   * `.git\` in the line. A line that only names it (`Where-Object Name -ne '.git'`) is left alone.
+   */
+  const intoGitDir =
+    /(^|[\s'"=(\\/,;])\.git[\\/]/i.test(command) ||
+    (/(^|[\s'"=(\\/,;])\.git(?=$|[\s'"),;|])/i.test(command) &&
+      /\b(Set-Location|sl|cd|chdir|pushd|Push-Location|Join-Path|Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Remove-Item|Rename-Item|Tee-Object|sc|ac|ni|cp|copy|mv|move|rm|del|ren)\b|>/i.test(command));
+  /*
+   * A git setting written: every `git config` that is not plainly a read (audit, 2026-10-27). The form that wanted a
+   * bare key and a value let `git config "filter.x.clean" "node fmt.js"`, `--type=bool`, `-z`, `git.exe config` and
+   * the scopes past, and the runner's own git then ran the filter. `--config-env` sets a key for one command, as -c does.
+   */
+  const setting = gitConfigWrites(command) || /\bgit(?:\.exe)?\b[^|;\n]*\s--config-env\b/i.test(command);
   // `git -c key=value <command>` sets the key for that one command — and some keys name a program
   // git then starts (hooks, fsmonitor, the pager, the editor, credential helpers, filters, diff and
   // merge drivers, aliases), which the allowlist never sees. Those keys are refused inline as well.
@@ -205,6 +271,26 @@ export function checkCommandRefusal(
 }
 
 /**
+ * The gate for a check the reviewer wrote (audit, 2026-10-27): a check's gate, and the rules for the chat's own steps
+ * in a run nobody watches, since such a check is kept and run at every later gate with no one asked — no allowed
+ * interpreter evaluating a string, no shell inside a shell, and only the scripts the operator's boxes let run. Refused,
+ * the finding stands without its check, as for any check the runner will not run.
+ */
+export function modelCheckRefusal(
+  command: string,
+  shell: Shell,
+  cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms' | 'readOnlyPrograms' | 'scripts'> & { questions?: 'ask' | 'agree' },
+  confinement: Confinement,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  return (
+    checkCommandRefusal(command, shell, cfg, confinement, env) ??
+    inlineCodeRefusal(command) ??
+    ownScriptRefusal(command, confinement.cwd, confinement.workStartedAt, shell, { rules: cfg.scripts, reviewer: true, screen: writtenScriptScreen(cfg, confinement, env) })
+  );
+}
+
+/**
  * A check reaching a platform with the operator's access, which a step puts to the operator every time (2026-10-26):
  * a check has nobody to put it to, so it is refused unless Settings agree with what the bot proposes. A program set to
  * read only passes with a command that only reads; one that cannot be read as reading is refused.
@@ -215,6 +301,31 @@ export function checkAccessRefusal(command: string, shell: Shell, cfg: Pick<Poli
   const platform = cfg.questions === 'agree' ? null : platformReason(command, shell, reading?.kind === 'reads' ? new Set(reading.programs) : undefined);
   if (!platform) return null;
   return `refused: this check reaches ${platform} with the operator's access, which only the operator may allow, and a check runs with nobody asked. Check it another way, or do it in a step, where it is put to the operator.`;
+}
+
+/**
+ * The gate a script the bot wrote is read through when the operator's box lets it run (2026-10-27): its text, as a
+ * line of its own. A `.ps1` is read by `scriptFileRefusal` in every case; a `.cmd` or `.bat` and a script of package.json
+ * (which npm hands to cmd) by the whole gate for cmd; a bash script by the rules that read text — refused techniques,
+ * the bot's own things, the repository's machinery, the deny list, the project's folders — since what it starts are
+ * bash's tools, not Windows programs. A script of package.json may start what the project installed
+ * (`node_modules/.bin`). A file of code (`.ts`, `.js`, `.py`) is code, and is not read.
+ */
+export function writtenScriptScreen(cfg: Pick<PolicyConfig, 'denyPatterns' | 'allowedPrograms' | 'readOnlyPrograms'>, confinement: Confinement, env: NodeJS.ProcessEnv = process.env): (run: ScriptRun, text: string) => string | null {
+  return (run, text) => {
+    if (run.kind === 'cmd') return commandRefusal(text, 'cmd', cfg.denyPatterns, cfg.allowedPrograms, env, confinement, cfg.readOnlyPrograms ?? []);
+    if (run.kind === 'npm') {
+      const bin = join(dirname(run.file), 'node_modules', '.bin');
+      const installed = existsSync(bin) ? readdirSync(bin).map((n) => n.replace(/\.(?:cmd|ps1|exe)$/i, '')) : [];
+      const allowed = cfg.allowedPrograms.length ? [...cfg.allowedPrograms, ...installed] : [];
+      return commandRefusal(text, 'cmd', cfg.denyPatterns, allowed, env, confinement, cfg.readOnlyPrograms ?? []);
+    }
+    if (run.kind === 'sh') {
+      const deny = matchDenyPattern(text, cfg.denyPatterns);
+      return dangerousRefusal(text) ?? botSelfRefusal(text) ?? repositoryInternalsRefusal(text) ?? (deny ? `refused: matches deny pattern /${deny}/` : null) ?? confinementRefusal(text, confinement);
+    }
+    return null;
+  };
 }
 
 /** A fetch inside a script the line runs — held or refused exactly as one on the line would be. */
@@ -273,14 +384,21 @@ export function staticCheck(
   cfg: PolicyConfig,
   env: NodeJS.ProcessEnv = process.env,
   confinement?: Confinement,
+  /** Whose step: the reviewer is told to check another way, since a review hands nothing over. */
+  actor?: string,
 ): PolicyDecision | null {
   /*
-   * Only the project's own scripts, and nothing from .cop-tmp (operator, 2026-10-21): a script the chat wrote is not
-   * run, however it is called. First, so the chat is told that, and not the older advice of the shared gate to write
-   * a script in one step and run it in the next. See `scriptFiles.ts`.
+   * The project's own scripts, and the bot's only where the operator's box lets them (2026-10-21, boxes 2026-10-27): a
+   * script the chat wrote is otherwise not run, however it is called, and one it is let run is read first. First, so
+   * the chat is told that, and not the older advice of the shared gate to write a script in one step and run it in the
+   * next. See `scriptFiles.ts`.
    */
   if (confinement) {
-    const own = ownScriptRefusal(step.cmd, confinement.cwd, confinement.workStartedAt, effectiveShell(step.shell));
+    const own = ownScriptRefusal(step.cmd, confinement.cwd, confinement.workStartedAt, effectiveShell(step.shell), {
+      rules: cfg.scripts,
+      reviewer: actor === 'review',
+      screen: writtenScriptScreen(cfg, confinement, env),
+    });
     if (own) return { action: 'skip', reason: own };
   }
   // Screened against the shell that will actually read it: the traps in `shellExecuteTrap.ts`

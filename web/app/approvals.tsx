@@ -13,6 +13,7 @@
  * It polls, like the rest of the interface: every two seconds, which is what a person answering a
  * question notices as "at once".
  */
+import { WrittenScripts } from './handoffView';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -249,6 +250,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
       {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
       {approval.readOnly && <p className="reason small">{t('approval.readOnly')}</p>}
       {approval.network && <p className="reason small">{t('approval.network')}</p>}
+      {(approval.scripts?.length ?? 0) > 0 && <WrittenScripts scripts={approval.scripts!} />}
       {err && (
         <p className="err" role="alert">
           {err}

@@ -29,7 +29,7 @@ import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
 import type { ProcessTracker } from '../exec/processes.js';
 import { effectiveShell, preferredShell, refusalForChat, resolveShell, shellNote, type Shell } from '../exec/shells.js';
-import { describeStep, checkCommandRefusal } from '../exec/policy.js';
+import { describeStep, modelCheckRefusal } from '../exec/policy.js';
 import { validateDerivedChecks } from './derivedChecks.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
 import { writeReport } from '../exec/reportFile.js';
@@ -40,6 +40,7 @@ import { Pacer } from '../util/pacing.js';
 import type { Session, Task, TaskCheck, TaskPlan } from '../session/model.js';
 import { planForReviewer } from './planMode.js';
 import { inScope } from '../vcs/scope.js';
+import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
 
 /** How a review ended. `error` is the review itself failing, which is not the work's fault. */
 export type ReviewOutcome = {
@@ -592,7 +593,7 @@ ${machineNote}` : contract);
            * at a gate. The finding stands without it, as for any check the runner will not run.
            * See `network.ts`.
            */
-          deny: (command, shell, cwd) => checkCommandRefusal(command, shell, cfg.execution, { roots: deps.roots, cwd }),
+          deny: (command, shell, cwd) => modelCheckRefusal(command, shell, cfg.execution, { roots: deps.roots, cwd, workStartedAt: deps.workStartedAt }),
           roots: deps.roots,
           signal,
           defaultShell,
@@ -649,8 +650,10 @@ ${machineNote}` : contract);
 
       // --- run what the reviewer asked for ------------------------------------------------
       const results: RunResult[] = [];
-      for (const step of review.steps) {
+      for (const proposed of review.steps) {
         if (signal?.aborted) break;
+        // Screened in the shell it will run in (audit, 2026-10-27): see the implementer's step loop.
+        const step = proposed.shell ? proposed : { ...proposed, shell: defaultShell };
         if (step.type !== 'command') {
           results.push(refused(step.id, 'a review runs commands only; it does not download or execute files', '(not run)', step.shell));
           continue;
@@ -698,6 +701,7 @@ ${machineNote}` : contract);
           continue;
         }
 
+        const gitConfigAfter = watchGitConfig(deps.cwd);
         const result = await runStep(
           {
             id: step.id,
@@ -713,6 +717,12 @@ ${machineNote}` : contract);
         );
         stepsRun += 1;
         results.push(result);
+        // Git's settings that would make the runner's own git run a program, put back (audit, 2026-10-27).
+        const configPutBack = gitConfigAfter();
+        if (configPutBack.length > 0) {
+          deps.event('git-config-put-back', { round, id: step.id, changes: configPutBack }, `review step ${step.id} changed git settings that name a program; put back`);
+          result.stderr = `${result.stderr}${result.stderr && !result.stderr.endsWith('\n') ? '\n' : ''}[runner] ${gitConfigMessage(configPutBack)}\n`;
+        }
         const touched = deps.afterStep ? await deps.afterStep().catch(() => null) : null;
         if (touched) result.stderr = `${result.stderr}${result.stderr && !result.stderr.endsWith('\n') ? '\n' : ''}[runner] ${touched}\n`;
         deps.event('review-step-finished', { round, id: step.id, outcome: result.outcome, exitCode: result.exitCode, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },

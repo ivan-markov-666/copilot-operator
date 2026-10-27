@@ -30,6 +30,14 @@ const SHAPES: Shape[] = [
   },
   { name: 'JWT', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: '[REDACTED JWT]' },
   { name: 'bearer token', pattern: /\b(bearer)\s+[A-Za-z0-9\-._~+/]{16,}=*/gi, replace: '$1 [REDACTED]' },
+  // An HTTP header with credentials in it, as git's and curl's traces print them (audit, 2026-10-27).
+  {
+    name: 'authorization header',
+    pattern: /\b((?:proxy-)?authorization:\s*)(basic|digest|ntlm|negotiate|token|sharedkey)\s+[A-Za-z0-9+/=._~:,"-]{8,}/gi,
+    replace: '$1$2 [REDACTED]',
+  },
+  { name: 'cookie header', pattern: /^([ \t>]*(?:set-)?cookie:[ \t]*)\S.*$/gim, replace: '$1[REDACTED]' },
+  { name: 'Stripe key', pattern: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, replace: '[REDACTED STRIPE KEY]' },
   { name: 'AWS access key', pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, replace: '[REDACTED AWS KEY]' },
   { name: 'GitHub token', pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, replace: '[REDACTED GITHUB TOKEN]' },
   { name: 'Slack token', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, replace: '[REDACTED SLACK TOKEN]' },
@@ -44,8 +52,16 @@ const SHAPES: Shape[] = [
     name: 'secret in an environment listing',
     // `Get-ChildItem env:` and `set` print NAME and value in columns, with no `=` or `:` between —
     // the one shape the assignment rule below cannot see.
-    pattern: /^([ \t]*[A-Za-z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CONN\w*STRING)[A-Za-z0-9_]*)([ \t]{2,})(\S.*)$/gim,
+    pattern: /^([ \t]*[A-Za-z0-9_]*(?:PASSWORD|PASSWD|_PASS|SECRET|TOKEN|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|[A-Z0-9]_KEY|CONN\w*STRING)[A-Za-z0-9_]*)([ \t]{2,})(\S.*)$/gim,
     replace: '$1$2[REDACTED]',
+  },
+  {
+    name: 'secret assignment (quoted)',
+    // A quoted value is the secret up to its closing quote, spaces and all (audit, 2026-10-27:
+    // `"password": "correct horse battery staple"` kept everything after its first word).
+    pattern: /\b([A-Za-z0-9_]*?(?:password|passwd|pwd|pass(?=["']?\s*[=:])|secret|credential|api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|private[_-]?key|token|[A-Za-z0-9]_key)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(["'])([^"'\r\n]{6,})\3/gi,
+    replace: (_m: string, name: string, sep: string, quote: string, value: string) =>
+      NOT_A_VALUE.has(value.trim().toLowerCase()) || value.startsWith('[REDACTED') ? _m : `${name}${sep}${quote}[REDACTED]${quote}`,
   },
   {
     name: 'secret assignment',
@@ -57,7 +73,7 @@ const SHAPES: Shape[] = [
     // `AWS_SECRET_ACCESS_KEY` — which is how environments and config files spell them; matching the
     // bare word only let every one of those through. Six characters is short enough for a real
     // password and long enough to leave `token: null` and `pwd: ok` alone.
-    pattern: /\b([A-Za-z0-9_]*?(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|private[_-]?key|token)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(["']?)([^\s"';,]{6,})\3/gi,
+    pattern: /\b([A-Za-z0-9_]*?(?:password|passwd|pwd|pass(?=["']?\s*[=:])|secret|credential|api[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|private[_-]?key|token|[A-Za-z0-9]_key)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(["']?)([^\s"';,]{6,})\3/gi,
     replace: (_m: string, name: string, sep: string, quote: string, value: string) =>
       NOT_A_VALUE.has(value.toLowerCase()) || value.startsWith('[REDACTED') ? _m : `${name}${sep}${quote}[REDACTED]${quote}`,
   },

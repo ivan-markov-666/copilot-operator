@@ -31,8 +31,8 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type HandoffCard, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
-import { handoffResultMessage } from '../orchestrator/handoff.js';
+import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
+import { handoffOutcomeOf, handoffResultMessage } from '../orchestrator/handoff.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
 import { Hold } from '../orchestrator/hold.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
@@ -161,7 +161,7 @@ type Waiting = {
   resolve: (d: PolicyDecision) => void;
   resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
   /** The lead's question (two chats): the operator's answer, or a stop. */
-  resolveAnswer?: (a: { answer: string; ran?: boolean } | 'stop') => void;
+  resolveAnswer?: (a: { answer: string; ran?: boolean; outcome?: HandoffOutcome } | 'stop') => void;
   /** A subtask that failed for a technical reason (two chats, 2026-10-25): what the operator chose for it, or a stop. */
   resolveRetry?: (choice: RetryChoice | 'stop') => void;
 };
@@ -1157,6 +1157,8 @@ export class OperatorService {
       networkFetch: cfg.execution.networkFetch,
       platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
       readOnlyPrograms: cfg.execution.readOnlyPrograms,
+      scripts: cfg.execution.scripts,
+      writtenScripts: cfg.execution.writtenScripts,
     };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
@@ -2162,7 +2164,7 @@ export class OperatorService {
       }
     } else if (a.kind === 'question') {
       const handed = p.approval.question?.handoff;
-      note = handed ? handoffResultMessage(handed, a.ran !== false, a.answer) : `You asked: ${p.approval.question?.text ?? ''}\n\nThe operator answers: ${a.answer}`;
+      note = handed ? handoffResultMessage(handed, handoffOutcomeOf(a.outcome, a.ran), a.answer) : `You asked: ${p.approval.question?.text ?? ''}\n\nThe operator answers: ${a.answer}`;
     } else if (a.kind === 'retry' && p.approval.retry) {
       const r = p.approval.retry;
       if (a.choice === 'accept') note = `Subtask ${r.n} (${r.title}) is taken as failed, at the operator's word: decide what to do next without it.`;
@@ -2340,7 +2342,7 @@ export class OperatorService {
   askLeadQuestion(
     ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; handoff?: HandoffCard; actor?: Actor },
     signal: AbortSignal,
-  ): Promise<{ answer: string; ran?: boolean } | 'stop'> {
+  ): Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome } | 'stop'> {
     return new Promise((resolveAnswer) => {
       if (signal.aborted) {
         resolveAnswer('stop');
@@ -2441,15 +2443,20 @@ export class OperatorService {
     return await this.start(threadId, cfg.execution.mode);
   }
 
-  answerQuestion(approvalId: string, text: string, ran?: boolean): { ok: boolean; problem?: string } {
+  answerQuestion(approvalId: string, text: string, ran?: boolean, outcome?: string): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
     if (!w?.resolveAnswer) return { ok: false, problem: 'No question of the lead is waiting under that id.' };
-    // Commands handed over (2026-10-26): what they printed, or that the operator did not run them, with a word or none.
+    /*
+     * Commands handed over (2026-10-26): what they printed; sent back for a correction, which needs what to correct
+     * (2026-10-27); or that the operator will not run them, with a word or none.
+     */
     const handed = !!w.approval.question?.handoff;
-    if (handed && ran !== false && !text.trim()) return { ok: false, problem: 'Paste what the commands printed first.' };
+    const how = handoffOutcomeOf(outcome, ran);
+    if (handed && how === 'ran' && !text.trim()) return { ok: false, problem: 'Paste what the commands printed first.' };
+    if (handed && how === 'revise' && !text.trim()) return { ok: false, problem: 'Say what to correct first.' };
     if (!handed && !text.trim()) return { ok: false, problem: 'Write the answer first.' };
     this.waiting.delete(approvalId);
-    w.resolveAnswer(handed ? { answer: text.trim(), ran: ran !== false } : { answer: text.trim() });
+    w.resolveAnswer(handed ? { answer: text.trim(), ran: how === 'ran', outcome: how } : { answer: text.trim() });
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
       message: 'the operator answered the lead', data: { approvalId, question: true } });
     return { ok: true };
@@ -2582,8 +2589,11 @@ export class OperatorService {
     if (mode === 'unattended') {
       for (const [id, w] of this.waiting) {
         if (this.runKey(w.approval.sessionId) !== sessionId) continue;
-        // A fetch waits for its own answer: "run the rest without asking" is not an answer to it; nor is a question.
-        if (w.approval.network || w.approval.model || w.approval.question || w.approval.plan) continue;
+        // A fetch waits for its own answer: "run the rest without asking" is not an answer to it; nor is a question, nor
+        // a platform reached with the operator's access, a read-only program's unclear line, a subtask's retry, or a
+        // script the bot wrote that Settings put to the operator first (audit, 2026-10-27: these were let go).
+        if (w.approval.network || w.approval.model || w.approval.question || w.approval.plan || w.approval.platform || w.approval.readOnly || w.approval.retry) continue;
+        if (w.approval.scripts && run.policy.writtenScripts !== 'run') continue;
         this.waiting.delete(id);
         w.resolve({ action: 'run' });
       }
@@ -2609,7 +2619,8 @@ export class OperatorService {
         // This is checked per step rather than captured once, which is what makes the switch
         // take effect from the very next step instead of the next run. A held step is the
         // exception: it is asked about in an unattended run too, which is the point of holding it.
-        if (!held && this.running.get(this.runKey(ctx.sessionId ?? ''))?.mode === 'unattended') {
+        const forTheOperator = !!(held?.network || held?.platform || held?.readOnly || (held?.scripts && policy.writtenScripts !== 'run'));
+        if (!forTheOperator && this.running.get(this.runKey(ctx.sessionId ?? ''))?.mode === 'unattended') {
           resolvePromise({ action: 'run' });
           return;
         }
@@ -2634,6 +2645,7 @@ export class OperatorService {
           ...(held?.network ? { network: held.network } : {}),
           ...(held?.platform ? { platform: held.platform } : {}),
           ...(held?.readOnly ? { readOnly: held.readOnly } : {}),
+          ...(held?.scripts ? { scripts: held.scripts } : {}),
         };
         this.waiting.set(approval.id, { approval, resolve: resolvePromise });
         this.parkLater(approval);

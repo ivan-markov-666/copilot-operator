@@ -141,9 +141,11 @@ export type ReplyOption = z.infer<typeof OptionSchema>;
 
 /**
  * Commands the operator runs themselves (operator, 2026-10-26: "the script is made, but the user runs it; the bot gives
- * the commands for the user to run and the result it expects"): a script written during the work is never run by the
- * runner (`scriptFiles.ts`), so the chat hands it over — the lines in order, the folder, what should be seen, and the
- * script files they run, which the card shows with their SHA-256 so the operator reads what they run.
+ * the commands for the user to run and the result it expects"): a script written during the work that the operator's
+ * boxes do not let the runner run (`scriptFiles.ts`) is handed over — the lines in order, the folder, what should be
+ * seen, and the script files they run, which the card shows in full so the operator reads what they run. Since
+ * 2026-10-27 also what it does besides: how it should end, what it reaches on the network and on a platform, and what
+ * it changes in the project — the card shows them beside what the runner itself reads in the lines and the scripts.
  */
 export const HandoffSchema = z.object({
   why: z.string().trim().min(1).optional(),
@@ -153,6 +155,14 @@ export const HandoffSchema = z.object({
   expect: z.string().trim().min(5, 'handoff.expect must say what the operator should see when it works.'),
   /** The script files the commands run, relative to the project. */
   files: z.array(z.preprocess(asText, z.string().trim().min(1))).default([]),
+  /** How it should end: the exit code, or what it prints last. */
+  exit: z.preprocess(asText, z.string().trim().min(1)).optional(),
+  /** What it reaches on the network: "nothing", or the hosts. */
+  network: z.preprocess(asText, z.string().trim().min(1)).optional(),
+  /** What it reaches on a platform with the operator's access (Azure, GitHub …): "nothing", or which. */
+  platforms: z.preprocess(asText, z.string().trim().min(1)).optional(),
+  /** What it changes in the project: "nothing", or the files and how. */
+  changes: z.preprocess(asText, z.string().trim().min(1)).optional(),
 });
 export type Handoff = z.infer<typeof HandoffSchema>;
 

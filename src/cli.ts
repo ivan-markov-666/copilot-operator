@@ -528,6 +528,8 @@ program
       networkFetch: cfg.execution.networkFetch,
       platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
       readOnlyPrograms: cfg.execution.readOnlyPrograms,
+      scripts: cfg.execution.scripts,
+      writtenScripts: cfg.execution.writtenScripts,
     };
     const authorizer =
       cfg.execution.mode === 'unattended'

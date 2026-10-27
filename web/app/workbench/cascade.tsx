@@ -17,14 +17,14 @@
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { api, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
+import { api, type HandoffOutcome, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
 import type { Key } from '../../lib/lang/types';
 import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useChosenSkill } from '../../lib/chosenSkill';
 import { useDots } from '../../lib/useDots';
 import { useChoice } from '../../lib/useChoice';
-import { HandoffDetails } from '../handoffView';
+import { HandoffDetails, HandoffRecord, WrittenScripts } from '../handoffView';
 import { useActivity } from '../../lib/activity';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
@@ -839,6 +839,9 @@ function StoryLines({ entries }: { entries: StoryEntry[] }) {
           ) : null
         ) : e.kind === 'step' ? (
           <Command key={i} step={e} />
+        ) : e.kind === 'handoff' ? (
+          // Every revision, the note it was sent back with and what the operator's run printed (2026-10-27).
+          <HandoffRecord key={i} card={e.card} outcome={e.outcome} answer={e.answer} />
         ) : null,
       )}
     </>
@@ -1088,6 +1091,8 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
       {approval.platform && <p className="reason small">{t('approval.platform', { platform: approval.platform })}</p>}
       {/* A program set to read only, with a command the bot could not read as only reading (2026-10-26). */}
       {approval.readOnly && <p className="reason small cs-read-only">{t('approval.readOnly')}</p>}
+      {/* Scripts the bot wrote that this runs, which Settings let it run: in full, to read first (2026-10-27). */}
+      {(approval.scripts?.length ?? 0) > 0 && <WrittenScripts scripts={approval.scripts!} />}
       <div className="row">
         <button type="button" className="primary" {...mark('run')} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
         {!approval.network && !approval.platform && <button type="button" {...mark('run-all')} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
@@ -1440,14 +1445,18 @@ function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecide
   const { t } = useT();
   const id = useId();
   const [text, setText] = useState('');
+  /** Sending it back for a correction (2026-10-27): the note, which may not be empty, in a field of its own. */
+  const [revising, setRevising] = useState(false);
+  const [note, setNote] = useState('');
   const { locked, err, choose, mark } = useChoice();
   const q = approval.question!;
-  const send = async (ran: boolean) => {
-    if (ran && !text.trim()) return;
+  const send = async (outcome: HandoffOutcome) => {
+    const said = outcome === 'revise' ? note : text;
+    if ((outcome === 'ran' || outcome === 'revise') && !said.trim()) return;
     onDecided(
       approval.id,
-      await choose(ran ? 'ran' : 'not-run', async () => {
-        await api.answerQuestion(approval.id, text, ran);
+      await choose(outcome, async () => {
+        await api.answerQuestion(approval.id, said, outcome);
       }),
     );
   };
@@ -1471,16 +1480,32 @@ function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecide
       </label>
       <textarea id={`${id}-out`} className="prose" rows={5} dir="ltr" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('ho.outputPlaceholder')} disabled={locked} />
       <div className="row">
-        <button type="button" className="primary" {...mark('ran')} disabled={locked || !text.trim()} onClick={() => void send(true)}>
+        <button type="button" className="primary" {...mark('ran')} disabled={locked || !text.trim()} onClick={() => void send('ran')}>
           {t('ho.send')}
         </button>
-        <button type="button" {...mark('not-run')} onClick={() => void send(false)} title={t('ho.notRunWhy')}>
+        <button type="button" {...mark('revise')} aria-expanded={revising} onClick={() => setRevising((v) => !v)} title={t('ho.reviseWhy')} disabled={locked}>
+          {t('ho.revise')}
+        </button>
+        <button type="button" {...mark('declined')} onClick={() => void send('declined')} title={t('ho.notRunWhy')}>
           {t('ho.notRun')}
         </button>
         <button type="button" className="danger" {...mark('stop')} onClick={() => void stop()}>
           {t('lead.stop')}
         </button>
       </div>
+      {revising && (
+        <div className="ho-revise">
+          <label htmlFor={`${id}-note`} className="small">
+            {t('ho.reviseNote')}
+          </label>
+          <textarea id={`${id}-note`} className="prose" rows={3} value={note} onChange={(e) => setNote(e.target.value)} required aria-required="true" disabled={locked} />
+          <div className="row">
+            <button type="button" className="primary" disabled={locked || !note.trim()} onClick={() => void send('revise')}>
+              {t('ho.reviseSend')}
+            </button>
+          </div>
+        </div>
+      )}
       {err && (
         <p className="err" role="alert">
           {err}

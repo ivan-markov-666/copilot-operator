@@ -188,21 +188,31 @@ export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | '
 export type Parked = { kind: ParkedKind; at: string; approval: Approval; answer?: { kind: string; at: string } };
 /** The operator's answer to it, as the card sends it; `{ stop: true }` stops the task. */
 /**
- * Commands the chat handed to the operator to run themselves (2026-10-26): the lines, the folder, what should be seen,
- * the scripts they run with their SHA-256, the lines the bot would refuse. See the server's `HandoffCard`.
+ * Commands the chat handed to the operator to run themselves (2026-10-26; revisions 2026-10-27): the lines, the folder,
+ * what should be seen and how it should end, what the chat says they reach and change, the scripts in full, what the bot
+ * reads in them, the lines and scripts the bot would refuse, the revision. See the server's `HandoffCard`.
  */
 export type HandoffCard = {
+  revision?: number;
+  why?: string;
   commands: string[];
   cwd: string;
   expect: string;
-  files: Array<{ path: string; sha256?: string; text?: string; cut?: boolean; problem?: string }>;
+  exit?: string;
+  network?: string;
+  platforms?: string;
+  changes?: string;
+  files: Array<{ path: string; abs?: string; text?: string; cut?: boolean; problem?: string }>;
+  seen?: { network?: string; platform?: string };
   outside?: boolean;
   warnings?: string[];
 };
+/** How the operator answered a handoff: ran it, sent it back for a correction, or will not run it. */
+export type HandoffOutcome = 'ran' | 'revise' | 'declined';
 
 export type ParkedAnswerInput =
   | { decision: 'approve' | 'revise'; note?: string }
-  | { answer: string; /** A handoff: false when the operator did not run the commands. */ ran?: boolean }
+  | { answer: string; /** A handoff: false when the operator did not run the commands. */ ran?: boolean; /** A handoff: how it was answered. */ outcome?: HandoffOutcome }
   | { choice: RetryChoice }
   | { decision: 'run' | 'skip' }
   | { resume: true }
@@ -826,6 +836,8 @@ export type Approval = {
   platform?: string;
   /** Set when its program is set to read only and this command could not be read as only reading: why, in English. */
   readOnly?: string;
+  /** Scripts the bot wrote that this step runs, which Settings let it run, each with its text (2026-10-27). */
+  scripts?: Array<{ path: string; kind: string; text?: string; cut?: boolean; problem?: string; script?: string }>;
   /** Set when this asks the operator to choose the model in the Copilot window; see the server's `PendingApproval`. */
   /** `review`: the model of the review's own conversation, best another, stronger one than the work's. */
   model?: { asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker' };
@@ -993,7 +1005,9 @@ export type StoryEntry =
   | { kind: 'sent'; iteration: number; label: string; text: string; at?: string }
   | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string; at?: string }
   | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean; at?: string }
-  | { kind: 'review'; round: number; entries: StoryEntry[]; at?: string };
+  | { kind: 'review'; round: number; entries: StoryEntry[]; at?: string }
+  /** Commands handed to the operator: the card as it was shown, and how it was answered (2026-10-27). */
+  | { kind: 'handoff'; revision: number; card: HandoffCard; outcome: string; answer?: string; at?: string; answeredAt?: string };
 
 /** A file a task changed. `added`/`removed` are -1 for a binary file. */
 export type ChangedFile = { path: string; oldPath?: string; status: string; added: number; removed: number };
@@ -1278,6 +1292,8 @@ export const api = {
        * the ones that can be set to read only; the list in force, which a policy lock may have narrowed.
        */
       programs?: { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
+      /** The scripts the bot may run, as in force: a policy lock may have emptied the boxes for its own (2026-10-27). */
+      scripts?: { inForce: Record<string, { own: boolean; written: boolean }>; writtenScripts: 'ask' | 'run' };
     }>('/settings'),
   /** Writes the whole raw settings object back; the API validates it before saving. */
   saveSettings: (raw: Record<string, unknown>) => call<{ ok: true }>('/settings', { method: 'PUT', body: JSON.stringify(raw) }),
@@ -1397,9 +1413,9 @@ export const api = {
       }),
     }),
   /** The lead's question (two chats): the operator's answer. */
-  /** `ran`: for commands handed over, false when the operator did not run them. */
-  answerQuestion: (approvalId: string, text: string, ran?: boolean) =>
-    call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify(ran === undefined ? { text } : { text, ran }) }),
+  /** `outcome`: for commands handed over, how the operator answered — ran them, sent them back for a correction, will not run them. */
+  answerQuestion: (approvalId: string, text: string, outcome?: HandoffOutcome) =>
+    call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify(outcome === undefined ? { text } : { text, outcome, ran: outcome === 'ran' }) }),
   /** A subtask that ended for a technical reason (two chats): try it again, with a new worker, from where it is, or not. */
   answerRetry: (approvalId: string, choice: RetryChoice) => call<{ ok: boolean }>(`/approvals/${approvalId}/retry`, { method: 'POST', body: JSON.stringify({ choice }) }),
   /** After a Stop (two chats): the stopped message carried on, its subtask `n` tried again first, by a new worker if `fresh`. */

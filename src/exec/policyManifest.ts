@@ -20,6 +20,7 @@
  * says plainly that isolation is not determined here. A manifest that overstated its own evidence
  * would be worse than none, because somebody would rely on it.
  */
+import { DEFAULT_SCRIPT_RULES, SCRIPT_KINDS, type ScriptRules, type WrittenScriptsChoice } from './scriptKinds.js';
 import { createHash } from 'node:crypto';
 
 import { DANGEROUS_TECHNIQUES } from './dangerous.js';
@@ -34,6 +35,8 @@ export type PolicyManifest = {
   allowlist: { enforced: boolean; count: number; digest: string; programs: string[] };
   /** The programs on it set to read only (2026-10-26): a command of theirs that changes something is refused. */
   readOnly: string[];
+  /** What the operator's boxes for scripts let run, the project's and the bot's own, in one line (2026-10-27). */
+  scripts: string;
   /**
    * Whether a file the chat provided could be executed.
    *
@@ -103,6 +106,9 @@ export type ManifestInput = {
   isolation: IsolationPosture;
   /** The project folders commands were held to; empty when there was no project to hold them to. */
   confinedTo?: string[];
+  /** The operator's boxes for scripts, and whether the bot's are asked about first (2026-10-27). */
+  scripts?: ScriptRules;
+  writtenScripts?: WrittenScriptsChoice;
 };
 
 /** The programs set to read only that a rule reads and, with the gate on, the list names: the ones in force. */
@@ -110,6 +116,16 @@ function readOnlyInForce(readOnly: string[], allowed: string[]): string[] {
   const capable = new Set(readOnlyCapable());
   const listed = new Set(allowed.map((p) => p.trim().toLowerCase()));
   return [...new Set(readOnly.map((p) => p.trim().toLowerCase()))].filter((p) => capable.has(p) && (listed.size === 0 || listed.has(p)));
+}
+
+/** What the scripts' boxes allowed in this run, in one line: the record says it, rather than implying it. */
+function scriptsStatement(rules: ScriptRules, written: WrittenScriptsChoice, mode: 'confirm' | 'unattended'): string {
+  const mine = SCRIPT_KINDS.filter((k) => rules[k].written);
+  const notOwn = SCRIPT_KINDS.filter((k) => !rules[k].own);
+  const own = notOwn.length ? `the project's ran except ${notOwn.join(', ')}` : "the project's ran";
+  if (mine.length === 0) return `${own}; none the bot wrote (each handed to the operator)`;
+  const how = mode === 'unattended' && written === 'run' ? 'without asking' : 'after the operator saw each';
+  return `${own}; the bot's own of ${mine.join(', ')} ran ${how}; the others it wrote were handed to the operator`;
 }
 
 export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessEnv = process.env): PolicyManifest {
@@ -126,6 +142,7 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
       programs: [...input.allowedPrograms],
     },
     readOnly: readOnlyInForce(input.readOnlyPrograms ?? [], input.allowedPrograms),
+    scripts: scriptsStatement(input.scripts ?? DEFAULT_SCRIPT_RULES, input.writtenScripts ?? 'ask', input.mode),
     chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command',
     networkFetch: networkFetchStatement(input.mode, input.networkFetch),
     denyPatterns: { count: input.denyPatterns.length, digest: digestOf(input.denyPatterns) },
@@ -148,6 +165,7 @@ export function describePolicyManifest(m: PolicyManifest): string {
     `mode        : ${m.mode}${m.mode === 'unattended' ? ' (no person saw the steps as they ran)' : ' (a person approved each step)'}`,
     `allowlist   : ${m.allowlist.enforced ? `${m.allowlist.count} programs, digest ${m.allowlist.digest}` : 'NOT ENFORCED — any program could be started'}`,
     `read only   : ${m.readOnly.length ? `${m.readOnly.join(', ')} — a command that changes something, signs in or out or shows a secret is refused` : 'none'}`,
+    `scripts     : ${m.scripts}`,
     `chat files : ${m.chatFiles}`,
     `downloads   : ${m.networkFetch}`,
     `deny list   : ${m.denyPatterns.count} patterns, digest ${m.denyPatterns.digest}`,

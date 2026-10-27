@@ -44,8 +44,12 @@ const PASSED = [
   'LANG', 'LC_ALL', 'TZ',
 ];
 
-/** Names that pass whatever they are called: a toolchain's telemetry switch is always the operator's to set. */
+/**
+ * Names that pass whatever they are called: a toolchain's telemetry switch is always the operator's to set — a switch,
+ * and only with a switch's value (audit, 2026-10-27: `TELEMETRY_CONNECTION_STRING` passed by its name).
+ */
 const PASSED_BY_SHAPE = /telemetry|_optout$|^do_not_track$|_nologo$/i;
+const A_SWITCH = /^(?:0|1|true|false|yes|no|on|off)$/i;
 
 const FORCED: Record<string, string> = {
   NO_COLOR: '1',
@@ -59,6 +63,9 @@ const FORCED: Record<string, string> = {
   DOTNET_NOLOGO: '1',
   POWERSHELL_TELEMETRY_OPTOUT: '1',
   DO_NOT_TRACK: '1',
+  // Git masks the Authorization headers in its traces; a step that turned that off would print the stored token
+  // (audit, 2026-10-27). Turning it off on the line is refused (`dangerous.ts`, credential-capture).
+  GIT_TRACE_REDACT: '1',
 };
 
 /** Names a step must never be given, even if the operator lists them: the bot's own keys. */
@@ -77,7 +84,7 @@ export function stepEnvironment(from: NodeJS.ProcessEnv = process.env, extra: st
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(from)) {
     if (v === undefined || NEVER.test(k)) continue;
-    if (wanted.has(k.toLowerCase()) || PASSED_BY_SHAPE.test(k)) out[k] = v;
+    if (wanted.has(k.toLowerCase()) || (PASSED_BY_SHAPE.test(k) && A_SWITCH.test(v.trim()))) out[k] = v;
   }
   const asking = askpass
     ? { GIT_ASKPASS: askpass, SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'auto', DISPLAY: from.DISPLAY || 'needs-to-be-defined' }

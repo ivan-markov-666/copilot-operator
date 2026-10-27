@@ -14,13 +14,18 @@
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Task } from './model.js';
+import type { HandoffCard, Task } from './model.js';
 
 export type StoryEntry =
   | { kind: 'sent'; iteration: number; label: string; text: string; at?: string }
   | { kind: 'reply'; iteration: number; label: string; text: string; status?: string; notes?: string; at?: string }
   | { kind: 'step'; iteration: number; id: number; command: string; output: string; outcome?: string; exitCode?: number; durationMs?: number; failed: boolean; at?: string }
-  | { kind: 'review'; round: number; entries: StoryEntry[]; at?: string };
+  | { kind: 'review'; round: number; entries: StoryEntry[]; at?: string }
+  /**
+   * Commands handed to the operator (2026-10-27): the card as it was shown — its revision, the scripts in full — and how
+   * it was answered: what their run printed, what to correct, that they will not run it, a Stop, or nobody there.
+   */
+  | { kind: 'handoff'; revision: number; card: HandoffCard; outcome: string; answer?: string; at?: string; answeredAt?: string };
 
 export type Story = {
   runId: string;
@@ -261,6 +266,19 @@ export async function buildStory(runsDir: string, runId: string, task: Task, liv
   }
   for (const round of reviewDirs) {
     if (!placedReviews.has(round)) entries.push(await reviewRound(join(dir, 'review', String(round)), round));
+  }
+
+  // Each handoff where it happened: after the last entry before it was put to the operator.
+  for (const name of (await readdir(join(dir, 'handoffs')).catch(() => [] as string[])).filter((n) => n.endsWith('.json')).sort()) {
+    const kept = await readFile(join(dir, 'handoffs', name), 'utf8').then((t) => JSON.parse(t) as { askedAt?: string; card?: HandoffCard; outcome?: string; answer?: string; answeredAt?: string }).catch(() => null);
+    if (!kept?.card) continue;
+    const at = kept.askedAt;
+    let place = entries.length;
+    if (at) {
+      const later = entries.findIndex((e) => e.at !== undefined && e.at > at);
+      if (later >= 0) place = later;
+    }
+    entries.splice(place, 0, { kind: 'handoff', revision: kept.card.revision ?? 1, card: kept.card, outcome: kept.outcome ?? 'nobody', ...(kept.answer ? { answer: clip(kept.answer) } : {}), ...(at ? { at } : {}), ...(kept.answeredAt ? { answeredAt: kept.answeredAt } : {}) });
   }
 
   const ended = task.status !== 'queued' && task.status !== 'running' && task.status !== 'waiting-approval';

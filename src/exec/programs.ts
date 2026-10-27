@@ -143,7 +143,12 @@ const INLINE_CODE: Array<{ what: string; pattern: RegExp }> = [
   { what: 'ruby -e', pattern: /\bruby(\.exe)?\s+(-\S+\s+)*?-e\b/i },
   { what: 'php -r', pattern: /\bphp(\.exe)?\s+(-\S+\s+)*?-r\b/i },
   { what: 'a nested PowerShell', pattern: /\b(pwsh|powershell)(\.exe)?\s+(-\S+\s+)*?-c(ommand)?\b/i },
-  { what: 'a nested cmd', pattern: /\bcmd(\.exe)?\s+(\/\S+\s+)*?\/c\b/i },
+  /*
+   * A nested cmd — but not one given a script file and nothing else (2026-10-27): `cmd /c tools\build.cmd` is how a
+   * `.cmd` or `.bat` is run, as `pwsh -File` runs a `.ps1`, and the file is read by the script rules
+   * (`scriptFiles.ts`) where no line is; `cmd /c "a & b"` and `cmd /c x.bat & calc` are still code the list cannot see.
+   */
+  { what: 'a nested cmd', pattern: /\bcmd(\.exe)?\s+(\/\S+\s+)*?\/c\b(?!\s+["']?[^\s"'&|<>^]+\.(?:cmd|bat)["']?(?:[ \t]+[^&|<>^\n;'"]*)?\s*(?:$|[;\n]))/i },
 ];
 
 /** Shells whose start through `Start-Process` is a nested shell however the arguments are spelled. */

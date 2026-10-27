@@ -412,13 +412,14 @@ try {
     await reference.uncheck();
     await waitFor('the box to be cleared', async () => !(await h.call<{ readOnly: boolean }>('GET', '/project')).readOnly, 10_000).catch(() => undefined);
     t.check('unticked: open for work again', (await h.call<{ readOnly: boolean }>('GET', '/project')).readOnly, false);
-    // Every field has an ⓘ beside its name.
+    // Every field has an ⓘ beside its name — a box of the scripts' table, the ⓘ of its column (2026-10-27).
     const bare = await page.evaluate(() => {
       const out: string[] = [];
       for (const el of Array.from(document.querySelectorAll('main input, main select, main textarea'))) {
         const f = el as HTMLInputElement;
         if (f.type === 'hidden' || f.getClientRects().length === 0) continue;
-        const holder = f.closest('.settings-field, .project-fields > div, .project-level2, .project-readonly');
+        const column = f.closest('table.scripts-table') && f.closest('td') ? (f.closest('table') as HTMLTableElement).tHead?.rows[0]?.cells[(f.closest('td') as HTMLTableCellElement).cellIndex] : null;
+        const holder = column ?? f.closest('.settings-field, .project-fields > div, .project-level2, .project-readonly');
         const info = holder?.querySelector('.info-btn');
         if (!info) out.push(f.id || f.getAttribute('aria-label') || f.outerHTML.slice(0, 60));
       }

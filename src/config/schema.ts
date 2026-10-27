@@ -6,6 +6,7 @@
  * commands denied.
  */
 import { z } from 'zod';
+import { SCRIPT_KINDS, type ScriptKind } from '../exec/scriptKinds.js';
 import { parse as parseYaml } from 'yaml';
 import { readHandWritten } from './handWritten.js';
 import { applyPolicyLock, readPolicyLocks, type LockOutcome, type LockablePolicy } from './lockedPolicy.js';
@@ -100,6 +101,9 @@ export function chatDenyPatterns(patterns: string[]): string[] {
   // Only the default pattern is narrowed: a list the operator wrote themselves is kept as they wrote it.
   return patterns.map((p) => (p === always ? `\\bgit\\s+(?:${GIT_GLOBAL_OPTION}\\s+)*(?:${GIT_CHAT_WRITES})(?![\\w-])` : p));
 }
+
+/** One kind's two boxes: the project's own scripts, and the bot's (2026-10-27). */
+const ScriptRuleSchema = z.object({ own: z.boolean().default(true), written: z.boolean().default(false) }).prefault({});
 
 export const RunConfigSchema = z.object({
   copilot: z
@@ -319,6 +323,21 @@ export const RunConfigSchema = z.object({
        * named here are ignored.
        */
       readOnlyPrograms: z.array(z.string()).default([]),
+      /**
+       * Which scripts may run (operator, 2026-10-27: "whether I allow npm, ts files, ps1 files … only for scripts that
+       * are already there, and another box for scripts the bot created"). For each kind (`exec/scriptKinds.ts`): `own`,
+       * the project's, there before the work began; `written`, the bot's, written during the work. A kind whose box is
+       * empty is not run: the chat hands it to the operator. The defaults are the rule as it was: the project's run,
+       * the bot's do not.
+       */
+      scripts: z
+        .object(Object.fromEntries(SCRIPT_KINDS.map((k) => [k, ScriptRuleSchema])) as Record<ScriptKind, typeof ScriptRuleSchema>)
+        .prefault({}),
+      /**
+       * A script the bot wrote, its box ticked, in a run without asking (2026-10-27): `ask` puts it on a card with its
+       * text first; `run` runs it as any other step. A run that asks before every command asks about these too.
+       */
+      writtenScripts: z.enum(['ask', 'run']).default('ask'),
       denyPatterns: z
         .array(z.string())
         .default([
@@ -603,6 +622,8 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
     denyPatterns: cfg.execution.denyPatterns,
     isolation: cfg.execution.isolation,
     passEnv: cfg.execution.passEnv,
+    scripts: cfg.execution.scripts,
+    writtenScripts: cfg.execution.writtenScripts,
   };
   const outcome: LockOutcome = { applied: false, changes: [] };
   for (const lock of locks) {
@@ -622,6 +643,8 @@ export async function resolveConfig(cfg: RunConfig, configPath: string, baseDir:
       denyPatterns: policy.denyPatterns,
       isolation: policy.isolation ?? cfg.execution.isolation,
       passEnv: policy.passEnv ?? cfg.execution.passEnv,
+      scripts: policy.scripts ?? cfg.execution.scripts,
+      writtenScripts: policy.writtenScripts ?? cfg.execution.writtenScripts,
     },
     configPath,
     baseDir,

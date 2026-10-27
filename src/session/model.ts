@@ -523,23 +523,41 @@ export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | '
 
 /** The operator's answer to it, given later; `resume` for what needs only the operator to be there again. */
 /**
- * Commands the chat handed to the operator to run themselves (2026-10-26): the lines, the folder, what should be seen,
- * the script files they run read from disk with their SHA-256, and the lines the runner would refuse outright.
+ * Commands the chat handed to the operator to run themselves (2026-10-26; revise and resubmit 2026-10-27): what they
+ * are for, the lines, the folder, what should be seen and how it should end, what the chat says they reach and change,
+ * the script files they run read from disk in full, what the runner reads in them of the network and of platforms, the
+ * lines and scripts the runner would refuse outright, and which revision this is.
  */
 export type HandoffCard = {
+  /** 1 for the first; one more for each the operator sent back for a correction. Absent on cards from before 2026-10-27. */
+  revision?: number;
+  why?: string;
   commands: string[];
   cwd: string;
   expect: string;
-  files: Array<{ path: string; sha256?: string; text?: string; cut?: boolean; problem?: string }>;
+  /** How it should end, as the chat says: an exit code, or what it prints last. */
+  exit?: string;
+  /** What it reaches on the network, as the chat says. */
+  network?: string;
+  /** What it reaches on a platform with the operator's access, as the chat says. */
+  platforms?: string;
+  /** What it changes in the project, as the chat says. */
+  changes?: string;
+  files: Array<{ path: string; abs?: string; text?: string; cut?: boolean; problem?: string }>;
+  /** What the runner itself finds in the lines and the scripts: a fetch from the network, a platform reached. */
+  seen?: { network?: string; platform?: string };
   /** The folder is outside the project. */
   outside?: boolean;
-  /** By line, the reason the runner would refuse it. */
+  /** By line or by script, the reason the runner would refuse it. */
   warnings?: string[];
 };
 
+/** The operator's answer to a handoff: ran it and sends what it printed; sends it back for a correction; will not run it. */
+export type HandoffOutcome = 'ran' | 'revise' | 'declined';
+
 export type ParkedAnswer =
   | { kind: 'plan'; decision: 'approve' | 'revise'; note?: string }
-  | { kind: 'question'; answer: string; /** A handoff: whether the operator ran the commands. */ ran?: boolean }
+  | { kind: 'question'; answer: string; /** A handoff: whether the operator ran the commands (before 2026-10-27). */ ran?: boolean; /** A handoff: how the operator answered it. */ outcome?: HandoffOutcome }
   | { kind: 'retry'; choice: RetryChoice }
   | { kind: 'command'; decision: 'run' | 'skip' }
   | { kind: 'resume' };
@@ -1274,6 +1292,11 @@ export type PendingApproval = {
    * Asked in every mode, Settings' agreement or not; it may change something.
    */
   readOnly?: string;
+  /**
+   * Scripts the bot wrote that this step runs, which the operator's boxes let run (2026-10-27), each with its text: put
+   * to the operator first unless Settings run them without asking. "Run the rest without asking" does not answer it.
+   */
+  scripts?: Array<{ path: string; kind: string; text?: string; cut?: boolean; problem?: string; script?: string }>;
   /**
    * Set when this is not a step but a request for the operator's hand: the chat could not be put on the
    * chosen model, and the operator is asked to choose it in the Copilot window (operator's request,

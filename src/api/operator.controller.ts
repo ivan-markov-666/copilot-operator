@@ -80,6 +80,7 @@ export class OperatorController {
     resolved: unknown;
     picker: { defaults: PickerLocators; dirs: { run: string; read: string } };
     programs: { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
+    scripts: { inForce: Record<string, { own: boolean; written: boolean }>; writtenScripts: 'ask' | 'run' };
   }> {
     const [raw, defaults, resolved] = await Promise.all([this.ops.settings.raw(), this.ops.settings.defaults(), this.ops.settings.load()]);
     /*
@@ -92,7 +93,9 @@ export class OperatorController {
      * be set to read only, and the list in force, which a policy lock may have narrowed.
      */
     const programs = { platforms: platformTools(), readOnly: readOnlyCapable(), inForce: resolved.execution.allowedPrograms };
-    return { raw, defaults, resolved: resolved.resolved, picker, programs };
+    // The scripts the bot may run, as in force (2026-10-27): a lock may have emptied the boxes for its own.
+    const scripts = { inForce: resolved.execution.scripts, writtenScripts: resolved.execution.writtenScripts };
+    return { raw, defaults, resolved: resolved.resolved, picker, programs, scripts };
   }
 
   @Put('settings')
@@ -495,8 +498,8 @@ export class OperatorController {
 
   /** The lead's question (two chats): the operator's answer, as text. Stopping the task is `approvals/:id` with abort. */
   @Post('approvals/:id/answer')
-  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown; ran?: unknown }): unknown {
-    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '', body?.ran === false ? false : undefined);
+  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown; ran?: unknown; outcome?: unknown }): unknown {
+    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '', body?.ran === false ? false : undefined, typeof body?.outcome === 'string' ? body.outcome : undefined);
     if (!result.ok) throw new BadRequestException(result.problem);
     return result;
   }

@@ -22,6 +22,7 @@
  * Kept as `data/queue.json` (see `OperatorService.queue`). This module is the part that needs no browser: the shape,
  * the checks of an edit, and which task is next.
  */
+import { handoffOutcomeOf } from '../orchestrator/handoff.js';
 import { branchExists } from '../vcs/git.js';
 import type { ParkedAnswer, ParkedKind, PendingApproval, RetryChoice } from '../session/model.js';
 
@@ -277,10 +278,12 @@ export function parkedAnswerFrom(p: { kind: ParkedKind; approval: PendingApprova
       if (input.decision === 'revise') return text(input.note) ? { kind: 'plan', decision: 'revise', note: text(input.note) } : { problem: 'Say what to change in the plan.' };
       return { problem: 'A plan is approved, or sent back for another.' };
     case 'question':
-      // Commands handed over (2026-10-26): what they printed, or that the operator did not run them, with a word or none.
+      // Commands handed over (2026-10-26): what they printed, sent back with what to correct (2026-10-27), or not run.
       if (p.approval.question?.handoff) {
-        if (input.ran === false) return { kind: 'question', answer: text(input.answer), ran: false };
-        return text(input.answer) ? { kind: 'question', answer: text(input.answer), ran: true } : { problem: 'Paste what the commands printed first.' };
+        const outcome = handoffOutcomeOf(input.outcome, input.ran);
+        if (outcome === 'declined') return { kind: 'question', answer: text(input.answer), ran: false, outcome };
+        if (outcome === 'revise') return text(input.answer) ? { kind: 'question', answer: text(input.answer), outcome } : { problem: 'Say what to correct first.' };
+        return text(input.answer) ? { kind: 'question', answer: text(input.answer), ran: true, outcome } : { problem: 'Paste what the commands printed first.' };
       }
       return text(input.answer) ? { kind: 'question', answer: text(input.answer) } : { problem: 'Write the answer first.' };
     case 'retry': {

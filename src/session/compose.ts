@@ -69,6 +69,8 @@ export type ComposeInput = {
    * that says nothing. Absent on a machine with PowerShell 7, which is most of them.
    */
   shellNote?: string;
+  /** The operator's boxes for scripts, when they are not the defaults (2026-10-27). See `exec/scriptKinds.ts`. */
+  scriptsNote?: string;
   /** Plan mode: the planning phase the task opens with. See `orchestrator/planMode.ts`. */
   planNote?: string;
   /** The operator's notes about this task not sent yet (`Task.notes`), as `operatorNotesSection` writes them. */
@@ -102,7 +104,7 @@ const TASK_HEADER = '## Task';
  * and a note that is empty simply leaves nothing behind.
  */
 function runnerBlock(input: ComposeInput): string {
-  const notes = [input.workDirNote, input.readOnlyNote, input.referenceNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.planNote, input.operatorNotes].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
+  const notes = [input.workDirNote, input.readOnlyNote, input.referenceNote, input.scopeNote, input.approachesNote, input.vcsNote, input.shellNote, input.scriptsNote, input.planNote, input.operatorNotes].map((n) => (n ?? '').trim()).filter((n) => n.length > 0);
   return notes.length > 0 ? `${notes.join('\n\n')}\n\n` : '';
 }
 

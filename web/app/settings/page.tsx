@@ -28,6 +28,11 @@ import { BranchIcon } from '../branchIcon';
 /** What the operator says contains the runner. Mirrors `execution.isolation` in the config. */
 type Isolation = 'none' | 'none-accepted' | 'separate-account' | 'sandbox' | 'vm';
 type StartMode = 'confirm' | 'unattended';
+/**
+ * How commands run, as the one list shows it (operator, 2026-10-27): always asked; without asking, but a script the bot
+ * wrote asked about first; or everything without asking. Kept as `execution.mode` and `execution.writtenScripts`.
+ */
+type RunChoice = 'confirm' | 'unattended-ask' | 'unattended';
 type NetworkFetch = 'ask' | 'refuse' | 'run';
 type Questions = 'ask' | 'agree';
 /** Two chats: what is done with a subtask that ended for a technical reason (`limits.subtaskRetryMode`, 2026-10-25). */
@@ -134,6 +139,7 @@ export default function DefaultsPage() {
       <PickerLocatorsSection catalogue={catalogue} />
       <ExecutionSection />
       <ProgramsSection />
+      <ScriptsSection />
     </div>
   );
 }
@@ -1428,6 +1434,7 @@ function ExecutionSection() {
   const [gapMax, setGapMax] = useState(90);
   const [isolation, setIsolation] = useState<Isolation>('none');
   const [startMode, setStartMode] = useState<StartMode>('confirm');
+  const [writtenScripts, setWrittenScripts] = useState<'ask' | 'run'>('ask');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
   const [questions, setQuestions] = useState<Questions>('ask');
   /** A subtask cut off for a technical reason (two chats, 2026-10-25): what is done, how many times, after how long. */
@@ -1481,7 +1488,8 @@ function ExecutionSection() {
         setGapMax(typeof pacing.gapMaxSec === 'number' ? pacing.gapMaxSec : 90);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
         setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions };
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run' };
+        setWrittenScripts(exec.writtenScripts === 'run' ? 'run' : 'ask');
         setIsolation(exec.isolation ?? 'none');
         setStartMode(exec.mode ?? 'confirm');
         setNetworkFetch(exec.networkFetch ?? 'ask');
@@ -1539,7 +1547,8 @@ function ExecutionSection() {
   const saveSubRetryWaitLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetryWaitSec', n));
   const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
   const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions', value: string) => write('execution', key, value);
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts', value: string) => write('execution', key, value);
+  const runChoice: RunChoice = startMode === 'confirm' ? 'confirm' : writtenScripts === 'run' ? 'unattended' : 'unattended-ask';
 
   /** The number fields, in the order a task meets them. */
   const numbers: Array<{ id: string; label: string; info: string; unit: string; value: number; min: number; max: number; set: (n: number) => void; later: (n: number) => void }> = [
@@ -1680,20 +1689,26 @@ function ExecutionSection() {
       <Field id="start-mode" label={t('exec.startMode')} info={t('exec.startModeWhy')}>
         <select
           id="start-mode"
-          value={startMode}
+          value={runChoice}
           onChange={async (e) => {
-            const v = e.target.value as StartMode;
+            const v = e.target.value as RunChoice;
             /*
              * The one place it is chosen (2026-10-23: the chat's own menu removed): running without asking is confirmed
-             * here, once, as the chat used to ask at the first message of every such conversation.
+             * here, once, as the chat used to ask at the first message of every such conversation — and running the bot's
+             * own scripts without asking with words of its own (2026-10-27).
              */
-            if (v === 'unattended' && !(await confirmDialog(t('exec.modeAutoConfirm')))) return;
-            setStartMode(v);
-            void saveExecution('mode', v);
+            if (v === 'unattended-ask' && startMode !== 'unattended' && !(await confirmDialog(t('exec.modeAutoConfirm')))) return;
+            if (v === 'unattended' && !(await confirmDialog(t('exec.modeAutoAllConfirm')))) return;
+            const mode: StartMode = v === 'confirm' ? 'confirm' : 'unattended';
+            const scripts = v === 'unattended' ? 'run' : 'ask';
+            setStartMode(mode);
+            setWrittenScripts(scripts);
+            void saveExecution('mode', mode).then(() => saveExecution('writtenScripts', scripts));
           }}
           disabled={!raw}
         >
           <option value="confirm">{t('exec.startModeAsk')}</option>
+          <option value="unattended-ask">{t('exec.startModeAutoAsk')}</option>
           <option value="unattended">{t('exec.startModeAuto')}</option>
         </select>
       </Field>
@@ -1879,8 +1894,10 @@ function ProgramsSection() {
     await save(null, []);
   };
 
-  const onPlatform = all.filter((p) => info.platforms[p]);
-  const others = all.filter((p) => !info.platforms[p]);
+  // In the order of their names (operator, 2026-10-27: "sort them alphabetically"); the file keeps its own order.
+  const byName = (a: string, b: string): number => a.localeCompare(b, 'en', { sensitivity: 'base' });
+  const onPlatform = all.filter((p) => info.platforms[p]).sort(byName);
+  const others = all.filter((p) => !info.platforms[p]).sort(byName);
   // Named here, but a policy lock on the machine does not let them run.
   const locked = list && info.inForce.length > 0 ? all.filter((p) => !info.inForce.includes(p)) : [];
   const last = all.length <= 1;
@@ -1953,6 +1970,143 @@ function ProgramsSection() {
       <div className="row">
         <button type="button" onClick={() => void restore()} disabled={!list}>
           {t('prog.restore')}
+        </button>
+      </div>
+      <SavedNote msg={msg} saving={saving} />
+    </section>
+  );
+}
+
+/** The kinds of script, as Settings shows them (2026-10-27): the server's `exec/scriptKinds.ts`. */
+const SCRIPT_KINDS: Array<{ kind: string; name: string; ext?: string }> = [
+  { kind: 'ts', name: 'TypeScript', ext: '.ts .mts .cts .tsx' },
+  { kind: 'js', name: 'JavaScript', ext: '.js .mjs .cjs .jsx' },
+  { kind: 'py', name: 'Python', ext: '.py .pyw' },
+  { kind: 'ps1', name: 'PowerShell', ext: '.ps1 .psm1' },
+  { kind: 'cmd', name: 'cmd', ext: '.bat .cmd' },
+  { kind: 'sh', name: 'bash', ext: '.sh .bash .zsh' },
+  { kind: 'other', name: 'Ruby, Perl, PHP', ext: '.rb .pl .php' },
+  { kind: 'npm', name: 'npm' },
+];
+type ScriptRule = { own: boolean; written: boolean };
+type ScriptRules = Record<string, ScriptRule>;
+type ScriptsInfo = { inForce: ScriptRules; writtenScripts: 'ask' | 'run' };
+
+/**
+ * Which scripts the bot may run (operator, 2026-10-27: "a setting for scripts like the one for programs: whether I allow
+ * npm, ts files, ps1 files … one box for the scripts that are already there and another for the scripts the bot
+ * created"). A row for each kind, in the order of its name; "ready-made" is the project's, there before the work began,
+ * and on as shipped; "written by the bot" is what the chat wrote during the work, off as shipped: such a script is handed
+ * to the operator on "Run this yourself". Whether the bot asks before running one it may is the run's mode, above.
+ */
+function ScriptsSection() {
+  const { t, locale } = useT();
+  const { saving, track } = useSaving();
+  const [rules, setRules] = useState<ScriptRules | null>(null);
+  const [info, setInfo] = useState<ScriptsInfo | null>(null);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const read = useCallback(async () => {
+    const s = await api.settings();
+    const mine = ((s.raw.execution as { scripts?: ScriptRules } | undefined)?.scripts ?? {}) as Partial<ScriptRules>;
+    const shipped = ((s.defaults as { execution?: { scripts?: ScriptRules } } | null)?.execution?.scripts ?? {}) as Partial<ScriptRules>;
+    setRules(Object.fromEntries(SCRIPT_KINDS.map(({ kind }) => [kind, { own: mine[kind]?.own ?? shipped[kind]?.own ?? true, written: mine[kind]?.written ?? shipped[kind]?.written ?? false }])));
+    if (s.scripts) setInfo(s.scripts);
+  }, []);
+  useEffect(() => {
+    read().catch((e: unknown) => setErr((e as Error).message));
+  }, [read]);
+
+  /** One box, written into the file as it is now; `null` puts back the defaults. */
+  const save = async (next: ScriptRules | null): Promise<void> => {
+    setErr('');
+    setMsg('');
+    try {
+      const base = (await api.settings()).raw;
+      const exec = { ...((base.execution as Record<string, unknown>) ?? {}) };
+      if (next === null) delete exec.scripts;
+      else exec.scripts = next;
+      await track(api.saveSettings({ ...base, execution: exec }));
+      await read();
+      setMsg(t('scr.saved'));
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+  const tick = (kind: string, box: keyof ScriptRule, value: boolean) => {
+    if (!rules) return;
+    const next = { ...rules, [kind]: { ...rules[kind]!, [box]: value } };
+    setRules(next);
+    void save(next);
+  };
+  const restore = async () => {
+    if (!(await confirmDialog(t('scr.restoreConfirm')))) return;
+    await save(null);
+  };
+
+  const name = (k: (typeof SCRIPT_KINDS)[number]): string => (k.kind === 'npm' ? t('scr.npm') : k.name);
+  const rows = [...SCRIPT_KINDS].sort((a, b) => name(a).localeCompare(name(b), locale, { sensitivity: 'base' }));
+  const anyWritten = !!rules && Object.values(rules).some((r) => r.written);
+  // Ticked here, but a policy lock on the machine does not let the bot run what it wrote.
+  const locked = !!rules && !!info && SCRIPT_KINDS.some(({ kind }) => rules[kind]?.written && !info.inForce[kind]?.written);
+
+  return (
+    <section className="panel" id="scripts" aria-labelledby="scripts-title">
+      <h2 id="scripts-title">{t('scr.title')}</h2>
+      <p className="muted small">{t('scr.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      {locked && <p className="reason small">{t('scr.locked')}</p>}
+      <table className="scripts-table">
+        <thead>
+          <tr>
+            <th scope="col">{t('scr.kind')}</th>
+            <th scope="col">
+              <span className="scripts-head">
+                {t('scr.own')} <InfoTip label={t('info.about', { name: t('scr.own') })} text={t('scr.ownWhy')} />
+              </span>
+            </th>
+            <th scope="col">
+              <span className="scripts-head">
+                {t('scr.written')} <InfoTip label={t('info.about', { name: t('scr.written') })} text={t('scr.writtenWhy')} />
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((k) => (
+            <tr key={k.kind} data-kind={k.kind}>
+              <th scope="row">
+                {name(k)} {k.ext && <code className="muted small" dir="ltr">{k.ext}</code>}
+              </th>
+              <td>
+                <input
+                  type="checkbox"
+                  id={`scr-${k.kind}-own`}
+                  aria-label={t('scr.ownOf', { kind: name(k) })}
+                  checked={rules?.[k.kind]?.own ?? true}
+                  disabled={!rules}
+                  onChange={(e) => tick(k.kind, 'own', e.target.checked)}
+                />
+              </td>
+              <td>
+                <input
+                  type="checkbox"
+                  id={`scr-${k.kind}-written`}
+                  aria-label={t('scr.writtenOf', { kind: name(k) })}
+                  checked={rules?.[k.kind]?.written ?? false}
+                  disabled={!rules}
+                  onChange={(e) => tick(k.kind, 'written', e.target.checked)}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {anyWritten && <p className="small prog-note">{t('scr.writtenNote')}</p>}
+      <div className="row">
+        <button type="button" onClick={() => void restore()} disabled={!rules}>
+          {t('scr.restore')}
         </button>
       </div>
       <SavedNote msg={msg} saving={saving} />

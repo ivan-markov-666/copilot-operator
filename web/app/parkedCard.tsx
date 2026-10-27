@@ -70,7 +70,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           </div>
         </>
       )}
-      {/* Commands handed over (2026-10-26): what they printed, pasted; or not run. */}
+      {/* Commands handed over (2026-10-26): what they printed, pasted; sent back with what to correct (2026-10-27); or not run. */}
       {parked.kind === 'question' && a.question?.handoff && (
         <>
           <HandoffDetails card={a.question.handoff} why={a.question.text} />
@@ -79,10 +79,13 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           </label>
           <textarea id={`${id}-out`} className="prose" rows={4} dir="ltr" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('ho.outputPlaceholder')} disabled={locked} />
           <div className="row">
-            <button type="button" className="primary" {...mark('ran')} disabled={locked || !text.trim()} onClick={() => void send('ran', { answer: text.trim(), ran: true })}>
+            <button type="button" className="primary" {...mark('ran')} disabled={locked || !text.trim()} onClick={() => void send('ran', { answer: text.trim(), ran: true, outcome: 'ran' })}>
               {t('ho.send')}
             </button>
-            <button type="button" {...mark('not-run')} onClick={() => void send('not-run', { answer: text.trim(), ran: false })} title={t('ho.notRunWhy')}>
+            <button type="button" {...mark('revise')} disabled={locked || !text.trim()} onClick={() => void send('revise', { answer: text.trim(), outcome: 'revise' })} title={t('pk.handoffReviseWhy')}>
+              {t('ho.revise')}
+            </button>
+            <button type="button" {...mark('declined')} onClick={() => void send('declined', { answer: text.trim(), ran: false, outcome: 'declined' })} title={t('ho.notRunWhy')}>
               {t('ho.notRun')}
             </button>
           </div>

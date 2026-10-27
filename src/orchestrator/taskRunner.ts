@@ -32,7 +32,7 @@ import { availableShells, detectShells, effectiveShell, preferredShell, refusalF
 import { runChecks, failureMessage, failureRedactions, failureReport, environmentProblemIn, COMMIT_CLEAN_CHECK, CONTENT_CLEAN_CHECK, RUNNER_CHECK_KINDS, type CheckOutcome } from '../exec/checks.js';
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck, withAttemptIds } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
-import { redactSecrets } from '../exec/redaction.js';
+import { findRedactions, redactSecrets, type RedactionHit } from '../exec/redaction.js';
 import { snapshotProcesses, reapLeftovers, describeLeftovers, ProcessTracker, type ProcessSnapshot } from '../exec/processes.js';
 import { collectEnvironment, describeEnvironment } from '../exec/environment.js';
 import { describeCrash } from '../transport/edgeCrash.js';
@@ -41,7 +41,9 @@ import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../pro
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, checkAccessRefusal, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
-import { handoffCard, handoffResultMessage, HANDOFF_NOBODY } from './handoff.js';
+import { handoffCard, handoffOutcomeOf, handoffResultMessage, HANDOFF_NOBODY } from './handoff.js';
+import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
+import { scriptsNote } from '../exec/scriptKinds.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { confinementRefusal, isWithin, sessionRoots, type Confinement } from '../exec/confinement.js';
@@ -59,7 +61,7 @@ import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
 import { contractConflicts, readsTreeClean } from './contract.js';
 import { commitFiles, treeFingerprint } from '../vcs/git.js';
-import type { HandoffCard, PendingApproval, RetryChoice, TaskStats } from '../session/model.js';
+import type { HandoffCard, HandoffOutcome, PendingApproval, RetryChoice, TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -162,10 +164,10 @@ export type RunDeps = {
     why?: string;
     options: string[];
     commands?: Array<string | null>;
-    /** Commands the chat hands to the operator to run themselves (2026-10-26); answered with what they printed, or not run. */
+    /** Commands the chat hands to the operator to run themselves (2026-10-26); answered with what they printed, a correction, or not run. */
     handoff?: HandoffCard;
     actor?: Actor;
-  }) => Promise<{ answer: string; ran?: boolean } | 'stop'>;
+  }) => Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome } | 'stop'>;
   /**
    * Two chats (2026-10-25): what to do with a subtask that failed for a technical reason, asked of the operator on a card
    * under the subtask (`sessionId`/`taskId`: the worker's attempt it is shown at). Absent: nobody is there to ask.
@@ -471,6 +473,29 @@ export function limitsMessageLength(
             `${basename(file)}. Read it there and answer it as a whole; what is above is only its beginning.]`;
           opts.onLong?.({ chars: text.length, max: opts.max, file });
           return await target.sendAndConfirm(`${text.slice(0, Math.max(0, opts.max - note.length))}${note}`, [...attachments, file]);
+        };
+      }
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * The same chat, whose every message has its secrets taken out before it goes (audit, 2026-10-27): the shapes of
+ * `redaction.ts` and the operator's own patterns, as each report already had. The reports were redacted where they were
+ * written; the texts made elsewhere were not — the output the operator pasted from a script they ran, an answer they
+ * typed, the message after a Stop that quotes the end of each step's log — and a token printed there went to Copilot.
+ * Put outside `limitsMessageLength`, so a message too long for text is redacted before its whole is written to a file.
+ */
+export function redactsMessages(transport: ChatTransport, opts: { patterns: string[]; onRedacted?: (hits: RedactionHit[]) => void }): ChatTransport {
+  return new Proxy(transport, {
+    get(target, key) {
+      if (key === 'sendAndConfirm') {
+        return async (text: string, attachments: string[] = []) => {
+          const hits = findRedactions(text, opts.patterns);
+          if (hits.length > 0) opts.onRedacted?.(hits);
+          return await target.sendAndConfirm(hits.length > 0 ? redactSecrets(text, opts.patterns) : text, attachments);
         };
       }
       const value: unknown = Reflect.get(target, key, target);
@@ -1233,6 +1258,11 @@ export async function runTask(
     onLong: ({ chars, max, file }) =>
       sink.event('message-long', { chars, max, file }, `a message of ${chars} characters is over the ${max} sent as text: its beginning is sent, the whole of it attached as ${file}`, 'warn'),
   });
+  // Nothing goes to the chat with a secret in it, whatever made the message (audit, 2026-10-27).
+  transport = redactsMessages(transport, {
+    patterns: cfg.report.redactPatterns,
+    onRedacted: (hits) => sink.event('message-redacted', { redactions: hits }, `secrets taken out of a message before it was sent: ${hits.map((h) => `${h.name} ×${h.count}`).join(', ')}`, 'warn'),
+  });
   let iterations = 0;
   /** What the model has declared it could not do as written, merged across every reply. */
   let deviations: Deviation[] = [];
@@ -1241,10 +1271,25 @@ export async function runTask(
   /** What the runner tells the model in its next message about the reply just processed. */
   let runnerNotes: string[] = [];
   /*
-   * Commands the operator chose an answer for (2026-10-23): the click is the permission for that one command, once.
-   * The rules that refuse a command still apply to it.
+   * The command of the answer the operator chose (2026-10-23): the click is the permission for that one command, once,
+   * in the reply made of it and no later one (audit, 2026-10-27: one refused before it ran stayed allowed for the next
+   * step of the same text). An answer taken because nobody was there to ask is no click: its command is asked about as
+   * any step is. The rules that refuse a command, and the holds, still apply to it.
    */
-  const consented = new Set<string>();
+  let chosenRun: string | null = null;
+  /** The handoff's revision, and whether the last one was sent back for a correction (2026-10-27). */
+  let handoffRevision = 0;
+  let handoffSentBack = false;
+  /**
+   * Each handoff as it was shown and answered, kept in the run folder, so the conversation shows every revision, the
+   * note it was sent back with and what the operator's own run printed (`session/story.ts`).
+   */
+  let handoffsKept = 0;
+  const keepHandoff = async (entry: { askedAt: string; card: HandoffCard; outcome: string; answer?: string; answeredAt?: string }): Promise<void> => {
+    handoffsKept += 1;
+    await mkdir(log.path('handoffs'), { recursive: true }).catch(() => undefined);
+    await writeFile(log.path('handoffs', `${String(handoffsKept).padStart(3, '0')}.json`), JSON.stringify(entry, null, 2), 'utf8').catch(() => undefined);
+  };
   /** The projects for reference only, watched for the length of the task (see `vcs/referenceGuard.ts`). */
   let reference: ReferenceGuard | null = null;
   /** Steps the chat sent that were not run, for the handoff at the end. */
@@ -1792,6 +1837,8 @@ export async function runTask(
     networkFetch: cfg.execution.networkFetch,
     allowedPrograms: cfg.execution.allowedPrograms,
     readOnlyPrograms: cfg.execution.readOnlyPrograms,
+    scripts: cfg.execution.scripts,
+    writtenScripts: cfg.execution.writtenScripts,
     denyPatterns: cfg.execution.denyPatterns,
     cwd: work.cwd,
     lock: cfg.policyLock,
@@ -2040,6 +2087,7 @@ export async function runTask(
             `each listed in "tried". With fewer, the runner asks you for another approach instead of accepting it.`
           : undefined,
       shellNote: shellNote(shells, defaultShell),
+      scriptsNote: scriptsNote(cfg.execution.scripts, cfg.execution.writtenScripts),
       ...(planning && planMode !== 'off'
         ? { planNote: planModeNote(planMode, planEnforced, planMode === 'approve' && !!deps.approvePlan && (session.kind === 'chat' || (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm')) }
         : {}),
@@ -3008,12 +3056,18 @@ export async function runTask(
        * they printed, or that they did not run it, goes back, and the work goes on.
        */
       if (reply.status === 'handoff' && reply.handoff) {
-        const card = handoffCard(reply.handoff, work.cwd, confinement.roots, cfg.execution.denyPatterns);
+        // The next revision of the one sent back for a correction; otherwise the first of a new one (2026-10-27).
+        handoffRevision = handoffSentBack ? handoffRevision + 1 : 1;
+        handoffSentBack = false;
+        const card = handoffCard(reply.handoff, work.cwd, confinement.roots, cfg.execution.denyPatterns, handoffRevision);
         const why = reply.handoff.why?.trim() || 'Run these commands yourself, and send what they print.';
         let message = HANDOFF_NOBODY;
-        await record('HANDOFF', `${why}\n\nin ${card.cwd}:\n${card.commands.join('\n')}\n\nexpected: ${card.expect}${card.files.length ? `\n\nscripts: ${card.files.map((f) => `${f.path}${f.sha256 ? ` (sha256 ${f.sha256})` : f.problem ? ` (${f.problem})` : ''}`).join(', ')}` : ''}`);
+        let outcome: HandoffOutcome | null = null;
+        let answer = '';
+        const askedAt = new Date().toISOString();
+        await record('HANDOFF', `revision ${card.revision}: ${why}\n\nin ${card.cwd}:\n${card.commands.join('\n')}\n\nexpected: ${card.expect}${card.files.length ? `\n\nscripts: ${card.files.map((f) => `${f.path}${f.problem ? ` (${f.problem})` : ''}`).join(', ')}` : ''}`);
         if (deps.askQuestion) {
-          sink.event('handoff-asked', { commands: card.commands, cwd: card.cwd, files: card.files.map((f) => ({ path: f.path, sha256: f.sha256 })) }, `the chat hands the operator commands to run themselves: ${card.commands.join(' ; ')}`, 'warn');
+          sink.event('handoff-asked', { commands: card.commands, cwd: card.cwd, revision: card.revision, files: card.files.map((f) => f.path) }, `the chat hands the operator commands to run themselves (revision ${card.revision}): ${card.commands.join(' ; ')}`, 'warn');
           await setTask((t) => {
             t.status = 'waiting-approval';
           });
@@ -3021,13 +3075,22 @@ export async function runTask(
           await setTask((t) => {
             t.status = 'running';
           });
-          if (got === 'stop' || signal?.aborted) return await finish('aborted', 'stopped by the operator at the commands handed over', undefined, lastMarkdown);
-          const ran = got.ran !== false;
-          sink.event('handoff-answered', { ran }, ran ? 'the operator ran the commands and sent what they printed' : 'the operator did not run the commands');
-          message = handoffResultMessage(card, ran, got.answer);
+          if (got === 'stop' || signal?.aborted) {
+            await keepHandoff({ askedAt, card, outcome: 'stopped' });
+            return await finish('aborted', 'stopped by the operator at the commands handed over', undefined, lastMarkdown);
+          }
+          outcome = handoffOutcomeOf(got.outcome, got.ran);
+          answer = got.answer;
+          handoffSentBack = outcome === 'revise';
+          sink.event('handoff-answered', { outcome, revision: card.revision },
+            outcome === 'ran' ? 'the operator ran the commands and sent what they printed'
+              : outcome === 'revise' ? `the operator sent revision ${card.revision} back for a correction`
+              : 'the operator will not run the commands');
+          message = handoffResultMessage(card, outcome, got.answer);
         } else {
           sink.event('handoff-nobody', { commands: card.commands }, 'the chat handed over commands to run, and nobody is here to run them', 'warn');
         }
+        await keepHandoff({ askedAt, card, outcome: outcome ?? 'nobody', answer, answeredAt: new Date().toISOString() });
         await record('HANDOFF RESULT', message);
         await pacer.throttleSend();
         const before = await transport.sendAndConfirm(message);
@@ -3078,7 +3141,7 @@ export async function runTask(
         const chosen = options.find((o) => o.answer === answer);
         if (chosen?.run) {
           // Run as this reply's one step: through the step loop below, its output reported as any step's.
-          consented.add(chosen.run.trim());
+          chosenRun = agree && deps.askQuestion === undefined ? null : chosen.run.trim();
           const mutable = reply as { status: string; steps: Step[] };
           mutable.status = 'continue';
           mutable.steps = [{ id: 1, type: 'command', cmd: chosen.run, ...(chosen.shell ? { shell: chosen.shell } : {}) } as Step];
@@ -3271,7 +3334,14 @@ export async function runTask(
        * tests run on the old code (live run 2026-10-03).
        */
       let refusedAt: number | null = null;
-      for (const step of reply.steps) {
+      const chosenNow = chosenRun;
+      chosenRun = null;
+      for (const proposed of reply.steps) {
+        /*
+         * Screened in the shell it will run in (audit, 2026-10-27): a step that names none runs in the default shell, and
+         * the gate read it as PowerShell — a line one string to PowerShell is several commands to cmd.
+         */
+        const step: Step = proposed.shell ? proposed : { ...proposed, shell: defaultShell };
         // Paused: no other command runs until Continue. Stopped while held, the Stop just below takes it.
         await holdHere('command');
         if (signal?.aborted) {
@@ -3345,10 +3415,19 @@ export async function runTask(
           t.status = 'waiting-approval';
         });
         sink.event('step-proposed', { id: step.id, description: describeStep(step) }, `step ${step.id}: ${describeStep(step)}`);
-        // The command of an answer the operator chose (2026-10-23): their click allowed it; the refusing rules still hold.
-        const decided = consented.delete(step.cmd.trim())
-          ? (staticCheck(step, { mode: 'confirm', denyPatterns: cfg.execution.denyPatterns, allowedPrograms: cfg.execution.allowedPrograms }, undefined, confinement) ?? { action: 'run' as const })
-          : await authorizer.authorize(step, { sessionId: session.id, taskId: task.id, iteration: iterations, confinement, actor: planning ? 'plan' : 'worker' });
+        /*
+         * The command of an answer the operator chose (2026-10-23): their click allowed it, so the plain card is not put
+         * again; every rule and hold still applies, through the run's own policy (audit, 2026-10-27: it was checked with
+         * a policy of three fields, which left the read-only, network and platform holds and the unattended rules out).
+         */
+        const decided = await authorizer.authorize(step, {
+          sessionId: session.id,
+          taskId: task.id,
+          iteration: iterations,
+          confinement,
+          actor: planning ? 'plan' : 'worker',
+          ...(chosenNow !== null && chosenNow === step.cmd.trim() ? { chosen: true } : {}),
+        });
         await setTask((t) => {
           t.status = 'running';
         });
@@ -3376,6 +3455,8 @@ export async function runTask(
         const idle = Math.min(step.idleTimeoutSec ?? (long ? cfg.execution.longIdleTimeoutSec : cfg.execution.idleTimeoutSec), cap);
 
         sink.event('step-started', { id: step.id, shell: step.shell ?? defaultShell }, `running step ${step.id}: ${describeStep(step)}`);
+        // Git's settings that would make the runner's own git run a program: read now, put back after (audit, 2026-10-27).
+        const gitConfigAfter = watchGitConfig(work.cwd);
         const result = await runStep(
           {
             id: step.id,
@@ -3408,6 +3489,13 @@ export async function runTask(
           },
         );
 
+        const configPutBack = gitConfigAfter();
+        if (configPutBack.length > 0) {
+          const told = gitConfigMessage(configPutBack);
+          sink.event('git-config-put-back', { id: step.id, changes: configPutBack }, `step ${step.id} changed git settings that name a program; put back: ${configPutBack.map((c) => c.keys.join(', ')).join('; ')}`, 'warn');
+          result.stderr = `${result.stderr}${result.stderr.endsWith('\n') || !result.stderr ? '' : '\n'}[runner] ${told}\n`;
+          runnerNotes.push(told);
+        }
         results.push(result);
         stepsRunThisAttempt += 1;
         // The run counts toward the limit only if it changed nothing about the answer.

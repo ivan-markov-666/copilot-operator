@@ -1012,6 +1012,11 @@ await scenario('a process left running is stopped', {}, async (h) => {
     );
     h.git('add', '-A');
     h.git('commit', '-q', '-m', 'server');
+    /*
+     * The project's server, committed before the work began: a commit in the same second as the session counts as the
+     * work's (`writtenDuringTheWork`), and Start-Process node is judged by it since 2026-10-27.
+     */
+    await new Promise((r) => setTimeout(r, 2_100));
     const [s] = await h.importPlan(plan(h, 'leftover', [task('starts-a-server')]));
     /*
      * The second step waits until the server is listening (up to 30 s), so the reap at the task's

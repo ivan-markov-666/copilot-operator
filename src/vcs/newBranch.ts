@@ -258,9 +258,13 @@ export async function createNewBranch(folder: string, opts: { name: string; carr
   // Everything is kept; the forced switch drops the tracked changes that are on the saved branch.
   const moved = await git(repoDir, ['switch', '--quiet', '--no-track', '--discard-changes', '-c', name, targetCommit], 300_000);
   if (!moved.ok) return { ok: false, problem: `The branch could not be made: ${(moved.stderr || moved.stdout).split(/\r?\n/)[0]}. What was not committed is kept on ${saved}.` };
-  // The new files, kept on the saved branch, out of the folder; ignored files stay (no -x).
-  if (plan.untracked.length > 0) {
-    const cleaned = await git(repoDir, ['clean', '-fd', '--quiet'], 300_000);
+  /*
+   * The new files, kept on the saved branch, out of the folder — those and no others (audit, 2026-10-27): a plain
+   * `clean` also took a file the old branch's .gitignore ignored and the new one's does not, which was never saved.
+   * Named a hundred at a time, literally, so a name is never read as a pattern.
+   */
+  for (let i = 0; i < plan.untracked.length; i += 100) {
+    const cleaned = await git(repoDir, ['--literal-pathspecs', 'clean', '-fd', '--quiet', '--', ...plan.untracked.slice(i, i + 100)], 300_000);
     if (!cleaned.ok) return { ok: false, problem: `The new branch ${name} is made, but the new files could not be taken out of the folder: ${cleaned.stderr}. They are kept on ${saved}.` };
   }
   return done({ branch: saved, commit: kept.commit, files });

@@ -14,7 +14,11 @@ import { networkFetchReason, networkFetchRefusal } from './network.js';
 import { scriptNetworkReason } from './policy.js';
 import { platformOf, platformReason } from './platforms.js';
 import { readOnlyUnclearRefusal, readOnlyVerdict } from './readOnly.js';
+import { scriptText, writtenScriptsLetRun } from './scriptFiles.js';
+import { effectiveShell } from './shells.js';
+import type { ScriptKind } from './scriptKinds.js';
 import { createInterface } from 'node:readline/promises';
+import { relative } from 'node:path';
 import { stdin, stdout } from 'node:process';
 
 export type AuthorizeContext = {
@@ -25,6 +29,11 @@ export type AuthorizeContext = {
   confinement?: Confinement;
   /** Whose step it is: the chat writing its plan, the worker or the reviewer — the card says so (2026-10-22). */
   actor?: Actor;
+  /**
+   * The command of an answer the operator chose on the chat's question (2026-10-23): their click allowed it, so the
+   * plain card is not put again. The rules still refuse, and a hold still asks.
+   */
+  chosen?: boolean;
 };
 
 export interface StepAuthorizer {
@@ -43,7 +52,15 @@ export type HeldFor = {
   readOnly?: string;
   /** That program. */
   readOnlyProgram?: string;
+  /**
+   * Scripts the bot wrote that this step runs, which the operator's boxes let run (2026-10-27): each with its text, for
+   * the card. Asked about in a run without asking too, unless Settings run them (`writtenScripts: run`).
+   */
+  scripts?: ShownScript[];
 };
+
+/** A script the bot wrote, as the card shows it: where it is, its kind, and what is in it. */
+export type ShownScript = { path: string; kind: ScriptKind; text?: string; cut?: boolean; problem?: string; script?: string };
 
 export type Ask = (step: Step, ctx: AuthorizeContext, held?: HeldFor) => Promise<PolicyDecision>;
 
@@ -65,14 +82,36 @@ export type Ask = (step: Step, ctx: AuthorizeContext, held?: HeldFor) => Promise
  * without asking" — a Stop that landed between the runner's own look at the signal and this answer
  * let one more step run.
  */
-export function makeAuthorizer(cfg: PolicyConfig, ask: Ask, signal?: AbortSignal): StepAuthorizer {
+export function makeAuthorizer(cfg: PolicyConfig, askPerson: Ask, signal?: AbortSignal): StepAuthorizer {
   return {
     async authorize(step, ctx) {
       if (signal?.aborted) return { action: 'abort', reason: 'stopped by the operator', by: 'operator' };
-      const blocked = staticCheck(step, cfg, undefined, ctx.confinement);
+      const blocked = staticCheck(step, cfg, undefined, ctx.confinement, ctx.actor);
       if (blocked) return blocked;
+      /*
+       * Asked, and the run gone over to running without asking meanwhile ("run the rest without asking"): the rules of a
+       * run nobody watches are put to the step before it runs (audit, 2026-10-27) — it was checked as a watched one.
+       */
+      const ask = async (s: Step, c: AuthorizeContext, held?: HeldFor): Promise<PolicyDecision> => {
+        const decided = await askPerson(s, c, held);
+        return decided.action === 'run' && cfg.mode === 'unattended' ? (staticCheck(s, cfg, undefined, c.confinement, c.actor) ?? decided) : decided;
+      };
       const cwd = ctx.confinement?.cwd;
-      const network = networkFetchReason(step.cmd, cwd) ?? (cwd ? scriptNetworkReason(step.cmd, cwd) : null);
+      // Scripts the bot wrote that the operator's boxes let run (2026-10-27): what is in them goes on the card.
+      const scripts: ShownScript[] =
+        ctx.confinement && cfg.scripts
+          ? writtenScriptsLetRun(step.cmd, ctx.confinement.cwd, ctx.confinement.workStartedAt, effectiveShell(step.shell), cfg.scripts).map((r) => {
+              const read = scriptText(r);
+              const path = relative(ctx.confinement!.cwd, r.file) || r.file;
+              return { path, kind: r.kind!, ...('problem' in read ? { problem: read.problem } : { text: read.text, ...(read.cut ? { cut: true } : {}) }), ...(r.script ? { script: r.script.name } : {}) };
+            })
+          : [];
+      // A fetch inside one is held as one on the line is (a `.ps1`'s is found by `scriptNetworkReason`).
+      const network =
+        networkFetchReason(step.cmd, cwd) ??
+        (cwd ? scriptNetworkReason(step.cmd, cwd) : null) ??
+        scripts.map((x) => (x.text !== undefined && x.kind !== 'ps1' ? networkFetchReason(x.text, cwd) : null)).find(Boolean) ??
+        null;
       /*
        * A platform reached with the operator's access (2026-10-23): asked in every mode, unless Settings agree to it. A
        * program set to read only (2026-10-26) is not asked about when the line only reads with it; when it cannot be
@@ -85,18 +124,29 @@ export function makeAuthorizer(cfg: PolicyConfig, ask: Ask, signal?: AbortSignal
         : cfg.platformAccess === 'allow'
           ? null
           : platformReason(step.cmd, step.shell, reading?.kind === 'reads' ? new Set(reading.programs) : undefined);
-      const held: HeldFor = { ...(platform ? { platform } : {}), ...(unclear ? { readOnly: unclear.why, readOnlyProgram: unclear.program } : {}) };
+      const held: HeldFor = {
+        ...(platform ? { platform } : {}),
+        ...(unclear ? { readOnly: unclear.why, readOnlyProgram: unclear.program } : {}),
+        ...(scripts.length ? { scripts } : {}),
+      };
       if (network) {
         if (cfg.mode === 'unattended' && cfg.networkFetch === 'refuse') return { action: 'skip', reason: networkFetchRefusal(network) };
         if (!platform && cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
         return await ask(step, ctx, { network, ...held });
       }
       if (platform) return await ask(step, ctx, held);
-      if (cfg.mode === 'unattended') return { action: 'run' };
+      // The bot's scripts: on a card with their text, unless Settings run them without asking (2026-10-27).
+      if (scripts.length && !(cfg.mode === 'unattended' && cfg.writtenScripts === 'run')) return await ask(step, ctx, held);
+      if (cfg.mode === 'unattended' || ctx.chosen) return { action: 'run' };
       return await ask(step, ctx);
     },
   };
 }
+
+/** What the chat is told when a script the bot wrote waits for the operator's word and nobody is there to give it. */
+export const WRITTEN_NOBODY =
+  'refused: this runs a script written during this work, which the operator\'s Settings put to them first, and this run has nobody to ask. ' +
+  'Put what it does in the step itself — a command may be several lines — or end blocked and say in "needed" what the operator has to run.';
 
 /** What the chat is told when a command to a platform was held and nobody was there to allow it. */
 export function platformRefusal(platform: string): string {
@@ -114,6 +164,10 @@ export function terminalAuthorizer(cfg: PolicyConfig, print: (s: string) => void
     if (held?.network) print(`  held: ${held.network}`);
     if (held?.platform) print(`  held: it reaches ${held.platform} with your access`);
     if (held?.readOnly) print(`  held: ${held.readOnlyProgram ?? 'the program'} is set to read only, and this could not be read as only reading (${held.readOnly})`);
+    for (const x of held?.scripts ?? []) {
+      print(`  it runs ${x.script ? `the script "${x.script}" of ${x.path}` : x.path}, written by the bot during this work:`);
+      print(x.text !== undefined ? x.text.split('\n').map((l) => `    | ${l}`).join('\n') : `    (${x.problem})`);
+    }
     const rl = createInterface({ input: stdin, output: stdout });
     try {
       const answer = (await rl.question('  [Enter] run  [s] skip  [q] abort > ')).trim().toLowerCase();
@@ -143,6 +197,8 @@ export function unattendedAuthorizer(cfg: PolicyConfig): StepAuthorizer {
         ? { action: 'skip', reason: readOnlyUnclearRefusal(held.readOnlyProgram ?? 'the program', held.readOnly) }
         : held?.platform
           ? { action: 'skip', reason: platformRefusal(held.platform) }
-          : { action: 'run' },
+          : held?.scripts
+            ? { action: 'skip', reason: WRITTEN_NOBODY }
+            : { action: 'run' },
   );
 }

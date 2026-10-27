@@ -104,7 +104,11 @@ export const ReviewSchema = z
      * and fails: "I could not verify X because Y" is information the operator needs, and
      * quietly passing work nobody could check is the one outcome worth ruling out.
      */
-    status: z.enum(['continue', 'pass', 'fail']),
+    status: z.enum(['continue', 'pass', 'fail'], {
+      message:
+        'status is one of "continue", "pass", "fail". A review hands nothing to the operator ("handoff" is the implementer\'s): check what a ' +
+        'script would show with commands of your own, or say in a finding that the operator has to run it.',
+    }),
     steps: z.array(StepSchema).default([]),
     notes: z.string().optional(),
     /** Required on `pass` and `fail`: what you checked, how, and what you saw. */

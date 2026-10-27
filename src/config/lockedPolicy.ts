@@ -16,6 +16,9 @@
  *                            the gate switched off, because empty means "no allowlist" and that is
  *                            the one direction a lock must never permit.
  *   denyPatterns             a floor: merged in, so a lock pattern cannot be deleted locally.
+ *   writtenScripts           a ceiling on the scripts the bot wrote (2026-10-27): `never` empties every kind's box for
+ *                            them, so the operator runs each one; `ask` puts each on a card first, even in a run
+ *                            without asking; `run` changes nothing.
  *
  * The runner never writes this file. There is no API route that edits it and no UI that shows it
  * as editable; it is placed by whoever administers the machine, and on a machine that has none
@@ -29,6 +32,7 @@ import { z } from 'zod';
 import { join } from 'node:path';
 import { readHandWritten } from './handWritten.js';
 import type { IsolationClaim } from '../exec/isolation.js';
+import { SCRIPT_KINDS, type ScriptRules, type WrittenScriptsChoice } from '../exec/scriptKinds.js';
 
 export const POLICY_LOCK_FILE = 'policy.lock.json';
 
@@ -46,6 +50,8 @@ export const PolicyLockSchema = z
      */
     allowDesktopMirror: z.boolean().optional(),
     allowEnvFiles: z.boolean().optional(),
+    /** A ceiling on the scripts the bot wrote during the work: never run by it, asked about first, or as Settings say. */
+    writtenScripts: z.enum(['never', 'ask', 'run']).optional(),
     /** A ceiling on `execution.passEnv`: the only variables a step may be given beyond the fixed set. */
     passEnv: z.array(z.string()).optional(),
     /** What `npm run update` must insist on: signed commits, and one remote no flag can override. */
@@ -68,6 +74,8 @@ export type LockablePolicy = {
   denyPatterns: string[];
   isolation?: IsolationClaim;
   passEnv?: string[];
+  scripts?: ScriptRules;
+  writtenScripts?: WrittenScriptsChoice;
 };
 
 /** What the lock changed, so the run log and the manifest can say it rather than imply it. */
@@ -139,6 +147,15 @@ export function applyPolicyLock(policy: LockablePolicy, lock: PolicyLock | null)
       changes.push(`passEnv narrowed from ${next.passEnv.length} to ${kept.length} variable(s) by the lock`);
       next.passEnv = kept;
     }
+  }
+
+  if (lock.writtenScripts === 'never' && next.scripts && SCRIPT_KINDS.some((k) => next.scripts![k].written)) {
+    next.scripts = Object.fromEntries(SCRIPT_KINDS.map((k) => [k, { ...next.scripts![k], written: false }])) as ScriptRules;
+    changes.push('scripts written by the bot are not run by it (the lock): each is handed to the operator');
+  }
+  if ((lock.writtenScripts === 'ask' || lock.writtenScripts === 'never') && next.writtenScripts === 'run') {
+    next.writtenScripts = 'ask';
+    changes.push('scripts written by the bot are asked about first, in every mode (the lock)');
   }
 
   return { policy: next, outcome: { applied: true, changes, maxMode: lock.maxMode } };

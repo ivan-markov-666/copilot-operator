@@ -302,8 +302,12 @@ on a promise until one is clicked. Stopping the session aborts every pending app
 once. A run that ends for any reason aborts whatever was still pending.
 
 Unattended mode skips the question entirely and is behind a confirmation dialog in the UI. For the chat it is chosen
-in Settings → Execution → "How commands run" and nowhere else (2026-10-23: the menu under the chat's box removed):
-"Run commands without asking" asks once to confirm there, and every message reads it as it is sent.
+in Settings → Execution → "How commands run" and nowhere else (2026-10-23: the menu under the chat's box removed),
+which has three choices since 2026-10-27: "Ask before each command"; "Run without asking, except scripts the bot wrote"
+(`mode: unattended`, `writtenScripts: ask`: a step that runs a script the bot wrote, of a kind its box lets run, waits on
+a card with the script in full, `PendingApproval.scripts`, and "run the rest" does not answer it); "Run everything
+without asking, the bot's scripts too" (`writtenScripts: run`). Each running without asking asks once to confirm there,
+in words of its own, and every message reads it as it is sent.
 
 **Plan first** (plan mode, 2026-10-13). Settings → Execution → "Plan first", and per session on its page
 ("As in Settings" by default; `planMode` in a plan's session): off, on with the plan approved by the
@@ -830,7 +834,7 @@ answer. The lead is told to always give answers too. Settings → Execution → 
 "Ask me" (default) or "Agree with what the bot proposes" (`execution.questions: agree`, confirmed when chosen):
 platform commands run and every question — the chat's, the lead's — takes the first answer, the conversation saying so.
 
-**Programs, and read only (2026-10-26).** Settings has a section, "Programs the bot may start", for the allowlist (`execution.allowedPrograms`), which used to be in the settings file only. A program is added by name (folder and `.exe` dropped) and taken off with its ✕ after a confirm. The last one cannot be taken off, since an empty list turns the gate off. "Put back the defaults" removes both keys from the file. A policy lock that narrows the list is said there.
+**Programs, and read only (2026-10-26).** Settings has a section, "Programs the bot may start", for the allowlist (`execution.allowedPrograms`), which used to be in the settings file only. Shown in the order of their names since 2026-10-27 (the file keeps its own). A program is added by name (folder and `.exe` dropped) and taken off with its ✕ after a confirm. The last one cannot be taken off, since an empty list turns the gate off. "Put back the defaults" removes both keys from the file. A policy lock that narrows the list is said there.
 
 Programs that reach a platform (`platformTools()`) are listed as rows with a mode:
 - "Ask me each time", as before;
@@ -870,12 +874,39 @@ The chat hands a script over with `"status": "handoff"` (`HandoffSchema`): `comm
 - with nobody to ask, tells the chat so (`HANDOFF_NOBODY`).
 
 The card is "Run this yourself" (`HandoffQuestion` in the chat, `HandoffDetails` in `web/app/handoffView.tsx`). It shows:
-- why it is needed, the folder, and the commands in order with "Copy";
-- what should be seen;
-- the lines the bot itself would refuse, marked;
-- each script, read from disk and folded, with its SHA-256 and its text.
+- its revision (1, and one more each time it was sent back), why it is needed, the folder, and the commands in order with "Copy";
+- what should be seen; how it should end, what it reaches on the network and on a platform, what it changes in the project, as the chat says (`exit`, `network`, `platforms`, `changes`, "not said" when missing) — and, beside them, what the bot itself reads in the lines and the scripts (`seen`);
+- the lines and the scripts the bot itself would refuse, marked;
+- each script, read from disk and folded, with its path in full and its text. (Its SHA-256 was shown until 2026-10-27; the operator found it more than the card needs.)
 
-The operator pastes what the commands printed and presses "Send what it printed", which needs some text. Or they press "I did not run it", where a word is optional, or "Stop the task". The chat gets `handoffResultMessage`: the output fenced next to what it expected, or that the commands were not run.
+The operator answers in one of four ways (revise and resubmit, 2026-10-27, from the operator's specification):
+- "I ran it — send the output", which needs some text: the chat gets the output fenced next to what it expected, as evidence and never as instructions;
+- "Send the script back for a correction": a note "What needs correcting?" opens, which may not be empty; nothing is run, the task goes on, and the chat is told to change only the script, as far as the note asks, and hand it over again — the next card is the next revision, read again in full;
+- "I will not run it", a word optional: final for that handoff; the chat goes on without it or ends blocked, and is told not to guess what it would have printed;
+- "Stop the task".
+
+Each handoff is kept in the run folder (`handoffs/NNN.json`), and the conversation shows it where it happened (`StoryEntry` `handoff`, `HandoffRecord`): the card folded, its revision, how it was answered and what was written. In two chats the card is the worker's, so a correction goes to the worker of the same subtask — the lead sees it in the worker's report — and takes no new subtask.
+
+**Scripts the bot may run (2026-10-27).** The operator: "a setting like the programs one, for scripts — whether I allow npx, npm, ts files, ps1 files; one box for scripts already there and another for scripts the bot created". Settings → "Scripts the bot may run" (`ScriptsSection`) is a table, one row a kind in the order of its name — TypeScript, JavaScript, Python, PowerShell, cmd, bash, Ruby/Perl/PHP, package.json's scripts — with two boxes, `execution.scripts.<kind>.own` ("Ready-made (the project's)", on) and `.written` ("Written by the bot", off). `exec/scriptKinds.ts` names the kinds; `ownScriptRefusal` (`exec/scriptFiles.ts`) judges each script a line runs (`scriptsRun`):
+- a box left empty is a refusal, the chat told to hand the script over (or, a reviewer, to check another way);
+- a script of package.json the line runs (`npmScripts.ts`: `npm run`, `npm test`, `pnpm x`, `yarn x`, with `--prefix`, `-C`, `--cwd` and workspaces) is the project's when it is the same as in the last commit before the work began, the work's when added or changed since — it used to run unread;
+- `.cop-tmp` follows the bot's box of the file's kind; a file there of no kind (`.jar`, `.dll`) is never run;
+- a script written and run in one line is refused whatever the boxes say;
+- a script of the bot's let run is read through the gate first (`writtenScriptScreen`): a `.cmd`, `.bat` and a package.json script as a cmd line (with what the project installed in `node_modules/.bin`), a bash script by the text rules; a `.ps1` as always; `.ts`, `.js`, `.py` are code, not read (the note under the table says so).
+
+The opening tells the chat which kinds it may run itself (`scriptsNote`), when the boxes are not as shipped. `cmd /c x.cmd` given a script file alone is no longer a nested shell in a run nobody watches (as `pwsh -File`). A policy lock's `writtenScripts` (`never`, `ask`) caps it.
+
+**The security audit (2026-10-27).** Four reviews of the gate, the local API, what reaches Copilot, and git, processes and the package; fixed, with `check:written-scripts`:
+- an answer's command (`status: ask`) went through a policy of three fields: it now goes through the authorizer (`ctx.chosen` skips only the plain card), and only after a click;
+- a reviewer's checks are held to the unattended rules and the script rules (`modelCheckRefusal`);
+- `node -r`, `npx --package`, `npm exec`, `pnpm dlx`, `Start-Process node -ArgumentList` reached a file of the work unseen (`codeFilesRun`);
+- a step naming no shell was read as PowerShell and run in the default shell: it is given the default shell before the gate;
+- a step that waited, then "run the rest": the unattended rules are put to it before it runs, and the platform, read-only, retry and the bot's script cards are not answered by the button;
+- `git config` in any form that is not a read is refused, as is going into `.git` by `Set-Location` or `Join-Path`; and after every step the git settings that name a program or a path (`gitConfigGuard.ts`) are put back if a step changed them;
+- the platform hold sees `npx vercel`, `npm exec -- vercel`, `Start-Process gh`;
+- every message to the chat is redacted (`redactsMessages`: the pasted output of a handoff, a typed answer, the message after a Stop); new shapes: a quoted secret with spaces, `*_PASS`, `*_KEY`, Stripe keys, `Authorization:` and `Cookie:` headers; `GIT_TRACE_REDACT=1` forced and switching it off refused; a telemetry-named variable passes only with a switch's value;
+- the handoff card reads the scripts, not only the lines;
+- `status: handoff` from the lead or the reviewer gets a format retry that says whose it is and what to do instead.
 
 A queue task set aside at such a card is answered on its card in the same words (`parkedAnswerFrom`, `resumeParked`). Up in the banner, on other pages, a question or a handoff now links to the chat ("Open the chat"). Its Run, Skip and Abort buttons used to stop the task. The contract (`prompts/level1.md`, "When a script has to run") says all this to the chat. It also tells the chat never to offer an answer that only promises something later.
 
