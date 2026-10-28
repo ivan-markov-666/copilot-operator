@@ -727,7 +727,7 @@ export const fr: Dictionary = {
   'info.about': 'À propos de « {name} »',
   'l1.title': 'Le prompt de base (niveau 1)',
   'l1.readOnly': 'lecture seule',
-  'l1.what': 'Ce texte est à lire. Il décrit l’agent que Copilot devient dans le chat : il traite une tâche étape par étape à l’aide de commandes, rend compte de ce que chacune a fait et mène chaque tâche à son terme — terminée, ou bloquée avec ce dont elle a besoin. Il est fourni avec le bot et ne change que lorsque le bot est mis à jour. Si quelque chose au sujet du chat n’est pas clair, Kerrigan (le bouton sur l’écran d’accueil du chat) peut vous guider jusqu’à ce que la tâche soit terminée.',
+  'l1.what': 'Ce texte est à lire. Il décrit l’agent que Copilot devient dans le chat : il traite une tâche étape par étape à l’aide de commandes, rend compte de ce que chacune a fait et mène chaque tâche à son terme — terminée, ou bloquée avec ce dont elle a besoin. Il est fourni avec le bot et ne change que lorsque le bot est mis à jour. Ses règles sont les fondations (niveau 0) : rien de ce qui est écrit ailleurs — le niveau 2 d’un projet, un skill, une tâche, un message dans le chat — ne les change, même si vous le demandez. Si quelque chose au sujet du chat n’est pas clair, Kerrigan (le bouton sur l’écran d’accueil du chat) peut vous guider jusqu’à ce que la tâche soit terminée.',
   'l1.show': 'Afficher tout le texte',
   'l1.failed': 'Impossible de lire le prompt de base : {reason}',
   'proj.namePlaceholder': 'le nom du dossier lui-même',

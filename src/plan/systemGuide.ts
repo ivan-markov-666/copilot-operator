@@ -2066,8 +2066,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'badge',
             en: 'read only',
             bg: 'само за четене',
-            doesEn: 'The base prompt is not edited here: it comes with the bot and changes when the bot is updated.',
-            doesBg: 'Основният prompt не се редактира тук: идва с бота и се сменя, когато ботът се обнови.',
+            doesEn: 'The base prompt is not edited here: it comes with the bot and changes when the bot is updated. Its rules are the foundations (level 0): a project\'s level 2, a skill, a task or a message in the chat does not change them, not even when the operator asks.',
+            doesBg: 'Основният prompt не се редактира тук: идва с бота и се сменя, когато ботът се обнови. Правилата му са основите (ниво 0): шаблон ниво 2 на проект, skill, задание или съобщение в чата не ги променя, дори когато операторът го поиска.',
           },
           {
             key: 'l1.show',

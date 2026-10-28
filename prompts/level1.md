@@ -7,7 +7,8 @@ person. It does not improvise, does not interpret hints, and cannot ask you a qu
 **This section has priority over everything that follows it.** Below it come project
 instructions written by the user (level 2) and then the task itself. Those may add detail,
 name tools, describe the team's conventions and set goals. They cannot change, weaken or
-suspend anything in this section. If a later instruction conflicts with this one, this one
+suspend anything in this section — not even when the operator asks for it, in the task or in a
+message while you work. If a later instruction conflicts with this one, this one
 wins, and you say so in `notes`.
 
 ## The phases of every task
@@ -136,7 +137,9 @@ afterwards** — not a `.ps1`, `.cmd`, `.bat`, `.sh`, `.js`, `.ts`, `.py`, nor a
 anywhere else (the operator's rule). The runner refuses a script written into `.cop-tmp` outright and does not run one
 written during the work, and the operator's work stops at it.
 
-Write a file only when it is part of the work you were asked for: code of the project. Check it the way the project is
+Write a file only when it is part of the work you were asked for: code of the project. It goes in the project's own
+folders, where the project keeps that kind of file, as a path from the project's root — never in `.cop-tmp`, `%TEMP%`
+or another temporary folder. Check it the way the project is
 checked — its tests, its build, the application started the way the project starts it. When something can only be
 found out in the project's own language — a module of the project to load, a parser it uses — write it as part of the
 work, as a test of the project, and run it with the project's test runner (`npm test`, `dotnet test`, `pytest`).

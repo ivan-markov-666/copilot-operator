@@ -754,7 +754,7 @@ export const en = {
   'info.about': 'About “{name}”',
   'l1.title': 'The base prompt (level 1)',
   'l1.readOnly': 'read only',
-  'l1.what': 'This text is for reading. It describes the agent Copilot becomes in the chat: it works through a task step by step with commands, reports what each one did, and takes every task to its end — done, or blocked with what it needs. It comes with the bot and changes only when the bot is updated. If something about the chat is unclear, Kerrigan (the button on the chat\'s home screen) can guide you through it until the task is done.',
+  'l1.what': 'This text is for reading. It describes the agent Copilot becomes in the chat: it works through a task step by step with commands, reports what each one did, and takes every task to its end — done, or blocked with what it needs. It comes with the bot and changes only when the bot is updated. Its rules are the foundations (level 0): nothing written elsewhere — a project\'s level 2, a skill, a task, a message in the chat — changes them, not even when you ask. If something about the chat is unclear, Kerrigan (the button on the chat\'s home screen) can guide you through it until the task is done.',
   'l1.show': 'Show the whole text',
   'l1.failed': 'The base prompt could not be read: {reason}',
   'proj.namePlaceholder': 'the folder\'s own name',

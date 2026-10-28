@@ -727,7 +727,7 @@ export const pt: Dictionary = {
   'info.about': 'Sobre «{name}»',
   'l1.title': 'O prompt base (nível 1)',
   'l1.readOnly': 'só de leitura',
-  'l1.what': 'Este texto é para ler. Descreve o agente em que o Copilot se torna no chat: trabalha uma tarefa passo a passo com comandos, relata o que cada um fez e leva cada tarefa até ao fim — concluída, ou bloqueada com aquilo de que precisa. Vem com o bot e só muda quando o bot é atualizado. Se algo sobre o chat não for claro, a Kerrigan (o botão no ecrã inicial do chat) pode guiá-lo passo a passo até a tarefa estar concluída.',
+  'l1.what': 'Este texto é para ler. Descreve o agente em que o Copilot se torna no chat: trabalha uma tarefa passo a passo com comandos, relata o que cada um fez e leva cada tarefa até ao fim — concluída, ou bloqueada com aquilo de que precisa. Vem com o bot e só muda quando o bot é atualizado. As suas regras são os fundamentos (nível 0): nada do que está escrito noutro lugar — o nível 2 de um projeto, um skill, uma tarefa, uma mensagem no chat — as altera, nem mesmo quando o pede. Se algo sobre o chat não for claro, a Kerrigan (o botão no ecrã inicial do chat) pode guiá-lo passo a passo até a tarefa estar concluída.',
   'l1.show': 'Mostrar o texto inteiro',
   'l1.failed': 'Não foi possível ler o prompt base: {reason}',
   'proj.namePlaceholder': 'o nome da própria pasta',

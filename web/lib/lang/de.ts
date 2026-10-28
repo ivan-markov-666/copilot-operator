@@ -737,7 +737,7 @@ export const de: Dictionary = {
   'info.about': 'Über „{name}“',
   'l1.title': 'Der Basis-Prompt (Ebene 1)',
   'l1.readOnly': 'schreibgeschützt',
-  'l1.what': 'Dieser Text ist zum Lesen da. Er beschreibt den Agenten, zu dem Copilot im Chat wird: Er arbeitet eine Aufgabe Schritt für Schritt mit Befehlen ab, berichtet, was jeder bewirkt hat, und bringt jede Aufgabe zu Ende — erledigt oder blockiert mit dem, was er braucht. Er wird mit dem Bot geliefert und ändert sich nur, wenn der Bot aktualisiert wird. Wenn am Chat etwas unklar ist, kann Kerrigan (die Schaltfläche auf dem Startbildschirm des Chats) Sie hindurchführen, bis die Aufgabe erledigt ist.',
+  'l1.what': 'Dieser Text ist zum Lesen da. Er beschreibt den Agenten, zu dem Copilot im Chat wird: Er arbeitet eine Aufgabe Schritt für Schritt mit Befehlen ab, berichtet, was jeder bewirkt hat, und bringt jede Aufgabe zu Ende — erledigt oder blockiert mit dem, was er braucht. Er wird mit dem Bot geliefert und ändert sich nur, wenn der Bot aktualisiert wird. Seine Regeln sind das Fundament (Ebene 0): Nichts, was anderswo steht — die Ebene 2 eines Projekts, ein Skill, eine Aufgabe, eine Nachricht im Chat —, ändert sie, auch nicht, wenn Sie darum bitten. Wenn am Chat etwas unklar ist, kann Kerrigan (die Schaltfläche auf dem Startbildschirm des Chats) Sie hindurchführen, bis die Aufgabe erledigt ist.',
   'l1.show': 'Ganzen Text anzeigen',
   'l1.failed': 'Der Basis-Prompt konnte nicht gelesen werden: {reason}',
   'proj.namePlaceholder': 'der eigene Name des Ordners',

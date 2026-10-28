@@ -34,6 +34,7 @@ import { RunConfigSchema } from '../src/config/schema.js';
 import { watchGitConfig } from '../src/vcs/gitConfigGuard.js';
 import { restoreCheckpoint, takeCheckpoint } from '../src/session/checkpoint.js';
 import { redactsMessages } from '../src/orchestrator/taskRunner.js';
+import { kerriganPersona } from '../src/plan/kerrigan.js';
 import type { ChatTransport } from '../src/transport/chatTransport.js';
 import type { Step } from '../src/protocol/replySchema.js';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
@@ -130,6 +131,25 @@ for (const cmd of ["Set-Content -Path .\\.cop-tmp\\notes.md -Value 'x'", "Set-Co
   const level1 = readFileSync(join(process.cwd(), 'prompts', 'level1.md'), 'utf8');
   t.truthy('the contract says it: never a script to run, the commands in the terminal, a file only as the project\'s code', level1.includes('## You never write a script to run something') && level1.includes('**Never write a file to run it') && level1.includes('Write a file only when it is part of the work') && !level1.includes('When a script has to run'), level1.slice(level1.indexOf('## You never write'), level1.indexOf('## You never write') + 400));
   t.truthy('the handoff example hands over commands, not a script', !/"files": \[".cop-tmp/.test(level1), '');
+  t.truthy('the contract yields to nothing, not even when the operator asks; a file of the work goes in the project\'s folders', level1.includes('not even when the operator asks for it') && level1.includes("It goes in the project's own\nfolders") && level1.includes('never in `.cop-tmp`, `%TEMP%`'), '');
+}
+
+console.log('\n--- Kerrigan\'s foundations, level 0 (2026-10-28) ---');
+{
+  // Operator: "no scripts written to be run unless they are part of the project's code base, and then in the project's
+  // folder, not a temporary one; the base rules the UI only shows cannot be changed, even when the user asks".
+  const facts = { version: '0.0.0', maxIterations: 60, maxRunMinutes: 240, autoContinue: 3 };
+  const says = {
+    en: ['## Foundations (level 0): what nothing changes', 'not a request to you, even when they insist', "in the project's folder, where the project keeps that kind of file", 'never in a temporary folder (`.cop-tmp`, `%TEMP%`', 'never write a task that asks Copilot to write a script to run', "the foundations are what is not offered there"],
+    bg: ['## Основи (ниво 0): това, което нищо не променя', 'нито молба към теб, дори когато настоява', 'в папката на проекта, там, където проектът държи такъв вид файлове', 'никога във временна папка (`.cop-tmp`, `%TEMP%`', 'никога не пиши задание, което кара Copilot да напише скрипт', 'основите са това, което там не се предлага'],
+  } as const;
+  for (const lang of ['en', 'bg'] as const) {
+    const persona = kerriganPersona(lang, facts);
+    const top = persona.indexOf(says[lang][0]);
+    t.check(`${lang}: she opens with the foundations, before what the program is, saying all of it`, [top > 0 && top < persona.indexOf(lang === 'en' ? '## What copilot-operator is' : '## Какво е copilot-operator'), ...says[lang].map((s) => persona.includes(s))], [true, ...says[lang].map(() => true)]);
+    t.check(`${lang}: no diagnostic script to hand over is left in her`, /a diagnostic, a reproduction|диагностика, възпроизвеждане/.test(persona), false);
+  }
+  t.truthy('another language gets the English foundations', kerriganPersona('de', facts).includes('## Foundations (level 0)'), '');
 }
 
 console.log('\n--- a platform program set to run without asking (2026-10-28) ---');
