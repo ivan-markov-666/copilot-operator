@@ -456,8 +456,32 @@ export function writtenScriptsLetRun(command: string, cwd: string, since: string
 
 /** What the chat is told to do instead (2026-10-26). */
 const HAND_IT_OVER =
-  'Put what it does in the step itself — a command may be several lines — or hand it to the operator with status "handoff": ' +
-  'the commands, the folder, what they should see and the script; the operator runs it and you get what it printed.';
+  'Put what it does in the step itself, in the terminal — a command may be several lines; you never write a script to run something ' +
+  '(the operator\'s rule). Only what the runner cannot run at all goes to the operator, as commands, with status "handoff".';
+
+/** The extensions of a script, as `.cop-tmp` must never hold one (2026-10-28). */
+const SCRIPT_EXT = String.raw`(?:ps1|psm1|cmd|bat|sh|bash|zsh|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|pyw|rb|pl|php|vbs|vbe|wsf|wsh|hta|jse|csx)`;
+/** A line that writes a file into `.cop-tmp`: a cmdlet or an alias that writes, a .NET file write, or a redirection. */
+const SCRATCH_SCRIPT_WRITE = new RegExp(
+  String.raw`\b(?:Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Rename-Item|Tee-Object|sc|ac|ni|cp|copy|mv|move|ren|tee|WriteAllText|WriteAllLines|WriteAllBytes|AppendAllText)\b[^|;\n]*?\.cop-tmp[\\/][^\s'"|;),]*\.${SCRIPT_EXT}\b` +
+    String.raw`|>{1,2}\s*["']?[^\s"'|;]*\.cop-tmp[\\/][^\s"'|;]*\.${SCRIPT_EXT}\b`,
+  'i',
+);
+
+/**
+ * Why a chat's step must not write a script into `.cop-tmp`, or null (operator, 2026-10-28: "I want the bot not to make
+ * scripts: when something has to run, it runs it dynamically in the terminal; it creates a file only when it is code of
+ * the project"). `.cop-tmp` holds what is not the work, so a script there is one written only to be run — refused at
+ * the writing, before the operator is asked about running it.
+ */
+export function scratchScriptRefusal(command: string, reviewer = false): string | null {
+  if (!SCRATCH_SCRIPT_WRITE.test(command)) return null;
+  return (
+    'refused: this writes a script into .cop-tmp, and you never write a script to run something (the operator\'s rule): put what it ' +
+    'would do in the step itself, in the terminal, on as many lines as it needs. ' +
+    (reviewer ? REVIEW_INSTEAD : 'Write a file only when it is code of the project, part of the work.')
+  );
+}
 
 /** What the reviewer is told instead: a review hands nothing over. */
 const REVIEW_INSTEAD =

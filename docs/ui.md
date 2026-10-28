@@ -778,7 +778,13 @@ about; and what the card of a subtask cut off says.
 branch starts from (`origin/main` and its commit), the branch the folder is on now, a free name (`task/<date>-<time>`),
 and what is not committed, with the choice to take it along — refused by Git, nothing moved, when the remote's main
 changed the same files, and then putting it aside is chosen — or to put it aside, kept whole as a commit on
-`cop/saved/<when>` (temporary index, checked to hold every change) before the folder is left clean. The new branch does
+`cop/saved/<when>` (temporary index, checked to hold every change) before the folder is left clean — or, since
+2026-10-28 (the operator: "a third choice, commit them on the branch we are on, the one before the new one"), to commit
+it on the branch the folder is on (`carry: commit`, `message`, empty for "Work in progress, before a new branch from
+main"): one commit of all of it, new files too, under the operator's own git name (the bot's where git has none), made
+with a temporary index and checked to hold everything, the branch moved to it only if it is still where it was
+(`update-ref` with the old value), the index read from it; not pushed, the repository's hooks not run, refused on a
+detached HEAD. The new branch does
 not track main; nothing is deleted; half a merge or rebase, no remote or a task at work refuse it, saying why; a remote
 that could not be fetched offers "Try again" and the main last fetched here. Made, the next message starts a new
 conversation. A fetch the operator presses for asks for a password through Git for Windows' own window (`git-askpass.exe`,
@@ -838,7 +844,8 @@ platform commands run and every question — the chat's, the lead's — takes th
 
 Programs that reach a platform (`platformTools()`) are listed as rows with a mode:
 - "Ask me each time", as before;
-- where a rule exists (`exec/readOnly.ts`, `readOnlyCapable()`: az today), "Only for reference (read only)" (`execution.readOnlyPrograms`). A program that can be read only is added that way.
+- where a rule exists (`exec/readOnly.ts`, `readOnlyCapable()`: az today), "Only for reference (read only)" (`execution.readOnlyPrograms`). A program that can be read only is added that way;
+- "Run without asking" (`execution.runWithoutAsking`, 2026-10-28; the operator: "az asks for permission again, although it is on the list of allowed commands"), confirmed when chosen: its commands are not held for the platform (`notHeldFor`), in steps and checks alike, changes included; the refused techniques, the folders and the download hold still apply. The platform card says where this is chosen, and the run's record lists them (`no card for`).
 
 Under read only, `az`'s own words decide. The scanner now records each invocation's arguments (`HeadScan.calls`), and the command is the words before the first option, judged by its verb:
 - **Runs without a card:** reading, `list`, `show`, `query`, `exists`, `wait`, `what-if`, `get-…`, `list-…`, `show-…`.
@@ -886,6 +893,8 @@ The operator answers in one of four ways (revise and resubmit, 2026-10-27, from 
 - "Stop the task".
 
 Each handoff is kept in the run folder (`handoffs/NNN.json`), and the conversation shows it where it happened (`StoryEntry` `handoff`, `HandoffRecord`): the card folded, its revision, how it was answered and what was written. In two chats the card is the worker's, so a correction goes to the worker of the same subtask — the lead sees it in the worker's report — and takes no new subtask.
+
+**No script written only to run something (2026-10-28).** The operator: "I want the bot not to make scripts; when something has to run, it takes it and runs it dynamically in the terminal; it creates scripts only when it has to write code for the project". The contract's "When a script has to run", which told the chat to write a diagnostic into `.cop-tmp` and hand it over, is now "You never write a script to run something": the commands themselves in the step, on as many lines as they need; a file only as code of the project, checked with the project's tools (a test of the project where only its own language can find something out); a handoff only for what the runner cannot run at all, as commands. A step that writes a script into `.cop-tmp` is refused at the writing (`scratchScriptRefusal`), whatever the boxes below say; the refusals tell the chat to put it in the step.
 
 **Scripts the bot may run (2026-10-27).** The operator: "a setting like the programs one, for scripts — whether I allow npx, npm, ts files, ps1 files; one box for scripts already there and another for scripts the bot created". Settings → "Scripts the bot may run" (`ScriptsSection`) is a table, one row a kind in the order of its name — TypeScript, JavaScript, Python, PowerShell, cmd, bash, Ruby/Perl/PHP, package.json's scripts — with two boxes, `execution.scripts.<kind>.own` ("Ready-made (the project's)", on) and `.written` ("Written by the bot", off). `exec/scriptKinds.ts` names the kinds; `ownScriptRefusal` (`exec/scriptFiles.ts`) judges each script a line runs (`scriptsRun`):
 - a box left empty is a refusal, the chat told to hand the script over (or, a reviewer, to check another way);

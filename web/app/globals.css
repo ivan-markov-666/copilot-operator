@@ -1260,6 +1260,9 @@ button.linkish:hover { text-decoration: underline; }
 .nb-dirty legend { padding: 0 4px; font-weight: 600; }
 .nb-files { margin: 0 0 8px; padding-inline-start: 18px; max-height: 9em; overflow: auto; }
 .nb-choice { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; font-weight: 400; cursor: var(--cur-pointer); }
+/* The commit's message, under the choice to commit them where they are (2026-10-28). */
+.nb .nb-message { margin: 2px 0 6px; padding-inline-start: 24px; }
+.nb .nb-message input { font-family: inherit; }
 /* Renaming the conversation (2026-10-26): its name in a box where the list was, with ✓ and ✕. */
 .cs-rename { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; margin: 0; }
 .cs-rename input { flex: 1; min-width: 0; padding: 4px 8px; font-size: calc(13px * var(--scale)); }

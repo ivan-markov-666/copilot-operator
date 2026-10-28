@@ -324,6 +324,13 @@ export const RunConfigSchema = z.object({
        */
       readOnlyPrograms: z.array(z.string()).default([]),
       /**
+       * Programs on the list that reach a platform with the operator's access, set to run without asking (operator,
+       * 2026-10-28: "az asks for permission again, although it is on the list of allowed commands"): their commands run
+       * as any other step's, changes included — no card. The refused techniques, the folders and the network hold still
+       * apply. A program set to read only is not one of these.
+       */
+      runWithoutAsking: z.array(z.string()).default([]),
+      /**
        * Which scripts may run (operator, 2026-10-27: "whether I allow npm, ts files, ps1 files … only for scripts that
        * are already there, and another box for scripts the bot created"). For each kind (`exec/scriptKinds.ts`): `own`,
        * the project's, there before the work began; `written`, the bot's, written during the work. A kind whose box is

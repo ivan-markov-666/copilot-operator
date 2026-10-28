@@ -108,6 +108,62 @@ try {
     t.check('and every change kept on a branch of its own, nothing lost', [/^cop\/saved\/\d{8}-\d{4}$/.test(saved), git(work, 'show', `${saved}:README.md`), git(work, 'show', `${saved}:new.txt`), aside.ok && aside.saved?.files], [true, 'first\nmine, not committed', 'new', 2]);
   }
 
+  console.log('\n--- uncommitted changes committed on the branch the folder is on (2026-10-28) ---');
+  {
+    const { work } = setUp('commit-here');
+    // The same file the remote's main changed, which "take them" cannot carry: committing where they are can.
+    writeFileSync(join(work, 'README.md'), 'first\nmine, not committed\n');
+    writeFileSync(join(work, 'new.txt'), 'new\n');
+    git(work, 'config', 'user.name', 'Operator');
+    git(work, 'config', 'user.email', 'operator@example.com');
+    const before = git(work, 'rev-parse', 'main');
+    const plan = await planNewBranch(work, { fetch: true, askpass: null });
+    const made = await createNewBranch(work, { name: 'task/after', carry: 'commit', fingerprint: plan.fingerprint!, message: 'My work so far' });
+    t.check('"Commit them on main": on the new branch, the folder clean', [made.ok, git(work, 'symbolic-ref', '--short', 'HEAD'), git(work, 'status', '--porcelain'), existsSync(join(work, 'new.txt'))], [true, 'task/after', '', false]);
+    const on = made.ok ? made.committed : undefined;
+    t.check('one commit on main on top of where it was, with every change, the new file too', [on?.branch, on?.files, git(work, 'rev-parse', 'main') === on?.commit, git(work, 'rev-parse', 'main~1'), git(work, 'show', 'main:README.md'), git(work, 'show', 'main:new.txt')], ['main', 2, true, before, 'first\nmine, not committed', 'new']);
+    t.check('under the operator\'s own git name, with their message and the files listed', [git(work, 'log', '-1', '--format=%an <%ae>', 'main'), git(work, 'log', '-1', '--format=%s', 'main'), /- changed: README\.md[\s\S]*- new: new\.txt/.test(git(work, 'log', '-1', '--format=%b', 'main'))], ['Operator <operator@example.com>', 'My work so far', true]);
+    t.check('not pushed: the remote\'s main is not it', git(work, 'rev-parse', 'origin/main') !== on?.commit, true);
+    t.truthy('said in a sentence', made.ok && made.result.includes(`committed on main as ${on?.commit.slice(0, 8)} (2 file(s)), not pushed`), made);
+  }
+  {
+    const { work } = setUp('commit-default');
+    writeFileSync(join(work, 'a.txt'), 'a, changed\n');
+    // No git name here, whatever this machine's own git config says: the bot's own, and the default message.
+    const blank = join(base, 'no-global.gitconfig');
+    writeFileSync(blank, '');
+    const kept = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_NOSYSTEM };
+    process.env.GIT_CONFIG_GLOBAL = blank;
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    const plan = await planNewBranch(work, { fetch: true, askpass: null });
+    const made = await createNewBranch(work, { name: 'task/default', carry: 'commit', fingerprint: plan.fingerprint! });
+    for (const [k, v] of [['GIT_CONFIG_GLOBAL', kept.global], ['GIT_CONFIG_NOSYSTEM', kept.system]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    t.check('no message written: the default; no git name: the bot\'s', [made.ok, git(work, 'log', '-1', '--format=%s', 'main'), git(work, 'log', '-1', '--format=%ae', 'main')], [true, 'Work in progress, before a new branch from main', 'copilot-operator@localhost']);
+  }
+  {
+    const { work } = setUp('commit-detached');
+    git(work, 'checkout', '-q', '--detach');
+    writeFileSync(join(work, 'a.txt'), 'a, changed\n');
+    const plan = await planNewBranch(work, { fetch: true, askpass: null });
+    const made = await createNewBranch(work, { name: 'task/detached', carry: 'commit', fingerprint: plan.fingerprint! });
+    t.check('on a detached HEAD: refused, said why, nothing moved', [made.ok, !made.ok && /detached HEAD/.test(made.problem), readFileSync(join(work, 'a.txt'), 'utf8'), git(work, 'status', '--porcelain')], [false, true, 'a, changed\n', 'M a.txt']);
+  }
+  {
+    const { work } = setUp('commit-staged');
+    // What the operator had staged stays staged, unstaged stays unstaged, until the commit is whole.
+    writeFileSync(join(work, 'a.txt'), 'a, staged\n');
+    git(work, 'add', 'a.txt');
+    writeFileSync(join(work, 'a.txt'), 'a, staged, then changed again\n');
+    const plan = await planNewBranch(work, { fetch: true, askpass: null });
+    const stale = await createNewBranch(work, { name: 'task/stale', carry: 'commit', fingerprint: 'not-the-one' });
+    t.check('the folder changed since it was read: refused, the index as it was', [stale.ok, git(work, 'diff', '--cached', '--name-only'), git(work, 'show', ':a.txt')], [false, 'a.txt', 'a, staged']);
+    const made = await createNewBranch(work, { name: 'task/staged', carry: 'commit', fingerprint: plan.fingerprint! });
+    t.check('committed as the folder has it — the file as last written, not as staged', [made.ok, git(work, 'show', 'main:a.txt')], [true, 'a, staged, then changed again']);
+  }
+
   console.log('\n--- what cannot go: half a merge, no remote, a remote that cannot be fetched ---');
   {
     const { work } = setUp('busy');

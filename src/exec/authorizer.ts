@@ -11,7 +11,7 @@ import type { Actor } from '../session/model.js';
 import { staticCheck, describeStep, type PolicyConfig, type PolicyDecision } from './policy.js';
 import type { Confinement } from './confinement.js';
 import { networkFetchReason, networkFetchRefusal } from './network.js';
-import { scriptNetworkReason } from './policy.js';
+import { notHeldFor, scriptNetworkReason } from './policy.js';
 import { platformOf, platformReason } from './platforms.js';
 import { readOnlyUnclearRefusal, readOnlyVerdict } from './readOnly.js';
 import { scriptText, writtenScriptsLetRun } from './scriptFiles.js';
@@ -123,7 +123,7 @@ export function makeAuthorizer(cfg: PolicyConfig, askPerson: Ask, signal?: Abort
         ? (platformReason(step.cmd, step.shell) ?? platformOf(unclear.program) ?? unclear.program)
         : cfg.platformAccess === 'allow'
           ? null
-          : platformReason(step.cmd, step.shell, reading?.kind === 'reads' ? new Set(reading.programs) : undefined);
+          : platformReason(step.cmd, step.shell, notHeldFor(cfg, reading?.kind === 'reads' ? reading.programs : []));
       const held: HeldFor = {
         ...(platform ? { platform } : {}),
         ...(unclear ? { readOnly: unclear.why, readOnlyProgram: unclear.program } : {}),

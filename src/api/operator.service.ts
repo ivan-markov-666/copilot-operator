@@ -1157,6 +1157,7 @@ export class OperatorService {
       networkFetch: cfg.execution.networkFetch,
       platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
       readOnlyPrograms: cfg.execution.readOnlyPrograms,
+      runWithoutAsking: cfg.execution.runWithoutAsking,
       scripts: cfg.execution.scripts,
       writtenScripts: cfg.execution.writtenScripts,
     };
@@ -1465,16 +1466,17 @@ export class OperatorService {
     return await planNewBranch(ws.dir, { fetch, askpass: fetch ? await askpassProgram() : null });
   }
 
-  /** The branch made and checked out, the uncommitted changes taken to it or put aside, as the operator chose. */
-  async newBranchCreate(input: { name?: unknown; carry?: unknown; fingerprint?: unknown }): Promise<NewBranchResult> {
+  /** The branch made and checked out, the uncommitted changes taken to it, put aside or committed where they are, as the operator chose. */
+  async newBranchCreate(input: { name?: unknown; carry?: unknown; fingerprint?: unknown; message?: unknown }): Promise<NewBranchResult> {
     const ws = await this.workspace();
     if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open: open one first.');
     const busy = this.branchBusy();
     if (busy) throw new Error(busy);
     return await createNewBranch(ws.dir, {
       name: typeof input.name === 'string' ? input.name : '',
-      carry: input.carry === 'aside' ? 'aside' : 'take',
+      carry: input.carry === 'aside' || input.carry === 'commit' ? input.carry : 'take',
       fingerprint: typeof input.fingerprint === 'string' ? input.fingerprint : '',
+      ...(typeof input.message === 'string' && input.message.trim() ? { message: input.message.trim().slice(0, 2000) } : {}),
       // The saved branch under the bot's own prefix, as its other branches are.
       prefix: DEFAULT_VCS.branchPrefix,
     });

@@ -872,6 +872,13 @@ try {
     ], [true, true, true, en['nb.dirty']!.replace('{n}', '2'), ['README.md', 'notes.txt']]);
     await box.locator('#nb-name').fill('task/login-test');
     t.check('"Take them" chosen at first', await box.getByRole('radio', { name: new RegExp(en['nb.take']!) }).isChecked(), true);
+    // The third choice (2026-10-28): commit them on the branch the folder is on, with a message of one's own.
+    const commitHere = box.getByRole('radio', { name: new RegExp(en['nb.commit']!.replace('{branch}', 'main')) });
+    t.check('a third choice: "Commit them on main", no message field until chosen', [await commitHere.count(), await commitHere.isDisabled(), await box.locator('#nb-message').count()], [1, false, 0]);
+    await commitHere.check();
+    t.check('chosen: the commit\'s message, the default said in it', [await box.getByLabel(en['nb.commitMessage']!).count(), await box.locator('#nb-message').getAttribute('placeholder')], [1, 'Work in progress, before a new branch from main']);
+    await box.getByRole('radio', { name: new RegExp(en['nb.take']!) }).check();
+    t.check('back to "Take them": the message field gone', await box.locator('#nb-message').count(), 0);
     await box.getByRole('button', { name: en['nb.make']!, exact: true }).click();
     await box.locator('.err').waitFor({ timeout: 30_000 });
     t.check('they cannot come along: said, "Put them aside" chosen, and nothing moved', [
@@ -1675,7 +1682,7 @@ try {
    * about; one taken off after asking; the last never; the defaults put back.
    */
   await scenario('Settings: programs the bot may start — az added read only, its mode, one taken off, the defaults back', {}, async (h, page, url) => {
-    type Exec = { allowedPrograms?: string[]; readOnlyPrograms?: string[] };
+    type Exec = { allowedPrograms?: string[]; readOnlyPrograms?: string[]; runWithoutAsking?: string[] };
     const settings = async (): Promise<Exec> => (await h.call<{ raw: { execution?: Exec } }>('GET', '/settings')).raw.execution ?? {};
     const defaults = RunConfigSchema.parse({}).execution.allowedPrograms;
     await page.goto(url('/settings'));
@@ -1699,14 +1706,22 @@ try {
     const saved = await settings();
     const row = section.locator('.prog-platform').filter({ has: page.locator('#prog-mode-az') });
     t.check('az added: on the list, read only, under the platforms with its name, the note on signing in shown', [saved.allowedPrograms?.length, saved.readOnlyPrograms, await mode.inputValue(), ((await row.textContent()) ?? '').includes('Azure (az)'), await section.locator('.prog-note').count()], [defaults.length + 1, ['az'], 'read-only', true, 1]);
-    t.check('its two ways, the ask one first', await mode.locator('option').allTextContents(), [en['prog.modeAsk'], en['prog.modeReadOnly']]);
+    t.check('its three ways, the ask one first', await mode.locator('option').allTextContents(), [en['prog.modeAsk'], en['prog.modeReadOnly'], en['prog.modeRun']]);
+    // Run without asking (operator, 2026-10-28: "az asks again although it is on the list"): confirmed first, then saved.
+    await mode.selectOption('run');
+    const sure = page.getByRole('alertdialog');
+    await sure.waitFor({ timeout: 5_000 });
+    t.truthy('running it without asking is confirmed first, naming it', ((await sure.textContent()) ?? '').includes('Azure (az)'), await sure.textContent());
+    await sure.getByRole('button', { name: 'OK' }).click();
+    await waitFor('run without asking to be saved', async () => ((await settings()).runWithoutAsking?.includes('az') ? true : null), 10_000).catch(() => undefined);
+    t.check('"Run without asking": saved, not read only any more, the note says it', [(await settings()).runWithoutAsking, (await settings()).readOnlyPrograms, await mode.inputValue(), await section.locator('.prog-run-note').count()], [['az'], [], 'run', 1]);
     await mode.selectOption('ask');
-    await waitFor('the mode to be saved', async () => ((await settings()).readOnlyPrograms?.length === 0 ? true : null), 10_000);
-    t.check('"Ask me each time": not read only any more, the note gone, az still on the list', [(await settings()).readOnlyPrograms, await section.locator('.prog-note').count(), (await settings()).allowedPrograms?.includes('az')], [[], 0, true]);
+    await waitFor('the mode to be saved', async () => ((await settings()).readOnlyPrograms?.length === 0 && (await settings()).runWithoutAsking?.length === 0 ? true : null), 10_000);
+    t.check('"Ask me each time": neither read only nor without asking, the notes gone, az still on the list', [(await settings()).readOnlyPrograms, (await settings()).runWithoutAsking, await section.locator('.prog-note').count(), (await settings()).allowedPrograms?.includes('az')], [[], [], 0, true]);
     await add.fill('gh');
     await addButton.click();
     await section.locator('#prog-mode-gh').waitFor();
-    t.check('gh, with no rule: asked about each time, with no "read only" to choose', [await section.locator('#prog-mode-gh').inputValue(), await section.locator('#prog-mode-gh option').count()], ['ask', 1]);
+    t.check('gh, with no rule: asked about each time, with no "read only" to choose, "without asking" there', [await section.locator('#prog-mode-gh').inputValue(), await section.locator('#prog-mode-gh option').allTextContents()], ['ask', [en['prog.modeAsk'], en['prog.modeRun']]]);
     await add.fill('GH.exe');
     await addButton.click();
     await waitFor('"already on the list"', async () => (((await section.locator('.err').textContent().catch(() => '')) ?? '').includes('gh') ? true : null), 5_000).catch(() => undefined);
@@ -1730,7 +1745,7 @@ try {
     await page.getByRole('alertdialog').getByRole('button', { name: 'OK' }).click();
     await waitFor('the defaults back', async () => ((await settings()).allowedPrograms === undefined ? true : null), 10_000);
     await waitFor('the chips back', async () => ((await section.locator('.prog-chip').count()) === defaults.length ? true : null), 10_000).catch(() => undefined);
-    t.check('the defaults back: the lists gone from the file, the chips as the bot comes with them', [(await settings()).allowedPrograms, (await settings()).readOnlyPrograms, await section.locator('.prog-chip').count()], [undefined, undefined, defaults.length]);
+    t.check('the defaults back: the lists gone from the file, the chips as the bot comes with them', [(await settings()).allowedPrograms, (await settings()).readOnlyPrograms, (await settings()).runWithoutAsking, await section.locator('.prog-chip').count()], [undefined, undefined, undefined, defaults.length]);
   });
 
   /*
@@ -1913,6 +1928,8 @@ try {
     await page.getByRole('button', { name: en['skills.add']!, exact: true }).click();
     await waitFor('the skill to be saved', async () => (await h.call<{ skills: Array<{ name: string }> }>('GET', '/skills')).skills.length === 1, 10_000).catch(() => undefined);
     t.check('added in Settings', (await h.call<{ skills: Array<{ name: string; text: string }> }>('GET', '/skills')).skills.map((k) => [k.name, k.text]), [['new-test', 'Tests live in tests/e2e, one file per page.']]);
+    // Saved is not yet shown: the page lists it once it has read the list again (seen to lag on a loaded machine, 2026-10-28).
+    await page.locator('.skill-entry:not(.skill-new)').first().waitFor({ timeout: 10_000 }).catch(() => undefined);
     t.check('and listed there, the form empty again', [await page.locator('.skill-entry:not(.skill-new)').count(), await add.getByLabel(en['skills.name']!, { exact: true }).inputValue()], [1, '']);
 
     await page.goto(url('/'));

@@ -1813,7 +1813,8 @@ function ExecutionSection() {
 
 /** A program's name as a terminal takes it: no folder, no spaces. */
 const PROGRAM_NAME = /^[a-z0-9][a-z0-9._+-]*$/;
-type ProgramMode = 'ask' | 'read-only';
+/** How a program that reaches a platform is used: asked each time, read only, or (2026-10-28) run without asking. */
+type ProgramMode = 'ask' | 'read-only' | 'run';
 type ProgramsInfo = { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
 
 /**
@@ -1829,6 +1830,8 @@ function ProgramsSection() {
   const { saving, track } = useSaving();
   const [list, setList] = useState<string[] | null>(null);
   const [readOnly, setReadOnly] = useState<string[]>([]);
+  /** Platform programs set to run without asking (`execution.runWithoutAsking`, 2026-10-28). */
+  const [runFree, setRunFree] = useState<string[]>([]);
   const [defaults, setDefaults] = useState<string[]>([]);
   const [info, setInfo] = useState<ProgramsInfo>({ platforms: {}, readOnly: [], inForce: [] });
   const [draft, setDraft] = useState('');
@@ -1837,19 +1840,20 @@ function ProgramsSection() {
 
   const read = useCallback(async () => {
     const s = await api.settings();
-    const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { allowedPrograms?: unknown; readOnlyPrograms?: unknown };
+    const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { allowedPrograms?: unknown; readOnlyPrograms?: unknown; runWithoutAsking?: unknown };
     const fallback = ((s.defaults as { execution?: { allowedPrograms?: string[] } } | null)?.execution?.allowedPrograms ?? []).slice();
     setDefaults(fallback);
     setList(Array.isArray(exec.allowedPrograms) ? (exec.allowedPrograms as string[]) : fallback);
     setReadOnly(Array.isArray(exec.readOnlyPrograms) ? (exec.readOnlyPrograms as string[]) : []);
+    setRunFree(Array.isArray(exec.runWithoutAsking) ? (exec.runWithoutAsking as string[]) : []);
     if (s.programs) setInfo(s.programs);
   }, []);
   useEffect(() => {
     read().catch((e: unknown) => setErr((e as Error).message));
   }, [read]);
 
-  /** Both lists in one write, from the file as it is now; `null` puts back the defaults. */
-  const save = async (programs: string[] | null, readOnlyNext: string[]): Promise<boolean> => {
+  /** The lists in one write, from the file as it is now; `null` puts back the defaults. */
+  const save = async (programs: string[] | null, readOnlyNext: string[], runNext: string[] = runFree): Promise<boolean> => {
     setErr('');
     setMsg('');
     try {
@@ -1858,9 +1862,11 @@ function ProgramsSection() {
       if (programs === null) {
         delete exec.allowedPrograms;
         delete exec.readOnlyPrograms;
+        delete exec.runWithoutAsking;
       } else {
         exec.allowedPrograms = programs;
         exec.readOnlyPrograms = readOnlyNext;
+        exec.runWithoutAsking = runNext;
       }
       await track(api.saveSettings({ ...base, execution: exec }));
       await read();
@@ -1886,12 +1892,21 @@ function ProgramsSection() {
     await save(
       all.filter((x) => x !== name),
       readOnly.filter((x) => x !== name),
+      runFree.filter((x) => x !== name),
     );
   };
-  const setMode = (name: string, mode: ProgramMode) => save(all, mode === 'read-only' ? [...readOnly.filter((x) => x !== name), name] : readOnly.filter((x) => x !== name));
+  // One mode at a time: read only and run without asking never both. Running without asking is confirmed first.
+  const setMode = async (name: string, mode: ProgramMode) => {
+    if (mode === 'run' && !(await confirmDialog(t('prog.modeRunConfirm', { name: info.platforms[name] ?? name })))) return;
+    await save(
+      all,
+      mode === 'read-only' ? [...readOnly.filter((x) => x !== name), name] : readOnly.filter((x) => x !== name),
+      mode === 'run' ? [...runFree.filter((x) => x !== name), name] : runFree.filter((x) => x !== name),
+    );
+  };
   const restore = async () => {
     if (!(await confirmDialog(t('prog.restoreConfirm')))) return;
-    await save(null, []);
+    await save(null, [], []);
   };
 
   // In the order of their names (operator, 2026-10-27: "sort them alphabetically"); the file keeps its own order.
@@ -1925,15 +1940,17 @@ function ProgramsSection() {
                 <InfoTip label={t('info.about', { name: p })} text={t('prog.modeWhy')} />
               </div>
               <div className="field-control">
-                <select id={`prog-mode-${p}`} value={readOnly.includes(p) ? 'read-only' : 'ask'} onChange={(e) => void setMode(p, e.target.value as ProgramMode)} disabled={!list}>
+                <select id={`prog-mode-${p}`} value={readOnly.includes(p) ? 'read-only' : runFree.includes(p) ? 'run' : 'ask'} onChange={(e) => void setMode(p, e.target.value as ProgramMode)} disabled={!list}>
                   <option value="ask">{t('prog.modeAsk')}</option>
                   {info.readOnly.includes(p) && <option value="read-only">{t('prog.modeReadOnly')}</option>}
+                  <option value="run">{t('prog.modeRun')}</option>
                 </select>
                 {removeButton(p)}
               </div>
             </div>
           ))}
           {onPlatform.some((p) => readOnly.includes(p)) && <p className="small prog-note">{t('prog.readOnlyNote')}</p>}
+          {onPlatform.some((p) => runFree.includes(p)) && <p className="small prog-note prog-run-note">{t('prog.runNote', { list: onPlatform.filter((p) => runFree.includes(p)).join(', ') })}</p>}
         </>
       )}
       <h3 id="programs-others">{t('prog.others')}</h3>

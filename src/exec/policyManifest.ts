@@ -37,6 +37,8 @@ export type PolicyManifest = {
   readOnly: string[];
   /** What the operator's boxes for scripts let run, the project's and the bot's own, in one line (2026-10-27). */
   scripts: string;
+  /** Programs that reach a platform with the operator's access and ran without asking, by the operator's choice. */
+  runWithoutAsking: string[];
   /**
    * Whether a file the chat provided could be executed.
    *
@@ -106,6 +108,8 @@ export type ManifestInput = {
   isolation: IsolationPosture;
   /** The project folders commands were held to; empty when there was no project to hold them to. */
   confinedTo?: string[];
+  /** Programs that reach a platform, set to run without asking (2026-10-28). */
+  runWithoutAsking?: string[];
   /** The operator's boxes for scripts, and whether the bot's are asked about first (2026-10-27). */
   scripts?: ScriptRules;
   writtenScripts?: WrittenScriptsChoice;
@@ -143,6 +147,7 @@ export function collectPolicyManifest(input: ManifestInput, env: NodeJS.ProcessE
     },
     readOnly: readOnlyInForce(input.readOnlyPrograms ?? [], input.allowedPrograms),
     scripts: scriptsStatement(input.scripts ?? DEFAULT_SCRIPT_RULES, input.writtenScripts ?? 'ask', input.mode),
+    runWithoutAsking: [...(input.runWithoutAsking ?? [])],
     chatFiles: 'the chat cannot supply a file: this runner has no file step and executes nothing it did not receive as a command',
     networkFetch: networkFetchStatement(input.mode, input.networkFetch),
     denyPatterns: { count: input.denyPatterns.length, digest: digestOf(input.denyPatterns) },
@@ -166,6 +171,7 @@ export function describePolicyManifest(m: PolicyManifest): string {
     `allowlist   : ${m.allowlist.enforced ? `${m.allowlist.count} programs, digest ${m.allowlist.digest}` : 'NOT ENFORCED — any program could be started'}`,
     `read only   : ${m.readOnly.length ? `${m.readOnly.join(', ')} — a command that changes something, signs in or out or shows a secret is refused` : 'none'}`,
     `scripts     : ${m.scripts}`,
+    `no card for : ${m.runWithoutAsking.length ? `${m.runWithoutAsking.join(', ')} — reaching a platform with the operator's access, run without asking, changes included` : 'none — every platform command was put to the operator'}`,
     `chat files : ${m.chatFiles}`,
     `downloads   : ${m.networkFetch}`,
     `deny list   : ${m.denyPatterns.count} patterns, digest ${m.denyPatterns.digest}`,

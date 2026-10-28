@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { codeFilesRun, ownScriptRefusal } from '../src/exec/scriptFiles.js';
 import { DEFAULT_SCRIPT_RULES, scriptsNote, SCRIPT_KINDS, type ScriptRules } from '../src/exec/scriptKinds.js';
-import { checkCommandRefusal, modelCheckRefusal, repositoryInternalsRefusal, staticCheck, type PolicyConfig } from '../src/exec/policy.js';
+import { checkAccessRefusal, checkCommandRefusal, modelCheckRefusal, repositoryInternalsRefusal, staticCheck, type PolicyConfig } from '../src/exec/policy.js';
 import { makeAuthorizer, type HeldFor } from '../src/exec/authorizer.js';
 import { platformReason } from '../src/exec/platforms.js';
 import { findRedactions, redactSecrets } from '../src/exec/redaction.js';
@@ -112,6 +112,48 @@ const shOn = rules({ sh: { written: true } });
 t.check('the bot\'s .sh, its box ticked: its text read, a tidy one passes this rule', ownScriptRefusal('bash tidy.sh', repo, since, 'pwsh', { rules: shOn, screen: () => null }), null);
 t.truthy('a fetch piped into a shell in one: refused', /fetch-and-run/.test(gate('bash fetch.sh', shOn) ?? ''), short(gate('bash fetch.sh', shOn)));
 t.truthy('a reviewer is told to check another way, not to hand over', /A review runs commands only/.test(ownScriptRefusal('node tools/new.js', repo, since, 'pwsh', { reviewer: true }) ?? ''), short(ownScriptRefusal('node tools/new.js', repo, since, 'pwsh', { reviewer: true })));
+
+console.log('\n--- no script written only to run something (2026-10-28) ---');
+for (const cmd of [
+  "Set-Content -NoNewline -Path .\\.cop-tmp\\inspect.ts -Value 'x'",
+  "New-Item -ItemType Directory -Force .\\.cop-tmp | Out-Null; Set-Content -Path .cop-tmp/run.ps1 -Value 'Write-Output 1'",
+  "'console.log(1)' > .cop-tmp\\a.js",
+  "[IO.File]::WriteAllText('.cop-tmp\\x.py', 'print(1)')",
+  'Copy-Item .\\tools\\old.js .\\.cop-tmp\\copy.js',
+]) {
+  t.truthy(`a script written into .cop-tmp is refused, whatever the boxes: ${cmd}`, /you never write a script to run something/.test(gate(cmd, allOn) ?? ''), short(gate(cmd, allOn)));
+}
+for (const cmd of ["Set-Content -Path .\\.cop-tmp\\notes.md -Value 'x'", "Set-Content -Path .\\src\\new.ts -Value 'export {}'", 'node tools/old.js > .cop-tmp\\out.txt']) {
+  t.check(`notes, output and the project's code are written: ${cmd}`, gate(cmd), null);
+}
+{
+  const level1 = readFileSync(join(process.cwd(), 'prompts', 'level1.md'), 'utf8');
+  t.truthy('the contract says it: never a script to run, the commands in the terminal, a file only as the project\'s code', level1.includes('## You never write a script to run something') && level1.includes('**Never write a file to run it') && level1.includes('Write a file only when it is part of the work') && !level1.includes('When a script has to run'), level1.slice(level1.indexOf('## You never write'), level1.indexOf('## You never write') + 400));
+  t.truthy('the handoff example hands over commands, not a script', !/"files": \[".cop-tmp/.test(level1), '');
+}
+
+console.log('\n--- a platform program set to run without asking (2026-10-28) ---');
+{
+  const azList = [...shipped.allowedPrograms, 'az', 'gh'];
+  const asked: unknown[] = [];
+  const ask = async () => {
+    asked.push(1);
+    return { action: 'run' as const };
+  };
+  const ctx = { iteration: 1, confinement };
+  const askMode = makeAuthorizer(policy({ allowedPrograms: azList }), ask);
+  await askMode.authorize(step('az webapp restart -n app -g rg'), ctx);
+  t.check('"Ask me each time": az waits on a card, in a run without asking too', asked.length, 1);
+  const free = makeAuthorizer(policy({ allowedPrograms: azList, runWithoutAsking: ['az'] }), ask);
+  const ran = await free.authorize(step('az webapp restart -n app -g rg'), ctx);
+  t.check('"Run without asking": it runs, no card, a change included', [ran.action, asked.length], ['run', 1]);
+  const other = await free.authorize(step('gh repo list'), ctx);
+  t.check('another platform program is still asked about', [other.action, asked.length], ['run', 2]);
+  const stillRefused = await free.authorize(step('az webapp restart -n app -g rg; certutil -decode a b'), ctx);
+  t.check('the refused techniques still refuse', stillRefused.action, 'skip');
+  t.check('a check with it runs too, nobody asked', checkAccessRefusal('az webapp list', 'pwsh', { readOnlyPrograms: [], runWithoutAsking: ['az'] }), null);
+  t.truthy('…where it is refused otherwise', checkAccessRefusal('az webapp list', 'pwsh', { readOnlyPrograms: [] }) !== null, checkAccessRefusal('az webapp list', 'pwsh', { readOnlyPrograms: [] }));
+}
 
 console.log('\n--- what the chat is told of the boxes ---');
 t.check('nothing, as shipped', scriptsNote(DEFAULT_SCRIPT_RULES, 'ask'), undefined);

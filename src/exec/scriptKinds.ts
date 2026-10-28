@@ -72,9 +72,9 @@ export function kindForChat(kind: ScriptKind): string {
 }
 
 /**
- * What the chat is told of the operator's boxes, in the opening, when they are not the defaults: which kinds of script
- * it writes the runner runs itself, and which of the project's own it does not run. Nothing when they are as shipped —
- * the contract already says that a script written during the work is handed over.
+ * What the chat is told of the operator's boxes, in the opening, when they are not the defaults: which kinds of file of
+ * code it writes as part of the work the runner runs itself, and which of the project's own it does not run. Nothing
+ * when they are as shipped. Either way it never writes a script only to run something (operator, 2026-10-28).
  */
 export function scriptsNote(rules: ScriptRules, written: WrittenScriptsChoice): string | undefined {
   const mine = SCRIPT_KINDS.filter((k) => rules[k].written);
@@ -83,17 +83,17 @@ export function scriptsNote(rules: ScriptRules, written: WrittenScriptsChoice): 
   const lines = ['## Scripts on this machine', ''];
   if (mine.length > 0) {
     lines.push(
-      `The operator lets the runner run scripts written during the work of these kinds itself: ${mine.map(kindForChat).join('; ')}. ` +
-        'Run such a script as a step — write it in one step and run it in the next, never both in one line — ' +
+      `The operator lets the runner run files of these kinds that you write as part of the work — code of the project: ${mine.map(kindForChat).join('; ')}. ` +
+        'Write such a file in one step and run it in the next, never both in one line, ' +
         (written === 'ask' ? 'and the operator is shown it, in full, before it runs. ' : 'and it runs as any other step. ') +
-        'Its text passes the same rules as a step. A script of any other kind is handed over, as "When a script has to run" says.',
+        'Its text passes the same rules as a step. Still, never write a script only to run something: that goes in the step itself.',
     );
   }
   if (notOwn.length > 0) {
     if (mine.length > 0) lines.push('');
     lines.push(
       `The operator does not let the runner run the project's own scripts of these kinds: ${notOwn.map(kindForChat).join('; ')}. ` +
-        'Do what they do in the step itself, or hand them over.',
+        'Do what they do in the step itself.',
     );
   }
   return lines.join('\n');

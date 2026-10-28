@@ -349,7 +349,8 @@ export class OperatorController {
   /**
    * A new branch from main, from the chat (2026-10-26): what it would start from — `fetch` true fetches the remote's
    * main first, through Git's own password window when it asks — and then the branch made, the uncommitted changes
-   * taken to it (`carry: take`) or put aside (`carry: aside`), after checking the folder is what the preview read.
+   * taken to it (`carry: take`), put aside (`carry: aside`) or committed on the branch it is on (`carry: commit`, with
+   * `message`), after checking the folder is what the preview read.
    */
   @Post('workspace/new-branch/preview')
   newBranchPreview(@Body() body: { fetch?: unknown } = {}): Promise<unknown> {
@@ -357,7 +358,7 @@ export class OperatorController {
   }
 
   @Post('workspace/new-branch')
-  newBranchCreate(@Body() body: { name?: unknown; carry?: unknown; fingerprint?: unknown } = {}): Promise<unknown> {
+  newBranchCreate(@Body() body: { name?: unknown; carry?: unknown; fingerprint?: unknown; message?: unknown } = {}): Promise<unknown> {
     return this.ops.newBranchCreate(body ?? {}).catch(fail);
   }
 

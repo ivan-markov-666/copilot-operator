@@ -7,14 +7,18 @@
  *
  * Pressed, it fetches the remote's main — if the remote wants a password, Git opens its own window for it, which the
  * bot never reads — and shows what the new branch will start from, its name to change, and, when something is not
- * committed, whether to take it along or to put it aside on a branch of its own. A remote that could not be fetched is
- * said, with "Try again" and "Go on from what was last fetched". See `src/vcs/newBranch.ts`.
+ * committed, whether to take it along, to put it aside on a branch of its own, or (2026-10-28) to commit it on the branch
+ * the folder is on, with a message of the operator's or the default. A remote that could not be fetched is said, with
+ * "Try again" and "Go on from what was last fetched". See `src/vcs/newBranch.ts`.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api, type NewBranchCarry, type NewBranchPlan, type Workspace } from '../../lib/api';
 import { useFmtTime, useT } from '../../lib/i18n';
 import { useDots } from '../../lib/useDots';
 import { useModalFocus } from '../../lib/useModalFocus';
+
+/** What the commit says when no message is written: the server's `COMMIT_BEFORE_NEW_BRANCH`. */
+const COMMIT_BEFORE_NEW_BRANCH = 'Work in progress, before a new branch from main';
 
 export function NewBranchButton({ workspace, running, onMade }: { workspace: Workspace | null; running: boolean; onMade: (result: string) => void }) {
   const { t } = useT();
@@ -40,6 +44,8 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
   const [reading, setReading] = useState(true);
   const [name, setName] = useState('');
   const [carry, setCarry] = useState<NewBranchCarry>('take');
+  /** The commit's message, when what is not committed is committed on the branch the folder is on; empty, the default. */
+  const [message, setMessage] = useState('');
   const [making, setMaking] = useState(false);
   const [problem, setProblem] = useState('');
   const [conflict, setConflict] = useState(false);
@@ -81,7 +87,7 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
     setProblem('');
     setConflict(false);
     try {
-      const r = await api.newBranchCreate(name.trim(), carry, plan.fingerprint);
+      const r = await api.newBranchCreate(name.trim(), carry, plan.fingerprint, carry === 'commit' ? message : undefined);
       if (r.ok) {
         onMade(r.result);
         return;
@@ -163,6 +169,21 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
                         <strong>{t('nb.aside')}</strong> <span className="muted small">{t('nb.asideWhy')}</span>
                       </span>
                     </label>
+                    {/* Committed where they are (operator, 2026-10-28): on the branch the folder is on now; none on a detached HEAD. */}
+                    <label className="nb-choice" title={plan.branch ? undefined : t('nb.commitDetached')}>
+                      <input type="radio" name="nb-carry" checked={carry === 'commit'} onChange={() => setCarry('commit')} disabled={making || !plan.branch} />
+                      <span>
+                        <strong>{t('nb.commit', { branch: plan.branch ?? '—' })}</strong> <span className="muted small">{t('nb.commitWhy')}</span>
+                      </span>
+                    </label>
+                    {carry === 'commit' && plan.branch && (
+                      <div className="settings-field nb-message">
+                        <label htmlFor="nb-message" className="field-label">
+                          {t('nb.commitMessage')}
+                        </label>
+                        <input id="nb-message" type="text" value={message} onChange={(e) => setMessage(e.target.value)} placeholder={COMMIT_BEFORE_NEW_BRANCH} disabled={making} maxLength={2000} />
+                      </div>
+                    )}
                   </fieldset>
                 )}
                 <p className="muted small">{t('nb.after')}</p>

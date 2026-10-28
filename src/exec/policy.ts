@@ -20,7 +20,7 @@ import { inlineCodeRefusal, programRefusal } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
 import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
-import { ownScriptRefusal, scriptFileRefusal, type ScriptRun } from './scriptFiles.js';
+import { ownScriptRefusal, scratchScriptRefusal, scriptFileRefusal, type ScriptRun } from './scriptFiles.js';
 import type { ScriptRules, WrittenScriptsChoice } from './scriptKinds.js';
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -63,6 +63,10 @@ export type PolicyConfig = {
    * that change something are refused, the ones that cannot be read are asked about in every mode. See `readOnly.ts`.
    */
   readOnlyPrograms?: string[];
+  /**
+   * Programs that reach a platform, set by the operator to run without asking (2026-10-28): not held for the platform.
+   */
+  runWithoutAsking?: string[];
   /**
    * The operator's boxes for scripts (2026-10-27): for each kind, whether the project's own may run and whether the
    * bot's may. Absent, the defaults: the project's run, the bot's are handed over. See `scriptKinds.ts`.
@@ -295,10 +299,10 @@ export function modelCheckRefusal(
  * a check has nobody to put it to, so it is refused unless Settings agree with what the bot proposes. A program set to
  * read only passes with a command that only reads; one that cannot be read as reading is refused.
  */
-export function checkAccessRefusal(command: string, shell: Shell, cfg: Pick<PolicyConfig, 'readOnlyPrograms'> & { questions?: 'ask' | 'agree' }): string | null {
+export function checkAccessRefusal(command: string, shell: Shell, cfg: Pick<PolicyConfig, 'readOnlyPrograms' | 'runWithoutAsking'> & { questions?: 'ask' | 'agree' }): string | null {
   const reading = readOnlyVerdict(command, shell, cfg.readOnlyPrograms);
   if (reading?.kind === 'unclear') return readOnlyUnclearRefusal(reading.program, reading.why);
-  const platform = cfg.questions === 'agree' ? null : platformReason(command, shell, reading?.kind === 'reads' ? new Set(reading.programs) : undefined);
+  const platform = cfg.questions === 'agree' ? null : platformReason(command, shell, notHeldFor(cfg, reading?.kind === 'reads' ? reading.programs : []));
   if (!platform) return null;
   return `refused: this check reaches ${platform} with the operator's access, which only the operator may allow, and a check runs with nobody asked. Check it another way, or do it in a step, where it is put to the operator.`;
 }
@@ -326,6 +330,15 @@ export function writtenScriptScreen(cfg: Pick<PolicyConfig, 'denyPatterns' | 'al
     }
     return null;
   };
+}
+
+/**
+ * The programs whose platform a command is not held for: those set to run without asking (2026-10-28), and those set to
+ * read only whose every command on the line only reads.
+ */
+export function notHeldFor(cfg: Pick<PolicyConfig, 'runWithoutAsking'>, reading: readonly string[]): Set<string> | undefined {
+  const all = [...(cfg.runWithoutAsking ?? []), ...reading].map((p) => p.trim().toLowerCase().replace(/\.(?:exe|cmd)$/, '')).filter(Boolean);
+  return all.length ? new Set(all) : undefined;
 }
 
 /** A fetch inside a script the line runs — held or refused exactly as one on the line would be. */
@@ -394,6 +407,9 @@ export function staticCheck(
    * next. See `scriptFiles.ts`.
    */
   if (confinement) {
+    // No script written only to be run (operator, 2026-10-28): one written into .cop-tmp is refused at the writing.
+    const scratch = scratchScriptRefusal(step.cmd, actor === 'review');
+    if (scratch) return { action: 'skip', reason: scratch };
     const own = ownScriptRefusal(step.cmd, confinement.cwd, confinement.workStartedAt, effectiveShell(step.shell), {
       rules: cfg.scripts,
       reviewer: actor === 'review',

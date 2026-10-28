@@ -141,10 +141,10 @@ export type NewBranchPlan = {
   suggested?: string;
   fingerprint?: string;
 };
-/** What is not committed: taken to the new branch, or put aside on a branch of its own. */
-export type NewBranchCarry = 'take' | 'aside';
+/** What is not committed: taken to the new branch, put aside on a branch of its own, or committed on the branch it is on. */
+export type NewBranchCarry = 'take' | 'aside' | 'commit';
 export type NewBranchResult =
-  | { ok: true; branch: string; commit: string; target: string; saved?: { branch: string; commit: string; files: number }; carried: number; result: string }
+  | { ok: true; branch: string; commit: string; target: string; saved?: { branch: string; commit: string; files: number }; committed?: { branch: string; commit: string; files: number }; carried: number; result: string }
   | { ok: false; problem: string; conflict?: boolean };
 /** `version` is a fingerprint of the file as read; saving over it is refused once the file changed on disk. */
 export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string };
@@ -1360,8 +1360,9 @@ export const api = {
   workspace: () => call<Workspace>('/workspace'),
   /** "New branch from main": `fetch` fetches the remote's main first, which may wait for Git's own password window. */
   newBranchPreview: (fetch: boolean) => call<NewBranchPlan>('/workspace/new-branch/preview', { method: 'POST', body: JSON.stringify({ fetch }) }, { timeoutMs: null }),
-  newBranchCreate: (name: string, carry: NewBranchCarry, fingerprint: string) =>
-    call<NewBranchResult>('/workspace/new-branch', { method: 'POST', body: JSON.stringify({ name, carry, fingerprint }) }, { timeoutMs: null }),
+  /** `message`: the commit's, when what is not committed is committed on the branch the folder is on. */
+  newBranchCreate: (name: string, carry: NewBranchCarry, fingerprint: string, message?: string) =>
+    call<NewBranchResult>('/workspace/new-branch', { method: 'POST', body: JSON.stringify({ name, carry, fingerprint, ...(message?.trim() ? { message } : {}) }) }, { timeoutMs: null }),
   /** The queue of tasks (2026-10-24): read, edited as a whole list, run, stopped. */
   queue: () => call<Queue>('/queue'),
   setQueue: (items: Array<Omit<QueueItem, 'status'> & { status?: QueueItem['status'] }>) => call<Queue>('/queue', { method: 'PUT', body: JSON.stringify({ items }) }),

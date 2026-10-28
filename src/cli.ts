@@ -528,6 +528,7 @@ program
       networkFetch: cfg.execution.networkFetch,
       platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
       readOnlyPrograms: cfg.execution.readOnlyPrograms,
+      runWithoutAsking: cfg.execution.runWithoutAsking,
       scripts: cfg.execution.scripts,
       writtenScripts: cfg.execution.writtenScripts,
     };

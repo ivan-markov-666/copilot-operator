@@ -1837,6 +1837,7 @@ export async function runTask(
     networkFetch: cfg.execution.networkFetch,
     allowedPrograms: cfg.execution.allowedPrograms,
     readOnlyPrograms: cfg.execution.readOnlyPrograms,
+    runWithoutAsking: cfg.execution.runWithoutAsking,
     scripts: cfg.execution.scripts,
     writtenScripts: cfg.execution.writtenScripts,
     denyPatterns: cfg.execution.denyPatterns,

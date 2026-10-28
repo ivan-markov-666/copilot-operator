@@ -14,7 +14,11 @@
  *        - taken to the new branch, as git carries changes across a checkout — refused by git, with nothing moved, when
  *          the remote's main changed the same files; then the other choice is offered;
  *        - put aside: one commit on a branch of its own (`<prefix>saved/<when>`), made with a temporary index and
- *          checked to hold every change before anything moves, then the folder is left clean on the new branch.
+ *          checked to hold every change before anything moves, then the folder is left clean on the new branch;
+ *        - committed on the branch the folder is on (operator, 2026-10-28: "a third choice: commit them on the branch we
+ *          are on, the one before we change to the new one"): one commit of all of them, the new files too, under the
+ *          operator's own git name (the bot's, where git has none), checked to have left nothing out, then the new
+ *          branch. Not on a detached HEAD, where no branch would hold it. Not pushed.
  *      Nothing is deleted: no branch, and no change that is not first kept. Ignored files are not touched.
  *
  * When the remote cannot be fetched — a password not given, no network — the operator may go on from the remote's main
@@ -54,10 +58,20 @@ export type NewBranchPlan = {
   fingerprint?: string;
 };
 
-export type Carry = 'take' | 'aside';
+export type Carry = 'take' | 'aside' | 'commit';
 
 export type NewBranchResult =
-  | { ok: true; branch: string; commit: string; target: string; saved?: { branch: string; commit: string; files: number }; carried: number; result: string }
+  | {
+      ok: true;
+      branch: string;
+      commit: string;
+      target: string;
+      saved?: { branch: string; commit: string; files: number };
+      /** Committed on the branch the folder was on (`carry: commit`): that branch, the commit, how many files. */
+      committed?: { branch: string; commit: string; files: number };
+      carried: number;
+      result: string;
+    }
   /** `conflict`: the changes could not be taken across — the remote's main changed the same files; nothing moved. */
   | { ok: false; problem: string; conflict?: boolean };
 
@@ -175,7 +189,7 @@ export async function branchNameProblem(repoDir: string, name: string): Promise<
  * Every uncommitted change and new file, as one commit on top of HEAD on a branch of its own, made with a temporary
  * index — then checked to hold all of them, so nothing is removed from the folder that is not kept.
  */
-async function keepUncommitted(dir: string, head: string, branch: string, message: string): Promise<{ commit: string } | { problem: string }> {
+async function keepUncommitted(dir: string, head: string, branch: string | null, message: string, author?: string[]): Promise<{ commit: string } | { problem: string }> {
   const index = join(tmpdir(), `cop-saved-index-${process.pid}-${Date.now()}`);
   const env = { ...process.env, GIT_INDEX_FILE: index };
   try {
@@ -190,18 +204,27 @@ async function keepUncommitted(dir: string, head: string, branch: string, messag
     }
     const tree = await git(dir, ['write-tree'], 60_000, env);
     if (!tree.ok || !tree.stdout) return { problem: tree.stderr || 'git write-tree failed' };
-    const commit = await git(dir, ['-c', 'user.name=copilot-operator', '-c', `user.email=${RUNNER_EMAIL}`, 'commit-tree', tree.stdout, '-p', head, '-m', message]);
+    const commit = await git(dir, [...(author ?? BOT_AUTHOR), 'commit-tree', tree.stdout, '-p', head, '-m', message]);
     if (!commit.ok || !commit.stdout) return { problem: commit.stderr || 'git commit-tree failed' };
-    const made = await git(dir, ['branch', branch, commit.stdout]);
-    if (!made.ok) return { problem: made.stderr || `the branch ${branch} could not be made` };
+    // On a branch of its own (put aside), or nowhere yet: the caller moves the branch it was made for.
+    if (branch) {
+      const made = await git(dir, ['branch', branch, commit.stdout]);
+      if (!made.ok) return { problem: made.stderr || `the branch ${branch} could not be made` };
+    }
     return { commit: commit.stdout };
   } finally {
     await rm(index, { force: true });
   }
 }
 
+/** The bot's own name on a commit. */
+const BOT_AUTHOR = ['-c', 'user.name=copilot-operator', '-c', `user.email=${RUNNER_EMAIL}`];
+
+/** The commit message when the operator wrote none. */
+export const COMMIT_BEFORE_NEW_BRANCH = 'Work in progress, before a new branch from main';
+
 /** Makes the branch and checks it out, after checking the folder is still what the preview showed. */
-export async function createNewBranch(folder: string, opts: { name: string; carry: Carry; fingerprint: string; prefix?: string }): Promise<NewBranchResult> {
+export async function createNewBranch(folder: string, opts: { name: string; carry: Carry; fingerprint: string; prefix?: string; message?: string }): Promise<NewBranchResult> {
   const plan = await planNewBranch(folder, { fetch: false });
   if (!plan.ok) return { ok: false, problem: plan.problem ?? 'the folder could not be read.' };
   if (!opts.fingerprint || plan.fingerprint !== opts.fingerprint) {
@@ -214,15 +237,21 @@ export async function createNewBranch(folder: string, opts: { name: string; carr
   const target = plan.target as string;
   const targetCommit = plan.targetCommit as string;
   const files = plan.changed.length + plan.untracked.length;
-  const done = async (saved?: { branch: string; commit: string; files: number }): Promise<NewBranchResult> => {
+  const done = async (saved?: { branch: string; commit: string; files: number }, committed?: { branch: string; commit: string; files: number }): Promise<NewBranchResult> => {
     const nowBranch = (await git(repoDir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout;
     const nowHead = (await git(repoDir, ['rev-parse', 'HEAD'])).stdout;
     if (nowBranch !== name || nowHead !== targetCommit) return { ok: false, problem: `The folder is on ${nowBranch || 'a detached HEAD'} at ${short(nowHead)}, not on ${name} at ${short(targetCommit)} as it should be.` };
-    const carried = saved ? 0 : files;
+    const carried = saved || committed ? 0 : files;
     const result =
       `The folder is on the new branch ${name}, made from ${target} (${short(targetCommit)}).` +
-      (saved ? ` What was not committed is kept on ${saved.branch} (${saved.files} file(s)).` : carried > 0 ? ` ${carried} uncommitted file(s) came with it.` : '');
-    return { ok: true, branch: name, commit: targetCommit, target, ...(saved ? { saved } : {}), carried, result };
+      (saved
+        ? ` What was not committed is kept on ${saved.branch} (${saved.files} file(s)).`
+        : committed
+          ? ` What was not committed is committed on ${committed.branch} as ${short(committed.commit)} (${committed.files} file(s)), not pushed.`
+          : carried > 0
+            ? ` ${carried} uncommitted file(s) came with it.`
+            : '');
+    return { ok: true, branch: name, commit: targetCommit, target, ...(saved ? { saved } : {}), ...(committed ? { committed } : {}), carried, result };
   };
 
   if (files === 0 || opts.carry === 'take') {
@@ -236,6 +265,43 @@ export async function createNewBranch(folder: string, opts: { name: string; carr
         : { ok: false, problem: `The branch could not be made: ${said.split(/\r?\n/)[0] || 'git switch failed'}. Nothing was moved.` };
     }
     return done();
+  }
+
+  /*
+   * Committed on the branch the folder is on (2026-10-28): every change and new file in one commit there, under the
+   * operator's own git name — it is their branch — or the bot's where git has none. Made as putting aside is, with a
+   * temporary index, and checked to hold everything, so nothing in the folder or its index is touched until it is
+   * whole; then the branch is moved to it, only if it is still where it was, and the index read from it. The
+   * repository's hooks are not run, as for every git the bot runs (`SAFE_GIT`).
+   */
+  if (opts.carry === 'commit') {
+    const here = plan.branch;
+    const head = plan.head;
+    if (!here) return { ok: false, problem: 'The folder is on a detached HEAD: there is no branch to commit them on. Take them to the new branch or put them aside; nothing was moved.' };
+    if (!head) return { ok: false, problem: `${here} has no commit yet to commit them on top of. Make a first commit, then try again; nothing was moved.` };
+    const own = (await git(repoDir, ['config', 'user.email'])).stdout && (await git(repoDir, ['config', 'user.name'])).stdout;
+    const message = [
+      opts.message?.trim() || COMMIT_BEFORE_NEW_BRANCH,
+      '',
+      `Committed on ${here} before the new branch ${name} was made from ${target} (${short(targetCommit)}).`,
+      '',
+      ...[...plan.changed.map((p) => `- changed: ${p}`), ...plan.untracked.map((p) => `- new: ${p}`)].slice(0, 300),
+      '',
+    ].join('\n');
+    const made = await keepUncommitted(repoDir, head, null, message, own ? [] : BOT_AUTHOR);
+    if ('problem' in made) return { ok: false, problem: `The changes could not be committed on ${here}: ${made.problem}` };
+    const moved = await git(repoDir, ['update-ref', '-m', 'copilot-operator: commit before a new branch from main', `refs/heads/${here}`, made.commit, head]);
+    if (!moved.ok) return { ok: false, problem: `${here} moved while the commit was made (${moved.stderr.split(/\r?\n/)[0]}); nothing was changed. Look at it again.` };
+    // The index as the new commit has it: the folder already does.
+    const indexed = await git(repoDir, ['read-tree', 'HEAD'], 120_000);
+    if (!indexed.ok) return { ok: false, problem: `${here} has the commit ${short(made.commit)}, but the index could not be read from it (${indexed.stderr.split(/\r?\n/)[0]}), so the folder was not moved.` };
+    const left = await git(repoDir, ['status', '--porcelain']);
+    if (!left.ok || left.stdout.trim()) {
+      return { ok: false, problem: `${here} has the commit ${short(made.commit)}, but not every change is in it (${lines(left.stdout).slice(0, 5).join(', ') || left.stderr}), so the folder was not moved.` };
+    }
+    const switched = await git(repoDir, ['switch', '--quiet', '--no-track', '-c', name, targetCommit], 300_000);
+    if (!switched.ok) return { ok: false, problem: `What was not committed is committed on ${here} as ${short(made.commit)}, but the new branch could not be made: ${(switched.stderr || switched.stdout).split(/\r?\n/)[0]}.` };
+    return done(undefined, { branch: here, commit: made.commit, files });
   }
 
   // Put aside: kept first, checked whole; only then is the folder moved, and left clean.
