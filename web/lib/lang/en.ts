@@ -314,7 +314,7 @@ export const en = {
   'wb.cmdFiles': 'Show the repository’s files',
   'wb.cmdGo': 'Go to: {page}',
   'wb.cmdPanel': 'Show or hide the panel',
-  'wb.previewHint': 'Preview: the next file opened from Git takes this tab\'s place. Double-click the tab to keep it and show the file among the folder\'s files.',
+  'wb.previewHint': 'Preview: the next file opened with one click takes this tab\'s place. Double-click the tab to keep it and show the file among the folder\'s files.',
   'wb.cmdKeepTab': 'Keep the open tab and show its file among the files',
   'wb.revealGone': '{name} is not among the folder\'s files now: it was deleted or renamed.',
   'wb.cmdProblems': 'Show the problems',

@@ -675,6 +675,53 @@ try {
   });
 
   /*
+   * The same preview for the files, the search and Go to File (operator, 2026-10-29: "do it for Files, the search and
+   * Ctrl+P too"): one click opens a preview in the one place there is for it, a double click opens to stay.
+   */
+  await scenario('the files, the search and Go to File open a preview too; a double click opens to stay', {}, async (h, page, url) => {
+    mkdirSync(join(h.repo, 'src', 'deep'), { recursive: true });
+    writeFileSync(join(h.repo, 'a.txt'), 'alpha needle\n', 'utf8');
+    writeFileSync(join(h.repo, 'b.txt'), 'beta\n', 'utf8');
+    writeFileSync(join(h.repo, 'src', 'deep', 'c.ts'), 'export const c = 3;\n', 'utf8');
+    await page.goto(url('/'));
+    const tree = page.getByRole('tree', { name: en['wb.files']! });
+    await tree.getByRole('button', { name: 'a.txt' }).waitFor();
+    const tabs = page.getByRole('tablist', { name: en['wb.openTabs']! }).locator('.wb-tab');
+    const look = async (): Promise<Array<[string, boolean]>> => await tabs.evaluateAll((els) => els.map((el) => [el.querySelector('.wb-tab-label')?.textContent ?? '', el.classList.contains('preview')]));
+    const settle = async (what: string, want: Array<[string, boolean]>): Promise<Array<[string, boolean]>> => {
+      await waitFor(what, async () => (JSON.stringify(await look()) === JSON.stringify(want) ? true : null), 5_000).catch(() => undefined);
+      return await look();
+    };
+
+    await tree.getByRole('button', { name: 'a.txt' }).click();
+    t.check('a file of the tree opens as a preview', await settle('a.txt as a preview', [['a.txt', true]]), [['a.txt', true]]);
+    await tree.getByRole('button', { name: 'b.txt' }).click();
+    t.check('the next one takes its place', await settle('b.txt in its place', [['b.txt', true]]), [['b.txt', true]]);
+    await tree.getByRole('button', { name: 'b.txt' }).dblclick();
+    t.check('a double click on its row opens it to stay', await settle('b.txt kept', [['b.txt', false]]), [['b.txt', false]]);
+    await tree.getByRole('button', { name: 'a.txt' }).click();
+    t.check('and the next file opens a preview beside it', await settle('a.txt beside it', [['b.txt', false], ['a.txt', true]]), [['b.txt', false], ['a.txt', true]]);
+
+    await page.keyboard.press('Control+p');
+    const quick = page.getByRole('dialog', { name: en['quick.label']! });
+    await quick.waitFor();
+    await quick.getByRole('combobox').fill('c.ts');
+    await quick.getByRole('option').first().waitFor();
+    await quick.getByRole('combobox').press('Enter');
+    t.check('Go to File (Ctrl+P): a preview, in the place of the one there was', await settle('c.ts as the preview', [['b.txt', false], ['c.ts', true]]), [['b.txt', false], ['c.ts', true]]);
+
+    await page.keyboard.press('Control+Shift+f');
+    const box = page.getByRole('textbox', { name: en['search.input']!, exact: true });
+    await box.fill('needle');
+    const hit = page.locator('.sv-match').first();
+    await hit.waitFor({ timeout: 10_000 });
+    await hit.click();
+    t.check('a search result: a preview, in the place of the one there was', await settle('a.txt as the preview', [['b.txt', false], ['a.txt', true]]), [['b.txt', false], ['a.txt', true]]);
+    await hit.dblclick();
+    t.check('a double click on the result opens it to stay', await settle('a.txt kept', [['b.txt', false], ['a.txt', false]]), [['b.txt', false], ['a.txt', false]]);
+  });
+
+  /*
    * "On this branch" (operator, 2026-10-22: "show all the files changed on this branch, as a pull request does, not
    * only the ones not committed; and of them, which are not committed yet"): against main, the branch's files committed
    * and not, a dot on the ones not committed, a filter, a file opening as the pull request shows it, the branch's
@@ -2221,6 +2268,8 @@ try {
     t.check('edited: "Not saved", and a dot on its tab', ((await pane.locator('.ed-bar [role="status"]').textContent()) ?? '').trim(), en['ed.unsaved']);
     await files.getByRole('button', { name: 'notes.txt' }).click();
     await editorText(page.locator('.wb-file-pane:not([hidden])'));
+    // Opened with one click it was a preview; edited, it is kept, as VS Code keeps it (2026-10-29), so notes.txt opens beside it.
+    t.check('edited, its preview is kept: notes.txt opens beside it', await page.getByRole('tablist', { name: en['wb.openTabs']! }).locator('.wb-tab').evaluateAll((els) => els.map((el) => [el.querySelector('.wb-tab-label')?.textContent ?? '', el.classList.contains('preview')])), [['greet.ts', false], ['notes.txt', true]]);
     await page.getByRole('tab', { name: /greet\.ts/ }).click();
     t.truthy('another tab and back: the edit is still there', (await editorText(page.locator('.wb-file-pane:not([hidden])'))).endsWith('// edited'), '');
     await shown().locator('.view-lines').click();

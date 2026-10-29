@@ -352,7 +352,7 @@ export const ko: Dictionary = {
   'wb.cmdFiles': '리포지토리 파일 표시',
   'wb.cmdGo': '이동: {page}',
   'wb.cmdPanel': '패널 표시/숨기기',
-  'wb.previewHint': '미리 보기: 다음에 Git에서 연 파일이 이 탭의 자리를 차지합니다. 탭을 두 번 클릭하면 탭이 유지되고 폴더의 파일 가운데 그 파일이 표시됩니다.',
+  'wb.previewHint': '미리 보기: 다음에 한 번 클릭으로 연 파일이 이 탭의 자리를 차지합니다. 탭을 두 번 클릭하면 탭이 유지되고 폴더의 파일 가운데 그 파일이 표시됩니다.',
   'wb.cmdKeepTab': '열린 탭을 유지하고 그 파일을 파일 목록에 표시',
   'wb.revealGone': '{name}은(는) 지금 폴더의 파일 가운데 없습니다. 삭제되었거나 이름이 바뀌었습니다.',
   'wb.cmdProblems': '문제 표시',

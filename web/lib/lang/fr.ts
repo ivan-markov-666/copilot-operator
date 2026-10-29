@@ -351,7 +351,7 @@ export const fr: Dictionary = {
   'wb.cmdFiles': 'Afficher les fichiers du dépôt',
   'wb.cmdGo': 'Aller à : {page}',
   'wb.cmdPanel': 'Afficher ou masquer le panneau',
-  'wb.previewHint': 'Aperçu : le prochain fichier ouvert depuis Git prend la place de cet onglet. Double-cliquez sur l’onglet pour le garder et afficher le fichier parmi les fichiers du dossier.',
+  'wb.previewHint': 'Aperçu : le prochain fichier ouvert d’un clic prend la place de cet onglet. Double-cliquez sur l’onglet pour le garder et afficher le fichier parmi les fichiers du dossier.',
   'wb.cmdKeepTab': 'Garder l’onglet ouvert et afficher son fichier parmi les fichiers',
   'wb.revealGone': '{name} n’est plus parmi les fichiers du dossier : il a été supprimé ou renommé.',
   'wb.cmdProblems': 'Afficher les problèmes',

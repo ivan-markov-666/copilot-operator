@@ -40,8 +40,9 @@ export type Tab = (
   | { kind: 'diff'; area: GitArea; path: string; commit?: string }
 ) & {
   /**
-   * A preview, as VS Code opens a file from Source Control (operator, 2026-10-29): its name in italics, its place taken
-   * by the next file opened that way; a double click on the tab keeps it, and shows the file among the folder's files.
+   * A preview, as VS Code opens a file with one click (operator, 2026-10-29: from Git, then from the files, the search
+   * and Go to File): its name in italics, its place taken by the next file opened that way; a double click on the tab
+   * keeps it, and shows the file among the folder's files.
    */
   preview?: boolean;
 };
@@ -164,9 +165,10 @@ function WorkbenchInner() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [goTo, setGoTo] = useState<(GoTo & { path: string }) | null>(null);
   const [searchAsk, setSearchAsk] = useState(0);
+  /** A file opened at a line: a preview, unless `keep` (a double click on a search result). */
   const openAt = useCallback(
-    (hit: SearchHit) => {
-      open({ kind: 'file', path: hit.path });
+    (hit: SearchHit, keep?: boolean) => {
+      open({ kind: 'file', path: hit.path, ...(keep ? {} : { preview: true }) });
       setGoTo((g) => ({ path: hit.path, line: hit.line, from: hit.from, to: hit.to, n: (g?.n ?? 0) + 1 }));
     },
     [open],
@@ -482,7 +484,7 @@ function WorkbenchInner() {
       {quickOpen && (
         <QuickOpen
           recent={tabs.filter((x) => x.kind === 'file').map((x) => x.path).reverse()}
-          onOpen={(path, line) => (line ? openAt({ path, line }) : open({ kind: 'file', path }))}
+          onOpen={(path, line) => (line ? openAt({ path, line }) : open({ kind: 'file', path, preview: true }))}
           onClose={() => setQuickOpen(false)}
         />
       )}

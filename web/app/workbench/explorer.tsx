@@ -140,11 +140,13 @@ function Files({ workspace, onOpen, reveal, onOpenFolder, grip }: { workspace: W
             type="button"
             className={`wb-row file${selected === f ? ' sel' : ''}`}
             data-path={f}
+            // A preview, as VS Code opens a file of the explorer; a double click opens it to stay (2026-10-29).
             onClick={() => {
               setSelected(f);
               setGone('');
-              onOpen({ kind: 'file', path: f });
+              onOpen({ kind: 'file', path: f, preview: true });
             }}
+            onDoubleClick={() => onOpen({ kind: 'file', path: f })}
             title={f}
           >
             <FileIcon path={f} />

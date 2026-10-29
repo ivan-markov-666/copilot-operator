@@ -352,7 +352,7 @@ export const de: Dictionary = {
   'wb.cmdFiles': 'Dateien des Repositorys anzeigen',
   'wb.cmdGo': 'Wechseln zu: {page}',
   'wb.cmdPanel': 'Panel ein- oder ausblenden',
-  'wb.previewHint': 'Vorschau: Die nächste aus Git geöffnete Datei nimmt den Platz dieses Tabs ein. Doppelklicken Sie auf den Tab, um ihn zu behalten und die Datei unter den Dateien des Ordners zu zeigen.',
+  'wb.previewHint': 'Vorschau: Die nächste mit einem Klick geöffnete Datei nimmt den Platz dieses Tabs ein. Doppelklicken Sie auf den Tab, um ihn zu behalten und die Datei unter den Dateien des Ordners zu zeigen.',
   'wb.cmdKeepTab': 'Den geöffneten Tab behalten und seine Datei unter den Dateien zeigen',
   'wb.revealGone': '{name} ist jetzt nicht unter den Dateien des Ordners: Sie wurde gelöscht oder umbenannt.',
   'wb.cmdProblems': 'Probleme anzeigen',

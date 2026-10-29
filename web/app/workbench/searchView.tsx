@@ -31,7 +31,7 @@ function lineWith(text: string, ranges: Array<[number, number]>): ReactNode[] {
   return out;
 }
 
-export function SearchView({ onOpen, grip, focusAsk }: { onOpen: (hit: SearchHit) => void; grip?: ReactNode; focusAsk: number }) {
+export function SearchView({ onOpen, grip, focusAsk }: { onOpen: (hit: SearchHit, keep?: boolean) => void; grip?: ReactNode; focusAsk: number }) {
   const { t } = useT();
   const [q, setQ] = useState('');
   const [matchCase, setMatchCase] = useState(false);
@@ -215,7 +215,9 @@ export function SearchView({ onOpen, grip, focusAsk }: { onOpen: (hit: SearchHit
                       aria-selected={false}
                       className="sv-match"
                       title={`${f.path}:${m.line}`}
+                      // A preview, as VS Code opens a result; a double click opens it to stay (2026-10-29).
                       onClick={() => onOpen({ path: f.path, line: m.line, ...(m.column !== undefined ? { from: m.column, to: m.column + (m.length ?? 0) } : {}) })}
+                      onDoubleClick={() => onOpen({ path: f.path, line: m.line, ...(m.column !== undefined ? { from: m.column, to: m.column + (m.length ?? 0) } : {}) }, true)}
                     >
                       {lineWith(m.text, m.ranges)}
                     </button>
