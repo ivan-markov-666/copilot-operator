@@ -5,7 +5,7 @@
  * view: the changes, staged and not, and the branch's commits. The tree of sessions and tasks went with the sessions
  * (2026-10-20).
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type BranchChanges, type GitArea, type GitFile, type Workspace, type WorkspaceGit } from '../../lib/api';
 import { BranchSection } from './branchChanges';
 import { useGitBase } from '../../lib/gitBase';
@@ -15,9 +15,12 @@ import type { SideView, Tab } from './workbench';
 import { FileIcon } from './fileIcon';
 import { BranchIcon } from '../branchIcon';
 
-export function Explorer({ view, onOpen, workspace, onOpenFolder, grip }: { view: SideView; onOpen: (tab: Tab) => void; workspace: Workspace | null; onOpenFolder: () => void; /** Moves the panel (see `panelGrip.tsx`). */ grip?: React.ReactNode }) {
+/** The file a kept tab asked to be shown among the files (its double click, 2026-10-29); `n` asks again for the same one. */
+export type Reveal = { path: string; n: number };
+
+export function Explorer({ view, onOpen, reveal, workspace, onOpenFolder, grip }: { view: SideView; onOpen: (tab: Tab) => void; reveal?: Reveal | null; workspace: Workspace | null; onOpenFolder: () => void; /** Moves the panel (see `panelGrip.tsx`). */ grip?: React.ReactNode }) {
   if (view === 'commits') return <GitView workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} grip={grip} />;
-  return <Files workspace={workspace} onOpen={onOpen} onOpenFolder={onOpenFolder} grip={grip} />;
+  return <Files workspace={workspace} onOpen={onOpen} reveal={reveal} onOpenFolder={onOpenFolder} grip={grip} />;
 }
 
 function Head({ title, children, grip }: { title: string; children?: React.ReactNode; grip?: React.ReactNode }) {
@@ -56,11 +59,15 @@ const byName = (a: string, b: string): number => a.localeCompare(b, undefined, {
  * The open project folder as it is on disk (2026-10-17, "like Windsurf"): what the chat works on, every file of
  * it a click from the editor. Read again on demand and every few seconds, so what the chat writes shows up.
  */
-function Files({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void; grip?: React.ReactNode }) {
+function Files({ workspace, onOpen, reveal, onOpenFolder, grip }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; reveal?: Reveal | null; onOpenFolder: () => void; grip?: React.ReactNode }) {
   const { t } = useT();
   const [files, setFiles] = useState<string[] | null>(null);
   const [err, setErr] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
+  /** The file marked in the tree: the one last opened from it, or shown in it. */
+  const [selected, setSelected] = useState('');
+  /** A file asked to be shown that the folder does not have now (deleted, or renamed). */
+  const [gone, setGone] = useState('');
   const read = () =>
     workspace?.ok
       ? api
@@ -77,6 +84,34 @@ function Files({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace?.dir, workspace?.ok]);
   usePoll(read, 6000, !!workspace?.ok);
+
+  /*
+   * Showing a file (operator, 2026-10-29: "on the double click, show it in the file system on the left"): its folders
+   * opened, its row marked and scrolled into view, once the files are read. Each ask once; the next with its own `n`.
+   */
+  const shown = useRef(0);
+  const scrollTo = useRef('');
+  useEffect(() => {
+    if (!reveal || !files || shown.current === reveal.n) return;
+    shown.current = reveal.n;
+    if (!files.includes(reveal.path)) {
+      setSelected('');
+      setGone(reveal.path);
+      return;
+    }
+    setGone('');
+    setSelected(reveal.path);
+    const parts = reveal.path.split('/');
+    setOpen((o) => new Set([...o, ...parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))]));
+    scrollTo.current = reveal.path;
+  }, [reveal, files]);
+  useEffect(() => {
+    if (!scrollTo.current) return;
+    const row = [...document.querySelectorAll<HTMLElement>('.wb-tree-list [data-path]')].find((el) => el.dataset.path === scrollTo.current);
+    if (!row) return;
+    scrollTo.current = '';
+    row.scrollIntoView({ block: 'nearest' });
+  });
 
   const toggle = (p: string) =>
     setOpen((o) => {
@@ -100,8 +135,18 @@ function Files({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace
         );
       })}
       {[...dir.files].sort((a, b) => byName(a.split('/').pop()!, b.split('/').pop()!)).map((f) => (
-        <li key={`f:${f}`} role="treeitem">
-          <button type="button" className="wb-row file" onClick={() => onOpen({ kind: 'file', path: f })} title={f}>
+        <li key={`f:${f}`} role="treeitem" aria-selected={selected === f}>
+          <button
+            type="button"
+            className={`wb-row file${selected === f ? ' sel' : ''}`}
+            data-path={f}
+            onClick={() => {
+              setSelected(f);
+              setGone('');
+              onOpen({ kind: 'file', path: f });
+            }}
+            title={f}
+          >
             <FileIcon path={f} />
             <span className="wb-row-name">{f.split('/').pop()}</span>
           </button>
@@ -129,6 +174,11 @@ function Files({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace
         <p className="muted small wb-pad">{t('wb.loading')}</p>
       ) : (
         <>
+          {gone && (
+            <p className="muted small wb-pad" role="status">
+              {t('wb.revealGone', { name: gone })}
+            </p>
+          )}
           <p className="muted small wb-pad" title={workspace.dir}>
             {workspace.branch ? (
               <>
@@ -208,7 +258,9 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
         <button
           type="button"
           className="wb-row wb-git-file"
-          onClick={() => onOpen({ kind: 'diff', area, path: f.path, ...(commit ? { commit } : {}) })}
+          // A preview, as VS Code opens a file from Source Control; a double click opens it kept (2026-10-29).
+          onClick={() => onOpen({ kind: 'diff', area, path: f.path, ...(commit ? { commit } : {}), preview: true })}
+          onDoubleClick={() => onOpen({ kind: 'diff', area, path: f.path, ...(commit ? { commit } : {}) })}
           title={`${f.oldPath ? `${f.oldPath} → ` : ''}${f.path} · ${statusName(f.status)}`}
         >
           <FileIcon path={f.path} />
@@ -270,7 +322,7 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
               'branch',
               t('git.branch'),
               branch.problem ? null : branch.files.length,
-              <BranchSection data={branch} onBase={chooseBase} statusName={statusName} onOpenFile={(path) => onOpen({ kind: 'diff', area: 'branch', path, ...(branch.base ? { commit: branch.base } : {}) })} />,
+              <BranchSection data={branch} onBase={chooseBase} statusName={statusName} onOpenFile={(path, keep) => onOpen({ kind: 'diff', area: 'branch', path, ...(branch.base ? { commit: branch.base } : {}), ...(keep ? {} : { preview: true }) })} />,
             )}
           {state.staged.length > 0 && section('staged', t('git.staged'), state.staged.length, <ul className="wb-git-files">{state.staged.map((f) => fileRow(f, 'staged'))}</ul>)}
           {section(

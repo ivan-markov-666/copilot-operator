@@ -642,6 +642,8 @@ the pull request shows it: where the branch began against the file as it is now 
 commits are marked in "Commits", with a line where it left the base. The base asked for must be one of the branches
 listed; nothing else of the request reaches git.
 
+**A preview tab, as VS Code opens a file from Git (2026-10-29).** The operator: "when I open a file from the git section, let it work as in VS Code: it opens to be looked at, its tab's name in italics — open, but not showing where it is; a double click on the tab turns it from italics to normal and shows it in the file system on the left". A file opened from the Git view — a change, a commit's file, a file "On this branch" — opens as a preview (`Tab.preview` in `workbench.tsx`): its name in italics, and the next file opened that way takes its place, so there is only ever one. A double click on the file's row opens it to stay; a double click on the tab keeps it, its name upright, and shows the Files view with the file's folders opened and its row marked and scrolled into view (`Reveal` in `explorer.tsx`); a file the folder no longer has is said so there. The palette's "Keep the open tab and show its file among the files" does the same from the keyboard. A file opened from the Files view, the search or Ctrl+P opens to stay, as before; a file edited in a preview tab is kept.
+
 **Two numbers on the Git button (2026-10-27).** The Git button in the column of icons has two numbers on its right.
 The top one counts the files not committed yet, each file once: staged, not staged, and the files git does not track.
 The bottom one counts every file "On this branch" lists, committed or not, against the base "Compared with" names.

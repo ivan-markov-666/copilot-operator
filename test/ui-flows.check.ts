@@ -610,6 +610,71 @@ try {
   });
 
   /*
+   * A preview tab, as VS Code opens a file from Source Control (operator, 2026-10-29: "it opens to be looked at, its
+   * tab's name in italics; a double click on the tab turns it from italics to normal and shows it in the file system on
+   * the left"): one preview at a time, the next file from Git in its place; a double click keeps it and shows the file.
+   */
+  await scenario('the Git view opens a file as a preview: in italics, replaced by the next, kept and shown in Files by a double click on its tab', {}, async (h, page, url) => {
+    mkdirSync(join(h.repo, 'src', 'deep'), { recursive: true });
+    writeFileSync(join(h.repo, 'src', 'deep', 'one.ts'), 'export const one = 1;\n', 'utf8');
+    writeFileSync(join(h.repo, 'gone.txt'), 'soon gone\n', 'utf8');
+    h.git('add', '.');
+    h.git('-c', 'user.name=op', '-c', 'user.email=op@example.com', 'commit', '-q', '-m', 'deep');
+    writeFileSync(join(h.repo, 'src', 'deep', 'one.ts'), 'export const one = 2;\n', 'utf8');
+    writeFileSync(join(h.repo, 'README.md'), '# fixture\nmore\n', 'utf8');
+    h.git('rm', '-q', 'gone.txt');
+    await page.goto(url('/'));
+    const gitButton = page.getByRole('button', { name: en['wb.viewCommits']!, exact: true });
+    await gitButton.click();
+    const side = page.locator('.wb-side');
+    const row = (name: string): Locator => side.locator('.wb-git-files li').filter({ hasText: name }).first().getByRole('button');
+    await row('one.ts').waitFor({ timeout: 10_000 });
+    const tabs = page.getByRole('tablist', { name: en['wb.openTabs']! }).locator('.wb-tab');
+    const look = async (): Promise<Array<[string, boolean, string]>> =>
+      await tabs.evaluateAll((els) => els.map((el) => [el.querySelector('.wb-tab-label')?.textContent ?? '', el.classList.contains('preview'), getComputedStyle(el.querySelector('.wb-tab-label')!).fontStyle]));
+    const readme = `README.md (${en['git.workingTree']})`;
+    const one = `one.ts (${en['git.workingTree']})`;
+
+    await row('README.md').click();
+    await tabs.first().waitFor();
+    t.check('a file from Git opens as a preview: its name in italics', await look(), [[readme, true, 'italic']]);
+    t.truthy('its tooltip says what a double click does', ((await tabs.first().getByRole('tab').getAttribute('title')) ?? '').includes(en['wb.previewHint']!), await tabs.first().getByRole('tab').getAttribute('title'));
+    await row('one.ts').click();
+    await tabs.filter({ hasText: 'one.ts' }).waitFor();
+    t.check('the next file from Git takes its place: still one tab, a preview', await look(), [[one, true, 'italic']]);
+
+    await tabs.first().getByRole('tab').dblclick();
+    const shown = side.locator('.wb-tree-list [data-path="src/deep/one.ts"]');
+    await shown.waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.check('a double click on the tab keeps it: its name upright', await look(), [[one, false, 'normal']]);
+    t.check(
+      'and shows the file among the files: the Files view on, its folders opened, its row marked and in view',
+      [await page.getByRole('button', { name: en['wb.viewFiles']!, exact: true }).getAttribute('aria-pressed'), await shown.count(), await shown.evaluate((el) => el.classList.contains('sel')).catch(() => false), await shown.isVisible().catch(() => false)],
+      ['true', 1, true, true],
+    );
+
+    await gitButton.click();
+    await row('README.md').click();
+    await tabs.nth(1).waitFor();
+    t.check('the kept tab stays; the next file from Git opens a preview beside it', await look(), [[one, false, 'normal'], [readme, true, 'italic']]);
+    await row('README.md').dblclick();
+    await waitFor('README.md to be kept', async () => ((await look())[1]?.[1] === false ? true : null), 5_000).catch(() => undefined);
+    t.check('a double click on the file opens it to stay', await look(), [[one, false, 'normal'], [readme, false, 'normal']]);
+
+    await row('gone.txt').click();
+    await tabs.nth(2).waitFor();
+    await tabs.nth(2).getByRole('tab').dblclick();
+    const note = side.getByRole('status').filter({ hasText: 'gone.txt' });
+    await note.waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.check('a file the folder no longer has: kept, and said so among the files', [(await look())[2]?.[1], await note.textContent().catch(() => '')], [false, en['wb.revealGone']!.replace('{name}', 'gone.txt')]);
+
+    await page.keyboard.press('Control+K');
+    t.check('the palette has the double click\'s command for the open tab', await page.getByRole('option', { name: en['wb.cmdKeepTab']! }).count().catch(() => 0), 1);
+    await page.keyboard.press('Escape');
+    t.check('looking changed nothing in the repository', h.git('status', '--porcelain').split('\n').map((l) => l.trim()).sort(), ['D  gone.txt', 'M README.md', 'M src/deep/one.ts']);
+  });
+
+  /*
    * "On this branch" (operator, 2026-10-22: "show all the files changed on this branch, as a pull request does, not
    * only the ones not committed; and of them, which are not committed yet"): against main, the branch's files committed
    * and not, a dot on the ones not committed, a filter, a file opening as the pull request shows it, the branch's

@@ -28,7 +28,8 @@ export function BranchSection({
 }: {
   data: BranchChanges;
   onBase: (base: string) => void;
-  onOpenFile: (path: string) => void;
+  /** `keep`: opened to stay (a double click), not as a preview the next one takes the place of. */
+  onOpenFile: (path: string, keep?: boolean) => void;
   statusName: (status: string) => string;
 }) {
   const { t } = useT();
@@ -94,7 +95,7 @@ export function BranchSection({
           ) : (
             <ul className="wb-git-files" aria-label={t('git.branch')}>
               {shown.map((f) => (
-                <BranchRow key={f.path} f={f} onOpen={() => onOpenFile(f.path)} statusName={statusName} />
+                <BranchRow key={f.path} f={f} onOpen={(keep) => onOpenFile(f.path, keep)} statusName={statusName} />
               ))}
             </ul>
           )}
@@ -105,7 +106,7 @@ export function BranchSection({
   );
 }
 
-function BranchRow({ f, onOpen, statusName }: { f: BranchFile; onOpen: () => void; statusName: (status: string) => string }) {
+function BranchRow({ f, onOpen, statusName }: { f: BranchFile; onOpen: (keep?: boolean) => void; statusName: (status: string) => string }) {
   const { t } = useT();
   const cut = f.path.lastIndexOf('/');
   const open = f.uncommitted ? t(SAID[f.uncommitted]) : '';
@@ -114,7 +115,8 @@ function BranchRow({ f, onOpen, statusName }: { f: BranchFile; onOpen: () => voi
       <button
         type="button"
         className={`wb-row wb-git-file${f.uncommitted ? ' has-uncommitted' : ''}`}
-        onClick={onOpen}
+        onClick={() => onOpen()}
+        onDoubleClick={() => onOpen(true)}
         title={[`${f.oldPath ? `${f.oldPath} → ` : ''}${f.path} · ${statusName(f.status)}`, f.committed ? t('git.inCommits') : '', open].filter(Boolean).join(' · ')}
       >
         <FileIcon path={f.path} />

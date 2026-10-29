@@ -1036,6 +1036,8 @@ button.linkish:hover { text-decoration: underline; }
 .wb-tab.active { background: var(--bg); box-shadow: inset 0 2px 0 var(--accent); }
 .wb-tab.active > button[role="tab"] { color: var(--ink); }
 .wb-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A preview, as VS Code shows one: its name in italics until it is kept. */
+.wb-tab.preview .wb-tab-label { font-style: italic; }
 .wb-tab-close { border: 0; background: none; color: var(--muted); padding: 2px 8px; cursor: var(--cur-pointer); font-size: calc(15px * var(--scale)); }
 .wb-tab-close:hover { color: var(--bad); }
 .wb-editor { overflow: auto; padding: 14px 18px 24px; min-height: 0; }

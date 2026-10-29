@@ -34,10 +34,17 @@ import type { GoTo } from './fileView';
 import { AREA_DRAG, DEFAULT_ORDER, movedTo, orderOf, PanelGrip, type Area } from './panelGrip';
 import { confirmDialog } from '../dialog';
 
-export type Tab =
+export type Tab = (
   | { kind: 'file'; path: string }
   /** A file of the open folder's git, its two versions side by side (see gitDiff.tsx). */
-  | { kind: 'diff'; area: GitArea; path: string; commit?: string };
+  | { kind: 'diff'; area: GitArea; path: string; commit?: string }
+) & {
+  /**
+   * A preview, as VS Code opens a file from Source Control (operator, 2026-10-29): its name in italics, its place taken
+   * by the next file opened that way; a double click on the tab keeps it, and shows the file among the folder's files.
+   */
+  preview?: boolean;
+};
 export type SideView = 'files' | 'search' | 'commits';
 export type BottomTab = 'terminal' | 'problems' | 'output';
 
@@ -91,6 +98,8 @@ function WorkbenchInner() {
   /** The files open in the editor with edits not saved yet: marked on their tab, and asked about on closing. */
   const [unsaved, setUnsaved] = useState<Set<string>>(new Set());
   const onDirty = useCallback((path: string, dirty: boolean) => {
+    // A file changed in its tab is kept, as VS Code keeps a preview that is edited.
+    if (dirty) setTabs((all) => (all.some((x) => x.kind === 'file' && x.path === path && x.preview) ? all.map((x) => (x.kind === 'file' && x.path === path ? { ...x, preview: false } : x)) : all));
     setUnsaved((u) => {
       if (u.has(path) === dirty) return u;
       const n = new Set(u);
@@ -134,10 +143,23 @@ function WorkbenchInner() {
     }
   }, [layout]);
 
+  /**
+   * A tab opened, or brought to the front. A preview takes the place of the one there is (there is only ever one), or
+   * comes last; a tab opened to be kept stays, and keeps one already open as a preview.
+   */
   const open = useCallback((tab: Tab) => {
-    setTabs((all) => (all.some((x) => tabKey(x) === tabKey(tab)) ? all : [...all, tab]));
-    setActive(tabKey(tab));
+    const key = tabKey(tab);
+    setTabs((all) => {
+      const i = all.findIndex((x) => tabKey(x) === key);
+      if (i >= 0) return tab.preview || !all[i]!.preview ? all : all.map((x, j) => (j === i ? { ...x, preview: false } : x));
+      if (!tab.preview) return [...all, tab];
+      const was = all.findIndex((x) => x.preview);
+      return was < 0 ? [...all, tab] : all.map((x, j) => (j === was ? tab : x));
+    });
+    setActive(key);
   }, []);
+  /** The file the Files view is asked to show: expanded to, marked and scrolled into view. */
+  const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null);
   /** Go to File (Ctrl+P) open, the line a file was opened at, and the Search view's box asked to take the keys. */
   const [quickOpen, setQuickOpen] = useState(false);
   const [goTo, setGoTo] = useState<(GoTo & { path: string }) | null>(null);
@@ -174,6 +196,15 @@ function WorkbenchInner() {
   const chatTask = chatTurn && chatTurn !== 'new' ? chatSession?.tasks.find((x) => x.id === chatTurn.taskId) : undefined;
 
   const setL = (patch: Partial<Layout>) => setLayout((l) => ({ ...l, ...patch }));
+  /** A tab kept, no longer a preview, and its file shown among the folder's files (operator, 2026-10-29). */
+  const keepAndReveal = (key: string): void => {
+    const tab = tabs.find((x) => tabKey(x) === key);
+    if (!tab) return;
+    setTabs((all) => all.map((x) => (tabKey(x) === key && x.preview ? { ...x, preview: false } : x)));
+    setSide('files');
+    setL({ sideOpen: true });
+    setReveal((r) => ({ path: tab.path, n: (r?.n ?? 0) + 1 }));
+  };
   const toChat = () => {
     setL({ chatOpen: true });
     setComposeAsk((n) => n + 1);
@@ -252,6 +283,8 @@ function WorkbenchInner() {
       { id: 'files', label: t('wb.cmdFiles'), run: () => { setL({ sideOpen: true }); setSide('files'); } },
       { id: 'commits', label: t('wb.cmdCommits'), run: () => { setL({ sideOpen: true }); setSide('commits'); } },
       { id: 'problems', label: t('wb.cmdProblems'), run: () => { setL({ bottomOpen: true }); setBottomTab('problems'); } },
+      // The tab's double click, from the keyboard.
+      ...(activeTab ? [{ id: 'keep-tab', label: t('wb.cmdKeepTab'), run: () => keepAndReveal(active) }] : []),
       ...(
         [
           ['/queue', 'nav.queue'],
@@ -262,7 +295,7 @@ function WorkbenchInner() {
       ...(sessions ?? []).map((s) => ({ id: `c:${s.id}`, label: t('wb.cmdThread', { name: s.name.replace(/^chat: /, '') }), run: () => { setL({ chatOpen: true }); setShowThread((v) => ({ id: s.id, n: (v?.n ?? 0) + 1 })); } })),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, t, layout],
+    [sessions, t, layout, active, tabs],
   );
 
   // A panel's grip being dragged, and the panel it is over (2026-10-21, see `panelGrip.tsx`).
@@ -324,7 +357,7 @@ function WorkbenchInner() {
         <div className="wb-side-view" hidden={side !== 'search'}>
           <SearchView onOpen={openAt} grip={side === 'search' ? grip('side', t('wb.explorer')) : undefined} focusAsk={searchAsk} />
         </div>
-        {side !== 'search' && <Explorer view={side} onOpen={open} workspace={workspace} onOpenFolder={() => void openFolder()} grip={grip('side', t('wb.explorer'))} />}
+        {side !== 'search' && <Explorer view={side} onOpen={open} reveal={reveal} workspace={workspace} onOpenFolder={() => void openFolder()} grip={grip('side', t('wb.explorer'))} />}
       </aside>
     ),
     center: (
@@ -339,8 +372,15 @@ function WorkbenchInner() {
                   ? `${tab.path.split('/').pop()} (${tab.area === 'commit' ? (tab.commit ?? '').slice(0, 7) : tab.area === 'branch' ? `⎇ ${tab.commit ?? ''}` : t(tab.area === 'staged' ? 'git.index' : 'git.workingTree')})`
                   : (tab.path.split('/').pop() ?? tab.path);
               return (
-                <div key={key} className={`wb-tab${key === active ? ' active' : ''}`}>
-                  <button type="button" role="tab" aria-selected={key === active} onClick={() => setActive(key)} title={tab.path}>
+                <div key={key} className={`wb-tab${key === active ? ' active' : ''}${tab.preview ? ' preview' : ''}`}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={key === active}
+                    onClick={() => setActive(key)}
+                    onDoubleClick={() => keepAndReveal(key)}
+                    title={tab.preview ? `${tab.path} · ${t('wb.previewHint')}` : tab.path}
+                  >
                     {tab.kind === 'diff' ? <span className="wb-ico" aria-hidden="true">±</span> : <FileIcon path={tab.path} />}
                     <span className="wb-tab-label">{label}</span>
                     {tab.kind === 'file' && unsaved.has(tab.path) && (
