@@ -517,6 +517,42 @@ console.log('\n--- Pause holds the work at its next message or command, Continue
 }
 
 /*
+ * What waits for the operator is not counted (operator, 2026-10-29: "the time for which the browser session may be used
+ * went on while the user had not answered the chat's questions; while the bot waits for the user to type something or
+ * answer, it must not count against the time the chat may be used"): a command waiting on its card, two minutes of it,
+ * does not use up a one-minute limit, and the page is given the wait to leave out of the minutes it shows.
+ */
+console.log('\n--- what waits for the operator does not count against maxRunMinutes ---');
+{
+  let hw: Harness | undefined;
+  const realNow = Date.now;
+  try {
+    hw = await startHarness({ settings: { limits: { maxRunMinutes: 1 } } });
+    const h = hw;
+    type Ask = { id: string; description: string };
+    type View = { pauses?: Array<{ from: string; to?: string }>; tasks: Array<{ status: string; reason?: string; pausedMs?: number }> };
+    const sent = await h.call<Sent>('POST', '/chat', { text: 'Create waited.txt holding waited.', model: 'Think deeper' });
+    h.chat.script(reply.steps(write('waited.txt', 'waited')), reply.done());
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'confirm' });
+    const card = await waitFor('the command to wait on its card', async () => (await h.call<Ask[]>('GET', `/approvals?session=${sent.threadId}`)).find((a) => a.description.includes('waited.txt')) ?? null, 20_000);
+    Date.now = () => realNow() + 2 * 60_000;
+    const waiting = (await h.call<View>('GET', `/sessions/${sent.threadId}`)).pauses;
+    t.truthy('the wait, still open, is given with the conversation for the page', waiting?.length === 1 && !waiting[0]!.to, waiting);
+    await h.call('POST', `/approvals/${card.id}`, { action: 'run' });
+    await h.idle();
+    const done = (await h.call<View>('GET', `/sessions/${sent.threadId}`)).tasks[0];
+    t.check('two minutes on the card did not use up its one-minute limit', [done?.status, done?.reason ?? ''], ['done', done?.reason ?? '']);
+    t.truthy('the time it waited is on the task: the two minutes', (done?.pausedMs ?? 0) >= 2 * 60_000 && (done?.pausedMs ?? 0) < 3 * 60_000, done?.pausedMs);
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('the waiting scenario ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    Date.now = realNow;
+    await hw?.stop();
+  }
+}
+
+/*
  * The review in the chat (operator, 2026-10-20: "if the model is chosen by hand, say plainly on the card that this is the
  * model for the review, best a different one"): on for a conversation the box asks it for, off for one asked for
  * without it; its conversation's model chosen by hand on a card marked as the review's; told what the message changed,

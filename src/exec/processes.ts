@@ -173,12 +173,17 @@ export async function processTable(since: number): Promise<ProcessRow[]> {
     .filter((p) => p.pid !== process.pid);
 }
 
-/** The ports these processes are listening on — asked about them only, not the whole machine. */
+/**
+ * The ports these processes are listening on — asked about them only, not the whole machine. A socket with no other end
+ * (remote port 0) counts as well as one in the Listen state: seen on 2026-10-29, Windows on this machine reported a
+ * server's listening socket, which answered requests, as "Closed", and `-State Listen` found nothing.
+ */
 async function listenersOf(pids: number[]): Promise<Listener[]> {
   if (pids.length === 0) return [];
   const text = await powershell(
-    `Get-NetTCPConnection -State Listen -OwningProcess ${pids.map((p) => Math.trunc(p)).join(',')} -ErrorAction SilentlyContinue | ` +
-      'Select-Object LocalPort, OwningProcess | ConvertTo-Json -Compress',
+    `Get-NetTCPConnection -OwningProcess ${pids.map((p) => Math.trunc(p)).join(',')} -ErrorAction SilentlyContinue | ` +
+      "Where-Object { $_.State -eq 'Listen' -or $_.RemotePort -eq 0 } | " +
+      'Select-Object LocalPort, OwningProcess -Unique | ConvertTo-Json -Compress',
   );
   return parseJsonList<{ LocalPort: number; OwningProcess: number }>(text).map((l) => ({ port: l.LocalPort, pid: l.OwningProcess }));
 }

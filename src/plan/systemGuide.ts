@@ -2505,8 +2505,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'field',
             en: 'Longest a task may run',
             bg: 'Най-дълго време за една задача',
-            doesEn: 'The longest a task may run (the time paused not counted).',
-            doesBg: 'Най-дългото време на една задача (без времето на пауза).',
+            doesEn: 'The longest a task may run (the time paused, or waiting for the operator — a card, Git\'s password window, a sign-in —, not counted).',
+            doesBg: 'Най-дългото време на една задача (без времето на пауза и на чакане за оператора — карта, прозорецът на Git за парола, вход).',
           },
           {
             key: 'exec.maxSubtasks',

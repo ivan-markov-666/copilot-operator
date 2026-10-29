@@ -7,7 +7,7 @@
  *
  *   npm run check:pause-clock
  */
-import { Hold, pausedWithin } from '../src/orchestrator/hold.js';
+import { Hold, pausedWithin, WaitsFor } from '../src/orchestrator/hold.js';
 import { workedMs } from '../web/lib/paused.js';
 import { Tally } from './support/harness.js';
 
@@ -37,6 +37,69 @@ t.check('several add up; one after now does not count', pausedWithin([{ from: T0
   } finally {
     Date.now = realNow;
   }
+}
+
+/*
+ * Waiting for the operator (operator, 2026-10-29: "while the bot waits for the user to type something or answer, it
+ * must not count against the time the chat may be used"): a card, Git's password window, a sign-in, each from the
+ * moment it waits to its answer, taken off as a pause is — the time two of them overlap, or a pause and one, once.
+ */
+{
+  const realNow = Date.now;
+  let clock = T0;
+  Date.now = () => clock;
+  try {
+    const hold = new Hold();
+    clock = T0 + 5 * min;
+    hold.waitFor('card:a');
+    clock = T0 + 8 * min;
+    t.check('a card waiting: three minutes so far, not counted', hold.pausedSince(T0), 3 * min);
+    hold.pause();
+    clock = T0 + 10 * min;
+    hold.waited('card:a');
+    clock = T0 + 12 * min;
+    hold.resume();
+    t.check('paused while the card waited: from the card to Continue, counted once', hold.pausedSince(T0), 7 * min);
+    clock = T0 + 15 * min;
+    hold.waitFor('pw:s');
+    hold.waitFor('card:b');
+    clock = T0 + 16 * min;
+    hold.waited('pw:s');
+    clock = T0 + 18 * min;
+    hold.waited('card:b');
+    clock = T0 + 30 * min;
+    t.check('two waits at once, counted once', hold.pausedSince(T0), 10 * min);
+    t.check('for the page, the time not counted, overlaps joined', hold.pauses, [
+      { from: new Date(T0 + 5 * min).toISOString(), to: new Date(T0 + 12 * min).toISOString() },
+      { from: new Date(T0 + 15 * min).toISOString(), to: new Date(T0 + 18 * min).toISOString() },
+    ]);
+    hold.waited('card:a');
+    hold.waited('never');
+    hold.waitFor('card:c');
+    clock = T0 + 31 * min;
+    hold.waitFor('card:c');
+    clock = T0 + 32 * min;
+    t.check('an end with no wait, or a second start of one waiting, changes nothing', hold.pausedSince(T0), 12 * min);
+    t.check('a wait going on is open for the page', hold.pauses.at(-1), { from: new Date(T0 + 30 * min).toISOString() });
+    t.check('and is not the operator\'s pause', hold.held, false);
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+{
+  // The cards, kept as before in one map, start and end their waits by themselves: set once, deleted once, cleared.
+  const seen: string[] = [];
+  const cards = new WaitsFor<{ n: number }>((key, _v, begins) => seen.push(`${begins ? '+' : '-'}${key}`));
+  cards.set('a', { n: 1 });
+  cards.set('a', { n: 2 });
+  cards.set('b', { n: 3 });
+  cards.delete('a');
+  cards.delete('a');
+  cards.set('c', { n: 4 });
+  cards.clear();
+  t.check('every card that waits starts a wait, and its going ends it, once each', seen, ['+a', '+b', '-a', '+c', '-b', '-c']);
+  t.check('and it is still the map it was', [cards.size, new WaitsFor(() => undefined).set('x', 1).get('x')], [0, 1]);
 }
 
 {

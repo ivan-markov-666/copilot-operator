@@ -662,6 +662,16 @@ against `maxRunMinutes`; the task keeps how long it was paused (`pausedMs`). A r
 from the API (`pauses`), and the status bar takes them off the minutes it shows (`web/lib/paused.ts`), so they stand
 still while paused.
 
+**Waiting for the operator is not counted either (2026-10-29).** The operator: "the time the browser session may be
+used went on while the user had not answered the chat's questions; while the bot waits for the user to type something or
+answer, it must not count". Every card — a command, a question, a plan, the model to choose, a subtask to try again,
+commands handed over — starts a wait on its run's clock when it is put in `waiting` (a `WaitsFor` map in
+`operator.service.ts`) and ends it when it goes, answered, set aside or stopped; Git's password window
+(`password-window`), a sign-in and a check that a person is there (`browser:sign-in-required` / `signed-in`,
+`verification-required` / `cleared`) do the same. `Hold` joins them with the pauses, counting what overlaps once: they
+are taken off `maxRunMinutes` and kept in `pausedMs`, and come to the page in `pauses`, so the minutes in the status bar
+stand still while the bot waits.
+
 **The lead's list of subtasks (2026-10-21).** "1 of 20 subtasks" read as if twenty were planned, when twenty is only
 the most the lead may give. The lead now sends its whole list (`todo` in `protocol/leadSchema.ts`, required with every
 plan and every subtask): each subtask "done" (once it has accepted the report), "running" (the one given now — exactly

@@ -34,7 +34,7 @@ import type {
 import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
 import { handoffOutcomeOf, handoffResultMessage } from '../orchestrator/handoff.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
-import { Hold } from '../orchestrator/hold.js';
+import { Hold, WaitsFor } from '../orchestrator/hold.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
 import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
@@ -427,10 +427,18 @@ export class OperatorService {
   private readonly passwordAsked = new Map<string, string>();
   private readonly followsActing = this.bus.subscribe('*', (e) => {
     if (e.type === 'acting' && e.data) this.acting.set(e.sessionId, e.data as Acting);
-    else if (e.type === 'password-window') {
+    else if (e.type === 'browser:sign-in-required' || e.type === 'browser:verification-required') {
+      // The Copilot window waits for the operator to sign in, or to show a person is there: not counted (2026-10-29).
+      this.holdOf(e.sessionId)?.waitFor(`${e.type}:${e.sessionId}`);
+    } else if (e.type === 'browser:signed-in' || e.type === 'browser:verification-cleared') {
+      this.holdOf(e.sessionId)?.waited(`${e.type === 'browser:signed-in' ? 'browser:sign-in-required' : 'browser:verification-required'}:${e.sessionId}`);
+    } else if (e.type === 'password-window') {
       const open = (e.data as { open?: unknown; id?: unknown } | undefined)?.open === true;
       if (open) this.passwordAsked.set(e.sessionId, e.at);
       else this.passwordAsked.delete(e.sessionId);
+      // Git's own window waits for the operator's password: not counted either (2026-10-29).
+      if (open) this.holdOf(e.sessionId)?.waitFor(`pw:${e.sessionId}`);
+      else this.holdOf(e.sessionId)?.waited(`pw:${e.sessionId}`);
       // In the queue, a password nobody types sets the task aside, as an unanswered card does (2026-10-26).
       if (open) {
         const step = Number((e.data as { id?: unknown } | undefined)?.id) || 0;
@@ -439,11 +447,25 @@ export class OperatorService {
     } else if (e.type === 'task-finished') {
       this.acting.delete(e.sessionId);
       this.passwordAsked.delete(e.sessionId);
+      for (const key of [`pw:${e.sessionId}`, `browser:sign-in-required:${e.sessionId}`, `browser:verification-required:${e.sessionId}`]) this.holdOf(e.sessionId)?.waited(key);
       const status = (e.data as { status?: unknown } | undefined)?.status;
       if (typeof status === 'string' && !this.workerLeads.has(e.sessionId)) this.lastOutcome = { status, at: e.at, sessionId: e.sessionId };
     }
   });
-  private readonly waiting = new Map<string, Waiting>();
+  /**
+   * What waits for the operator: every card, by its id. Each one put here starts a wait on its run's clock and its going
+   * — answered, set aside, stopped — ends it, so a task's minutes, and its limit, leave out the time it waited
+   * (operator, 2026-10-29: "while the bot waits for the user to type something or answer, it must not count").
+   */
+  private readonly waiting = new WaitsFor<Waiting>((id, w, begins) => {
+    const hold = this.holdOf(w.approval.sessionId);
+    if (begins) hold?.waitFor(`card:${id}`);
+    else hold?.waited(`card:${id}`);
+  });
+  /** The clock of the run a session's work belongs to: its own, or its lead's for a worker. */
+  private holdOf(sessionId: string): Hold | undefined {
+    return this.running.get(this.runKey(sessionId))?.hold;
+  }
   /**
    * The workers of the two-chat mode, by the session of the lead they work for (2026-10-20). A worker's steps and cards
    * carry its own session's id, while the run, its mode and its Stop are the lead's: they are looked up through this.
