@@ -415,6 +415,11 @@ details[open] > summary { margin-bottom: 6px; }
   z-index: 2;
 }
 .approval code { font-family: var(--mono); font-size: calc(13px * var(--scale)); }
+/* A plan's note and "Ask for another plan" (2026-11-02): what the note is for under its name; the ⓘ kept beside its button. */
+.pm-note-hint { margin: 2px 0 4px; }
+.pm-revise { display: inline-flex; align-items: center; gap: 4px; }
+.pm-revise .info-btn { margin: 0; }
+.approval-banner .approval .pm-revise .info-btn { font-size: calc(11px * var(--scale)); padding: 0; }
 
 .log {
   font-family: var(--mono);

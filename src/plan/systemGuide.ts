@@ -380,12 +380,12 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
           {
             key: 'pm.note',
             kind: 'field',
-            en: 'Note for the chat (optional when approving; says what to change when asking for another plan)',
-            bg: 'Бележка за чата (по желание при одобрение; казва какво да се промени, когато искаш друг план)',
+            en: 'Note for the chat',
+            bg: 'Бележка за чата',
             doesEn:
-              'On a plan waiting for approval (plan first): sent to the chat with the answer — a condition for the work when approving, what to change when asking for another plan.',
+              'On a plan waiting for approval (plan first), and on the card of a queue task set aside at its plan: sent to the chat with the answer — optional when approving (a condition for the work, which wins where it and the plan disagree), required when asking for another plan (what to change). The line under its name says so.',
             doesBg:
-              'На план, който чака одобрение („Първо план“): изпраща се на чата с отговора — условие за работата при одобрение, какво да се промени, когато искаш друг план.',
+              'На план, който чака одобрение („Първо план“), и на картата на задача от опашката, оставена настрана при плана си: изпраща се на чата с отговора — по желание при одобрение (условие за работата, което важи там, където то и планът се разминават), задължителна при искане на друг план (какво да се промени). Редът под името ѝ казва това.',
           },
           {
             key: 'pm.approve',
@@ -400,8 +400,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Ask for another plan',
             bg: 'Поискай друг план',
-            doesEn: 'Needs the note: the chat makes a new version of the plan with it, still without changing anything, and the card comes back.',
-            doesBg: 'Иска бележка: чатът прави нова версия на плана с нея, пак без да променя нищо, и картата се връща.',
+            doesEn: 'Off until the note says what to change (the pointer over it and its ⓘ say how): the chat makes a new version of the plan with the note, still without changing anything, and the card comes back.',
+            doesBg: 'Изключен, докато бележката не каже какво да се промени (показалецът върху него и ⓘ до него казват как): чатът прави нова версия на плана с бележката, пак без да променя нищо, и картата се връща.',
           },
           {
             key: 'pm.stop',
@@ -1739,16 +1739,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Ask for another plan',
             bg: 'Поискай друг план',
-            doesEn: 'Sends the plan back with the note, which says what to change; the task makes another plan first when it carries on.',
-            doesBg: 'Връща плана с бележката, която казва какво да се промени; задачата първо прави нов план, когато продължи.',
-          },
-          {
-            key: 'pk.note',
-            kind: 'field',
-            en: 'A note with the plan (needed to ask for another)',
-            bg: 'Бележка към плана (нужна, за да поискате друг)',
-            doesEn: 'What goes with the approval, or what to change when asking for another plan.',
-            doesBg: 'Какво върви с одобрението или какво да се промени, когато се иска друг план.',
+            doesEn: 'Off until the note ("Note for the chat") says what to change; sends the plan back with it, and the task makes another plan first when it carries on.',
+            doesBg: 'Изключен, докато бележката („Бележка за чата“) не каже какво да се промени; връща плана с нея и задачата първо прави нов план, когато продължи.',
           },
           {
             key: 'pk.run',

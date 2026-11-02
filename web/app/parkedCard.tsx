@@ -15,6 +15,7 @@ import { useFmtTime, useT } from '../lib/i18n';
 import { useChoice } from '../lib/useChoice';
 import { CopyButton } from './copyButton';
 import { PlanView } from './planView';
+import { PlanNoteHint, ReviseButton } from './planNote';
 import { RichText } from './richText';
 import { HandoffDetails } from './handoffView';
 
@@ -57,16 +58,15 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
         <>
           <PlanView plan={a.plan.plan} showApproval={false} />
           <label htmlFor={`${id}-note`} className="small">
-            {t('pk.note')}
+            {t('pm.note')}
           </label>
-          <textarea id={`${id}-note`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={locked} />
+          <PlanNoteHint id={`${id}-note-hint`} />
+          <textarea id={`${id}-note`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('pm.notePlaceholder')} aria-describedby={`${id}-note-hint`} disabled={locked} />
           <div className="row">
             <button type="button" className="primary" {...mark('approve')} onClick={() => void send('approve', { decision: 'approve', ...(text.trim() ? { note: text.trim() } : {}) })}>
               {t('pk.approve')}
             </button>
-            <button type="button" {...mark('revise')} disabled={locked || !text.trim()} onClick={() => void send('revise', { decision: 'revise', note: text.trim() })} title={text.trim() ? undefined : t('pk.reviseWhy')}>
-              {t('pk.revise')}
-            </button>
+            <ReviseButton note={text} label="pk.revise" approve="pk.approve" choice={mark('revise')} onPress={() => void send('revise', { decision: 'revise', note: text.trim() })} />
           </div>
         </>
       )}

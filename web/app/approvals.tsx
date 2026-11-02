@@ -25,6 +25,7 @@ import { useChoice } from '../lib/useChoice';
 import { useActivity } from '../lib/activity';
 import { tabTitle } from '../lib/actors';
 import { PlanView } from './planView';
+import { PlanNoteHint, ReviseButton } from './planNote';
 import { ActorChip } from './actor';
 
 const EVERY_MS = 2_000;
@@ -278,21 +279,17 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
 
 /**
  * A task's plan, waiting before the work starts: the plan in full, a note the chat gets with the
- * answer, and three answers — approve it, ask for another (the note says what to change, so it is
- * required), or stop the task. In the chat's conversation it is shown where it was asked for, with no session name.
+ * answer, and three answers — approve it, ask for another (the note says what to change, so the
+ * button is off until there is one), or stop the task. In the chat's conversation it is shown where it was asked for, with no session name.
  */
 export function PlanCard({ approval, sessionName, onDecided }: { approval: Approval; sessionName?: string; onDecided: (ok: boolean) => void }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
   const [note, setNote] = useState('');
-  const { locked, err, setErr, choose, mark } = useChoice();
+  const { locked, err, choose, mark } = useChoice();
   const p = approval.plan!;
 
   const decide = async (action: 'approve' | 'revise' | 'stop') => {
-    if (action === 'revise' && !note.trim()) {
-      setErr(t('pm.reviseNeedsNote'));
-      return;
-    }
     if (action === 'stop' && !(await confirmDialog(t('pm.stopConfirm')))) return;
     onDecided(
       await choose(action, async () => {
@@ -312,12 +309,14 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
       <p className="small">{t('pm.cardWhy')}</p>
       <PlanView plan={p.plan} showApproval={false} />
       <label htmlFor={`plan-note-${approval.id}`}>{t('pm.note')}</label>
+      <PlanNoteHint id={`plan-note-hint-${approval.id}`} />
       <textarea
         id={`plan-note-${approval.id}`}
         className="prose"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder={t('pm.notePlaceholder')}
+        aria-describedby={`plan-note-hint-${approval.id}`}
         style={{ minHeight: 70 }}
         disabled={locked}
       />
@@ -330,9 +329,7 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
         <button className="primary" {...mark('approve')} onClick={() => void decide('approve')}>
           {t('pm.approve')}
         </button>
-        <button {...mark('revise')} onClick={() => void decide('revise')} title={t('pm.reviseWhy')}>
-          {t('pm.revise')}
-        </button>
+        <ReviseButton note={note} label="pm.revise" approve="pm.approve" choice={mark('revise')} onPress={() => void decide('revise')} />
         <button className="danger" {...mark('stop')} onClick={() => void decide('stop')}>
           {t('pm.stop')}
         </button>

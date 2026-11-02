@@ -325,6 +325,13 @@ review is given the approved plan and checks that the work followed it: an undec
 finding. A task carried on (a limit, a new prompt) plans no more and keeps its plan. See
 `src/orchestrator/planMode.ts`; verified by `npm run check:e2e-planmode`.
 
+**The plan's note and "Ask for another plan" (2026-11-02).** On the plan's card and on the card of a queue task
+set aside at its plan alike (`web/app/planNote.tsx`): the field is "Note for the chat", and a line under its name says
+what it is for — optional when approving (a condition for the work, which wins where it and the plan disagree),
+required when asking for another plan (what to change). "Ask for another plan" is off while the note is empty; the
+pointer over it says to write what to change first (and, once there is a note, what pressing it does), and the ⓘ
+beside it says how it is used, step by step. Verified by `npm run check:ui` (the plan mode and queue scenarios).
+
 ## Version control
 
 On by default, per session, and the runner does the git itself. A step written by Copilot goes

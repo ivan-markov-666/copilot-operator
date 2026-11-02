@@ -1683,7 +1683,10 @@ try {
     t.check('in its chat, the same card under its message', await chat.locator('.cs-parked .pk').getByRole('button', { name: en['pk.approve']!, exact: true }).count(), 1);
     await chat.close();
     t.check('"Ask for another plan" waits for a note', await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isDisabled(), true);
-    await row.getByLabel(en['pk.note']!).fill('Keep it short.');
+    // The same note and button as on the plan's card (2026-11-02): what the note is for, the pointer and the ⓘ saying how.
+    t.check('the note and its button as on the plan\'s card', [(await row.locator('.pk .pm-note-hint').textContent())?.trim(), await row.getByRole('button', { name: en['pk.revise']!, exact: true }).getAttribute('title'), await row.getByRole('button', { name: en['info.about']!.replace('{name}', en['pk.revise']!), exact: true }).count()], [en['pm.noteHint'], en['pm.reviseOffWhy'], 1]);
+    await row.getByLabel(en['pm.note']!).fill('Keep it short.');
+    t.check('with a note, "Ask for another plan" is on', await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isEnabled(), true);
     // Pressed (2026-10-26): its other answers and the note off, "Approve" marked, while the answer goes.
     let releaseAnswer!: () => void;
     const answerHeld = new Promise<void>((r) => (releaseAnswer = r));
@@ -1694,7 +1697,7 @@ try {
     });
     await row.getByRole('button', { name: en['pk.approve']!, exact: true }).click();
     await row.locator('.pk [data-chosen="sending"]').waitFor({ timeout: 5_000 });
-    t.check('approving: "Approve" marked, "Ask for another plan", "Stop" and the note off', [await row.getByRole('button', { name: en['pk.approve']!, exact: true }).getAttribute('data-chosen'), await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isDisabled(), await row.getByRole('button', { name: en['pk.stop']!, exact: true }).isDisabled(), await row.getByLabel(en['pk.note']!).isDisabled()], ['sending', true, true, true]);
+    t.check('approving: "Approve" marked, "Ask for another plan", "Stop" and the note off', [await row.getByRole('button', { name: en['pk.approve']!, exact: true }).getAttribute('data-chosen'), await row.getByRole('button', { name: en['pk.revise']!, exact: true }).isDisabled(), await row.getByRole('button', { name: en['pk.stop']!, exact: true }).isDisabled(), await row.getByLabel(en['pm.note']!).isDisabled()], ['sending', true, true, true]);
     releaseAnswer();
     await page.unroute(parkedAnswers);
     await waitFor('the task to wait to carry on', async () => ((await row.locator('.queue-status').textContent())?.trim() === en['q.waiting'] ? true : null), 10_000).catch(() => undefined);
@@ -2370,7 +2373,7 @@ try {
     const card = page.locator('.cs-plan-ask .approval');
     await card.waitFor({ timeout: 30_000 });
     t.truthy('the plan is asked about in the conversation, though commands run without asking', ((await card.textContent()) ?? '').includes('create the file'), await card.textContent());
-    t.check('with its three answers', await card.locator('button:not(.copy-btn)').allTextContents(), [en['pm.approve'], en['pm.revise'], en['pm.stop']]);
+    t.check('with its three answers', await card.locator('button:not(.copy-btn):not(.info-btn)').allTextContents(), [en['pm.approve'], en['pm.revise'], en['pm.stop']]);
     t.check('and says who asks: plan mode', await card.locator('.actor-chip').textContent(), 'Asked by: Plan mode');
     // "Copy" on the plan (operator, 2026-10-21): the whole plan, under its headings, at its top and at its foot.
     t.check('"Copy" at the plan\'s top and at its foot', await card.locator('.plan-view .copy-btn').count(), 2);
@@ -2384,7 +2387,25 @@ try {
     );
     t.check('and not in the banner over the workbench', await page.locator('.approval-banner .approval').count(), 0);
     t.check('nothing was changed before it is approved', existsSync(join(h.repo, 'planned.txt')), false);
-    await card.getByRole('textbox', { name: en['pm.note']! }).fill(note);
+    /*
+     * The note and "Ask for another plan" (operator, 2026-11-02: "it cannot be pressed without text in the field ... an i
+     * button, or a hint when the mouse is over the button"; "make the field's information clearer"): the field named
+     * plainly with what it is for under its name, the button off and saying why until the note says what to change, its ⓘ
+     * saying how, in the card's own words.
+     */
+    const noteBox = card.getByRole('textbox', { name: en['pm.note']! });
+    const hint = card.locator('.pm-note-hint');
+    t.check('the note named plainly, what it is for under its name and read with the field', [(await card.locator(`label[for="${await noteBox.getAttribute('id')}"]`).textContent())?.trim(), (await hint.textContent())?.trim(), await noteBox.getAttribute('aria-describedby')], [en['pm.note'], en['pm.noteHint'], await hint.getAttribute('id')]);
+    const revise = card.getByRole('button', { name: en['pm.revise']!, exact: true });
+    t.check('"Ask for another plan" off while the note is empty, the pointer over it saying what to do first', [await revise.isDisabled(), await revise.getAttribute('title')], [true, en['pm.reviseOffWhy']]);
+    await noteBox.fill('   ');
+    t.check('spaces are no note', await revise.isDisabled(), true);
+    const about = en['info.about']!.replace('{name}', en['pm.revise']!);
+    await card.getByRole('button', { name: about, exact: true }).click();
+    const how = ((await page.getByRole('dialog', { name: about }).textContent()) ?? '');    t.truthy('its ⓘ says how, naming the field and the buttons as the card does', how.includes(`Write in “${en['pm.note']}”`) && how.includes(`Press “${en['pm.revise']}”`) && how.includes(`With “${en['pm.approve']}”`) && !how.includes('{'), how);
+    await page.keyboard.press('Escape');
+    await noteBox.fill(note);
+    t.check('with a note, on, the pointer over it saying what it does', [await revise.isEnabled(), await revise.getAttribute('title')], [true, en['pm.reviseWhy']]);
     await card.getByRole('button', { name: en['pm.approve']!, exact: true }).click();
     await page.locator('.cs-body').getByText('I wrote planned.txt as the plan said').waitFor({ timeout: 30_000 });
     t.check('approved: the work, then done', [existsSync(join(h.repo, 'planned.txt'))], [true]);
