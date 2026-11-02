@@ -13,8 +13,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { withProblemAt } from '../src/session/model.js';
 
 const t = new Tally();
+
+/*
+ * When a version-control problem happened (2026-11-02): kept while the same problem is carried on, new when it is a
+ * new one, gone with it; a time carried in by spreading an older record is not taken for it.
+ */
+{
+  const before = { branch: 'cop/x', problem: 'the branch moved', problemAt: '2026-11-02T08:00:00.000Z' };
+  const now = '2026-11-02T09:00:00.000Z';
+  t.check('the same problem carried on keeps when it was first recorded', withProblemAt(before, { branch: 'cop/x', commit: 'abc', problem: 'the branch moved' }, now).problemAt, before.problemAt);
+  t.check('a new problem gets the time now, though the record it was spread from had one', withProblemAt(before, { ...before, problem: 'nothing to commit' }, now).problemAt, now);
+  t.check('a first problem gets the time now', withProblemAt(undefined, { problem: 'no repository' }, now).problemAt, now);
+  t.check('no problem: no time, even one spread in', 'problemAt' in withProblemAt(before, { ...before, problem: undefined }, now), false);
+}
 
 function plan(h: Harness, name: string, tasks: unknown[], extra: Record<string, unknown> = {}): unknown {
   return {
@@ -335,6 +349,9 @@ await scenario('nothing is committed onto a branch the repository was moved to d
   await whileWaiting(h, s!.id, () => h.git('checkout', '-q', '-b', 'someone-else'));
   const task = (await h.session(s!.id)).tasks[0]!;
   t.truthy('the task says why nothing was committed', /not on the task's branch cop\/moved/.test(task.vcs?.problem ?? ''), task.vcs);
+  // When it was recorded (2026-11-02): what the Problems panel says it happened at, inside the task's run.
+  const problemAt = (task.vcs as { problemAt?: string } | undefined)?.problemAt ?? '';
+  t.truthy('and when: problemAt, between the start and the end of the task', !!task.startedAt && !!task.finishedAt && problemAt >= task.startedAt && problemAt <= task.finishedAt, { problemAt, startedAt: task.startedAt, finishedAt: task.finishedAt });
   t.check('neither branch got a commit', [h.git('rev-list', '--count', 'main..cop/moved'), h.git('rev-list', '--count', 'main..someone-else')], ['0', '0']);
   t.check('the work is still in the working tree', h.git('status', '--porcelain'), '?? hello.txt');
 });

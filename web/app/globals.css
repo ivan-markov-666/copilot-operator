@@ -1255,8 +1255,19 @@ button.linkish:hover { text-decoration: underline; }
 .cs-cmd-row { display: flex; align-items: center; min-width: 0; }
 .cs-cmd-row > .cs-cmd-head { flex: 1; }
 .cs-cmd-row > .copy-btn { margin-right: 4px; }
-.wb-problems li { display: flex; align-items: center; gap: 6px; }
-.wb-problems li > .wb-row { flex: 1; min-width: 0; }
+/* A problem's line, and pressed, all of what it says under it (2026-11-02). */
+.wb-problem-line { display: flex; align-items: center; gap: 6px; }
+.wb-problem-line > .wb-row { flex: 1; min-width: 0; }
+.wb-problem-line .wb-fold { flex: none; width: 1em; color: var(--muted); }
+.wb-problem-where { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-problem-more { margin: 2px 10px 8px; margin-inline-start: 30px; padding: 8px 10px; border-inline-start: 2px solid var(--line); background: var(--bg-tint); font-size: calc(13px * var(--scale)); }
+.wb-problem-full { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wb-problem-label { margin: 8px 0 0; }
+.wb-problem-label + .wb-problem-full { margin-top: 2px; }
+.wb-problem-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0 0 6px; }
+.wb-problem-facts dt { color: var(--muted); }
+.wb-problem-facts dd { margin: 0; overflow-wrap: anywhere; }
+.wb-problem-actions { gap: 6px; }
 .wb-problems li.seen { opacity: 0.6; }
 .wb-seen { flex: none; }
 .cs-new { flex: none; padding: 4px 10px; font-size: calc(13px * var(--scale)); }

@@ -31,7 +31,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { MAX_INSTRUCTION_CHARS, newId, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
+import { MAX_INSTRUCTION_CHARS, newId, withProblemAt, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
 import { handoffOutcomeOf, handoffResultMessage } from '../orchestrator/handoff.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
 import { Hold, WaitsFor } from '../orchestrator/hold.js';
@@ -553,7 +553,7 @@ export class OperatorService {
       if (!t) return;
       if (interruption) t.interruption = interruption;
       if (vcs?.commit) {
-        t.vcs = vcs;
+        t.vcs = withProblemAt(t.vcs, vcs);
         t.reason = `${t.reason ?? ''} What it had changed is committed on ${vcs.branch} as ${vcs.commit?.slice(0, 8)}.`.trim();
       }
       // The same fixed-shape ending a task the runner finished gets; the steps the bot never

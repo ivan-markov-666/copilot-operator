@@ -339,6 +339,9 @@ await scenario('invalid-check when the rounds run out: a check reading outside t
   h.chat.discard();
   t.check('failed, stopCode invalid-check', [ended.status, ended.stopCode ?? null], ['failed', 'invalid-check']);
   t.truthy('the check was refused for leaving the project', /refused before it ran: .*outside the project folders/.test(ended.checkResults?.[0]?.detail ?? ''), ended.checkResults);
+  // When it ran (2026-11-02): what the Problems panel says it happened at.
+  const checkedAt = (ended.checkResults?.[0] as { at?: string } | undefined)?.at ?? '';
+  t.truthy('and when it ran: at, inside the run of the task', !!ended.startedAt && !!ended.finishedAt && checkedAt >= ended.startedAt && checkedAt <= ended.finishedAt, { checkedAt, startedAt: ended.startedAt, finishedAt: ended.finishedAt });
 });
 
 await scenario('the check-round limit is exact', { limits: { maxCheckRounds: 2 } }, async (h) => {

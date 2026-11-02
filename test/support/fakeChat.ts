@@ -419,8 +419,8 @@ export const reply = {
   done(summary = 'The work is finished. I created the files the task asked for and checked that they are there and hold the right text.'): string {
     return fenced({ status: 'done', summary });
   },
-  blocked(summary = 'I could not finish: the file the task names is not in the repository, and nothing I tried brought it back.'): string {
-    return fenced({ status: 'blocked', summary, tried: ['looked for the file by name', 'searched the whole tree for it'], needed: 'the missing file' });
+  blocked(summary = 'I could not finish: the file the task names is not in the repository, and nothing I tried brought it back.', needed = 'the missing file'): string {
+    return fenced({ status: 'blocked', summary, tried: ['looked for the file by name', 'searched the whole tree for it'], needed });
   },
   pass(summary = 'I read the changed files and ran the checks: the file exists and holds exactly the text the task asked for.'): string {
     return fenced({ status: 'pass', summary });

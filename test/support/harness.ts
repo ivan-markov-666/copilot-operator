@@ -64,6 +64,8 @@ export type TaskView = {
   reason?: string;
   summary?: string;
   iterations: number;
+  startedAt?: string;
+  finishedAt?: string;
   attempt?: number;
   runId?: string;
   continuing?: { fromAttempt: number; how?: string; stoppedBecause?: string };

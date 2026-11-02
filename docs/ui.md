@@ -81,7 +81,7 @@ them as they were, and is kept as the record of why the runner does what it does
 | Activity bar (far left) | the open folder's files; its git; the chat; how the page looks | switches the explorer, hides or shows the chat; the last icon opens the theme (System — the machine's, the default — Light, Dark), A− and A+, night light and the reading aids |
 | Explorer | the open folder's files, each with an icon of its kind; or its git: the changes, staged and not, and the branch's commits | opens a file, or a file's two versions, in a tab |
 | Editor | tabs: a file, coloured by its language (found from its name, its extension, its first line, or chosen), with line numbers, editable — saved with Ctrl+S over the version it was opened at, keeping its line endings; a file's two versions side by side | with nothing open: the folder the chat works in, and **Kerrigan** — a persona to save or copy for a chat of one's own, optional — with a short box under her button saying what she is, three things she is for and how to use her (2026-10-22) |
-| Panel (below) | Terminal: the commands of the chat's latest message and their output; Problems: what did not go well in the conversation; Output: its events — each with an "i" saying what it shows | a problem brings its message into view in the chat; "Seen" takes it off the list |
+| Panel (below) | Terminal: the commands of the chat's latest message and their output; Problems: what did not go well in the conversation; Output: its events — each with an "i" saying what it shows | a problem opens to all it says, when, its chat and message, and "Show its message in the chat"; "Seen" takes it off the list |
 | Chat (right) | the conversation, as it happens | a message is a task run in the open folder; "Plan mode" asks for a plan first, approved in the conversation; "Pause", which becomes "Continue" (the work holds at its next message or command; the time held does not count against the time limit); Stop; "New chat"; go back to before a message |
 | Status bar | the folder and its branch, what is running, commands or plans waiting for an answer, the model | shows the running conversation in the chat; brings the waiting card into view |
 
@@ -107,6 +107,19 @@ tells Copilot what was undone. `POST /chat/:id/rewind { taskId }`; `session/chec
 Files view and the editor read the folder as it is on disk. `GET /workspace`, `/workspace/files`,
 `/workspace/file?path=`, `GET /chat/threads`, `POST /chat { text, threadId? }`; checked by `npm run check:e2e-chat`.
 A task's own box (note, continue, new prompt) and its conversation are in its tab.
+
+**A problem opened (2026-11-02).** The operator: "when I press one of the problems I want to see more of what
+happened: the message ends in '...' as there is little room; on a press, all of it; and when it happened, and which
+chat it is of". A press on a problem's line opens it under the line, and a second press folds it; several can be
+open at once. Opened, it says all of what it says (the line keeps only its start, and stays cut as before, since it
+is part of what "Seen" remembers), the review's evidence and the place in the work for a finding, what it comes from
+(a check, the review, why the message ended with how, version control), when it happened, the chat by its name (and
+its name in Copilot when the two differ) and the message by its number and title; "Show its message in the chat",
+which a press of the line did before, and "Copy", which takes all of it. The time is the record's own: a check's
+result has `at` (when it ran), the review `at` (when it was last saved), version control `problemAt` (when the
+problem was first recorded, kept while the same one is carried on: `withProblemAt` in `session/model.ts`), and why
+the message ended is its `finishedAt`. A record older than these has only `finishedAt`, and says it is when its
+message ended. `web/app/workbench/bottomPanel.tsx`.
 
 Ctrl+K (or Ctrl+Shift+P) opens a palette that finds any task, session, page or command; Ctrl+B hides the
 explorer, Ctrl+J the panel, Ctrl+L puts the keyboard in the chat box. The chosen task is in the address

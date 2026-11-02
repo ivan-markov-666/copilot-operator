@@ -1624,8 +1624,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'tab',
             en: 'Problems',
             bg: 'Проблеми',
-            doesEn: 'What did not go well in the conversation open in the chat — a message that ended unfinished, stopped or at a limit, and why; a check that failed. Each brings its message into view in the chat; the count is of the ones not marked seen. Empty on a new chat.',
-            doesBg: 'Какво не е минало добре в отворения в чата разговор — съобщение, завършило незавършено, спряно или при ограничение, и защо; проверка, която не е минала. Всяко показва съобщението си в чата; броят е на тези, които не са отбелязани като видени. Празно при нов чат.',
+            doesEn: 'What did not go well in the conversation open in the chat — a message that ended unfinished, stopped or at a limit, and why; a check that failed. A press on one opens it under its line: all of what it says (the line shows only its start), the review\'s evidence for a finding, what it comes from, when it happened, the chat and the message it is of; a second press folds it. The count is of the ones not marked seen. Empty on a new chat.',
+            doesBg: 'Какво не е минало добре в отворения в чата разговор — съобщение, завършило незавършено, спряно или при ограничение, и защо; проверка, която не е минала. Натискане на проблем го отваря под реда му: всичко, което казва (редът показва само началото), доказателството на прегледа за находка, от какво идва, кога се е случил, чатът и съобщението, към които е; второ натискане го свива. Броят е на тези, които не са отбелязани като видени. Празно при нов чат.',
           },
           {
             key: 'wb.problemsInfoLabel',
@@ -1640,8 +1640,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Show its message in the chat',
             bg: 'Покажи съобщението му в чата',
-            doesEn: 'A problem itself: brings its message into view in the chat.',
-            doesBg: 'Самият проблем: показва съобщението му в чата.',
+            doesEn: 'In a problem opened: brings its message into view in the chat. Beside it, "Copy" takes the problem with when and where.',
+            doesBg: 'В отворен проблем: показва съобщението му в чата. До него „Копирай“ взема проблема с кога и къде.',
           },
           {
             key: 'wb.problemSeen',

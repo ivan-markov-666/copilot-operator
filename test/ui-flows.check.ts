@@ -2739,6 +2739,61 @@ try {
   });
 
   /*
+   * A problem opened (operator, 2026-11-02: "when I press one of the problems I want to see more of what happened: the
+   * message ends in '...' as there is little room; on a press, all of it; and when it happened, and which chat it is
+   * of"): the line its start, cut to fit; a press opens it under the line — all of it, what it comes from, when, the
+   * chat and the message — with "Show its message in the chat" and "Copy", which takes all of it; a second press folds it.
+   */
+  await scenario('a problem opened: all of what it says, when, its chat and message; a second press folds it', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    const needed = Array.from({ length: 5 }, (_, i) => `part ${i + 1} of what is needed: the file the message names, put back where it was, with what it held`).join('; ');
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Bring the missing file back.', model: 'Think deeper' });
+    h.chat.script(reply.steps('Get-ChildItem'), reply.blocked(undefined, needed));
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await h.idle();
+    const s = await h.session(threadId);
+    const task = s.tasks[0]!;
+    const reason = task.reason ?? '';
+    t.truthy('the message ended blocked, on a reason longer than the line keeps', task.status === 'blocked' && reason.length > 200 && reason.includes('part 5 of what is needed') && !!task.finishedAt, task);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    await page.getByRole('tablist', { name: en['wb.panel']! }).getByRole('tab', { name: en['wb.problems']! }).click();
+    const row = page.locator('.wb-problems li').first();
+    const line = row.locator('.wb-problem-line .wb-row');
+    await line.waitFor({ timeout: 15_000 });
+    const name = row.locator('.wb-row-name');
+    t.check('the line: its start, cut to fit, folded', [await name.textContent(), await name.evaluate((el) => el.scrollWidth > el.clientWidth), await line.getAttribute('aria-expanded'), await row.locator('.wb-problem-more').count(), await line.getAttribute('title')], [reason.slice(0, 200), true, 'false', 0, en['wb.problemMoreWhy']]);
+
+    await line.click();
+    const more = row.locator('.wb-problem-more');
+    await more.waitFor({ timeout: 5_000 });
+    const when = await page.evaluate((iso) => new Date(iso).toLocaleString('en-GB', { hour12: false }), task.finishedAt!);
+    const shown = ((await page.locator('#cs-thread option:checked').textContent()) ?? '').trim();
+    const copilot = s.chat?.name && s.chat.name !== shown ? s.chat.name : '';
+    const chat = copilot ? `${shown} (${en['wb.problemInCopilot']!.replace('{name}', copilot)})` : shown;
+    const facts = await more.locator('dl').evaluate((dl) => [...dl.querySelectorAll('dt')].map((dt) => [dt.textContent ?? '', dt.nextElementSibling?.textContent ?? '']));
+    t.check('pressed: all of it, uncut, under the line', [await more.locator('.wb-problem-full').textContent(), await line.getAttribute('aria-expanded'), await line.getAttribute('title')], [reason, 'true', en['wb.problemLessWhy']]);
+    t.check('what it comes from, when, the chat (as the chat names it) and the message', [shown, facts], [
+      'Bring the missing file back.',
+      [
+        [en['wb.problemWhat'], en['wb.problemFromStop']!.replace('{status}', en['status.blocked']!)],
+        [en['wb.problemWhen'], when],
+        [en['wb.problemChat'], chat],
+        [en['wb.problemMessage'], `1. ${task.title}`],
+      ],
+    ]);
+    await more.getByRole('button', { name: en['wb.problemCopy']! }).click();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    t.truthy('"Copy": all of it, with when, the chat and the message', copied.startsWith(reason) && copied.includes(`${en['wb.problemWhen']}: ${when}`) && copied.includes(`${en['wb.problemChat']}: ${chat}`) && copied.includes(`${en['wb.problemMessage']}: 1. ${task.title}`), copied);
+    await more.getByRole('button', { name: en['wb.problemShow']!, exact: true }).click();
+    t.check('"Show its message in the chat" is there, and leaves it open', await more.count(), 1);
+    await line.click();
+    t.check('a second press folds it', [await row.locator('.wb-problem-more').count(), await line.getAttribute('aria-expanded')], [0, 'false']);
+  });
+
+  /*
    * A card answered (operator, 2026-10-26: "when one of the possibilities is chosen, make the other inputs for the same
    * thing inactive"): from the press every answer of the card is off, the one chosen marked and at full strength, until
    * the card goes; a second press sends nothing; an answer that did not arrive gives them all back, its error on the

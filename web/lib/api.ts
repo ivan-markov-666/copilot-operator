@@ -293,10 +293,12 @@ export type TaskReview = {
   /** Set when the review could not be carried out, which is not the work's fault. */
   problem?: string;
   model?: string;
+  /** When it was last recorded; absent on records from before 2026-11-02. */
+  at?: string;
 };
 
 /** How one check turned out the last time it ran. */
-export type TaskCheckResult = { name: string; passed: boolean; detail: string };
+export type TaskCheckResult = { name: string; passed: boolean; detail: string; /** When it ran; absent on records from before 2026-11-02. */ at?: string };
 
 /** The kinds that ask about a command rather than about a file. */
 export const CHECK_KINDS: TaskCheck['expect'][] = [
@@ -522,6 +524,8 @@ export type TaskVcs = {
   suspicious?: Array<{ path: string; reason: string }>;
   foreignCommits?: string[];
   problem?: string;
+  /** When `problem` was first recorded; absent on records from before 2026-11-02. */
+  problemAt?: string;
 };
 
 /** What going back to the code from before a task would do. */

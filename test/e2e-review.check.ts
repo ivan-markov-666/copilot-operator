@@ -171,6 +171,9 @@ await scenario('fail, fix, pass', {}, async (h) => {
   const task = full((await h.run(s!.id)).tasks[0]!);
   t.check('the task is done', task.status, 'done');
   t.check('after two rounds, the last one a pass', [task.review?.rounds, task.review?.verdict], [2, 'pass']);
+  // When it was last saved (2026-11-02): what the Problems panel says its findings were made at.
+  const reviewedAt = (task.review as { at?: string } | undefined)?.at ?? '';
+  t.truthy('and when: at, inside the run of the task', !!task.startedAt && !!task.finishedAt && reviewedAt >= task.startedAt && reviewedAt <= task.finishedAt, { reviewedAt, startedAt: task.startedAt, finishedAt: task.finishedAt });
   t.check('one rejection counted', task.stats?.reviewRejections, 1);
   t.check('three conversations: the implementer\'s and one per review round', h.chat.conversations.size, 3);
   t.truthy('the findings as sent are kept in the run folder', !!task.runId && existsSync(join(h.runsDir, task.runId, 'review', '1', 'findings-sent.md')), task.runId);

@@ -3,9 +3,10 @@
 /**
  * The panel under the editor, for the conversation open in the chat: the terminal — the commands its latest message
  * ran and what each printed, following the newest while it runs; the problems — what did not go well in it, each
- * bringing its message into view in the chat; and the output — the bot's events for it as they come. Ctrl+J opens and
- * closes it. On a new chat it is empty until that chat runs (2026-10-19), and a problem can be marked "Seen", which
- * takes it off the list and the count. Each tab has an "i" that says what it shows (2026-10-20).
+ * opening to all it says, when, in which chat and message, with a button that brings its message into view in the
+ * chat (2026-11-02); and the output — the bot's events for it as they come. Ctrl+J opens and closes it. On a new chat
+ * it is empty until that chat runs (2026-10-19), and a problem can be marked "Seen", which takes it off the list and
+ * the count. Each tab has an "i" that says what it shows (2026-10-20).
  */
 import { Fragment, useEffect, useState } from 'react';
 import { api, type Session, type SessionEvent, type Story, type StoryEntry, type Task } from '../../lib/api';
@@ -13,6 +14,7 @@ import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { InfoTip } from '../popover';
+import { CopyButton } from '../copyButton';
 import type { BottomTab } from './workbench';
 
 const TABS: Array<{ tab: BottomTab; label: Key; infoLabel: Key; info: Key }> = [
@@ -46,6 +48,14 @@ export function BottomPanel({
   const problems = session ? problemsOf(session) : [];
   const [seen, setSeen] = useState<Set<string>>(() => new Set());
   const [showSeen, setShowSeen] = useState(false);
+  // The problems opened to all of what they say (operator, 2026-11-02): each its own, until pressed again.
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const toggle = (key: string): void =>
+    setOpened((was) => {
+      const next = new Set(was);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   useEffect(() => setSeen(readSeen()), []);
   const markSeen = (keys: string[]): void => setSeen(writeSeen(keys));
   const unseen = problems.filter((p) => !seen.has(p.key));
@@ -81,20 +91,34 @@ export function BottomPanel({
                   <p className="muted small wb-pad">{t('wb.problemsNoneNew')}</p>
                 ) : (
                   <ul className="wb-problems">
-                    {shown.map((p) => (
-                      <li key={p.key} className={seen.has(p.key) ? 'seen' : undefined}>
-                        <button type="button" className="wb-row" onClick={() => onShowMessage(p.taskId)} title={t('wb.problemShow')}>
-                          <span className={`wb-sev ${p.kind}`} aria-hidden="true">{p.kind === 'error' ? '✗' : '⚠'}</span>
-                          <span className="wb-row-name">{p.text}</span>
-                          <span className="muted">{p.where}</span>
-                        </button>
-                        {!seen.has(p.key) && (
-                          <button type="button" className="quiet small wb-seen" onClick={() => markSeen([p.key])} title={t('wb.problemSeenWhy')}>
-                            {t('wb.problemSeen')}
-                          </button>
-                        )}
-                      </li>
-                    ))}
+                    {shown.map((p, i) => {
+                      const isOpen = opened.has(p.key);
+                      return (
+                        <li key={p.key} className={seen.has(p.key) ? 'seen' : undefined}>
+                          <div className="wb-problem-line">
+                            <button
+                              type="button"
+                              className="wb-row"
+                              aria-expanded={isOpen}
+                              aria-controls={isOpen ? `wb-problem-${i}` : undefined}
+                              onClick={() => toggle(p.key)}
+                              title={t(isOpen ? 'wb.problemLessWhy' : 'wb.problemMoreWhy')}
+                            >
+                              <span className="wb-fold" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+                              <span className={`wb-sev ${p.kind}`} aria-hidden="true">{p.kind === 'error' ? '✗' : '⚠'}</span>
+                              <span className="wb-row-name">{p.text}</span>
+                              <span className="muted wb-problem-where">{p.where}</span>
+                            </button>
+                            {!seen.has(p.key) && (
+                              <button type="button" className="quiet small wb-seen" onClick={() => markSeen([p.key])} title={t('wb.problemSeenWhy')}>
+                                {t('wb.problemSeen')}
+                              </button>
+                            )}
+                          </div>
+                          {isOpen && session && <ProblemDetails id={`wb-problem-${i}`} problem={p} session={session} onShowMessage={onShowMessage} />}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
                 {(unseen.length > 1 || seenHere > 0) && (
@@ -124,7 +148,28 @@ export function BottomPanel({
   );
 }
 
-type Problem = { key: string; taskId: string; kind: 'error' | 'warn'; text: string; where: string };
+type Problem = {
+  key: string;
+  taskId: string;
+  kind: 'error' | 'warn';
+  /** The line in the list, cut to fit it; and part of what "Seen" remembers it by, so it is cut as it always was. */
+  text: string;
+  where: string;
+  /** What it comes from: a check, the review, why its message ended, version control. */
+  from: 'check' | 'review' | 'stop' | 'vcs';
+  /** All that it says, uncut: what the line shows only the start of (operator, 2026-11-02). */
+  full: string;
+  /** A finding's: the review's evidence for it, and where in the work it is. */
+  evidence?: string;
+  place?: string;
+  /** When it happened. `atEnd`: the record has no time of its own (older than 2026-11-02), and this is when its message ended. */
+  at?: string;
+  atEnd?: boolean;
+  /** Its message: its number in the conversation, its title, how it ended. */
+  n: number;
+  title: string;
+  status: Task['status'];
+};
 
 /** What did not pass, task by task: checks, review findings, and why a task stopped. */
 function problemsOf(session: Session): Problem[] {
@@ -135,15 +180,86 @@ function problemsOf(session: Session): Problem[] {
      * What "Seen" remembers it by: the task, its attempt and what the problem says. The same problem on a later
      * attempt of the task is a new one, and is shown again.
      */
-    const add = (kind: Problem['kind'], text: string, at = where): void => {
-      out.push({ key: `${session.id}|${x.id}|a${x.attempt ?? 1}|${kind}|${text}`, taskId: x.id, kind, text, where: at });
+    const add = (kind: Problem['kind'], text: string, more: Pick<Problem, 'from' | 'full' | 'evidence' | 'place'> & { at?: string }, at = where): void => {
+      const when = more.at ?? x.finishedAt;
+      out.push({
+        key: `${session.id}|${x.id}|a${x.attempt ?? 1}|${kind}|${text}`,
+        taskId: x.id,
+        kind,
+        text,
+        where: at,
+        ...more,
+        ...(when ? { at: when } : {}),
+        ...(!more.at && when && more.from !== 'stop' ? { atEnd: true } : {}),
+        n: i + 1,
+        title: x.title,
+        status: x.status,
+      });
     };
-    for (const c of x.checkResults ?? []) if (!c.passed) add('error', `${c.name}: ${c.detail.slice(0, 160)}`);
-    if (x.review?.verdict === 'fail') for (const f of x.review.findings ?? []) add('error', f.what.slice(0, 200), f.where ? `${where} · ${f.where}` : where);
-    if (['failed', 'blocked', 'limit-reached', 'aborted'].includes(x.status) && x.reason) add('warn', x.reason.slice(0, 200));
-    if (x.vcs?.problem) add('warn', x.vcs.problem.slice(0, 200));
+    for (const c of x.checkResults ?? []) if (!c.passed) add('error', `${c.name}: ${c.detail.slice(0, 160)}`, { from: 'check', full: `${c.name}\n\n${c.detail}`, at: c.at });
+    if (x.review?.verdict === 'fail') {
+      for (const f of x.review.findings ?? []) {
+        add('error', f.what.slice(0, 200), { from: 'review', full: f.what, evidence: f.evidence || undefined, place: f.where, at: x.review.at }, f.where ? `${where} · ${f.where}` : where);
+      }
+    }
+    if (['failed', 'blocked', 'limit-reached', 'aborted'].includes(x.status) && x.reason) add('warn', x.reason.slice(0, 200), { from: 'stop', full: x.reason });
+    if (x.vcs?.problem) add('warn', x.vcs.problem.slice(0, 200), { from: 'vcs', full: x.vcs.problem, at: x.vcs.problemAt });
   });
   return out;
+}
+
+const FROM: Record<Problem['from'], Key> = { check: 'wb.problemFromCheck', review: 'wb.problemFromReview', stop: 'wb.problemFromStop', vcs: 'wb.problemFromVcs' };
+
+/**
+ * A problem opened (operator, 2026-11-02: "when I press one of the problems I want to see more of what happened: the
+ * message ends in '...' as there is little room; on a press, all of it; and when it happened, and which chat it is
+ * of"): all that it says, the review's evidence for a finding, what it comes from, when, the conversation and the
+ * message; "Show its message in the chat", which a press of the line did before, and "Copy".
+ */
+function ProblemDetails({ id, problem: p, session, onShowMessage }: { id: string; problem: Problem; session: Session; onShowMessage: (taskId: string) => void }) {
+  const { t } = useT();
+  const fmt = useFmtTime();
+  const status = t(`status.${p.status}` as Key);
+  const what = t(FROM[p.from], { status });
+  const when = !p.at ? t('wb.problemWhenNone') : p.atEnd ? t('wb.problemWhenEnd', { time: fmt(p.at) }) : fmt(p.at);
+  const name = session.name.replace(/^chat: /, '');
+  const copilot = session.chat?.name && session.chat.name !== name ? session.chat.name : undefined;
+  const chat = copilot ? `${name} (${t('wb.problemInCopilot', { name: copilot })})` : name;
+  const message = `${p.n}. ${p.title}`;
+  const facts: Array<[Key, string]> = [
+    ['wb.problemWhat', what],
+    ['wb.problemWhen', when],
+    ['wb.problemChat', chat],
+    ['wb.problemMessage', message],
+    ...(p.place ? [['wb.problemPlace', p.place] as [Key, string]] : []),
+  ];
+  const copy = [p.full, ...(p.evidence ? [`${t('wb.problemEvidence')}:\n${p.evidence}`] : []), facts.map(([k, v]) => `${t(k)}: ${v}`).join('\n')].join('\n\n');
+  return (
+    <div id={id} className="wb-problem-more">
+      {/* What, when and where first, with the buttons: the panel is low, and a long text under them does not push them out of sight. */}
+      <dl className="wb-problem-facts">
+        {facts.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt>{t(k)}</dt>
+            <dd dir="auto">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      <div className="row wb-problem-actions">
+        <button type="button" className="quiet small" onClick={() => onShowMessage(p.taskId)}>
+          {t('wb.problemShow')}
+        </button>
+        <CopyButton text={copy} what="wb.problemCopy" />
+      </div>
+      <p className="wb-problem-full" dir="auto">{p.full}</p>
+      {p.evidence && (
+        <>
+          <p className="muted small wb-problem-label">{t('wb.problemEvidence')}</p>
+          <p className="wb-problem-full" dir="auto">{p.evidence}</p>
+        </>
+      )}
+    </div>
+  );
 }
 
 /*

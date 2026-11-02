@@ -66,7 +66,7 @@ import type { HandoffCard, HandoffOutcome, PendingApproval, RetryChoice, TaskSta
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
-import { isContinuable } from '../session/model.js';
+import { isContinuable, withProblemAt } from '../session/model.js';
 import { prepareForTask, commitTaskResult, commitShortfall, repoDirOf, trackedRepoOf, whereLeft } from '../vcs/taskVcs.js';
 import { protectInputs, inputsMessage, inputsAtCommit, untrackedInputs, blobOfFile, type InputsCheck } from '../vcs/inputs.js';
 import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } from '../vcs/artifacts.js';
@@ -1573,7 +1573,7 @@ export async function runTask(
      * task that was done but whose tree was never judged ends `aborted`, as every Stop ends a task,
      * which "Continue" carries on to be judged.
      */
-    let afterCommitResults: Array<{ name: string; passed: boolean; detail: string }> = [];
+    let afterCommitResults: Array<{ name: string; passed: boolean; detail: string; at?: string }> = [];
     if (afterCommitChecks.length > 0 && runAfterCommit) {
       const outcomes = signal?.aborted
         ? []
@@ -1589,7 +1589,8 @@ export async function runTask(
           reason = 'stopped by the operator before the checks after the commit had decided';
         }
       } else {
-        afterCommitResults = outcomes.map((o) => ({ name: `${o.check.name} (after the commit)`, passed: o.passed, detail: o.detail }));
+        const at = new Date().toISOString();
+        afterCommitResults = outcomes.map((o) => ({ name: `${o.check.name} (after the commit)`, passed: o.passed, detail: o.detail, at }));
         for (const o of outcomes) {
           sink.event(o.passed ? 'check-passed' : 'check-failed', { name: o.check.name, detail: o.detail, afterCommit: true },
             `${o.passed ? 'passed' : 'FAILED'} after the commit: ${o.check.name} — ${o.detail}`, o.passed ? 'info' : 'warn');
@@ -1637,7 +1638,7 @@ export async function runTask(
     }
 
     await setTask((t) => {
-      if (vcsAfter) t.vcs = vcsAfter;
+      if (vcsAfter) t.vcs = withProblemAt(t.vcs, vcsAfter);
       t.status = status;
       delete t.acting;
       t.iterations = iterations;
@@ -1874,13 +1875,13 @@ export async function runTask(
     );
     if (prepared.refuse) {
       await setTask((t) => {
-        t.vcs = prepared.vcs;
+        t.vcs = withProblemAt(t.vcs, prepared.vcs);
       });
       return await finish('failed', prepared.refuse);
     }
     if (prepared.vcs.branch || prepared.vcs.problem) {
       await setTask((t) => {
-        t.vcs = prepared.vcs;
+        t.vcs = withProblemAt(t.vcs, prepared.vcs);
       });
       await record(
         'VERSION CONTROL',
@@ -2335,8 +2336,9 @@ export async function runTask(
         }
       }
 
+      const checkedAt = new Date().toISOString();
       await setTask((t) => {
-        t.checkResults = outcomes.map((o) => ({ name: o.check.name, passed: o.passed, detail: o.detail }));
+        t.checkResults = outcomes.map((o) => ({ name: o.check.name, passed: o.passed, detail: o.detail, at: checkedAt }));
       });
 
       /*
@@ -2503,7 +2505,7 @@ export async function runTask(
 
     const saveReview = async (review: TaskReview): Promise<void> => {
       await setTask((t) => {
-        t.review = review;
+        t.review = { ...review, at: new Date().toISOString() };
       });
     };
 

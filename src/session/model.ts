@@ -455,6 +455,8 @@ export type TaskReview = {
   skippedBecause?: string;
   /** What the review actually ran on, when it differed from the session's model. */
   model?: string;
+  /** When it was last recorded (2026-11-02): when the Problems panel says its findings were made. Absent on records older than that. */
+  at?: string;
 };
 
 /** How one check turned out, kept on the task so the record says why it ended as it did. */
@@ -487,6 +489,8 @@ export type TaskCheckResult = {
   name: string;
   passed: boolean;
   detail: string;
+  /** When it ran (2026-11-02): when the Problems panel says a check that did not pass went wrong. Absent on records older than that. */
+  at?: string;
 };
 
 /**
@@ -1061,6 +1065,8 @@ export type TaskVcs = {
   foreignCommits?: string[];
   /** Set when version control was on but could not do its part, with the reason. */
   problem?: string;
+  /** When `problem` was first recorded (2026-11-02), kept while the same problem is carried on. See `withProblemAt`. */
+  problemAt?: string;
   /**
    * The working tree just before the runner's commit: what was changed or new. Together with
    * `afterCommit`, the two ends of the commit kept apart, so what the task said before it and what
@@ -1070,6 +1076,18 @@ export type TaskVcs = {
   /** The repository just after the runner's commit (or its attempt): branch, HEAD, and what is still uncommitted. */
   afterCommit?: { branch?: string; head?: string; clean: boolean; changed: string[] };
 };
+
+/**
+ * The version-control record about to be kept, with the time its problem was first seen (2026-11-02): the time the
+ * record before it had when the problem is the same one carried on, now when it is new, none when there is none. A
+ * record made by spreading an older one carries that one's time, which is not trusted: only `before`'s counts.
+ */
+export function withProblemAt(before: TaskVcs | undefined, after: TaskVcs, now = new Date().toISOString()): TaskVcs {
+  const kept: TaskVcs = { ...after };
+  delete kept.problemAt;
+  if (!kept.problem) return kept;
+  return { ...kept, problemAt: before?.problem === kept.problem && before.problemAt ? before.problemAt : now };
+}
 
 export type Session = {
   id: string;
