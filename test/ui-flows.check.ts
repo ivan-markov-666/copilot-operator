@@ -2513,9 +2513,59 @@ try {
     const options = card.locator('.cs-options button');
     t.check('its answers in order, the first the recommended one, highlighted', [await options.count(), await options.first().getAttribute('title'), ((await options.first().getAttribute('class')) ?? '').includes('primary')], [2, en['chat.optionRecommended'], true]);
     t.truthy('the answer that carries a command says what it runs', ((await options.first().locator('.cs-option-run').textContent()) ?? '').includes("Set-Content -Path asked.txt"), await options.first().textContent());
+    // "Copy" (operator, 2026-11-02): the answers offered, the recommended one and what one runs said, and how it is answered.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    await card.getByRole('button', { name: en['chat.copyQuestion']!, exact: true }).click();
+    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    t.check('"Copy" takes the question, its answers in order and how it is answered', copied,
+      `Shall I write asked.txt now?\n\n${en['chat.copyOne']}\n1. Yes, write it (${en['chat.optionRecommended']})\n   ${en['chat.optionRuns']!.replace('{cmd}', write('asked.txt', 'yes'))}\n2. Not yet\n\n${en['chat.copyWrite']!.replace('{answer}', en['lead.answer']!).replace('{send}', en['lead.send']!)}`);
     await options.first().click();
     await page.locator('.cs-body').getByText('asked.txt was written by the command').waitFor({ timeout: 30_000 });
     t.check('clicked: the bot ran it, and the work went on to its end', existsSync(join(h.repo, 'asked.txt')) ? readFileSync(join(h.repo, 'asked.txt'), 'utf8').trim() : null, 'yes');
+  });
+
+  /*
+   * A question of several answers (operator, 2026-11-02: "more than one choice — I do not want them to look like radio
+   * buttons or check boxes"): the same buttons, a press marks one chosen and a second takes it off, and one button sends
+   * the ones chosen with what is written; "Copy" says more than one may be chosen, and how.
+   */
+  await scenario('the chat asks a question of several answers: pressed to choose, sent together', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Write picked.txt with the words I choose.', model: 'Think deeper' });
+    let told = '';
+    h.chat.script(
+      reply.ask('Which words should picked.txt hold?', ['alpha', 'beta', 'gamma'], undefined, true),
+      (m) => {
+        told = m.text;
+        return reply.steps(write('picked.txt', 'alpha gamma'));
+      },
+      reply.done('picked.txt holds alpha and gamma, as the operator chose, and was read back to check it.'),
+    );
+    await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
+    await page.goto(url('/'));
+    await page.locator('#cs-thread').waitFor();
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    const card = page.locator('.cs-question');
+    await card.waitFor({ timeout: 30_000 });
+    const send = card.getByRole('button', { name: en['chat.sendChosen']!, exact: true });
+    const pressed = async (): Promise<Array<string | null>> => card.locator('.cs-options button').evaluateAll((els) => els.map((el) => el.getAttribute('aria-pressed')));
+    t.check(
+      'a line says more than one may be chosen; none chosen yet, "Send the choice" off, and no "Send the answer"',
+      [(await card.locator('.cs-many-hint').textContent())?.trim(), await pressed(), await send.isDisabled(), await card.getByRole('button', { name: en['lead.send']!, exact: true }).count()],
+      [en['chat.manyHint']!.replace('{send}', en['chat.sendChosen']!).replace('{answer}', en['lead.answer']!), ['false', 'false', 'false'], true, 0],
+    );
+    t.check('the answers are the same buttons: no tick boxes, no round buttons', await card.locator('input[type="checkbox"], input[type="radio"]').count(), 0);
+    for (const word of ['gamma', 'beta', 'alpha', 'beta']) await card.getByRole('button', { name: word, exact: true }).click();
+    t.check('pressed, chosen; pressed again, taken off; nothing sent yet', [await pressed(), await send.isEnabled(), told], [['true', 'false', 'true'], true, '']);    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    await card.getByRole('button', { name: en['chat.copyQuestion']!, exact: true }).click();
+    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    t.check('"Copy" says more than one may be chosen, and how it is answered', copied,
+      `Which words should picked.txt hold?\n\n${en['chat.copyMany']!.replace('{send}', en['chat.sendChosen']!)}\n1. alpha (${en['chat.optionRecommended']})\n2. beta\n3. gamma\n\n${en['chat.copyWriteMany']!.replace('{answer}', en['lead.answer']!).replace('{send}', en['chat.sendChosen']!)}`);
+    await card.getByRole('textbox', { name: en['lead.answer']! }).fill('On one line.');
+    await send.click();
+    await page.locator('.cs-body').getByText('picked.txt holds alpha and gamma').waitFor({ timeout: 30_000 });
+    t.check('sent: the chat is told the ones chosen, in their order, and what was written', told.split('\n\nGo on')[0],
+      'The operator answered your question ("Which words should picked.txt hold?"), choosing 2 of your answers:\n\n- alpha\n- gamma\n\nAnd wrote:\n\nOn one line.');
   });
 
   /*
@@ -3159,7 +3209,9 @@ try {
     await progress.getByRole('button', { name: en['lead.copyList']!, exact: true }).click();
     t.truthy('the list copied, by phase, each with its mark', /## Survey\n✓ Survey the project/.test(await clipboard()) && (await clipboard()).includes('○ Write done.txt'), await clipboard());
     await card.getByRole('button', { name: en['chat.copyQuestion']!, exact: true }).click();
-    t.check('the question waiting copied, with why it is asked and the answers it offers', await clipboard(), 'Should done.txt go at the root, or in a folder of its own?\nthe assignment names a folder that is there twice\n1. at the root\n2. in a folder');
+    // With how it is answered (operator, 2026-11-02: "the different answers too, and that one can be written in the field").
+    t.check('the question waiting copied, with why it is asked, the answers it offers and how it is answered', await clipboard(),
+      `Should done.txt go at the root, or in a folder of its own?\n\nthe assignment names a folder that is there twice\n\n${en['chat.copyOne']}\n1. at the root (${en['chat.optionRecommended']})\n2. in a folder\n\n${en['chat.copyWrite']!.replace('{answer}', en['lead.answer']!).replace('{send}', en['lead.send']!)}`);
     t.truthy('the lead\'s question, with its choices',((await card.textContent()) ?? '').includes('Should done.txt go at the root') && (await card.getByRole('button', { name: 'at the root', exact: true }).count()) === 1, await card.textContent());
     /*
      * Answered, the card goes at once (2026-10-20: it stayed, answered, until the next read of the list) — here every
@@ -3192,7 +3244,8 @@ try {
     await qa.getByRole('button', { name: en['chat.copyQuestion']!, exact: true }).click();
     const copiedQuestion = await clipboard();
     await qa.getByRole('button', { name: en['chat.copyAnswer']!, exact: true }).click();
-    t.check('on the record, the question and the answer each copied', [copiedQuestion, await clipboard()], ['Should done.txt go at the root, or in a folder of its own?', 'at the root']);
+    t.check('on the record, the question (with why and the answers it offered) and the answer each copied', [copiedQuestion, await clipboard()],
+      [`Should done.txt go at the root, or in a folder of its own?\n\nthe assignment names a folder that is there twice\n\n${en['chat.copyOffered']}\n1. at the root (${en['chat.optionRecommended']})\n2. in a folder`, 'at the root']);
     t.check('the worker is not a conversation of the list', await page.locator('#cs-thread option').count(), 2);
     t.check('the started conversation shows how it began: "Two chats" ticked and fixed', [await two.isChecked(), await two.isDisabled()], [true, true]);
     await page.getByRole('tab', { name: en['wb.terminal']!, exact: true }).click();

@@ -557,7 +557,7 @@ export type HandoffOutcome = 'ran' | 'revise' | 'declined';
 
 export type ParkedAnswer =
   | { kind: 'plan'; decision: 'approve' | 'revise'; note?: string }
-  | { kind: 'question'; answer: string; /** A handoff: whether the operator ran the commands (before 2026-10-27). */ ran?: boolean; /** A handoff: how the operator answered it. */ outcome?: HandoffOutcome }
+  | { kind: 'question'; answer: string; /** A handoff: whether the operator ran the commands (before 2026-10-27). */ ran?: boolean; /** A handoff: how the operator answered it. */ outcome?: HandoffOutcome; /** A question of several answers: the ones chosen, and what was written besides (2026-11-02). */ chosen?: string[]; written?: string }
   | { kind: 'retry'; choice: RetryChoice }
   | { kind: 'command'; decision: 'run' | 'skip' }
   | { kind: 'resume' };
@@ -1316,8 +1316,11 @@ export type PendingApproval = {
    * Set when the lead of a two-chat conversation asks the operator something only a person can answer (2026-10-20): the
    * question, why, and the choices when it gave some. Answered with text (`/approvals/:id/answer`), or the task stopped.
    */
-  /** `commands`: by answer, the command the bot runs when that one is chosen (2026-10-23), or null. */
-  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; handoff?: HandoffCard };
+  /**
+   * `commands`: by answer, the command the bot runs when that one is chosen (2026-10-23), or null. `multiple`: more than
+   * one of its answers may be chosen at a time (2026-11-02).
+   */
+  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean; handoff?: HandoffCard };
   /**
    * Set when a subtask of two chats failed for a technical reason and the operator is asked what to do (2026-10-25):
    * the subtask, the attempt and the most there may be, why, what the attempt left, and the choices — try it again in
@@ -1411,7 +1414,7 @@ export type LeadRound = {
     report?: string;
   };
   /** The question it asked the operator, and the answer it got. */
-  question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
+  question?: { text: string; why?: string; options?: string[]; multiple?: boolean; answer?: string; chosen?: string[]; at?: string };
   /** This reply made the list of subtasks, or changed it: its version, and how many came and went (see `LeadLedger`). */
   ledger?: { revision: number; added: number; removed: number; total: number };
 };

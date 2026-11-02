@@ -23,6 +23,7 @@
  * the checks of an edit, and which task is next.
  */
 import { handoffOutcomeOf } from '../orchestrator/handoff.js';
+import { chosenAnswer } from '../orchestrator/chosenAnswers.js';
 import { branchExists } from '../vcs/git.js';
 import type { ParkedAnswer, ParkedKind, PendingApproval, RetryChoice } from '../session/model.js';
 
@@ -284,6 +285,11 @@ export function parkedAnswerFrom(p: { kind: ParkedKind; approval: PendingApprova
         if (outcome === 'declined') return { kind: 'question', answer: text(input.answer), ran: false, outcome };
         if (outcome === 'revise') return text(input.answer) ? { kind: 'question', answer: text(input.answer), outcome } : { problem: 'Say what to correct first.' };
         return text(input.answer) ? { kind: 'question', answer: text(input.answer), ran: true, outcome } : { problem: 'Paste what the commands printed first.' };
+      }
+      // A question of several answers (2026-11-02): the ones chosen, by their place, and any text besides.
+      if (input.chosen !== undefined && p.approval.question) {
+        const many = chosenAnswer(p.approval.question, input.chosen, text(input.answer));
+        return 'problem' in many ? many : { kind: 'question', ...many };
       }
       return text(input.answer) ? { kind: 'question', answer: text(input.answer) } : { problem: 'Write the answer first.' };
     case 'retry': {

@@ -130,6 +130,8 @@ export const LeadReplySchema = z
     question: prose,
     why: prose,
     options: proseList.default([]),
+    /** Its options may be chosen more than one at a time (operator, 2026-11-02). */
+    multiple: z.boolean().default(false),
     answer: prose,
     evidence: proseList.default([]),
     summary: prose,
@@ -147,6 +149,9 @@ export const LeadReplySchema = z
   })
   .refine((r) => r.status !== 'ask' || (r.question ?? '').trim().length >= 10, {
     message: 'status "ask" requires a "question" for the operator: what only a person can decide, said in full.',
+  })
+  .refine((r) => r.status !== 'ask' || !r.multiple || r.options.length >= 2, {
+    message: 'a question with "multiple": true needs at least two "options" for the operator to choose from.',
   })
   .refine((r) => r.status !== 'done' || (r.answer ?? '').trim().length >= MIN_SUMMARY_CHARS, {
     message: 'status "done" requires an "answer": the result, in the form the assignment asked for, in full.',
@@ -202,7 +207,7 @@ const LEAD_EXAMPLE = [
   '{"status": "delegate", "notes": "what you decide and why", "subtask": {"title": "Run the tests", "goal": "Find out which tests fail now.", "context": "Change nothing.", "steps": [], "report": "The totals, and for each failing test its name and its error, quoted.", "doneWhen": "The suite ran once.", "readOnly": true, "freshWorker": false}, "todo": [{"title": "Survey the project", "status": "done", "phase": "Survey"}, {"title": "Run the tests", "status": "running", "phase": "Diagnosis"}, {"title": "Fix the failing test", "status": "planned", "phase": "Fix"}]}',
   '```',
   'or {"status": "plan", "plan": {"existing": "…", "approach": "…", "steps": ["…"], "files": [], "verification": "…"}, "todo": [{"title": "…", "status": "planned", "phase": "…"}]}',
-  'or {"status": "ask", "question": "…", "why": "…", "options": ["…", "…"]}',
+  'or {"status": "ask", "question": "…", "why": "…", "options": ["…", "…"], "multiple": false}',
   'or {"status": "done", "answer": "the result, in the form asked for", "evidence": ["…"]}',
   'or {"status": "blocked", "summary": "what was done and found", "needed": "what would let it go on"}',
 ].join('\n');

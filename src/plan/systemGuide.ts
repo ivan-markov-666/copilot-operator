@@ -1132,8 +1132,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'The chat asks you',
             bg: 'Чатът ви пита',
-            doesEn: 'A question from the chat itself (plan mode or the worker), on a card, with its answers to click — its recommended one first, highlighted — and a field for another. An answer marked "runs: …" has the bot run that command when it is chosen; nothing to type by hand.',
-            doesBg: 'Въпрос от самия чат (режим на плана или изпълнителя), на карта, с отговори за избор — препоръчаният първи, открояван — и поле за друг. Отговор с „изпълнява: …“ кара бота да пусне тази команда, когато бъде избран; нищо не се пише на ръка.',
+            doesEn: 'A question from the chat itself (plan mode or the worker), on a card, with its answers to click — its recommended one first, highlighted — and a field for another. An answer marked "runs: …" has the bot run that command when it is chosen; nothing to type by hand. When the chat lets more than one be chosen, a line under the question says so: a press marks an answer chosen (again, takes it off) and "Send the choice" sends them, with what is written in the field. "Copy the question" takes the question, why, every answer offered and how it is answered.',
+            doesBg: 'Въпрос от самия чат (режим на плана или изпълнителя), на карта, с отговори за избор — препоръчаният първи, открояван — и поле за друг. Отговор с „изпълнява: …“ кара бота да пусне тази команда, когато бъде избран; нищо не се пише на ръка. Когато чатът позволява да се изберат повече от един, ред под въпроса казва това: натискане отбелязва отговор като избран (отново — маха го), а „Изпрати избора“ ги изпраща, с написаното в полето. „Копирай въпроса“ взема въпроса, защо, всички предложени отговори и как се отговаря.',
           },
           {
             key: 'chat.optionRecommended',
@@ -1158,6 +1158,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Изпрати отговора',
             doesEn: 'Sends your answer to the lead, and the work goes on.',
             doesBg: 'Изпраща отговора ви на ръководителя и работата продължава.',
+          },
+          {
+            key: 'chat.sendChosen',
+            kind: 'button',
+            en: 'Send the choice',
+            bg: 'Изпрати избора',
+            doesEn: 'On a question where more than one answer may be chosen: sends the answers pressed (filled), with what is written in the field besides; on with one chosen, or with something written.',
+            doesBg: 'На въпрос, на който може да се избере повече от един отговор: изпраща натиснатите (запълнени) отговори, заедно с написаното в полето; включен е, щом има избран отговор или нещо написано.',
           },
           {
             key: 'ho.output',

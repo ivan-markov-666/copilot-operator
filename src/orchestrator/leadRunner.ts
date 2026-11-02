@@ -33,6 +33,7 @@ import { operatorNotesSection, whyItStopped } from '../session/compose.js';
 import { describeDeviations } from '../protocol/replySchema.js';
 import { leadFormatErrorMessage, parseLeadReply, UNDERSTANDING_FIRST, type Subtask } from '../protocol/leadSchema.js';
 import { describePlan, planFrom } from './planMode.js';
+import { chosenSaid } from './chosenAnswers.js';
 import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
 import { classifySubtaskEnd, describeAttempts, FAILURE_WORDS, retryMessage, retryPlan, sanitizedReason, sideEffectsOf, stepFacts, stepsOf, type RetryMode, type StepFacts } from './subtaskRetry.js';
 import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, redactsMessages, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
@@ -187,8 +188,10 @@ export function leadPlanRevise(comment: string, version: number): string {
 }
 
 /** The operator's answer to the lead's question. */
-export function operatorAnswerMessage(answer: string, left: number): string {
-  return ['The operator answers your question:', '', answer.trim(), '', `Go on in the lead's format. Subtasks left: ${left}.`].join('\n');
+export function operatorAnswerMessage(answer: string, left: number, many?: { chosen: string[]; written?: string }): string {
+  // A question of several answers (2026-11-02): the ones chosen, one a line, and what was written besides.
+  const said = many ? ['The operator answered your question, ' + chosenSaid(many)] : ['The operator answers your question:', '', answer.trim()];
+  return [...said, '', `Go on in the lead's format. Subtasks left: ${left}.`].join('\n');
 }
 
 /** Nobody can answer the lead's question (a run with no page to ask on). */
@@ -882,7 +885,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           break;
         }
         case 'ask': {
-          round.question = { text: r.question!, ...(r.why ? { why: r.why } : {}), ...(r.options.length > 0 ? { options: r.options } : {}) };
+          round.question = { text: r.question!, ...(r.why ? { why: r.why } : {}), ...(r.options.length > 0 ? { options: r.options } : {}), ...(r.multiple ? { multiple: true } : {}) };
           await saveLead();
           /*
            * Settings agree with what the bot proposes (2026-10-23): the lead's recommended answer, its first, is taken
@@ -903,13 +906,14 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             break;
           }
           sink.event('lead-question', { round: round.n, question: r.question }, `the lead asks the operator: ${r.question}`, 'warn');
-          const got = await deps.askQuestion({ sessionId: session.id, taskId: task.id, question: r.question!, ...(r.why ? { why: r.why } : {}), options: r.options, actor: 'lead' });
+          const got = await deps.askQuestion({ sessionId: session.id, taskId: task.id, question: r.question!, ...(r.why ? { why: r.why } : {}), options: r.options, ...(r.multiple ? { multiple: true } : {}), actor: 'lead' });
           if (got === 'stop' || signal?.aborted) return await finish('aborted', 'the operator stopped the task at the lead\'s question');
           round.question.answer = got.answer;
+          if (got.chosen) round.question.chosen = got.chosen;
           round.question.at = new Date().toISOString();
           await saveLead();
           sink.event('lead-question-answered', { round: round.n }, 'the operator answered the lead');
-          markdown = await tell(operatorAnswerMessage(got.answer, limit - lead.subtasks));
+          markdown = await tell(operatorAnswerMessage(got.answer, limit - lead.subtasks, got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined));
           break;
         }
         case 'done': {

@@ -212,7 +212,7 @@ export type HandoffOutcome = 'ran' | 'revise' | 'declined';
 
 export type ParkedAnswerInput =
   | { decision: 'approve' | 'revise'; note?: string }
-  | { answer: string; /** A handoff: false when the operator did not run the commands. */ ran?: boolean; /** A handoff: how it was answered. */ outcome?: HandoffOutcome }
+  | { answer: string; /** A handoff: false when the operator did not run the commands. */ ran?: boolean; /** A handoff: how it was answered. */ outcome?: HandoffOutcome; /** A question of several answers: the ones chosen, by their place (2026-11-02). */ chosen?: number[] }
   | { choice: RetryChoice }
   | { decision: 'run' | 'skip' }
   | { resume: true }
@@ -845,7 +845,8 @@ export type Approval = {
   plan?: { title: string; plan: TaskPlan };
   /** Two chats: the lead's question for the operator, answered with text. */
   /** `commands`: by answer, the command the bot runs when that one is chosen, or null. */
-  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; handoff?: HandoffCard };
+  /** `multiple`: more than one of its answers may be chosen at a time (2026-11-02). */
+  question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean; handoff?: HandoffCard };
   /** Two chats: a subtask that ended for a technical reason, and what to do with it; see the server's `PendingApproval`. */
   retry?: { n: number; title: string; attempt: number; maxAttempts: number; category: SubtaskFailure; reason: string; sideEffects: SideEffects; changed: string[]; choices: RetryChoice[] };
 };
@@ -885,7 +886,7 @@ export type LeadRound = {
   notes?: string;
   /** `taskId` is the latest attempt's; `attempts` once there was more than one way to end (2026-10-25). */
   subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean; attempts?: SubtaskAttempt[]; maxAttempts?: number };
-  question?: { text: string; why?: string; options?: string[]; answer?: string; at?: string };
+  question?: { text: string; why?: string; options?: string[]; multiple?: boolean; answer?: string; chosen?: string[]; at?: string };
   /** This reply made the list of subtasks or changed it: its version, how many came and went, how many in all. */
   ledger?: { revision: number; added: number; removed: number; total: number };
 };
@@ -1417,6 +1418,9 @@ export const api = {
   /** `outcome`: for commands handed over, how the operator answered — ran them, sent them back for a correction, will not run them. */
   answerQuestion: (approvalId: string, text: string, outcome?: HandoffOutcome) =>
     call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify(outcome === undefined ? { text } : { text, outcome, ran: outcome === 'ran' }) }),
+  /** A question of several answers (2026-11-02): the ones chosen, by their place, and what was written besides. */
+  answerChosen: (approvalId: string, chosen: number[], text: string) =>
+    call<{ ok: boolean }>(`/approvals/${approvalId}/answer`, { method: 'POST', body: JSON.stringify({ text, chosen }) }),
   /** A subtask that ended for a technical reason (two chats): try it again, with a new worker, from where it is, or not. */
   answerRetry: (approvalId: string, choice: RetryChoice) => call<{ ok: boolean }>(`/approvals/${approvalId}/retry`, { method: 'POST', body: JSON.stringify({ choice }) }),
   /** After a Stop (two chats): the stopped message carried on, its subtask `n` tried again first, by a new worker if `fresh`. */

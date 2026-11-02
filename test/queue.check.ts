@@ -368,6 +368,49 @@ try {
   }, 120_000);
   t.check('answered, the lead carried on and ended it', led.status, 'done');
   t.truthy('the lead was told why it stopped, its question and the answer', toLead.startsWith('Continue assignment') && toLead.includes('set aside so that the queue') && toLead.includes('You asked: Should done.txt go at the root') && toLead.includes('The operator answers: at the root'), toLead.slice(0, 1500));
+
+  // A question of several answers set aside (2026-11-02): answered with the ones chosen, the lead is told them.
+  await hp.call('PUT', '/queue', { items: [{ id: 'l2', name: 'Led many', prompt: 'Find what done.txt should hold, and say it.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, lead: true }] });
+  hp.chat.script(reply.lead.ask('What should done.txt hold?', ['the date', 'the user name', 'nothing'], { understanding: 'What done.txt should hold, said in a sentence.', multiple: true }));
+  await hp.call('POST', '/queue/run');
+  await waitFor('the question of several answers to be set aside', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? true : null;
+  }, 120_000);
+  t.check('none chosen is refused', (await hp.raw('POST', '/queue/items/l2/answer', { answer: '', chosen: [] })).status, 400);
+  await hp.call('POST', '/queue/items/l2/answer', { answer: '', chosen: [1, 0] });
+  let toLeadMany = '';
+  hp.chat.script((m) => {
+    toLeadMany = m.text;
+    return reply.lead.done('done.txt holds the date and the user name, as the operator chose when asked; nothing else was needed.');
+  });
+  await hp.call('POST', '/queue/run');
+  await waitFor('the led task to end', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'waiting' && q.items[0]!.status !== 'running' ? true : null;
+  }, 120_000);
+  t.truthy('the lead was told the ones chosen', toLeadMany.includes('You asked: What should done.txt hold?') && toLeadMany.includes('The operator answered your question, choosing 2 of your answers:\n\n- the date\n- the user name'), toLeadMany.slice(0, 1500));
+
+  // The chat's own question set aside, answered with an answer that carries a command (2026-11-02): it is told to run it.
+  await hp.call('PUT', '/queue', { items: [{ id: 'c2', name: 'Asks', prompt: 'Write signed.txt once the operator agrees to it.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false }] });
+  hp.chat.script(reply.ask('Shall I write signed.txt now?', [{ answer: 'Yes, write it', run: "Set-Content -Path signed.txt -Value 'signed'" }, 'No']));
+  await hp.call('POST', '/queue/run');
+  await waitFor('the chat\'s question to be set aside', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? true : null;
+  }, 120_000);
+  await hp.call('POST', '/queue/items/c2/answer', { answer: 'Yes, write it' });
+  let toChat = '';
+  hp.chat.script((m) => {
+    toChat = m.text;
+    return reply.done('Nothing was left to do once the operator answered: signed.txt is written by the next step, as the answer said.');
+  });
+  await hp.call('POST', '/queue/run');
+  await waitFor('the asking task to end', async () => {
+    const q = await hp!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'waiting' && q.items[0]!.status !== 'running' ? true : null;
+  }, 120_000);
+  t.truthy('the chat was told the answer, and to send the command it carries', toChat.includes('The operator answers: Yes, write it') && toChat.includes("That answer carries a command: send `Set-Content -Path signed.txt -Value 'signed'` as your next step."), toChat.slice(0, 1500));
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

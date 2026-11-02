@@ -83,7 +83,9 @@ with everything you need in it.
 
 Always give `options`: two to four answers the operator can click, **your recommended one first** — the operator may
 have set the runner to take the first without asking. An open question gets its likely answers too; the operator can
-still write another. Never ask the operator to run a command by hand: give the worker a subtask that runs it — a
+still write another. When more than one of them may be chosen at once, add `"multiple": true`: the operator presses
+each one they want and sends them together, and you get the ones chosen, one a line, with anything they wrote
+besides. Never ask the operator to run a command by hand: give the worker a subtask that runs it — a
 command that reaches a platform with the operator's access (Azure, AWS, GitHub, Jira, Vercel, Kubernetes, publishing a
 package) waits for the operator's permission anyway.
 
@@ -128,7 +130,8 @@ The statuses, and what each one requires:
   done, "steps": [the stages, in order], "files": [the files that will change, if any], "verification": how the
   result will be shown right, "risks": what could go wrong or is still open }`; and `todo`, the subtasks the plan
   needs, in order, with their phases.
-- **`ask`** — `question`: what only the operator can answer, with `why`, and `options` when there are choices.
+- **`ask`** — `question`: what only the operator can answer, with `why`, and `options` when there are choices
+  (`"multiple": true` when more than one may be chosen).
 - **`done`** — `answer`: the result, in the form the assignment asked for, in full; `evidence`: what shows it.
 - **`blocked`** — `summary`: what was done and found, with its evidence; `needed`: what would let it go on.
 

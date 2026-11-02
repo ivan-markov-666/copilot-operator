@@ -433,8 +433,8 @@ export const reply = {
     return [reply.steps('Get-ChildItem'), reply.blocked()];
   },
   /** A question for the operator (2026-10-23): its answers, the recommended first; an answer may carry a command to run. */
-  ask(question: string, options: Array<string | { answer: string; run?: string }>, why?: string): string {
-    return fenced({ status: 'ask', steps: [], question, ...(why ? { why } : {}), options });
+  ask(question: string, options: Array<string | { answer: string; run?: string }>, why?: string, multiple?: boolean): string {
+    return fenced({ status: 'ask', steps: [], question, ...(why ? { why } : {}), options, ...(multiple ? { multiple } : {}) });
   },
   /** Commands handed to the operator to run themselves (2026-10-26): the lines, what should be seen, and the rest. */
   handoff(commands: string[], expect: string, extra: { why?: string; cwd?: string; files?: string[] } = {}): string {
@@ -504,7 +504,7 @@ export const reply = {
         },
       });
     },
-    ask(question = 'Which of the two folders is the one the assignment means: the old one or the new one?', options: string[] = [], extra: { understanding?: string; notes?: string; why?: string; todo?: unknown[] } = {}): string {
+    ask(question = 'Which of the two folders is the one the assignment means: the old one or the new one?', options: string[] = [], extra: { understanding?: string; notes?: string; why?: string; todo?: unknown[]; multiple?: boolean } = {}): string {
       return fenced({ status: 'ask', question, ...(options.length > 0 ? { options } : {}), why: 'the assignment names a folder that is there twice', ...extra });
     },
     done(answer: unknown = 'The work is finished: the worker wrote the file and read it back, and it holds exactly the text the assignment asked for.', evidence: string[] = [], extra: { understanding?: string; notes?: string } = {}): string {

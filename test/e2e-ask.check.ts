@@ -9,18 +9,25 @@
  *   permission — and the chat gets the answer with the command's output;
  * - an answer without one: the chat gets the answer, and goes on;
  * - Settings agree with what the bot proposes: no card; the recommended answer, the first, is taken and its command
- *   run, and the conversation says so; the lead's question too.
+ *   run, and the conversation says so; the lead's question too;
+ * - a question of several answers (2026-11-02): said in the format, its answers carrying no command; the card says so;
+ *   the ones chosen, by their place, checked, and told to the chat or the lead one a line, with what was written; a
+ *   queue task set aside at it answered the same way.
  *
  *   npm run check:e2e-ask
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseReply } from '../src/protocol/parser.js';
+import { parseLeadReply } from '../src/protocol/leadSchema.js';
+import { chosenAnswer, chosenSaid } from '../src/orchestrator/chosenAnswers.js';
+import { parkedAnswerFrom } from '../src/queue/queue.js';
+import type { PendingApproval } from '../src/session/model.js';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
 const t = new Tally();
-type Card = { id: string; actor?: string; question?: { text: string; options: string[]; commands?: Array<string | null> } };
+type Card = { id: string; actor?: string; question?: { text: string; options: string[]; commands?: Array<string | null>; multiple?: boolean } };
 
 async function scenario(title: string, settings: Record<string, unknown>, body: (h: Harness) => Promise<void>): Promise<void> {
   console.log(`\n--- ${title} ---`);
@@ -51,6 +58,25 @@ console.log('--- the format ---');
   t.truthy('one answer is not enough: sent back, with how to write it', !one.ok && /at least two "options"/.test(one.detail ?? ''), one);
   const withSteps = parseReply('```json\n' + JSON.stringify({ status: 'ask', question: 'Shall I sign in?', options: ['Yes', 'No'], steps: [{ id: 1, type: 'command', cmd: 'az login' }] }) + '\n```', OPTS);
   t.truthy('nor does a question carry steps: the command goes in an answer', !withSteps.ok && /"ask" for the operator's answer/.test(withSteps.detail ?? ''), withSteps);
+  // More than one answer at a time (operator, 2026-11-02): said by the chat, its answers carrying no command.
+  const many = parseReply(reply.ask('Which checks shall I add?', ['Unit tests', 'An end-to-end check', 'A lint rule'], undefined, true), OPTS);
+  t.check('a question of several answers is read as one, a question of one answer unless it says so', [many.ok ? [many.reply.status, many.reply.multiple] : many, asked.ok ? asked.reply.multiple : asked], [['ask', true], false]);
+  const manyRun = parseReply(reply.ask('Which shall I run?', [{ answer: 'The tests', run: 'npm test' }, 'The linter'], undefined, true), OPTS);
+  t.truthy('its answers carry no command: sent back, with what to do instead', !manyRun.ok && /cannot carry "run"/.test(manyRun.detail ?? ''), manyRun);
+  const leadMany = parseLeadReply(reply.lead.ask('Which of the folders should the lead clean?', ['the old one', 'the new one'], { multiple: true }));
+  const leadOne = parseLeadReply(reply.lead.ask('Which of the folders should the lead clean?', ['the old one'], { multiple: true }));
+  t.check('the lead\'s too, with two answers to choose from at least', [leadMany.ok ? leadMany.reply.multiple : leadMany, leadOne.ok], [true, false]);
+}
+
+console.log('\n--- the answers chosen ---');
+{
+  const q = { options: ['A', 'B', 'C'], multiple: true };
+  t.check('the ones chosen in their order, once each, and what was written under them', chosenAnswer(q, [2, 0, 2], ' and X '), { answer: '- A\n- C\n\nand X', chosen: ['A', 'C'], written: 'and X' });
+  t.check('none chosen, a place that is not there, not a number: refused', [chosenAnswer(q, [], ''), chosenAnswer(q, [3], ''), chosenAnswer(q, ['0'], ''), chosenAnswer(q, 1, '')].map((r) => 'problem' in r), [true, true, true, true]);
+  t.check('a question of one answer takes no choice of several', 'problem' in chosenAnswer({ options: ['A', 'B'] }, [0], ''), true);
+  t.check('what the chat is told', [chosenSaid({ chosen: ['A', 'C'], written: 'and X' }), chosenSaid({ chosen: ['B'] })], ['choosing 2 of your answers:\n\n- A\n- C\n\nAnd wrote:\n\nand X', 'choosing one of your answers:\n\n- B']);
+  const parked = { kind: 'question' as const, approval: { question: { text: 'Which?', options: ['A', 'B', 'C'], multiple: true } } as unknown as PendingApproval };
+  t.check('a queue task set aside at it is answered the same way', [parkedAnswerFrom(parked, { answer: '', chosen: [1] }), 'problem' in parkedAnswerFrom(parked, { answer: '', chosen: [] }), parkedAnswerFrom(parked, { answer: 'none of them' })], [{ kind: 'question', answer: '- B', chosen: ['B'] }, true, { kind: 'question', answer: 'none of them' }]);
 }
 
 await scenario('a question, answered with the answer that carries a command: the bot runs it, and the chat is told', { execution: { mode: 'confirm' } }, async (h) => {
@@ -89,10 +115,55 @@ await scenario('a question, answered with an answer that carries no command: the
   await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   const card = await waitFor('the question', async () => (await h.call<Card[]>('GET', '/approvals')).find((a) => !!a.question), 60_000);
   t.check('asked in a run without asking too: only the operator can answer', !!card, true);
+  t.check('a question of one answer takes no choice of several', (await h.raw('POST', `/approvals/${card.id}/answer`, { text: '', chosen: [0] })).status, 400);
   await h.call('POST', `/approvals/${card.id}/answer`, { text: 'No, the word alone' });
   await h.idle();
   t.truthy('the answer reached the chat', told.startsWith('The operator answered your question') && told.includes('"No, the word alone"'), told.slice(0, 300));
   t.check('and the work went on to its end', (await h.session(s!.id)).tasks[0]!.status, 'done');
+});
+
+await scenario('a question of several answers: the ones chosen, and what was written, reach the chat', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'ask-many'));
+  let told = '';
+  h.chat.script(
+    reply.ask('Which lines should signed.txt hold?', ['The word signed', 'The date', 'The user name'], 'The task does not say.', true),
+    (m) => {
+      told = m.text;
+      return reply.steps(SIGN_IN);
+    },
+    reply.done('signed.txt holds the word signed, as the operator chose, and was read back to check it.'),
+  );
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  const card = await waitFor('the question', async () => (await h.call<Card[]>('GET', '/approvals')).find((a) => !!a.question), 60_000);
+  t.check('the card says more than one may be chosen', [card.question?.options, card.question?.multiple], [['The word signed', 'The date', 'The user name'], true]);
+  const refused = [(await h.raw('POST', `/approvals/${card.id}/answer`, { text: '', chosen: [] })).status, (await h.raw('POST', `/approvals/${card.id}/answer`, { text: '', chosen: [5] })).status];
+  t.check('none chosen, or one that is not there: refused, and the card still waits', [refused, (await h.call<Card[]>('GET', '/approvals')).some((a) => a.id === card.id)], [[400, 400], true]);
+  await h.call('POST', `/approvals/${card.id}/answer`, { text: 'Nothing else.', chosen: [2, 0] });
+  await h.idle();
+  t.check('the chat is told the ones chosen, in their order, and what was written',
+    told.split('\n\nGo on')[0],
+    'The operator answered your question ("Which lines should signed.txt hold?"), choosing 2 of your answers:\n\n- The word signed\n- The user name\n\nAnd wrote:\n\nNothing else.');
+  t.check('and the work went on to its end', (await h.session(s!.id)).tasks[0]!.status, 'done');
+});
+
+await scenario("the lead's question of several answers: the ones chosen reach the lead, and stay on its round", { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Create result.txt holding the word hello.', model: 'Think deeper', lead: true });
+  let told = '';
+  h.chat.script(
+    reply.lead.ask('Which of these should result.txt hold besides hello?', ['the date', 'the user name', 'nothing else'], { understanding: 'Goal: result.txt holding hello. Done when it is there and read back.', multiple: true }),
+    (m) => {
+      told = m.text;
+      return reply.lead.done(undefined, ['result.txt']);
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  const card = await waitFor('the lead\'s question', async () => (await h.call<Card[]>('GET', `/approvals?session=${sent.threadId}`)).find((a) => !!a.question), 20_000);
+  t.check('the card says more than one may be chosen, asked by the lead', [card.question?.multiple, card.actor], [true, 'lead']);
+  await h.call('POST', `/approvals/${card.id}/answer`, { text: '', chosen: [0, 1] });
+  await h.idle();
+  t.check('the lead is told the ones chosen', told.split('\n\nGo on')[0], 'The operator answered your question, choosing 2 of your answers:\n\n- the date\n- the user name');
+  const round = ((await h.session(sent.threadId)).tasks[0] as unknown as { lead?: { rounds: Array<{ question?: { multiple?: boolean; answer?: string; chosen?: string[] } }> } }).lead?.rounds[0]?.question;
+  t.check('and its round keeps the question\'s kind, the answer and the ones chosen', [round?.multiple, round?.answer, round?.chosen], [true, '- the date\n- the user name', ['the date', 'the user name']]);
 });
 
 await scenario('Settings agree with what the bot proposes: no card; the recommended answer taken and its command run', { execution: { mode: 'unattended', isolation: 'none-accepted', questions: 'agree' } }, async (h) => {

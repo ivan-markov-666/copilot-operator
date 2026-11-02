@@ -42,6 +42,7 @@ import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, checkAccessRefusal, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
 import { handoffCard, handoffOutcomeOf, handoffResultMessage, HANDOFF_NOBODY } from './handoff.js';
+import { chosenSaid } from './chosenAnswers.js';
 import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
 import { scriptsNote } from '../exec/scriptKinds.js';
 import { collectPolicyManifest, describePolicyManifest } from '../exec/policyManifest.js';
@@ -164,10 +165,12 @@ export type RunDeps = {
     why?: string;
     options: string[];
     commands?: Array<string | null>;
+    /** More than one of its answers may be chosen (2026-11-02); answered then with the ones chosen, and any text besides. */
+    multiple?: boolean;
     /** Commands the chat hands to the operator to run themselves (2026-10-26); answered with what they printed, a correction, or not run. */
     handoff?: HandoffCard;
     actor?: Actor;
-  }) => Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome } | 'stop'>;
+  }) => Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string } | 'stop'>;
   /**
    * Two chats (2026-10-25): what to do with a subtask that failed for a technical reason, asked of the operator on a card
    * under the subtask (`sessionId`/`taskId`: the worker's attempt it is shown at). Absent: nobody is there to ask.
@@ -3114,6 +3117,8 @@ export async function runTask(
         const options = reply.options;
         const agree = cfg.execution.questions === 'agree' || !deps.askQuestion;
         let answer = options[0]!.answer;
+        // A question of several answers (2026-11-02): the ones the operator chose, and what they wrote besides.
+        let many: { chosen: string[]; written?: string } | undefined;
         if (agree) {
           sink.event('question-agreed', { question, answer, why: cfg.execution.questions === 'agree' ? 'settings' : 'nobody to ask' },
             `the chat asked: ${question} — answered as it recommends (${cfg.execution.questions === 'agree' ? 'Settings agree with what the bot proposes' : 'nobody is there to ask'}): ${answer}`);
@@ -3129,6 +3134,7 @@ export async function runTask(
             ...(reply.why?.trim() ? { why: reply.why.trim() } : {}),
             options: options.map((o) => o.answer),
             commands: options.map((o) => o.run ?? null),
+            ...(reply.multiple ? { multiple: true } : {}),
             actor: planning ? 'plan' : 'worker',
           });
           await setTask((t) => {
@@ -3136,10 +3142,11 @@ export async function runTask(
           });
           if (got === 'stop' || signal?.aborted) return await finish('aborted', 'stopped by the operator at its question', undefined, lastMarkdown);
           answer = got.answer;
-          sink.event('question-answered', { question, answer }, `the operator answered: ${answer}`);
+          if (got.chosen) many = { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) };
+          sink.event('question-answered', { question, answer, ...(many ? { chosen: many.chosen } : {}) }, `the operator answered: ${answer}`);
         }
         await record('QUESTION', `${question}\n\nAnswer${agree ? ' (as the chat recommends)' : ''}: ${answer}`);
-        const chosen = options.find((o) => o.answer === answer);
+        const chosen = many ? undefined : options.find((o) => o.answer === answer);
         if (chosen?.run) {
           // Run as this reply's one step: through the step loop below, its output reported as any step's.
           chosenRun = agree && deps.askQuestion === undefined ? null : chosen.run.trim();
@@ -3151,9 +3158,10 @@ export async function runTask(
               'The runner ran the command that answer carries — step 1 below, its output with it. Go on from there.',
           );
         } else {
-          const message =
-            `${agree ? 'The runner took your recommended answer' : 'The operator answered your question'} ("${question}"): "${answer}".\n\n` +
-            'Go on with the work from here, in the same format.';
+          const message = many
+            ? `The operator answered your question ("${question}"), ${chosenSaid(many)}\n\nGo on with the work from here, in the same format.`
+            : `${agree ? 'The runner took your recommended answer' : 'The operator answered your question'} ("${question}"): "${answer}".\n\n` +
+              'Go on with the work from here, in the same format.';
           await record('ANSWER', message);
           await pacer.throttleSend();
           const before = await transport.sendAndConfirm(message);

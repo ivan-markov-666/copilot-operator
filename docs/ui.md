@@ -859,6 +859,22 @@ answer. The lead is told to always give answers too. Settings → Execution → 
 "Ask me" (default) or "Agree with what the bot proposes" (`execution.questions: agree`, confirmed when chosen):
 platform commands run and every question — the chat's, the lead's — takes the first answer, the conversation saying so.
 
+**Questions of several answers, and what "Copy" takes (2026-11-02).** The chat and the lead may add `"multiple": true`
+to a question (`replySchema.ts`, `leadSchema.ts`; told in `prompts/level1.md` and `prompts/lead1.md`): more than one
+of its answers may be chosen. Its answers carry no `run` then (refused, with what to do instead: the commands as
+steps once the answer comes back), and the lead's needs two answers at least. On the card (`web/app/questionAnswers.tsx`,
+the same in the chat and on a queue task set aside at it) the answers are the same buttons, not tick boxes: a press
+marks one chosen (`aria-pressed`, filled) and a second takes it off; a line under the question says so, and one button,
+"Send the choice", sends the ones chosen with what is written in "Your answer" — or what is written alone. The API
+takes them by their place (`POST /approvals/:id/answer` and `/queue/items/:id/answer` with `chosen: [0, 2]`, checked
+by `orchestrator/chosenAnswers.ts`: at least one, each once, none that is not there, none on a question of one
+answer); the answer kept is the chosen ones as a list with the text under it, and the chat or the lead is told
+"choosing N of your answers:" with them one a line. "Settings agree" takes the first. "Copy the question" takes the
+question, why, every answer offered — the recommended one and what one runs said — and how it is answered on the card;
+on the record of a lead's question answered, the answers it offered. A queue task set aside at a question, answered
+with an answer that carries a command, is told to send that command as its next step. Verified by
+`npm run check:e2e-ask`, `check:queue` and `check:ui`.
+
 **Programs, and read only (2026-10-26).** Settings has a section, "Programs the bot may start", for the allowlist (`execution.allowedPrograms`), which used to be in the settings file only. Shown in the order of their names since 2026-10-27 (the file keeps its own). A program is added by name (folder and `.exe` dropped) and taken off with its ✕ after a confirm. The last one cannot be taken off, since an empty list turns the gate off. "Put back the defaults" removes both keys from the file. A policy lock that narrows the list is said there.
 
 Programs that reach a platform (`platformTools()`) are listed as rows with a mode:

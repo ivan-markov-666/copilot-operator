@@ -497,10 +497,13 @@ export class OperatorController {
     return this.ops.chatRetrySubtask(id, taskId, n, body?.fresh === true).catch(fail);
   }
 
-  /** The lead's question (two chats): the operator's answer, as text. Stopping the task is `approvals/:id` with abort. */
+  /**
+   * A question of the chat or the lead: the operator's answer, as text; for one of several answers (2026-11-02), the
+   * ones chosen by their place in `chosen`, with any text besides. Stopping the task is `approvals/:id` with abort.
+   */
   @Post('approvals/:id/answer')
-  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown; ran?: unknown; outcome?: unknown }): unknown {
-    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '', body?.ran === false ? false : undefined, typeof body?.outcome === 'string' ? body.outcome : undefined);
+  answerQuestion(@Param('id') id: string, @Body() body: { text?: unknown; ran?: unknown; outcome?: unknown; chosen?: unknown }): unknown {
+    const result = this.ops.answerQuestion(id, typeof body?.text === 'string' ? body.text : '', body?.ran === false ? false : undefined, typeof body?.outcome === 'string' ? body.outcome : undefined, body?.chosen);
     if (!result.ok) throw new BadRequestException(result.problem);
     return result;
   }

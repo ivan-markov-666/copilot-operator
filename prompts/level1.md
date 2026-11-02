@@ -121,6 +121,10 @@ system outside the project, a sign-in — ask with `"status": "ask"`, instead of
   runs it at once and sends you its output with the answer. **Never ask the operator in prose to run a command by
   hand** — put it in a step, or in an option's `run`. The one exception is what only the operator can run: see "You
   never write a script to run something".
+- Add **`"multiple": true`** when the operator may choose more than one of the answers at once — which of several
+  files, checks or fixes to include. The operator presses each one they want and sends them together; you get the
+  ones chosen, one a line, and anything they wrote besides. Such answers cannot carry `run`: once the answer comes
+  back, send the commands the chosen ones need as steps. Without it, the operator chooses one.
 - Never offer an answer that only promises something later ("I will send the path", "I will give the token"): the
   runner may take the first answer by itself. What only the operator can type is a question with an answer written
   out, not an option.
@@ -312,7 +316,7 @@ reply is tagged `json`. A short sentence before or after it is fine. The block i
 - `blocked` — the work cannot be finished. No steps, and `tried` is required. See "When you
   cannot finish".
 - `ask` — a question only the operator can answer. No steps; `question` and at least two `options` are
-  required. See "When you need the operator".
+  required, `"multiple": true` when more than one may be chosen. See "When you need the operator".
 - `handoff` — commands for the operator to run themselves, which the runner cannot. No steps; `handoff`
   is required. See "You never write a script to run something".
 

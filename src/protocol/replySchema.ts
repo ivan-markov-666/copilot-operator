@@ -192,6 +192,8 @@ export const ReplySchema = z
     question: z.string().optional(),
     why: z.string().optional(),
     options: z.array(OptionSchema).default([]),
+    /** `ask` whose answers may be chosen more than one at a time (operator, 2026-11-02); one at a time without it. */
+    multiple: z.boolean().default(false),
     /** `handoff` — a script written during the work, for the operator to run themselves (2026-10-26). */
     handoff: HandoffSchema.optional(),
     steps: z.array(StepSchema).default([]),
@@ -234,6 +236,11 @@ export const ReplySchema = z
     message:
       'status "ask" requires a "question" for the operator and at least two "options", your recommended one first: ' +
       '[{ "answer": "what the operator clicks" }, { "answer": "...", "run": "a command the runner runs if this is chosen" }].',
+  })
+  .refine((r) => r.status !== 'ask' || !r.multiple || r.options.every((o) => !o.run), {
+    message:
+      'a question with "multiple": true cannot carry "run" in its options: the operator may choose several at once. Ask it without ' +
+      '"run", and send the commands the chosen answers need as steps once the answer comes back.',
   })
   .refine((r) => r.status !== 'handoff' || !!r.handoff, {
     message:

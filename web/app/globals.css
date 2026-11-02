@@ -1163,7 +1163,11 @@ button.linkish:hover { text-decoration: underline; }
 .cs-ask-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 /* An answer to click, and the command it runs when it carries one (2026-10-23). */
 .cs-option { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: start; }
-.cs-option-run { font-size: calc(11.5px * var(--scale)); opacity: 0.85; background: none; padding: 0; white-space: pre-wrap; word-break: break-word; }
+/* An answer chosen, on a question of several (2026-11-02): filled as a pressed button, kept so once the choice is sent. */
+.cs-option[aria-pressed='true'] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.cs-option[aria-pressed='true']:disabled { opacity: 1; }
+.cs-many-hint { margin: 6px 0 0; }
+.cs-option-run {font-size: calc(11.5px * var(--scale)); opacity: 0.85; background: none; padding: 0; white-space: pre-wrap; word-break: break-word; }
 
 /* Who works, or asks (2026-10-22): one colour for each, wherever it is said — the status bar, the chat, the cards. */
 .actor-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: calc(11.5px * var(--scale)); font-weight: 600; line-height: 1.5; letter-spacing: 0; text-transform: none; white-space: nowrap; vertical-align: middle; }

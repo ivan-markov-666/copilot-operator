@@ -16,6 +16,7 @@ import { useChoice } from '../lib/useChoice';
 import { CopyButton } from './copyButton';
 import { PlanView } from './planView';
 import { PlanNoteHint, ReviseButton } from './planNote';
+import { QuestionAnswers, questionCopy } from './questionAnswers';
 import { RichText } from './richText';
 import { HandoffDetails } from './handoffView';
 
@@ -96,26 +97,16 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           <RichText text={a.question.text} />
           {a.question.why && <p className="muted small">{a.question.why}</p>}
           <div className="cs-copy-row">
-            <CopyButton text={[a.question.text, a.question.why ?? '', ...a.question.options.map((o, i) => `${i + 1}. ${o}`)].filter(Boolean).join('\n')} what="chat.copyQuestion" />
+            <CopyButton text={questionCopy(t, a.question, true)} what="chat.copyQuestion" />
           </div>
-          {a.question.options.length > 0 && (
-            <div className="row cs-options">
-              {a.question.options.map((o, i) => (
-                <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} {...mark(`option-${i}`)} onClick={() => void send(`option-${i}`, { answer: o })}>
-                  {o}
-                </button>
-              ))}
-            </div>
-          )}
-          <label htmlFor={`${id}-answer`} className="small">
-            {t('lead.answer')}
-          </label>
-          <textarea id={`${id}-answer`} className="prose" rows={2} value={text} onChange={(e) => setText(e.target.value)} disabled={locked} />
-          <div className="row">
-            <button type="button" className="primary" {...mark('written')} disabled={locked || !text.trim()} onClick={() => void send('written', { answer: text.trim() })}>
-              {t('lead.send')}
-            </button>
-          </div>
+          <QuestionAnswers
+            id={id}
+            q={a.question}
+            locked={locked}
+            mark={mark}
+            rows={2}
+            onAnswer={(which, value) => void send(which, { answer: value.text.trim(), ...(value.chosen ? { chosen: value.chosen } : {}) })}
+          />
         </>
       )}
       {parked.kind === 'retry' && a.retry && (

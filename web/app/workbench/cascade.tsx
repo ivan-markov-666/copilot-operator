@@ -40,6 +40,7 @@ import { FileIcon } from './fileIcon';
 import { LeadProgress, LedgerChange } from './leadPlan';
 import { NewBranchButton } from './newBranch';
 import { ParkedCard } from '../parkedCard';
+import { QuestionAnswers, questionCopy } from '../questionAnswers';
 
 const THREAD_KEY = 'cop.chat.thread';
 /** Plan mode for the next new conversation, as last chosen in this browser. */
@@ -1146,7 +1147,7 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
               <RichText text={r.question.text} />
               {/* Each with its "Copy" (operator, 2026-10-26: "a copy button for the lead's questions too"). */}
               <div className="cs-copy-row">
-                <CopyButton text={r.question.text} what="chat.copyQuestion" />
+                <CopyButton text={questionCopy(t, { ...r.question, options: r.question.options ?? [] }, false)} what="chat.copyQuestion" />
               </div>
               <p className="cs-who">{t('lead.answered')}</p>
               <RichText text={r.question.answer} />
@@ -1519,18 +1520,17 @@ function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecide
 function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
   const { t } = useT();
   const id = useId();
-  const [text, setText] = useState('');
   const { locked, err, choose, mark } = useChoice();
   const q = approval.question!;
   // The lead's question, or since 2026-10-23 the chat's own.
   const asker = approval.actor ?? 'lead';
-  // `which`: the answer's own button, an offered answer by its place or the one written out.
-  const answer = async (which: string, value: string) => {
-    if (!value.trim()) return;
+  // `which`: the answer's own button, an offered answer by its place, the one written out or the ones chosen.
+  const answer = async (which: string, value: { text: string; chosen?: number[] }) => {
+    if (!value.chosen && !value.text.trim()) return;
     onDecided(
       approval.id,
       await choose(which, async () => {
-        await api.answerQuestion(approval.id, value);
+        await (value.chosen ? api.answerChosen(approval.id, value.chosen, value.text) : api.answerQuestion(approval.id, value.text));
       }),
     );
   };
@@ -1551,34 +1551,13 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
       <RichText text={q.text} />
       {q.why && <p className="muted small">{q.why}</p>}
       <div className="cs-copy-row">
-        <CopyButton text={[q.text, q.why ?? '', ...q.options.map((o, i) => `${i + 1}. ${o}`)].filter(Boolean).join('\n')} what="chat.copyQuestion" />
+        <CopyButton text={questionCopy(t, q, true)} what="chat.copyQuestion" />
       </div>
-      {/*
-        Its answers to click (2026-10-23), the chat's recommended one first; an answer that carries a command says it
-        runs it, and the bot runs it when it is chosen — nothing for the operator to type.
-      */}
-      {q.options.length > 0 && (
-        <div className="row cs-options">
-          {q.options.map((o, i) => (
-            <button key={o} type="button" className={i === 0 ? 'primary cs-option' : 'cs-option'} {...mark(`option-${i}`)} onClick={() => void answer(`option-${i}`, o)} title={i === 0 ? t('chat.optionRecommended') : undefined}>
-              <span>{o}</span>
-              {q.commands?.[i] && <code className="cs-option-run">{t('chat.optionRuns', { cmd: q.commands[i]! })}</code>}
-            </button>
-          ))}
-        </div>
-      )}
-      <label htmlFor={`${id}-answer`} className="small">
-        {t('lead.answer')}
-      </label>
-      <textarea id={`${id}-answer`} className="prose" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('lead.answerPlaceholder')} disabled={locked} />
-      <div className="row">
-        <button type="button" className="primary" {...mark('written')} disabled={locked || !text.trim()} onClick={() => void answer('written', text)}>
-          {t('lead.send')}
-        </button>
+      <QuestionAnswers id={id} q={q} locked={locked} mark={mark} onAnswer={(which, value) => void answer(which, value)}>
         <button type="button" className="danger" {...mark('stop')} onClick={() => void stop()}>
           {t('lead.stop')}
         </button>
-      </div>
+      </QuestionAnswers>
       {err && (
         <p className="err" role="alert">
           {err}
