@@ -135,8 +135,9 @@ try {
       return reply.steps('Get-ChildItem');
     },
     reply.blocked(),
-    (m) => {
+    async (m) => {
       texts.push(m.text);
+      midQueue = await h!.call<{ queue?: boolean }>('GET', '/activity');
       return reply.steps(write('c.txt', 'c'));
     },
     reply.done(),
@@ -146,6 +147,8 @@ try {
     },
     reply.done(),
   );
+  // Whether the queue's turn is still going, for "Done" to wait for its end (2026-11-03).
+  let midQueue = null as { queue?: boolean } | null;
   await h.call('POST', '/queue/run');
   t.check('running again while it runs is refused', (await h.raw('POST', '/queue/run')).status, 400);
   const done = await waitFor('the queue to end', async () => {
@@ -153,6 +156,9 @@ try {
     return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
   }, 120_000);
   t.check('one failed; what depends on it skipped, and on that; the others done', done.items.map((x) => x.status), ['failed', 'skipped', 'done', 'done', 'skipped']);
+  t.check('while its turn goes the activity says the queue is at work, for "Done" to wait for its end', midQueue?.queue, true);
+  await waitFor('the turn of the queue to be over', async () => !(await h!.call<{ queue?: boolean }>('GET', '/activity')).queue, 10_000).catch(() => undefined);
+  t.check('its turn over, it says nothing of the queue', (await h.call<{ queue?: boolean }>('GET', '/activity')).queue, undefined);
   t.check('each skipped one says why', [done.items[1]!.why, done.items[4]!.why], ['it depends on "Find the old report and summarise it.", which failed', 'it depends on "Turn the summary into a slide.", which was skipped']);
 
   const sessions = await Promise.all(done.items.filter((x) => x.sessionId).map((x) => h!.call<SessionView>('GET', `/sessions/${x.sessionId}`)));

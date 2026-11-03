@@ -763,6 +763,11 @@ export const ko: Dictionary = {
   'def.title': '설정',
   'def.intro': '채팅이 작업하는 폴더, Copilot 로그인, 모델, 작업 실행 방식을 설정합니다. 각 필드 이름 옆의 ⓘ에서 그 필드의 용도와 도움이 되는 점을 볼 수 있습니다.',
   'def.autoSave': '이 페이지의 모든 항목은 변경하는 즉시 자동으로 저장됩니다. 따로 누를 것은 없습니다.',
+  'def.live': '메시지가 작업 중일 때도 여기서 바꾼 것은 가능한 경우 바로 적용됩니다. 각 단계를 판단하는 규칙, 한도, 대기 시간, 보고서입니다. 모델, 계획 모드, 프로젝트, 스킬 등은 다음 메시지부터, 채팅 창 자체의 설정은 창이 다음에 열릴 때부터 적용됩니다.',
+  'live.now': '저장했습니다. 진행 중인 작업에 바로 적용됩니다.',
+  'live.next': '저장했습니다. 작업 중인 메시지는 시작할 때의 설정을 유지하고, 다음 메시지부터 적용됩니다.',
+  'live.window': '저장했습니다. 채팅 창이 다음에 열릴 때부터 적용됩니다.',
+  'live.close': '닫기',
   'info.about': '‘{name}’ 정보',
   'l1.title': '기본 프롬프트(레벨 1)',
   'l1.readOnly': '읽기 전용',
@@ -989,6 +994,8 @@ export const ko: Dictionary = {
   'proj.otherNotRepo': 'git 리포지토리 아님',
   'approval.waitingHere': '한 단계가 사용자의 결정을 기다리고 있습니다',
   'awaiting.title': '사용자의 작업을 기다리는 중',
+  'done.label': '완료',
+  'done.ended': '끝남: {status}',
   'approval.waitingHereWhy':
     '단계가 기다리는 동안 모든 페이지에 표시되므로, 묻고 있는 페이지가 열려 있지 않다는 이유로 실행이 멈춘 것처럼 보이는 일이 없습니다.',
   // Scripts the bot may run, three ways to run commands, revise and resubmit (2026-10-27).

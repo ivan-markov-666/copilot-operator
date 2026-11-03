@@ -272,6 +272,11 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     signal,
     onGap: (ms) => sink.event('pacing-gap', { ms, lead: true }, `the next message to the lead waits ${Math.ceil(ms / 1000)} s: Settings ask for a pause between messages`),
   });
+  // The pauses as Settings have them when one is saved while the lead works (2026-11-03); the worker's task says the rest.
+  const unlive =
+    deps.live?.onChange(() =>
+      pacer.retune({ enabled: cfg.pacing.enabled, settleMs: cfg.pacing.settleMs, maxMessagesPerHour: cfg.pacing.maxMessagesPerHour, gapMs: gapFrom(cfg.pacing) }),
+    ) ?? (() => undefined);
   let limitHit: TaskLimit | undefined;
 
   /*
@@ -290,7 +295,9 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
   };
   // No message to the lead longer than Settings allow as text: the rest goes attached (2026-10-22).
   const leadChat = redactsMessages(limitsMessageLength(holdsWhilePaused(transport, holdHere), {
-    max: cfg.limits.maxMessageChars,
+    get max() {
+      return cfg.limits.maxMessageChars;
+    },
     dir: log.path('messages'),
     onLong: ({ chars, max, file }) =>
       sink.event('message-long', { chars, max, file, lead: true }, `a message to the lead of ${chars} characters is over the ${max} sent as text: its beginning is sent, the whole of it attached as ${file}`, 'warn'),
@@ -370,6 +377,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     });
     await record(`TASK ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
     sink.event('task-finished', { status, reason, iterations: lead.rounds.length, subtasks: lead.subtasks, lead: true }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
+    unlive();
     await log.close();
     return { status, iterations: lead.rounds.length, summary, reason };
   };
@@ -468,9 +476,16 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
    * many times more, so far apart. Only for two chats.
    */
   const retrying = {
-    mode: (cfg.limits.subtaskRetryMode ?? 'ask') as RetryMode,
-    maxAttempts: 1 + Math.max(0, Math.min(3, cfg.limits.subtaskRetries ?? 2)),
-    waitMs: Math.max(0, cfg.limits.subtaskRetryWaitSec ?? 15) * 1000,
+    // As Settings have them when a subtask is tried again (2026-11-03: a save takes effect at once).
+    get mode(): RetryMode {
+      return (cfg.limits.subtaskRetryMode ?? 'ask') as RetryMode;
+    },
+    get maxAttempts(): number {
+      return 1 + Math.max(0, Math.min(3, cfg.limits.subtaskRetries ?? 2));
+    },
+    get waitMs(): number {
+      return Math.max(0, cfg.limits.subtaskRetryWaitSec ?? 15) * 1000;
+    },
   };
   /** A pause the run's Stop ends. */
   const pauseFor = (ms: number): Promise<void> =>
@@ -781,37 +796,37 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       markdown = await tell(assignment);
     }
 
-    const maxFormat = Math.max(0, cfg.limits.maxFormatRetries ?? 2);
+    const maxFormat = (): number => Math.max(0, cfg.limits.maxFormatRetries ?? 2);
     let formatRetries = 0;
     // A message carried on was restated when it began: its first reply now need not do it again.
     let understood = carryingOn;
     let planVersion = 0;
     let revisions: TaskPlan['revisions'] = [];
-    const maxRounds = Math.max(1, cfg.limits.maxIterations);
+    const maxRounds = (): number => Math.max(1, cfg.limits.maxIterations);
 
     for (;;) {
       if (signal?.aborted) return await finish('aborted', 'stopped by the operator');
-      if (lead.rounds.length >= maxRounds) {
-        limitHit = { setting: 'maxIterations', value: maxRounds };
-        return await finish('limit-reached', `maxIterations (${maxRounds}) reached: the lead's replies`);
+      if (lead.rounds.length >= maxRounds()) {
+        limitHit = { setting: 'maxIterations', value: maxRounds() };
+        return await finish('limit-reached', `maxIterations (${maxRounds()}) reached: the lead's replies`);
       }
       const parsed = parseLeadReply(markdown);
       if (!parsed.ok) {
         formatRetries += 1;
-        if (formatRetries > maxFormat) {
-          limitHit = { setting: 'maxFormatRetries', value: maxFormat };
-          return await finish('limit-reached', `maxFormatRetries (${maxFormat}) reached: the lead's replies did not match its format (${parsed.detail})`);
+        if (formatRetries > maxFormat()) {
+          limitHit = { setting: 'maxFormatRetries', value: maxFormat() };
+          return await finish('limit-reached', `maxFormatRetries (${maxFormat()}) reached: the lead's replies did not match its format (${parsed.detail})`);
         }
-        sink.event('lead-format-retry', { reason: parsed.reason, detail: parsed.detail, retry: formatRetries }, `the lead's reply did not match its format, asked again (${formatRetries} of ${maxFormat})`, 'warn');
-        markdown = await tell(leadFormatErrorMessage(parsed, formatRetries, maxFormat));
+        sink.event('lead-format-retry', { reason: parsed.reason, detail: parsed.detail, retry: formatRetries }, `the lead's reply did not match its format, asked again (${formatRetries} of ${maxFormat()})`, 'warn');
+        markdown = await tell(leadFormatErrorMessage(parsed, formatRetries, maxFormat()));
         continue;
       }
       const r = parsed.reply;
       if (!understood && !r.understanding) {
         formatRetries += 1;
-        if (formatRetries > maxFormat) {
-          limitHit = { setting: 'maxFormatRetries', value: maxFormat };
-          return await finish('limit-reached', `maxFormatRetries (${maxFormat}) reached: the lead did not restate the assignment`);
+        if (formatRetries > maxFormat()) {
+          limitHit = { setting: 'maxFormatRetries', value: maxFormat() };
+          return await finish('limit-reached', `maxFormatRetries (${maxFormat()}) reached: the lead did not restate the assignment`);
         }
         markdown = await tell(UNDERSTANDING_FIRST);
         continue;

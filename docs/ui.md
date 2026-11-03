@@ -604,6 +604,13 @@ POST   /api/login                    POST /api/browse-folder   PUT /api/home (th
 
 ## Settings
 
+**Saved while work goes on (2026-11-03).** The operator: "when I change a setting in Settings, if it can be, let it take effect at once, even while a task is running". A run used to read its settings once, at its start. Now each run keeps its own (`LiveSettings` in `config/live.ts`, the `cfg` every part of it holds), and `PUT /settings` (`OperatorService.saveSettings`) has each run at work take what can change under a message, in place:
+- **at once**: the rules a step is judged by — programs, scripts, read only, run without asking, downloads, deny patterns (a chat's kept as the chat's), isolation, the variables a step is given — and Settings' agreement with the bot; the time a command may take; the limits (the lead's number of subtasks apart, which its assignment states); the pauses (`Pacer.retune`); the reports and their redaction. Each is read where it is used — the limits a task used to copy at its start are read when they are asked (`minApproaches()`, `maxCheckRounds()` and the rest, the progress guard, the message length, the redaction), and the step rules the approval screen judges by are set again (`stepRules`). A lock that now holds runs to asking takes a run that started unattended back to asking;
+- **from the next message**: the models, plan mode, the default shell and folder, the project, the skills, the stop word, the standing mode, the lead's subtasks;
+- **when the chat window opens again**: its address, browser, waits and model-menu locators (the window is kept open between messages).
+
+A step that is running and a card already shown go on as they began. The task says so in its record (`settings-changed`); when a step rule changed, the rules in force are written again beside the first ones (`policy-2.json`, "POLICY CHANGED (2)") and the chat is told with its next message — a step refused before may run now, and one that ran may be refused. The answer to the save (`SettingsSaved`) says how many runs there are and what each took, waits for or leaves to the window; every page hears it (`onSettingsSaved`), and while something runs a notice at the bottom says which (`settingsTaken.tsx`: "Saved, and in force at once…", "…from the next message…", "…the next time the chat window opens"), gone after a few seconds or with its ✕. Nothing is said when nothing runs. Settings says the same under "Everything on this page saves itself" (`def.live`).
+
 **Go to File, Search, Markdown (2026-10-21).** As in VS Code: Ctrl+P opens "Go to File" (`quickOpen.tsx`, the
 letters matched by `lib/fuzzy.ts`; `name:42` opens at line 42); Ctrl+Shift+F, or the magnifier in the column of icons,
 the Search view (`searchView.tsx`): Match Case, Match Whole Word, a regular expression (PCRE), the files to include and
@@ -737,6 +744,8 @@ When such a card appears:
 - the card gets the keyboard, unless the operator is typing in a field. There, a card's button would take their next Enter.
 
 A queue task set aside is not marked: the work does not wait for it.
+
+**"Done" (2026-11-03).** The operator: "when the task ends, if there is no queue, let a message appear — 'Done'; as the one that we wait for the user's action appears, one like it, that we are done with everything". `DoneLabel` (`web/app/doneLabel.tsx`, on every page) puts it in the middle of the window, as large as "Waiting for the user's action", green, once the work is over: nothing runs or is being started, the queue's turn is over (`Activity.queue`, set while `queueLoop` goes, so the moment between two of its tasks is not taken for the end), nothing on the screen carries `data-awaits`, and the activity says how the last message ended (`Activity.last`, a worker's subtask not counted). A message that ended done says "Done" ("Готово") with a ✓; one that ended otherwise says how ("Finished: not done"), since "Done" would say something false; a Stop the operator pressed says nothing. It takes no click and has no button: the first click or key anywhere takes it away, and so does the next start. Each ending is shown once — the one taken away is kept by when it was (`cop.done.seen`), so a reload does not show it again.
 
 **The tab's title, and the export (2026-10-23).** The browser tab says what stage the bot is at, in English whatever
 the page's language (as the operator asked): "Working." "Working.." "Working..." round again while it works,

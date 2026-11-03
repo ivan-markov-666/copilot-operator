@@ -12,6 +12,8 @@ import { usePathname } from 'next/navigation';
 import { Nav } from './nav';
 import { GlobalApprovals } from './approvals';
 import { AwaitingSpotlight } from './awaiting';
+import { SettingsTakenNotice } from './settingsTaken';
+import { DoneLabel } from './doneLabel';
 import { StartFailureBanner } from './startFailure';
 import { Logo } from './logo';
 
@@ -27,6 +29,9 @@ export function Shell({ children }: { children: ReactNode }) {
         </main>
         {/* What waits for the operator, lit, the rest darkened (2026-10-27). */}
         <AwaitingSpotlight />
+        {/* What a setting saved while work goes on did to it, and "Done" once the work is over (2026-11-03). */}
+        <SettingsTakenNotice />
+        <DoneLabel />
       </div>
     );
   }
@@ -47,6 +52,8 @@ export function Shell({ children }: { children: ReactNode }) {
       <StartFailureBanner />
       <main id="main">{children}</main>
       <AwaitingSpotlight />
+      <SettingsTakenNotice />
+      <DoneLabel />
     </div>
   );
 }

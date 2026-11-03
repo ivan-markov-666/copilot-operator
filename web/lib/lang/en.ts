@@ -780,6 +780,11 @@ export const en = {
   'def.title': 'Settings',
   'def.intro': 'The folders the chat works in, the sign-in to Copilot, the models, and how a task runs. Each field has an ⓘ beside its name that says what it is for and how it helps.',
   'def.autoSave': 'Everything on this page saves itself as you change it. There is nothing to press.',
+  'def.live': 'While a message is at work, a change here takes effect at once where it can: the rules a step is judged by, the limits, the pauses and the reports. The models, plan mode, the project, the skills and the like apply from the next message; the chat window\'s own settings from the next time it opens.',
+  'live.now': 'Saved, and in force at once for the work going on.',
+  'live.next': 'Saved. The message at work keeps what it started with; from the next message, this.',
+  'live.window': 'Saved. In force from the next time the chat window opens.',
+  'live.close': 'Close',
   'info.about': 'About “{name}”',
   'l1.title': 'The base prompt (level 1)',
   'l1.readOnly': 'read only',
@@ -1049,6 +1054,8 @@ export const en = {
   // running several sessions in turn
   'approval.waitingHere': 'A step is waiting for your decision',
   'awaiting.title': 'Waiting for the user\'s action',
+  'done.label': 'Done',
+  'done.ended': 'Finished: {status}',
   'approval.waitingHereWhy':
     'Shown on every page while a step waits, so a run never looks stuck because the page that asks is not the one open.',
   // Scripts the bot may run, three ways to run commands, revise and resubmit (2026-10-27).

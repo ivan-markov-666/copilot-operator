@@ -2054,6 +2054,22 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesEn: 'Everything on the page saves itself as it is changed.',
             doesBg: 'Всичко на страницата се запазва само, докато се променя.',
           },
+          {
+            key: 'def.live',
+            kind: 'note',
+            en: 'While a message is at work, a change here takes effect at once where it can: the rules a step is judged by, the limits, the pauses and the reports. The models, plan mode, the project, the skills and the like apply from the next message; the chat window\'s own settings from the next time it opens.',
+            bg: 'Докато работи съобщение, промяна тук влиза в сила веднага, където може: правилата, по които се преценява всяка стъпка, ограниченията, паузите и отчетите. Моделите, режимът с план, проектът, уменията и други такива важат от следващото съобщение, а настройките на самия прозорец на чата — от следващото му отваряне.',
+            doesEn: 'A setting saved while a message is at work (2026-11-03): the programs, scripts, read-only and run-without-asking choices, downloads, deny patterns, isolation, step timeouts, limits, pauses and reports take effect at once, for the next step or the next message to the chat; the models, plan mode, the shell and folder, the project, the skills, the lead\'s number of subtasks and the stop word from the next message; the chat window\'s address, browser, waits and model-menu locators from the next time the window opens. A step that is running and a card already shown go on as they began.',
+            doesBg: 'Настройка, записана докато работи съобщение (2026-11-03): програмите, скриптовете, „само за справка“ и „пускай без да питаш“, изтеглянията, забранените шаблони, изолацията, времето на стъпките, ограниченията, паузите и отчетите влизат в сила веднага, от следващата стъпка или следващото съобщение към чата; моделите, режимът с план, обвивката и папката, проектът, уменията, броят подзадачи на водещия и думата за край — от следващото съобщение; адресът на чата, браузърът, чакането и локаторите на менюто с модели — от следващото отваряне на прозореца. Стъпка, която вече върви, и карта, която вече е показана, продължават, както са започнали.',
+          },
+          {
+            key: 'live.close',
+            kind: 'button',
+            en: 'Close',
+            bg: 'Затвори',
+            doesEn: 'On the notice a save brings while work goes on, at the bottom of any page: "in force at once", "from the next message" or "from the next time the chat window opens". It goes by itself after a few seconds; ✕ closes it now. Nothing is said when nothing is at work.',
+            doesBg: 'На известието, което носи запис докато върви работа, долу на всяка страница: „в сила веднага“, „от следващото съобщение“ или „от следващото отваряне на прозореца на чата“. Изчезва само след няколко секунди; ✕ го затваря веднага. Когато нищо не работи, нищо не се казва.',
+          },
         ],
       },
       {

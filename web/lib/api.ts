@@ -673,6 +673,8 @@ export type Activity = {
   paused?: boolean;
   /** Git asks for a password in its own window, and the work waits for it (2026-10-26). */
   password?: boolean;
+  /** The queue's turn is still going, between one of its tasks and the next (2026-11-03). */
+  queue?: boolean;
   /** How the last message ended, while nothing runs (2026-10-23). */
   last?: { status: string; at: string };
 };
@@ -1280,6 +1282,20 @@ async function call<T>(path: string, init?: RequestInit, opts: { timeoutMs?: num
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/**
+ * What a save from Settings did to the work going on (2026-11-03): how many runs there are, and the settings each took
+ * at once (`now`), keeps until its next message (`next`) or until the chat window opens again (`window`), by name.
+ */
+export type SettingsSaved = { ok: true; running: number; now: string[]; next: string[]; window: string[] };
+const settingsSavedListeners = new Set<(saved: SettingsSaved) => void>();
+/** Hears every save of the settings from this page, with what the work going on made of it. */
+export function onSettingsSaved(fn: (saved: SettingsSaved) => void): () => void {
+  settingsSavedListeners.add(fn);
+  return () => {
+    settingsSavedListeners.delete(fn);
+  };
+}
+
 /** Kerrigan's text, as `GET /kerrigan` gives it. */
 export type KerriganText = { lang: string; fileName: string; text: string; /** False when the names of the controls are left as ⟦key⟧ for the page. */ filled: boolean };
 
@@ -1300,8 +1316,15 @@ export const api = {
       /** The scripts the bot may run, as in force: a policy lock may have emptied the boxes for its own (2026-10-27). */
       scripts?: { inForce: Record<string, { own: boolean; written: boolean }>; writtenScripts: 'ask' | 'run' };
     }>('/settings'),
-  /** Writes the whole raw settings object back; the API validates it before saving. */
-  saveSettings: (raw: Record<string, unknown>) => call<{ ok: true }>('/settings', { method: 'PUT', body: JSON.stringify(raw) }),
+  /**
+   * Writes the whole raw settings object back; the API validates it before saving. The answer says what the work going
+   * on took at once and what waits (2026-11-03), and every page listening hears of it (`onSettingsSaved`).
+   */
+  saveSettings: (raw: Record<string, unknown>) =>
+    call<SettingsSaved>('/settings', { method: 'PUT', body: JSON.stringify(raw) }).then((saved) => {
+      for (const fn of settingsSavedListeners) fn(saved);
+      return saved;
+    }),
 
   /** The base prompt as it ships: shown in Settings to read. */
   level1: () => call<{ content: string }>('/level1'),

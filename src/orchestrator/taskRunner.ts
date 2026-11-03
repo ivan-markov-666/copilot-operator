@@ -15,6 +15,7 @@ import { readFile, mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
 import type { ResolvedConfig } from '../config/schema.js';
+import type { LiveChange, LiveSettings } from '../config/live.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions } from '../transport/copilotTransport.js';
 import { buttonShows, normModel } from '../transport/modelMatch.js';
 import { createTransport, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
@@ -91,6 +92,12 @@ export type TaskOutcome = {
  */
 export const NOT_THE_CHATS: ReadonlyArray<NonNullable<Task['stopCode']>> = ['contract-conflict', 'environment', 'invalid-check'];
 
+/** The Settings each step is judged by: the chat is told when a save changes one under it (2026-11-03). */
+const LIVE_RULES: ReadonlySet<string> = new Set([
+  'execution.allowedPrograms', 'execution.readOnlyPrograms', 'execution.runWithoutAsking', 'execution.scripts',
+  'execution.writtenScripts', 'execution.networkFetch', 'execution.denyPatterns', 'execution.isolation',
+]);
+
 export type RunDeps = {
   cfg: ResolvedConfig;
   store: SessionStore;
@@ -117,6 +124,11 @@ export type RunDeps = {
    * before its next command, and goes on when the operator continues. Unlike `shouldPause`, nothing ends. See `Hold`.
    */
   hold?: Hold;
+  /**
+   * Settings saved while the run goes on (2026-11-03): `cfg` is its object, which takes at once what can change under a
+   * message; a task hears of it here, to say so and to tell the chat. See `config/live.ts`.
+   */
+  live?: LiveSettings;
   /**
    * The press of a start button this run belongs to, written onto every task it reaches.
    *
@@ -1162,6 +1174,8 @@ export async function runTask(
     if (sink.publishing || e.type === 'console' || (e.taskId && e.taskId !== task.id)) return;
     log.event(e.type, { ...(e.data ?? {}), ...(e.message ? { message: e.message } : {}), mirrored: true }, undefined, e.level);
   });
+  // No longer hearing of Settings saved, once the task ends (see `tookSettings`).
+  let unlive: () => void = () => undefined;
   const pacer = new Pacer({
     enabled: cfg.pacing.enabled,
     settleMs: cfg.pacing.settleMs,
@@ -1255,15 +1269,20 @@ export async function runTask(
   };
   transport = holdsWhilePaused(transport, () => holdHere('message'));
   // No message longer than Settings allow as text: the rest goes attached (2026-10-22, see `limitsMessageLength`).
+  // The limit and the patterns as Settings have them when each message goes (2026-11-03: a save takes effect at once).
   transport = limitsMessageLength(transport, {
-    max: cfg.limits.maxMessageChars,
+    get max() {
+      return cfg.limits.maxMessageChars;
+    },
     dir: log.path('messages'),
     onLong: ({ chars, max, file }) =>
       sink.event('message-long', { chars, max, file }, `a message of ${chars} characters is over the ${max} sent as text: its beginning is sent, the whole of it attached as ${file}`, 'warn'),
   });
   // Nothing goes to the chat with a secret in it, whatever made the message (audit, 2026-10-27).
   transport = redactsMessages(transport, {
-    patterns: cfg.report.redactPatterns,
+    get patterns() {
+      return cfg.report.redactPatterns;
+    },
     onRedacted: (hits) => sink.event('message-redacted', { redactions: hits }, `secrets taken out of a message before it was sent: ${hits.map((h) => `${h.name} ×${h.count}`).join(', ')}`, 'warn'),
   });
   let iterations = 0;
@@ -1303,15 +1322,22 @@ export async function runTask(
    * How many different approaches "blocked" needs, from Settings, never below the format's own two.
    * A "blocked" with fewer is sent back; after `MAX_EARLY_BLOCKS` of them in a row with nothing tried
    * in between the verdict is accepted, so a chat that cannot think of anything else does not spend
-   * the rest of the iterations saying so.
+   * the rest of the iterations saying so. Read when it is asked, as the limits below are, so a change
+   * saved in Settings while the task runs is the one it goes by (2026-11-03).
    */
-  const minApproaches = Math.max(MIN_TRIED_APPROACHES, cfg.limits.minApproachesBeforeBlocked ?? MIN_TRIED_APPROACHES);
+  const minApproaches = (): number => Math.max(MIN_TRIED_APPROACHES, cfg.limits.minApproachesBeforeBlocked ?? MIN_TRIED_APPROACHES);
   const MAX_EARLY_BLOCKS = 3;
   let earlyBlocks = 0;
   /** What went wrong on the way, counted for the register's figures. See `TaskStats`. */
   const stats: TaskStats = { formatErrors: 0, doneRejected: 0, repeatsRefused: 0, stepsRefused: 0, operatorStops: 0, reviewRejections: 0, scopeReverts: 0 };
   /** Loops the older guards do not see; see `progress.ts`. */
-  const progress = new ProgressWatch({ noProgress: Math.max(2, cfg.limits.maxNoProgressRounds ?? 3), oscillations: 2 });
+  const progress = new ProgressWatch({
+    // As Settings have it when it is asked (2026-11-03).
+    get noProgress() {
+      return Math.max(2, cfg.limits.maxNoProgressRounds ?? 3);
+    },
+    oscillations: 2,
+  });
   /** Set when a check round shows no progress; the give-up then ends the task blocked with it. */
   let noProgressReason: string | null = null;
   /** The scope as enforced on the task's own branch, once known; `finish` holds the commit to it too. */
@@ -1676,6 +1702,7 @@ export async function runTask(
     await record(`TASK ${status.toUpperCase()}`, reason ? `Reason: ${reason}` : '(no reason: it ended as reported)');
     sink.event('task-finished', { status, reason, iterations }, `task "${task.title}" ${status}${reason ? `: ${reason}` : ''}`);
     unmirror();
+    unlive();
     await log.close();
     /*
      * An attempt that did not end done leaves its plan, work and runner views in its own folder,
@@ -1836,20 +1863,23 @@ export async function runTask(
   for (const concern of isolation.warnings) {
     sink.event('isolation', { claim: isolation.claim, elevated: isolation.signals.elevated }, concern, 'warn');
   }
-  const manifest = collectPolicyManifest({
-    isolation,
-    confinedTo: confinement.roots,
-    mode: deps.currentMode?.() ?? cfg.execution.mode,
-    networkFetch: cfg.execution.networkFetch,
-    allowedPrograms: cfg.execution.allowedPrograms,
-    readOnlyPrograms: cfg.execution.readOnlyPrograms,
-    runWithoutAsking: cfg.execution.runWithoutAsking,
-    scripts: cfg.execution.scripts,
-    writtenScripts: cfg.execution.writtenScripts,
-    denyPatterns: cfg.execution.denyPatterns,
-    cwd: work.cwd,
-    lock: cfg.policyLock,
-  });
+  // The rules in force as Settings have them now: at the start, and again whenever a save changes them.
+  const policyManifestNow = (assessed = isolation) =>
+    collectPolicyManifest({
+      isolation: assessed,
+      confinedTo: confinement.roots,
+      mode: deps.currentMode?.() ?? cfg.execution.mode,
+      networkFetch: cfg.execution.networkFetch,
+      allowedPrograms: cfg.execution.allowedPrograms,
+      readOnlyPrograms: cfg.execution.readOnlyPrograms,
+      runWithoutAsking: cfg.execution.runWithoutAsking,
+      scripts: cfg.execution.scripts,
+      writtenScripts: cfg.execution.writtenScripts,
+      denyPatterns: cfg.execution.denyPatterns,
+      cwd: work.cwd,
+      lock: cfg.policyLock,
+    });
+  const manifest = policyManifestNow();
   await writeFile(log.path('policy.json'), JSON.stringify(manifest, null, 2), 'utf8').catch(() => undefined);
   await record('POLICY', describePolicyManifest(manifest));
   sink.event(
@@ -1859,6 +1889,32 @@ export async function runTask(
       'the chat cannot supply files',
     manifest.mode === 'unattended' || !manifest.allowlist.enforced ? 'warn' : 'info',
   );
+
+  /*
+   * Settings saved while this message is at work (operator, 2026-11-03: "when I change a setting, if it can be, let it
+   * take effect at once, even while a task is running"). `cfg` has taken what can change under a message already
+   * (`config/live.ts`), and every part of the task reads it where it uses it. Here the record says so, the pauses are
+   * set again, the rules in force are written beside the first ones, and the chat is told with the next message — a
+   * step refused before may run now, and one that ran may be refused.
+   */
+  let policyRevision = 1;
+  const tookSettings = async (change: LiveChange): Promise<void> => {
+    pacer.retune({ enabled: cfg.pacing.enabled, settleMs: cfg.pacing.settleMs, maxMessagesPerHour: cfg.pacing.maxMessagesPerHour, gapMs: gapFrom(cfg.pacing) });
+    const later = [...change.next, ...change.window];
+    sink.event('settings-changed', change,
+      `Settings saved while this message runs: ${change.now.join(', ')} in force from now${later.length ? `; ${later.join(', ')} from the next message, or the next time the chat window opens` : ''}`);
+    const rules = change.now.filter((name) => LIVE_RULES.has(name));
+    if (rules.length === 0) return;
+    policyRevision += 1;
+    const again = policyManifestNow(assessIsolation(cfg.execution.isolation, readIsolationSignals()));
+    await writeFile(log.path(`policy-${policyRevision}.json`), JSON.stringify(again, null, 2), 'utf8').catch(() => undefined);
+    await record(`POLICY CHANGED (${policyRevision})`, describePolicyManifest(again));
+    runnerNotes.push(
+      `The operator changed Settings while this task runs: ${rules.map((name) => name.replace(/^execution\./, '')).join(', ')}. Every step is judged by ` +
+        'them as they are now: a step refused before for them may run now — send it again if the work needs it — and one that ran before may be refused.',
+    );
+  };
+  unlive = deps.live?.onChange((change) => void tookSettings(change).catch(() => undefined)) ?? unlive;
 
   // Not when the project is this runner's own checkout: every process of the runner would
   // then look like a leftover.
@@ -2089,8 +2145,8 @@ export async function runTask(
           : '',
       ].filter(Boolean).join('\n\n'),
       approachesNote:
-        minApproaches > MIN_TRIED_APPROACHES
-          ? `## Giving up\n\nThis task may end with status "blocked" only after at least ${minApproaches} genuinely different approaches, ` +
+        minApproaches() > MIN_TRIED_APPROACHES
+          ? `## Giving up\n\nThis task may end with status "blocked" only after at least ${minApproaches()} genuinely different approaches, ` +
             `each listed in "tried". With fewer, the runner asks you for another approach instead of accepting it.`
           : undefined,
       shellNote: shellNote(shells, defaultShell),
@@ -2193,7 +2249,7 @@ export async function runTask(
     // refresh the object this function is holding, so reading it back would give the state
     // before the checks ran and the reason would come out empty.
     let lastOutcomes: CheckOutcome[] = [];
-    const maxCheckRounds = Math.max(1, cfg.limits.maxCheckRounds ?? 3);
+    const maxCheckRounds = (): number => Math.max(1, cfg.limits.maxCheckRounds ?? 3);
     /*
      * The runner's own check, when there is going to be a commit.
      *
@@ -2423,7 +2479,7 @@ export async function runTask(
         sink.event('no-progress', { kind: 'checks' }, stuck, 'warn');
         return 'give-up';
       }
-      if (checkRounds > maxCheckRounds) {
+      if (checkRounds > maxCheckRounds()) {
         /*
          * Only checks from earlier reviews are failing. A reviewer's check is outranked by the
          * next reviewer's judgement, not by a counter: they are suspended, the work goes to
@@ -2437,12 +2493,12 @@ export async function runTask(
           });
           derivedStillFailing = failed.map((o) => ({ name: o.check.name, detail: o.detail }));
           sink.event('checks-derived-deferred', { rounds: checkRounds - 1, checks: failed.map((o) => o.check.name) },
-            `${failed.length} check(s) from earlier reviews still fail after ${maxCheckRounds} attempt(s); the work goes to the reviewer with them named`, 'warn');
+            `${failed.length} check(s) from earlier reviews still fail after ${maxCheckRounds()} attempt(s); the work goes to the reviewer with them named`, 'warn');
           return 'accept';
         }
-        limitHit = { setting: 'maxCheckRounds', value: maxCheckRounds };
+        limitHit = { setting: 'maxCheckRounds', value: maxCheckRounds() };
         sink.event('checks-exhausted', { rounds: checkRounds - 1 },
-          `${failed.length} check(s) still failing after ${maxCheckRounds} attempt(s); the task is closed as failed`, 'warn');
+          `${failed.length} check(s) still failing after ${maxCheckRounds()} attempt(s); the task is closed as failed`, 'warn');
         return 'give-up';
       }
       // A Stop that came after every check had run: the round stands, and nothing more is sent.
@@ -2460,7 +2516,7 @@ export async function runTask(
       const checkReport = failureReport(outcomes, cfg.report.redactPatterns);
       await writeFile(path, checkReport, 'utf8');
       await record(`CHECKS ${checkRounds}`, checkReport);
-      const message = failureMessage(outcomes, checkRounds, maxCheckRounds, cfg.report.redactPatterns);
+      const message = failureMessage(outcomes, checkRounds, maxCheckRounds(), cfg.report.redactPatterns);
       await record(`CHECKS ${checkRounds} MESSAGE SENT`, message);
       // Said as a step report's redaction is, so a checks round that hid something is not silent.
       const redactions = failureRedactions(outcomes, cfg.report.redactPatterns);
@@ -2503,7 +2559,7 @@ export async function runTask(
     let previousLeftovers: Array<{ name: string; ports: number[] }> = [];
 
     const reviewWanted = task.reviewEnabled ?? session.review?.enabled ?? true;
-    const maxReviewRounds = Math.max(1, cfg.limits.maxReviewRounds ?? 2);
+    const maxReviewRounds = (): number => Math.max(1, cfg.limits.maxReviewRounds ?? 2);
 
     const saveReview = async (review: TaskReview): Promise<void> => {
       await setTask((t) => {
@@ -2555,7 +2611,7 @@ export async function runTask(
 
       await actingNow('review', { round: reviewRounds });
       sink.event('review-started', { round: reviewRounds, model: model || '(the session model)', files: changedFiles.length, deliverable: deliverable?.why },
-        `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds})` +
+        `an independent review is opening a fresh conversation (round ${reviewRounds} of ${maxReviewRounds()})` +
           (deliverable ? `; the closing summary goes with it as the product (${deliverable.why})` : ''));
 
       // What is running before the review, so that what the review leaves is its own.
@@ -2805,10 +2861,10 @@ export async function runTask(
        * was then blocked quoting that finding as "still there" without anybody having looked
        * at the fix. It had been fixed.
        */
-      if (reviewRounds > maxReviewRounds) {
-        limitHit = { setting: 'maxReviewRounds', value: maxReviewRounds };
-        sink.event('review-exhausted', { rounds: maxReviewRounds, findings: outcome.findings.length },
-          `the review still has findings after ${maxReviewRounds} round(s) of fixing; the task is closed as blocked`, 'warn');
+      if (reviewRounds > maxReviewRounds()) {
+        limitHit = { setting: 'maxReviewRounds', value: maxReviewRounds() };
+        sink.event('review-exhausted', { rounds: maxReviewRounds(), findings: outcome.findings.length },
+          `the review still has findings after ${maxReviewRounds()} round(s) of fixing; the task is closed as blocked`, 'warn');
         return 'give-up';
       }
 
@@ -2820,7 +2876,7 @@ export async function runTask(
       await pacer.throttleSend();
       // The reviewer quotes output in its evidence, so the message gets the same treatment.
       // Recorded as sent, because what reached the chat is what the next question is about.
-      const findingsSent = redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds, repeatedNamed, roundLeftovers), cfg.report.redactPatterns);
+      const findingsSent = redactSecrets(findingsMessage(outcome, reviewRounds, maxReviewRounds(), repeatedNamed, roundLeftovers), cfg.report.redactPatterns);
       await writeFile(log.path('review', String(reviewRounds), 'findings-sent.md'), findingsSent, 'utf8').catch(() => undefined);
       await record(`REVIEW ${reviewRounds} FINDINGS SENT`, findingsSent);
       const before = await transport.sendAndConfirm(findingsSent);
@@ -2843,7 +2899,7 @@ export async function runTask(
         ? `an independent review found ${findings.length} problem(s) with the task itself rather than with the work, ` +
           `so there was nothing to send back for fixing: ${listed}`
         : `an independent review found ${findings.length} problem(s) that were still there after ` +
-          `${maxReviewRounds} round(s) of fixing: ${listed}`;
+          `${maxReviewRounds()} round(s) of fixing: ${listed}`;
     };
 
     /**
@@ -2897,8 +2953,8 @@ export async function runTask(
      * in a circle, and the thing that turns into a task that ends rather than a task that times
      * out.
      */
-    const maxCommandRepeats = Math.max(1, cfg.limits.maxCommandRepeats ?? 3);
-    const maxStalledIterations = Math.max(1, cfg.limits.maxStalledIterations ?? 2);
+    const maxCommandRepeats = (): number => Math.max(1, cfg.limits.maxCommandRepeats ?? 3);
+    const maxStalledIterations = (): number => Math.max(1, cfg.limits.maxStalledIterations ?? 2);
     /**
      * Per command: how many times in a row it has returned exactly the same thing.
      *
@@ -3315,7 +3371,7 @@ export async function runTask(
         await pacer.settle();
         continue;
       }
-      if (blocked && reply.tried.length < minApproaches && earlyBlocks < MAX_EARLY_BLOCKS) {
+      if (blocked && reply.tried.length < minApproaches() && earlyBlocks < MAX_EARLY_BLOCKS) {
         /*
          * Too early to give up, by the operator's own measure (Settings → Execution). Sent back as a
          * request for another approach rather than accepted: the format only knows that two is the
@@ -3323,10 +3379,10 @@ export async function runTask(
          */
         earlyBlocks += 1;
         stats.blockedTooEarly = (stats.blockedTooEarly ?? 0) + 1;
-        sink.event('blocked-too-early', { tried: reply.tried.length, needed: minApproaches, time: earlyBlocks },
-          `"blocked" after ${reply.tried.length} approach(es); Settings ask for ${minApproaches}, so the chat is asked for another`, 'warn');
+        sink.event('blocked-too-early', { tried: reply.tried.length, needed: minApproaches(), time: earlyBlocks },
+          `"blocked" after ${reply.tried.length} approach(es); Settings ask for ${minApproaches()}, so the chat is asked for another`, 'warn');
         const message =
-          `Not yet. This task is given up only after at least ${minApproaches} genuinely different approaches, and your reply lists ` +
+          `Not yet. This task is given up only after at least ${minApproaches()} genuinely different approaches, and your reply lists ` +
           `${reply.tried.length}: ${reply.tried.map((x, i) => `(${i + 1}) ${x}`).join(' ')}. Try a different approach now — not one of ` +
           'these again, and not the same command reworded — and send its steps with status "continue". If it fails too, add it to ' +
           '"tried" and try another. Nothing you listed is lost: the runner keeps what has been tried.';
@@ -3342,8 +3398,8 @@ export async function runTask(
       if (blocked) {
         sink.event('task-blocked', { tried: reply.tried, needed: reply.needed },
           `the task was given up as blocked after ${reply.tried.length} approach(es)`, 'warn');
-        const early = reply.tried.length < minApproaches
-          ? `It gave up after ${reply.tried.length} of the ${minApproaches} approaches Settings ask for, having been asked ${earlyBlocks} time(s) for another.`
+        const early = reply.tried.length < minApproaches()
+          ? `It gave up after ${reply.tried.length} of the ${minApproaches()} approaches Settings ask for, having been asked ${earlyBlocks} time(s) for another.`
           : '';
         return await finish('blocked', sentences(blockedReason(reply.tried, reply.needed), early), reply.summary, lastMarkdown);
       }
@@ -3428,7 +3484,7 @@ export async function runTask(
         const key = fingerprint(step);
         const last = seen.get(key);
         let ran = last?.sameInARow ?? 0;
-        if (ran >= maxCommandRepeats && last) {
+        if (ran >= maxCommandRepeats() && last) {
           // Something changed since it last ran — the tree, or (without a tree to compare) another step ran: not a repeat.
           const nowTree = await treeNow();
           const changed = last.tree !== null && nowTree !== null ? last.tree !== nowTree : stepsRunThisAttempt > last.stepNo;
@@ -3437,12 +3493,12 @@ export async function runTask(
             ran = 0;
           }
         }
-        if (ran >= maxCommandRepeats) {
+        if (ran >= maxCommandRepeats()) {
           repeatsRefused += 1;
           stats.repeatsRefused += 1;
-          sink.event('step-repeated', { id: step.id, count: ran, limit: maxCommandRepeats, command: describeStep(step) },
+          sink.event('step-repeated', { id: step.id, count: ran, limit: maxCommandRepeats(), command: describeStep(step) },
             `step ${step.id} refused: already run ${ran} time(s) in this task with the same result`, 'warn');
-          results.push(refusedResult(step, repeatRefusal(ran, maxCommandRepeats)));
+          results.push(refusedResult(step, repeatRefusal(ran, maxCommandRepeats())));
           continue;
         }
 
@@ -3538,7 +3594,7 @@ export async function runTask(
         const previous = seen.get(key);
         const sameInARow = previous && previous.signature === signature ? previous.sameInARow + 1 : 1;
         // The tree is read only for a command at the limit, the one case it is asked about.
-        seen.set(key, { signature, sameInARow, tree: sameInARow >= maxCommandRepeats ? await treeNow() : null, stepNo: stepsRunThisAttempt });
+        seen.set(key, { signature, sameInARow, tree: sameInARow >= maxCommandRepeats() ? await treeNow() : null, stepNo: stepsRunThisAttempt });
         sink.event('step-finished', { id: step.id, outcome: result.outcome, exitCode: result.exitCode, durationMs: result.durationMs, shell: result.shell, requestedShell: result.requestedShell ?? null, shellPath: result.shellPath ?? '' },
           `step ${step.id}: ${result.outcome}, exit ${result.exitCode}, ${(result.durationMs / 1000).toFixed(1)}s`);
 
@@ -3715,11 +3771,11 @@ export async function runTask(
       const allNamedAMissingShell = repeatsRefused === 0;
       if (reply.steps.length > 0 && refusedEverything === reply.steps.length) {
         stalled += 1;
-        sink.event('iteration-stalled', { stalled, limit: maxStalledIterations },
-          `every step this iteration ${allRepeats ? 'was a repeat' : allNamedAMissingShell ? 'named a shell this machine has not got' : 'was a repeat or named a shell this machine has not got'} (${stalled}/${maxStalledIterations})`, 'warn');
-        if (stalled >= maxStalledIterations) {
+        sink.event('iteration-stalled', { stalled, limit: maxStalledIterations() },
+          `every step this iteration ${allRepeats ? 'was a repeat' : allNamedAMissingShell ? 'named a shell this machine has not got' : 'was a repeat or named a shell this machine has not got'} (${stalled}/${maxStalledIterations()})`, 'warn');
+        if (stalled >= maxStalledIterations()) {
           const repeated = [...seen.entries()]
-            .filter(([, v]) => v.sameInARow >= maxCommandRepeats)
+            .filter(([, v]) => v.sameInARow >= maxCommandRepeats())
             .map(([cmd]) => cmd.slice(0, 120));
           return await finish(
             'blocked',
@@ -3759,7 +3815,7 @@ export async function runTask(
       if (repeatsRefused > 0) {
         covering +=
           `\n\n${repeatsRefused} of the ${reply.steps.length} step(s) were not run: they repeat a command ` +
-          `that has already run ${maxCommandRepeats} time(s) in this task with the same result. ` +
+          `that has already run ${maxCommandRepeats()} time(s) in this task with the same result. ` +
           'Change the approach rather than the wording. If nothing else is left to try, end with ' +
           'status "blocked" and say in "tried" what you attempted.';
       }

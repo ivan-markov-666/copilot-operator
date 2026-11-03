@@ -128,6 +128,7 @@ export default function DefaultsPage() {
         <h2>{t('def.title')}</h2>
         <p className="muted small">{t('def.intro')}</p>
         <p className="why">{t('def.autoSave')}</p>
+        <p className="why">{t('def.live')}</p>
       </div>
       <Level1Section />
       <ProjectSection />

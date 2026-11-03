@@ -2744,6 +2744,83 @@ try {
    * of"): the line its start, cut to fit; a press opens it under the line — all of it, what it comes from, when, the
    * chat and the message — with "Show its message in the chat" and "Copy", which takes all of it; a second press folds it.
    */
+  /*
+   * A setting saved while work goes on (operator, 2026-11-03: "when I change a setting, if it can be, let it take effect
+   * at once, even while a task is running"): the page says what the work made of it — in force at once, from the next
+   * message, or when the chat window opens again — and says nothing when nothing is at work.
+   */
+  await scenario('a setting saved while work goes on: at once, from the next message, with the window; nothing with nothing at work', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    const [s] = await h.importPlan(planFor(h, 'live-settings', [task('live', 'live.txt')]));
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    let asked = false;
+    h.chat.script(
+      async () => {
+        asked = true;
+        await gate;
+        return reply.steps(write('live.txt', 'live'));
+      },
+      reply.done(),
+    );
+    await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+    try {
+      await waitFor('the run to wait for the chat', async () => asked, 30_000);
+      await page.goto(url('/settings'));
+      t.check('the page says which settings a message at work takes at once', await page.getByText(en['def.live']).count(), 1);
+      const notice = page.getByTestId('settings-taken');
+      const said = async (): Promise<string> => (await notice.locator('.settings-taken-lines').innerText()).trim();
+      await page.locator('#max-iterations').fill('45');
+      await notice.waitFor({ timeout: 8_000 });
+      t.check('a limit saved: in force at once for the work going on', await said(), en['live.now']);
+      await notice.getByRole('button', { name: en['live.close'] }).click();
+      t.check('closed with its ✕', await notice.count(), 0);
+      await page.locator('#max-subtasks').fill('7');
+      await notice.waitFor({ timeout: 8_000 });
+      t.check("the lead's subtasks: from the next message", await said(), en['live.next']);
+      await notice.getByRole('button', { name: en['live.close'] }).click();
+      await page.locator('#reply-timeout').fill('700');
+      await notice.waitFor({ timeout: 8_000 });
+      t.check("the reply's wait: when the chat window opens again", await said(), en['live.window']);
+      await notice.getByRole('button', { name: en['live.close'] }).click();
+    } finally {
+      release();
+    }
+    await h.idle();
+    await page.locator('#max-iterations').fill('46');
+    await waitFor('the save with nothing at work', async () => (await settingsOf(h)).limits?.maxIterations === 46, 8_000);
+    t.check('with nothing at work, nothing is said', await appears(page.getByTestId('settings-taken'), 1_500), false);
+  });
+
+  /*
+   * "Done" (operator, 2026-11-03: "when the task ends, if there is no queue, let a message appear — 'Done', as the one
+   * that we wait for the user's action does"): in the middle of the window once the work is over, gone at the first
+   * click, not again after a reload; a message that ended otherwise says how it ended instead.
+   */
+  await scenario('"Done" once the work is over: gone at a click, not again after a reload; otherwise how it ended', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
+    const [ok, notOk] = await h.importPlan({ version: 1, sessions: [session(h, 'done-label', [task('done', 'done.txt')]), session(h, 'ended-label', [task('ended', 'ended.txt')])] });
+    await page.goto(url('/settings'));
+    const label = page.getByTestId('done-label');
+    t.check('nothing said before any work', await appears(label, 2_500), false);
+    h.chat.script(reply.steps(write('done.txt', 'done')), reply.done());
+    await h.call('POST', `/sessions/${ok!.id}/start`, { mode: 'unattended' });
+    await h.idle();
+    await label.waitFor({ timeout: 10_000 });
+    t.truthy('the work over: "Done" in the middle of the window', ((await label.textContent()) ?? '').includes(en['done.label']!), await label.textContent());
+    const box = await label.boundingBox();
+    t.truthy('in the middle of the window', !!box && Math.abs(box.x + box.width / 2 - 640) < 4 && Math.abs(box.y + box.height / 2 - 450) < 4, box);
+    await page.mouse.click(20, 880);
+    t.check('the first click takes it away', await label.count(), 0);
+    await page.reload();
+    t.check('not shown again after a reload', await appears(label, 3_000), false);
+    h.chat.script(reply.steps('Get-ChildItem -Name'), reply.blocked());
+    await h.call('POST', `/sessions/${notOk!.id}/start`, { mode: 'unattended' });
+    await h.idle();
+    await label.waitFor({ timeout: 10_000 });
+    t.check('a message that did not end done says how it ended', ((await label.textContent()) ?? '').trim(), en['done.ended']!.replace('{status}', en['status.blocked']!));
+    await page.keyboard.press('Shift');
+    t.check('a key takes it away too', await label.count(), 0);
+  });
+
   await scenario('a problem opened: all of what it says, when, its chat and message; a second press folds it', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
     const needed = Array.from({ length: 5 }, (_, i) => `part ${i + 1} of what is needed: the file the message names, put back where it was, with what it held`).join('; ');
     const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Bring the missing file back.', model: 'Think deeper' });

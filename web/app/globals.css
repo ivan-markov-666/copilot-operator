@@ -1866,6 +1866,60 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .queue-prompt { margin: 2px 0 0 calc(1.6em + 10px); color: var(--muted); overflow-wrap: anywhere; }
 
 /*
+ * "Done" (2026-11-03, see doneLabel.tsx): the work over, in the middle of the window as "Waiting for your action" is,
+ * green for done; nothing of it takes a click, and the first click or key anywhere takes it away.
+ */
+.done-label {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 44;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 18px 28px;
+  border: 3px solid var(--ok);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  font-size: calc(26px * var(--scale));
+  font-weight: 700;
+  line-height: 1.25;
+  pointer-events: none;
+}
+.done-label-ended { border-color: var(--line-strong); }
+.done-mark { color: var(--ok); font-size: 1.2em; }
+
+/* A setting saved while work goes on (2026-11-03, see settingsTaken.tsx): what the work made of it, for a few seconds. */
+.settings-taken {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 44;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--line-strong);
+  border-inline-start: 4px solid var(--accent);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: calc(14px * var(--scale));
+}
+.settings-taken-lines p { margin: 0; }
+.settings-taken-lines p + p { margin-top: 4px; }
+.settings-taken-now { font-weight: 600; }
+
+/*
  * "Waiting for the user's action" (2026-10-27, see awaiting.tsx): while a card waits for the operator, the rest of the
  * window is darkened, the card left lit with a ring around it, and the label set over the darkened part. Over the
  * panels and the banner, under a dialog and a menu; nothing of it takes a click.

@@ -763,6 +763,11 @@ export const de: Dictionary = {
   'def.title': 'Einstellungen',
   'def.intro': 'Die Ordner, in denen der Chat arbeitet, die Anmeldung bei Copilot, die Modelle und wie eine Aufgabe abläuft. Neben dem Namen jedes Felds steht ein ⓘ, das erklärt, wofür es da ist und wie es hilft.',
   'def.autoSave': 'Alles auf dieser Seite speichert sich selbst, während Sie es ändern. Es gibt nichts zu klicken.',
+  'def.live': 'Während eine Nachricht läuft, gilt eine Änderung hier sofort, wo es geht: die Regeln, nach denen ein Schritt beurteilt wird, die Grenzen, die Pausen und die Berichte. Die Modelle, der Planmodus, das Projekt, die Skills und dergleichen gelten ab der nächsten Nachricht, die Einstellungen des Chatfensters selbst ab seinem nächsten Öffnen.',
+  'live.now': 'Gespeichert und sofort in Kraft für die laufende Arbeit.',
+  'live.next': 'Gespeichert. Die laufende Nachricht behält, womit sie begonnen hat; ab der nächsten Nachricht gilt dies.',
+  'live.window': 'Gespeichert. In Kraft ab dem nächsten Öffnen des Chatfensters.',
+  'live.close': 'Schließen',
   'info.about': 'Über „{name}“',
   'l1.title': 'Der Basis-Prompt (Ebene 1)',
   'l1.readOnly': 'schreibgeschützt',
@@ -989,6 +994,8 @@ export const de: Dictionary = {
   'skills.saved': 'Skills gespeichert: {n}.',
   'approval.waitingHere': 'Ein Schritt wartet auf Ihre Entscheidung',
   'awaiting.title': 'Warten auf eine Aktion des Benutzers',
+  'done.label': 'Fertig',
+  'done.ended': 'Beendet: {status}',
   'approval.waitingHereWhy':
     'Wird auf jeder Seite angezeigt, solange ein Schritt wartet, damit ein Lauf nie hängend wirkt, nur weil die Seite, die fragt, nicht die geöffnete ist.',
   // Scripts the bot may run, three ways to run commands, revise and resubmit (2026-10-27).

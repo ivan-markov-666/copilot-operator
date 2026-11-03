@@ -86,6 +86,12 @@ export class Pacer {
     this.rnd = mulberry32(this.seed);
   }
 
+  /** Settings saved while the work goes on (2026-11-03): the pauses and the hourly cap as they are now. */
+  retune(profile: Pick<Partial<PacingProfile>, 'enabled' | 'settleMs' | 'maxMessagesPerHour' | 'gapMs'>): void {
+    Object.assign(this.profile, profile);
+    if (!('gapMs' in profile) || profile.gapMs === undefined) delete this.profile.gapMs;
+  }
+
   /** Short fixed pause after an action. Zero when pacing is disabled. */
   async settle(signal?: AbortSignal): Promise<number> {
     const ms = this.profile.enabled ? this.profile.settleMs : 0;

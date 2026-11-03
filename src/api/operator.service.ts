@@ -135,6 +135,7 @@ import { createZip } from '../util/zip.js';
 import { settingsOf, SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { chatDenyPatterns, type ResolvedConfig } from '../config/schema.js';
+import { LiveSettings, mergedChange, type LiveChange } from '../config/live.js';
 
 /**
  * A run in progress. `mode` is mutable on purpose: the operator can decide, in the middle of
@@ -150,7 +151,31 @@ type Running = {
   policy: PolicyConfig;
   /** "Pause" and "Continue" on the chat: see `Hold`. */
   hold: Hold;
+  /** The run's settings, which take what is saved while it goes on (2026-11-03). See `config/live.ts`. */
+  live: LiveSettings;
 };
+
+/**
+ * The rules each step of a run is judged by, from its settings: at the start, and again when a save changes them while
+ * it goes on (2026-11-03). The mode is not among them: it is the start's, and "run the rest without asking" changes it.
+ */
+function stepRules(cfg: ResolvedConfig): Omit<PolicyConfig, 'mode'> {
+  return {
+    denyPatterns: cfg.execution.denyPatterns,
+    allowedPrograms: cfg.execution.allowedPrograms,
+    isolation: cfg.execution.isolation,
+    lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
+    networkFetch: cfg.execution.networkFetch,
+    platformAccess: cfg.execution.questions === 'agree' ? 'allow' : 'ask',
+    readOnlyPrograms: cfg.execution.readOnlyPrograms,
+    runWithoutAsking: cfg.execution.runWithoutAsking,
+    scripts: cfg.execution.scripts,
+    writtenScripts: cfg.execution.writtenScripts,
+  };
+}
+
+/** What a save from Settings did to the work going on: what each run took at once, and what waits. */
+export type SettingsSaved = { ok: true; running: number } & LiveChange;
 
 /**
  * Something waiting for the operator. `resolvePlan`: a plan waiting for approval, answered with the
@@ -1170,20 +1195,10 @@ export class OperatorService {
     const loaded = await this.settings.load();
     // A chat conversation's git is the operator's: switching branches and committing are allowed there (2026-10-17).
     const cfg: ResolvedConfig = session.kind === 'chat' ? { ...loaded, execution: { ...loaded.execution, denyPatterns: chatDenyPatterns(loaded.execution.denyPatterns) } } : loaded;
-    const policy = {
-      mode,
-      denyPatterns: cfg.execution.denyPatterns,
-      allowedPrograms: cfg.execution.allowedPrograms,
-      isolation: cfg.execution.isolation,
-      lockedToConfirm: cfg.policyLock?.maxMode === 'confirm',
-      // Read once per run like the rest of the policy: a change in Settings applies from the next start.
-      networkFetch: cfg.execution.networkFetch,
-      platformAccess: cfg.execution.questions === 'agree' ? ('allow' as const) : ('ask' as const),
-      readOnlyPrograms: cfg.execution.readOnlyPrograms,
-      runWithoutAsking: cfg.execution.runWithoutAsking,
-      scripts: cfg.execution.scripts,
-      writtenScripts: cfg.execution.writtenScripts,
-    };
+    // The run's own settings; a save while it goes on changes them in place (`saveSettings`), and these rules with them.
+    const runCfg = { ...cfg, execution: { ...cfg.execution, mode } } as ResolvedConfig;
+    const live = new LiveSettings(runCfg, session.kind === 'chat', loaded);
+    const policy: PolicyConfig = { mode, ...stepRules(runCfg) };
     /*
      * An unattended run that cannot legally execute anything is stopped here, where the operator
      * is looking, rather than starting and returning every step refused. The step gate holds the
@@ -1210,7 +1225,7 @@ export class OperatorService {
 
     const startedAt = new Date().toISOString();
     const hold = new Hold();
-    this.running.set(sessionId, { controller, startedAt, mode, policy, hold });
+    this.running.set(sessionId, { controller, startedAt, mode, policy, hold, live });
     // Who was at work in a run of it that ended without saying so is not who is at work in this one.
     this.acting.delete(sessionId);
     {
@@ -1232,7 +1247,8 @@ export class OperatorService {
     });
 
     const done = runSession(sessionId, {
-      cfg: { ...cfg, execution: { ...cfg.execution, mode } } as ResolvedConfig,
+      cfg: runCfg,
+      live,
       store: this.store,
       bus: this.bus,
       authorizer,
@@ -1403,7 +1419,7 @@ export class OperatorService {
    * answer a question this one answers from two fields already in memory. A poll that costs a
    * directory walk every few seconds, on every page, to light up a dot would be a bad trade.
    */
-  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean; password?: boolean; last?: { status: string; at: string } } {
+  activity(): { running: boolean; sessions: number; starting: boolean; acting?: Acting; paused?: boolean; password?: boolean; queue?: boolean; last?: { status: string; at: string } } {
     /*
      * A run being started — its version control checked before the browser opens — is not running yet
      * and not idle either: `starting` says so, so "nothing is happening" is not read in that moment.
@@ -1420,6 +1436,8 @@ export class OperatorService {
       ...(run?.hold?.held ? { paused: true } : {}),
       // Git asks for a password in its own window, and the work waits for it (2026-10-26).
       ...(this.passwordAsked.size > 0 ? { password: true } : {}),
+      // The queue still has its turn going, between one of its tasks and the next (2026-11-03): the work is not over.
+      ...(this.queueLoop ? { queue: true } : {}),
       // How the last message ended, while nothing runs: what the tab says until the operator has looked.
       ...(this.running.size === 0 && this.lastOutcome ? { last: { status: this.lastOutcome.status, at: this.lastOutcome.at } } : {}),
     };
@@ -2997,6 +3015,27 @@ export class OperatorService {
    * folder that is not there, a name used twice, and the default listed again among the others
    * — each of those would be a setting that looks filled in and points nowhere.
    */
+  /**
+   * Settings saved from their page (operator, 2026-11-03: "when I change a setting, if it can be, let it take effect at
+   * once, even while a task is running"). Each run at work takes what can change under a message into its own settings
+   * at once — the rules its steps are judged by with them — and the answer says, for the page to show, what did and
+   * what waits for the next message or the next chat window. See `config/live.ts`.
+   */
+  async saveSettings(body: Record<string, unknown>): Promise<SettingsSaved> {
+    const saved = await this.settings.save(body);
+    const changes: LiveChange[] = [];
+    for (const run of this.running.values()) {
+      changes.push(run.live.take(saved));
+      Object.assign(run.policy, stepRules(run.live.cfg));
+      // A lock that holds runs to asking now holds this one too, whatever it started as.
+      if (run.policy.lockedToConfirm && run.mode === 'unattended') {
+        run.mode = 'confirm';
+        run.policy.mode = 'confirm';
+      }
+    }
+    return { ok: true, running: this.running.size, ...mergedChange(changes) };
+  }
+
   async setProject(patch: {
     rootDir?: string;
     name?: string;

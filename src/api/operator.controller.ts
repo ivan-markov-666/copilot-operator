@@ -9,7 +9,7 @@
  */
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Res, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import type { Response } from 'express';
-import { OperatorService } from './operator.service.js';
+import { OperatorService, type SettingsSaved } from './operator.service.js';
 import { SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { CHANGED_ON_DISK } from '../session/workspace.js';
@@ -98,10 +98,10 @@ export class OperatorController {
     return { raw, defaults, resolved: resolved.resolved, picker, programs, scripts };
   }
 
+  /** Saved, and taken at once by the work going on where it can be (2026-11-03): the answer says what was, and what waits. */
   @Put('settings')
-  async saveSettings(@Body() body: Record<string, unknown>): Promise<{ ok: true }> {
-    await this.ops.settings.save(body).catch(fail);
-    return { ok: true };
+  async saveSettings(@Body() body: Record<string, unknown>): Promise<SettingsSaved> {
+    return await this.ops.saveSettings(body).catch(fail);
   }
 
   // --- level 1 ----------------------------------------------------------------------------
