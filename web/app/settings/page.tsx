@@ -38,9 +38,6 @@ type Questions = 'ask' | 'agree';
 /** Two chats: what is done with a subtask that ended for a technical reason (`limits.subtaskRetryMode`, 2026-10-25). */
 type SubtaskRetryMode = 'ask' | 'same' | 'fresh' | 'lead';
 
-/** The longest level 2 a project may have; the server holds it to the same (`MAX_PROJECT_LEVEL2`). */
-const MAX_LEVEL2 = 8000;
-
 /**
  * A section named by the address — `/settings#skills` from the chat's "+ Skills" — is brought into view and lit up for
  * a moment (operator, 2026-10-23: "not only lead there: let the skills section be highlighted, to show with motion where
@@ -926,14 +923,13 @@ function ProjectEntry({
         </div>
       </div>
 
-      {/* Level 2 (operator, 2026-10-20): what is written here goes into Kerrigan, saved or copied. */}
+      {/* Level 2 (operator, 2026-10-20): what is written here goes into Kerrigan, saved or copied. No limit to it (2026-11-03). */}
       <div className="project-level2">
-        <FieldName htmlFor={`${id}-level2`} label={t('proj.level2')} info={t('proj.level2Info', { n: MAX_LEVEL2.toLocaleString() })} />
+        <FieldName htmlFor={`${id}-level2`} label={t('proj.level2')} info={t('proj.level2Info')} />
         <textarea
           id={`${id}-level2`}
           className="prose"
           rows={4}
-          maxLength={MAX_LEVEL2}
           value={level2Draft}
           onChange={(e) => {
             typingLevel2.current = true;
@@ -942,7 +938,7 @@ function ProjectEntry({
           }}
           placeholder={t('proj.level2Placeholder')}
         />
-        <span className="muted small">{t('proj.level2Count', { n: level2Draft.length.toLocaleString(), max: MAX_LEVEL2.toLocaleString() })}</span>
+        <span className="muted small">{t('proj.level2Count', { n: level2Draft.length.toLocaleString() })}</span>
       </div>
     </div>
   );

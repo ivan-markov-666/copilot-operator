@@ -59,7 +59,9 @@ touched by any of it.
 the base prompt's page, the presets' page and the Appearance page went. The base prompt is shown in Settings to read,
 folded, with what it is said above the fold; it is the one that ships and changes only when the bot is updated (an
 edited copy an earlier version kept in the data folder is not read). Each project in Settings has its branch (read
-from git each time) and a "Level 2 template (for Kerrigan)", which Kerrigan carries, saved or copied; "Prepare the
+from git each time) and a "Level 2 template (for Kerrigan)", which Kerrigan carries, saved or copied (no limit to its
+length since 2026-11-03: the 8 000 characters it was held to went, the count under it says how many there are, and
+a save may carry up to 50 MB); "Prepare the
 folder from the remote main branch" went, with its routes and the sync command before it. Every field of Settings has
 an ⓘ, and the fields are one grid. The chat has "Review" under its box, on unless unticked: when Copilot says a message
 is done, a conversation of its own reviews the work, told what the message changed from the folder against its

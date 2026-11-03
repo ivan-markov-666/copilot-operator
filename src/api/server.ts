@@ -77,8 +77,9 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   captureTerminal();
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: opts.quiet ? ['error', 'warn'] : ['error', 'warn', 'log'] });
   // A plan pasted from a chat carries every task's text at once, which the 100 KB default
-  // refuses with a message about entity size that says nothing about plans.
-  app.useBodyParser('json', { limit: '5mb' });
+  // refuses with a message about entity size that says nothing about plans; and a project's
+  // level 2 has no limit of its own (2026-11-03), so a save may carry megabytes of it.
+  app.useBodyParser('json', { limit: '50mb' });
   app.enableCors({
     origin: [WEB_ORIGIN, WEB_ORIGIN.replace('localhost', '127.0.0.1')],
     /*

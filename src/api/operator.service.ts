@@ -47,9 +47,6 @@ import { chatCode } from '../transport/chatSession.js';
 import { type PlanCheck } from '../plan/schema.js';
 
 /** The folders the operator works in: the default new sessions start on, and the rest by name. */
-/** The longest level 2 a project may have: Kerrigan carries each one whole. */
-export const MAX_PROJECT_LEVEL2 = 8000;
-
 /** The longest name a conversation or a session may be given (2026-10-26). */
 export const MAX_SESSION_NAME = 120;
 
@@ -3057,9 +3054,8 @@ export class OperatorService {
       const readOnly = patch.readOnly !== undefined ? patch.readOnly === true : current.readOnly === true;
       const name = patch.name !== undefined ? patch.name.trim() : (current.name ?? '').trim();
       const level2 = patch.level2 !== undefined ? patch.level2 : (current.level2 ?? '');
-      // Each goes into Kerrigan whole, and she is pasted into a chat: bounded, so one project cannot crowd out the rest.
-      const tooLong = [{ name: name || rootDir, level2 }, ...(patch.others ?? [])].find((o) => (o.level2 ?? '').length > MAX_PROJECT_LEVEL2);
-      if (tooLong) throw new Error(`The level 2 of "${tooLong.name}" is longer than ${MAX_PROJECT_LEVEL2.toLocaleString('en')} characters; keep it to what a chat needs to know about the project.`);
+      // No limit to its length (operator, 2026-11-03: "remove the limit, so it can take megabytes if need be"): each goes
+      // into Kerrigan whole, and only the size of a request (`server.ts`) bounds it.
       if (rootDir && !existsSync(rootDir)) throw new Error(`The folder ${rootDir} does not exist on this machine.`);
 
       /*

@@ -365,8 +365,11 @@ try {
   t.check('the other project: its level 2, and no branch outside a repository', [proj.others[0]?.level2, proj.others[0]?.branch], ['Where the tests live.', undefined]);
   await h.call('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: other }] });
   t.check('saved without it, the other project keeps its level 2', (await h.call<Project>('GET', '/project')).others[0]?.level2, 'Where the tests live.');
-  const tooLong = await h.raw('PUT', '/project', { level2: 'x'.repeat(8001) });
-  t.check('a level 2 longer than 8 000 characters is refused', tooLong.status, 400);
+  // No limit to it (operator, 2026-11-03): two million characters, in Cyrillic four megabytes, are kept whole.
+  const long = 'Ниво 2. '.repeat(250_000);
+  const keptLong = await h.raw('PUT', '/project', { level2: long });
+  t.check('a level 2 of megabytes is kept whole', [keptLong.status, (await h.call<Project>('GET', '/project')).level2.length], [200, long.length]);
+  await h.call('PUT', '/project', { level2: 'The fixture. Tests: none. Never touch README.md.' });
   const kp = await h.call<Kerrigan>('GET', '/kerrigan?lang=en');
   const part = kp.text.slice(kp.text.indexOf('## The projects'), kp.text.indexOf('## How you help'));
   t.truthy('Kerrigan carries every project: name, folder, branch, level 2', part.includes('(the chat\'s folder)') && part.includes('`feature/kerrigan`') && part.includes('Never touch README.md') && part.includes('### the tests, renamed') && part.includes('Where the tests live.'), part);
