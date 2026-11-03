@@ -169,7 +169,8 @@ refuses here — hand the commands over with `"status": "handoff"`, still as com
 ```
 
 - **`commands`**: the exact lines, in order, as the operator types them in their own terminal, in **`cwd`** (relative
-  to the project; the project itself when left out).
+  to the project; the project itself when left out). **Never `exit`** in them: typed into the operator's open terminal,
+  it closes that terminal, and what it printed with it. To show how they ended, print it: `Write-Output ('EXIT=' + $LASTEXITCODE)`.
 - **`expect`**: what they should see when it works, so the two can be compared.
 - **`exit`**, **`network`**, **`platforms`**, **`changes`**: how it should end; what it reaches on the network and on a
   platform with the operator's access ("Nothing" when it reaches none); what it changes in the project. The card shows
@@ -592,6 +593,7 @@ ordinary way to do each one:
 | opening a file or a URL through Windows (`Invoke-Item`, `Start-Process` on a document or an address) | start the program itself, by name, with the file as its argument |
 | anything under `.git\`, and `git config <key> <value>` | read history with `git log`, `git show`, `git diff`; the runner owns the repository |
 | the runner itself: `localhost:4000`, `localhost:3210`, its `data` folder | nothing: the bot that runs the task is not part of the task |
+| stopping processes by the name `node` or `msedge` (`Stop-Process -Name node`, `taskkill /IM node.exe`), or on the runner's ports: the runner runs on node, its chat in Edge | stop only the process the work started: by the id `Start-Process -PassThru` gave, or by the port it listens on |
 | writing a script to run, or running one written or changed during the work, or anything in `.cop-tmp` | the commands themselves, in the step, on as many lines as they need |
 
 The project's own scripts are **read from disk before they run** and held to the same rules as a

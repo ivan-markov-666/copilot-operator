@@ -198,7 +198,7 @@ export const de: Dictionary = {
   'ho.commands': 'Die Befehle, der Reihe nach',
   'ho.copyCommands': 'Die Befehle kopieren',
   'ho.expect': 'Was Sie sehen sollten',
-  'ho.warn': 'Der Bot selbst würde diese Zeilen ablehnen. Lesen Sie sie, bevor Sie etwas ausführen:',
+  'ho.warn': 'Lesen Sie dies, bevor Sie etwas ausführen: Der Bot selbst würde es ablehnen, oder es würde das Terminal schließen, in das Sie es eingeben:',
   'ho.files': 'vor dem Ausführen lesen',
   'ho.copyFile': 'Das Skript kopieren',
   'ho.output': 'Was es ausgegeben hat',

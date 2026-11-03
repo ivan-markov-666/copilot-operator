@@ -32,6 +32,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { gitSync, RUNNER_EMAIL } from '../vcs/git.js';
 import { scanCommandHeads, type CallArg, type CommandCall } from './commandHeads.js';
+import { foldersAlong } from './locations.js';
 import { packageScriptsRun, packageScriptWritten, writesPackageScripts } from './npmScripts.js';
 import { DEFAULT_SCRIPT_RULES, kindForChat, kindOfFile, type ScriptKind, type ScriptRule, type ScriptRules } from './scriptKinds.js';
 
@@ -44,8 +45,8 @@ export type ScriptFile = { path: string; text: string | null; problem?: string }
 export function scriptPathsRun(command: string): string[] {
   const paths = new Set<string>();
   const patterns = [
-    /\b(?:pwsh|powershell)(?:\.exe)?\b[^|;\n]*?\s-(?:File|f)\s+(?:"([^"]+)"|'([^']+)'|(\S+))/gi,
-    /(?:^|[|;&(\n{]\s*)(?:[.&]\s+)?(?:"([^"]+\.ps1)"|'([^']+\.ps1)'|(\S+\.ps1))(?=\s|$)/gi,
+    /\b(?:pwsh|powershell)(?:\.exe)?\b[^|;\n]*?\s-(?:File|f)\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&)}]+))/gi,
+    /(?:^|[|;&(\n{]\s*)(?:[.&]\s+)?(?:"([^"]+\.ps1)"|'([^']+\.ps1)'|([^\s;|&)}]+\.ps1))(?=$|[\s;|&)}])/gi,
   ];
   for (const re of patterns) {
     for (const m of command.matchAll(re)) {
@@ -61,10 +62,13 @@ export function writesScript(command: string): boolean {
   return /\b(Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|Rename-Item|sc|ac|cp|copy|mv|move|ren|ni)\b[^|;\n]*\.ps1\b|>\s*["']?[^\s"']*\.ps1\b/i.test(command);
 }
 
-/** Reads the scripts a command runs, relative to `cwd`. */
+/** Reads the scripts a command runs, relative to `cwd`, or to the folder the line has moved to (`foldersAlong`). */
 export function scriptFilesRun(command: string, cwd: string): ScriptFile[] {
-  return scriptPathsRun(command).map((p) => {
-    const path = isAbsolute(p) ? p : resolve(cwd, p);
+  const paths = new Set<string>();
+  for (const seg of foldersAlong(command, cwd)) {
+    for (const p of scriptPathsRun(seg.text)) paths.add(isAbsolute(p) ? p : resolve(seg.cwd, p));
+  }
+  return [...paths].map((path) => {
     try {
       const size = statSync(path).size;
       if (size > MAX_SCRIPT_BYTES) return { path, text: null, problem: `${path} is ${size} bytes, larger than a step's script` };
@@ -106,21 +110,35 @@ const RUNS_A_FILE = String.raw`(?:node|nodejs|python3?|py|pwsh|powershell|cmd|ts
  * Windows Script Host's `.vbs`, `.wsf` and the rest — as full paths:
  * given to `-File`, dot-sourced, called with `&` or by a path, passed to `cmd /c`, started with Start-Process, or
  * imported as a module. A bare name counts only when that file is in the folder, where cmd and Start-Process look
- * first; otherwise it is a program found on PATH — `npm.cmd`, `npx.cmd` — and not one of the project's files.
+ * first; otherwise it is a program found on PATH — `npm.cmd`, `npx.cmd` — and not one of the project's files. Each is
+ * looked for in the folder the line is in where it runs it (`foldersAlong`, 2026-11-03).
  */
-export function shellScriptsRun(command: string, cwd: string): string[] {
+export function shellScriptsRun(command: string, cwd: string, shell?: string): string[] {
+  return alongTheLine(command, cwd, shell, shellScriptsRunIn);
+}
+
+/** What `find` gives for each stretch of the line in its own folder, each file once. */
+function alongTheLine(command: string, cwd: string, shell: string | undefined, find: (text: string, cwd: string) => string[]): string[] {
+  const files = new Map<string, string>();
+  for (const seg of foldersAlong(command, cwd, shell)) {
+    for (const file of find(seg.text, seg.cwd)) if (!files.has(file.toLowerCase())) files.set(file.toLowerCase(), file);
+  }
+  return [...files.values()];
+}
+
+function shellScriptsRunIn(command: string, cwd: string): string[] {
   const named = new Set<string>(scriptPathsRun(command));
   const patterns = [
-    /(?:^|[|;&(\n{]\s*)(?:[.&]\s+)?(?:"([^"]+\.(?:ps1|psm1|cmd|bat))"|'([^']+\.(?:ps1|psm1|cmd|bat))'|(\S+\.(?:ps1|psm1|cmd|bat)))(?=\s|$)/gi,
-    /\bcmd(?:\.exe)?\b[^|;\n]*?\s\/[ck]\s+(?:"([^"]+\.(?:cmd|bat))"|'([^']+\.(?:cmd|bat))'|(\S+\.(?:cmd|bat)))/gi,
+    /(?:^|[|;&(\n{]\s*)(?:[.&]\s+)?(?:"([^"]+\.(?:ps1|psm1|cmd|bat))"|'([^']+\.(?:ps1|psm1|cmd|bat))'|([^\s;|&)}]+\.(?:ps1|psm1|cmd|bat)))(?=$|[\s;|&)}])/gi,
+    /\bcmd(?:\.exe)?\b[^|;\n]*?\s\/[ck]\s+(?:"([^"]+\.(?:cmd|bat))"|'([^']+\.(?:cmd|bat))'|([^\s;|&)}]+\.(?:cmd|bat)))/gi,
     /\b(?:Start-Process|saps)\b[^|;\n]*?(?:"([^"]+\.(?:ps1|cmd|bat))"|'([^']+\.(?:ps1|cmd|bat))'|([^\s'",]+\.(?:ps1|cmd|bat)))/gi,
-    /\b(?:Import-Module|ipmo)\b[^|;\n]*?(?:"([^"]+\.psm1)"|'([^']+\.psm1)'|(\S+\.psm1))/gi,
+    /\b(?:Import-Module|ipmo)\b[^|;\n]*?(?:"([^"]+\.psm1)"|'([^']+\.psm1)'|([^\s;|&)}]+\.psm1))/gi,
     // A shell script for bash and its kin (Git Bash, WSL), by a path or given to the shell.
-    /(?:^|[|;&(\n{]\s*)(?:"([^"]+\.(?:sh|bash|zsh))"|'([^']+\.(?:sh|bash|zsh))'|(\S+\.(?:sh|bash|zsh)))(?=\s|$)/gi,
-    /\b(?:bash|sh|zsh|ksh|dash|wsl)(?:\.exe)?\b[^|;\n]*?\s(?:"([^"]+\.(?:sh|bash|zsh))"|'([^']+\.(?:sh|bash|zsh))'|(\S+\.(?:sh|bash|zsh)))/gi,
+    /(?:^|[|;&(\n{]\s*)(?:"([^"]+\.(?:sh|bash|zsh))"|'([^']+\.(?:sh|bash|zsh))'|([^\s;|&)}]+\.(?:sh|bash|zsh)))(?=$|[\s;|&)}])/gi,
+    /\b(?:bash|sh|zsh|ksh|dash|wsl)(?:\.exe)?\b[^|;\n]*?\s(?:"([^"]+\.(?:sh|bash|zsh))"|'([^']+\.(?:sh|bash|zsh))'|([^\s;|&)}]+\.(?:sh|bash|zsh)))/gi,
     // Windows Script Host's scripts.
-    /\b(?:wscript|cscript)(?:\.exe)?\b[^|;\n]*?\s(?:"([^"]+\.(?:vbs|vbe|js|jse|wsf|wsh))"|'([^']+\.(?:vbs|vbe|js|jse|wsf|wsh))'|(\S+\.(?:vbs|vbe|js|jse|wsf|wsh)))/gi,
-    /(?:^|[|;&(\n{]\s*)(?:[.&]\s+)?(?:"([^"]+\.(?:vbs|vbe|wsf|wsh|hta))"|'([^']+\.(?:vbs|vbe|wsf|wsh|hta))'|(\S+\.(?:vbs|vbe|wsf|wsh|hta)))(?=\s|$)/gi,
+    /\b(?:wscript|cscript)(?:\.exe)?\b[^|;\n]*?\s(?:"([^"]+\.(?:vbs|vbe|js|jse|wsf|wsh))"|'([^']+\.(?:vbs|vbe|js|jse|wsf|wsh))'|([^\s;|&)}]+\.(?:vbs|vbe|js|jse|wsf|wsh)))/gi,
+    /(?:^|[|;&(\n{]\s*)(?:[.&]\s+)?(?:"([^"]+\.(?:vbs|vbe|wsf|wsh|hta))"|'([^']+\.(?:vbs|vbe|wsf|wsh|hta))'|([^\s;|&)}]+\.(?:vbs|vbe|wsf|wsh|hta)))(?=$|[\s;|&)}])/gi,
   ];
   for (const re of patterns) {
     for (const m of command.matchAll(re)) {
@@ -211,9 +229,13 @@ function startedProcesses(command: string): CommandCall[] {
  * started with Start-Process (`Start-Process node -ArgumentList x.js`). The first argument that is not a switch is the
  * file; a line whose first one is not a file of code (`node --version`, `python -m pytest`) gives none. The project's
  * test runners are not this (operator, 2026-10-26: "tests as before"): `node --test` is left alone, as are `npm test`,
- * `npx playwright test` and the rest, which are not runtimes given a file.
+ * `npx playwright test` and the rest, which are not runtimes given a file. Each in the folder the line is in there.
  */
 export function codeFilesRun(command: string, cwd: string, shell?: string): string[] {
+  return alongTheLine(command, cwd, shell, (text, folder) => codeFilesRunIn(text, folder, shell));
+}
+
+function codeFilesRunIn(command: string, cwd: string, shell?: string): string[] {
   const files = new Set<string>();
   const add = (literal: string): void => void files.add(isAbsolute(literal) ? literal : resolve(cwd, literal));
   for (const call of [...scanCommandHeads(command, shell ?? 'pwsh').calls, ...startedProcesses(command)]) {
@@ -345,7 +367,7 @@ export function scriptsRun(command: string, cwd: string, since?: string, shell?:
     seen.add(key);
     return true;
   };
-  for (const file of shellScriptsRun(command, cwd)) {
+  for (const file of shellScriptsRun(command, cwd, shell)) {
     if (first(file)) out.push({ file, kind: kindOfFile(file, /\.jse?$/i.test(file)), written: notTheProjects(file, since), shell: true });
   }
   for (const file of codeFilesRun(command, cwd, shell)) {
@@ -353,12 +375,15 @@ export function scriptsRun(command: string, cwd: string, since?: string, shell?:
     const written = inScratch(file) ? `it is in ${SCRATCH}, the folder for scratch files` : writesFileNamed(command, file) ? SAME_LINE : writtenDuringTheWork(file, since);
     out.push({ file, kind: kindOfFile(file), written });
   }
-  for (const m of command.matchAll(SCRATCH_RUN)) {
-    const file = resolve(cwd, m[1]!);
-    if (first(file)) out.push({ file, kind: kindOfFile(file), written: `it is in ${SCRATCH}, the folder for scratch files` });
+  const segments = foldersAlong(command, cwd, shell);
+  for (const seg of segments) {
+    for (const m of seg.text.matchAll(SCRATCH_RUN)) {
+      const file = resolve(seg.cwd, m[1]!);
+      if (first(file)) out.push({ file, kind: kindOfFile(file), written: `it is in ${SCRATCH}, the folder for scratch files` });
+    }
   }
   const sameLine = writesPackageScripts(command);
-  for (const run of packageScriptsRun(command, cwd, shell)) {
+  for (const run of segments.flatMap((seg) => packageScriptsRun(seg.text, seg.cwd, shell))) {
     const written = packageScriptWritten(run, since, sameLine);
     // No such script and nothing writes it: npm says so, and nothing runs.
     if (run.command === null && written === null) continue;

@@ -34,6 +34,7 @@ process.once('exit', () => rmSync(base, { recursive: true, force: true }));
 const repo = join(base, 'repo');
 mkdirSync(join(repo, 'tools'), { recursive: true });
 mkdirSync(join(repo, '.cop-tmp'), { recursive: true });
+mkdirSync(join(repo, 'rules-engine'), { recursive: true });
 const git = (...args: string[]): string => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
 const as = (email: string, ...args: string[]): string => git('-c', `user.name=${email.split('@')[0]}`, '-c', `user.email=${email}`, ...args);
 git('init', '-q', '-b', 'main');
@@ -44,6 +45,9 @@ const files: Record<string, string> = {
   'legacy.vbs': 'WScript.Echo "legacy"',
   'scripts.js': 'console.log("project code")',
   '.cop-tmp/kept.ps1': 'Write-Output scratch',
+  // In a folder of the project, as the operator's environment switch is (2026-11-03).
+  'rules-engine/switch-env.ps1': 'param($e)\nWrite-Output "switched to $e"',
+  'rules-engine/restart.ps1': 'Copy-Item .env.qa .env\nGet-Process node -ErrorAction SilentlyContinue | Stop-Process -Force',
 };
 for (const [path, text] of Object.entries(files)) writeFileSync(join(repo, path), text);
 as('operator@example.com', 'add', '-A', '-f');
@@ -89,6 +93,7 @@ for (const cmd of [
 console.log('\n--- a script that is not the project\'s own is refused, and says why ---');
 writeFileSync(join(repo, 'new.ps1'), 'Write-Output new');
 writeFileSync(join(repo, 'made.sh'), 'echo made');
+writeFileSync(join(repo, 'tools', 'made.cmd'), '@echo made');
 for (const [cmd, why] of [
   ['pwsh -NoProfile -File .\\new.ps1', 'not committed'],
   ['& .\\new.ps1', 'not committed'],
@@ -100,6 +105,11 @@ for (const [cmd, why] of [
   ['pwsh -File .\\.cop-tmp\\kept.ps1', '.cop-tmp'],
   ['node .\\.cop-tmp\\helper.js', '.cop-tmp'],
   ['npx tsx .cop-tmp/helper.ts', '.cop-tmp'],
+  // Followed by more of the line (2026-11-03): the `;` was read as part of the path, and the script was not seen at all.
+  ['pwsh -NoProfile -File .\\new.ps1; Write-Output done', 'not committed'],
+  ['& .\\new.ps1; Write-Output done', 'not committed'],
+  ['if ($true) { & .\\new.ps1 }', 'not committed'],
+  ['cmd /c tools\\made.cmd& echo done', 'not committed'],
 ] as const) {
   const r = refused(cmd);
   t.truthy(`refused (${why}): ${cmd}`, r !== null && r.includes(why), short(r));
@@ -153,6 +163,39 @@ const gated = staticCheck(step('pwsh -NoProfile -File .\\new.ps1'), cfg, process
 t.truthy('a chat step running a script it wrote: skipped, with the reason', gated?.action === 'skip' && gated.reason.includes("not one of the project's own scripts"), JSON.stringify(gated));
 t.check('a chat step running the project\'s script passes this gate', staticCheck(step('pwsh -NoProfile -File .\\build.ps1'), cfg, process.env, confinement), null);
 t.check('an operator\'s check running a script is not held to it', checkCommandRefusal('pwsh -NoProfile -File .\\new.ps1', 'pwsh', cfg, { roots: [repo], cwd: repo }), null);
+
+/*
+ * The folder the line moves to (operator, 2026-11-03): `Push-Location 'rules-engine'; .\switch-env.ps1 qa` was looked
+ * for in the project's root, where it is not, and the project's own committed script was refused as "not one of the
+ * project's own scripts — it does not exist"; the chat handed it over, and the operator ran it.
+ */
+console.log('\n--- a script is looked for in the folder the line has moved to ---');
+for (const cmd of [
+  "Push-Location 'rules-engine'; .\\switch-env.ps1 qa; $exit=$LASTEXITCODE; Pop-Location; Write-Output ('SWITCH_EXIT='+$exit)",
+  'cd rules-engine; .\\switch-env.ps1 qa',
+  'Set-Location -Path rules-engine\n& .\\switch-env.ps1 qa',
+  'pushd .\\rules-engine && pwsh -NoProfile -File .\\switch-env.ps1 qa',
+  'cd tools; cd ..\\rules-engine; .\\switch-env.ps1 qa',
+]) {
+  t.check(`the project's own, in its folder: ${cmd.replace(/\n/g, ' / ')}`, refused(cmd), null);
+}
+t.check("cmd's cd /d is followed too", ownScriptRefusal('cd /d tools && run.cmd', repo, began, 'cmd'), null);
+for (const [cmd, why] of [
+  ['Push-Location rules-engine; Pop-Location; .\\switch-env.ps1 qa', 'back in the root, where it is not'],
+  ['cd $where; .\\switch-env.ps1 qa', 'a folder chosen when it runs is not followed'],
+  ['if ($true) { cd rules-engine }; .\\switch-env.ps1 qa', 'a folder changed in a block is not followed'],
+] as const) {
+  t.truthy(`refused (${why}): ${cmd}`, refused(cmd)?.includes('does not exist') === true, short(refused(cmd)));
+}
+t.check('a step running it in its folder passes the step gate', staticCheck(step("Push-Location 'rules-engine'; pwsh -NoProfile -File .\\switch-env.ps1 qa; Pop-Location"), cfg, process.env, confinement), null);
+const stops = staticCheck(step("Push-Location 'rules-engine'; pwsh -NoProfile -File .\\restart.ps1; Pop-Location"), cfg, process.env, confinement);
+t.truthy(
+  "the project's own script that stops every node process is read in its folder, and refused: it would stop the bot",
+  stops?.action === 'skip' && stops.reason.includes('every process named node') && stops.reason.includes('stops the bot too') && stops.reason.includes('restart.ps1'),
+  JSON.stringify(stops),
+);
+const read = staticCheck(step('pwsh -NoProfile -File .\\rules-engine\\restart.ps1; Write-Output done'), cfg, process.env, confinement);
+t.truthy('a script followed by more of the line is still read before it runs', read?.action === 'skip' && read.reason.includes('stops the bot too'), JSON.stringify(read));
 
 console.log('\n--- a chat message, end to end ---');
 {

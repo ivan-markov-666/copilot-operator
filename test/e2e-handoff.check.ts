@@ -11,11 +11,13 @@
  * - what the operator pasted reaches the chat with what it expected; "I will not run it" too; the work goes on;
  * - revise and resubmit (2026-10-27): sent back with a note, which is needed, nothing run, the task going on; the chat
  *   hands it over again as revision 2, read again; run, and the conversation's history keeps both revisions;
- * - a queue task's card answered later says the same.
+ * - a queue task's card answered later says the same;
+ * - a line that would close the operator's terminal (2026-11-03) goes back to the chat before the card, twice at most;
+ *   the scripts the lines run, in the folder they move to, are on the card, a script that stops the bot marked.
  *
  *   npm run check:e2e-handoff
  */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseReply } from '../src/protocol/parser.js';
 import { parkedAnswerFrom } from '../src/queue/queue.js';
@@ -173,6 +175,86 @@ await scenario('revise and resubmit: sent back with a note, handed over again as
   const story = await h.call<{ entries: Array<{ kind: string; revision?: number; outcome?: string; answer?: string }> }>('GET', `/sessions/${s!.id}/tasks/${task.id}/story`);
   const kept = story.entries.filter((e) => e.kind === 'handoff').map((e) => [e.revision, e.outcome, e.answer]);
   t.check('the history keeps both revisions, the note and what was printed', kept, [[1, 'revise', 'Leave iss out.'], [2, 'ran', '{"aud":"api://rules-engine"}']]);
+});
+
+/*
+ * Lines that close the operator's terminal, and a script on no list (operator, 2026-11-03: "this command stops the cop
+ * package — it kills its terminal outright"). The chat ended its line with `exit $exit`, which closes the terminal it is
+ * typed in; and the script the line runs after `Push-Location` was on no card, so what it did — stop every node process,
+ * the bot with them — was found out when it did it.
+ */
+const SWITCH = "Push-Location 'rules-engine'; pwsh -NoProfile -File .\\switch-env.ps1 qa; $exit=$LASTEXITCODE; Pop-Location; Write-Output ('SWITCH_EXIT='+$exit)";
+const SWITCH_EXPECT = 'The QA profile is active and the last line is SWITCH_EXIT=0.';
+const SWITCH_SCRIPT = "param($e)\nCopy-Item \".env.$e\" .env\nGet-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\n";
+const putSwitch = (h: Harness): void => {
+  mkdirSync(join(h.repo, 'rules-engine'), { recursive: true });
+  writeFileSync(join(h.repo, 'rules-engine', 'switch-env.ps1'), SWITCH_SCRIPT);
+};
+
+await scenario('a line that would close the operator\'s terminal goes back to the chat unseen; the script it runs after Push-Location is on the card', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  putSwitch(h);
+  const [s] = await h.importPlan(plan(h, 'handoff-exit'));
+  let sentBack = '';
+  let told = '';
+  h.chat.script(
+    reply.handoff([`${SWITCH}; exit $exit`], SWITCH_EXPECT, { why: 'Only the operator may switch the environment.' }),
+    (m) => {
+      sentBack = m.text;
+      return reply.handoff([SWITCH], SWITCH_EXPECT, { why: 'Only the operator may switch the environment.' });
+    },
+    (m) => {
+      told = m.text;
+      return reply.done('The QA profile is active: the operator ran the switch themselves, and it ended with SWITCH_EXIT=0 as expected.');
+    },
+  );
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  const card = await waitFor('the commands handed over', async () => (await h.call<Card[]>('GET', '/approvals')).find((a) => !!a.question?.handoff), 60_000);
+  t.truthy(
+    'the chat was told, before the operator saw anything: which line, why, and what to write instead',
+    sentBack.includes('Not shown to the operator yet') && sentBack.includes('line 1') && sentBack.includes('"exit" closes the PowerShell') && sentBack.includes("Write-Output ('EXIT='"),
+    sentBack.slice(0, 600),
+  );
+  const ho = card.question!.handoff!;
+  t.check('the card shows the lines handed over again, without exit, as revision 1', [ho.commands, ho.revision], [[SWITCH], 1]);
+  t.check('the script the line runs in the folder it moves to is on the card, read in full, though the chat named none', [ho.files.map((f) => f.path), ho.files[0]?.text], [['rules-engine/switch-env.ps1'], SWITCH_SCRIPT]);
+  t.truthy(
+    'and it is marked: it stops every node process, the bot with them',
+    (ho.warnings ?? []).some((w) => w.startsWith('rules-engine/switch-env.ps1:') && w.includes('every process named node') && w.includes('stops the bot too')),
+    ho.warnings,
+  );
+  t.truthy('no line is marked for closing the terminal', !(ho.warnings ?? []).some((w) => w.includes('closes the PowerShell')), ho.warnings);
+  await h.call('POST', `/approvals/${card.id}/answer`, { text: 'switched to qa\nSWITCH_EXIT=0' });
+  await h.idle();
+  t.truthy('what it printed reached the chat', told.includes('SWITCH_EXIT=0'), told.slice(0, 400));
+  t.check('and the work went on to its end', (await h.session(s!.id)).tasks[0]!.status, 'done');
+  const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${s!.id}/events`);
+  t.check('sent back once, asked once', ['handoff-ends-shell', 'handoff-asked'].map((k) => events.filter((e) => e.type === k).length), [1, 1]);
+});
+
+await scenario('a chat that keeps writing exit: sent back twice, then the card shows it, marked, for the operator to decide', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  putSwitch(h);
+  const [s] = await h.importPlan(plan(h, 'handoff-exit-again'));
+  const ending = `${SWITCH}; exit $exit`;
+  let told = '';
+  h.chat.script(
+    reply.handoff([ending], SWITCH_EXPECT),
+    reply.handoff([ending], SWITCH_EXPECT),
+    reply.handoff([ending], SWITCH_EXPECT),
+    (m) => {
+      told = m.text;
+      return reply.done('The environment was not switched: the operator would not run the commands, so the work ends with the QA profile left for them.');
+    },
+  );
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
+  const card = await waitFor('the commands handed over', async () => (await h.call<Card[]>('GET', '/approvals')).find((a) => !!a.question?.handoff), 60_000);
+  const ho = card.question!.handoff!;
+  t.check('the third time, the card shows the line as the chat wrote it', ho.commands, [ending]);
+  t.truthy('marked: line 1 closes the terminal it is typed in', (ho.warnings ?? []).includes('1: "exit" closes the PowerShell it is typed in'), ho.warnings);
+  await h.call('POST', `/approvals/${card.id}/answer`, { text: 'not with exit in it', ran: false });
+  await h.idle();
+  t.truthy('the operator\'s word reached the chat', told.includes('They say: not with exit in it'), told.slice(0, 400));
+  const events = await h.call<Array<{ type: string }>>('GET', `/sessions/${s!.id}/events`);
+  t.check('sent back twice, then asked once', ['handoff-ends-shell', 'handoff-asked'].map((k) => events.filter((e) => e.type === k).length), [2, 1]);
 });
 
 t.finish();

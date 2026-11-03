@@ -53,6 +53,11 @@ export type HeadScan = {
   calls: CommandCall[];
   /** Why the line could not be read with certainty, when it could not. See the file comment. */
   uncertain?: string;
+  /**
+   * How many `exit` statements PowerShell would run, wherever they stand — a block, a subexpression — but not in a
+   * string (2026-11-03: typed into the operator's own terminal, one closes it; see `endsTheShell` in `stops.ts`).
+   */
+  exits?: number;
 };
 
 /** One argument of an invocation. */
@@ -103,12 +108,18 @@ class PowerShellScan {
   private readonly calls: CommandCall[] = [];
   private uncertain?: string;
   private depth = 0;
+  private exits = 0;
 
   constructor(private readonly s: string) {}
 
   run(): HeadScan {
     this.statements(0, null);
-    return this.uncertain ? { heads: this.heads, calls: this.calls, uncertain: this.uncertain } : { heads: this.heads, calls: this.calls };
+    return {
+      heads: this.heads,
+      calls: this.calls,
+      ...(this.uncertain ? { uncertain: this.uncertain } : {}),
+      ...(this.exits ? { exits: this.exits } : {}),
+    };
   }
 
   /** A literal head: recorded, with the invocation its arguments are read into. */
@@ -249,7 +260,10 @@ class PowerShellScan {
       if (NAMING_KEYWORDS.has(lower)) return this.keywordRest(this.readWord(this.skip(word.end)).end);
       if (TYPE_KEYWORDS.has(lower)) return this.typeDefinition(word.end);
       if (PIPELINE_KEYWORDS.has(lower)) return this.element(word.end);
-      if (BLOCK_KEYWORDS.has(lower)) return this.keywordRest(word.end);
+      if (BLOCK_KEYWORDS.has(lower)) {
+        if (lower === 'exit') this.exits += 1;
+        return this.keywordRest(word.end);
+      }
     }
     if (word.dynamic) this.fail(`the command "${word.literal}" is built from a variable, so which program it starts is known only when it runs`);
     else if (word.literal) return this.commandArgs(word.end, this.record(word.literal));

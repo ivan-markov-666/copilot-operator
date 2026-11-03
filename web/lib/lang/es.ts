@@ -199,7 +199,7 @@ export const es: Dictionary = {
   'ho.commands': 'Los comandos, en orden',
   'ho.copyCommands': 'Copiar los comandos',
   'ho.expect': 'Lo que debería ver',
-  'ho.warn': 'El propio bot rechazaría estas líneas. Léalas antes de ejecutar nada:',
+  'ho.warn': 'Lea esto antes de ejecutar nada: el propio bot lo rechazaría, o cerraría el terminal en el que lo escribe:',
   'ho.files': 'léalo antes de ejecutarlo',
   'ho.copyFile': 'Copiar el script',
   'ho.output': 'Lo que imprimió',

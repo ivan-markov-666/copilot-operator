@@ -199,7 +199,7 @@ export const ko: Dictionary = {
   'ho.commands': '명령(순서대로)',
   'ho.copyCommands': '명령 복사',
   'ho.expect': '보여야 하는 내용',
-  'ho.warn': '봇 자신이라면 이 줄들을 거부합니다. 무엇이든 실행하기 전에 읽어 보세요:',
+  'ho.warn': '무엇이든 실행하기 전에 읽어 보세요. 봇 자신이라면 거부하는 것이거나, 입력한 터미널을 닫아 버리는 것입니다:',
   'ho.files': '실행하기 전에 읽어 보세요',
   'ho.copyFile': '스크립트 복사',
   'ho.output': '출력된 내용',

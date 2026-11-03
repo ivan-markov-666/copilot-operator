@@ -41,7 +41,7 @@ import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../pro
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, checkAccessRefusal, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
-import { handoffCard, handoffOutcomeOf, handoffResultMessage, HANDOFF_NOBODY } from './handoff.js';
+import { handoffCard, handoffOutcomeOf, handoffResultMessage, HANDOFF_NOBODY, MAX_SHELL_ENDING_RETURNS, shellEndingLines, shellEndingMessage } from './handoff.js';
 import { chosenSaid } from './chosenAnswers.js';
 import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
 import { scriptsNote } from '../exec/scriptKinds.js';
@@ -1283,6 +1283,8 @@ export async function runTask(
   /** The handoff's revision, and whether the last one was sent back for a correction (2026-10-27). */
   let handoffRevision = 0;
   let handoffSentBack = false;
+  // Handoffs sent back in a row because a line would end the operator's terminal (2026-11-03).
+  let shellEndingReturns = 0;
   /**
    * Each handoff as it was shown and answered, kept in the run folder, so the conversation shows every revision, the
    * note it was sent back with and what the operator's own run printed (`session/story.ts`).
@@ -3061,7 +3063,29 @@ export async function runTask(
        * agreement or not: only their own run of it has anything to say. With nobody to ask, the chat is told so. What
        * they printed, or that they did not run it, goes back, and the work goes on.
        */
+      if (reply.status !== 'handoff') shellEndingReturns = 0;
       if (reply.status === 'handoff' && reply.handoff) {
+        /*
+         * A line that would end the terminal it is typed in — `exit`, the chat's habit for passing on an exit code — goes
+         * back to the chat before the operator sees it (2026-11-03): typed into their open terminal, it closed it, and what
+         * it printed with it. Twice at most; then the card shows it, marked, and the operator decides.
+         */
+        const ending = shellEndingLines(reply.handoff);
+        if (ending.length > 0 && shellEndingReturns < MAX_SHELL_ENDING_RETURNS) {
+          shellEndingReturns += 1;
+          sink.event('handoff-ends-shell', { lines: ending.map((l) => l.n), time: shellEndingReturns },
+            `the commands handed over would close the operator's terminal (line ${ending.map((l) => l.n).join(', ')}): sent back to the chat, ${shellEndingReturns}/${MAX_SHELL_ENDING_RETURNS}`, 'warn');
+          const message = shellEndingMessage(ending);
+          await record('HANDOFF SENT BACK — IT WOULD CLOSE THE TERMINAL', message);
+          await pacer.throttleSend();
+          const before = await transport.sendAndConfirm(message);
+          const next = await transport.waitForReply(before);
+          await saveReply(`handoff-ends-shell-${shellEndingReturns}`, next);
+          lastMarkdown = next.markdown;
+          await pacer.settle();
+          continue;
+        }
+        shellEndingReturns = 0;
         // The next revision of the one sent back for a correction; otherwise the first of a new one (2026-10-27).
         handoffRevision = handoffSentBack ? handoffRevision + 1 : 1;
         handoffSentBack = false;

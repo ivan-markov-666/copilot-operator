@@ -531,6 +531,50 @@ try {
   for (const cmd of ['Get-Content D:\\bot2\\a.txt', 'Get-Content C:\\Users\\x\\AppData\\Local\\copilot-operator-other\\a', 'Get-ChildItem $env:LOCALAPPDATA\\Temp']) {
     t.check(`not the bot's folder: ${cmd}`, botSelfRefusal(cmd, [4000], 'C:\\bot', homes), null);
   }
+  /*
+   * The processes it runs as (operator, 2026-11-03: "this command stops the cop package — it kills its terminal
+   * outright"): an environment switch that restarts its server by stopping every node process stops the bot with it,
+   * and one that stops every msedge stops the window its chat is in. By the name, a wildcard, a filter, a method, or the
+   * bot's port; the process the work started, by its id or its own port, is the work's to stop.
+   */
+  console.log('\n--- a line that stops the processes the bot runs as is refused ---');
+  for (const cmd of [
+    'Stop-Process -Name node -Force',
+    'Stop-Process -Name "node*"',
+    'kill -n node',
+    'spps -Name msedge',
+    'taskkill /F /IM node.exe',
+    'taskkill.exe /IM "msedge.exe" /T /F',
+    'taskkill /F /FI "IMAGENAME eq node.exe"',
+    'Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force',
+    'gps node | kill',
+    '(Get-Process msedge).Kill()',
+    "Get-Process | Where-Object { $_.ProcessName -eq 'node' } | Stop-Process",
+    'Get-CimInstance Win32_Process -Filter "Name=\'node.exe\'" | Invoke-CimMethod -MethodName Terminate',
+    'wmic process where "name=\'node.exe\'" delete',
+    'pkill node',
+    'npx kill-port 4000',
+    'Get-NetTCPConnection -LocalPort 4000 | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }',
+    "netstat -ano | findstr :4000 | ForEach-Object { taskkill /PID ($_ -split '\\s+')[-1] /F }",
+  ]) {
+    const why = botSelfRefusal(cmd, [4000], 'C:\\bot');
+    t.truthy(`refused, it stops the bot: ${cmd}`, why !== null && why.includes('stops the bot too') && why.includes('Start-Process -PassThru'), String(why));
+  }
+  for (const cmd of [
+    'Stop-Process -Id $server.Id',
+    '$p = Start-Process node server.js -PassThru; $p.Kill()',
+    'Get-Process node',
+    'Get-Process node | Select-Object Id, StartTime',
+    'Write-Output "Stop-Process -Name node"',
+    'npx kill-port 5173',
+    'Get-NetTCPConnection -LocalPort 5173 | ForEach-Object { Stop-Process -Id $_.OwningProcess }',
+    'taskkill /PID 1234 /F',
+    "wmic process where \"name='node.exe'\" get processid",
+    'Stop-Process -Name nodemon',
+    'node server.js',
+  ]) {
+    t.check(`not the bot's processes: ${cmd}`, botSelfRefusal(cmd, [4000], 'C:\\bot'), null);
+  }
 
   /*
    * A step is started with the variables Windows and the toolchains need, by name. The bot's own

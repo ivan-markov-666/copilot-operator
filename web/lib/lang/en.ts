@@ -207,7 +207,7 @@ export const en = {
   'ho.commands': 'The commands, in order',
   'ho.copyCommands': 'Copy the commands',
   'ho.expect': 'What you should see',
-  'ho.warn': 'The bot itself would refuse these lines. Read them before you run anything:',
+  'ho.warn': 'Read these before you run anything: the bot itself would refuse them, or they would close the terminal you type them in:',
   'ho.files': 'read it before you run it',
   'ho.copyFile': 'Copy the script',
   'ho.output': 'What it printed',

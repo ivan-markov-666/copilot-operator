@@ -52,6 +52,7 @@
 
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { stopsTheBot } from './stops.js';
 import { botRootDir } from './workDir.js';
 import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
 
@@ -272,6 +273,7 @@ export function networkFetchReason(command: string, cwd?: string): string | null
  * that approves its steps. Found on 2026-09-27: with the token in its environment, a step could call
  * `127.0.0.1:4000` and answer its own held download. The token is no longer passed (`stepEnv.ts`);
  * this refuses the attempt as well, so a step that goes looking gets a reason instead of a 401.
+ * And a line that stops the processes the bot runs as, by their name or its port (`stops.ts`, 2026-11-03).
  */
 export function botSelfRefusal(command: string, ports: number[] = botPorts(), root: string = botRootDir(), homes: string[] = botHomeFolders()): string | null {
   const port = `(?:${ports.map((p) => String(Math.trunc(p))).join('|')})`;
@@ -317,7 +319,7 @@ export function botSelfRefusal(command: string, ports: number[] = botPorts(), ro
       'the bot that runs it is not part of the work. Use a different port for a server the task starts.'
     );
   }
-  return null;
+  return stopsTheBot(command, ports);
 }
 
 /** A path or a command as compared here: one backslash for any run of slashes, lower case. */
