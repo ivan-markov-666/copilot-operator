@@ -13,22 +13,13 @@ import type { Key } from '../lib/lang/types';
 import type { Parked, ParkedAnswerInput, RetryChoice } from '../lib/api';
 import { useFmtTime, useT } from '../lib/i18n';
 import { useChoice } from '../lib/useChoice';
-import { CopyButton } from './copyButton';
+import { CopyAll, CopyButton } from './copyButton';
 import { PlanView } from './planView';
 import { PlanNoteHint, ReviseButton } from './planNote';
-import { QuestionAnswers, questionCopy } from './questionAnswers';
+import { CHOICE_KEY, PARKED_WAITS, parkedCopy, questionCopy } from '../lib/cardCopy';
+import { QuestionAnswers } from './questionAnswers';
 import { RichText } from './richText';
-import { HandoffCopyAll, HandoffDetails } from './handoffView';
-
-const CHOICE: Record<RetryChoice, Key> = { same: 'retry.same', fresh: 'retry.fresh', continue: 'retry.continue', restore: 'retry.restore', accept: 'retry.accept' };
-const WHAT: Record<Parked['kind'], Key> = {
-  plan: 'pk.waitsPlan',
-  question: 'pk.waitsQuestion',
-  retry: 'pk.waitsRetry',
-  command: 'pk.waitsCommand',
-  model: 'pk.waitsModel',
-  password: 'pk.waitsPassword',
-};
+import { HandoffDetails } from './handoffView';
 
 export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (answer: ParkedAnswerInput) => Promise<void> }) {
   const { t } = useT();
@@ -53,7 +44,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
   return (
     <div className="pk" role="group" aria-label={t('pk.title')}>
       <p className="small pk-head">
-        <strong>{t('pk.title')}</strong> <span className="muted">{t('pk.since', { at: fmtTime(parked.at), what: t(WHAT[parked.kind]) })}</span>
+        <strong>{t('pk.title')}</strong> <span className="muted">{t('pk.since', { at: fmtTime(parked.at), what: t(PARKED_WAITS[parked.kind]) })}</span>
       </p>
       {parked.kind === 'plan' && a.plan && (
         <>
@@ -90,7 +81,6 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
               {t('ho.notRun')}
             </button>
           </div>
-          <HandoffCopyAll card={a.question.handoff} why={a.question.text} />
         </>
       )}
       {parked.kind === 'question' && a.question && !a.question.handoff && (
@@ -120,7 +110,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           <div className="row">
             {a.retry.choices.map((c, i) => (
               <button key={c} type="button" className={i === 0 ? 'primary' : undefined} {...mark(c)} onClick={() => void send(c, { choice: c })}>
-                {t(CHOICE[c])}
+                {t(CHOICE_KEY[c])}
               </button>
             ))}
           </div>
@@ -161,6 +151,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
           {err}
         </p>
       )}
+      <CopyAll text={parkedCopy(t, parked, fmtTime(parked.at))} />
     </div>
   );
 }

@@ -50,3 +50,12 @@ export function CopyButton({ text, what, label = 'copy.copy', className = '' }: 
     </button>
   );
 }
+
+/** "Copy all" (2026-11-04): the last thing on a card the bot addressed to the operator; what it takes is in `lib/cardCopy.ts`. */
+export function CopyAll({ text }: { text: string }) {
+  return (
+    <div className="cs-copy-row">
+      <CopyButton text={text} what="copy.allWhy" label="copy.all" className="copy-all" />
+    </div>
+  );
+}

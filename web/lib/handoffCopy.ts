@@ -28,7 +28,7 @@ export function seenLines(t: Translate, card: HandoffCard): string[] {
 }
 
 /** In a fence longer than any run of backticks in the text, so a script that prints Markdown stays whole when pasted. */
-function fenced(text: string): string {
+export function fenced(text: string): string {
   const ticks = '`'.repeat(Math.max(3, ...(text.match(/`+/g) ?? []).map((run) => run.length + 1)));
   return `${ticks}\n${text}\n${ticks}`;
 }

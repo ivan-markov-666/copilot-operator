@@ -24,13 +24,13 @@ import { usePoll } from '../../lib/usePoll';
 import { useChosenSkill } from '../../lib/chosenSkill';
 import { useDots } from '../../lib/useDots';
 import { useChoice } from '../../lib/useChoice';
-import { HandoffCopyAll, HandoffDetails, HandoffRecord, WrittenScripts } from '../handoffView';
+import { HandoffDetails, HandoffRecord, WrittenScripts } from '../handoffView';
 import { useActivity } from '../../lib/activity';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
 import { BY_HAND, ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
-import { CopyButton } from '../copyButton';
+import { CopyAll, CopyButton } from '../copyButton';
 import { RichText } from '../richText';
 import { PlanCard } from '../approvals';
 import { ActorChip } from '../actor';
@@ -40,7 +40,8 @@ import { FileIcon } from './fileIcon';
 import { LeadProgress, LedgerChange } from './leadPlan';
 import { NewBranchButton } from './newBranch';
 import { ParkedCard } from '../parkedCard';
-import { QuestionAnswers, questionCopy } from '../questionAnswers';
+import { afterStopCopy, cardCopy, CHOICE_KEY, FAILURE_KEY, questionCopy } from '../../lib/cardCopy';
+import { QuestionAnswers } from '../questionAnswers';
 
 const THREAD_KEY = 'cop.chat.thread';
 /** Plan mode for the next new conversation, as last chosen in this browser. */
@@ -620,9 +621,10 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         {paused && <p className="cs-system cs-paused" role="status">{t('chat.pausedNote')}</p>}
         {/* Git asks for a password in its own window (2026-10-26): the work waits for it; said where to look. */}
         {running && activity?.password && (
-          <p className="cs-system cs-password" role="alert" data-awaits={`password:${session?.id ?? ''}`} tabIndex={-1}>
+          <div className="cs-system cs-password" role="alert" data-awaits={`password:${session?.id ?? ''}`} tabIndex={-1}>
             {t('chat.passwordWaiting')}
-          </p>
+            <CopyAll text={t('chat.passwordWaiting')} />
+          </div>
         )}
         {said && <p className="cs-system" role="status">{said}</p>}
       </div>
@@ -1104,6 +1106,7 @@ function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }
           {err}
         </p>
       )}
+      <CopyAll text={cardCopy(t, approval)} />
     </div>
   );
 }
@@ -1254,16 +1257,6 @@ function LeadSays({ who, text }: { who: string; text: string }) {
   );
 }
 
-/** Why an attempt ended, in words: each kind of technical failure and the others (2026-10-25). */
-const FAILURE_KEY: Record<SubtaskFailure, Key> = {
-  TRANSIENT_CHAT_FAILURE: 'retry.catTransient',
-  COMMAND_INFRASTRUCTURE_FAILURE: 'retry.catCommand',
-  TASK_EVIDENCE_FAILURE: 'retry.catEvidence',
-  USER_STOPPED: 'retry.catStopped',
-  UNKNOWN_SIDE_EFFECT_STATE: 'retry.catUnknown',
-};
-const CHOICE_KEY: Record<RetryChoice, Key> = { same: 'retry.same', fresh: 'retry.fresh', continue: 'retry.continue', restore: 'retry.restore', accept: 'retry.accept' };
-
 /**
  * One subtask of the lead's, as the worker did it: folded once it ended, open while it runs. Tried more than once
  * (2026-10-25), it says which attempt it is on, or was done at, and keeps the attempts before under it; one that did not
@@ -1332,6 +1325,7 @@ function SubtaskTurn({ round, worker, approvals, onDecided, onOpenFile, onRetry 
                 {t('retry.fresh')}
               </button>
             </div>
+            <CopyAll text={afterStopCopy(t, sub.n, sub.title)} />
           </div>
         )}
       </div>
@@ -1416,12 +1410,6 @@ function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Dec
       {r.reason && <p className="small">{t('retry.reason', { reason: r.reason })}</p>}
       {r.sideEffects === 'unknown' && <p className="reason small">{t('retry.unknown')}</p>}
       {r.changed.length > 0 && <p className="muted small">{t('retry.changed', { files: r.changed.slice(0, 8).join(', ') + (r.changed.length > 8 ? ', …' : '') })}</p>}
-      <div className="cs-copy-row">
-        <CopyButton
-          text={[t('retry.title', { n: r.n }), `${r.title}`, `${t('retry.attempt', { k: r.attempt, m: r.maxAttempts })} · ${t(FAILURE_KEY[r.category])}`, r.reason ? t('retry.reason', { reason: r.reason }) : '', r.changed.length > 0 ? t('retry.changed', { files: r.changed.join(', ') }) : ''].filter(Boolean).join('\n')}
-          what="chat.copyCard"
-        />
-      </div>
       <div className="row">
         {r.choices.map((c, i) => (
           <button key={c} type="button" className={i === 0 ? 'primary' : undefined} {...mark(c)} onClick={() => void choose(c)}>
@@ -1434,6 +1422,7 @@ function RetryCard({ approval, onDecided }: { approval: Approval; onDecided: Dec
           {err}
         </p>
       )}
+      <CopyAll text={cardCopy(t, approval)} />
     </div>
   );
 }
@@ -1512,7 +1501,7 @@ function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecide
           {err}
         </p>
       )}
-      <HandoffCopyAll card={q.handoff!} why={q.text} />
+      <CopyAll text={cardCopy(t, approval)} />
     </div>
   );
 }
@@ -1564,6 +1553,7 @@ function QuestionCard({ approval, onDecided }: { approval: Approval; onDecided: 
           {err}
         </p>
       )}
+      <CopyAll text={cardCopy(t, approval)} />
     </div>
   );
 }

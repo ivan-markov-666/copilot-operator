@@ -11,29 +11,13 @@
  *
  * "Copy" (operator, 2026-11-02: "the copy button copies the different answers too, and that one can be written in the
  * field"): the question, why, every answer offered — the recommended one and what one runs said — and how it is
- * answered on the card.
+ * answered on the card; `questionCopy` in `lib/cardCopy.ts`.
  */
 import { useState, type ReactNode } from 'react';
 import type { useChoice } from '../lib/useChoice';
 import { useT } from '../lib/i18n';
 
 type Question = { text: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean };
-type T = ReturnType<typeof useT>['t'];
-
-/** What "Copy" takes from a question; `open` while it waits for its answer, with how it is answered on the card. */
-export function questionCopy(t: T, q: Question, open: boolean): string {
-  const send = t(q.multiple ? 'chat.sendChosen' : 'lead.send');
-  const offered = q.options.map((o, i) => [`${i + 1}. ${o}${i === 0 ? ` (${t('chat.optionRecommended')})` : ''}`, ...(q.commands?.[i] ? [`   ${t('chat.optionRuns', { cmd: q.commands[i]! })}`] : [])].join('\n'));
-  const head = !open ? t('chat.copyOffered') : q.multiple ? t('chat.copyMany', { send }) : t('chat.copyOne');
-  return [
-    q.text,
-    q.why ?? '',
-    offered.length > 0 ? [head, ...offered].join('\n') : '',
-    open ? t(q.multiple ? 'chat.copyWriteMany' : 'chat.copyWrite', { answer: t('lead.answer'), send }) : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-}
 
 /**
  * The answers to press, the field for another and the button that sends it; `children` go beside that button. `onAnswer`

@@ -184,6 +184,15 @@ let browser: Browser | null = null;
  * One scenario: a harness of its own, a fresh browser context, and every uncaught page error failing
  * it — an error seen in a page nobody asserted on is still a page that broke.
  */
+/** "Copy all" (2026-11-04): the last button on a card the bot addressed to the operator; pressed, what it copied. */
+async function copiedFrom(page: Page, card: Locator): Promise<string> {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin });
+  const button = card.getByRole('button').last();
+  t.check('"Copy all", the last button on the card', [((await button.textContent()) ?? '').trim(), await button.getAttribute('aria-label')], [en['copy.all'], en['copy.allWhy']]);
+  await button.click();
+  return (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+}
+
 async function scenario(
   title: string,
   settings: Record<string, unknown>,
@@ -275,6 +284,8 @@ try {
     const link = card.getByRole('link');
     await waitFor('the card to name its session', async () => (await link.textContent()) === 'run-rest', 10_000).catch(() => undefined);
     t.check('the card shows the session name, not its id', await link.textContent(), 'run-rest');
+    const stepCopied = await copiedFrom(page, card);
+    t.truthy('"Copy all": its heading and the command', stepCopied.startsWith(`${en['approval.title']!.replace('{n}', '1')}\n\n\`\`\`\n`), stepCopied);
     await card.getByRole('button', { name: 'Run this and the rest without asking' }).click();
     const confirm = page.getByRole('alertdialog');
     await confirm.waitFor({ timeout: 3_000 });
@@ -308,7 +319,7 @@ try {
     t.check('its card names the session', await fetchCard.getByRole('link').textContent(), 'fetcher');
     t.check('the network note is shown', await fetchCard.getByText(en['approval.network']!).isVisible(), true);
     t.check('and there is no "run the rest" button on it', await fetchCard.getByRole('button', { name: 'Run this and the rest without asking' }).count(), 0);
-    t.check('only Run, Skip and Abort task', await fetchCard.getByRole('button').allTextContents(), ['Run', 'Skip', 'Abort task']);
+    t.check('only Run, Skip and Abort task', await fetchCard.locator('button:not(.copy-btn)').allTextContents(), ['Run', 'Skip', 'Abort task']);
     await fetchCard.getByRole('button', { name: 'Abort task' }).click();
     await h.idle();
     t.check('aborted, and nothing was fetched', [(await cards(h, fetcher!.id))[0]!.status, existsSync(join(h.repo, 'x'))], ['aborted', false]);
@@ -490,7 +501,9 @@ try {
     await banner.getByText(en['approval.manualTitle']!).waitFor({ timeout: 30_000 });
     t.check('signed in, it waits on the card at the top of the workbench, with nothing sent', h.chat.sent.length, 0);
     // One way on, not two that did the same (2026-10-19), and Stop.
-    t.check('the card offers "Ready — continue" and "Stop", nothing else', await banner.locator('.approval').last().getByRole('button').allTextContents(), [en['approval.manualReady'], en['approval.modelStop']]);
+    t.check('the card offers "Ready — continue" and "Stop", nothing else', await banner.locator('.approval').last().locator('button:not(.copy-btn)').allTextContents(), [en['approval.manualReady'], en['approval.modelStop']]);
+    const modelCopied = await copiedFrom(page, banner.locator('.approval').last());
+    t.truthy('"Copy all": what to do and what the picker shows', modelCopied.startsWith(`${en['approval.manualTitle']}\n\n`) && modelCopied.includes(en['approval.modelShown']!.split('{shown}')[0]!), modelCopied);
     h.chat.currentModel = 'GPT 5.6 Sol Think deeper';
     await banner.getByRole('button', { name: en['approval.manualReady']!, exact: true }).click();
     await chat.getByText('I wrote hi.txt holding the word hi').waitFor({ timeout: 30_000 });
@@ -1672,6 +1685,8 @@ try {
     await row.locator('.pk').waitFor();
     t.check('the wait before a task is set aside, as set', await page.locator('#queue-park-after').inputValue(), '2');
     t.check('"Waits for you", and its plan on its card', [(await row.locator('.queue-status').textContent())?.trim(), await row.locator('.pk .plan-view').count(), (await row.locator('.pk-head strong').textContent())?.trim()], [en['q.parked'], 1, en['pk.title']]);
+    const parkedCopied = await copiedFrom(page, row.locator('.pk'));
+    t.truthy('"Copy all": since when it waits, for what, and the plan', parkedCopied.startsWith(`${en['pk.title']}\n\n`) && parkedCopied.includes(en['pk.waitsPlan']!) && parkedCopied.includes(`## ${en['pm.approach']}`), parkedCopied);
     t.check('"Plan first" is on for a new task', await page.locator('#queue-plan').isChecked(), true);
     // Under its message in its chat too.
     const sessionId = (await h.call<{ items: Array<{ sessionId?: string }> }>('GET', '/queue')).items[0]!.sessionId!;
@@ -1930,11 +1945,7 @@ try {
     t.check('pressed again, the note is put away, nothing sent', [await sendBack.count(), (await h.call<unknown[]>('GET', '/approvals')).length], [0, 1]);
     t.check('"I will not run it" is there beside them', await card.getByRole('button', { name: en['ho.notRun']!, exact: true }).count(), 1);
     // "Copy all" (operator, 2026-11-04): the last thing on the card, all it says, the script it keeps folded too.
-    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
-    const copyAll = card.locator('button').last();
-    t.check('last on the card: "Copy all"', [((await copyAll.textContent()) ?? '').trim(), await copyAll.getAttribute('aria-label')], [en['ho.copyAll'], en['ho.copyAllWhy']]);
-    await copyAll.click();
-    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    const copied = await copiedFrom(page, card);
     t.check(
       'it copies the card: the text, the folder, the commands, what should be seen, how it ends, the script in full',
       [
@@ -1956,7 +1967,7 @@ try {
     await record.first().waitFor({ timeout: 15_000 });
     t.check('the conversation keeps the card: revision 1, run by you, what it printed', [((await record.locator(':scope > details > summary').textContent()) ?? '').replace(/\s+/g, ' ').trim(), ((await record.locator('pre').last().textContent()) ?? '').trim()], [`${en['ho.historyTitle']!.replace('{n}', '1')} · ${en['ho.historyRan']}`, '42']);
     await record.locator(':scope > details > summary').click();
-    await record.getByRole('button', { name: en['ho.copyAllWhy']!, exact: true }).click();
+    await record.getByRole('button', { name: en['copy.allWhy']!, exact: true }).click();
     t.check('and "Copy all" there takes the same text', (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), copied);
   });
 
@@ -2403,6 +2414,8 @@ try {
       copied.startsWith(`## ${en['pm.existing']}\n\nOnly README.md`) && copied.includes(`## ${en['pm.steps']}\n\n1. create the file\n2. read it back`) && copied.includes('- `planned.txt`') && copied.includes(`## ${en['pm.verification']}`),
       copied,
     );
+    const planCopied = await copiedFrom(page, card);
+    t.truthy('"Copy all" under its answers: its heading, what it says, the plan', planCopied.startsWith(en['pm.cardTitle']!.split('{title}')[0]!) && planCopied.includes(en['pm.cardWhy']!) && planCopied.endsWith(copied), planCopied);
     t.check('and not in the banner over the workbench', await page.locator('.approval-banner .approval').count(), 0);
     t.check('nothing was changed before it is approved', existsSync(join(h.repo, 'planned.txt')), false);
     /*
@@ -2502,6 +2515,8 @@ try {
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
     await ask.getByRole('button', { name: en['chat.copyAsked']!, exact: true }).click();
     t.check('"Copy" on the card: what it asks about, as shown', (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), ((await ask.locator('pre.cs-out').textContent()) ?? '').replace(/\r\n/g, '\n'));
+    const askCopied = await copiedFrom(page, ask);
+    t.truthy('"Copy all" under its answers: its heading and the command', askCopied.startsWith(`${en['chat.askTitle']}\n\n\`\`\`\n`), askCopied);
     await ask.getByRole('button', { name: en['chat.askRun']!, exact: true }).click();
     await page.locator('.cs-body').getByText('I wrote live.txt holding the word live').waitFor({ timeout: 30_000 });
     await waitFor('LIVE to go', async () => (await badge.count()) === 0 || null, 15_000).catch(() => undefined);
@@ -2537,6 +2552,7 @@ try {
     const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
     t.check('"Copy" takes the question, its answers in order and how it is answered', copied,
       `Shall I write asked.txt now?\n\n${en['chat.copyOne']}\n1. Yes, write it (${en['chat.optionRecommended']})\n   ${en['chat.optionRuns']!.replace('{cmd}', write('asked.txt', 'yes'))}\n2. Not yet\n\n${en['chat.copyWrite']!.replace('{answer}', en['lead.answer']!).replace('{send}', en['lead.send']!)}`);
+    t.check('"Copy all" under its answers: who asks, and all of that', await copiedFrom(page, card), `${en['chat.question']}\n\n${copied}`);
     await options.first().click();
     await page.locator('.cs-body').getByText('asked.txt was written by the command').waitFor({ timeout: 30_000 });
     t.check('clicked: the bot ran it, and the work went on to its end', existsSync(join(h.repo, 'asked.txt')) ? readFileSync(join(h.repo, 'asked.txt'), 'utf8').trim() : null, 'yes');
@@ -2972,7 +2988,8 @@ try {
     const run = banner.getByRole('button', { name: en['approval.run']!, exact: true });
     await run.click();
     await banner.locator('[data-chosen="sending"]').waitFor({ timeout: 5_000 });
-    const buttons = banner.getByRole('button');
+    // "Copy all" is no answer, and stays on.
+    const buttons = banner.locator('button:not(.copy-btn)');
     t.check('in the banner: Run marked, and none of its answers on', [await run.getAttribute('data-chosen'), (await buttons.evaluateAll((bs) => bs.map((b) => (b as HTMLButtonElement).disabled))).every(Boolean), await buttons.count()], ['sending', true, 4]);
     releaseDecide();
     t.truthy('answered, the card goes', await banner.waitFor({ state: 'detached', timeout: 5_000 }).then(() => true, () => false), await page.locator('.approval-banner').count());
@@ -3449,6 +3466,8 @@ try {
       ],
       [en['retry.title']!.replace('{n}', '1'), [en['retry.attempt']!.replace('{k}', '1').replace('{m}', '3'), en['retry.catTransient']], true, [en['retry.same'], en['retry.fresh'], en['retry.accept']]],
     );
+    const retryCopied = await copiedFrom(page, card);
+    t.truthy('"Copy all" under its choices: which subtask, why, and the choices', retryCopied.startsWith(`${en['retry.title']!.replace('{n}', '1')}\n`) && retryCopied.includes('ERR_CONNECTION_RESET') && retryCopied.includes(`1. ${en['retry.same']}`) && retryCopied.includes(`3. ${en['retry.accept']}`), retryCopied);
     // The worker's session is read on its own, every second and a half: its attempt ended a moment before the card.
     t.truthy('beside the subtask\'s title too: "Attempt 1 of 3"', await appears(sub.locator(':scope > summary .cs-attempt').filter({ hasText: en['retry.attempt']!.replace('{k}', '1').replace('{m}', '3') }), 10_000), await sub.locator(':scope > summary').textContent());
     // The page reloaded under it (14): the card is asked for again and is there, the run still waiting on it.
@@ -3498,7 +3517,9 @@ try {
     await h.idle();
     await openThread(page, url, sent.threadId);
     const group = page.getByRole('group', { name: en['retry.afterStop']! });
-    t.truthy('under the stopped subtask: try it again, or with a new worker', await appears(group, 15_000) && (await group.getByRole('button').allTextContents()).join('|') === [en['retry.same'], en['retry.fresh']].join('|'), await page.locator('.cs-lead-turn').textContent());
+    t.truthy('under the stopped subtask: try it again, or with a new worker', await appears(group, 15_000) && (await group.locator('button:not(.copy-btn)').allTextContents()).join('|') === [en['retry.same'], en['retry.fresh']].join('|'), await page.locator('.cs-lead-turn').textContent());
+    const afterStop = await copiedFrom(page, group);
+    t.truthy('"Copy all": the subtask, what can be done, the two answers', afterStop.includes(en['retry.afterStopWhy']!) && afterStop.includes(`1. ${en['retry.same']}`) && afterStop.includes(`2. ${en['retry.fresh']}`), afterStop);
     t.check('nothing was tried again by itself', (await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${sent.threadId}`)).tasks.map((x) => x.status), ['aborted']);
     h.chat.script(reply.steps(write('result.txt', 'hello')), reply.done(retryWorkerDone), reply.lead.done(retryLeadDone));
     /*
@@ -3527,7 +3548,7 @@ try {
     releaseRetry();
     let onAgain = false;
     for (const until = Date.now() + 1_800; Date.now() < until; await sleep(100)) {
-      const states = await group.getByRole('button').evaluateAll((bs) => bs.map((b) => (b as HTMLButtonElement).disabled)).catch(() => [] as boolean[]);
+      const states = await group.locator('button:not(.copy-btn)').evaluateAll((bs) => bs.map((b) => (b as HTMLButtonElement).disabled)).catch(() => [] as boolean[]);
       if (states.some((off) => !off)) onAgain = true;
     }
     t.check('and not on again before the conversation is read; sent once', [onAgain, tries], [false, 1]);

@@ -7,13 +7,13 @@
  * and change beside what the bot itself reads in them, the lines and scripts the bot would refuse, and the scripts they
  * run, each folded in full with where it is — what the operator reads is what they run. Shown in the conversation, on a
  * queue task's card and in the conversation's history alike; each says how it is answered. Last on each, "Copy all"
- * takes everything it says (2026-11-04; `lib/handoffCopy.ts`).
+ * takes everything it says (2026-11-04; `lib/handoffCopy.ts`, `lib/cardCopy.ts`).
  */
 import { Fragment } from 'react';
 import type { Approval, HandoffCard } from '../lib/api';
 import { declaredLines, handoffCopy, seenLines } from '../lib/handoffCopy';
 import { useT } from '../lib/i18n';
-import { CopyButton } from './copyButton';
+import { CopyAll, CopyButton } from './copyButton';
 import { RichText } from './richText';
 
 export function HandoffDetails({ card, why }: { card: HandoffCard; why: string }) {
@@ -94,16 +94,6 @@ export function HandoffDetails({ card, why }: { card: HandoffCard; why: string }
   );
 }
 
-/** "Copy all": the last thing on the card, under what answers it, so it is there once all of it has been read. */
-export function HandoffCopyAll({ card, why }: { card: HandoffCard; why: string }) {
-  const { t } = useT();
-  return (
-    <div className="cs-copy-row">
-      <CopyButton text={handoffCopy(t, card, why)} what="ho.copyAllWhy" label="ho.copyAll" className="ho-copy-all" />
-    </div>
-  );
-}
-
 /** A handoff as the conversation's history keeps it: the card as it was shown, folded, and how it was answered. */
 export function HandoffRecord({ card, outcome, answer }: { card: HandoffCard; outcome: string; answer?: string }) {
   const { t } = useT();
@@ -116,7 +106,7 @@ export function HandoffRecord({ card, outcome, answer }: { card: HandoffCard; ou
           <strong>{t('ho.historyTitle', { n: card.revision ?? 1 })}</strong> · {how}
         </summary>
         <HandoffDetails card={card} why={card.why ?? ''} />
-        <HandoffCopyAll card={card} why={card.why ?? ''} />
+        <CopyAll text={handoffCopy(t, card, card.why ?? '')} />
       </details>
       {answer && (
         <>

@@ -10,23 +10,9 @@
  * under the headings it is shown with, to paste into a ticket, a mail or another chat.
  */
 import type { TaskPlan } from '../lib/api';
-import { useT, useFmtTime, type Key } from '../lib/i18n';
+import { planAsText } from '../lib/cardCopy';
+import { useT, useFmtTime } from '../lib/i18n';
 import { CopyButton } from './copyButton';
-
-/** The plan as text, in the page's language: its headings as Markdown, its steps numbered, its files as a list. */
-export function planAsText(plan: TaskPlan, t: (key: Key, vars?: Record<string, string | number>) => string): string {
-  const part = (heading: Key, body: string): string[] => (body.trim() ? [`## ${t(heading)}`, '', body.trim(), ''] : []);
-  return [
-    ...part('pm.existing', plan.existing),
-    ...part('pm.approach', plan.approach),
-    ...part('pm.steps', plan.steps.map((s, i) => `${i + 1}. ${s.trim()}`).join('\n')),
-    ...part('pm.files', plan.files.map((f) => `- \`${f}\``).join('\n')),
-    ...part('pm.verification', plan.verification),
-    ...part('pm.risks', plan.risks ?? ''),
-  ]
-    .join('\n')
-    .trim();
-}
 
 export function PlanView({ plan, showApproval = true }: { plan: TaskPlan; showApproval?: boolean }) {
   const { t } = useT();

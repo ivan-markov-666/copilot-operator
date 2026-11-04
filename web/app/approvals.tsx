@@ -14,10 +14,12 @@
  * question notices as "at once".
  */
 import { WrittenScripts } from './handoffView';
+import { CopyAll } from './copyButton';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { api, type Approval } from '../lib/api';
+import { cardCopy, modelAsk } from '../lib/cardCopy';
 import { useT, useFmtTime } from '../lib/i18n';
 import { confirmDialog } from './dialog';
 import { usePoll } from '../lib/usePoll';
@@ -175,6 +177,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
             {t('approval.openChat', { name: sessionName })}
           </Link>
         </div>
+        <CopyAll text={cardCopy(t, approval)} />
       </div>
     );
   }
@@ -210,7 +213,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
             <span>{t(m.role === 'lead' ? 'approval.leadModelWhy' : 'approval.workerModelWhy')}</span>
           </div>
         )}
-        <p>{m.manual ? (m.asked ? t('approval.manualAsk', { model: m.asked }) : t('approval.manualAskAny')) : t('approval.modelAsk', { model: m.asked })}</p>
+        <p>{modelAsk(t, m)}</p>
         <p className="muted small">{t('approval.modelShown', { shown: m.shown ?? '—' })}</p>
         {!m.manual && <p className="reason small">{t('approval.modelWhy', { why: m.why, tries: m.tries })}</p>}
         {err && (
@@ -235,6 +238,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
             {t('approval.modelStop')}
           </button>
         </div>
+        <CopyAll text={cardCopy(t, approval)} />
       </div>
     );
   }
@@ -273,6 +277,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
           {t('approval.abort')}
         </button>
       </div>
+      <CopyAll text={cardCopy(t, approval, t('approval.title', { n: approval.stepId }))} />
     </div>
   );
 }
@@ -334,6 +339,7 @@ export function PlanCard({ approval, sessionName, onDecided }: { approval: Appro
           {t('pm.stop')}
         </button>
       </div>
+      <CopyAll text={cardCopy(t, approval)} />
     </div>
   );
 }
