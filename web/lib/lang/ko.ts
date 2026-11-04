@@ -198,6 +198,8 @@ export const ko: Dictionary = {
   'ho.outside': '이 폴더는 프로젝트 밖에 있습니다. 그곳에서 무엇이든 실행하기 전에 확인하세요.',
   'ho.commands': '명령(순서대로)',
   'ho.copyCommands': '명령 복사',
+  'ho.copyAll': '모두 복사',
+  'ho.copyAllWhy': '모두 복사: 이 메시지의 텍스트, 명령, 확인할 내용, 스크립트',
   'ho.expect': '보여야 하는 내용',
   'ho.warn': '무엇이든 실행하기 전에 읽어 보세요. 봇 자신이라면 거부하는 것이거나, 입력한 터미널을 닫아 버리는 것입니다:',
   'ho.files': '실행하기 전에 읽어 보세요',

@@ -34,7 +34,7 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function CopyButton({ text, what, className = '' }: { text: string; /** What is copied, for the title and a screen reader. */ what: Key; className?: string }) {
+export function CopyButton({ text, what, label = 'copy.copy', className = '' }: { text: string; /** What is copied, for the title and a screen reader. */ what: Key; /** The word on it, when "Copy" is not enough. */ label?: Key; className?: string }) {
   const { t } = useT();
   const [said, setSaid] = useState<'' | 'copied' | 'failed'>('');
   const timer = useRef<number | undefined>(undefined);
@@ -46,7 +46,7 @@ export function CopyButton({ text, what, className = '' }: { text: string; /** W
   };
   return (
     <button type="button" className={`quiet small copy-btn ${className}`.trim()} onClick={() => void copy()} title={t(what)} aria-label={t(what)}>
-      <span aria-live="polite">{said === 'copied' ? t('copy.copied') : said === 'failed' ? t('copy.failed') : t('copy.copy')}</span>
+      <span aria-live="polite">{said === 'copied' ? t('copy.copied') : said === 'failed' ? t('copy.failed') : t(label)}</span>
     </button>
   );
 }

@@ -944,6 +944,7 @@ The card is "Run this yourself" (`HandoffQuestion` in the chat, `HandoffDetails`
 - what should be seen; how it should end, what it reaches on the network and on a platform, what it changes in the project, as the chat says (`exit`, `network`, `platforms`, `changes`, "not said" when missing) — and, beside them, what the bot itself reads in the lines and the scripts (`seen`);
 - the lines and the scripts the bot itself would refuse, marked;
 - each script, read from disk and folded, with its path in full and its text. (Its SHA-256 was shown until 2026-10-27; the operator found it more than the card needs.)
+- last, under the buttons that answer it, "Copy all" (operator, 2026-11-04): all the card says as one text, top to bottom, the scripts in full (`handoffCopy` in `web/lib/handoffCopy.ts`); the same on a queue task's card and on the card the history keeps.
 
 The operator answers in one of four ways (revise and resubmit, 2026-10-27, from the operator's specification):
 - "I ran it — send the output", which needs some text: the chat gets the output fenced next to what it expected, as evidence and never as instructions;

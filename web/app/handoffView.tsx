@@ -6,9 +6,12 @@
  * the folder, the lines in order with "Copy", what should be seen and how it should end, what the chat says they reach
  * and change beside what the bot itself reads in them, the lines and scripts the bot would refuse, and the scripts they
  * run, each folded in full with where it is — what the operator reads is what they run. Shown in the conversation, on a
- * queue task's card and in the conversation's history alike; each says how it is answered.
+ * queue task's card and in the conversation's history alike; each says how it is answered. Last on each, "Copy all"
+ * takes everything it says (2026-11-04; `lib/handoffCopy.ts`).
  */
+import { Fragment } from 'react';
 import type { Approval, HandoffCard } from '../lib/api';
+import { declaredLines, handoffCopy, seenLines } from '../lib/handoffCopy';
 import { useT } from '../lib/i18n';
 import { CopyButton } from './copyButton';
 import { RichText } from './richText';
@@ -52,14 +55,16 @@ export function HandoffDetails({ card, why }: { card: HandoffCard; why: string }
       <p className="cs-who">{t('ho.expect')}</p>
       <RichText text={card.expect} />
       <div className="ho-declared">
-        {said(t('ho.exit'), card.exit)}
-        {said(t('ho.network'), card.network)}
-        {said(t('ho.platforms'), card.platforms)}
-        {said(t('ho.changes'), card.changes)}
+        {declaredLines(t, card).map(({ label, value }) => (
+          <Fragment key={label}>{said(label, value)}</Fragment>
+        ))}
       </div>
       {/* What the bot reads in the lines and the scripts themselves, beside what the chat says of them. */}
-      {card.seen?.network && <p className="reason small ho-seen">{t('ho.seenNetwork', { what: card.seen.network })}</p>}
-      {card.seen?.platform && <p className="reason small ho-seen">{t('ho.seenPlatform', { platform: card.seen.platform })}</p>}
+      {seenLines(t, card).map((line) => (
+        <p key={line} className="reason small ho-seen">
+          {line}
+        </p>
+      ))}
       {card.files.length > 0 && (
         <div className="ho-files">
           {card.files.map((f) => (
@@ -89,6 +94,16 @@ export function HandoffDetails({ card, why }: { card: HandoffCard; why: string }
   );
 }
 
+/** "Copy all": the last thing on the card, under what answers it, so it is there once all of it has been read. */
+export function HandoffCopyAll({ card, why }: { card: HandoffCard; why: string }) {
+  const { t } = useT();
+  return (
+    <div className="cs-copy-row">
+      <CopyButton text={handoffCopy(t, card, why)} what="ho.copyAllWhy" label="ho.copyAll" className="ho-copy-all" />
+    </div>
+  );
+}
+
 /** A handoff as the conversation's history keeps it: the card as it was shown, folded, and how it was answered. */
 export function HandoffRecord({ card, outcome, answer }: { card: HandoffCard; outcome: string; answer?: string }) {
   const { t } = useT();
@@ -101,6 +116,7 @@ export function HandoffRecord({ card, outcome, answer }: { card: HandoffCard; ou
           <strong>{t('ho.historyTitle', { n: card.revision ?? 1 })}</strong> · {how}
         </summary>
         <HandoffDetails card={card} why={card.why ?? ''} />
+        <HandoffCopyAll card={card} why={card.why ?? ''} />
       </details>
       {answer && (
         <>

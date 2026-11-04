@@ -198,6 +198,8 @@ export const pt: Dictionary = {
   'ho.outside': 'Esta pasta está fora do projeto: verifique-a antes de executar algo ali.',
   'ho.commands': 'Os comandos, por ordem',
   'ho.copyCommands': 'Copiar os comandos',
+  'ho.copyAll': 'Copiar tudo',
+  'ho.copyAllWhy': 'Copiar tudo o que esta mensagem diz: o texto, os comandos, o que deve ver e os scripts',
   'ho.expect': 'O que você deve ver',
   'ho.warn': 'Leia isto antes de executar qualquer coisa: o próprio bot o recusaria, ou fecharia o terminal em que o digita:',
   'ho.files': 'leia antes de executar',

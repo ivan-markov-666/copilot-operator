@@ -197,6 +197,8 @@ export const de: Dictionary = {
   'ho.outside': 'Dieser Ordner liegt außerhalb des Projekts: Prüfen Sie ihn, bevor Sie dort etwas ausführen.',
   'ho.commands': 'Die Befehle, der Reihe nach',
   'ho.copyCommands': 'Die Befehle kopieren',
+  'ho.copyAll': 'Alles kopieren',
+  'ho.copyAllWhy': 'Alles kopieren, was diese Nachricht sagt: den Text, die Befehle, was Sie sehen sollten, und die Skripte',
   'ho.expect': 'Was Sie sehen sollten',
   'ho.warn': 'Lesen Sie dies, bevor Sie etwas ausführen: Der Bot selbst würde es ablehnen, oder es würde das Terminal schließen, in das Sie es eingeben:',
   'ho.files': 'vor dem Ausführen lesen',

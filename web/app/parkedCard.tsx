@@ -18,7 +18,7 @@ import { PlanView } from './planView';
 import { PlanNoteHint, ReviseButton } from './planNote';
 import { QuestionAnswers, questionCopy } from './questionAnswers';
 import { RichText } from './richText';
-import { HandoffDetails } from './handoffView';
+import { HandoffCopyAll, HandoffDetails } from './handoffView';
 
 const CHOICE: Record<RetryChoice, Key> = { same: 'retry.same', fresh: 'retry.fresh', continue: 'retry.continue', restore: 'retry.restore', accept: 'retry.accept' };
 const WHAT: Record<Parked['kind'], Key> = {
@@ -90,6 +90,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
               {t('ho.notRun')}
             </button>
           </div>
+          <HandoffCopyAll card={a.question.handoff} why={a.question.text} />
         </>
       )}
       {parked.kind === 'question' && a.question && !a.question.handoff && (

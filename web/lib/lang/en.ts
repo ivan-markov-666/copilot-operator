@@ -206,6 +206,8 @@ export const en = {
   'ho.outside': 'This folder is outside the project: check it before you run anything there.',
   'ho.commands': 'The commands, in order',
   'ho.copyCommands': 'Copy the commands',
+  'ho.copyAll': 'Copy all',
+  'ho.copyAllWhy': 'Copy all this message says: the text, the commands, what you should see and the scripts',
   'ho.expect': 'What you should see',
   'ho.warn': 'Read these before you run anything: the bot itself would refuse them, or they would close the terminal you type them in:',
   'ho.files': 'read it before you run it',

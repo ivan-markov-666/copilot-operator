@@ -1904,7 +1904,7 @@ try {
     const run = 'npx tsx tools/inspect.ts';
     h.chat.script(
       reply.steps("New-Item -ItemType Directory -Force tools | Out-Null; Set-Content -NoNewline -Path tools/inspect.ts -Value 'console.log(42)'", run),
-      reply.handoff([run], 'It prints 42.', { why: 'To read the claims, which no command here can show.', files: ['tools/inspect.ts'] }),
+      reply.handoff([run], 'It prints 42.', { why: 'To read the claims, which no command here can show.', files: ['tools/inspect.ts'], exit: 'Exit code 0.' }),
       reply.done('The inspection printed 42 when the operator ran it themselves, as expected, so the claims are the ones the script reads.'),
     );
     await h.call('POST', `/sessions/${threadId}/start`, { mode: 'unattended' });
@@ -1929,6 +1929,21 @@ try {
     await revise.click();
     t.check('pressed again, the note is put away, nothing sent', [await sendBack.count(), (await h.call<unknown[]>('GET', '/approvals')).length], [0, 1]);
     t.check('"I will not run it" is there beside them', await card.getByRole('button', { name: en['ho.notRun']!, exact: true }).count(), 1);
+    // "Copy all" (operator, 2026-11-04): the last thing on the card, all it says, the script it keeps folded too.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url('') });
+    const copyAll = card.locator('button').last();
+    t.check('last on the card: "Copy all"', [((await copyAll.textContent()) ?? '').trim(), await copyAll.getAttribute('aria-label')], [en['ho.copyAll'], en['ho.copyAllWhy']]);
+    await copyAll.click();
+    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    t.check(
+      'it copies the card: the text, the folder, the commands, what should be seen, how it ends, the script in full',
+      [
+        en['ho.intro'], 'To read the claims, which no command here can show.', `${en['ho.folder']} ${h.repo}`, `${en['ho.commands']}\n\`\`\`\n${run}\n\`\`\``,
+        `${en['ho.expect']}\nIt prints 42.`, `${en['ho.exit']} Exit code 0.`, `${en['ho.network']} ${en['ho.notSaid']}`,
+        `tools/inspect.ts — ${en['ho.files']}`, join(h.repo, 'tools', 'inspect.ts'), '```\nconsole.log(42)\n```',
+      ].filter((part) => !copied.includes(part!)),
+      [],
+    );
     const send = card.getByRole('button', { name: en['ho.send']!, exact: true });
     t.check('"I ran it — send the output" waits for what was pasted', await send.isDisabled(), true);
     await card.getByLabel(en['ho.output']!).fill('42');
@@ -1940,6 +1955,9 @@ try {
     const record = page.locator('.ho-record');
     await record.first().waitFor({ timeout: 15_000 });
     t.check('the conversation keeps the card: revision 1, run by you, what it printed', [((await record.locator(':scope > details > summary').textContent()) ?? '').replace(/\s+/g, ' ').trim(), ((await record.locator('pre').last().textContent()) ?? '').trim()], [`${en['ho.historyTitle']!.replace('{n}', '1')} · ${en['ho.historyRan']}`, '42']);
+    await record.locator(':scope > details > summary').click();
+    await record.getByRole('button', { name: en['ho.copyAllWhy']!, exact: true }).click();
+    t.check('and "Copy all" there takes the same text', (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), copied);
   });
 
   /*

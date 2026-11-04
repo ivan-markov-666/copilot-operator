@@ -13,7 +13,8 @@
  *   hands it over again as revision 2, read again; run, and the conversation's history keeps both revisions;
  * - a queue task's card answered later says the same;
  * - a line that would close the operator's terminal (2026-11-03) goes back to the chat before the card, twice at most;
- *   the scripts the lines run, in the folder they move to, are on the card, a script that stops the bot marked.
+ *   the scripts the lines run, in the folder they move to, are on the card, a script that stops the bot marked;
+ * - "Copy all" (2026-11-04) takes all a card says, from top to bottom, whatever it has and leaves out.
  *
  *   npm run check:e2e-handoff
  */
@@ -25,8 +26,61 @@ import { handoffResultMessage } from '../src/orchestrator/handoff.js';
 import type { PendingApproval } from '../src/session/model.js';
 import { startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
+import { handoffCopy } from '../web/lib/handoffCopy.js';
+import { en } from '../web/lib/lang/en.js';
+import type { Key } from '../web/lib/lang/types.js';
 
 const t = new Tally();
+
+/*
+ * "Copy all": every part of a card, in the order it is shown; a new part of the card has to be added here and there.
+ * A script holding a Markdown fence stays whole in a longer one; what a small card leaves out leaves no gap.
+ */
+{
+  const say = (key: Key, vars: Record<string, string | number> = {}): string => Object.entries(vars).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), en[key] as string);
+  const full = handoffCopy(
+    say,
+    {
+      revision: 2,
+      commands: ['pwsh -File tools/a.ps1', 'Get-Content out.txt'],
+      cwd: 'C:\\work\\tools',
+      outside: true,
+      expect: 'It prints 42.',
+      exit: 'Exit code 0.',
+      network: 'Nothing.',
+      platforms: 'Azure, read only.',
+      changes: 'Only out.txt.',
+      seen: { network: 'https://example.test/x', platform: 'Azure' },
+      warnings: ['Line 2 is refused.', 'Line 3 too.'],
+      files: [
+        { path: 'tools/a.ps1', abs: 'C:\\work\\tools\\a.ps1', text: 'Write-Output "```"', cut: true },
+        { path: 'tools/gone.ps1', problem: 'It is not there.' },
+      ],
+    },
+    'To read the claims.',
+  );
+  t.check('"Copy all": every part of the card, from top to bottom', full.split('\n\n'), [
+    `${say('ho.historyTitle', { n: 2 })}\n${en['ho.revisionNew']}`,
+    en['ho.intro'],
+    'To read the claims.',
+    `${en['ho.folder']} C:\\work\\tools\n${en['ho.outside']}`,
+    `${en['ho.commands']}\n\`\`\`\npwsh -File tools/a.ps1\nGet-Content out.txt\n\`\`\``,
+    `${en['ho.warn']}\n- Line 2 is refused.\n- Line 3 too.`,
+    `${en['ho.expect']}\nIt prints 42.`,
+    `${en['ho.exit']} Exit code 0.\n${en['ho.network']} Nothing.\n${en['ho.platforms']} Azure, read only.\n${en['ho.changes']} Only out.txt.`,
+    `${say('ho.seenNetwork', { what: 'https://example.test/x' })}\n${say('ho.seenPlatform', { platform: 'Azure' })}`,
+    `tools/a.ps1 — ${en['ho.files']}\n${en['ho.abs']} C:\\work\\tools\\a.ps1\n${en['ho.cut']}\n\`\`\`\`\nWrite-Output "\`\`\`"\n\`\`\`\``,
+    'tools/gone.ps1 — It is not there.',
+  ]);
+  t.check('a small card: no gaps, and "not said" where the chat said nothing', handoffCopy(say, { commands: ['a'], cwd: 'C:\\w', expect: 'Seen.', files: [] }, '').split('\n\n'), [
+    say('ho.historyTitle', { n: 1 }),
+    en['ho.intro'],
+    `${en['ho.folder']} C:\\w`,
+    `${en['ho.commands']}\n\`\`\`\na\n\`\`\``,
+    `${en['ho.expect']}\nSeen.`,
+    [en['ho.exit'], en['ho.network'], en['ho.platforms'], en['ho.changes']].map((label) => `${label} ${en['ho.notSaid']}`).join('\n'),
+  ]);
+}
 type Card = {
   id: string;
   actor?: string;

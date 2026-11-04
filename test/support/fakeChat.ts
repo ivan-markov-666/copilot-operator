@@ -437,7 +437,7 @@ export const reply = {
     return fenced({ status: 'ask', steps: [], question, ...(why ? { why } : {}), options, ...(multiple ? { multiple } : {}) });
   },
   /** Commands handed to the operator to run themselves (2026-10-26): the lines, what should be seen, and the rest. */
-  handoff(commands: string[], expect: string, extra: { why?: string; cwd?: string; files?: string[] } = {}): string {
+  handoff(commands: string[], expect: string, extra: { why?: string; cwd?: string; files?: string[]; exit?: string } = {}): string {
     return fenced({ status: 'handoff', steps: [], handoff: { commands, expect, ...extra } });
   },
   /** A plan, in plan mode: what is there, how, the stages, the files, how it will be shown done. */

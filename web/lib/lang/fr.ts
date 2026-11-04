@@ -240,6 +240,8 @@ export const fr: Dictionary = {
   'ho.outside': 'Ce dossier est hors du projet : vérifiez-le avant d\'y lancer quoi que ce soit.',
   'ho.commands': 'Les commandes, dans l\'ordre',
   'ho.copyCommands': 'Copier les commandes',
+  'ho.copyAll': 'Tout copier',
+  'ho.copyAllWhy': 'Tout copier dans ce message : le texte, les commandes, ce que vous devriez voir et les scripts',
   'ho.expect': 'Ce que vous devriez voir',
   'ho.warn': 'Lisez ceci avant de lancer quoi que ce soit : le bot lui-même le refuserait, ou cela fermerait le terminal où vous le tapez :',
   'ho.files': 'à lire avant de le lancer',

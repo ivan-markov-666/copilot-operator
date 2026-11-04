@@ -24,7 +24,7 @@ import { usePoll } from '../../lib/usePoll';
 import { useChosenSkill } from '../../lib/chosenSkill';
 import { useDots } from '../../lib/useDots';
 import { useChoice } from '../../lib/useChoice';
-import { HandoffDetails, HandoffRecord, WrittenScripts } from '../handoffView';
+import { HandoffCopyAll, HandoffDetails, HandoffRecord, WrittenScripts } from '../handoffView';
 import { useActivity } from '../../lib/activity';
 import { useFollowBottom } from '../../lib/useFollowBottom';
 import { confirmDialog } from '../dialog';
@@ -1512,6 +1512,7 @@ function HandoffQuestion({ approval, onDecided }: { approval: Approval; onDecide
           {err}
         </p>
       )}
+      <HandoffCopyAll card={q.handoff!} why={q.text} />
     </div>
   );
 }

@@ -1216,6 +1216,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Окончателно за този скрипт: казва на чата, че няма да го пуснете, с написаното като причина; той продължава без него или приключва като блокиран.',
           },
           {
+            key: 'ho.copyAll',
+            kind: 'button',
+            en: 'Copy all',
+            bg: 'Копирай всичко',
+            doesEn: 'Last on the card "Run this yourself", on a queue task\'s card and in the conversation\'s history: copies all the card says — the text, the folder, the commands, what should be seen, the warnings and each script in full.',
+            doesBg: 'Последен на картата „Пуснете го сами“, на картата на задача от опашката и в историята на разговора: копира всичко, което казва картата — текста, папката, командите, какво трябва да се види, предупрежденията и всеки скрипт изцяло.',
+          },
+          {
             key: 'approval.openChat',
             kind: 'link',
             en: 'Open the chat ({name})',
