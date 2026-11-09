@@ -21,7 +21,7 @@
  */
 import { CopilotTransport, type TransportOptions } from './copilotTransport.js';
 
-export { ReplyTimeoutError, isReplyTimeout, WindowClosed } from './copilotTransport.js';
+export { ReplyTimeoutError, isReplyTimeout, WindowClosed, ChatLost, type OnChat } from './copilotTransport.js';
 
 export type ChatTransport = Pick<
   CopilotTransport,
@@ -36,6 +36,7 @@ export type ChatTransport = Pick<
   | 'openConversation'
   | 'openConversationByName'
   | 'currentChatId'
+  | 'ensureOnChat'
   | 'nameChat'
   | 'selectModel'
   | 'currentModel'

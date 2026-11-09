@@ -307,6 +307,44 @@ export class WindowClosed extends Error {
 }
 
 /**
+ * The window had left the conversation the bot put it on, and could not be put back (operator, 2026-11-09; see
+ * `ensureOnChat`): the conversation does not open again, or the sign-in the page asked for first was not done in time.
+ * Nothing was sent: not to it, and not to the page the window was on instead, another conversation or a new one on
+ * Copilot's home page. Nothing that sends again gets past it either, so a caller's retries do not try (see `runTask`).
+ */
+export class ChatLost extends Error {
+  constructor(
+    readonly chatId: string,
+    /** Where the window was: its address without the query. */
+    readonly found: string,
+    message?: string,
+  ) {
+    super(
+      message ??
+        `Copilot's window was no longer on this conversation (${chatId}): it showed ${found}. The conversation could not be ` +
+          'opened again, by its address or by its name in the sidebar, so nothing was sent, and nothing went into another chat. ' +
+          "Look in Copilot's sidebar in the Edge window to see whether the conversation is still there.",
+    );
+    this.name = 'ChatLost';
+  }
+}
+
+/** Where `ensureOnChat` found the window: on its conversation, put back on it, or with no conversation expected of it. */
+export type OnChat =
+  | { at: 'here' | 'unknown' }
+  | { at: 'returned'; chatId: string; from: string; by: 'address' | 'name'; signedIn: boolean };
+
+/** An address without its query and fragment, which may carry an account's name: what a record says of where a page was. */
+export function whereIs(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'about:' ? url : `${u.origin}${u.pathname}`;
+  } catch {
+    return url.replace(/[?#].*$/, '').slice(0, 200);
+  }
+}
+
+/**
  * A card drawn over the chat's page (see `showNotice`): a heading, the message it is about, a few lines, one button.
  * `tone` picks the mark beside the heading: a tick, a stop, or a warning.
  */
@@ -430,6 +468,19 @@ export class CopilotTransport {
   private locatorProblems: string[];
   /** Whether the rows' locator has been said not to work in the page (see `readMenuRows`). */
   private rowsLocatorFailed = false;
+  /**
+   * The conversation the bot itself put this window on (operator, 2026-11-09: a task paused, or waiting on a card, for
+   * some days went on in a new chat on Auto — the page had left its conversation meanwhile, and the next message went
+   * wherever the page was). `{ id }` once the conversation has an address; `'new'` for a new one not yet answered, which
+   * gets its address with its first answer (`waitForReply`); null where none is expected, as on Copilot's home page after
+   * a sign-in, before a run enters its conversation. Set only by what moves the page on purpose — `newChat`,
+   * `openConversation`, `openConversationByName`, `ensureSignedIn`, `gotoChatAs`, `signOut` — and read by `ensureOnChat`.
+   */
+  private onChat: { id: string } | 'new' | null = null;
+  /** The name each conversation was given, or found by, in the sidebar: the way back to it when its address does not open it. */
+  private readonly chatNames = new Map<string, string>();
+  /** How long a page is given to show the composer before it is taken to be asking for a sign-in. */
+  private firstLookMs = 15_000;
 
   constructor(private readonly opts: TransportOptions) {
     const { locators, problems } = resolvePickerLocators(opts.pickerLocators);
@@ -700,6 +751,7 @@ export class CopilotTransport {
    * without anyone choosing it.
    */
   async signOut(): Promise<void> {
+    this.onChat = null;
     this.emit('signing-out');
     await this.p
       .goto('https://login.microsoftonline.com/common/oauth2/v2.0/logout', {
@@ -724,6 +776,7 @@ export class CopilotTransport {
       target.searchParams.set('login_hint', upn);
       target.searchParams.set('prompt', 'select_account');
     }
+    this.onChat = null;
     await this.p.goto(target.toString(), { waitUntil: 'domcontentloaded' });
   }
 
@@ -837,6 +890,8 @@ Current URL: ${url}`);
    * types credentials; it only waits for the composer to appear.
    */
   async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal } = {}): Promise<void> {
+    // Copilot's home page, where no conversation is expected until the run enters one.
+    this.onChat = null;
     await this.p.goto(url, { waitUntil: 'domcontentloaded' });
 
     /*
@@ -844,7 +899,7 @@ Current URL: ${url}`);
      * ends the wait at once, rather than after the whole sign-in timeout, fifteen minutes by default (2026-10-17).
      */
     const stoppedHere = 'stopped by the operator while waiting for the sign-in';
-    if (!(await this.composerWithin(15_000, opts.signal, stoppedHere))) {
+    if (!(await this.composerWithin(this.firstLookMs, opts.signal, stoppedHere))) {
       this.emit('sign-in-required', { url: this.p.url() });
       if (!(await this.composerWithin(this.opts.signInTimeoutMs, opts.signal, stoppedHere))) {
         throw new Error(
@@ -860,28 +915,121 @@ Current URL: ${url}`);
   }
 
   async newChat(): Promise<void> {
+    this.onChat = null;
     await this.p.goto(Url.newChat, { waitUntil: 'domcontentloaded' });
     await this.composer().waitFor({ state: 'visible' });
     await this.dismissPopups();
+    this.onChat = 'new';
   }
 
   /** Reopens a conversation by its id. Returns false when it no longer opens. */
   async openConversation(chatId: string): Promise<boolean> {
+    this.onChat = null;
     await this.p.goto(Url.conversation(chatId), { waitUntil: 'domcontentloaded' });
     if (!(await this.isChatReady(20_000))) return false;
-    return parseChatId(this.p.url()) === chatId;
+    const there = parseChatId(this.p.url()) === chatId;
+    if (there) this.onChat = { id: chatId };
+    return there;
   }
 
   /** Finds a conversation by its exact name in the sidebar. */
   async openConversationByName(name: string): Promise<boolean> {
     const row = this.p.locator(`${Sidebar.conversationLink}[aria-label="${name.replace(/"/g, '\\"')}"]`);
     if ((await row.count()) === 0) return false;
+    // The conversation it is, from the link's own address: the page's follows a moment after the click.
+    const href = await row.first().getAttribute('href').catch(() => null);
+    this.onChat = null;
     await row.first().click();
-    return await this.isChatReady(20_000);
+    if (!(await this.isChatReady(20_000))) return false;
+    const id = parseChatId(href ?? '') ?? parseChatId(this.p.url());
+    if (id) {
+      this.onChat = { id };
+      this.chatNames.set(id, name);
+    }
+    return true;
   }
 
   async currentChatId(): Promise<string | null> {
     return parseChatId(this.p.url());
+  }
+
+  /** The conversation id in the page's address, waited for up to `ms`: null when it shows none by then. */
+  private async addressId(ms: number): Promise<string | null> {
+    const until = Date.now() + ms;
+    for (;;) {
+      const id = parseChatId(this.p.url());
+      if (id || Date.now() >= until) return id;
+      await this.p.waitForTimeout(200);
+    }
+  }
+
+  /**
+   * Puts the window back on the conversation the bot put it on, when it has left it (operator, 2026-11-09: "after every
+   * return to the bot — an action taken, a pause ended — check that we are on the right chat, by the address taken at
+   * its start; if not, go back to it and carry on from there"). The runner asks this before every message it sends
+   * (`staysOnItsChat` in taskRunner.ts), which is every moment the work goes on after a wait: a pause, a card answered,
+   * commands handed over, a sign-in.
+   *
+   * What is compared is the conversation's id in the page's address, a uuid, the one the run keeps on record: unique,
+   * and the same whatever the conversation is called. When the page shows another, or none — Copilot's home page, a new
+   * chat on Auto, the sign-in page of a session that ran out, a conversation the operator opened from the sidebar — the
+   * conversation is opened again by its address, and when the page asks for a sign-in first, the operator signing in is
+   * waited for as at the start (`sign-in-required`; the run's Stop ends the wait); then by the name it was given in the
+   * sidebar. The page is never written in where it was found: a conversation that will not open again ends with
+   * `ChatLost`, and the next message is not sent anywhere either.
+   *
+   * A new conversation has no address until its first answer, so before that nothing can be compared; it takes the one
+   * the page shows from then on.
+   */
+  async ensureOnChat(opts: { signal?: AbortSignal } = {}): Promise<OnChat> {
+    const want = this.onChat;
+    if (!want) return { at: 'unknown' };
+    const now = parseChatId(this.p.url());
+    if (want === 'new') {
+      if (now) this.onChat = { id: now };
+      return { at: 'here' };
+    }
+    if (now === want.id) return { at: 'here' };
+
+    const from = whereIs(this.p.url());
+    this.emit('chat-left', { chatId: want.id, found: from });
+    const stopped = 'stopped by the operator while waiting for the sign-in';
+    let signedIn = false;
+    for (let tries = 0; tries < 3; tries += 1) {
+      await this.p.goto(Url.conversation(want.id), { waitUntil: 'domcontentloaded' });
+      if (await this.composerWithin(this.firstLookMs, opts.signal, stopped)) {
+        if (parseChatId(this.p.url()) !== want.id) break;
+        this.onChat = want;
+        await this.dismissPopups().catch(() => undefined);
+        this.emit('chat-returned', { chatId: want.id, by: 'address', signedIn, from });
+        return { at: 'returned', chatId: want.id, from, by: 'address', signedIn };
+      }
+      // No composer: the session ran out while the window waited, and the page asks for a sign-in — the operator's.
+      this.emit('sign-in-required', { url: whereIs(this.p.url()) });
+      await this.p.bringToFront().catch(() => undefined);
+      if (!(await this.composerWithin(this.opts.signInTimeoutMs, opts.signal, stopped))) {
+        this.onChat = want;
+        throw new ChatLost(
+          want.id,
+          from,
+          `The chat asked for a sign-in before going back to this conversation, and it was not completed within ${Math.round(this.opts.signInTimeoutMs / 1000)} s ` +
+            '(Settings → copilot.signInTimeoutSec). Nothing was sent. Sign in in the open Edge window, then continue the task.',
+        );
+      }
+      this.emit('signed-in');
+      signedIn = true;
+      // A sign-in comes back to Copilot's home page, not to the conversation: its address is opened again.
+    }
+
+    const name = this.chatNames.get(want.id);
+    if (name && (await this.openConversationByName(name).catch(() => false)) && (await this.addressId(5_000)) === want.id) {
+      this.emit('chat-returned', { chatId: want.id, by: 'name', name, signedIn, from });
+      return { at: 'returned', chatId: want.id, from, by: 'name', signedIn };
+    }
+    // Still the one expected: the next message is not sent to the page found either.
+    this.onChat = want;
+    this.emit('chat-lost', { chatId: want.id, found: from });
+    throw new ChatLost(want.id, from);
   }
 
   /**
@@ -1002,6 +1150,7 @@ Current URL: ${url}`);
         return false;
       }
       this.emit('chat-named', { chatId, name: wanted, ...(wanted !== name ? { asked: name } : {}) });
+      this.chatNames.set(chatId, wanted);
       return wanted;
     } catch (e) {
       this.emit('chat-name-failed', { chatId, name, error: (e as Error).message });
@@ -2246,6 +2395,11 @@ Current URL: ${url}`);
     if (attachments.length) this.emit('reply-files-ignored', { files: attachments });
     const codeBlocksDom = await this.lastAnswerCodeBlocks();
     const { markdown, degraded } = await this.copyLastReply();
+    // A new conversation has its address once it has answered: from now on, the one `ensureOnChat` holds the page to.
+    if (this.onChat === 'new') {
+      const id = parseChatId(this.p.url());
+      if (id) this.onChat = { id };
+    }
     this.emit('reply-received', {
       chars: markdown.length,
       degraded,

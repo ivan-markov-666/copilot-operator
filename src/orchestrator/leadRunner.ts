@@ -36,7 +36,7 @@ import { describePlan, planFrom } from './planMode.js';
 import { chosenSaid } from './chosenAnswers.js';
 import { closeLedger, describeLedger, nextLedger } from './leadLedger.js';
 import { classifySubtaskEnd, describeAttempts, FAILURE_WORDS, retryMessage, retryPlan, sanitizedReason, sideEffectsOf, stepFacts, stepsOf, type RetryMode, type StepFacts } from './subtaskRetry.js';
-import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, redactsMessages, runTask, Sink, speakFor, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
+import { ACTOR_WORDS, applySessionModel, enterSessionConversation, holdsWhilePaused, limitsMessageLength, redactsMessages, runTask, Sink, speakFor, staysOnItsChat, StoppedSend, type RunDeps, type TaskOutcome } from './taskRunner.js';
 import type { Acting, Actor, LeadRecord, LeadRound, RetryChoice, Session, SubtaskAttempt, Task, TaskLimit, TaskPlan } from '../session/model.js';
 import { DEFAULT_VCS } from '../session/store.js';
 
@@ -294,7 +294,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     return stopped;
   };
   // No message to the lead longer than Settings allow as text: the rest goes attached (2026-10-22).
-  const leadChat = redactsMessages(limitsMessageLength(holdsWhilePaused(transport, holdHere), {
+  // Each one into the lead's own conversation, the window put back on it when it has left it (2026-11-09).
+  const leadChat = redactsMessages(limitsMessageLength(holdsWhilePaused(staysOnItsChat(transport, signal), holdHere), {
     get max() {
       return cfg.limits.maxMessageChars;
     },

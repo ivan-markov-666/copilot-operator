@@ -49,13 +49,14 @@ import { fileURLToPath } from 'node:url';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import {
   CLIPBOARD_GUARD,
+  ChatLost,
   CopilotTransport,
   SendRejectedError,
   isReplyTimeout,
   type TransportOptions,
 } from '../src/transport/copilotTransport.js';
 import { acquireProfileLock, findEdgeUsingProfile } from '../src/transport/profileLock.js';
-import { buildChatName, chatNameForms } from '../src/transport/chatSession.js';
+import { buildChatName, chatNameForms, parseChatId } from '../src/transport/chatSession.js';
 import { Tally } from './support/harness.js';
 
 const t = new Tally();
@@ -804,6 +805,119 @@ try {
     const quoted = await f.transport.openConversationByName('say "hi"').then((ok) => String(ok), (e: Error) => `threw: ${e.message}`);
     t.check('a name with a double quote does not throw, and is found', [quoted, (await clicks(f.page))['say "hi"'] ?? 0], ['true', 1]);
     t.check('an unknown name returns false and clicks nothing', [await f.transport.openConversationByName('op/ab/none'), Object.values(await clicks(f.page)).reduce((a, b) => a + b, 0)], [false, 2]);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('ensureOnChat: a window that left its conversation is put back on it, or nothing is sent', async () => {
+    /*
+     * Operator, 2026-11-09: a task left paused, or waiting on a card, for some days went on in a new chat on Auto. The
+     * window is held to the conversation the bot put it on, by the uuid in its address. Copilot's addresses are served
+     * here by the page's own routes: a conversation, the home page (a new chat), a sign-in page that sends the operator
+     * back to the home page once they have signed in, and a conversation that no longer opens (it goes to the home page).
+     */
+    const A = '11111111-2222-3333-4444-555555555555';
+    const B = '22222222-3333-4444-5555-666666666666';
+    const C = '33333333-4444-5555-6666-777777777777';
+    const HOME = 'https://m365.cloud.microsoft/chat?es=SSR';
+    const conv = (id: string): string => `https://m365.cloud.microsoft/chat/conversation/${id}?es=SSR`;
+    const state = { signInFirst: 0, signInForever: false, gone: new Set<string>(), served: [] as string[] };
+    const f = await fixture('on-chat', COMPOSER, { signInTimeoutMs: 4_000 });
+    await f.page.route(/^https:\/\/m365\.cloud\.microsoft\//, async (route) => {
+      const url = route.request().url();
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      const id = parseChatId(url);
+      state.served.push(url.replace(/\?.*$/, ''));
+      const html = (body: string): Promise<void> => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8">${body}` });
+      if (id && (state.signInForever || state.signInFirst > 0)) {
+        if (!state.signInForever) state.signInFirst -= 1;
+        // The operator signs in, and Microsoft brings them back to Copilot's home page, not to the conversation.
+        return await html(`<title>Sign in</title><p>Pick an account</p>${state.signInForever ? '' : `<script>setTimeout(() => location.href = ${JSON.stringify(HOME)}, 1200)</script>`}`);
+      }
+      if (id && state.gone.has(id)) return await html(`<script>location.replace(${JSON.stringify(HOME)})</script>`);
+      if (id) return await html(`<title>conversation</title>${COMPOSER}<p id="conv">${id}</p>`);
+      // The home page: a new chat, and the sidebar, whose link moves the page without loading it, as Copilot's does.
+      return await html(`<title>Copilot</title>${COMPOSER}<nav><a href="/chat/conversation/${A}" aria-label="op/ab/away">op/ab/away</a></nav>
+        <script>document.querySelector('nav a').addEventListener('click', (e) => { e.preventDefault(); history.pushState({}, '', ${JSON.stringify(`/chat/conversation/${A}?es=SSR`)}); });</script>`);
+    });
+    const tr = f.transport;
+    type Held = { onChat: { id: string } | 'new' | null; firstLookMs: number; chatNames: Map<string, string> };
+    const held = tr as unknown as Held;
+    const events = (from: number): string[] => f.events.slice(from).map((e) => e.event);
+
+    t.check('a window nobody put on a conversation is not held to one', await tr.ensureOnChat(), { at: 'unknown' });
+    t.check('opened on A', await tr.openConversation(A), true);
+    let served = state.served.length;
+    t.check('on A: nothing to do, and nothing loaded', [await tr.ensureOnChat(), state.served.length - served], [{ at: 'here' }, 0]);
+
+    // The page went to Copilot's home page: a new chat, on the default model.
+    await f.page.goto(HOME);
+    let seen = f.events.length;
+    t.check('on the home page: put back on A by its address',
+      [await tr.ensureOnChat(), parseChatId(f.page.url())],
+      [{ at: 'returned', chatId: A, from: 'https://m365.cloud.microsoft/chat', by: 'address', signedIn: false }, A]);
+    t.check('said as it happened: left, then back', [events(seen), f.events[seen]?.detail], [['chat-left', 'chat-returned'], { chatId: A, found: 'https://m365.cloud.microsoft/chat' }]);
+
+    // The operator opened another conversation in the window.
+    await f.page.goto(conv(B));
+    t.check('on another conversation: put back on A', [(await tr.ensureOnChat()).at, parseChatId(f.page.url())], ['returned', A]);
+
+    // The session ran out while the window waited: the page asks for a sign-in, which the operator does.
+    held.firstLookMs = 1_000;
+    await f.page.goto(HOME);
+    state.signInFirst = 1;
+    seen = f.events.length;
+    const signedIn = await rejection(tr.ensureOnChat({}).then((r) => {
+      t.check('after the sign-in, put back on A by its address, saying a sign-in came first', [r, parseChatId(f.page.url())], [{ at: 'returned', chatId: A, from: 'https://m365.cloud.microsoft/chat', by: 'address', signedIn: true }, A]);
+    }));
+    t.check('the sign-in waited for, never done by the bot', [signedIn?.message ?? null, events(seen)], [null, ['chat-left', 'sign-in-required', 'signed-in', 'chat-returned']]);
+    t.check('the sign-in page\'s address is said without its query', f.events.find((e, i) => i >= seen && e.event === 'sign-in-required')?.detail, { url: `https://m365.cloud.microsoft/chat/conversation/${A}` });
+
+    // A Stop while the sign-in is waited for ends the wait at once.
+    state.signInForever = true;
+    await f.page.goto(HOME);
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 1_500);
+    const from = Date.now();
+    const stopped = await rejection(tr.ensureOnChat({ signal: stop.signal }));
+    t.check('Stop while the sign-in is waited for: it ends with the stop', [stopped?.name, stopped?.message], ['StoppedByOperator', 'stopped by the operator while waiting for the sign-in']);
+    t.truthy('at once, not when the sign-in time runs out', Date.now() - from < 4_000, `${Date.now() - from} ms`);
+    t.check('and the window is still held to A', held.onChat, { id: A });
+    // Not signed in in time.
+    await f.page.goto(HOME);
+    const late = await rejection(tr.ensureOnChat());
+    t.truthy('a sign-in not done in time: said, with the setting, and that nothing was sent', /it was not completed within 4 s \(Settings → copilot\.signInTimeoutSec\)\. Nothing was sent/.test(late?.message ?? ''), late?.message);
+    state.signInForever = false;
+
+    // A no longer opens by its address: found by the name it was given in the sidebar.
+    state.gone.add(A);
+    held.chatNames.set(A, 'op/ab/away');
+    await f.page.goto(conv(B));
+    seen = f.events.length;
+    t.check('its address takes the page elsewhere: put back on A by its name', [await tr.ensureOnChat(), parseChatId(f.page.url())], [{ at: 'returned', chatId: A, from: `https://m365.cloud.microsoft/chat/conversation/${B}`, by: 'name', signedIn: false }, A]);
+
+    // And with no name to find it by: nothing is sent, and the page found is not taken for it.
+    held.chatNames.clear();
+    await f.page.goto(HOME);
+    seen = f.events.length;
+    served = state.served.length;
+    const lostErr = await rejection(tr.ensureOnChat());
+    t.check('it will not open again: ChatLost, naming the conversation and where the window was', [lostErr instanceof ChatLost, (lostErr as ChatLost | null)?.chatId, (lostErr as ChatLost | null)?.found], [true, A, 'https://m365.cloud.microsoft/chat']);
+    t.truthy('its message says nothing was sent and nothing went into another chat', /could not be opened again, by its address or by its name in the sidebar, so nothing was sent, and nothing went into another chat/.test(lostErr?.message ?? ''), lostErr?.message);
+    t.check('said as it happened: left, then lost', events(seen), ['chat-left', 'chat-lost']);
+    t.check('the window is still held to A: the next message is refused the same way', [held.onChat, (await rejection(tr.ensureOnChat()))?.name], [{ id: A }, 'ChatLost']);
+    state.gone.clear();
+
+    // A new conversation has no address until its first answer; from then on it is held to the one it got.
+    await tr.newChat();
+    t.check('a new conversation, before its first answer: nothing to compare', [await tr.ensureOnChat(), held.onChat], [{ at: 'here' }, 'new']);
+    await f.page.evaluate((id) => history.pushState({}, '', `/chat/conversation/${id}?es=SSR`), C);
+    t.check('answered, it takes the address the page shows', [await tr.ensureOnChat(), held.onChat], [{ at: 'here' }, { id: C }]);
+    await f.page.goto(HOME);
+    t.check('and is put back on it when the page leaves it', [(await tr.ensureOnChat()).at, parseChatId(f.page.url())], ['returned', C]);
+
+    // Signing in again, as at the start of a message, expects no conversation until the run enters one.
+    await tr.ensureSignedIn(HOME);
+    t.check('after ensureSignedIn: not held to one', await tr.ensureOnChat(), { at: 'unknown' });
   });
 
   // -------------------------------------------------------------------------------------------

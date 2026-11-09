@@ -510,6 +510,23 @@ console.log('\n--- Pause holds the work at its next message or command, Continue
     await h.idle();
     const stopped = await view(two.threadId);
     t.check('Stop while paused: the task stopped, its command never ran, nothing more was sent', [stopped.tasks[0]?.status, exists('held.txt'), h.chat.exchanged.length], ['aborted', false, sentHeld]);
+
+    /*
+     * Held before the report of a command it ran, then stopped (2026-11-09): the report is not sent, then or on a retry.
+     * The report's retries took the stop for an upload that failed, and the next attempt, no longer held, sent it.
+     */
+    const three = await h.call<Sent>('POST', '/chat', { text: 'Create report.txt holding report, slowly.', model: 'Think deeper' });
+    h.chat.script(reply.steps(`Start-Sleep -Seconds 2; ${write('report.txt', 'report')}`), reply.done());
+    await h.call('POST', `/sessions/${three.threadId}/start`, { mode: 'unattended' });
+    await waitFor('the command to be running', async () => (await h.call<Ev[]>('GET', `/sessions/${three.threadId}/events`)).some((e) => e.type === 'step-started'), 20_000);
+    await h.call('POST', `/sessions/${three.threadId}/pause`, {});
+    await waitFor('the report to be held', async () => (await h.call<Ev[]>('GET', `/sessions/${three.threadId}/events`)).some((e) => e.type === 'task-paused'), 20_000);
+    const sentReport = h.chat.exchanged.length;
+    await h.call('POST', `/sessions/${three.threadId}/stop`, {});
+    await h.idle();
+    const third = await view(three.threadId);
+    t.check('Stop while the report was held: the task stopped, its command had run, and the report was not sent', [third.tasks[0]?.status, exists('report.txt'), h.chat.exchanged.length], ['aborted', true, sentReport]);
+    t.check('its answer was never asked for', h.chat.discard(), 1);
     t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
   } catch (e) {
     t.truthy('the Pause scenarios ran without throwing', false, (e as Error).stack ?? String(e));
@@ -552,6 +569,95 @@ console.log('\n--- what waits for the operator does not count against maxRunMinu
   } finally {
     Date.now = realNow;
     await hw?.stop();
+  }
+}
+
+/*
+ * The page left the conversation while the work waited (operator, 2026-11-09: "if I pause, or the bot waits for the user,
+ * and the program and the computer are left for some days, then the chat goes on in a new chat on Auto: the browser loses
+ * the right chat"). Before every message the window is put back on the conversation the run put it on — after a pause,
+ * after a card answered, after a sign-in the session asked for meanwhile — and a conversation that will not open again
+ * ends the message with that said, and nothing sent anywhere.
+ */
+console.log('\n--- the page left the conversation while the work waited: the next message goes back to it, never elsewhere ---');
+{
+  let hl: Harness | undefined;
+  try {
+    hl = await startHarness();
+    const h = hl;
+    type Ev = { type: string; message: string; level?: string };
+    type Ask = { id: string; description: string };
+    type View = { chat?: { chatId: string }; tasks: Array<{ status: string; reason?: string }> };
+    const view = async (id: string): Promise<View> => await h.call<View>('GET', `/sessions/${id}`);
+    const events = async (id: string): Promise<Ev[]> => await h.call<Ev[]>('GET', `/sessions/${id}/events`);
+    const exists = (p: string): boolean => existsSync(join(h.repo, p));
+    /** The conversations the messages from the `from`-th on went into. */
+    const into = (from: number): string[] => [...new Set(h.chat.exchanged.slice(from).map((m) => m.chatId))];
+    const card = async (id: string, file: string): Promise<Ask> =>
+      await waitFor(`the command writing ${file} to wait on its card`, async () => (await h.call<Ask[]>('GET', `/approvals?session=${id}`)).find((a) => a.description.includes(file)) ?? null, 20_000);
+
+    // Paused, and the window found on Copilot's home page — a new chat, on the default model — when the operator continues.
+    const one = await h.call<Sent>('POST', '/chat', { text: 'Create away.txt holding away, slowly.', model: 'Think deeper' });
+    h.chat.script(reply.steps(`Start-Sleep -Seconds 2; ${write('away.txt', 'away')}`), reply.done());
+    await h.call('POST', `/sessions/${one.threadId}/start`, { mode: 'unattended' });
+    await waitFor('the command to be running', async () => (await events(one.threadId)).some((e) => e.type === 'step-started'), 20_000);
+    await h.call('POST', `/sessions/${one.threadId}/pause`, {});
+    await waitFor('the work to hold before its next message', async () => (await events(one.threadId)).some((e) => e.type === 'task-paused'), 20_000);
+    const chatId = (await view(one.threadId)).chat?.chatId;
+    t.truthy('the conversation is on record before the pause', !!chatId, chatId);
+    const beforePause = h.chat.exchanged.length;
+    const home = h.chat.leavePage();
+    await h.call('POST', `/sessions/${one.threadId}/resume`, {});
+    await h.idle();
+    t.check('after "Continue", the report went into the conversation, and the new chat the window showed got nothing',
+      [(await view(one.threadId)).tasks[0]?.status, exists('away.txt'), into(beforePause), home?.messages.length], ['done', true, [chatId], 0]);
+    const saidOne = await events(one.threadId);
+    const left = saidOne.find((e) => e.type === 'browser:chat-left');
+    t.check('the record says the window had left it, as a warning, and was put back', [left?.level, saidOne.some((e) => e.type === 'browser:chat-returned')], ['warn', true]);
+    t.truthy('it says where the window was', /no longer on this conversation \(it shows Copilot's home page\)/.test(left?.message ?? ''), left?.message);
+
+    // A card answered after the operator opened one of their own chats in the window, and the session ran out meanwhile.
+    const theirs = h.chat.newConversation();
+    theirs.messages.push({ chatId: theirs.id, text: 'the operator\'s own question', attachments: [], attached: {} });
+    await h.call<Sent>('POST', '/chat', { text: 'Create card.txt holding card.', threadId: one.threadId });
+    h.chat.script(reply.steps(write('card.txt', 'card')), reply.done());
+    await h.call('POST', `/sessions/${one.threadId}/start`, { mode: 'confirm' });
+    const ask = await card(one.threadId, 'card.txt');
+    h.chat.leavePage(theirs);
+    h.chat.signInOnReturn = 1;
+    const [beforeCard, signIns, returns] = [h.chat.exchanged.length, h.chat.signIns, h.chat.returns.length];
+    await h.call('POST', `/approvals/${ask.id}`, { action: 'run' });
+    await h.idle();
+    t.check('after the card, the command\'s report went into the conversation, and the operator\'s own chat got nothing more',
+      [(await view(one.threadId)).tasks[1]?.status, exists('card.txt'), into(beforeCard), theirs.messages.length], ['done', true, [chatId], 1]);
+    t.check('the sign-in the page asked for was waited for, once, before going back', [h.chat.signIns - signIns, h.chat.returns.slice(returns)], [1, [{ chatId, from: `conversation ${theirs.id}`, signedIn: true }]]);
+    const back = (await events(one.threadId)).filter((e) => e.type === 'browser:chat-returned').at(-1);
+    t.truthy('and the record says so', /Back on this conversation, after the sign-in/.test(back?.message ?? ''), back?.message);
+
+    // The conversation will not open again (deleted in Copilot): nothing is sent, to it or anywhere else, and that is said.
+    await h.call<Sent>('POST', '/chat', { text: 'Create lost.txt holding lost.', threadId: one.threadId });
+    h.chat.script(reply.steps(write('lost.txt', 'lost')), reply.done());
+    await h.call('POST', `/sessions/${one.threadId}/start`, { mode: 'confirm' });
+    const third = await card(one.threadId, 'lost.txt');
+    const elsewhere = h.chat.leavePage();
+    h.chat.unopenable.add(chatId!);
+    const beforeLost = h.chat.exchanged.length;
+    await h.call('POST', `/approvals/${third.id}`, { action: 'run' });
+    await h.idle();
+    const lost = (await view(one.threadId)).tasks[2];
+    t.check('the message ends failed, nothing more was sent, and the new chat the window showed got nothing', [lost?.status, into(beforeLost), elsewhere?.messages.length], ['failed', [], 0]);
+    t.truthy('its reason says the conversation could not be opened again and nothing went into another chat',
+      /no longer on this conversation .* could not be opened again, by its address or by its name in the sidebar, so nothing was sent, and nothing went into another chat/.test(lost?.reason ?? ''), lost?.reason);
+    t.check('the record says so as an error', (await events(one.threadId)).find((e) => e.type === 'browser:chat-lost')?.level, 'error');
+    // Tried once: a retry of the report would go back to its address, and wait a whole sign-in time, to say the same.
+    const tried = await events(one.threadId);
+    t.check('the report is not tried again and again', [tried.filter((e) => e.type === 'browser:chat-lost').length, tried.filter((e) => e.type === 'report-send-failed').length], [1, 0]);
+    t.check('its report was not asked for', h.chat.discard(), 1);
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('the scenarios of a page that left its conversation ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await hl?.stop();
   }
 }
 

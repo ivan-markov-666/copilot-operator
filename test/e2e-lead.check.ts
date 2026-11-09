@@ -245,6 +245,47 @@ await scenario('asked before each command: the worker\'s steps wait under the le
   t.check('"run the rest without asking" switched the whole run: the next step ran unasked, and it is done', [job.status, existsSync(join(h.repo, 'result.txt'))], ['done', true]);
 });
 
+/*
+ * The window left a conversation while a card waited (operator, 2026-11-09: a chat left waiting for some days went on in
+ * a new chat on Auto). Two conversations share one window, so each message goes back to its own: the lead's answer to
+ * its question, after the window was found on Copilot's home page; the worker's report, after it was found on the lead's.
+ */
+await scenario('the window left a conversation while a card waited: the lead\'s and the worker\'s messages each go back to their own', { execution: { mode: 'confirm', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  let answerWent = '';
+  let reportWent = '';
+  h.chat.script(
+    reply.lead.ask('Which folder do you mean: the old one or the new one?', ['the old one', 'the new one'], { understanding: 'A file result.txt holding hello.' }),
+    (m) => {
+      answerWent = m.chatId;
+      return reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt holding exactly the word hello.', readOnly: false }, { understanding: 'A file result.txt holding hello.' });
+    },
+    reply.steps(write('result.txt', 'hello')),
+    (m) => {
+      reportWent = m.chatId;
+      return reply.done('I wrote result.txt with Set-Content; it holds hello, exactly as the subtask asked.');
+    },
+    reply.lead.done('The worker wrote result.txt holding hello; nothing else was changed in the folder.'),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'confirm' });
+  const question = await waitFor('the lead\'s question', async () => (await h.call<Approval[]>('GET', `/approvals?session=${sent.threadId}`)).find((a) => a.question) ?? null, 20_000);
+  const leadChat = h.chat.sent.find((m) => m.contract === 'lead')!.chatId;
+  const home = h.chat.leavePage();
+  await h.call('POST', `/approvals/${question.id}/answer`, { text: 'the new one' });
+  const step = await waitFor('the worker\'s step', async () => (await h.call<Approval[]>('GET', `/approvals?session=${sent.threadId}`)).find((a) => !a.question && !a.plan && !(a as { model?: unknown }).model) ?? null, 20_000);
+  t.check('the answer went into the lead\'s conversation, and the home page the window showed got nothing', [answerWent, home?.messages.length], [leadChat, 0]);
+  const workerChat = (await workerOf(h, sent.threadId)).chat?.chatId;
+  t.truthy('the worker has a conversation of its own', !!workerChat && workerChat !== leadChat, workerChat);
+  const leadsBefore = h.chat.conversations.get(leadChat)!.messages.length;
+  h.chat.leavePage(h.chat.conversations.get(leadChat));
+  await h.call('POST', `/approvals/${step.id}`, { action: 'run' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('the worker\'s report went into the worker\'s conversation, not the lead\'s the window showed', [reportWent, job.status, existsSync(join(h.repo, 'result.txt'))], [workerChat, 'done', true]);
+  t.check('the lead\'s conversation got only the lead\'s messages after it', h.chat.conversations.get(leadChat)!.messages.slice(leadsBefore).every((m) => m.text.startsWith('Report of subtask 1')), true);
+  t.check('each put back on its own, from where the window was', h.chat.returns.map((r) => [r.chatId, r.from]), [[leadChat, "Copilot's home page"], [workerChat, `conversation ${leadChat}`]]);
+});
+
 await scenario('limits and conversations: the subtasks run out, a fresh worker, the wrong format, a note while it works', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { maxSubtasks: 2 } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
   let formatBack = '';

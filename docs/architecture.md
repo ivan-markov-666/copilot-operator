@@ -106,6 +106,19 @@ also to a stable `runs/last-chat.json` pointer.
 A caveat worth recording: `document.title` still showed the old title after a successful
 rename, so the sidebar row's `aria-label` is the only trustworthy read of the current name.
 
+**Held to its conversation** (2026-11-09). A task left paused, or waiting on a card, for some days
+went on in a new chat on Auto: the page had left its conversation meanwhile (the session ran out,
+or the operator opened another chat in the window), and the next message went wherever the page
+was. The transport now remembers the conversation it put the window on (`newChat`,
+`openConversation`, `openConversationByName`; a new conversation takes its id with its first
+answer), and before every message the runner sends (`staysOnItsChat`, inside `holdsWhilePaused`)
+`ensureOnChat` compares the uuid in the page's address with it. When they differ the window is
+put back: by the address, after waiting for the operator to sign in if the page asks for that
+(the run's Stop ends the wait, and the wait is not counted against `maxRunMinutes`), then by the
+name the chat was given in the sidebar. A conversation that will not open again ends the task with
+`ChatLost` and nothing sent, to it or to the page found. The lead and the worker of two chats share
+one window, so each is held to its own conversation.
+
 #### Profile and popups
 
 - Owns the profile directory path and a lock file so two bot instances never open the same profile.
@@ -497,11 +510,12 @@ CLI commands:
 | Situation | Behaviour |
 |---|---|
 | Session expired mid-run | Pause in `WAIT_FOR_HUMAN_LOGIN`, print instructions, resume the same chat if still open, else fail the run. |
+| The window left its conversation (a pause, a card, a sign-in) | Before the next message, back to it by its address, then by its name; else the task fails with `ChatLost` and nothing is sent anywhere. See "Held to its conversation". |
 | UI changed, locator not found | Screenshot + HTML dump to `runs/<id>/`, fail fast with a message naming the locator key in `locators.ts`. |
 | Copilot reply never finishes | `replyTimeoutSec` (default 600), then send "please resend the last answer in the required format" once, then fail. |
 | Invalid format | up to `maxFormatRetries`, then fail. |
 | Command hangs | killed at `commandTimeoutSec`, reported as exit code -1 with `timeout: true`. |
-| Report upload fails | retry `uploadRetries` times, then fall back to head+tail as message text and say so in the message. |
+| Report upload fails | retry `uploadRetries` times, then fall back to head+tail as message text and say so in the message. Not retried after a Stop or a lost conversation: a retry would send the report after the Stop. |
 | Copilot ignores the attached file | the covering message repeats the instruction to read it; if two consecutive replies show no sign of the output, fail the run rather than loop blindly. |
 | Two runs at once | lock file on the profile dir; second run refuses to start. |
 

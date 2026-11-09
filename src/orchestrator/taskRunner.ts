@@ -18,7 +18,7 @@ import type { ResolvedConfig } from '../config/schema.js';
 import type { LiveChange, LiveSettings } from '../config/live.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions } from '../transport/copilotTransport.js';
 import { buttonShows, normModel } from '../transport/modelMatch.js';
-import { createTransport, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
+import { ChatLost, createTransport, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
@@ -442,6 +442,36 @@ export class StoppedSend extends Error {
 }
 
 /**
+ * The same chat, whose every message goes into the conversation the runner put the window on (operator, 2026-11-09: a
+ * task left paused, or waiting on a card, for some days went on in a new chat on Auto — the page had left its
+ * conversation, and the next message went wherever the page was). Before each message the window is asked whether it is
+ * still there and put back when it is not (`ensureOnChat`): every moment the work goes on after a wait — a pause, a card,
+ * commands handed over — is the moment it sends again. A conversation that will not open again ends the task, said as
+ * it is (`ChatLost`), with nothing sent; a Stop pressed while a sign-in is waited for there ends it as stopped.
+ *
+ * Put inside `holdsWhilePaused`, so the window is looked at when the work goes on after a pause, not before it.
+ */
+export function staysOnItsChat(transport: ChatTransport, signal: AbortSignal | undefined): ChatTransport {
+  return new Proxy(transport, {
+    get(target, key) {
+      if (key === 'sendAndConfirm') {
+        return async (...args: Parameters<ChatTransport['sendAndConfirm']>) => {
+          try {
+            await target.ensureOnChat({ signal });
+          } catch (e) {
+            if (signal?.aborted) throw new StoppedSend();
+            throw e;
+          }
+          return await target.sendAndConfirm(...args);
+        };
+      }
+      const value: unknown = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
  * The same chat, whose every message waits while the operator has paused the task ("Pause", 2026-10-20). The
  * runner sends from a dozen places — the task, each round's report, format repairs, the plan, the review, the
  * checks — and holding here holds all of them, the ones added later included. `hold` resolves true when the run
@@ -613,12 +643,16 @@ export async function openBrowser(
         'model-menu-stuck':
           'The model menu would not close — Escape, the menu button and a click outside all left it open. Close it in the Edge window; the run goes on.',
         'window-closed': 'The Edge window was closed. A run in it stops; the next message opens a new one.',
+        // The window left its conversation while the work waited (2026-11-09): put back before anything is sent.
+        'chat-left': `The Copilot window is no longer on this conversation (it shows ${String(detail?.found ?? 'another page')}). Going back to it before anything is sent.`,
+        'chat-returned': `Back on this conversation${detail?.signedIn ? ', after the sign-in' : ''}${detail?.by === 'name' ? ', found by its name in the sidebar' : ''}. The work goes on there.`,
+        'chat-lost': 'The conversation could not be opened again, by its address or by its name. Nothing was sent, and nothing went into another chat.',
       };
       for (const id of new Set(speaker.alone ? [speaker.id] : [speaker.id, sessionId])) {
         bus.publish({
           sessionId: id,
           type: `browser:${event}`,
-          level: event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' ? 'warn' : 'info',
+          level: event === 'chat-lost' ? 'error' : event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' || event === 'chat-left' ? 'warn' : 'info',
           // An event with no sentence of its own is named, not said as "undefined".
           message: spoken[event] ?? event.replace(/-/g, ' '),
           data: detail,
@@ -1267,6 +1301,8 @@ export async function runTask(
     );
     return stopped;
   };
+  // Each message into the conversation the window was put on, looked at after the pause it held for (2026-11-09).
+  transport = staysOnItsChat(transport, signal);
   transport = holdsWhilePaused(transport, () => holdHere('message'));
   // No message longer than Settings allow as text: the rest goes attached (2026-10-22, see `limitsMessageLength`).
   // The limit and the patterns as Settings have them when each message goes (2026-11-03: a save takes effect at once).
@@ -3838,6 +3874,12 @@ export async function runTask(
            */
           // Nor is a window the operator closed, which no retry reaches.
           if (isReplyTimeout(e) || transport.closedOutside()) throw e;
+          /*
+           * Nor a Stop, which ended it before it went (it waited out every retry's pause before), nor a conversation the
+           * window could not be put back on (2026-11-09): each retry went back to its address, and to a sign-in wait of
+           * the whole sign-in time, before saying the same.
+           */
+          if (e instanceof StoppedSend || e instanceof ChatLost || signal?.aborted) throw e;
           sink.event('report-send-failed', { attempt, error: String(e) }, `sending the report failed (attempt ${attempt + 1}): ${(e as Error).message}`, 'warn');
           if (attempt === cfg.report.uploadRetries) {
             const body = await readFile(report.paths[0], 'utf8');

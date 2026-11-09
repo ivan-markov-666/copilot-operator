@@ -22,8 +22,8 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChatTransport, TransportFactory } from '../../src/transport/chatTransport.js';
-import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions, WindowNotice } from '../../src/transport/copilotTransport.js';
+import { ChatLost, type ChatTransport, type TransportFactory } from '../../src/transport/chatTransport.js';
+import type { ModelChoice, ModelLocator, ModelOption, OnChat, ReplyCapture, TransportOptions, WindowNotice } from '../../src/transport/copilotTransport.js';
 import { pageModelFor, sameModel } from '../../src/transport/modelMatch.js';
 
 /** One message the runner sent, with the text of every file it attached. */
@@ -93,6 +93,14 @@ export class FakeCopilot {
   signIns = 0;
   signOuts = 0;
   readonly askedAccounts: string[] = [];
+  /** How many times a window was asked whether it is still on its conversation (`ensureOnChat`). */
+  onChatChecks = 0;
+  /** How many of the next returns to a conversation the page had left find a sign-in first: the session ran out meanwhile. */
+  signInOnReturn = 0;
+  /** Conversations that no longer open, by their address or by their name: deleted in Copilot. */
+  readonly unopenable = new Set<string>();
+  /** Each time a window was put back on its conversation: which, from where, and whether a sign-in came first. */
+  readonly returns: Array<{ chatId: string; from: string; signedIn: boolean }> = [];
 
   private readonly queue: Script[] = [];
   private nextChat = 1;
@@ -130,6 +138,17 @@ export class FakeCopilot {
     if (!w) return false;
     w.closedByHand();
     return true;
+  }
+
+  /**
+   * The newest window's page leaves its conversation without the runner moving it, as it did after days of waiting
+   * (operator, 2026-11-09): onto Copilot's home page — a new chat with nothing in it, on the default model — or onto
+   * another conversation, one the operator opened from the sidebar. Returns where it went.
+   */
+  leavePage(to?: FakeConversation): FakeConversation | null {
+    const w = this.windows.at(-1);
+    if (!w) return null;
+    return w.leave(to ?? this.newConversation());
   }
 
   /** Whether a card is up in the newest open window, not taken away yet. */
@@ -187,6 +206,8 @@ export class FakeCopilot {
 /** One open "window": the transport the runner holds. */
 class FakeChat implements ChatTransport {
   private current: FakeConversation | null = null;
+  /** The conversation the runner put this window on, kept as the real window keeps it (see `CopilotTransport.ensureOnChat`). */
+  private onChat: { id: string } | 'new' | null = null;
   private waiting: Promise<string> | null = null;
   private live = false;
   private gone = false;
@@ -254,6 +275,7 @@ class FakeChat implements ChatTransport {
 
   async ensureSignedIn(): Promise<void> {
     if (!this.live && !this.gone) throw new Error('ensureSignedIn before open');
+    this.onChat = null;
     this.world.signIns += 1;
     if (this.live && this.world.closeOnSignIn > 0) {
       this.world.closeOnSignIn -= 1;
@@ -279,25 +301,67 @@ class FakeChat implements ChatTransport {
   async newChat(): Promise<void> {
     this.alive('newChat');
     this.current = this.world.newConversation();
+    this.onChat = 'new';
   }
 
   async openConversation(chatId: string): Promise<boolean> {
     this.alive('openConversation');
+    this.onChat = null;
     const c = this.world.conversations.get(chatId);
-    if (!c) return false;
+    if (!c || this.world.unopenable.has(chatId)) return false;
     this.current = c;
+    this.onChat = { id: c.id };
     return true;
   }
 
   async openConversationByName(name: string): Promise<boolean> {
-    const c = [...this.world.conversations.values()].find((x) => x.name === name);
+    const c = [...this.world.conversations.values()].find((x) => x.name === name && !this.world.unopenable.has(x.id));
     if (!c) return false;
     this.current = c;
+    this.onChat = { id: c.id };
     return true;
   }
 
   async currentChatId(): Promise<string | null> {
     return this.current?.messages.length ? this.current.id : null;
+  }
+
+  /** The page goes elsewhere without the runner moving it (see `FakeCopilot.leavePage`). */
+  leave(to: FakeConversation): FakeConversation {
+    this.current = to;
+    return to;
+  }
+
+  /** As the real window's: back on the conversation the runner put it on, or `ChatLost` with nothing sent. */
+  async ensureOnChat(): Promise<OnChat> {
+    this.alive('ensureOnChat');
+    this.world.onChatChecks += 1;
+    const want = this.onChat;
+    if (!want) return { at: 'unknown' };
+    if (want === 'new') {
+      if (this.current?.messages.length) this.onChat = { id: this.current.id };
+      return { at: 'here' };
+    }
+    if (this.current?.id === want.id) return { at: 'here' };
+    const from = this.current?.messages.length ? `conversation ${this.current.id}` : "Copilot's home page";
+    this.opts.onEvent?.('chat-left', { chatId: want.id, found: from });
+    let signedIn = false;
+    if (this.world.signInOnReturn > 0) {
+      this.world.signInOnReturn -= 1;
+      this.world.signIns += 1;
+      this.opts.onEvent?.('sign-in-required', { url: 'https://login.microsoftonline.com/' });
+      this.opts.onEvent?.('signed-in');
+      signedIn = true;
+    }
+    const c = this.world.conversations.get(want.id);
+    if (!c || this.world.unopenable.has(want.id)) {
+      this.opts.onEvent?.('chat-lost', { chatId: want.id, found: from });
+      throw new ChatLost(want.id, from);
+    }
+    this.current = c;
+    this.world.returns.push({ chatId: want.id, from, signedIn });
+    this.opts.onEvent?.('chat-returned', { chatId: want.id, by: 'address', signedIn, from });
+    return { at: 'returned', chatId: want.id, from, by: 'address', signedIn };
   }
 
   async nameChat(chatId: string, name: string): Promise<string | false> {
@@ -387,6 +451,8 @@ class FakeChat implements ChatTransport {
     const markdown = await pending;
     // Closed while the reply was being written: the real wait ends on the closed page, not with the reply.
     this.alive('waitForReply');
+    // A new conversation has its address once it has answered, as the real one.
+    if (this.onChat === 'new' && this.current) this.onChat = { id: this.current.id };
     return { markdown, degraded: false, attachments: [], codeBlocksDom: [] };
   }
 
