@@ -33,7 +33,7 @@ import type {
 } from '../session/model.js';
 import { MAX_INSTRUCTION_CHARS, newId, withProblemAt, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
 import { handoffOutcomeOf, handoffResultMessage } from '../orchestrator/handoff.js';
-import { runSession, queuedToRun, failedWhileOpening, pickerOptions } from '../orchestrator/taskRunner.js';
+import { runSession, queuedToRun, failedWhileOpening, pickerOptions, type CardHandle, type PlanAnswer, type QuestionAnswer } from '../orchestrator/taskRunner.js';
 import { Hold, WaitsFor } from '../orchestrator/hold.js';
 import { chosenAnswer, chosenSaid } from '../orchestrator/chosenAnswers.js';
 import { exportFileName, exportMachine, writeAttemptRecord } from '../session/exports.js';
@@ -41,7 +41,7 @@ import { suggestRunName } from '../session/runName.js';
 import { buildStory, type Story } from '../session/story.js';
 import { buildTaskExchange } from '../session/taskExchange.js';
 import { chatNotice } from '../session/chatNotice.js';
-import { kerriganFileName, kerriganPersona } from '../plan/kerrigan.js';
+import { kerriganBrief, kerriganFileName, kerriganPersona, type KerriganFacts } from '../plan/kerrigan.js';
 import { branchChanges, gitCounts, workspaceCommit, workspaceGit, workspaceGitVersions, type GitArea } from '../session/workspaceGit.js';
 import { chatCode } from '../transport/chatSession.js';
 import { type PlanCheck } from '../plan/schema.js';
@@ -51,13 +51,16 @@ import { type PlanCheck } from '../plan/schema.js';
 export const MAX_SESSION_NAME = 120;
 
 /** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
-export type Skill = { name: string; description: string; text: string; projectDir: string };
+/** `forKerrigan` (2026-11-12): its phases, its result and what it needs from the person, for Kerrigan; may be empty. */
+export type Skill = { name: string; description: string; text: string; projectDir: string; forKerrigan: string };
 /*
  * Its instructions have no limit of their own (operator, 2026-10-25: "remove the limit; say how many characters there
  * are instead"): the message they go with is held to Settings' `limits.maxMessageChars` like every other — longer, its
  * beginning goes as text and the whole of it attached.
  */
 export const MAX_SKILL_DESCRIPTION = 300;
+/** What a skill says for Kerrigan is short (2026-11-12): its phases, its result, what it needs. */
+export const MAX_SKILL_FOR_KERRIGAN = 3000;
 export const MAX_SKILLS = 50;
 /** What follows `/` at the start of a message: lowercase letters, digits and hyphens, 2 to 40 of them. */
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,38}[a-z0-9]$/;
@@ -123,6 +126,7 @@ import { dirtyPolicy } from '../vcs/snapshot.js';
 import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
 import { createNewBranch, planNewBranch, type NewBranchPlan, type NewBranchResult } from '../vcs/newBranch.js';
+import { commitAsOperator, identityOf, pushAsOperator, setIdentity, stageFiles, TrustedHooks, type GitOp, type HookChoice } from '../vcs/operatorGit.js';
 import { askpassProgram, closePasswordWindows } from '../vcs/remoteAuth.js';
 import { planApprovedMessage, planReviseMessage } from '../orchestrator/planMode.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
@@ -182,11 +186,24 @@ export type SettingsSaved = { ok: true; running: number } & LiveChange;
 type Waiting = {
   approval: PendingApproval;
   resolve: (d: PolicyDecision) => void;
-  resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string }) => void;
-  /** The lead's question (two chats): the operator's answer, or a stop. */
-  resolveAnswer?: (a: { answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string } | 'stop') => void;
+  resolvePlan?: (a: { decision: 'approve' | 'revise' | 'stop'; note?: string; by?: 'kerrigan' }) => void;
+  /** The lead's question (two chats): the operator's answer — or Kerrigan's in their place (2026-11-12) —, or a stop. */
+  resolveAnswer?: (a: { answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string; by?: 'kerrigan' } | 'stop') => void;
   /** A subtask that failed for a technical reason (two chats, 2026-10-25): what the operator chose for it, or a stop. */
   resolveRetry?: (choice: RetryChoice | 'stop') => void;
+};
+
+/** The languages of the page, by their names in English: the language Kerrigan writes to the person in (2026-11-12). */
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: 'English',
+  bg: 'Bulgarian',
+  de: 'German',
+  es: 'Spanish',
+  fr: 'French',
+  ja: 'Japanese',
+  ko: 'Korean',
+  pt: 'Portuguese',
+  ar: 'Arabic',
 };
 
 /** Who has the browser profile: a conversation's run, a read of the model list, or the sign-in. */
@@ -412,6 +429,17 @@ function browserRefusal(held: BrowserHolder, ask: BrowserAsk): string {
     : 'another conversation is running, and the browser takes one run at a time; start this one once it has finished';
 }
 
+/** What the Git view said about the project's hooks: none of them (`skip`), or these run although flagged, each as shown then. */
+function hookChoiceOf(input: { hooks?: unknown; trust?: unknown }): HookChoice {
+  const trust = Array.isArray(input.trust)
+    ? input.trust
+        .filter((t): t is { path: string; sha: string } => !!t && typeof (t as { path?: unknown }).path === 'string' && typeof (t as { sha?: unknown }).sha === 'string')
+        .slice(0, 100)
+        .map((t) => ({ path: t.path, sha: t.sha }))
+    : [];
+  return { hooks: input.hooks === 'skip' ? 'skip' : 'auto', ...(trust.length > 0 ? { trust } : {}) };
+}
+
 /** A folder as compared: absolute, forward slashes, no trailing slash, and case folded as Windows does. */
 function normaliseDir(dir: string): string {
   if (!dir.trim()) return '';
@@ -490,14 +518,34 @@ export class OperatorService {
     return this.running.get(this.runKey(sessionId))?.hold;
   }
   /**
-   * The workers of the two-chat mode, by the session of the lead they work for (2026-10-20). A worker's steps and cards
-   * carry its own session's id, while the run, its mode and its Stop are the lead's: they are looked up through this.
+   * The workers of the two-chat mode, by the session of the lead they work for (2026-10-20); and since 2026-11-12 the
+   * chats Kerrigan directs, by her conversation's session, and their workers by their chat. A worker's steps and cards
+   * carry its own session's id, while the run, its mode and its Stop are the lead's — or Kerrigan's: they are looked up
+   * through this, up the chain.
    */
   private readonly workerLeads = new Map<string, string>();
 
-  /** The session whose run a session's steps belong to: its own, or its lead's for a worker. */
+  /** The session whose run a session's steps belong to: its own, or the one up its chain whose run it is. */
   private runKey(sessionId: string): string {
-    return this.running.has(sessionId) ? sessionId : (this.workerLeads.get(sessionId) ?? sessionId);
+    let key = sessionId;
+    for (let i = 0; i < 4 && !this.running.has(key); i++) {
+      const up = this.workerLeads.get(key);
+      if (!up) break;
+      key = up;
+    }
+    return this.running.has(key) ? key : sessionId;
+  }
+
+  /** Whether a session is this one or below it: its worker, a chat Kerrigan directs, that chat's worker. */
+  private under(sessionId: string, top: string): boolean {
+    let key = sessionId;
+    for (let i = 0; i < 4; i++) {
+      if (key === top) return true;
+      const up = this.workerLeads.get(key);
+      if (!up) return false;
+      key = up;
+    }
+    return false;
   }
   private ready: Promise<void> | null = null;
   /**
@@ -684,6 +732,12 @@ export class OperatorService {
         const manual = typeof patch.workerManualModel === 'boolean' ? patch.workerManualModel : !!s.lead.workerManualModel;
         const model = patch.workerModel !== undefined ? patch.workerModel.trim() : (s.lead.workerModel ?? '');
         s.lead = { ...s.lead, workerManualModel: manual || undefined, workerModel: manual ? undefined : model || undefined };
+      }
+      // Kerrigan's (2026-11-12): the same fields are the model of the chats she sends to — the ones she makes from now on.
+      if (s.kerrigan && (patch.workerModel !== undefined || typeof patch.workerManualModel === 'boolean')) {
+        const manual = typeof patch.workerManualModel === 'boolean' ? patch.workerManualModel : !!s.kerrigan.chatManualModel;
+        const model = patch.workerModel !== undefined ? patch.workerModel.trim() : (s.kerrigan.chatModel ?? '');
+        s.kerrigan = { ...(manual ? { chatManualModel: true } : {}), ...(!manual && model ? { chatModel: model } : {}) };
       }
       // The same for the group: clearing it gives this session its conversation back. It does
       // not move the conversation it is already in; that history is where it is.
@@ -1180,6 +1234,9 @@ export class OperatorService {
     await this.init();
     const idle: RunTally = { ran: 0, failed: 0, leftQueued: 0, failedTitles: [] };
     if (this.running.has(sessionId)) return { started: false, reason: 'already running', done: Promise.resolve(idle) };
+    // The operator's own commit or push still running in the folder: a run's git would go under it (2026-11-11).
+    const gitBusy = this.gitOpBusy();
+    if (gitBusy) return { started: false, reason: gitBusy, done: Promise.resolve(idle) };
     const session = await this.store.getSession(sessionId);
     if (!session) return { started: false, reason: 'no such session', done: Promise.resolve(idle) };
     // Set aside by the operator on the Sessions page: not started by anything until made active.
@@ -1228,6 +1285,14 @@ export class OperatorService {
     {
       const asLead = await this.store.getSession(sessionId);
       if (asLead?.lead?.workerSessionId) this.workerLeads.set(asLead.lead.workerSessionId, sessionId);
+      // Kerrigan's (2026-11-12): the chats she directs, and their workers, are hers to speak for from the start.
+      if (asLead?.kerrigan) {
+        for (const s of await this.store.listSessions()) {
+          if (s.directedBy !== sessionId) continue;
+          this.workerLeads.set(s.id, sessionId);
+          if (s.lead?.workerSessionId) this.workerLeads.set(s.lead.workerSessionId, s.id);
+        }
+      }
     }
     this.bus.publish({ sessionId, type: 'run-requested', level: 'info', message: `starting in ${mode} mode` });
     // Said at the start of every run, in both modes, because it is the one fact about this tool a
@@ -1298,7 +1363,15 @@ export class OperatorService {
       // The two-chat mode (2026-10-20): the lead's questions, and the worker the run speaks for too.
       askQuestion: (ask) => this.askLeadQuestion(ask, controller.signal),
       askSubtaskRetry: (ask) => this.askSubtaskRetry(ask, controller.signal),
-      onWorker: (workerId) => this.workerLeads.set(workerId, sessionId),
+      onWorker: (workerId, parent) => this.workerLeads.set(workerId, parent ?? sessionId),
+      // A conversation Kerrigan directs (2026-11-12): the facts she is told, and the skills she sends with.
+      kerrigan: {
+        brief: async () => await this.kerriganBriefText((await this.store.getSession(sessionId))?.lang ?? session.lang, sessionId),
+        skill: async (name, dir) => {
+          const found = await this.skillFor(name, dir).catch(() => null);
+          return found ? { name: found.name, description: found.description, text: found.text } : null;
+        },
+      },
       hold,
     })
       .then(async (outcome) => {
@@ -1371,7 +1444,9 @@ export class OperatorService {
    * "Pause" on the chat (operator, 2026-10-20): the running work holds at its next message to Copilot or its next
    * command, and the button becomes "Continue". A reply being written and a command running are let finish.
    */
-  pause(sessionId: string): { paused: boolean } {
+  pause(asked: string): { paused: boolean } {
+    // A chat Kerrigan directs is paused with her run (2026-11-12).
+    const sessionId = this.runKey(asked);
     const r = this.running.get(sessionId);
     if (!r) throw new Error('Nothing of this conversation is running, so there is nothing to pause.');
     if (r.hold.pause()) {
@@ -1381,13 +1456,16 @@ export class OperatorService {
   }
 
   /** "Continue": the paused work goes on from where it held. A run that has ended meanwhile has nothing to go on with. */
-  resume(sessionId: string): { paused: boolean } {
+  resume(asked: string): { paused: boolean } {
+    const sessionId = this.runKey(asked);
     const r = this.running.get(sessionId);
     if (r?.hold.resume()) this.bus.publish({ sessionId, type: 'resume-asked', level: 'info', message: 'continued by the operator' });
     return { paused: false };
   }
 
-  async stop(sessionId: string): Promise<{ stopping: boolean }> {
+  async stop(asked: string): Promise<{ stopping: boolean }> {
+    // A chat Kerrigan directs is stopped with her run (2026-11-12): it is one run.
+    const sessionId = this.runKey(asked);
     const r = this.running.get(sessionId);
     if (!r) return { stopping: false };
     r.controller.abort();
@@ -1484,11 +1562,93 @@ export class OperatorService {
 
   // --- a new branch from main, from the chat (2026-10-26) --------------------------------------------------------
 
-  /** Why the folder's branch may not be changed now: a task at work, or the queue between its tasks. */
+  /** Why the folder's branch may not be changed now: a task at work, the queue between its tasks, or the operator's own commit or push. */
   private branchBusy(): string | null {
     if (this.running.size > 0 || this.browser?.kind === 'run') return 'A task is working: stop it or let it finish first; the branch is not changed under it.';
     if (this.queueLoop) return 'The queue is running: stop it first; the branch is not changed under its tasks.';
-    return null;
+    return this.gitOpBusy();
+  }
+
+  // --- the operator's own commit and push, from the Git view (2026-11-11, see `vcs/operatorGit.ts`) ------------------
+
+  /** The commit or push of the operator's that runs now, or ran last: what the Git view follows. One at a time. */
+  private gitOp: GitOp | null = null;
+  /** Hook files the operator said to run although they were not the project's own, each as it was then. */
+  private readonly trustedHooks = new TrustedHooks(join(this.dataDir, 'trusted-hooks.json'));
+
+  /** Why nothing else may change the folder's git now: the operator's commit or push still running. */
+  private gitOpBusy(): string | null {
+    if (this.gitOp?.state !== 'running') return null;
+    return this.gitOp.kind === 'commit'
+      ? 'Git is committing in the project folder (the Git view follows it): let it finish first.'
+      : 'Git is pushing from the project folder (the Git view follows it): let it finish first.';
+  }
+
+  /** The folder the Git view acts in, when nothing else is changing its git; else why not. */
+  private async gitFolder(): Promise<string> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open: open one first.');
+    const busy = this.branchBusy();
+    if (busy) throw new Error(busy);
+    return ws.dir;
+  }
+
+  /** The commit or push running now, or the last one. */
+  gitOpState(): GitOp | null {
+    return this.gitOp;
+  }
+
+  /** Files of the Git view's lists staged or unstaged; the folder's git as it is then. */
+  async gitStage(how: 'stage' | 'unstage', which: string[] | 'all'): Promise<Awaited<ReturnType<typeof workspaceGit>>> {
+    const dir = await this.gitFolder();
+    await stageFiles(dir, how, which);
+    return await workspaceGit(dir);
+  }
+
+  /** Starts a commit or a push and answers at once with it; the Git view reads it again while it runs (`gitOpState`). */
+  private startGitOp(kind: GitOp['kind'], dir: string, run: (update: (patch: Partial<GitOp>) => void) => Promise<void>, extra: Partial<GitOp> = {}): GitOp {
+    const op: GitOp = { id: newId('g-'), kind, state: 'running', startedAt: new Date().toISOString(), command: kind === 'commit' ? 'git commit' : 'git push', output: '', hooks: 'none', ...extra };
+    this.gitOp = op;
+    const update = (patch: Partial<GitOp>): void => {
+      // A later one replaces this one only once this one has ended, so nothing is written into another's record.
+      if (this.gitOp?.id === op.id) Object.assign(op, patch);
+    };
+    void run(update)
+      .catch((e: unknown) => update({ state: 'failed', cause: 'unknown', output: `${op.output}${op.output ? '\n' : ''}${(e as Error).message}\n`, endedAt: new Date().toISOString() }))
+      .finally(() => {
+        if (op.state === 'running') update({ state: 'failed', cause: 'unknown', endedAt: new Date().toISOString() });
+        console.log(`[git] ${op.kind} in ${dir}: ${op.state}${op.cause ? ` (${op.cause})` : ''}${op.commit ? ` ${op.commit.slice(0, 8)}` : ''}${op.target ? ` → ${op.target}` : ''}`);
+      });
+    return op;
+  }
+
+  /** The operator's commit of what is staged, or of everything (`all`), with the project's hooks as `hooks`/`trust` say. */
+  async gitCommit(input: { message?: unknown; all?: unknown; hooks?: unknown; trust?: unknown }): Promise<GitOp> {
+    const dir = await this.gitFolder();
+    const message = typeof input.message === 'string' ? input.message.slice(0, 20_000) : '';
+    const all = input.all === true;
+    const choice = hookChoiceOf(input);
+    return this.startGitOp('commit', dir, (update) => commitAsOperator(dir, { message, all, ...choice }, this.trustedHooks, update), { message, all });
+  }
+
+  /** The operator's push of the branch the folder is on, to its upstream or published (see `pushAsOperator`). */
+  async gitPush(input: { hooks?: unknown; trust?: unknown }): Promise<GitOp> {
+    const dir = await this.gitFolder();
+    return this.startGitOp('push', dir, (update) => pushAsOperator(dir, hookChoiceOf(input), this.trustedHooks, update));
+  }
+
+  /** The operator's name and e-mail as git has them for the open folder's repository. */
+  async gitIdentity(): Promise<{ name: string; email: string }> {
+    const ws = await this.workspace();
+    if (!ws.ok) throw new Error(ws.problem ?? 'No project folder is open.');
+    return await identityOf(ws.dir);
+  }
+
+  /** The operator's name and e-mail set for git, in this repository or for all of theirs: what a first commit asks for. */
+  async setGitIdentity(input: { name?: unknown; email?: unknown; global?: unknown }): Promise<{ name: string; email: string }> {
+    const dir = await this.gitFolder();
+    await setIdentity(dir, { name: typeof input.name === 'string' ? input.name : '', email: typeof input.email === 'string' ? input.email : '', global: input.global === true });
+    return await identityOf(dir);
   }
 
   /**
@@ -1595,6 +1755,24 @@ export class OperatorService {
    * language she is not written out in, the page fills in the names of the controls (`filled: false`).
    */
   async kerrigan(lang: string, skill?: string): Promise<{ lang: string; fileName: string; text: string; filled: boolean }> {
+    const { facts, chosen } = await this.kerriganFacts(skill);
+    const text = kerriganPersona(lang, facts);
+    return { lang, fileName: kerriganFileName(lang, chosen?.name), text, filled: lang === 'en' || lang === 'bg' };
+  }
+
+  /**
+   * The facts of this machine for Kerrigan when she directs a conversation herself (2026-11-12): the same as her text's,
+   * with the person's language, how many messages she may send to chats, and how the chats' commands run in this run.
+   */
+  private async kerriganBriefText(lang: string | undefined, sessionId: string): Promise<string> {
+    const cfg = await this.settings.load();
+    const { facts } = await this.kerriganFacts();
+    const mode = this.running.get(this.runKey(sessionId))?.mode ?? cfg.execution.mode;
+    return kerriganBrief({ ...facts, language: LANGUAGE_NAMES[lang ?? 'en'] ?? 'English', maxSends: cfg.limits.maxKerriganSends ?? 6, commands: mode === 'unattended' ? 'auto' : 'ask' });
+  }
+
+  /** What Kerrigan is told of this machine: its limits, the projects with their notes, the skills; a skill chosen, too. */
+  private async kerriganFacts(skill?: string): Promise<{ facts: KerriganFacts; chosen?: Skill }> {
     const cfg = await this.settings.load();
     const p = await this.project();
     const projects = [
@@ -1604,12 +1782,12 @@ export class OperatorService {
     // The skills, each with the name of the project it is for.
     const nameOf = (dir: string): string => [{ name: p.name || p.rootDir, rootDir: p.rootDir }, ...p.others].find((x) => x.rootDir && sameFolder(x.rootDir, dir))?.name ?? dir;
     const all = (await this.skills()).skills;
-    const skills = all.map((k) => ({ name: k.name, description: k.description, ...(k.projectDir ? { project: nameOf(k.projectDir) } : {}) }));
+    const skills = all.map((k) => ({ name: k.name, description: k.description, ...(k.projectDir ? { project: nameOf(k.projectDir) } : {}), forKerrigan: k.forKerrigan, text: k.text }));
     // The skill chosen beside her button (2026-10-26): its instructions go with her text.
     const asked = skill?.trim().replace(/^\//, '').toLowerCase();
     const chosen = asked ? all.find((k) => k.name === asked) : undefined;
     if (asked && !chosen) throw new Error(`There is no skill called "${asked}" in Settings → Skills.`);
-    const text = kerriganPersona(lang, {
+    const facts: KerriganFacts = {
       version: botVersion(),
       skills,
       maxIterations: cfg.limits.maxIterations,
@@ -1619,18 +1797,29 @@ export class OperatorService {
       maxSubtasks: cfg.limits.maxSubtasks ?? 20,
       projects,
       ...(chosen ? { chosenSkill: { name: chosen.name, description: chosen.description, text: chosen.text, ...(chosen.projectDir ? { project: nameOf(chosen.projectDir) } : {}) } } : {}),
-    });
-    return { lang, fileName: kerriganFileName(lang, chosen?.name), text, filled: lang === 'en' || lang === 'bg' };
+    };
+    return { facts, ...(chosen ? { chosen } : {}) };
   }
 
   /** The chat's conversations, newest first. */
-  async chatThreads(): Promise<Array<{ id: string; name: string; createdAt: string; status: Session['status']; turns: number; running: boolean; repoDir: string }>> {
+  async chatThreads(): Promise<Array<{ id: string; name: string; createdAt: string; status: Session['status']; turns: number; running: boolean; repoDir: string; kerrigan?: boolean; directedBy?: string }>> {
     await this.init();
     return (await this.store.listSessions())
       // A worker's session (two chats) is not a conversation of the list: it is shown under its lead's messages.
       .filter((s) => s.kind === 'chat' && !s.workerOf)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map((s) => ({ id: s.id, name: s.name, createdAt: s.createdAt, status: s.status, turns: s.tasks.length, running: this.running.has(s.id), repoDir: s.vcs?.repoDir || s.projectDir }));
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        createdAt: s.createdAt,
+        status: s.status,
+        turns: s.tasks.length,
+        // A chat Kerrigan directs runs in her run (2026-11-12): running while a message of its is at work in it.
+        running: this.running.has(s.id) || (!!s.directedBy && this.running.has(this.runKey(s.id)) && s.tasks.some((t) => t.status === 'running' || t.status === 'waiting-approval')),
+        repoDir: s.vcs?.repoDir || s.projectDir,
+        ...(s.kerrigan ? { kerrigan: true } : {}),
+        ...(s.directedBy ? { directedBy: s.directedBy } : {}),
+      }));
   }
 
   /**
@@ -1640,7 +1829,7 @@ export class OperatorService {
    * the first time, where the work starts being asked once). While the conversation is working, the message is a
    * note to the task in flight, which the chat gets with its next report.
    */
-  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; reviewModel?: string; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
+  async chatSend(input: { text: string; threadId?: string; model?: string; manualModel?: boolean; lang?: string; planMode?: boolean; review?: boolean; reviewModel?: string; lead?: boolean; workerModel?: string; workerManualModel?: boolean; skill?: string; kerrigan?: boolean; chatModel?: string; chatManualModel?: boolean }): Promise<{ threadId: string; taskId: string; noted?: boolean; needsStart: boolean }> {
     await this.init();
     const text = (input.text ?? '').trim();
     if (!text) throw new Error('The message is empty.');
@@ -1651,6 +1840,15 @@ export class OperatorService {
     const skill = input.skill?.trim() ? await this.skillFor(input.skill, session?.projectDir ?? (await this.workspace()).dir) : undefined;
     if (session) {
       const inFlight = session.tasks.find((t) => t.status === 'running' || t.status === 'waiting-approval');
+      // A chat Kerrigan directs, while she works (2026-11-12): a note to its message at work, or to her.
+      if (session.directedBy && !this.running.has(session.id) && this.running.has(this.runKey(session.id))) {
+        if (skill) throw new Error('Kerrigan is at work with this chat: write to her conversation, or Stop her first.');
+        if (inFlight) {
+          await this.addTaskNote(session.id, inFlight.id, text);
+          return { threadId: session.id, taskId: inFlight.id, noted: true, needsStart: false };
+        }
+        throw new Error('Kerrigan is at work with this chat: write to her conversation, or Stop her first.');
+      }
       if (inFlight && this.running.has(session.id)) {
         if (skill) throw new Error(`A skill goes with a new message, and this one would be a note to the message at work. Send /${skill.name} when it has finished.`);
         await this.addTaskNote(session.id, inFlight.id, text);
@@ -1685,7 +1883,18 @@ export class OperatorService {
          * Two chats (operator, 2026-10-20): this conversation is the lead's, and a worker carries out its subtasks. The
          * lead judges the worker's reports, so there is no review of its own.
          */
-        if (input.lead) {
+        /*
+         * Kerrigan directs (operator, 2026-11-12): the conversation is hers, and she chooses plan mode, two chats, the review
+         * and the skill for each message she sends to a chat of its own. The model of those chats, as chosen beside hers.
+         */
+        if (input.kerrigan) {
+          s.kerrigan = {
+            ...(input.chatManualModel ? { chatManualModel: true } : {}),
+            ...(!input.chatManualModel && input.chatModel?.trim() ? { chatModel: input.chatModel.trim() } : {}),
+          };
+          s.review = { enabled: false, model: '' };
+          s.planMode = 'off';
+        } else if (input.lead) {
           s.lead = {
             ...(input.workerManualModel ? { workerManualModel: true } : {}),
             ...(!input.workerManualModel && input.workerModel?.trim() ? { workerModel: input.workerModel.trim() } : {}),
@@ -2251,11 +2460,12 @@ export class OperatorService {
   // --- skills (2026-10-21) ----------------------------------------------------------------------------
 
   /** The skills in Settings, and how long what each is for may be. */
-  async skills(): Promise<{ skills: Skill[]; maxDescription: number }> {
+  async skills(): Promise<{ skills: Skill[]; maxDescription: number; maxForKerrigan: number }> {
     const cfg = await this.settings.load();
     return {
-      skills: (cfg.skills ?? []).map((k) => ({ name: k.name, description: k.description ?? '', text: k.text ?? '', projectDir: k.projectDir ?? '' })),
+      skills: (cfg.skills ?? []).map((k) => ({ name: k.name, description: k.description ?? '', text: k.text ?? '', projectDir: k.projectDir ?? '', forKerrigan: k.forKerrigan ?? '' })),
       maxDescription: MAX_SKILL_DESCRIPTION,
+      maxForKerrigan: MAX_SKILL_FOR_KERRIGAN,
     };
   }
 
@@ -2263,7 +2473,7 @@ export class OperatorService {
    * Stores the list as given, held to the rules: a name to type after `/` — lowercase, digits and hyphens, each used
    * once — instructions that are there, of any length, a project that is one of Settings' or every project.
    */
-  async setSkills(list: Array<Record<string, unknown>>): Promise<{ skills: Skill[]; maxDescription: number }> {
+  async setSkills(list: Array<Record<string, unknown>>): Promise<{ skills: Skill[]; maxDescription: number; maxForKerrigan: number }> {
     if (!Array.isArray(list)) throw new Error('The skills come as a list.');
     if (list.length > MAX_SKILLS) throw new Error(`There can be at most ${MAX_SKILLS} skills.`);
     const cfg = await this.settings.load();
@@ -2280,7 +2490,9 @@ export class OperatorService {
       if (!text.trim()) throw new Error(`The skill "${name}" has no instructions: write what the chat should know and do for this kind of task.`);
       const projectDir = String(k?.projectDir ?? '').trim();
       if (projectDir && !folders.some((f) => sameFolder(f, projectDir))) throw new Error(`The skill "${name}" is for ${projectDir}, which is not one of the projects in Settings.`);
-      return { name, description, text, projectDir };
+      const forKerrigan = String(k?.forKerrigan ?? '').trim();
+      if (forKerrigan.length > MAX_SKILL_FOR_KERRIGAN) throw new Error(`What "${name}" says for Kerrigan is longer than ${MAX_SKILL_FOR_KERRIGAN} characters: its phases, its result and what it needs, in a few lines.`);
+      return { name, description, text, projectDir, forKerrigan };
     });
     await this.settings.update((raw) => ({ ...raw, skills }));
     return await this.skills();
@@ -2388,9 +2600,9 @@ export class OperatorService {
    * answered or the task is stopped.
    */
   askLeadQuestion(
-    ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean; handoff?: HandoffCard; actor?: Actor },
+    ask: { sessionId: string; taskId: string; question: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean; handoff?: HandoffCard; actor?: Actor; onCard?: (card: CardHandle<QuestionAnswer>) => void },
     signal: AbortSignal,
-  ): Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string } | 'stop'> {
+  ): Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string; by?: 'kerrigan' } | 'stop'> {
     return new Promise((resolveAnswer) => {
       if (signal.aborted) {
         resolveAnswer('stop');
@@ -2425,6 +2637,7 @@ export class OperatorService {
       this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
         message: `the lead asks the operator: ${ask.question}`, data: { approvalId: approval.id, question: approval.question } });
+      ask.onCard?.(this.cardHandle(approval.id, (a, why) => this.answerQuestion(approval.id, a.text, undefined, undefined, a.chosen, { by: 'kerrigan', why })));
     });
   }
 
@@ -2434,7 +2647,7 @@ export class OperatorService {
    * with why, which attempt it was, what it left, and the choices; it waits until one is chosen, or the task is stopped.
    * Answered with `answerRetry`; "abort" on the card, a Stop or the end of the run stop the task.
    */
-  askSubtaskRetry(ask: { sessionId: string; taskId: string; retry: NonNullable<PendingApproval['retry']> }, signal: AbortSignal): Promise<RetryChoice | 'stop'> {
+  askSubtaskRetry(ask: { sessionId: string; taskId: string; retry: NonNullable<PendingApproval['retry']>; onCard?: (card: CardHandle<RetryChoice>) => void }, signal: AbortSignal): Promise<RetryChoice | 'stop'> {
     return new Promise((resolveRetry) => {
       if (signal.aborted) {
         resolveRetry('stop');
@@ -2454,19 +2667,40 @@ export class OperatorService {
       this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
         message: `subtask ${ask.retry.n} did not finish (attempt ${ask.retry.attempt} of ${ask.retry.maxAttempts}): the operator is asked what to do`, data: { approvalId: approval.id, retry: ask.retry } });
+      ask.onCard?.(this.cardHandle(approval.id, (choice, why) => this.answerRetry(approval.id, choice, { by: 'kerrigan', why })));
     });
   }
 
   /** The operator's choice for a subtask that failed for a technical reason: one of the card's own. */
-  answerRetry(approvalId: string, choice: string): { ok: boolean; problem?: string } {
+  answerRetry(approvalId: string, choice: string, as?: { by: 'kerrigan'; why: string }): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
     if (!w?.resolveRetry || !w.approval.retry) return { ok: false, problem: 'No subtask is waiting for a choice under that id.' };
     if (!w.approval.retry.choices.includes(choice as RetryChoice)) return { ok: false, problem: `"${choice}" is not one of this card's choices: ${w.approval.retry.choices.join(', ')}.` };
     this.waiting.delete(approvalId);
     w.resolveRetry(choice as RetryChoice);
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
-      message: `the operator chose for subtask ${w.approval.retry.n}: ${choice}`, data: { approvalId, retry: choice } });
+      message: `${as ? 'Kerrigan' : 'the operator'} chose for subtask ${w.approval.retry.n}: ${choice}${as?.why ? ` — ${as.why}` : ''}`, data: { approvalId, retry: choice, ...(as ? { by: as.by } : {}) } });
     return { ok: true };
+  }
+
+  /**
+   * A card, handed to Kerrigan to answer in the operator's place (2026-11-12): answered through the same way as their
+   * press, said to be hers; marked with what she is doing about it, which the card shows.
+   */
+  private cardHandle<A>(id: string, answer: (a: A, why: string) => { ok: boolean; problem?: string }): CardHandle<A> {
+    return {
+      id,
+      open: () => this.waiting.has(id),
+      answer: (a, why) => (this.waiting.has(id) ? answer(a, why) : { ok: false, problem: 'The card was answered already.' }),
+      mark: (state) => {
+        const w = this.waiting.get(id);
+        if (!w) return;
+        if (state) w.approval.kerrigan = state;
+        else delete w.approval.kerrigan;
+        this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-kerrigan', level: state?.state === 'yours' ? 'warn' : 'info',
+          message: state?.state === 'yours' ? `Kerrigan leaves the card to the operator: ${state.why ?? ''}` : state ? 'the card went to Kerrigan' : 'the card is the operator\'s again', data: { approvalId: id, kerrigan: state } });
+      },
+    };
   }
 
   /**
@@ -2492,17 +2726,20 @@ export class OperatorService {
     return await this.start(threadId, cfg.execution.mode);
   }
 
-  answerQuestion(approvalId: string, text: string, ran?: boolean, outcome?: string, chosen?: unknown): { ok: boolean; problem?: string } {
+  answerQuestion(approvalId: string, text: string, ran?: boolean, outcome?: string, chosen?: unknown, as?: { by: 'kerrigan'; why: string }): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
     if (!w?.resolveAnswer) return { ok: false, problem: 'No question of the lead is waiting under that id.' };
+    // Kerrigan never answers commands handed over to run (2026-11-12): those are the operator's.
+    if (as && w.approval.question?.handoff) return { ok: false, problem: 'Commands handed over to run are the operator\'s to answer.' };
+    const who = as ? 'Kerrigan' : 'the operator';
     // A question of several answers (2026-11-02): the ones chosen, by their place, and what was written besides.
     if (chosen !== undefined && w.approval.question && !w.approval.question.handoff) {
       const many = chosenAnswer(w.approval.question, chosen, text);
       if ('problem' in many) return { ok: false, problem: many.problem };
       this.waiting.delete(approvalId);
-      w.resolveAnswer(many);
+      w.resolveAnswer({ ...many, ...(as ? { by: as.by } : {}) });
       this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
-        message: `the operator chose ${many.chosen.length} of the answers`, data: { approvalId, question: true } });
+        message: `${who} chose ${many.chosen.length} of the answers${as?.why ? ` — ${as.why}` : ''}`, data: { approvalId, question: true, ...(as ? { by: as.by } : {}) } });
       return { ok: true };
     }
     /*
@@ -2515,9 +2752,9 @@ export class OperatorService {
     if (handed && how === 'revise' && !text.trim()) return { ok: false, problem: 'Say what to correct first.' };
     if (!handed && !text.trim()) return { ok: false, problem: 'Write the answer first.' };
     this.waiting.delete(approvalId);
-    w.resolveAnswer(handed ? { answer: text.trim(), ran: how === 'ran', outcome: how } : { answer: text.trim() });
+    w.resolveAnswer(handed ? { answer: text.trim(), ran: how === 'ran', outcome: how } : { answer: text.trim(), ...(as ? { by: as.by } : {}) });
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
-      message: 'the operator answered the lead', data: { approvalId, question: true } });
+      message: `${who} answered: ${text.trim().slice(0, 200)}${as?.why ? ` — ${as.why}` : ''}`, data: { approvalId, question: true, ...(as ? { by: as.by } : {}) } });
     return { ok: true };
   }
 
@@ -2526,7 +2763,7 @@ export class OperatorService {
    * waits on the approvals card, on every page, until it is approved, sent back for another, or the task
    * is stopped. See `PlanMode`.
    */
-  askPlanApproval(ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan; actor?: Actor }, signal: AbortSignal): Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }> {
+  askPlanApproval(ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan; actor?: Actor; onCard?: (card: CardHandle<PlanAnswer>) => void }, signal: AbortSignal): Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string; by?: 'kerrigan' }> {
     return new Promise((resolveAnswer) => {
       if (signal.aborted) {
         resolveAnswer({ decision: 'stop' });
@@ -2551,6 +2788,7 @@ export class OperatorService {
       this.parkLater(approval);
       this.bus.publish({ sessionId: ask.sessionId, taskId: ask.taskId, type: 'approval-requested', level: 'warn',
         message: `the plan of "${ask.title}" (version ${ask.plan.version}) is waiting for you to approve it`, data: { approvalId: approval.id, plan: true } });
+      ask.onCard?.(this.cardHandle(approval.id, (a, why) => this.decidePlan(approval.id, a.decision, a.note, { by: 'kerrigan', why })));
     });
   }
 
@@ -2558,22 +2796,23 @@ export class OperatorService {
    * Answers a plan waiting for approval: approve it (with a note the chat is given beside it), ask for
    * another (saying what to change), or stop the task.
    */
-  decidePlan(approvalId: string, action: 'approve' | 'revise' | 'stop', note?: string): { ok: boolean; problem?: string } {
+  decidePlan(approvalId: string, action: 'approve' | 'revise' | 'stop', note?: string, as?: { by: 'kerrigan'; why: string }): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
     if (!w || !w.resolvePlan) return { ok: false, problem: 'That plan is not waiting any more.' };
     const text = (note ?? '').trim();
     if (action === 'revise' && !text) return { ok: false, problem: 'Say what to change in the plan, so the chat knows what the next one must do differently.' };
     if (text.length > MAX_INSTRUCTION_CHARS) return { ok: false, problem: `The note is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.` };
     this.waiting.delete(approvalId);
-    w.resolvePlan({ decision: action, ...(text ? { note: text } : {}) });
+    w.resolvePlan({ decision: action, ...(text ? { note: text } : {}), ...(as ? { by: as.by } : {}) });
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
-      message: `plan: ${action}${text ? ' (with a note)' : ''}`, data: { approvalId, action, plan: true } });
+      message: `plan: ${action}${text ? ' (with a note)' : ''}${as ? `, by Kerrigan${as.why ? ` — ${as.why}` : ''}` : ''}`, data: { approvalId, action, plan: true, ...(as ? { by: as.by } : {}) } });
     return { ok: true };
   }
 
   /** What waits for the operator; of one session, its worker's included (two chats: they are asked in its conversation). */
   pendingApprovals(sessionId?: string): PendingApproval[] {
-    return [...this.waiting.values()].map((w) => w.approval).filter((a) => !sessionId || a.sessionId === sessionId || this.workerLeads.get(a.sessionId) === sessionId);
+    // Kerrigan's (2026-11-12): the cards of the chats she directs, and of their workers, are shown in hers too.
+    return [...this.waiting.values()].map((w) => w.approval).filter((a) => !sessionId || this.under(a.sessionId, sessionId));
   }
 
   /**

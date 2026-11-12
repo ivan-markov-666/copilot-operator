@@ -104,7 +104,9 @@ export function GlobalApprovals() {
     return () => clearInterval(id);
   }, []);
   const lastAt = activity?.last ? Date.parse(activity.last.at) : 0;
-  const title = tabTitle(approvals.length, activity, (tick % 3) + 1, !!activity?.last && lookedAt.current - lastAt < SEEN_MS);
+  // A card Kerrigan is answering (2026-11-12) does not wait for the operator yet.
+  const forOperator = approvals.filter((a) => a.kerrigan?.state !== 'thinking');
+  const title = tabTitle(forOperator.length, activity, (tick % 3) + 1, !!activity?.last && lookedAt.current - lastAt < SEEN_MS);
   useEffect(() => {
     document.title = title;
   }, [title]);
@@ -119,8 +121,8 @@ export function GlobalApprovals() {
    */
   const shown =
     pathname === '/'
-      ? approvals.filter((a) => a.sessionId in known.current && (!chats.current.has(a.sessionId) || !!a.model))
-      : approvals;
+      ? forOperator.filter((a) => a.sessionId in known.current && (!chats.current.has(a.sessionId) || !!a.model))
+      : forOperator;
   if (shown.length === 0) return null;
 
   return (

@@ -79,18 +79,20 @@ export function AwaitingSpotlight() {
 
   useEffect(() => {
     const look = (): void => {
-      const shown = [...document.querySelectorAll<HTMLElement>('[data-awaits]')].filter((c) => c.getClientRects().length > 0);
+      // A card Kerrigan is answering (2026-11-12) does not wait for the operator yet: not lit, not counted.
+      const shown = [...document.querySelectorAll<HTMLElement>('[data-awaits]')].filter((c) => c.getClientRects().length > 0 && !c.closest('[data-kerrigan-thinking]'));
       setCards(shown.length);
       for (const card of shown) {
         const id = card.dataset.awaits ?? '';
         if (greeted.current.has(id)) continue;
         greeted.current.add(id);
-        if (!card.closest('[data-follow]')) card.scrollIntoView({ block: 'nearest' });
+        // Brought into view with what frames it: Kerrigan's word above a card she left to the operator (2026-11-12).
+        if (!card.closest('[data-follow]')) ((card.closest('[data-awaits-frame]') as HTMLElement | null) ?? card).scrollIntoView({ block: 'nearest' });
         if (!typing()) card.focus({ preventScroll: true });
       }
     };
     const watch = new MutationObserver(look);
-    watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-awaits', 'hidden'] });
+    watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-awaits', 'hidden', 'data-kerrigan-thinking'] });
     look();
     return () => watch.disconnect();
   }, []);
@@ -103,7 +105,7 @@ export function AwaitingSpotlight() {
     }
     let frame = 0;
     const draw = (): void => {
-      const next = [...document.querySelectorAll<HTMLElement>('[data-awaits]')].map(seenBox).filter((b): b is Box => b !== null);
+      const next = [...document.querySelectorAll<HTMLElement>('[data-awaits]')].filter((c) => !c.closest('[data-kerrigan-thinking]')).map(seenBox).filter((b): b is Box => b !== null);
       setBoxes((was) => (sameBoxes(was, next) ? was : next));
       setView((was) => (was.w === window.innerWidth && was.h === window.innerHeight ? was : { w: window.innerWidth, h: window.innerHeight }));
       frame = requestAnimationFrame(draw);

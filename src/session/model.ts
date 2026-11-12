@@ -222,6 +222,14 @@ export type Task = {
   /** A worker's subtask: the lead's message it is part of, and which of its subtasks it is. */
   fromLead?: { sessionId: string; taskId: string; n: number };
   /**
+   * A message of a conversation Kerrigan directs (operator, 2026-11-12): what she did — the messages she sent to the
+   * chats and with which settings, the cards of theirs she answered and why, what she asked the operator, and her report,
+   * which is the task's `summary`. See `orchestrator/kerriganRunner.ts`.
+   */
+  kerrigan?: KerriganRecord;
+  /** A message Kerrigan sent to a chat: her message it is part of, and which of hers it is. */
+  fromKerrigan?: { sessionId: string; taskId: string; n: number };
+  /**
    * The skill the message was sent with (2026-10-21), as it read then: a later edit in Settings does not change what
    * this task was told. Sent with its opening; a worker's subtask carries its lead's.
    */
@@ -639,6 +647,8 @@ export type TaskAttempt = {
   plan?: TaskPlan;
   /** What the lead did in this attempt, in the two-chat mode. */
   lead?: LeadRecord;
+  /** What Kerrigan did in this attempt, in a conversation she directs. */
+  kerrigan?: KerriganRecord;
   accepted?: Task['accepted'];
   /**
    * The operator undid this attempt (2026-10-14): `this` — its work taken out of the session's line by a
@@ -841,7 +851,8 @@ export type TaskPlan = {
   version: number;
   at: string;
   /** Approved by the operator, with what they added, or by the runner, and why it did not ask. */
-  approved?: { by: 'operator' | 'auto'; at: string; note?: string; why?: string };
+  /** `kerrigan`: she approved it in the operator's place, in a conversation she directs (2026-11-12). */
+  approved?: { by: 'operator' | 'auto' | 'kerrigan'; at: string; note?: string; why?: string };
   /** What the operator asked to change in earlier versions, oldest first. */
   revisions?: Array<{ version: number; comment: string; at: string }>;
 };
@@ -1134,6 +1145,15 @@ export type Session = {
   lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
   /** A worker's session: the chat session whose lead gives it its subtasks. It is not a conversation of the chat's list. */
   workerOf?: string;
+  /**
+   * Kerrigan directs this conversation (operator, 2026-11-12: "automate what I do by hand — Kerrigan in a third chat
+   * writes the prompt, says plan mode, two chats, review, which skill, answers the bot's questions, judges the result"):
+   * its conversation is hers, and the messages she writes go to chats of their own (`directedBy`). The model those chats
+   * work on, as chosen under the chat's box; none, Settings'.
+   */
+  kerrigan?: { chatModel?: string; chatManualModel?: boolean };
+  /** A chat Kerrigan started and sends her messages to: her conversation's session. Shown in the list, under her. */
+  directedBy?: string;
   /** The task of the queue this chat ran (2026-10-24): `QueueItem.id` in data/queue.json. */
   queueItem?: string;
   /** The language the workbench was in at the chat's last message, for what its window says at the end (2026-10-19). */
@@ -1284,7 +1304,7 @@ export type SessionEvent = {
  * lead of two chats, `worker` the chat doing the work — the worker of two chats, or the one chat without them — and
  * `review` the independent reviewer.
  */
-export type Actor = 'plan' | 'lead' | 'worker' | 'review';
+export type Actor = 'plan' | 'lead' | 'worker' | 'review' | 'kerrigan';
 
 /** Who is at work on a task now, and since when; with the subtask the worker is on, or the review's round. */
 export type Acting = { actor: Actor; since: string; subtask?: number; round?: number };
@@ -1340,6 +1360,12 @@ export type PendingApproval = {
    */
   question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean; handoff?: HandoffCard };
   /**
+   * A card of a chat Kerrigan directs, which she answers in the operator's place (2026-11-12): a question, a plan, a
+   * subtask to try again. What she is doing about it: `thinking` — it went to her and she has not answered yet; `yours`
+   * — she left it to the operator, with why and what she would choose. The operator may answer it first, either way.
+   */
+  kerrigan?: KerriganOnCard;
+  /**
    * Set when a subtask of two chats failed for a technical reason and the operator is asked what to do (2026-10-25):
    * the subtask, the attempt and the most there may be, why, what the attempt left, and the choices — try it again in
    * the same worker's conversation or a fresh one, carry on from the folder as it is or put it back to the subtask's
@@ -1356,6 +1382,72 @@ export type PendingApproval = {
     changed: string[];
     choices: RetryChoice[];
   };
+};
+
+/** What Kerrigan is doing about a card of a chat she directs (see `PendingApproval.kerrigan`). */
+export type KerriganOnCard = { state: 'thinking' | 'yours'; at: string; why?: string; suggestion?: string };
+
+/**
+ * One of Kerrigan's replies, as the chat shows it (2026-11-12). `send`: a message to a chat — new or the one she sent the
+ * last to — with the settings it goes with; `answer`: a card of the chat, answered in the operator's place; `ask`: a
+ * question for the operator, or a card left to them; `done`: her report; `blocked`: why it cannot go on.
+ */
+export type KerriganRound = {
+  status: 'send' | 'answer' | 'ask' | 'done' | 'blocked';
+  at: string;
+  understanding?: string;
+  notes?: string;
+  /** Where she looked before she decided, as she names them: a mail, a chat, a meeting's transcript, a file, the code. */
+  sources?: string[];
+  send?: {
+    /** Her message's number among those she sent for this one of the operator's. */
+    n: number;
+    title: string;
+    prompt: string;
+    /** A new chat, or the one she sent to last. */
+    chat: 'new' | 'same';
+    planMode: boolean;
+    twoChats: boolean;
+    review: boolean;
+    skill?: string;
+    /** The chat's session and the task the message is, once made; how it ended, and its summary. */
+    sessionId?: string;
+    taskId?: string;
+    status?: TaskStatus;
+    summary?: string;
+  };
+  /** A card of the chat: what it asked, and what was answered — by her, or by the operator before her. */
+  card?: {
+    id: string;
+    kind: 'question' | 'plan' | 'retry';
+    sessionId: string;
+    taskId: string;
+    actor?: Actor;
+    text: string;
+    options?: string[];
+    answer?: string;
+    by?: 'kerrigan' | 'operator';
+    /** Left to the operator: why, and what she would choose. */
+    yours?: { why: string; suggestion?: string };
+  };
+  /** Her own question for the operator, and their answer. */
+  question?: { text: string; why?: string; options: string[]; multiple?: boolean; answer?: string };
+  /** `done`: her report to the operator; `blocked`: what was done, and what would let it go on. */
+  report?: string;
+  evidence?: string[];
+  needed?: string;
+};
+
+/** What Kerrigan did for one of the operator's messages, as the chat shows it. */
+export type KerriganRecord = {
+  rounds: KerriganRound[];
+  /** The messages she sent to chats, and the most she may for this one of the operator's. */
+  sent: number;
+  maxSends: number;
+  /** The messages that went to her own conversation. */
+  messages: number;
+  /** The chats she sent to, in order: their sessions. */
+  chats: string[];
 };
 
 /** What the operator, or Settings, may choose for a subtask that failed for a technical reason (2026-10-25). */
@@ -1432,7 +1524,7 @@ export type LeadRound = {
     report?: string;
   };
   /** The question it asked the operator, and the answer it got. */
-  question?: { text: string; why?: string; options?: string[]; multiple?: boolean; answer?: string; chosen?: string[]; at?: string };
+  question?: { text: string; why?: string; options?: string[]; multiple?: boolean; answer?: string; chosen?: string[]; at?: string; by?: 'kerrigan' };
   /** This reply made the list of subtasks, or changed it: its version, and how many came and went (see `LeadLedger`). */
   ledger?: { revision: number; added: number; removed: number; total: number };
 };

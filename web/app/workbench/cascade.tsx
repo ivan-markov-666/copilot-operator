@@ -50,6 +50,8 @@ const PLAN_KEY = 'cop.chat.plan';
 const REVIEW_KEY = 'cop.chat.review';
 /** Two chats for the next new conversation, as last chosen in this browser: 'on', or one chat. */
 const LEAD_KEY = 'cop.chat.lead';
+/** "Kerrigan directs" for the next new conversation (2026-11-12). */
+const KERRIGAN_KEY = 'cop.chat.kerrigan';
 const keep = (key: string, value: string): void => {
   try {
     if (value) window.localStorage.setItem(key, value);
@@ -90,6 +92,11 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    */
   const [newLead, setNewLead] = useState(false);
   const [newWorkerModel, setNewWorkerModel] = useState('');
+  /**
+   * Kerrigan directs, for a conversation not started yet (operator, 2026-11-12): the message goes to her, and she writes
+   * the messages for chats of their own. The model of her chats is `newWorkerModel`'s picker under hers.
+   */
+  const [newKerrigan, setNewKerrigan] = useState(false);
   /** The worker's session of a two-chat conversation, whose tasks are the lead's subtasks. */
   const [worker, setWorker] = useState<Session | null>(null);
   const [text, setText] = useState('');
@@ -105,14 +112,16 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
   // The same choice as beside Kerrigan's button (2026-10-26): chosen in either, it changes in both.
   const [skill, setSkill] = useChosenSkill();
   const box = useRef<HTMLTextAreaElement | null>(null);
-  const running = !!session && session.status !== 'idle';
+  // A chat Kerrigan directs runs in her run (2026-11-12): working while a message of its is at work.
+  const running = !!session && (session.status !== 'idle' || (!!session.directedBy && session.tasks.some((x) => x.status === 'running' || x.status === 'waiting-approval')));
   /*
    * What the model picker shows. "Set the model by hand" when it was chosen, and also when nothing names a model —
    * none of the conversation's own and none in Settings — because then the run asks for it by hand (2026-10-17;
    * the runner decides the same way, see `modelByHand` in taskRunner.ts). It replaced "Whatever the chat is on".
    */
   // Settings' model for this conversation's part (2026-10-23): the lead's with two chats, else the worker's.
-  const leading = session ? !!session.lead : newLead;
+  // Kerrigan's conversation takes Settings' model for the lead, as the lead's does (2026-11-12).
+  const leading = session ? !!session.lead || !!session.kerrigan : newLead || newKerrigan;
   const settingsModel = (leading ? catalogue?.defaultLeadModel || catalogue?.defaultModel : catalogue?.defaultModel) ?? '';
   const settingsWorkerModel = catalogue?.defaultModel ?? '';
   const sessionModelShown = session ? (session.manualModel || (!session.model && !settingsModel) ? BY_HAND : (session.model ?? '')) : '';
@@ -122,7 +131,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     setThreadId(kept(THREAD_KEY));
     setNewPlan(kept(PLAN_KEY) === 'on');
     setNewReview(kept(REVIEW_KEY) !== 'off');
-    setNewLead(kept(LEAD_KEY) === 'on');
+    setNewLead(kept(LEAD_KEY) === 'on' && kept(KERRIGAN_KEY) !== 'on');
+    setNewKerrigan(kept(KERRIGAN_KEY) === 'on');
   }, []);
   useEffect(() => {
     if (composeAsk > 0) box.current?.focus();
@@ -279,8 +289,22 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       const byHand = fresh && newModel === BY_HAND;
       // The language of the page goes along: the Copilot window says in it when the work on the message has ended.
       // Two chats, for a new conversation: the lead judges the worker's reports, so there is no review of its own.
-      const two = fresh && newLead ? { workerModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, workerManualModel: newWorkerModel === BY_HAND } : undefined;
-      const r = await api.chatSend(message, threadId || undefined, fresh && !byHand ? newModel || undefined : undefined, byHand, locale, fresh && newPlan, fresh ? (two ? false : newReview) : undefined, two, chosen || undefined, fresh && !two ? newReviewModel || undefined : undefined);
+      const two = fresh && newLead && !newKerrigan ? { workerModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, workerManualModel: newWorkerModel === BY_HAND } : undefined;
+      // Kerrigan directs (2026-11-12): she chooses plan mode, two chats and the review for each message she sends.
+      const directed = fresh && newKerrigan ? { chatModel: newWorkerModel === BY_HAND ? undefined : newWorkerModel || undefined, chatManualModel: newWorkerModel === BY_HAND } : undefined;
+      const r = await api.chatSend(
+        message,
+        threadId || undefined,
+        fresh && !byHand ? newModel || undefined : undefined,
+        byHand,
+        locale,
+        fresh && newPlan && !directed,
+        fresh ? (two || directed ? false : newReview) : undefined,
+        two,
+        chosen || undefined,
+        fresh && !two && !directed ? newReviewModel || undefined : undefined,
+        directed,
+      );
       setText('');
       // A skill goes with one message: the next one starts without, unless chosen again.
       setSkill('');
@@ -368,6 +392,10 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
         ...(s.lead && (workerModel !== undefined || workerManualModel !== undefined)
           ? { lead: { ...s.lead, workerManualModel: workerManualModel || undefined, workerModel: workerManualModel ? undefined : workerModel || undefined } }
           : {}),
+        // Kerrigan's chats' model, by the same fields (2026-11-12).
+        ...(s.kerrigan && (workerModel !== undefined || workerManualModel !== undefined)
+          ? { kerrigan: { chatManualModel: workerManualModel || undefined, chatModel: workerManualModel ? undefined : workerModel || undefined } }
+          : {}),
       };
     });
     try {
@@ -390,14 +418,41 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * Two chats (2026-10-20): a lead and a worker, chosen for a new conversation; a started one keeps how it began. The
    * worker's model is chosen beside the lead's: the same as the lead's when none is chosen, or by hand.
    */
-  const leadOn = session ? !!session.lead : newLead;
+  const leadOn = session ? !!session.lead : newLead && !newKerrigan;
   const chooseLead = (on: boolean) => {
     if (session) return;
     setNewLead(on);
     keep(LEAD_KEY, on ? 'on' : '');
+    // One or the other: with Kerrigan, she chooses two chats for each message herself.
+    if (on) {
+      setNewKerrigan(false);
+      keep(KERRIGAN_KEY, '');
+    }
+  };
+  /**
+   * Kerrigan directs (operator, 2026-11-12), for a new conversation; a started one keeps how it began. She chooses plan
+   * mode, two chats, the review and the skill for each message she sends to a chat, so those are hers, not the box's.
+   */
+  const kerriganOn = session ? !!session.kerrigan : newKerrigan;
+  const chooseKerrigan = (on: boolean) => {
+    if (session) return;
+    setNewKerrigan(on);
+    keep(KERRIGAN_KEY, on ? 'on' : '');
+    if (on) {
+      setNewLead(false);
+      keep(LEAD_KEY, '');
+    }
   };
   // The worker's own; none chosen, Settings' model for the worker (2026-10-23), else the lead's, as the runner does.
-  const workerModelShown = session ? (session.lead?.workerManualModel ? BY_HAND : (session.lead?.workerModel ?? '')) : newWorkerModel;
+  const workerModelShown = session
+    ? session.kerrigan
+      ? session.kerrigan.chatManualModel
+        ? BY_HAND
+        : (session.kerrigan.chatModel ?? '')
+      : session.lead?.workerManualModel
+        ? BY_HAND
+        : (session.lead?.workerModel ?? '')
+    : newWorkerModel;
   const chooseWorkerModel = async (name: string) => {
     if (!session) {
       setNewWorkerModel(name);
@@ -552,9 +607,9 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             <label htmlFor="cs-thread" className="sr-only">{t('chat.thread')}</label>
             <select id="cs-thread" dir="auto" value={threadId} onChange={(e) => choose(e.target.value)}>
               <option value="">{t('chat.newThread')}</option>
-              {threads.map((x) => (
+              {listed(threads).map((x) => (
                 <option key={x.id} value={x.id}>
-                  {shownName(x.name)}
+                  {x.kerrigan ? `✦ ${shownName(x.name)}` : x.directedBy ? `  ↳ ${shownName(x.name)}` : shownName(x.name)}
                 </option>
               ))}
             </select>
@@ -595,11 +650,32 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
       </div>
 
       <div className="cs-body" ref={scrollRef} aria-live="polite">
+        {session?.directedBy && (
+          <p className="cs-system cs-directed">
+            {t('kz.directedBy')}{' '}
+            <button type="button" className="quiet small" onClick={() => choose(session.directedBy!)}>
+              {t('kz.openHers')}
+            </button>
+          </p>
+        )}
         {!session ? (
           <Welcome workspace={workspace} onPick={(p) => { setText(p); box.current?.focus(); }} onOpenFolder={onOpenFolder} />
         ) : (
           session.tasks.map((task, i) =>
-            session.lead ? (
+            session.kerrigan ? (
+              <KerriganTurn
+                key={task.id}
+                n={i + 1}
+                session={session}
+                task={task}
+                threads={threads}
+                approvals={approvals}
+                onDecided={decided}
+                onOpenFile={onOpenFile}
+                onOpenChat={choose}
+                onRewind={running || busy ? undefined : () => void rewind(task)}
+              />
+            ) : session.lead ? (
               <LeadTurn
                 key={task.id}
                 n={i + 1}
@@ -645,7 +721,30 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             }
           }}
         />
-        {leadOn ? (
+        {kerriganOn ? (
+          /* Kerrigan directs (2026-11-12): her model, and under it the model of the chats she sends to. */
+          <div className="cs-models">
+            <span className="cs-pick-label" aria-hidden="true">
+              {t('chat.kerriganModel')}
+            </span>
+            <div className="cs-bar">{modelPicker('90%')}</div>
+            <label htmlFor="cs-chats-model" className="cs-pick-label">
+              {t('chat.kerriganChatsModel')}
+            </label>
+            <div className="cs-bar">
+              <ModelPicker
+                id="cs-chats-model"
+                chosen={workerModelShown}
+                onChange={(n) => void chooseWorkerModel(n)}
+                byHand={t('chat.modelByHand')}
+                none={settingsWorkerModel ? t('chat.modelDefault', { model: settingsWorkerModel }) : t('chat.modelByHand')}
+                catalogue={catalogue}
+                disabled={running}
+                style={{ minWidth: 0, maxWidth: '90%' }}
+              />
+            </div>
+          </div>
+        ) : leadOn ? (
           /* Two chats: the worker's model under the lead's, the two pickers lined up — the lead's when none is chosen. */
           <div className="cs-models">
             <span className="cs-pick-label" aria-hidden="true">
@@ -668,7 +767,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
               />
             </div>
           </div>
-        ) : reviewOn ? (
+        ) : reviewOn && !kerriganOn ? (
           /* With "Review" ticked: the review's model under the work's, the two pickers lined up, as with two chats. */
           <div className="cs-models">
             <span className="cs-pick-label" aria-hidden="true">
@@ -731,17 +830,27 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
           />
         </div>
         <div className="cs-bar">
-          <label className="cs-plan-toggle" title={t('chat.planModeWhy')}>
-            <input type="checkbox" checked={planOn} disabled={running} onChange={(e) => void choosePlan(e.target.checked)} />
-            <span>{t('chat.planMode')}</span>
+          {/* Kerrigan directs (2026-11-12): for a new conversation; a started one shows how it began. */}
+          <label className="cs-plan-toggle cs-kerrigan-toggle" title={t('chat.kerriganWhy')}>
+            <input type="checkbox" checked={kerriganOn} disabled={running || !!session} onChange={(e) => chooseKerrigan(e.target.checked)} />
+            <span>{t('chat.kerrigan')}</span>
           </label>
+          {/* Plan mode, two chats and the review are hers to choose for each message, with Kerrigan. */}
+          {!kerriganOn && (
+            <label className="cs-plan-toggle" title={t('chat.planModeWhy')}>
+              <input type="checkbox" checked={planOn} disabled={running} onChange={(e) => void choosePlan(e.target.checked)} />
+              <span>{t('chat.planMode')}</span>
+            </label>
+          )}
           {/* Two chats (2026-10-20): for a new conversation; a started one shows how it began. */}
-          <label className="cs-plan-toggle cs-lead-toggle" title={t('chat.leadWhy')}>
-            <input type="checkbox" checked={leadOn} disabled={running || !!session} onChange={(e) => chooseLead(e.target.checked)} />
-            <span>{t('chat.lead')}</span>
-          </label>
+          {!kerriganOn && (
+            <label className="cs-plan-toggle cs-lead-toggle" title={t('chat.leadWhy')}>
+              <input type="checkbox" checked={leadOn} disabled={running || !!session} onChange={(e) => chooseLead(e.target.checked)} />
+              <span>{t('chat.lead')}</span>
+            </label>
+          )}
           {/* The lead judges the worker's reports: a conversation with two chats has no review of its own. */}
-          {!leadOn && (
+          {!leadOn && !kerriganOn && (
             <label className="cs-plan-toggle cs-review-toggle" title={t('chat.reviewWhy')}>
               <input type="checkbox" checked={reviewOn} disabled={running} onChange={(e) => void chooseReview(e.target.checked)} />
               <span>{t('chat.review')}</span>
@@ -1066,7 +1175,27 @@ function Command({ step }: { step: Extract<StoryEntry, { kind: 'step' }> }) {
 const awaits = (approval: Approval): { 'data-awaits': string; tabIndex: number } => ({ 'data-awaits': approval.id, tabIndex: -1 });
 
 /** A command waiting to be run, asked about where it was asked for. */
+/**
+ * A card, with what Kerrigan is doing about it above it, in a conversation she directs (2026-11-12): answering it — the
+ * operator may still answer first —, or leaving it to them, with why and what she would choose.
+ */
 function Ask({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
+  const { t } = useT();
+  const k = approval.kerrigan;
+  if (!k) return <AskCard approval={approval} onDecided={onDecided} />;
+  return (
+    <div className={`cs-kz-card s-${k.state}`} data-awaits-frame="" {...(k.state === 'thinking' ? { 'data-kerrigan-thinking': '' } : {})}>
+      <p className="small cs-kz-on-card" role="status">
+        <ActorChip actor="kerrigan" />{' '}
+        {k.state === 'thinking' ? t('kz.thinking') : t('kz.yoursOnCard', { why: k.why ?? '' })}
+        {k.state === 'yours' && k.suggestion && <span className="cs-kz-suggests"> {t('kz.suggests', { answer: k.suggestion })}</span>}
+      </p>
+      <AskCard approval={approval} onDecided={onDecided} />
+    </div>
+  );
+}
+
+function AskCard({ approval, onDecided }: { approval: Approval; onDecided: Decided }) {
   const { t } = useT();
   const { err, choose, mark } = useChoice();
   const answer = async (action: 'run' | 'skip' | 'abort' | 'run-all') => {
@@ -1193,6 +1322,160 @@ function LeadTurn({ n, session, task, worker, approvals, onDecided, onOpenFile, 
           </ul>
           <div className="cs-copy-row">
             <CopyButton text={task.lead!.evidence!.map((e) => `- ${e}`).join('\n')} what="chat.copyEvidence" />
+          </div>
+        </div>
+      )}
+      {task.runId && (
+        <div className="cs-exchange">
+          <a className="button-link quiet small" href={api.taskExchangeUrl(session.id, task.id)} download title={t('chat.exchangeWhy')}>
+            {t('chat.exchange')}
+          </a>
+        </div>
+      )}
+      {(task.vcs?.files?.length ?? 0) > 0 && !live && (
+        <div className="cs-files">
+          <span className="small">{t('chat.changed', { n: task.vcs!.files!.length })}</span>
+          {task.vcs!.files!.slice(0, 12).map((f) => (
+            <button key={f.path} type="button" className="cs-file" onClick={() => onOpenFile(f.path)} title={f.path}>
+              <FileIcon path={f.path} /> {f.path.split('/').pop()} <span className="muted">{f.added >= 0 ? `+${f.added} −${f.removed}` : ''}</span>
+            </button>
+          ))}
+          <ChangesButton sessionId={session.id} taskId={task.id} runId={task.runId} title={task.title} files={task.vcs!.files!.length} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The chat's list with each chat Kerrigan directs right under her conversation, oldest first (2026-11-12); the rest as
+ * they come, newest first.
+ */
+function listed(threads: ChatThread[]): ChatThread[] {
+  const hers = new Map<string, ChatThread[]>();
+  const ids = new Set(threads.map((x) => x.id));
+  for (const x of threads) if (x.directedBy && ids.has(x.directedBy)) hers.set(x.directedBy, [...(hers.get(x.directedBy) ?? []), x]);
+  const out: ChatThread[] = [];
+  for (const x of threads) {
+    if (x.directedBy && ids.has(x.directedBy)) continue;
+    out.push(x);
+    out.push(...(hers.get(x.id) ?? []).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+  }
+  return out;
+}
+
+/**
+ * A message of a conversation Kerrigan directs (operator, 2026-11-12): the operator's task; then what she did, reply by
+ * reply — how she understood it, where she looked, each message she sent to a chat with the settings she chose and how
+ * it went (the chat itself a click away), each card of the chat she answered and why, or left to the operator, her own
+ * questions — and her report, which is the message's summary. The cards waiting now are under it, hers and her chats'.
+ */
+function KerriganTurn({ n, session, task, threads, approvals, onDecided, onOpenFile, onOpenChat, onRewind }: { n: number; session: Session; task: Task; threads: ChatThread[]; approvals: Approval[]; onDecided: Decided; onOpenFile: (path: string) => void; onOpenChat: (id: string) => void; onRewind?: () => void }) {
+  const { t } = useT();
+  const live = task.status === 'running' || task.status === 'waiting-approval';
+  const k = task.kerrigan;
+  const rounds = k?.rounds ?? [];
+  const nameOf = (id?: string): string => (threads.find((x) => x.id === id)?.name ?? '').replace(/^chat: /, '') || t('kz.aChat');
+  // The cards waiting now: hers, and her chats' — one message of hers works at a time.
+  const waiting = live ? approvals.filter((a) => a.taskId === task.id || a.sessionId !== session.id) : [];
+  const lastSend = [...rounds].reverse().find((r) => r.send)?.send;
+  const chatAtWork = live && lastSend && (lastSend.status === 'running' || lastSend.status === 'waiting-approval');
+  return (
+    <section className="cs-turn cs-kz-turn" id={`cs-turn-${task.id}`} aria-label={t('chat.turn', { text: task.title })}>
+      <UserPrompt task={task} n={n} onRewind={onRewind} />
+      {task.status === 'queued' && <p className="muted small cs-system">{session.status === 'idle' ? t('chat.queued') : t('chat.waitingTurn')}</p>}
+      {rounds.map((r, i) => (
+        <Fragment key={`${r.at}-${i}`}>
+          {r.understanding && <LeadSays who={t('kz.understood')} text={r.understanding} />}
+          {r.notes && <LeadSays who={t('actor.kerrigan')} text={r.notes} />}
+          {(r.sources?.length ?? 0) > 0 && (
+            <div className="cs-kz-sources small">
+              <span className="cs-who">{t('kz.sources')}</span>
+              <ul>
+                {r.sources!.map((x) => (
+                  <li key={x}>{x}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {r.send && (
+            <div className="cs-bot cs-kz-send">
+              <p className="cs-who">{t('kz.send', { n: r.send.n, name: nameOf(r.send.sessionId) })}</p>
+              <p className="cs-kz-chips">
+                <span className="badge">{r.send.chat === 'same' ? t('kz.sameChat') : t('kz.newChat')}</span>
+                {r.send.planMode && <span className="badge">{t('kz.planMode')}</span>}
+                {r.send.twoChats && <span className="badge">{t('kz.twoChats')}</span>}
+                {r.send.review && <span className="badge">{t('kz.review')}</span>}
+                {r.send.skill && <span className="badge skill">{t('chat.skillUsed', { name: r.send.skill })}</span>}
+              </p>
+              <Folded>
+                <RichText text={r.send.prompt} />
+              </Folded>
+              <div className="cs-copy-row">
+                <CopyButton text={r.send.prompt} what="kz.copyPrompt" />
+                {r.send.sessionId && (
+                  <button type="button" className="quiet small cs-kz-open" onClick={() => onOpenChat(r.send!.sessionId!)} title={t('kz.openChatWhy')}>
+                    {t('kz.openChat')}
+                  </button>
+                )}
+              </div>
+              {r.send.status && r.send.status !== 'running' && r.send.status !== 'waiting-approval' && (
+                <p className="small cs-kz-ended">
+                  <StatusMark status={r.send.status} /> {t('kz.chatEnded')}
+                </p>
+              )}
+            </div>
+          )}
+          {r.card && (
+            <div className="cs-bot cs-kz-answer">
+              <p className="cs-who">{t('kz.cardHead')} {r.card.actor && <ActorChip actor={r.card.actor} how="asks" />}</p>
+              <RichText text={r.card.text} />
+              {r.card.answer !== undefined && <p className="small"><strong>{r.card.by === 'operator' ? t('kz.youAnswered', { answer: r.card.answer }) : t('kz.answered', { answer: r.card.answer })}</strong></p>}
+              {r.card.yours && (
+                <p className="small cs-kz-yours">
+                  {t('kz.leftToYou', { why: r.card.yours.why })}
+                  {r.card.yours.suggestion ? ` ${t('kz.suggests', { answer: r.card.yours.suggestion })}` : ''}
+                </p>
+              )}
+            </div>
+          )}
+          {r.question && r.question.answer !== undefined && (
+            <div className="cs-bot cs-lead-qa">
+              <p className="cs-who">{t('kz.asked')}</p>
+              <RichText text={r.question.text} />
+              <div className="cs-copy-row">
+                <CopyButton text={questionCopy(t, { ...r.question, options: r.question.options ?? [] }, false)} what="chat.copyQuestion" />
+              </div>
+              <p className="cs-who">{t('lead.answered')}</p>
+              <RichText text={r.question.answer} />
+            </div>
+          )}
+          {r.status === 'blocked' && r.needed && <p className="small cs-kz-needed">{t('kz.needed', { needed: r.needed })}</p>}
+        </Fragment>
+      ))}
+      {waiting.map((a) => (
+        <Ask key={a.id} approval={a} onDecided={onDecided} />
+      ))}
+      {live && (
+        <p className="cs-working" role="status">
+          {task.acting ? <ActorChip actor={task.acting.actor} acting={task.acting} /> : <span className="wb-live" aria-hidden="true" />}{' '}
+          {chatAtWork ? t('kz.chatWorking', { n: lastSend!.n, name: nameOf(lastSend!.sessionId) }) : t('kz.working')}
+        </p>
+      )}
+      {k && (k.sent > 0 || k.messages > 0) && <p className="muted small cs-kz-count">{t('kz.counts', { sent: k.sent, max: k.maxSends, messages: k.messages })}</p>}
+      {!live && task.status !== 'queued' && <Ending task={task} />}
+      {!live && (rounds.at(-1)?.evidence?.length ?? 0) > 0 && (
+        <div className="cs-evidence">
+          <p className="cs-who">{t('lead.evidence')}</p>
+          <ul>
+            {rounds.at(-1)!.evidence!.map((e) => (
+              <li key={e}>
+                <RichText text={e} />
+              </li>
+            ))}
+          </ul>
+          <div className="cs-copy-row">
+            <CopyButton text={rounds.at(-1)!.evidence!.map((e) => `- ${e}`).join('\n')} what="chat.copyEvidence" />
           </div>
         </div>
       )}

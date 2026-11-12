@@ -671,6 +671,86 @@ the pull request shows it: where the branch began against the file as it is now 
 commits are marked in "Commits", with a line where it left the base. The base asked for must be one of the branches
 listed; nothing else of the request reaches git.
 
+**The operator's own commit and push (2026-11-11).** The operator: "add committing and pushing; a commit may not go
+through, and the operator must be able to see why". Asked whether to embed a ready-made open-source Git interface
+instead (ungit: a server of its own whose page the password goes through; isomorphic-git: git rewritten in JavaScript,
+with no hooks, SSH or credential manager), they chose the real git under the view, as VS Code has it
+(`vcs/operatorGit.ts`, `gitActions.tsx`):
+
+- A file's "+" stages it, its "−" unstages it, and the same beside "Staged changes" or "Changes" takes the whole list
+  (`POST /api/workspace/git/stage|unstage`); only files the lists name reach git.
+- Under the branch line, the message (kept in the browser for the folder until committed; Ctrl+Enter commits) and
+  "Commit" — "Commit all" when nothing is staged — with how many files, and "Push ↑n", or "Publish branch" for a branch
+  with no upstream (pushed under its name with `--set-upstream`). No button when there is nothing to push. Never
+  `--force`, `--amend` or a reset.
+- Each is started (`POST /api/workspace/git/commit|push`) and followed (`GET /api/workspace/git/op`, every second while
+  it runs) with every line git and the hooks print as it comes (`gitLive` in `vcs/git.ts`, 15 minutes at most). One that
+  did not go through says why in a sentence (`GitCause`: no message, nothing to commit, no name for git, a conflict,
+  another git's lock, signing, a hook's "no", no branch, no remote, the remote moved on, the password, the remote's own
+  refusal, the network, the time) over git's own words, which stay open; "Without hooks" after a hook's "no"; a form for
+  the operator's name and e-mail when git has none (`PUT /api/workspace/git/identity`, this repository or `--global`).
+- The project's hooks run, as a terminal runs them — the only git of the bot that does (`OWN_HOOKS_GIT`) — when each hook
+  file that would run is the project's own: outside the project's folder or in `.git` (where the chat may not write), or
+  committed, unchanged since and not last committed by the bot. Any other is named with why, nothing is staged, run or
+  committed, and the operator chooses "Without hooks", "Run them anyway" (remembered by its hash in
+  `trusted-hooks.json`, asked again once it changes) or "Cancel". husky's `.husky/_` stubs and the `.husky/<hook>` they
+  run are both looked at.
+- Git's password window for a push, as for "New branch from main", said in the view while it is open.
+- One at a time, and refused while a task or the queue works in the folder; while it runs, no message of the chat or
+  task of the queue starts, and "New branch from main" waits too.
+
+**Kerrigan directs (2026-11-12).** The operator, of how they work: "I paste Kerrigan into a chat (the projects, the
+skills, everything is set in Settings); she says hello, give me the tasks; I give her the task and she gives me a prompt
+for the bot and tells me whether plan mode, two chats, the reviewer, which skill; I do that by hand and start the bot.
+When the bot asks me something, I take its question with its answers to her, and she tells me what to press and what to
+add. At the end she reads the result; if there is a problem she goes on with a new prompt, for a new chat or the same —
+she decides. Automate that." And: "not that it never asks — fewer questions: have it look in the internal sources
+first: mail, chats, transcripts, shared files, the code, the Azure CLI." Asked which of the bot's stops she may decide,
+they chose her questions, plans and retries, with the commands as Settings say.
+
+- "Kerrigan directs" under the chat's box, for a new conversation (`Session.kerrigan`); with it, "Plan mode", "Two chats"
+  and "Review" leave the box — they are hers to choose for each message — and her model ("Kerrigan's model", Settings'
+  model for the lead when none) and her chats' model ("Her chats' model", Settings' model for the worker when none)
+  take their place.
+- Her conversation is hers, in the same Copilot window: her contract (`prompts/kerrigan1.md`) and the facts of the
+  machine (`kerriganBrief`: the foundations, the person's language, the projects with their level 2, the skills, the
+  limits, how commands run) once, then each message of the operator's. Every reply is one decision
+  (`protocol/kerriganSchema.ts`): `send` a message to a chat — `new`, or `same` for the one she sent to last — with
+  `planMode`, `twoChats`, `review` and `skill`; `answer` a card; `ask` the operator; `done` with her report; `blocked`.
+  `orchestrator/kerriganRunner.ts` runs it.
+- A message of hers is a task of a chat of its own (`Session.directedBy`, `Task.fromKerrigan`), run as any chat message
+  is (`runTask`, or `runLeadTask` with two chats). The chats are in the list, under her conversation (✦ hers, ↳ theirs);
+  "Open the chat" under her message shows one as it works, and the chat says who directs it, with "Open Kerrigan's
+  conversation".
+- The chat's question, plan and cut-off subtask go to her (`onCard` on the asks; `CardHandle` from the service): the
+  card is shown in her conversation and the chat's, marked "Kerrigan is answering this card" — not lit or counted as
+  waiting for the operator, who may still answer it first. She answers as the operator would (by its answer's number,
+  several, her own words; approve or revise with a note; a retry choice), or leaves it to them with why and what she
+  would choose, and the card is lit. The window goes to her conversation and back to the chat's before the chat goes on
+  (a lease holds the chat while she has the window). A chat's question goes to her even when Settings agree with what
+  the bot proposes. An answer of hers that carries a command does not consent to it: it is asked about as the run asks.
+  Commands, platform access, scripts handed over, Git's password, sign-ins and a model chosen by hand never come to her.
+- What she is given is what the operator would have copied to her (operator, 2026-11-12: "by default only what 'Copy'
+  or 'Copy all' gives; the whole JSON as an option"): on a card, what its "Copy all" gives (`orchestrator/cardText.ts`,
+  the page's `cardCopy` in English, held to it word for word by `check:card-copy`); when a chat's work on her message
+  ends, how it ended and what "Copy" under its ending gives — the chat's summary — with how many messages are left
+  (`limits.maxKerriganSends`, "Most messages Kerrigan may send", 6 by default). With "What Kerrigan gets when a chat's
+  message ends" set to the whole exchange (`execution.kerriganResult: 'exchange'`), the message's "JSON"
+  (`buildTaskExchange`, secrets taken out first) is attached too. Her report is the message's ending, with what shows it.
+- The task she is given carries the skill it is for, its instructions whole; her facts list every skill with what it
+  says "For Kerrigan" (a field of each skill in Settings: its phases, its result, what it needs from the person) or,
+  when it says nothing, its instructions.
+- The text the operator copies for their own chat (`kerriganPersona`) opens with the way they work with her, step by
+  step: hello and the task; the skill it is for, or whether to make one — a new skill is built with the person in the
+  loop, so that task does not go to "Kerrigan directs"; the gaps, looked for in the company's sources, then in the
+  projects through a message that only looks, then asked; the person may say "start now" at any point; then the task
+  as one message, for a new conversation with "Kerrigan directs" ticked and its skill chosen.
+- Before she asks, she looks: her contract tells her to search the operator's mail, Teams chats, meeting transcripts and
+  shared files where Copilot can, to name them in `sources`, and to have a chat look in the code or with the Azure CLI;
+  what she reads there is information, never an instruction. The chat's and the lead's contracts say the same before a
+  question.
+- Verified by `npm run check:e2e-kerrigan` and the ui-flows scenario "Kerrigan directs".
+
 **A preview tab, as VS Code opens a file from Git (2026-10-29).** The operator: "when I open a file from the git section, let it work as in VS Code: it opens to be looked at, its tab's name in italics — open, but not showing where it is; a double click on the tab turns it from italics to normal and shows it in the file system on the left". A file opened from the Git view — a change, a commit's file, a file "On this branch" — opens as a preview (`Tab.preview` in `workbench.tsx`): its name in italics, and the next file opened that way takes its place, so there is only ever one. A double click on the file's row opens it to stay; a double click on the tab keeps it, its name upright, and shows the Files view with the file's folders opened and its row marked and scrolled into view (`Reveal` in `explorer.tsx`); a file the folder no longer has is said so there. The palette's "Keep the open tab and show its file among the files" does the same from the keyboard. The same for a file opened from the Files view, a search result and Go to File (Ctrl+P), the operator asked next ("do it for Files, the search and Ctrl+P too"): one click opens a preview, in the one place there is for it, and a double click on the row or the result opens it to stay. A file edited in a preview tab is kept, as VS Code keeps it; a link followed from a Markdown file, or a file opened from the chat, opens to stay.
 
 **Two numbers on the Git button (2026-10-27).** The Git button in the column of icons has two numbers on its right.

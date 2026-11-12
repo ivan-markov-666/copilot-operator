@@ -148,7 +148,8 @@ export type NewBranchResult =
   | { ok: false; problem: string; conflict?: boolean };
 /** `version` is a fingerprint of the file as read; saving over it is refused once the file changed on disk. */
 export type WorkspaceFile = { path: string; text: string | null; binary: boolean; tooLarge: boolean; size: number; version?: string };
-export type ChatThread = { id: string; name: string; createdAt: string; status: 'idle' | 'running' | 'stopping'; turns: number; running: boolean; repoDir: string };
+/** `kerrigan`: a conversation Kerrigan directs (2026-11-12); `directedBy`: a chat she sends her messages to, by hers. */
+export type ChatThread = { id: string; name: string; createdAt: string; status: 'idle' | 'running' | 'stopping'; turns: number; running: boolean; repoDir: string; kerrigan?: boolean; directedBy?: string };
 export type ChatSent = { threadId: string; taskId: string; noted?: boolean; needsStart: boolean };
 /** A task of the queue (2026-10-24), as `src/queue/queue.ts` keeps it. */
 export type QueueItem = {
@@ -413,6 +414,10 @@ export type Task = {
   lead?: LeadRecord;
   /** A worker's subtask: the lead's message it is part of. */
   fromLead?: { sessionId: string; taskId: string; n: number };
+  /** A message of a conversation Kerrigan directs (2026-11-12): what she did. */
+  kerrigan?: KerriganRecord;
+  /** A message Kerrigan sent to this chat: hers, and which of hers. */
+  fromKerrigan?: { sessionId: string; taskId: string; n: number };
   /** The skill the message was sent with, as it read then (2026-10-21). */
   skill?: { name: string; description: string; text: string };
 };
@@ -660,7 +665,25 @@ export type TaskRunGroup = { id: string; startedAt: string; sessions: number; na
  * Who works, or asks (2026-10-22): the chat writing its plan in plan mode, the lead of two chats, the worker — the chat
  * doing the work, the worker of two chats or the one chat — and the independent reviewer.
  */
-export type Actor = 'plan' | 'lead' | 'worker' | 'review';
+export type Actor = 'plan' | 'lead' | 'worker' | 'review' | 'kerrigan';
+
+/** One of Kerrigan's replies, as the chat shows it (2026-11-12): see `src/session/model.ts`. */
+export type KerriganRound = {
+  status: 'send' | 'answer' | 'ask' | 'done' | 'blocked';
+  at: string;
+  understanding?: string;
+  notes?: string;
+  sources?: string[];
+  send?: { n: number; title: string; prompt: string; chat: 'new' | 'same'; planMode: boolean; twoChats: boolean; review: boolean; skill?: string; sessionId?: string; taskId?: string; status?: TaskStatus; summary?: string };
+  card?: { id: string; kind: 'question' | 'plan' | 'retry'; sessionId: string; taskId: string; actor?: Actor; text: string; options?: string[]; answer?: string; by?: 'kerrigan' | 'operator'; yours?: { why: string; suggestion?: string } };
+  question?: { text: string; why?: string; options: string[]; multiple?: boolean; answer?: string };
+  report?: string;
+  evidence?: string[];
+  needed?: string;
+};
+
+/** What Kerrigan did for one of the operator's messages. */
+export type KerriganRecord = { rounds: KerriganRound[]; sent: number; maxSends: number; messages: number; chats: string[] };
 /** Who is at work on a task now, and since when; the subtask the worker is on, or the review's round. */
 export type Acting = { actor: Actor; since: string; subtask?: number; round?: number };
 
@@ -805,6 +828,10 @@ export type Session = {
   lead?: { workerSessionId?: string; workerModel?: string; workerManualModel?: boolean };
   /** A worker's session: the lead's it works for. */
   workerOf?: string;
+  /** Kerrigan directs this conversation (2026-11-12); the model of the chats she sends to. */
+  kerrigan?: { chatModel?: string; chatManualModel?: boolean };
+  /** A chat Kerrigan sends her messages to: her conversation's session. */
+  directedBy?: string;
   /** A conversation the queue made for one of its tasks: that task's id in the queue (2026-10-24). */
   queueItem?: string;
   /** The name of the plan this session was imported from, offered as the run's name. */
@@ -853,6 +880,8 @@ export type Approval = {
   /** `commands`: by answer, the command the bot runs when that one is chosen, or null. */
   /** `multiple`: more than one of its answers may be chosen at a time (2026-11-02). */
   question?: { text: string; why?: string; options: string[]; commands?: Array<string | null>; multiple?: boolean; handoff?: HandoffCard };
+  /** A card of a chat Kerrigan directs (2026-11-12): she is answering it (`thinking`), or left it to the operator (`yours`). */
+  kerrigan?: { state: 'thinking' | 'yours'; at: string; why?: string; suggestion?: string };
   /** Two chats: a subtask that ended for a technical reason, and what to do with it; see the server's `PendingApproval`. */
   retry?: { n: number; title: string; attempt: number; maxAttempts: number; category: SubtaskFailure; reason: string; sideEffects: SideEffects; changed: string[]; choices: RetryChoice[] };
 };
@@ -892,7 +921,7 @@ export type LeadRound = {
   notes?: string;
   /** `taskId` is the latest attempt's; `attempts` once there was more than one way to end (2026-10-25). */
   subtask?: { n: number; taskId: string; title: string; readOnly?: boolean; fresh?: boolean; attempts?: SubtaskAttempt[]; maxAttempts?: number };
-  question?: { text: string; why?: string; options?: string[]; multiple?: boolean; answer?: string; chosen?: string[]; at?: string };
+  question?: { text: string; why?: string; options?: string[]; multiple?: boolean; answer?: string; chosen?: string[]; at?: string; by?: 'kerrigan' };
   /** This reply made the list of subtasks or changed it: its version, how many came and went, how many in all. */
   ledger?: { revision: number; added: number; removed: number; total: number };
 };
@@ -915,7 +944,7 @@ export type TaskPlan = {
   risks?: string;
   version: number;
   at: string;
-  approved?: { by: 'operator' | 'auto'; at: string; note?: string; why?: string };
+  approved?: { by: 'operator' | 'auto' | 'kerrigan'; at: string; note?: string; why?: string };
   revisions?: Array<{ version: number; comment: string; at: string }>;
 };
 
@@ -1001,8 +1030,9 @@ export type SearchResult = {
 };
 
 /** A skill (2026-10-21): instructions for a kind of task, sent with the message it is chosen for. */
-export type Skill = { name: string; description: string; text: string; projectDir: string };
-export type SkillList = { skills: Skill[]; maxDescription: number };
+/** `forKerrigan` (2026-11-12): its phases, its result and what it needs from the person, for Kerrigan; may be empty. */
+export type Skill = { name: string; description: string; text: string; projectDir: string; forKerrigan: string };
+export type SkillList = { skills: Skill[]; maxDescription: number; maxForKerrigan?: number };
 
 /** The chat's folder, the first project, and the others by name. */
 export type ProjectDefault = ProjectEntry & { others: ProjectEntry[] };
@@ -1045,6 +1075,33 @@ export type WorkspaceGit = {
   moreCommits: boolean;
 };
 export type GitArea = 'staged' | 'changes' | 'commit' | 'branch';
+/** A hook file that would run and is not the project's own (2026-11-11): see `FlaggedHook` in src/vcs/operatorGit.ts. */
+export type FlaggedHook = { path: string; why: 'not-committed' | 'changed' | 'by-bot'; sha: string };
+export type GitCause = 'message' | 'nothing' | 'identity' | 'unmerged' | 'lock' | 'signing' | 'hook' | 'detached' | 'no-remote' | 'behind' | 'auth' | 'refused' | 'network' | 'timeout' | 'unknown';
+/** The operator's commit or push, as the Git view follows it (2026-11-11): see `GitOp` in src/vcs/operatorGit.ts. */
+export type GitOp = {
+  id: string;
+  kind: 'commit' | 'push';
+  state: 'running' | 'done' | 'failed' | 'hooks';
+  startedAt: string;
+  endedAt?: string;
+  command: string;
+  output: string;
+  cut?: boolean;
+  hooks: 'run' | 'skipped' | 'none';
+  flagged?: FlaggedHook[];
+  cause?: GitCause;
+  branch?: string;
+  commit?: string;
+  target?: string;
+  published?: boolean;
+  upToDate?: boolean;
+  passwordWindow?: boolean;
+  message?: string;
+  all?: boolean;
+};
+/** What the operator said about the project's hooks: none of them, or these run although flagged. */
+export type GitHookChoice = { hooks?: 'skip'; trust?: Array<{ path: string; sha: string }> };
 /** The two numbers on the Git button (2026-10-27): files not committed; files on this branch, null with nothing to compare. */
 export type GitCounts = { isRepo: boolean; uncommitted: number; branch: number | null; base?: string; problem?: string };
 /** A file the branch changed, as a pull request lists it, and what of it is not committed yet (2026-10-22). */
@@ -1416,6 +1473,16 @@ export const api = {
   /** The two numbers on the Git button: files not committed, and files on this branch against `base`. */
   workspaceGitCounts: (base?: string) => call<GitCounts>(`/workspace/git/counts${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   workspaceCommit: (sha: string) => call<GitCommit & { body: string; files: GitFile[] }>(`/workspace/git/commit?sha=${encodeURIComponent(sha)}`),
+  /** The operator's own git (2026-11-11): files staged or unstaged (`'all'` for the whole list); the folder's git after. */
+  gitStage: (how: 'stage' | 'unstage', which: string[] | 'all') =>
+    call<WorkspaceGit>(`/workspace/git/${how}`, { method: 'POST', body: JSON.stringify(which === 'all' ? { all: true } : { paths: which }) }),
+  /** A commit, started: followed with `gitOp`. `all` commits every change and new file. */
+  gitCommit: (message: string, all: boolean, choice: GitHookChoice = {}) => call<GitOp>('/workspace/git/commit', { method: 'POST', body: JSON.stringify({ message, all, ...choice }) }),
+  /** A push of the branch the folder is on, started: followed with `gitOp`. */
+  gitPush: (choice: GitHookChoice = {}) => call<GitOp>('/workspace/git/push', { method: 'POST', body: JSON.stringify(choice) }),
+  gitOp: () => call<{ op: GitOp | null }>('/workspace/git/op'),
+  gitIdentity: () => call<{ name: string; email: string }>('/workspace/git/identity'),
+  setGitIdentity: (name: string, email: string, global: boolean) => call<{ name: string; email: string }>('/workspace/git/identity', { method: 'PUT', body: JSON.stringify({ name, email, global }) }),
   /** A file of those lists, as it was before and after: for the side-by-side view. */
   workspaceGitFile: (area: GitArea, path: string, commit?: string) =>
     call<ChangedFileContent>(`/workspace/git/file?area=${area}&path=${encodeURIComponent(path)}${commit ? `&commit=${encodeURIComponent(commit)}` : ''}`),
@@ -1425,7 +1492,8 @@ export const api = {
   /** `review`: whether a new conversation's messages are reviewed (the box under the chat); left out, they are not. */
   /** `two`: a new conversation with a lead and a worker (two chats, 2026-10-20), and the worker's model. */
   /** `reviewModel`: the model of a new conversation's review, chosen beside the box (2026-10-21); left out, Settings' one. */
-  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string, reviewModel?: string) =>
+  /** `kerrigan`: a new conversation Kerrigan directs (2026-11-12), and the model of the chats she sends to. */
+  chatSend: (text: string, threadId?: string, model?: string, manualModel?: boolean, lang?: string, planMode?: boolean, review?: boolean, two?: { workerModel?: string; workerManualModel?: boolean }, skill?: string, reviewModel?: string, kerrigan?: { chatModel?: string; chatManualModel?: boolean }) =>
     call<ChatSent>('/chat', {
       method: 'POST',
       body: JSON.stringify({
@@ -1439,6 +1507,7 @@ export const api = {
         ...(two ? { lead: true, ...(two.workerManualModel ? { workerManualModel: true } : two.workerModel ? { workerModel: two.workerModel } : {}) } : {}),
         ...(skill ? { skill } : {}),
         ...(reviewModel ? { reviewModel } : {}),
+        ...(kerrigan ? { kerrigan: true, ...(kerrigan.chatManualModel ? { chatManualModel: true } : kerrigan.chatModel ? { chatModel: kerrigan.chatModel } : {}) } : {}),
       }),
     }),
   /** The lead's question (two chats): the operator's answer. */

@@ -227,6 +227,12 @@ export const RunConfigSchema = z.object({
        */
       questions: z.enum(['ask', 'agree']).default('ask'),
       /**
+       * What Kerrigan is given when a chat's work on her message ends, in a conversation she directs (operator,
+       * 2026-11-12): `copy` — what "Copy" under its ending gives, its summary, as the operator copied it to her; `exchange`
+       * — that, and the whole exchange of the message (its "JSON") attached. Her cards are always what "Copy all" gives.
+       */
+      kerriganResult: z.enum(['copy', 'exchange']).default('copy'),
+      /**
        * Plan mode, for every session that does not set its own (see `PlanMode` in session/model.ts): a
        * task's chat first looks at the project read-only and replies with a plan, and the work begins once
        * the plan is approved — by the runner (`auto`), or by the operator (`approve`, in a run that asks
@@ -444,6 +450,12 @@ export const RunConfigSchema = z.object({
         description: z.string().default(''),
         text: z.string().default(''),
         projectDir: z.string().default(''),
+        /*
+         * For Kerrigan (operator, 2026-11-12: "Kerrigan knows every skill, even one not chosen: short, exact and clear, at
+         * least its phases and the result it leads to"): the phases, the result and what it needs from the person, in a
+         * few lines. Empty, she is given its instructions whole.
+         */
+        forKerrigan: z.string().default(''),
       }),
     )
     .default([]),
@@ -555,6 +567,11 @@ export const RunConfigSchema = z.object({
        * subtask is a task of the worker's, with the limits above; this bounds the whole. Settings → Execution.
        */
       maxSubtasks: z.number().int().min(1).max(100).default(20),
+      /*
+       * The most messages Kerrigan may send to chats for one message of the operator's, in a conversation she directs
+       * (2026-11-12). Each is a chat's message, with the limits above; this bounds the whole. Settings → limits.
+       */
+      maxKerriganSends: z.number().int().min(1).max(50).default(6),
       /*
        * A subtask of two chats that failed for a technical reason (operator's specification, 2026-10-25; see
        * `orchestrator/subtaskRetry.ts`): `ask` puts it to the operator on a card; `same` tries it again in the same

@@ -169,17 +169,21 @@ export function noSubtasksLeft(max: number): string {
 /** The plan, as the lead is told it was approved. */
 export function leadPlanApproved(approval: NonNullable<TaskPlan['approved']>, left: number): string {
   return [
-    approval.by === 'operator' ? 'The operator approved your plan.' : 'Your plan is on record; the operator is not asked about plans in this conversation.',
-    ...(approval.note?.trim() ? ['', 'With this from the operator, which wins where it and the plan disagree:', '', approval.note.trim()] : []),
+    approval.by === 'operator'
+      ? 'The operator approved your plan.'
+      : approval.by === 'kerrigan'
+        ? 'Kerrigan, who directs this work for the operator, approved your plan.'
+        : 'Your plan is on record; the operator is not asked about plans in this conversation.',
+    ...(approval.note?.trim() ? ['', `With this from ${approval.by === 'kerrigan' ? 'her' : 'the operator'}, which wins where it and the plan disagree:`, '', approval.note.trim()] : []),
     '',
     `Carry it out now: give the worker the first subtask of it (status "delegate"). Subtasks left: ${left}.`,
   ].join('\n');
 }
 
-/** The operator asked the lead for another plan. */
-export function leadPlanRevise(comment: string, version: number): string {
+/** The operator — or Kerrigan in their place (2026-11-12) — asked the lead for another plan. */
+export function leadPlanRevise(comment: string, version: number, byKerrigan = false): string {
   return [
-    `The operator read version ${version} of your plan and asks for another. What to change:`,
+    `${byKerrigan ? 'Kerrigan, who directs this work for the operator,' : 'The operator'} read version ${version} of your plan and asks for another. What to change:`,
     '',
     comment.trim(),
     '',
@@ -188,9 +192,10 @@ export function leadPlanRevise(comment: string, version: number): string {
 }
 
 /** The operator's answer to the lead's question. */
-export function operatorAnswerMessage(answer: string, left: number, many?: { chosen: string[]; written?: string }): string {
+export function operatorAnswerMessage(answer: string, left: number, many?: { chosen: string[]; written?: string }, byKerrigan = false): string {
   // A question of several answers (2026-11-02): the ones chosen, one a line, and what was written besides.
-  const said = many ? ['The operator answered your question, ' + chosenSaid(many)] : ['The operator answers your question:', '', answer.trim()];
+  const who = byKerrigan ? 'Kerrigan, who directs this work for the operator,' : 'The operator';
+  const said = many ? [`${who} answered your question, ` + chosenSaid(many)] : [`${who} answers your question:`, '', answer.trim()];
   return [...said, '', `Go on in the lead's format. Subtasks left: ${left}.`].join('\n');
 }
 
@@ -389,7 +394,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     const id = now?.lead?.workerSessionId;
     const existing = id ? await store.getSession(id) : null;
     if (existing) {
-      deps.onWorker?.(existing.id);
+      deps.onWorker?.(existing.id, session.id);
       lead.workerSessionId = existing.id;
       return existing;
     }
@@ -431,7 +436,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       s.lead = { ...(s.lead ?? {}), workerSessionId: worker.id };
     });
     lead.workerSessionId = worker.id;
-    deps.onWorker?.(worker.id);
+    deps.onWorker?.(worker.id, session.id);
     sink.event('worker-made', { workerSessionId: worker.id }, 'a worker for the lead\'s subtasks');
     return worker;
   };
@@ -887,10 +892,10 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
               await setTask((t) => {
                 if (t.plan) t.plan.revisions = revisions;
               });
-              markdown = await tell(leadPlanRevise(answer.note ?? '', planVersion));
+              markdown = await tell(leadPlanRevise(answer.note ?? '', planVersion, answer.by === 'kerrigan'));
               break;
             }
-            approved = { by: 'operator', at: new Date().toISOString(), ...(answer.note?.trim() ? { note: answer.note.trim() } : {}) };
+            approved = { by: answer.by === 'kerrigan' ? 'kerrigan' : 'operator', at: new Date().toISOString(), ...(answer.note?.trim() ? { note: answer.note.trim() } : {}) };
           } else {
             approved = { by: 'auto', at: new Date().toISOString(), why: 'plans are not put to the operator in this conversation' };
           }
@@ -907,7 +912,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
            * Settings agree with what the bot proposes (2026-10-23): the lead's recommended answer, its first, is taken
            * and said; with no answers given, it is told to go on as it proposes.
            */
-          if (cfg.execution.questions === 'agree') {
+          // Kerrigan directs (2026-11-12): the question goes to its card, which she answers, whatever Settings say.
+          if (cfg.execution.questions === 'agree' && !deps.directed) {
             const agreed = r.options[0] ?? 'Go on as you propose.';
             round.question.answer = agreed;
             round.question.at = new Date().toISOString();
@@ -926,10 +932,11 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           if (got === 'stop' || signal?.aborted) return await finish('aborted', 'the operator stopped the task at the lead\'s question');
           round.question.answer = got.answer;
           if (got.chosen) round.question.chosen = got.chosen;
+          if (got.by === 'kerrigan') round.question.by = 'kerrigan';
           round.question.at = new Date().toISOString();
           await saveLead();
-          sink.event('lead-question-answered', { round: round.n }, 'the operator answered the lead');
-          markdown = await tell(operatorAnswerMessage(got.answer, limit - lead.subtasks, got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined));
+          sink.event('lead-question-answered', { round: round.n, ...(got.by ? { by: got.by } : {}) }, got.by === 'kerrigan' ? 'Kerrigan answered the lead' : 'the operator answered the lead');
+          markdown = await tell(operatorAnswerMessage(got.answer, limit - lead.subtasks, got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined, got.by === 'kerrigan'));
           break;
         }
         case 'done': {

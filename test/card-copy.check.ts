@@ -10,6 +10,7 @@ import type { Approval, Parked, TaskPlan } from '../web/lib/api.js';
 import { afterStopCopy, cardCopy, parkedCopy } from '../web/lib/cardCopy.js';
 import { en } from '../web/lib/lang/en.js';
 import { Tally } from './support/harness.js';
+import { CARD_WORDS, cardCopyText, endingCopyText } from '../src/orchestrator/cardText.js';
 
 const t = new Tally();
 const say = (key: string, vars?: Record<string, string | number>): string =>
@@ -124,5 +125,28 @@ t.check('a subtask', parked('retry', { ...base, retry }), `${head(en['pk.waitsRe
 t.check('the model, which no card holds', parked('model', { ...base, model }), `${head(en['pk.waitsModel'])}${en['pk.modelWhy']}`);
 t.check('a password, which no card holds', parked('password', base), `${head(en['pk.waitsPassword'])}${en['pk.passwordWhy']}`);
 t.check('after a Stop: the subtask, what can be done, the two answers', afterStopCopy(say, 2, 'Write the file'), `${say('lead.subtask', { n: 2, title: 'Write the file' })}\n\n${en['retry.afterStopWhy']}\n\n${en['chat.copyOffered']}\n1. ${en['retry.same']}\n2. ${en['retry.fresh']}`);
+
+/*
+ * What Kerrigan is given when she directs (operator, 2026-11-12: "by default only what 'Copy all' — or 'Copy' — gives"):
+ * the program's own English copy of a card is the page's "Copy all" in English, word for word, and its words the
+ * dictionary's.
+ */
+console.log('--- what Kerrigan is given: the same as "Copy all" ---');
+{
+  const words = Object.entries(CARD_WORDS).filter(([k, v]) => (en as Record<string, string>)[k] !== v).map(([k]) => k);
+  t.check('every word the program uses is the English dictionary\'s, as it is now', words, []);
+  const cards: Array<[string, Approval]> = [
+    ['a question of the chat, its answers numbered, one with a command', { ...base, actor: 'worker', question }],
+    ['a question of the lead', { ...base, actor: 'lead', question: { text: 'Where?', options: ['Here', 'There'] } }],
+    ['a question of several answers', { ...base, actor: 'worker', question: { ...question, multiple: true } }],
+    ['an open question', { ...base, actor: 'plan', question: { text: 'What name?', options: [] } }],
+    ['a plan', { ...base, actor: 'plan', plan: { title: 'Add a file', plan } }],
+    ['a subtask cut off', { ...base, actor: 'lead', retry }],
+    ['a subtask cut off, what it left not known', { ...base, actor: 'lead', retry: { ...retry, sideEffects: 'unknown', choices: ['continue', 'restore', 'accept'] } }],
+  ];
+  for (const [what, a] of cards) t.check(`${what}: as "Copy all" gives it`, cardCopyText(a as never), cardCopy(say, a));
+  t.check('not a command, a model or commands handed over: those never go to her', [cardCopyText({ ...base } as never), cardCopyText({ ...base, question: { text: 'Run these', options: [], handoff: { commands: ['x'], cwd: '.', expect: 'y', files: [] } } } as never)], [null, null]);
+  t.check('a message\'s ending, as its "Copy" gives it', [endingCopyText({ status: 'done', summary: 'Done it.', reason: 'ignored' }), endingCopyText({ status: 'blocked', summary: 'Tried.', reason: 'No file.' })], ['Done it.', 'Tried.\n\nNo file.']);
+}
 
 t.finish();

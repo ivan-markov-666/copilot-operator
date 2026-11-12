@@ -40,6 +40,9 @@
   --plan-soft: #efe8fb;
   --review: #a3266f;
   --review-soft: #f9e6f1;
+  /* Kerrigan, who directs the work in the operator's place (2026-11-12). */
+  --kerrigan: #8a4b08;
+  --kerrigan-soft: #fbeedd;
   --code: #edf5fc;
   --shadow: 0 1px 2px rgba(16, 56, 96, 0.07), 0 6px 18px rgba(16, 56, 96, 0.06);
 
@@ -76,6 +79,8 @@
   --plan-soft: #2a2140;
   --review: #f39ac9;
   --review-soft: #3a1d30;
+  --kerrigan: #f2b56b;
+  --kerrigan-soft: #3a2a17;
   --code: #101c2a;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.3);
 }
@@ -636,6 +641,12 @@ th { color: var(--muted); font-weight: 700; font-size: calc(12px * var(--scale))
 
 /* Summaries a model wrote: prose with the odd command, list or quoted block in it. The point
    of the styling is that the structure the model did write becomes visible. */
+/*
+ * A path or a word longer than the box breaks where it must rather than leaving it (2026-11-11: an ending's paths, with
+ * no space in them, made its text as wide as the longest one, past the green box). `anywhere`, not `break-word`: it is
+ * the one that also lets the box be narrower than its longest word, so a row it is in does not grow to fit it.
+ */
+.rich { overflow-wrap: anywhere; }
 .rich > :first-child { margin-top: 0; }
 .rich > :last-child { margin-bottom: 0; }
 .rich p { margin: 0 0 8px; max-width: 76ch; }
@@ -1129,7 +1140,13 @@ button.linkish:hover { text-decoration: underline; }
 .cs-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 /* Room on the right for the arrow: a padding of its own here took it away, and the arrow sat on the text (2026-10-20). */
 .cs-head select { flex: 1; min-width: 0; padding: 4px 26px 4px 8px; background-position: right 8px center; font-size: calc(13px * var(--scale)); }
-.cs-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.cs-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: break-word; }
+/*
+ * The text of a row in the chat — an ending beside its mark and its Copy, a card beside its icon — is as wide as the
+ * row leaves it, never as wide as its longest line (2026-11-11): a flex item is otherwise never narrower than its
+ * content, and one long path pushed the whole column past its box.
+ */
+.cs-body .grow { min-width: 0; }
 .cs-turn { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .cs-turn:last-child { border-bottom: 0; }
 /*
@@ -1176,6 +1193,7 @@ button.linkish:hover { text-decoration: underline; }
 .actor-lead { color: var(--accent); background: var(--accent-soft); }
 .actor-worker { color: var(--ok); background: var(--ok-soft); }
 .actor-review { color: var(--review); background: var(--review-soft); }
+.actor-kerrigan { color: var(--kerrigan); background: var(--kerrigan-soft); }
 .wb-statusbar .actor-chip { border-color: transparent; }
 
 /* The way to Settings' skills, beside the skills under the chat's box (2026-10-23). */
@@ -1214,6 +1232,31 @@ button.linkish:hover { text-decoration: underline; }
 .wb-git-files { list-style: none; margin: 0; padding: 0 0 4px; }
 .wb-git-files.nested { padding-left: 14px; }
 .wb-git-file { gap: 6px; }
+/* The operator's own commit and push (2026-11-11): a file's "+" or "−" beside its row, a list's beside its heading. */
+.wb-git-head-row { display: flex; align-items: center; }
+.wb-git-head-row .wb-git-head { flex: 1; min-width: 0; }
+.wb-git-stageable { display: flex; align-items: center; }
+.wb-git-stageable > .wb-row { flex: 1; min-width: 0; }
+.wb-git-stage { flex: none; margin-inline-end: 6px; font-weight: 700; }
+.wb-git-actions { display: grid; gap: 6px; padding: 4px 10px 8px; }
+.wb-git-message { width: 100%; min-height: 44px; resize: vertical; font: inherit; font-size: calc(13px * var(--scale)); }
+.wb-git-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.wb-git-buttons button { display: inline-flex; align-items: center; gap: 6px; }
+.wb-git-op { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: var(--panel); overflow-wrap: anywhere; font-size: calc(12.5px * var(--scale)); }
+.wb-git-op.s-done { background: var(--ok-soft); }
+.wb-git-op.s-failed { background: var(--bad-soft); border-color: var(--bad); }
+.wb-git-op.s-hooks { background: var(--warn-soft); border-color: var(--warn); }
+.wb-git-op-head { display: flex; align-items: center; gap: 6px; }
+.wb-git-why { margin: 4px 0; }
+.wb-git-hooks { margin: 4px 0 8px; padding-inline-start: 18px; }
+.wb-git-hooks li { margin: 2px 0; }
+.wb-git-output { margin-top: 4px; }
+.wb-git-output summary { font-size: calc(12px * var(--scale)); }
+.wb-git-output pre { max-height: 260px; overflow: auto; margin: 4px 0; font-size: calc(11.5px * var(--scale)); }
+.wb-git-identity { display: grid; gap: 6px; margin: 6px 0; }
+.wb-git-identity p { margin: 0; }
+.wb-git-identity label { display: grid; gap: 2px; font-size: calc(12px * var(--scale)); }
+.wb-git-identity label.check { display: flex; align-items: center; gap: 6px; }
 .wb-git-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(11.5px * var(--scale)); min-width: 0; }
 .wb-git-counts { flex: none; font-size: calc(11.5px * var(--scale)); }
 .wb-git-counts .plus, .diff-counts .plus { color: var(--ok); }
@@ -1957,3 +2000,18 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 }
 @keyframes awaiting-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
 @keyframes awaiting-ring { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: 0.35; } }
+
+/* Kerrigan directs (2026-11-12): her messages to the chats, the cards she answered, where she looked; a card she is on. */
+.cs-kz-send, .cs-kz-answer { border-inline-start: 3px solid var(--kerrigan); padding-inline-start: 10px; margin: 6px 0; }
+.cs-kz-answer { border-inline-start-style: dashed; }
+.cs-kz-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+.cs-kz-sources { margin: 4px 0; color: var(--muted); }
+.cs-kz-sources ul { margin: 0; padding-inline-start: 20px; }
+.cs-kz-ended { margin: 4px 0 0; display: flex; align-items: center; gap: 6px; }
+.cs-kz-yours, .cs-kz-needed { color: var(--warn); }
+.cs-kz-count { margin: 2px 0 6px; }
+.cs-kz-card { border: 1px solid var(--kerrigan); border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
+.cs-kz-card.s-yours { border-color: var(--warn); }
+.cs-kz-on-card { margin: 0 0 6px; }
+.cs-kz-suggests { font-weight: 600; }
+.cs-directed { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

@@ -135,6 +135,8 @@ export const TASK_FIELD_ON_RERUN: Record<keyof Task, 'archived' | 'cleared' | 'r
   // The lead's rounds belong to the attempt that made them (two chats, 2026-10-20); which lead a subtask serves, to the task.
   lead: 'archived',
   fromLead: 'kept',
+  kerrigan: 'archived',
+  fromKerrigan: 'kept',
   // The kind of task it is: every attempt is sent with the same skill.
   skill: 'kept',
   interruption: 'cleared',
@@ -237,6 +239,11 @@ export class SessionStore {
   /** The lead's contract (two chats, 2026-10-20): `lead1.md`, beside the base prompt it ships with. */
   async getLead1(): Promise<{ content: string }> {
     return { content: await readFile(join(dirname(this.defaultLevel1Path), 'lead1.md'), 'utf8') };
+  }
+
+  /** Kerrigan's contract (2026-11-12), when she directs a conversation herself: `prompts/kerrigan1.md`. */
+  async getKerrigan1(): Promise<{ content: string }> {
+    return { content: await readFile(join(dirname(this.defaultLevel1Path), 'kerrigan1.md'), 'utf8') };
   }
 
   // --- the model catalogue ----------------------------------------------------------------
@@ -641,6 +648,8 @@ export class SessionStore {
           accepted: t.accepted,
           // Two chats: the lead's rounds and subtasks of this attempt (the next one counts its own from nothing).
           lead: t.lead,
+          // Kerrigan's rounds of this attempt (2026-11-12), as the lead's.
+          kerrigan: t.kerrigan,
         },
       ];
 
@@ -681,6 +690,7 @@ export class SessionStore {
       t.plan = undefined;
       t.accepted = undefined;
       t.lead = undefined;
+      t.kerrigan = undefined;
       t.scopeReverted = undefined;
       t.treeChanged = undefined;
       t.inputsRestored = undefined;

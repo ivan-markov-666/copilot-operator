@@ -52,6 +52,12 @@ export function useFollowBottom<T extends HTMLElement>(active: boolean, content:
     setFollowing(on);
   }, []);
 
+  /**
+   * The cards that wait for the operator, and what each is shown with (2026-11-12): not one Kerrigan is answering, which
+   * waits for her; and with the frame around it when it has one — her word above a card she left to the operator.
+   */
+  const waitingIn = (node: T): HTMLElement[] => [...node.querySelectorAll<HTMLElement>('[data-awaits]')].filter((c) => !c.closest('[data-kerrigan-thinking]'));
+  const frameOf = (card: HTMLElement): HTMLElement => (card.closest('[data-awaits-frame]') as HTMLElement | null) ?? card;
   /** The scrollTop at which `card` is shown: its top a little below the element's, or centred when it fits. */
   const cardTop = (node: T, card: HTMLElement, centred: boolean): number => {
     const top = card.getBoundingClientRect().top - node.getBoundingClientRect().top + node.scrollTop;
@@ -66,9 +72,9 @@ export function useFollowBottom<T extends HTMLElement>(active: boolean, content:
   };
   /** The bottom; or, while a card in it waits, as far down as still shows the top of the first one. */
   const stick = (node: T): void => {
-    const waiting = node.querySelector<HTMLElement>('[data-awaits]');
+    const waiting = waitingIn(node)[0];
     const bottom = node.scrollHeight - node.clientHeight;
-    moveTo(node, waiting ? Math.min(bottom, cardTop(node, waiting, false)) : bottom);
+    moveTo(node, waiting ? Math.min(bottom, cardTop(node, frameOf(waiting), false)) : bottom);
   };
   /**
    * A card that waits and was not here before: brought into view. Not while the element is hidden (the chat's panel
@@ -76,13 +82,13 @@ export function useFollowBottom<T extends HTMLElement>(active: boolean, content:
    */
   const bringNewCard = (node: T): boolean => {
     if (node.clientHeight === 0) return false;
-    const cards = [...node.querySelectorAll<HTMLElement>('[data-awaits]')];
+    const cards = waitingIn(node);
     const fresh = cards.filter((c) => !seen.current.has(c.dataset.awaits ?? ''));
     for (const c of cards) seen.current.add(c.dataset.awaits ?? '');
     const card = fresh[0];
     if (!card) return false;
     if (followingRef.current) stick(node);
-    else moveTo(node, cardTop(node, card, true));
+    else moveTo(node, cardTop(node, frameOf(card), true));
     return true;
   };
 
@@ -116,7 +122,7 @@ export function useFollowBottom<T extends HTMLElement>(active: boolean, content:
       }
       grew();
     });
-    children.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-awaits'] });
+    children.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-awaits', 'data-kerrigan-thinking'] });
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => {
       el.removeEventListener('scroll', onScroll);

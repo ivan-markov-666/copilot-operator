@@ -30,7 +30,7 @@
  * Set COP_UI_SHOTS to a folder to keep a screenshot of every scenario that fails; COP_UI_ONLY to run only the
  * scenarios whose title has that text.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Locator, type Page, type Response as PwResponse } from 'playwright';
@@ -600,7 +600,7 @@ try {
     t.check('the changes: the file changed (M) and the one git does not track (U)', listed, [['README.md', 'M'], ['new.txt', 'U']]);
     t.truthy('on the branch it is on', ((await side.locator('.wb-git-branch').textContent()) ?? '').includes('main'), await side.locator('.wb-git-branch').textContent());
 
-    await rows.first().getByRole('button').click();
+    await rows.first().locator('.wb-row').click();
     const tab = page.getByRole('tablist', { name: en['wb.openTabs']! }).getByRole('tab', { name: `README.md (${en['git.workingTree']})` });
     await tab.waitFor();
     const editor = page.locator('.wb-gitdiff');
@@ -623,6 +623,83 @@ try {
   });
 
   /*
+   * The operator's own commit and push from the Git view (operator, 2026-11-11: "add committing and pushing; a commit
+   * may not go through, and the operator must be able to see why"; the project's hooks run "unless a hook was changed").
+   * A file staged with its "+"; a commit the project's pre-commit stops, said why over the hook's own words, then made
+   * "Without hooks"; a push of it; a hook that is not the project's own named, with nothing run until "Run them anyway".
+   */
+  await scenario('the Git view commits and pushes: a file staged, a hook\'s "no" shown with why, the push, a hook not the project\'s own asked about', {}, async (h, page, url) => {
+    const remote = join(h.base, 'remote.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    h.git('remote', 'add', 'origin', remote);
+    h.git('push', '-q', '-u', 'origin', 'main');
+    writeFileSync(join(h.repo, 'README.md'), '# fixture\nmore\n', 'utf8');
+    writeFileSync(join(h.repo, 'new.txt'), 'brand new\n', 'utf8');
+    // The project's own pre-commit, in .git: it runs without asking, and says no.
+    writeFileSync(join(h.repo, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho "lint: README.md has a trailing space" >&2\nexit 1\n', 'utf8');
+    await page.goto(url('/'));
+    await page.getByRole('button', { name: en['wb.viewCommits']!, exact: true }).click();
+    const side = page.locator('.wb-side');
+    await side.getByRole('button', { name: new RegExp(`^${en['git.changes']!}`) }).waitFor();
+    await side.getByRole('button', { name: en['git.stageFile']!.replace('{path}', 'new.txt'), exact: true }).click();
+    await side.getByRole('button', { name: new RegExp(`^${en['git.staged']!}`) }).waitFor();
+    const listOf = async (title: string): Promise<string[]> =>
+      await side.locator('.wb-git-section').filter({ has: page.getByRole('button', { name: new RegExp(`^${title}`) }) }).locator('.wb-git-files li .wb-row-name').allTextContents();
+    t.check('"+" stages the file: staged, the other change left', [await listOf(en['git.staged']!), await listOf(en['git.changes']!)], [['new.txt'], ['README.md']]);
+
+    const commitButton = side.locator('.wb-git-buttons button.primary');
+    t.truthy('"Commit" waits for a message', await commitButton.isDisabled(), await commitButton.getAttribute('title'));
+    await side.getByRole('textbox', { name: en['git.message']!, exact: true }).fill('Add new.txt');
+    t.check('"Commit", with how many files', [(await commitButton.evaluate((b) => { const c = b.cloneNode(true) as HTMLElement; c.querySelector('.wb-badge')?.remove(); return c.textContent ?? ''; })).replace(/\s+/g, ' ').trim(), await commitButton.locator('.wb-badge').textContent()], [`✓ ${en['git.commit']}`, '1']);
+    await commitButton.click();
+    const result = side.locator('.wb-git-op');
+    await side.locator('.wb-git-op.s-failed').waitFor({ timeout: 20_000 });
+    t.check('the hook said no: "did not go through", why in a sentence, and the hook\'s own words, open', [
+      (await result.locator('.wb-git-op-head strong').textContent())?.trim(),
+      (await result.locator('.wb-git-why').first().textContent())?.trim(),
+      ((await result.locator('.wb-git-output pre').textContent()) ?? '').includes('lint: README.md has a trailing space'),
+      await result.locator('.wb-git-output').evaluate((d) => (d as HTMLDetailsElement).open),
+    ], [en['git.op.commitFailed'], en['git.why.hook'], true, true]);
+    t.check('nothing was committed', h.git('log', '-1', '--format=%s'), 'initial');
+    await result.getByRole('button', { name: en['git.hooks.skip']!, exact: true }).click();
+    await side.locator('.wb-git-op.s-done').waitFor({ timeout: 20_000 });
+    t.check('"Without hooks": committed, said so; the message box emptied; the other change left', [
+      ((await result.locator('.wb-git-op-head strong').textContent()) ?? '').startsWith('Committed '),
+      h.git('log', '-1', '--format=%s'),
+      h.git('show', '--name-only', '--format=', 'HEAD'),
+      await side.getByRole('textbox', { name: en['git.message']!, exact: true }).inputValue(),
+      h.git('status', '--porcelain'),
+    ], [true, 'Add new.txt', 'new.txt', '', 'M README.md']);
+
+    const pushButton = side.locator('.wb-git-buttons button').filter({ hasText: en['git.push']!.replace(' ↑{n}', '') });
+    await waitFor('the push to say what goes', async () => (((await pushButton.textContent()) ?? '').includes('↑1') ? true : null), 10_000).catch(() => undefined);
+    t.check('"Push ↑1": one commit to go', ((await pushButton.textContent()) ?? '').trim(), en['git.push']!.replace('{n}', '1'));
+    await pushButton.click();
+    await side.locator('.wb-git-op.s-done').filter({ hasText: en['git.op.pushed']!.replace('{target}', 'origin/main') }).waitFor({ timeout: 30_000 });
+    t.check('pushed: the remote has it', execFileSync('git', ['-C', remote, 'rev-parse', 'main'], { encoding: 'utf8' }).trim(), h.git('rev-parse', 'HEAD'));
+
+    // A hooks folder in the project, its hook not committed: named with why, nothing run or committed until the operator says.
+    rmSync(join(h.repo, '.git', 'hooks', 'pre-commit'));
+    const mark = join(h.base, 'hook-ran.txt').replace(/\\/g, '/');
+    mkdirSync(join(h.repo, '.githooks'), { recursive: true });
+    writeFileSync(join(h.repo, '.githooks', 'pre-commit'), `#!/bin/sh\necho ran > "${mark}"\n`, 'utf8');
+    h.git('config', 'core.hooksPath', '.githooks');
+    await side.getByRole('textbox', { name: en['git.message']!, exact: true }).fill('Update README');
+    await waitFor('"Commit all"', async () => (((await commitButton.textContent()) ?? '').includes(en['git.commitAll']!) ? true : null), 10_000).catch(() => undefined);
+    t.truthy('nothing staged: "Commit all"', ((await commitButton.textContent()) ?? '').includes(en['git.commitAll']!), await commitButton.textContent());
+    await commitButton.click();
+    await side.locator('.wb-git-op.s-hooks').waitFor({ timeout: 20_000 });
+    t.check('asked: the hook named, with why; nothing run, staged or committed', [
+      ((await result.locator('.wb-git-hooks li').first().textContent()) ?? '').replace(/\s+/g, ' ').trim(),
+      existsSync(mark),
+      h.git('log', '-1', '--format=%s'),
+    ], [`.githooks/pre-commit — ${en['git.hookWhy.not-committed']} ${en['git.hooks.open']}`, false, 'Add new.txt']);
+    await result.getByRole('button', { name: en['git.hooks.trust']!, exact: true }).click();
+    await side.locator('.wb-git-op.s-done').waitFor({ timeout: 20_000 });
+    t.check('"Run them anyway": the hook ran, everything committed', [existsSync(mark), h.git('log', '-1', '--format=%s'), h.git('status', '--porcelain')], [true, 'Update README', '']);
+  });
+
+  /*
    * A preview tab, as VS Code opens a file from Source Control (operator, 2026-10-29: "it opens to be looked at, its
    * tab's name in italics; a double click on the tab turns it from italics to normal and shows it in the file system on
    * the left"): one preview at a time, the next file from Git in its place; a double click keeps it and shows the file.
@@ -640,7 +717,7 @@ try {
     const gitButton = page.getByRole('button', { name: en['wb.viewCommits']!, exact: true });
     await gitButton.click();
     const side = page.locator('.wb-side');
-    const row = (name: string): Locator => side.locator('.wb-git-files li').filter({ hasText: name }).first().getByRole('button');
+    const row = (name: string): Locator => side.locator('.wb-git-files li').filter({ hasText: name }).first().locator('.wb-row');
     await row('one.ts').waitFor({ timeout: 10_000 });
     const tabs = page.getByRole('tablist', { name: en['wb.openTabs']! }).locator('.wb-tab');
     const look = async (): Promise<Array<[string, boolean, string]>> =>
@@ -2069,9 +2146,19 @@ try {
       [null, long.length, en['skills.count']!.replace('{n}', long.length.toLocaleString('en'))],
     );
     await instructions.fill('Tests live in tests/e2e, one file per page.');
+    // For Kerrigan (operator, 2026-11-12): its phases, its result and what it needs, in a few lines.
+    const forKerrigan = add.getByLabel(en['skills.forKerrigan']!, { exact: true });
+    t.check('a field for Kerrigan, a few lines at most', [await forKerrigan.count(), await forKerrigan.getAttribute('maxlength')], [1, '3000']);
+    await forKerrigan.fill('Phases: find the page, write the test, run it. Result: a passing test. Needs: the page.');
     await page.getByRole('button', { name: en['skills.add']!, exact: true }).click();
     await waitFor('the skill to be saved', async () => (await h.call<{ skills: Array<{ name: string }> }>('GET', '/skills')).skills.length === 1, 10_000).catch(() => undefined);
-    t.check('added in Settings', (await h.call<{ skills: Array<{ name: string; text: string }> }>('GET', '/skills')).skills.map((k) => [k.name, k.text]), [['new-test', 'Tests live in tests/e2e, one file per page.']]);
+    t.check('added in Settings, with what it says for Kerrigan', (await h.call<{ skills: Array<{ name: string; text: string; forKerrigan: string }> }>('GET', '/skills')).skills.map((k) => [k.name, k.text, k.forKerrigan]), [['new-test', 'Tests live in tests/e2e, one file per page.', 'Phases: find the page, write the test, run it. Result: a passing test. Needs: the page.']]);
+    // What Kerrigan gets when a chat's message ends (2026-11-12): what "Copy" gives, unless the whole exchange is asked for.
+    const kerriganResult = page.locator('#kerrigan-result');
+    t.check('what Kerrigan gets at the end of a message: what "Copy" gives, by default', [await kerriganResult.inputValue(), await kerriganResult.locator('option').allTextContents()], ['copy', [en['exec.kerriganResultCopy'], en['exec.kerriganResultExchange']]]);
+    await kerriganResult.selectOption('exchange');
+    await waitFor('the choice to be saved', async () => ((await h.call<{ raw: { execution?: { kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganResult === 'exchange') || null, 10_000).catch(() => undefined);
+    t.check('the whole exchange, when chosen, saved', (await h.call<{ raw: { execution?: { kerriganResult?: string } } }>('GET', '/settings')).raw.execution?.kerriganResult, 'exchange');
     // Saved is not yet shown: the page lists it once it has read the list again (seen to lag on a loaded machine, 2026-10-28).
     await page.locator('.skill-entry:not(.skill-new)').first().waitFor({ timeout: 10_000 }).catch(() => undefined);
     t.check('and listed there, the form empty again', [await page.locator('.skill-entry:not(.skill-new)').count(), await add.getByLabel(en['skills.name']!, { exact: true }).inputValue()], [1, '']);
@@ -3109,6 +3196,67 @@ try {
   });
 
   /*
+   * Text that ran out of its box (operator, 2026-11-11, a photo: "the container of the text ends, and the text goes
+   * on"). A finished message's ending listed paths with no space in them; the ending is a row (its mark, the text, its
+   * Copy), and the text's column grew as wide as the longest path, so every line of it wrapped that wide, past the
+   * green box, and the whole chat scrolled sideways. Whatever the text — a path, a word longer than the box, a code
+   * line — it stays inside its box, in the ending and in the operator's own message, and the chat never scrolls sideways.
+   */
+  await scenario('a long path in an ending or a message stays inside its box, and the chat does not scroll sideways', {}, async (h, page, url) => {
+    const path = 'automation/rules-engine/src/CAS.DataCapture.RulesEngine.Infrastructure/Workflows/Activities/DPS/TrimDuplicateChargesActivityWithAVeryLongName.cs';
+    const summary = [
+      'Pass 2 found exactly one test: DUP-01 only, with the local fixture and model evidence already in place.',
+      '',
+      `- ${path}`,
+      `- ${path.replace(/\//g, '\\')}`,
+      `- \`${path}\``,
+      '',
+      `A word longer than any box: ${'x'.repeat(220)}.`,
+      '',
+      '```',
+      `Get-ChildItem -Recurse ${path} | Select-Object -ExpandProperty FullName | Out-String -Width 400`,
+      '```',
+      '',
+      'Nothing else was changed.',
+    ].join('\n');
+    const { threadId } = await h.call<{ threadId: string }>('POST', '/chat', { text: `Look at ${path} and ${path.replace(/\//g, '\\')} and say what they do.`, model: 'Think deeper' });
+    h.chat.script(reply.steps('Get-ChildItem -Name'), reply.done(summary));
+    t.check('it runs', (await h.call<{ started: boolean }>('POST', `/sessions/${threadId}/start`, { mode: 'unattended' })).started, true);
+    await h.idle();
+    await page.goto(url('/'));
+    await page.evaluate((id) => localStorage.setItem('cop.chat.thread', id), threadId);
+    await page.reload();
+    await page.locator('.cs-end').waitFor({ timeout: 30_000 });
+    await page.locator('.cs-end').getByText('Nothing else was changed.').waitFor();
+    /** Everything in the box whose right or left edge is outside it, by more than a pixel. */
+    const outside = (selector: string) =>
+      page.locator(selector).first().evaluate((box) => {
+        const edge = box.getBoundingClientRect();
+        const out: string[] = [];
+        for (const el of Array.from(box.querySelectorAll('*'))) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) continue;
+          if (r.right > edge.right + 1 || r.left < edge.left - 1) out.push(`${el.tagName.toLowerCase()}.${(el as HTMLElement).className || ''} ${Math.round(r.left)}–${Math.round(r.right)} in ${Math.round(edge.left)}–${Math.round(edge.right)}`);
+        }
+        return out.slice(0, 6);
+      });
+    t.check('the ending: nothing outside its box', await outside('.cs-end'), []);
+    t.check("the operator's message: nothing outside its box", await outside('.cs-user'), []);
+    const sideways = await page.locator('.cs-body').evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    t.truthy('the chat does not scroll sideways', sideways.scroll <= sideways.client + 1, sideways);
+    // Wrapped, not cut: the path is all there, to copy and to read.
+    t.truthy('the path is still whole in the text', ((await page.locator('.cs-end').textContent()) ?? '').includes(path), path);
+    // A word is broken only in the text: the ending's "Copy" keeps its word on one line, however long the text beside it.
+    const copy = page.locator('.cs-end > .copy-btn');
+    const copyLines = await copy.evaluate((el) => {
+      const s = getComputedStyle(el);
+      const line = parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.3;
+      return Math.round((el.getBoundingClientRect().height - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom) - parseFloat(s.borderTopWidth) - parseFloat(s.borderBottomWidth)) / line);
+    });
+    t.check('"Copy" beside the ending: one line, its word whole', copyLines, 1);
+  });
+
+  /*
    * Bulgarian: chosen from the nav, said to the browser as lang="bg" for screen readers, remembered
    * across a reload, and — being longer than English almost everywhere — still fitting on a phone.
    */
@@ -3418,6 +3566,95 @@ try {
     await page.getByRole('tab', { name: en['wb.terminal']!, exact: true }).click();
     await waitFor('the panel to show the worker\'s command', async () => ((await page.locator('.wb-terminal').textContent()) ?? '').includes('Get-ChildItem'), 10_000).catch(() => undefined);
     t.truthy('the panel follows the worker\'s commands', ((await page.locator('.wb-terminal').textContent()) ?? '').includes('Get-ChildItem'), await page.locator('.wb-terminal').textContent());
+  });
+
+  /*
+   * Kerrigan directs (operator, 2026-11-12): ticked for a new conversation, plan mode, two chats and the review are hers
+   * to choose and leave the box, with her model and her chats' model in their place. Her understanding, where she looked,
+   * the message she sent with its settings and "Open the chat"; a card of the chat she is answering is marked so and not
+   * lit as waiting for the operator; one she leaves to them says why and what she would choose, and is lit; answered
+   * there, her chat goes on, and her report is the message's ending. The chat she sent to is in the list under her, and
+   * says who directs it.
+   */
+  await scenario('Kerrigan directs: her message to a chat, a card she is on and one she leaves to the operator, her report', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
+    await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    await page.goto(url('/'));
+    const directs = page.getByRole('checkbox', { name: en['chat.kerrigan']! });
+    await directs.waitFor();
+    t.check('"Kerrigan directs" is off at first', await directs.isChecked(), false);
+    await page.getByRole('checkbox', { name: en['chat.lead']! }).check();
+    await directs.check();
+    t.check(
+      'ticked: "Two chats" off and gone with "Plan mode" and "Review" (hers to choose); her model and her chats\' model instead',
+      [await page.getByRole('checkbox', { name: en['chat.lead']! }).count(), await page.getByRole('checkbox', { name: en['chat.planMode']! }).count(), await page.getByRole('checkbox', { name: en['chat.review']! }).count(), await page.locator('#cs-model').count(), await page.locator('#cs-chats-model').count()],
+      [0, 0, 0, 1, 1],
+    );
+    let thinking!: () => void;
+    const held = new Promise<void>((r) => (thinking = r));
+    h.chat.script(
+      reply.kerrigan.send('Create done.txt at the root holding exactly the word done, and read it back with Get-Content.', {
+        understanding: 'Goal: done.txt holding done. Result: one sentence of what was done.',
+        sources: ['The task itself; the team\'s chat says nothing about done.txt'],
+        title: 'Write done.txt',
+      }),
+      reply.ask('Overwrite done.txt if it is there already?', ['Overwrite it', 'Keep the old one'], 'it may be there'),
+      async () => {
+        await held;
+        return reply.kerrigan.ask({ why: 'Overwriting a file you may have written cannot be undone.', suggestion: 'Overwrite it' });
+      },
+      reply.steps(write('done.txt', 'done'), 'Get-Content done.txt'),
+      reply.done('I wrote done.txt with Set-Content and read it back: it holds done.'),
+      reply.kerrigan.done('Done: done.txt is at the root and holds done; the chat read it back with Get-Content.'),
+    );
+    const input = page.getByRole('textbox', { name: en['chat.input']! });
+    await input.fill('Create done.txt holding done, and say in one sentence what was done.');
+    await input.press('Enter');
+    const understood = page.locator('.cs-lead-say').filter({ hasText: 'Goal: done.txt holding done.' });
+    await understood.waitFor({ timeout: 30_000 });
+    t.truthy('her understanding of the task, said as hers', ((await understood.textContent()) ?? '').includes(en['kz.understood']!), await understood.textContent());
+    t.truthy('where she looked', ((await page.locator('.cs-kz-sources').first().textContent()) ?? '').includes('the team\'s chat says nothing'), await page.locator('.cs-kz-sources').first().textContent());
+    const sent = page.locator('.cs-kz-send').first();
+    await sent.waitFor({ timeout: 30_000 });
+    t.truthy('her message to the chat, numbered, as a new chat, with "Open the chat"', ((await sent.locator('.cs-who').textContent()) ?? '').startsWith('Message 1 to the chat') && ((await sent.textContent()) ?? '').includes(en['kz.newChat']!) && (await sent.getByRole('button', { name: en['kz.openChat']!, exact: true }).count()) === 1, await sent.textContent());
+
+    // The card, while she is on it: marked so, and not lit as waiting for the operator.
+    const card = page.locator('.cs-kz-card');
+    await card.waitFor({ timeout: 30_000 });
+    await waitFor('the card to say she is on it', async () => ((await card.getAttribute('class')) ?? '').includes('s-thinking') || null, 15_000).catch(() => undefined);
+    t.truthy('a card she is answering says so', ((await card.textContent()) ?? '').includes(en['kz.thinking']!), await card.textContent());
+    await sleep(600);
+    t.check('and is not lit as waiting for the operator', await page.locator('.awaiting-label').count(), 0);
+    thinking();
+
+    // Left to the operator: why and what she would choose; lit now.
+    await waitFor('the card left to the operator', async () => ((await card.getAttribute('class')) ?? '').includes('s-yours') || null, 30_000);
+    t.truthy('left to the operator, with why and what she would choose', ((await card.textContent()) ?? '').includes('Overwriting a file you may have written cannot be undone.') && ((await card.textContent()) ?? '').includes(en['kz.suggests']!.replace('{answer}', 'Overwrite it')), await card.textContent());
+    await page.locator('.awaiting-label').waitFor({ timeout: 10_000 }).catch(() => undefined);
+    t.check('and lit as waiting for the operator', await page.locator('.awaiting-label').count(), 1);
+    await sleep(500);
+    const [noteBox, bodyBox] = await Promise.all([page.locator('.cs-kz-on-card').boundingBox(), page.locator('.cs-body').boundingBox()]);
+    t.truthy('brought into view with her word above it, not only the card', !!noteBox && !!bodyBox && noteBox.y >= bodyBox.y - 1 && noteBox.y + noteBox.height <= bodyBox.y + bodyBox.height + 1, JSON.stringify({ noteBox, bodyBox }));
+    // Found by this check (2026-11-12): the chat jumped to the chat that asked, away from her conversation, which shows the card too.
+    t.truthy('the chat stays on her conversation, where the card is', ((await page.locator('#cs-thread').evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? '')) ?? '').startsWith('✦ '), await page.locator('#cs-thread').evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? ''));
+    await card.getByRole('button', { name: 'Keep the old one', exact: true }).click();
+
+    await page.locator('.cs-kz-turn .cs-end.s-done').waitFor({ timeout: 30_000 });
+    t.truthy('her report is the message\'s ending', ((await page.locator('.cs-kz-turn .cs-end').textContent()) ?? '').includes('Done: done.txt is at the root and holds done'), await page.locator('.cs-kz-turn .cs-end').textContent());
+    const answered = page.locator('.cs-kz-answer').first();
+    t.truthy('on her record: the card, and that the operator answered it after she left it', ((await answered.textContent()) ?? '').includes('Overwrite done.txt if it is there already?') && ((await answered.textContent()) ?? '').includes(en['kz.youAnswered']!.replace('{answer}', 'Keep the old one')) && ((await answered.textContent()) ?? '').includes('Overwriting a file you may have written cannot be undone.'), await answered.textContent());
+    t.truthy('how many messages went to chats and to her', /Messages to chats: 1 of 6/.test((await page.locator('.cs-kz-count').textContent()) ?? ''), await page.locator('.cs-kz-count').textContent());
+    t.check('the started conversation shows how it began: "Kerrigan directs" ticked and fixed', [await directs.isChecked(), await directs.isDisabled()], [true, true]);
+
+    // The chat she sent to: in the list, under her conversation; opened, it says who directs it.
+    const options = await page.locator('#cs-thread option').allTextContents();
+    t.truthy('her conversation and, under it, the chat she sent to', options.length === 3 && options[1]!.startsWith('✦ ') && options[2]!.includes('↳ Kerrigan 1: Write done.txt'), options);
+    await sent.getByRole('button', { name: en['kz.openChat']!, exact: true }).click();
+    await page.locator('.cs-directed').waitFor({ timeout: 10_000 });
+    t.truthy('the chat says Kerrigan directs it, with the way back to her', ((await page.locator('.cs-directed').textContent()) ?? '').includes(en['kz.directedBy']!), await page.locator('.cs-directed').textContent());
+    t.truthy('and holds her message, done', ((await page.locator('.cs-body').textContent()) ?? '').includes('Create done.txt at the root holding exactly the word done') && (await page.locator('.cs-end.s-done').count()) === 1, '');
+    await page.getByRole('button', { name: en['kz.openHers']!, exact: true }).click();
+    await page.locator('.cs-kz-turn').waitFor({ timeout: 10_000 });
+    t.check('back in her conversation', await page.locator('.cs-kz-send').count(), 1);
   });
 
   /*

@@ -75,10 +75,12 @@ export function planApprovedMessage(approval: NonNullable<TaskPlan['approved']>)
   const by =
     approval.by === 'operator'
       ? 'The operator approved your plan.'
-      : `Your plan is approved by the runner${approval.why ? ` (${approval.why})` : ''}.`;
+      : approval.by === 'kerrigan'
+        ? 'Kerrigan, who directs this work for the operator, approved your plan.'
+        : `Your plan is approved by the runner${approval.why ? ` (${approval.why})` : ''}.`;
   return [
     by,
-    ...(approval.note?.trim() ? ['', 'With this from the operator, which wins where it and the plan disagree:', '', approval.note.trim()] : []),
+    ...(approval.note?.trim() ? ['', `With this from ${approval.by === 'kerrigan' ? 'her' : 'the operator'}, which wins where it and the plan disagree:`, '', approval.note.trim()] : []),
     '',
     'Carry it out now: reply with status "continue" and the steps of its first stage. Keep to the plan; when it',
     'has to change, say so in `notes` and why — a change the plan did not foresee is declared, not hidden.',
@@ -87,9 +89,9 @@ export function planApprovedMessage(approval: NonNullable<TaskPlan['approved']>)
 }
 
 /** The operator asked for another plan. */
-export function planReviseMessage(comment: string, version: number): string {
+export function planReviseMessage(comment: string, version: number, byKerrigan = false): string {
   return [
-    `The operator read version ${version} of your plan and asks for another. What to change:`,
+    `${byKerrigan ? 'Kerrigan, who directs this work for the operator,' : 'The operator'} read version ${version} of your plan and asks for another. What to change:`,
     '',
     comment.trim(),
     '',

@@ -15,7 +15,8 @@
  *   - Nothing runs through a shell. `execFile` takes an argument list, so a branch name or a
  *     commit message cannot turn into another command.
  */
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { existsSync, statSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -48,6 +49,13 @@ function noHooksDir(): string {
   return process.env.SystemRoot ? join(process.env.SystemRoot, 'System32', 'copilot-operator-no-hooks') : '/nonexistent';
 }
 
+/**
+ * The settings of the operator's own commit and push from the Git view (2026-11-11), the only git of the bot that runs
+ * the repository's hooks — and only once `vcs/operatorGit.ts` has found them to be the project's own, or the operator
+ * has said to run them. Still no fsmonitor program and no untracked cache.
+ */
+export const OWN_HOOKS_GIT = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false'];
+
 /** Runs one git command in a directory. Never throws: the caller decides what a failure means. */
 export function git(
   cwd: string,
@@ -60,14 +68,14 @@ export function git(
    * alone, and a fetch's ssh and its password window outlived it (found 2026-10-03: the window stayed
    * on screen after the fetch had been given up).
    */
-  opts: { windowsHide?: boolean; killTree?: boolean } = {},
+  opts: { windowsHide?: boolean; killTree?: boolean; /** Read where the repository's own hooks are: see `OWN_HOOKS_GIT`. */ ownHooks?: boolean } = {},
 ): Promise<GitResult> {
   return new Promise((resolve) => {
     let timedOut = false;
     let timer: NodeJS.Timeout | undefined;
     const child = execFile(
       'git',
-      [...SAFE_GIT, ...args],
+      [...(opts.ownHooks ? OWN_HOOKS_GIT : SAFE_GIT), ...args],
       { cwd, timeout: opts.killTree ? 0 : timeoutMs, windowsHide: opts.windowsHide ?? true, maxBuffer: 8 * 1024 * 1024, ...(env ? { env } : {}) },
       (error, stdout, stderr) => {
         if (timer) clearTimeout(timer);
@@ -88,6 +96,72 @@ export function git(
         else child.kill('SIGKILL');
       }, timeoutMs);
     }
+  });
+}
+
+/** How a git followed as it ran ended: its whole output (the last `maxChars` of it), as stdout and stderr came. */
+export type LiveGit = { ok: boolean; code: number; output: string; timedOut: boolean; cut: boolean };
+
+/**
+ * One git command whose output is read as it comes, stdout and stderr together in the order they arrive (2026-11-11):
+ * the operator's commit and push, whose hooks and remote talk for as long as they need, and whose every line the Git
+ * view shows while it runs. `ownHooks` runs the repository's hooks (see `OWN_HOOKS_GIT`); otherwise `SAFE_GIT`. Nothing
+ * is read from stdin, so a hook that waits for an answer gets none and ends. On the timeout git and everything it
+ * started are stopped. Never throws.
+ */
+export function gitLive(
+  cwd: string,
+  args: string[],
+  opts: { ownHooks: boolean; env?: NodeJS.ProcessEnv; windowsHide?: boolean; timeoutMs: number; maxChars?: number; onOutput?: (output: string, cut: boolean) => void },
+): Promise<LiveGit> {
+  const max = opts.maxChars ?? 200_000;
+  return new Promise((resolveLive) => {
+    let output = '';
+    let cut = false;
+    let timedOut = false;
+    let settled = false;
+    const add = (text: string): void => {
+      if (!text) return;
+      output += text;
+      if (output.length > max) {
+        output = output.slice(output.length - max);
+        cut = true;
+      }
+      opts.onOutput?.(output, cut);
+    };
+    const done = (r: Omit<LiveGit, 'output' | 'cut' | 'timedOut'>): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveLive({ ...r, output, cut, timedOut });
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('git', [...(opts.ownHooks ? OWN_HOOKS_GIT : SAFE_GIT), ...args], { cwd, windowsHide: opts.windowsHide ?? true, stdio: ['ignore', 'pipe', 'pipe'], ...(opts.env ? { env: opts.env } : {}) });
+    } catch (e) {
+      add(`git could not be started: ${(e as Error).message}\n`);
+      resolveLive({ ok: false, code: 1, output, cut, timedOut });
+      return;
+    }
+    const out = new StringDecoder('utf8');
+    const err = new StringDecoder('utf8');
+    child.stdout?.on('data', (b: Buffer) => add(out.write(b)));
+    child.stderr?.on('data', (b: Buffer) => add(err.write(b)));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      add(`\ngit gave up after ${Math.round(opts.timeoutMs / 1000)} s\n`);
+      if (process.platform === 'win32' && child.pid) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => undefined);
+      else child.kill('SIGKILL');
+    }, opts.timeoutMs);
+    child.on('error', (e) => {
+      add(`git could not be started: ${e.message}\n`);
+      done({ ok: false, code: 1 });
+    });
+    child.on('close', (code) => {
+      add(out.end());
+      add(err.end());
+      done({ ok: code === 0 && !timedOut, code: typeof code === 'number' ? code : 1 });
+    });
   });
 }
 

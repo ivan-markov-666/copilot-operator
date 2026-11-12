@@ -222,14 +222,24 @@ function WorkbenchInner() {
     const s = sessions?.find((x) => x.id === a.sessionId);
     if (!s) return false;
     setL({ chatOpen: true });
-    // A worker's step is shown in its lead's conversation.
-    const thread = s.workerOf ?? s.id;
-    if (chatThreadShown() !== thread) setShowThread((v) => ({ id: thread, n: (v?.n ?? 0) + 1 }));
+    /*
+     * A worker's step is shown in its lead's conversation; a chat Kerrigan directs is shown in hers too (2026-11-12). The
+     * conversations the card is in, from its own up: one of them shown already, the chat stays on it; otherwise the top.
+     */
+    const chain: string[] = [];
+    for (let at: typeof s | undefined = s; at && chain.length < 4; at = sessions?.find((x) => x.id === (at!.workerOf ?? at!.directedBy))) {
+      // A worker's own conversation is not one of the chat's list.
+      if (!at.workerOf) chain.push(at.id);
+    }
+    if (chain.includes(chatThreadShown())) return true;
+    const thread = chain.at(-1) ?? s.id;
+    setShowThread((v) => ({ id: thread, n: (v?.n ?? 0) + 1 }));
     return true;
   };
   const onApprovals = (list: Approval[]): void => {
-    // Only once the conversation is known: one not read yet is greeted with the next list.
-    const fresh = list.filter((a) => !greeted.current.has(a.id) && !!sessions?.some((x) => x.id === a.sessionId));
+    // Only once the conversation is known: one not read yet is greeted with the next list. A card Kerrigan is answering
+    // does not wait for the operator yet: it is greeted when it does (2026-11-12).
+    const fresh = list.filter((a) => !greeted.current.has(a.id) && a.kerrigan?.state !== 'thinking' && !!sessions?.some((x) => x.id === a.sessionId));
     for (const a of fresh) greeted.current.add(a.id);
     if (fresh[0]) showAsking(fresh[0]);
   };

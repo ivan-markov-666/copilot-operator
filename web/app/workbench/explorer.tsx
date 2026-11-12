@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type BranchChanges, type GitArea, type GitFile, type Workspace, type WorkspaceGit } from '../../lib/api';
 import { BranchSection } from './branchChanges';
+import { GitActions } from './gitActions';
 import { useGitBase } from '../../lib/gitBase';
 import { usePoll } from '../../lib/usePoll';
 import { useT, useFmtTime } from '../../lib/i18n';
@@ -203,8 +204,9 @@ function Files({ workspace, onOpen, reveal, onOpenFolder, grip }: { workspace: W
  * The open folder's git, as an IDE's Source Control view shows it (2026-10-19: "let the Commits button show Git as
  * VS Code does"): the branch and how far it is from the one it follows; the changes, staged and not, each file with
  * its letter and its lines, opening its two versions side by side in the editor; and the branch's commits, each
- * opening to the files it changed, which open the same way. Read-only: it stages, commits and checks out nothing.
- * Read again every five seconds, as the chat changes the folder.
+ * opening to the files it changed, which open the same way. Read again every five seconds, as the chat changes the
+ * folder. Since 2026-11-11 the operator's own commit and push too (`gitActions.tsx`): a file staged with its "+" and
+ * unstaged with its "−", or all of a list from its heading; it checks out nothing.
  */
 function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspace | null; onOpen: (tab: Tab) => void; onOpenFolder: () => void; grip?: React.ReactNode }) {
   const { t } = useT();
@@ -253,10 +255,36 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
     }
   };
   const statusName = (status: string): string => t(`git.status.${status === '!' ? 'conflict' : status}` as 'git.status.M');
+  /** Staging or unstaging, from a file's "+" or "−" or a list's heading: the folder's git as it is after. */
+  const [staging, setStaging] = useState(false);
+  const [stageErr, setStageErr] = useState('');
+  const stage = (how: 'stage' | 'unstage', which: string[] | 'all'): void => {
+    setStaging(true);
+    setStageErr('');
+    api
+      .gitStage(how, which)
+      .then(setState)
+      .catch((e: unknown) => setStageErr((e as Error).message))
+      .finally(() => setStaging(false));
+  };
+  /** A file's "+" (a change) or "−" (a staged one), beside its row. */
+  const stageButton = (f: GitFile, area: GitArea) =>
+    area === 'changes' || area === 'staged' ? (
+      <button
+        type="button"
+        className="wb-icon-btn wb-git-stage"
+        onClick={() => stage(area === 'changes' ? 'stage' : 'unstage', [f.path])}
+        disabled={staging}
+        title={t(area === 'changes' ? 'git.stageFile' : 'git.unstageFile', { path: f.path })}
+        aria-label={t(area === 'changes' ? 'git.stageFile' : 'git.unstageFile', { path: f.path })}
+      >
+        {area === 'changes' ? '+' : '−'}
+      </button>
+    ) : null;
   const fileRow = (f: GitFile, area: GitArea, commit?: string) => {
     const cut = f.path.lastIndexOf('/');
     return (
-      <li key={`${area}:${commit ?? ''}:${f.path}`}>
+      <li key={`${area}:${commit ?? ''}:${f.path}`} className={area === 'changes' || area === 'staged' ? 'wb-git-stageable' : undefined}>
         <button
           type="button"
           className="wb-row wb-git-file"
@@ -282,17 +310,27 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
             {f.status}
           </span>
         </button>
+        {stageButton(f, area)}
       </li>
     );
   };
-  const section = (id: string, title: string, count: number | null, body: React.ReactNode) => (
+  /** A list's heading, which folds it; `action` beside it (a list's "Stage all" or "Unstage all"). */
+  const section = (id: string, title: string, count: number | null, body: React.ReactNode, action?: React.ReactNode) => (
     <div className="wb-git-section">
-      <button type="button" className="wb-git-head" aria-expanded={!shut.has(id)} onClick={() => toggle(id)}>
-        <span aria-hidden="true">{shut.has(id) ? '▸' : '▾'}</span> {title}
-        {count !== null && <span className="wb-badge">{count}</span>}
-      </button>
+      <div className="wb-git-head-row">
+        <button type="button" className="wb-git-head" aria-expanded={!shut.has(id)} onClick={() => toggle(id)}>
+          <span aria-hidden="true">{shut.has(id) ? '▸' : '▾'}</span> {title}
+          {count !== null && <span className="wb-badge">{count}</span>}
+        </button>
+        {action}
+      </div>
       {!shut.has(id) && body}
     </div>
+  );
+  const allButton = (how: 'stage' | 'unstage') => (
+    <button type="button" className="wb-icon-btn wb-git-stage" onClick={() => stage(how, 'all')} disabled={staging} title={t(how === 'stage' ? 'git.stageAll' : 'git.unstageAll')} aria-label={t(how === 'stage' ? 'git.stageAll' : 'git.unstageAll')}>
+      {how === 'stage' ? '+' : '−'}
+    </button>
   );
 
   return (
@@ -319,6 +357,12 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
             <BranchIcon /> <strong>{state.branch ?? 'HEAD'}</strong>
             {state.upstream && <span className="muted"> · {t('git.upstream', { name: state.upstream.name, ahead: state.upstream.ahead, behind: state.upstream.behind })}</span>}
           </p>
+          <GitActions state={state} onChanged={() => void read()} onOpen={onOpen} />
+          {stageErr && (
+            <p className="err small wb-pad" role="alert">
+              {stageErr}
+            </p>
+          )}
           {branch &&
             section(
               'branch',
@@ -326,12 +370,13 @@ function GitView({ workspace, onOpen, onOpenFolder, grip }: { workspace: Workspa
               branch.problem ? null : branch.files.length,
               <BranchSection data={branch} onBase={chooseBase} statusName={statusName} onOpenFile={(path, keep) => onOpen({ kind: 'diff', area: 'branch', path, ...(branch.base ? { commit: branch.base } : {}), ...(keep ? {} : { preview: true }) })} />,
             )}
-          {state.staged.length > 0 && section('staged', t('git.staged'), state.staged.length, <ul className="wb-git-files">{state.staged.map((f) => fileRow(f, 'staged'))}</ul>)}
+          {state.staged.length > 0 && section('staged', t('git.staged'), state.staged.length, <ul className="wb-git-files">{state.staged.map((f) => fileRow(f, 'staged'))}</ul>, allButton('unstage'))}
           {section(
             'changes',
             t('git.changes'),
             state.changes.length,
             state.changes.length === 0 ? <p className="muted small wb-pad">{t('git.noChanges')}</p> : <ul className="wb-git-files">{state.changes.map((f) => fileRow(f, 'changes'))}</ul>,
+            state.changes.length > 0 ? allButton('stage') : undefined,
           )}
           {section(
             'commits',

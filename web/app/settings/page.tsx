@@ -341,7 +341,7 @@ function SavedNote({ msg, saving }: { msg: string; saving?: boolean }) {
 // Skills (operator, 2026-10-21): instructions for a kind of task that comes back
 // ---------------------------------------------------------------------------------------
 
-const EMPTY_SKILL: Skill = { name: '', description: '', text: '', projectDir: '' };
+const EMPTY_SKILL: Skill = { name: '', description: '', text: '', projectDir: '', forKerrigan: '' };
 
 /**
  * The skills: each one a name to call it by (after `/` at the start of a message, or from the list under the chat's
@@ -352,7 +352,7 @@ function SkillsSection() {
   const { t } = useT();
   const { saving, track } = useSaving();
   const [list, setList] = useState<Skill[] | null>(null);
-  const [limits, setLimits] = useState({ maxDescription: 300 });
+  const [limits, setLimits] = useState({ maxDescription: 300, maxForKerrigan: 3000 });
   const [projects, setProjects] = useState<Array<{ name: string; dir: string }>>([]);
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
@@ -364,7 +364,7 @@ function SkillsSection() {
       .skills()
       .then((r) => {
         setList(r.skills);
-        setLimits({ maxDescription: r.maxDescription });
+        setLimits({ maxDescription: r.maxDescription, maxForKerrigan: r.maxForKerrigan ?? 3000 });
       })
       .catch((e: unknown) => setErr((e as Error).message));
     api
@@ -452,7 +452,7 @@ function SkillEntry({
 }: {
   skill: Skill;
   projects: Array<{ name: string; dir: string }>;
-  limits: { maxDescription: number };
+  limits: { maxDescription: number; maxForKerrigan: number };
   onChange?: (skill: Skill) => Promise<boolean>;
   onDraft?: (skill: Skill) => void;
   onRemove?: () => void;
@@ -473,7 +473,7 @@ function SkillEntry({
   };
   const textLater = useDebouncedSave(async (next: Skill) => {
     typing.current = false;
-    if (onChange && next.text !== skill.text) await onChange(next);
+    if (onChange && (next.text !== skill.text || next.forKerrigan !== skill.forKerrigan)) await onChange(next);
   }, 1200);
   const leave = (): void => {
     if (onChange && (shown.name !== skill.name || shown.description !== skill.description)) void onChange(shown);
@@ -542,6 +542,28 @@ function SkillEntry({
         />
         {/* How long they are, with no limit (operator, 2026-10-25): the message they go with is held to Settings' own. */}
         <span className="muted small skill-count">{t('skills.count', { n: shown.text.length.toLocaleString() })}</span>
+      </div>
+      {/*
+        For Kerrigan (operator, 2026-11-12: "Kerrigan knows every skill, even one not chosen: short, exact and clear, at
+        least its phases and the result it leads to"): a few lines; empty, she is told its instructions whole.
+      */}
+      <div className="project-level2">
+        <FieldName htmlFor={`${id}-kerrigan`} label={t('skills.forKerrigan')} info={t('skills.forKerriganInfo')} />
+        <textarea
+          id={`${id}-kerrigan`}
+          className="prose"
+          rows={3}
+          maxLength={limits.maxForKerrigan}
+          value={shown.forKerrigan ?? ''}
+          onChange={(e) => {
+            const next = edit({ forKerrigan: e.target.value });
+            if (onChange) {
+              typing.current = true;
+              textLater(next);
+            }
+          }}
+          placeholder={t('skills.forKerriganPlaceholder')}
+        />
       </div>
     </div>
   );
@@ -1421,6 +1443,8 @@ function ExecutionSection() {
   const [minutes, setMinutes] = useState(240);
   /** The most subtasks the lead of a two-chat conversation may give for one message (`limits.maxSubtasks`). */
   const [subtasks, setSubtasks] = useState(20);
+  /** The most messages Kerrigan may send to chats for one message, in a conversation she directs (`limits.maxKerriganSends`, 2026-11-12). */
+  const [kerriganSends, setKerriganSends] = useState(6);
   const [replySec, setReplySec] = useState(900);
   /** The most characters of one message sent as text (`limits.maxMessageChars`, 2026-10-22); longer, the rest goes attached. */
   const [messageChars, setMessageChars] = useState(120_000);
@@ -1434,6 +1458,8 @@ function ExecutionSection() {
   const [writtenScripts, setWrittenScripts] = useState<'ask' | 'run'>('ask');
   const [networkFetch, setNetworkFetch] = useState<NetworkFetch>('ask');
   const [questions, setQuestions] = useState<Questions>('ask');
+  /** What Kerrigan gets when a chat's message ends (`execution.kerriganResult`, 2026-11-12). */
+  const [kerriganResult, setKerriganResult] = useState<'copy' | 'exchange'>('copy');
   /** A subtask cut off for a technical reason (two chats, 2026-10-25): what is done, how many times, after how long. */
   const [subRetryMode, setSubRetryMode] = useState<SubtaskRetryMode>('ask');
   const [subRetries, setSubRetries] = useState(2);
@@ -1462,6 +1488,7 @@ function ExecutionSection() {
           maxRunMinutes?: number;
           autoContinue?: number;
           maxSubtasks?: number;
+          maxKerriganSends?: number;
           maxMessageChars?: number;
           subtaskRetryMode?: SubtaskRetryMode;
           subtaskRetries?: number;
@@ -1474,6 +1501,7 @@ function ExecutionSection() {
         setIterations(typeof limits.maxIterations === 'number' ? limits.maxIterations : 60);
         setMinutes(typeof limits.maxRunMinutes === 'number' ? limits.maxRunMinutes : 240);
         setSubtasks(typeof limits.maxSubtasks === 'number' ? limits.maxSubtasks : 20);
+        setKerriganSends(typeof limits.maxKerriganSends === 'number' ? limits.maxKerriganSends : 6);
         setMessageChars(typeof limits.maxMessageChars === 'number' ? limits.maxMessageChars : 120_000);
         setSubRetryMode(limits.subtaskRetryMode ?? 'ask');
         setSubRetries(typeof limits.subtaskRetries === 'number' ? limits.subtaskRetries : 2);
@@ -1485,7 +1513,8 @@ function ExecutionSection() {
         setGapMax(typeof pacing.gapMaxSec === 'number' ? pacing.gapMaxSec : 90);
         const copilot = ((s.raw.copilot as Record<string, unknown>) ?? {}) as { replyTimeoutSec?: number };
         setReplySec(typeof copilot.replyTimeoutSec === 'number' ? copilot.replyTimeoutSec : 900);
-        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run' };
+        const exec = ((s.raw.execution as Record<string, unknown>) ?? {}) as { isolation?: Isolation; mode?: StartMode; networkFetch?: NetworkFetch; questions?: Questions; writtenScripts?: 'ask' | 'run'; kerriganResult?: 'copy' | 'exchange' };
+        setKerriganResult(exec.kerriganResult === 'exchange' ? 'exchange' : 'copy');
         setWrittenScripts(exec.writtenScripts === 'run' ? 'run' : 'ask');
         setIsolation(exec.isolation ?? 'none');
         setStartMode(exec.mode ?? 'confirm');
@@ -1538,13 +1567,14 @@ function ExecutionSection() {
   const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
   const saveMinutesLater = useDebouncedSave((n: number) => write('limits', 'maxRunMinutes', n));
   const saveSubtasksLater = useDebouncedSave((n: number) => write('limits', 'maxSubtasks', n));
+  const saveKerriganSendsLater = useDebouncedSave((n: number) => write('limits', 'maxKerriganSends', n));
   const saveReplyLater = useDebouncedSave((n: number) => write('copilot', 'replyTimeoutSec', n));
   const saveMessageCharsLater = useDebouncedSave((n: number) => write('limits', 'maxMessageChars', n));
   const saveSubRetriesLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetries', n));
   const saveSubRetryWaitLater = useDebouncedSave((n: number) => write('limits', 'subtaskRetryWaitSec', n));
   const saveGapSecLater = useDebouncedSave((n: number) => write('pacing', 'gapSec', n));
   const saveGapMaxLater = useDebouncedSave((n: number) => write('pacing', 'gapMaxSec', n));
-  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts', value: string) => write('execution', key, value);
+  const saveExecution = (key: 'isolation' | 'mode' | 'networkFetch' | 'questions' | 'writtenScripts' | 'kerriganResult', value: string) => write('execution', key, value);
   const runChoice: RunChoice = startMode === 'confirm' ? 'confirm' : writtenScripts === 'run' ? 'unattended' : 'unattended-ask';
 
   /** The number fields, in the order a task meets them. */
@@ -1558,6 +1588,8 @@ function ExecutionSection() {
     { id: 'max-minutes', label: t('exec.maxRunMinutes'), info: t('exec.maxRunMinutesWhy'), unit: t('exec.maxRunMinutesUnit'), value: minutes, min: 10, max: 1440, set: setMinutes, later: saveMinutesLater },
     // Two chats (2026-10-20): the lead's subtasks for one message, each a task of the worker's with the limits above.
     { id: 'max-subtasks', label: t('exec.maxSubtasks'), info: t('exec.maxSubtasksWhy'), unit: t('exec.maxSubtasksUnit'), value: subtasks, min: 1, max: 100, set: setSubtasks, later: saveSubtasksLater },
+    // Kerrigan directs (2026-11-12): her messages to chats for one message, each a chat's message with the limits above.
+    { id: 'max-kerrigan-sends', label: t('exec.maxKerriganSends'), info: t('exec.maxKerriganSendsWhy'), unit: t('exec.maxKerriganSendsUnit'), value: kerriganSends, min: 1, max: 50, set: setKerriganSends, later: saveKerriganSendsLater },
     { id: 'reply-timeout', label: t('exec.replyTimeout'), info: t('exec.replyTimeoutWhy'), unit: t('exec.replyTimeoutUnit'), value: replySec, min: 60, max: 10800, set: setReplySec, later: saveReplyLater },
     // How long one message to the chat may be as text (operator, 2026-10-22); the rest of a longer one goes attached.
     { id: 'max-message-chars', label: t('exec.maxMessageChars'), info: t('exec.maxMessageCharsWhy'), unit: t('exec.maxMessageCharsUnit'), value: messageChars, min: 1000, max: 1_000_000, set: setMessageChars, later: saveMessageCharsLater },
@@ -1746,6 +1778,26 @@ function ExecutionSection() {
         >
           <option value="ask">{t('exec.questionsAsk')}</option>
           <option value="agree">{t('exec.questionsAgree')}</option>
+        </select>
+      </Field>
+
+      {/*
+        Kerrigan directs (operator, 2026-11-12: "a setting: whether the whole JSON is attached for the automatic Kerrigan,
+        or only what 'Copy' gives; by default the other"): what she is given when a chat's message ends.
+      */}
+      <Field id="kerrigan-result" label={t('exec.kerriganResult')} info={t('exec.kerriganResultWhy')}>
+        <select
+          id="kerrigan-result"
+          value={kerriganResult}
+          onChange={(e) => {
+            const v = e.target.value === 'exchange' ? 'exchange' : 'copy';
+            setKerriganResult(v);
+            void saveExecution('kerriganResult', v);
+          }}
+          disabled={!raw}
+        >
+          <option value="copy">{t('exec.kerriganResultCopy')}</option>
+          <option value="exchange">{t('exec.kerriganResultExchange')}</option>
         </select>
       </Field>
 

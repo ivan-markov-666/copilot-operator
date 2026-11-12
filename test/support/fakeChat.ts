@@ -33,7 +33,7 @@ export type Sent = {
   attachments: string[];
   attached: Record<string, string>;
   /** Which kind of opening this was, when it was one. */
-  contract?: 'task' | 'review' | 'lead';
+  contract?: 'task' | 'review' | 'lead' | 'kerrigan';
 };
 
 /** What a scripted reply sees: the message it answers and every conversation so far. */
@@ -41,7 +41,7 @@ export type Incoming = Sent & { chat: FakeConversation; world: FakeCopilot };
 
 export type Script = string | ((m: Incoming) => string | Promise<string>);
 
-export type FakeConversation = { id: string; name?: string; messages: Sent[]; review: boolean; /** Given the lead's contract (two chats). */ lead?: boolean };
+export type FakeConversation = { id: string; name?: string; messages: Sent[]; review: boolean; /** Given the lead's contract (two chats). */ lead?: boolean; /** Given Kerrigan's contract (2026-11-12). */ kerrigan?: boolean };
 
 const repoRoot = join(import.meta.dirname, '..', '..');
 
@@ -107,6 +107,7 @@ export class FakeCopilot {
   private readonly taskContract = firstLine('level1.md');
   private readonly reviewContract = firstLine('review1.md');
   private readonly leadContract = firstLine('lead1.md');
+  private readonly kerriganContract = firstLine('kerrigan1.md');
 
   /** What answers when the queue is empty: only for test/support/demo.ts, where a person types. Checks leave it unset. */
   fallback: Script | null = null;
@@ -178,6 +179,12 @@ export class FakeCopilot {
   }
 
   async answer(chat: FakeConversation, m: Sent): Promise<string> {
+    // Kerrigan's contract, when she directs a conversation (2026-11-12): answered like the others.
+    if (m.text.includes(this.kerriganContract)) {
+      chat.kerrigan = true;
+      m.contract = 'kerrigan';
+      return 'Hello, I am Kerrigan. Give me the tasks.';
+    }
     // The lead's contract of the two-chat mode (2026-10-20): answered like the others, without a scripted reply.
     if (m.text.includes(this.leadContract)) {
       chat.lead = true;
@@ -524,6 +531,27 @@ export const reply = {
   /** Not JSON at all: what a chat that forgot the format sends. */
   prose(text = 'Sure! I will get right on that.'): string {
     return text;
+  },
+  /** Kerrigan's replies, in the format of prompts/kerrigan1.md (2026-11-12). */
+  kerrigan: {
+    send(
+      prompt = 'Create result.txt at the root of the project holding exactly the word hello, then read it back with Get-Content and report what it printed.',
+      extra: Partial<{ understanding: string; notes: string; sources: string[]; chat: 'new' | 'same'; title: string; planMode: boolean; twoChats: boolean; review: boolean; skill: string }> = {},
+    ): string {
+      return fenced({ status: 'send', chat: 'new', title: 'Write result.txt', planMode: false, twoChats: false, review: false, skill: '', ...extra, prompt });
+    },
+    answer(over: Partial<{ option: number; options: number[]; text: string; decision: 'approve' | 'revise'; note: string; choice: string; why: string; notes: string; sources: string[] }>): string {
+      return fenced({ status: 'answer', why: 'the task says so', ...over });
+    },
+    ask(over: Partial<{ question: string; why: string; options: string[]; multiple: boolean; suggestion: string; understanding: string; notes: string }> = {}): string {
+      return fenced({ status: 'ask', ...over });
+    },
+    done(report = 'Done: result.txt is at the root of the project and holds hello; the chat read it back with Get-Content.', evidence: string[] = [], extra: { notes?: string; understanding?: string } = {}): string {
+      return fenced({ status: 'done', report, evidence, ...extra });
+    },
+    blocked(summary = 'The chat looked for the project the task names and it is not in the folder, nor in the mail or the files shared.', needed = 'the folder the project is in', extra: { understanding?: string } = {}): string {
+      return fenced({ status: 'blocked', summary, needed, ...extra });
+    },
   },
   /** The lead's replies, in the format of prompts/lead1.md (two chats, 2026-10-20). */
   lead: {

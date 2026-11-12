@@ -63,7 +63,7 @@ import { composeHandoff, type NotRun } from '../session/handoff.js';
 import { ProgressWatch } from './progress.js';
 import { contractConflicts, readsTreeClean } from './contract.js';
 import { commitFiles, treeFingerprint } from '../vcs/git.js';
-import type { HandoffCard, HandoffOutcome, PendingApproval, RetryChoice, TaskStats } from '../session/model.js';
+import type { HandoffCard, HandoffOutcome, KerriganOnCard, PendingApproval, RetryChoice, TaskSkill, TaskStats } from '../session/model.js';
 import type { SessionStore } from '../session/store.js';
 import type { EventBus } from '../session/events.js';
 import type { Acting, Actor, PlanMode, Session, SessionStart, Task, TaskAttempt, TaskCheck, TaskLimit, TaskPlan, TaskRunGroup, TaskReview, TaskReviewCheck, TaskStatus } from '../session/model.js';
@@ -74,6 +74,7 @@ import { artifactPatterns, artifactState, keepArtifacts, type ArtifactState } fr
 import { exportMachine, writeAttemptRecord } from '../session/exports.js';
 import type { Hold } from './hold.js';
 import { runLeadTask } from './leadRunner.js';
+import { runKerriganTask } from './kerriganRunner.js';
 
 export type TaskOutcome = {
   status: Extract<TaskStatus, 'done' | 'blocked' | 'failed' | 'aborted' | 'limit-reached'>;
@@ -165,7 +166,7 @@ export type RunDeps = {
    * answer is approve (with a note, optionally), revise (with what to change) or stop. Absent, or in a run
    * that does not ask, the runner approves the plan itself. See `PlanMode`.
    */
-  approvePlan?: (ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan; actor?: Actor }) => Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string }>;
+  approvePlan?: (ask: { sessionId: string; taskId: string; title: string; plan: TaskPlan; actor?: Actor; onCard?: (card: CardHandle<PlanAnswer>) => void }) => Promise<{ decision: 'approve' | 'revise' | 'stop'; note?: string; by?: 'kerrigan' }>;
   /**
    * The two-chat mode (2026-10-20): the lead's question for the operator, put to them on a card in the conversation; the
    * answer is text, or the operator stops the task. Absent (the terminal), the lead is told nobody can answer.
@@ -182,14 +183,51 @@ export type RunDeps = {
     /** Commands the chat hands to the operator to run themselves (2026-10-26); answered with what they printed, a correction, or not run. */
     handoff?: HandoffCard;
     actor?: Actor;
-  }) => Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string } | 'stop'>;
+    /** Kerrigan directs the run (2026-11-12): the card, once it is up, for her to answer in the operator's place. */
+    onCard?: (card: CardHandle<QuestionAnswer>) => void;
+  }) => Promise<{ answer: string; ran?: boolean; outcome?: HandoffOutcome; chosen?: string[]; written?: string; by?: 'kerrigan' } | 'stop'>;
   /**
    * Two chats (2026-10-25): what to do with a subtask that failed for a technical reason, asked of the operator on a card
    * under the subtask (`sessionId`/`taskId`: the worker's attempt it is shown at). Absent: nobody is there to ask.
    */
-  askSubtaskRetry?: (ask: { sessionId: string; taskId: string; retry: NonNullable<PendingApproval['retry']> }) => Promise<RetryChoice | 'stop'>;
-  /** The two-chat mode: the worker's session the run now also speaks for, so its steps and cards are the run's. */
-  onWorker?: (workerSessionId: string) => void;
+  askSubtaskRetry?: (ask: { sessionId: string; taskId: string; retry: NonNullable<PendingApproval['retry']>; onCard?: (card: CardHandle<RetryChoice>) => void }) => Promise<RetryChoice | 'stop'>;
+  /**
+   * The two-chat mode: the worker's session the run now also speaks for, so its steps and cards are the run's. A chat
+   * Kerrigan directs (2026-11-12) is one too, and its worker is the chat's: `parent` says whose.
+   */
+  onWorker?: (workerSessionId: string, parent?: string) => void;
+  /**
+   * Kerrigan directs this run (2026-11-12): the chats' questions go to a card, which she answers, even when Settings agree
+   * with what the bot proposes — she knows the task; the first answer is only the chat's guess.
+   */
+  directed?: boolean;
+  /** What a conversation Kerrigan directs needs of the program: the facts she is told, and a skill by its name. */
+  kerrigan?: KerriganHooks;
+};
+
+/** A question's answer as Kerrigan gives it: by the place of the answers chosen, or in words. */
+export type QuestionAnswer = { text: string; chosen?: number[] };
+export type PlanAnswer = { decision: 'approve' | 'revise'; note?: string };
+
+/**
+ * A card up for the operator, handed to Kerrigan to answer in their place (2026-11-12). The operator may answer it first;
+ * then `open` is false and her answer is not taken.
+ */
+export type CardHandle<A> = {
+  id: string;
+  /** Nobody has answered it yet. */
+  open(): boolean;
+  /** Answers it as a press of the operator's would, said to be hers, with why. */
+  answer(a: A, why: string): { ok: boolean; problem?: string };
+  /** What she is doing about it, shown on the card. */
+  mark(state: KerriganOnCard | null): void;
+};
+
+export type KerriganHooks = {
+  /** The facts of this machine she is told when her conversation begins (`kerriganBrief`). */
+  brief(): Promise<string>;
+  /** A skill of Settings by its name, for the folder; null when there is none. */
+  skill(name: string, dir: string): Promise<TaskSkill | null>;
 };
 
 /**
@@ -598,6 +636,11 @@ const speakers = new WeakMap<ChatTransport, { id: string; alone?: boolean }>();
  * (2026-10-19), which goes from one conversation to the next and belongs to none of them: a batch's window is opened
  * under the batch, whose log is the run's, but the chat's is opened by whichever message came first.
  */
+/** Whose session the window speaks for now (see `speakFor`), to give it back after a turn of another's (2026-11-12). */
+export function spokenFor(transport: ChatTransport): string | undefined {
+  return speakers.get(transport)?.id;
+}
+
 export function speakFor(transport: ChatTransport, sessionId: string, opts: { alone?: boolean } = {}): void {
   const speaker = speakers.get(transport);
   if (!speaker) return;
@@ -827,14 +870,15 @@ export function roleOf(session: Pick<Session, 'workerOf' | 'lead'>): { role?: 'l
 }
 
 /** Who is at work, as the run's transcript and the Output panel say it. */
-export const ACTOR_WORDS: Record<Actor, string> = { plan: 'the chat writing its plan', lead: 'the lead', worker: 'the worker', review: 'the reviewer' };
+export const ACTOR_WORDS: Record<Actor, string> = { plan: 'the chat writing its plan', lead: 'the lead', worker: 'the worker', review: 'the reviewer', kerrigan: 'Kerrigan' };
 
 /**
  * Who a session's conversation is, for a card it raises before its first message (2026-10-22): the lead or the worker
  * of two chats, the chat that writes its plan first in plan mode, or else the chat that does the work.
  */
-export function actorOfSession(session: Pick<Session, 'workerOf' | 'lead' | 'planMode'>, cfg: { execution?: { planMode?: PlanMode } }): Actor {
+export function actorOfSession(session: Pick<Session, 'workerOf' | 'lead' | 'planMode' | 'kerrigan'>, cfg: { execution?: { planMode?: PlanMode } }): Actor {
   if (session.workerOf) return 'worker';
+  if (session.kerrigan) return 'kerrigan';
   if (session.lead) return 'lead';
   return (session.planMode ?? cfg.execution?.planMode ?? 'off') !== 'off' ? 'plan' : 'worker';
 }
@@ -898,7 +942,7 @@ export async function openSessionTransport(
  * on every run (operator's rule, 2026-10-06: what is set in Settings outranks the same thing in the JSON).
  */
 export function effectiveModels(
-  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'manualModel' | 'lead'>,
+  session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'manualModel' | 'lead'> & Partial<Pick<Session, 'kerrigan'>>,
   cfg: Pick<ResolvedConfig, 'copilot'>,
 ): { model: string; reviewModel: string; modelFrom: 'session' | 'settings' | 'plan' | 'none'; reviewModelFrom: 'session' | 'settings' | 'plan' | 'none' } {
   const pick = (own: string, source: 'plan' | 'operator' | undefined, settings: string): [string, 'session' | 'settings' | 'plan' | 'none'] =>
@@ -908,7 +952,9 @@ export function effectiveModels(
    * Settings' model for the conversation's part (2026-10-23): the lead's for the lead of two chats — the worker's when
    * none is chosen for the lead, as before there were two — else the worker's.
    */
-  const fromSettings = ((session.lead ? cfg.copilot.defaultLeadModel?.trim() || cfg.copilot.defaultModel : cfg.copilot.defaultModel) ?? '').trim();
+  // Kerrigan directs as the lead does (2026-11-12): her conversation takes Settings' model for the lead.
+  const directs = !!session.lead || !!session.kerrigan;
+  const fromSettings = ((directs ? cfg.copilot.defaultLeadModel?.trim() || cfg.copilot.defaultModel : cfg.copilot.defaultModel) ?? '').trim();
   const [model, modelFrom]: [string, 'session' | 'settings' | 'plan' | 'none'] = session.manualModel ? ['', 'none'] : pick((session.model ?? '').trim(), session.modelSource, fromSettings);
   const [reviewModel, reviewModelFrom] = pick((session.review?.model ?? '').trim(), session.reviewModelSource, (cfg.copilot.defaultReviewModel ?? '').trim());
   return { model, reviewModel, modelFrom, reviewModelFrom };
@@ -919,9 +965,9 @@ export function effectiveModels(
  * every run, the session says so ("Set the model by hand" in the chat's picker), or it is a chat that names no
  * model and has none from Settings either — its picker shows "by hand" for that, and what it shows is what happens.
  */
-export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'lead'>, cfg: Pick<ResolvedConfig, 'copilot'>): boolean {
-  // Settings' "by hand" for the conversation's part (2026-10-23): the lead's has its own, absent as the worker's.
-  const settingsSay = session.lead ? (cfg.copilot.leadManualModel ?? cfg.copilot.manualModel) : cfg.copilot.manualModel;
+export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'lead'> & Partial<Pick<Session, 'kerrigan'>>, cfg: Pick<ResolvedConfig, 'copilot'>): boolean {
+  // Settings' "by hand" for the conversation's part (2026-10-23): the lead's has its own, absent as the worker's; Kerrigan's is the lead's.
+  const settingsSay = session.lead || session.kerrigan ? (cfg.copilot.leadManualModel ?? cfg.copilot.manualModel) : cfg.copilot.manualModel;
   if (settingsSay || session.manualModel) return true;
   return session.kind === 'chat' && !effectiveModels(session, cfg).model;
 }
@@ -3233,10 +3279,13 @@ export async function runTask(
       if (reply.status === 'ask') {
         const question = (reply.question ?? '').trim();
         const options = reply.options;
-        const agree = cfg.execution.questions === 'agree' || !deps.askQuestion;
+        // Kerrigan directs (2026-11-12): the question goes to its card, which she answers, whatever Settings say.
+        const agree = (cfg.execution.questions === 'agree' && !deps.directed) || !deps.askQuestion;
         let answer = options[0]!.answer;
         // A question of several answers (2026-11-02): the ones the operator chose, and what they wrote besides.
         let many: { chosen: string[]; written?: string } | undefined;
+        // Answered by Kerrigan in the operator's place: no click of theirs, so no command runs by it unasked.
+        let byKerrigan = false;
         if (agree) {
           sink.event('question-agreed', { question, answer, why: cfg.execution.questions === 'agree' ? 'settings' : 'nobody to ask' },
             `the chat asked: ${question} — answered as it recommends (${cfg.execution.questions === 'agree' ? 'Settings agree with what the bot proposes' : 'nobody is there to ask'}): ${answer}`);
@@ -3260,25 +3309,27 @@ export async function runTask(
           });
           if (got === 'stop' || signal?.aborted) return await finish('aborted', 'stopped by the operator at its question', undefined, lastMarkdown);
           answer = got.answer;
+          byKerrigan = got.by === 'kerrigan';
           if (got.chosen) many = { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) };
-          sink.event('question-answered', { question, answer, ...(many ? { chosen: many.chosen } : {}) }, `the operator answered: ${answer}`);
+          sink.event('question-answered', { question, answer, ...(many ? { chosen: many.chosen } : {}), ...(byKerrigan ? { by: 'kerrigan' } : {}) }, `${byKerrigan ? 'Kerrigan answered' : 'the operator answered'}: ${answer}`);
         }
         await record('QUESTION', `${question}\n\nAnswer${agree ? ' (as the chat recommends)' : ''}: ${answer}`);
         const chosen = many ? undefined : options.find((o) => o.answer === answer);
         if (chosen?.run) {
           // Run as this reply's one step: through the step loop below, its output reported as any step's.
-          chosenRun = agree && deps.askQuestion === undefined ? null : chosen.run.trim();
+          // Kerrigan's answer is no click of the operator's (2026-11-12): its command is asked about as any step is.
+          chosenRun = (agree && deps.askQuestion === undefined) || byKerrigan ? null : chosen.run.trim();
           const mutable = reply as { status: string; steps: Step[] };
           mutable.status = 'continue';
           mutable.steps = [{ id: 1, type: 'command', cmd: chosen.run, ...(chosen.shell ? { shell: chosen.shell } : {}) } as Step];
           runnerNotes.push(
-            `${agree ? 'The runner took your recommended answer' : 'The operator answered your question'} ("${question}"): "${answer}". ` +
+            `${agree ? 'The runner took your recommended answer' : byKerrigan ? 'Kerrigan, who directs this work for the operator, answered your question' : 'The operator answered your question'} ("${question}"): "${answer}". ` +
               'The runner ran the command that answer carries — step 1 below, its output with it. Go on from there.',
           );
         } else {
           const message = many
-            ? `The operator answered your question ("${question}"), ${chosenSaid(many)}\n\nGo on with the work from here, in the same format.`
-            : `${agree ? 'The runner took your recommended answer' : 'The operator answered your question'} ("${question}"): "${answer}".\n\n` +
+            ? `${byKerrigan ? 'Kerrigan, who directs this work for the operator, answered your question' : 'The operator answered your question'} ("${question}"), ${chosenSaid(many)}\n\nGo on with the work from here, in the same format.`
+            : `${agree ? 'The runner took your recommended answer' : byKerrigan ? 'Kerrigan, who directs this work for the operator, answered your question' : 'The operator answered your question'} ("${question}"): "${answer}".\n\n` +
               'Go on with the work from here, in the same format.';
           await record('ANSWER', message);
           await pacer.throttleSend();
@@ -3323,7 +3374,7 @@ export async function runTask(
            * turned it on to see the plan before anything changes, whether the commands are then asked about or not.
            */
           const asks = planMode === 'approve' && !!deps.approvePlan && (session.kind === 'chat' || (deps.currentMode?.() ?? cfg.execution.mode) === 'confirm');
-          let answer: { decision: 'approve' | 'revise' | 'stop'; note?: string } = { decision: 'approve' };
+          let answer: { decision: 'approve' | 'revise' | 'stop'; note?: string; by?: 'kerrigan' } = { decision: 'approve' };
           if (asks) {
             sink.event('plan-waiting', { version: planVersion }, `plan ${planVersion} is waiting for the operator`, 'warn');
             answer = await deps.approvePlan!({ sessionId: session.id, taskId: task.id, title: task.title, plan, actor: 'plan' });
@@ -3337,13 +3388,13 @@ export async function runTask(
             await setTask((t) => {
               if (t.plan) t.plan.revisions = [...planRevisions];
             });
-            sink.event('plan-revise', { version: planVersion, comment }, `the operator asked for another plan: ${comment}`);
-            message = planReviseMessage(comment, planVersion);
+            sink.event('plan-revise', { version: planVersion, comment, ...(answer.by ? { by: answer.by } : {}) }, `${answer.by === 'kerrigan' ? 'Kerrigan' : 'the operator'} asked for another plan: ${comment}`);
+            message = planReviseMessage(comment, planVersion, answer.by === 'kerrigan');
           } else {
             // Who approved it, and why the operator was not asked when they were not.
             const why = asks ? undefined : planMode === 'auto' ? 'plan mode approves plans automatically' : 'the run does not ask before each command';
             const approved = {
-              by: asks ? ('operator' as const) : ('auto' as const),
+              by: asks ? (answer.by === 'kerrigan' ? ('kerrigan' as const) : ('operator' as const)) : ('auto' as const),
               at: new Date().toISOString(),
               ...(answer.note?.trim() ? { note: answer.note.trim() } : {}),
               ...(why ? { why } : {}),
@@ -3353,7 +3404,7 @@ export async function runTask(
             });
             planInForce = { ...plan, approved };
             sink.event('plan-approved', { version: planVersion, by: approved.by, ...(approved.note ? { note: approved.note } : {}) },
-              `plan ${planVersion} approved ${asks ? 'by the operator' : `by the runner — ${why}`}${approved.note ? `, with a note` : ''}`);
+              `plan ${planVersion} approved ${asks ? (approved.by === 'kerrigan' ? 'by Kerrigan' : 'by the operator') : `by the runner — ${why}`}${approved.note ? `, with a note` : ''}`);
             planning = false;
             await actingNow('worker');
             message = planApprovedMessage(approved);
@@ -4083,6 +4134,20 @@ export async function runSession(
        * subtasks (see `leadRunner.ts`). Not carried on or retried in a fresh chat here: the lead decides what to do when
        * a subtask falls short, and its own limits bound it.
        */
+      /*
+       * A message of a conversation Kerrigan directs (2026-11-12): she writes the messages for chats of their own and
+       * answers their cards (see `kerriganRunner.ts`). Not carried on here: she decides what to do with a result.
+       */
+      if (session.kerrigan && session.kind === 'chat') {
+        const led = await runKerriganTask(chat, session, task, deps);
+        ran += 1;
+        lastStatus = led.status;
+        if (chat.closedOutside()) {
+          bus.publish({ sessionId, type: 'session-stopped', level: 'info', message: 'the browser window was closed; the tasks after this one stay queued' });
+          break;
+        }
+        continue;
+      }
       if (session.lead && session.kind === 'chat') {
         const led = await runLeadTask(chat, session, task, deps);
         ran += 1;

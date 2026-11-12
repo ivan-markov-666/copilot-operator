@@ -91,12 +91,20 @@ await scenario('a message with a skill: its instructions go to Copilot, and the 
   const other = join(h.base, 'other-project');
   mkdirSync(other, { recursive: true });
   await h.call('PUT', '/project', { others: [{ name: 'other', rootDir: other }] });
-  await h.call('PUT', '/skills', { skills: [TEST_SKILL, { name: 'elsewhere', description: '', text: 'For the other project.', projectDir: other }] });
+  // What a skill says for Kerrigan (2026-11-12): its phases, its result and what it needs; one with none, its instructions.
+  const FOR_KERRIGAN = 'Phases: 1. find the page 2. write the test 3. run it. Result: one new passing test. Needs: the page and what it must show.';
+  await h.call('PUT', '/skills', { skills: [{ ...TEST_SKILL, forKerrigan: FOR_KERRIGAN }, { name: 'elsewhere', description: '', text: 'For the other project.', projectDir: other }] });
+  t.check('what a skill says for Kerrigan is kept', (await h.call<{ skills: Array<{ name: string; forKerrigan: string }> }>('GET', '/skills')).skills.map((k) => [k.name, k.forKerrigan]), [['new-test', FOR_KERRIGAN], ['elsewhere', '']]);
+  t.truthy('and held to a few lines', (await refusal(h, 'PUT', '/skills', { skills: [{ ...TEST_SKILL, forKerrigan: 'x'.repeat(3001) }] })).includes('longer than 3000 characters'), '');
   t.truthy('a skill for another project is refused here, saying whose it is', (await refusal(h, 'POST', '/chat', { text: 'x y z', skill: 'elsewhere' })).includes('not for the folder this chat works in'), '');
   t.truthy('one that is not there: refused, with the ones there are', (await refusal(h, 'POST', '/chat', { text: 'x y z', skill: 'nope' })).includes('there are new-test'), await refusal(h, 'POST', '/chat', { text: 'x y z', skill: 'nope' }));
 
   const kerrigan = await h.call<{ text: string }>('GET', '/kerrigan?lang=en');
-  t.truthy('Kerrigan lists the skills, each with its project', kerrigan.text.includes('## The skills') && kerrigan.text.includes('`/new-test` (every project) — Adding an automated test') && kerrigan.text.includes('`/elsewhere` (other)'), kerrigan.text.slice(kerrigan.text.indexOf('## The skills'), kerrigan.text.indexOf('## How you help')));
+  const listed = kerrigan.text.slice(kerrigan.text.indexOf('## The skills'), kerrigan.text.indexOf('## The way you work'));
+  t.truthy('Kerrigan lists the skills, each with its project and what it is for', listed.includes('### `/new-test` (every project)\n\nAdding an automated test') && listed.includes('### `/elsewhere` (other)'), listed);
+  t.truthy('a skill that says what it is for Kerrigan: that, and not its instructions', listed.includes(FOR_KERRIGAN) && !listed.includes(TEST_SKILL.text), listed);
+  t.truthy('one that says nothing for her: its instructions whole, said to be them', listed.includes('Nothing is written for you with it; its instructions, as the bot sends them:') && listed.includes('```text\nFor the other project.\n```'), listed);
+  t.truthy('and the way she works, from the task to the work done', kerrigan.text.includes('## The way you work: from the task to the work done') && kerrigan.text.includes('**this task does not go to** **"Kerrigan directs"**'), '');
 });
 
 await scenario('a note to a message at work cannot carry a skill', async (h) => {

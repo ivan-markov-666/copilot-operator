@@ -26,6 +26,15 @@ function fail(e: unknown): never {
   throw new BadRequestException((e as Error).message);
 }
 
+/** The files a stage or unstage names: `all`, or a list of paths as the Git view lists them. */
+function stagedWhich(body: { paths?: unknown; all?: unknown }): string[] | 'all' {
+  if (body?.all === true) return 'all';
+  if (!Array.isArray(body?.paths) || body.paths.length === 0 || !body.paths.every((p) => typeof p === 'string' && p.length > 0 && p.length < 4096)) {
+    throw new BadRequestException('paths must be a list of the files to stage or unstage, or all: true');
+  }
+  return (body.paths as string[]).slice(0, 5000);
+}
+
 /**
  * `fail` for a route that writes its own response, as the downloads do: the request's own problem
  * as plain text with a 400, and a settings file or a policy lock that cannot be used passed on to
@@ -374,6 +383,50 @@ export class OperatorController {
     return this.ops.workspaceGitCounts(base || undefined).catch(fail);
   }
 
+  /**
+   * The operator's own git from the Git view (2026-11-11, see `vcs/operatorGit.ts`): files of its lists staged or
+   * unstaged (`paths`, or `all`); a commit (`message`, `all` to commit everything) and a push, each started and then
+   * followed through `workspace/git/op`; `hooks: 'skip'` runs neither without the project's hooks, `trust` runs the ones
+   * named (path and hash, as the view showed them) although they are not the project's own. Refused while a task, the
+   * queue or another commit or push is at work in the folder.
+   */
+  @Post('workspace/git/stage')
+  gitStage(@Body() body: { paths?: unknown; all?: unknown } = {}): Promise<unknown> {
+    return this.ops.gitStage('stage', stagedWhich(body)).catch(fail);
+  }
+
+  @Post('workspace/git/unstage')
+  gitUnstage(@Body() body: { paths?: unknown; all?: unknown } = {}): Promise<unknown> {
+    return this.ops.gitStage('unstage', stagedWhich(body)).catch(fail);
+  }
+
+  @Post('workspace/git/commit')
+  gitCommit(@Body() body: { message?: unknown; all?: unknown; hooks?: unknown; trust?: unknown } = {}): Promise<unknown> {
+    return this.ops.gitCommit(body ?? {}).catch(fail);
+  }
+
+  @Post('workspace/git/push')
+  gitPush(@Body() body: { hooks?: unknown; trust?: unknown } = {}): Promise<unknown> {
+    return this.ops.gitPush(body ?? {}).catch(fail);
+  }
+
+  /** The commit or push running now, or the last one: `{ op: null }` before the first. */
+  @Get('workspace/git/op')
+  gitOp(): { op: unknown } {
+    return { op: this.ops.gitOpState() };
+  }
+
+  /** The operator's name and e-mail as git has them; and set, here (`global` false) or for every repository. */
+  @Get('workspace/git/identity')
+  gitIdentity(): Promise<unknown> {
+    return this.ops.gitIdentity().catch(fail);
+  }
+
+  @Put('workspace/git/identity')
+  setGitIdentity(@Body() body: { name?: unknown; email?: unknown; global?: unknown } = {}): Promise<unknown> {
+    return this.ops.setGitIdentity(body ?? {}).catch(fail);
+  }
+
   @Get('workspace/git/commit')
   workspaceCommit(@Query('sha') sha?: string): Promise<unknown> {
     if (!sha) throw new BadRequestException('sha is required');
@@ -397,7 +450,7 @@ export class OperatorController {
 
   /** A message in the chat: a task of its conversation (made in the open folder if there is none), or a note while it works. */
   @Post('chat')
-  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; reviewModel?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown } = {}): Promise<unknown> {
+  chatSend(@Body() body: { text?: unknown; threadId?: unknown; model?: unknown; manualModel?: unknown; lang?: unknown; planMode?: unknown; review?: unknown; reviewModel?: unknown; lead?: unknown; workerModel?: unknown; workerManualModel?: unknown; skill?: unknown; kerrigan?: unknown; chatModel?: unknown; chatManualModel?: unknown } = {}): Promise<unknown> {
     if (typeof body?.text !== 'string' || !body.text.trim()) throw new BadRequestException('text is required');
     return this.ops
       .chatSend({
@@ -417,6 +470,10 @@ export class OperatorController {
         ...(body.workerManualModel === true ? { workerManualModel: true } : {}),
         // The skill chosen for this message (2026-10-21), by its name.
         ...(typeof body.skill === 'string' && body.skill.trim() ? { skill: body.skill } : {}),
+        // Kerrigan directs, for a new conversation (2026-11-12): the model of the chats she sends to, as chosen beside hers.
+        ...(body.kerrigan === true ? { kerrigan: true } : {}),
+        ...(typeof body.chatModel === 'string' && body.chatModel.trim() ? { chatModel: body.chatModel } : {}),
+        ...(body.chatManualModel === true ? { chatManualModel: true } : {}),
       })
       .catch(fail);
   }

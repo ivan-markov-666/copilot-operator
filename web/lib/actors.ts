@@ -8,8 +8,8 @@ import type { Key } from './lang/types';
 
 type Translate = (key: Key, vars?: Record<string, string | number>) => string;
 
-export const ACTOR_NAME: Record<Actor, Key> = { plan: 'actor.plan', lead: 'actor.lead', worker: 'actor.worker', review: 'actor.review' };
-export const ACTOR_INFO: Record<Actor, Key> = { plan: 'actor.planInfo', lead: 'actor.leadInfo', worker: 'actor.workerInfo', review: 'actor.reviewInfo' };
+export const ACTOR_NAME: Record<Actor, Key> = { plan: 'actor.plan', lead: 'actor.lead', worker: 'actor.worker', review: 'actor.review', kerrigan: 'actor.kerrigan' };
+export const ACTOR_INFO: Record<Actor, Key> = { plan: 'actor.planInfo', lead: 'actor.leadInfo', worker: 'actor.workerInfo', review: 'actor.reviewInfo', kerrigan: 'actor.kerriganInfo' };
 
 /** The actor's name, with the subtask or the review's round when there is one: "Worker · subtask 3". */
 export function actorLabel(t: Translate, actor: Actor, acting?: Pick<Acting, 'subtask' | 'round'>): string {
