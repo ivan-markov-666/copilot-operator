@@ -121,6 +121,23 @@ name the chat was given in the sidebar. A conversation that will not open again 
 `ChatLost` and nothing sent, to it or to the page found. The lead and the worker of two chats share
 one window, so each is held to its own conversation.
 
+**The window opened again** (2026-11-13). The operator: "if I close the browser with the chat by
+accident, the bot should carry the task on from where it got to". Every window the runner holds
+comes from `createTransport` wrapped in `KeptWindow` (`transport/keptWindow.ts`), so the real
+window and the checks' scripted chat go through the same rules. While a message is at work
+(`holdWindow`, set by `runSession` for each message with `limits.reopenWindow`, 3 by default), a
+window closed under it — its X, or Edge ending — is started again at once on the same profile
+(`CopilotTransport.reopen`: tried again while the Edge that was closed still holds the profile,
+then back on the conversation by its address, a sign-in, or its name). The work goes on there:
+what was to be sent is sent in the new window (results of commands that ran meanwhile, an answer
+given on a card); a message the window closed on while it was being sent goes again, marked as a
+copy; an answer the chat was writing reached no window and is not read from the page opened again,
+so the chat is asked to send it again. Past the number, or when the window cannot be put back (a
+conversation with no address yet, Edge that will not start), the message stops with why
+(`WindowClosed`), and "Continue" under the conversation's last message (`chatContinue`) carries it
+on from where it got to, telling the chat which of its last commands ran (`readInterruption`).
+0 keeps the old way: the X stops the message. Between messages nothing is held.
+
 #### Profile and popups
 
 - Owns the profile directory path and a lock file so two bot instances never open the same profile.
@@ -512,6 +529,7 @@ CLI commands:
 | Situation | Behaviour |
 |---|---|
 | Session expired mid-run | Pause in `WAIT_FOR_HUMAN_LOGIN`, print instructions, resume the same chat if still open, else fail the run. |
+| The window closed while a message is at work (its X, Edge ending) | Opened again at once on its conversation, up to `limits.reopenWindow` times per message; the work goes on there, an answer being written asked for again. Past that, stopped with why, and "Continue" carries it on. See "The window opened again". |
 | The window left its conversation (a pause, a card, a sign-in) | Before the next message, back to it by its address, then by its name; else the task fails with `ChatLost` and nothing is sent anywhere. See "Held to its conversation". |
 | UI changed, locator not found | Screenshot + HTML dump to `runs/<id>/`, fail fast with a message naming the locator key in `locators.ts`. |
 | Copilot reply never finishes | `replyTimeoutSec` (default 600), then send "please resend the last answer in the required format" once, then fail. |

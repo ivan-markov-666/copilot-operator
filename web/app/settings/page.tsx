@@ -1437,6 +1437,8 @@ function ExecutionSection() {
   const [retries, setRetries] = useState(2);
   /** Times a task a limit stopped is carried on by itself (`limits.autoContinue`). */
   const [autoContinue, setAutoContinue] = useState(3);
+  /** Times the chat's window, closed while a message is at work, is opened again for it (`limits.reopenWindow`, 2026-11-13). */
+  const [reopenWindow, setReopenWindow] = useState(3);
   const [approaches, setApproaches] = useState(2);
   const [reviewRounds, setReviewRounds] = useState(2);
   const [iterations, setIterations] = useState(60);
@@ -1487,6 +1489,7 @@ function ExecutionSection() {
           maxIterations?: number;
           maxRunMinutes?: number;
           autoContinue?: number;
+          reopenWindow?: number;
           maxSubtasks?: number;
           maxKerriganSends?: number;
           maxMessageChars?: number;
@@ -1495,6 +1498,7 @@ function ExecutionSection() {
           subtaskRetryWaitSec?: number;
         };
         setAutoContinue(typeof limits.autoContinue === 'number' ? limits.autoContinue : 3);
+        setReopenWindow(typeof limits.reopenWindow === 'number' ? limits.reopenWindow : 3);
         setRetries(typeof limits.retryBlockedInFreshChat === 'number' ? limits.retryBlockedInFreshChat : 2);
         setApproaches(typeof limits.minApproachesBeforeBlocked === 'number' ? limits.minApproachesBeforeBlocked : 2);
         setReviewRounds(typeof limits.maxReviewRounds === 'number' ? limits.maxReviewRounds : 2);
@@ -1562,6 +1566,7 @@ function ExecutionSection() {
   };
   const saveRetriesLater = useDebouncedSave((n: number) => write('limits', 'retryBlockedInFreshChat', n));
   const saveAutoContinueLater = useDebouncedSave((n: number) => write('limits', 'autoContinue', n));
+  const saveReopenWindowLater = useDebouncedSave((n: number) => write('limits', 'reopenWindow', n));
   const saveApproachesLater = useDebouncedSave((n: number) => write('limits', 'minApproachesBeforeBlocked', n));
   const saveReviewRoundsLater = useDebouncedSave((n: number) => write('limits', 'maxReviewRounds', n));
   const saveIterationsLater = useDebouncedSave((n: number) => write('limits', 'maxIterations', n));
@@ -1581,6 +1586,8 @@ function ExecutionSection() {
   const numbers: Array<{ id: string; label: string; info: string; unit: string; value: number; min: number; max: number; set: (n: number) => void; later: (n: number) => void }> = [
     // Keep going until done (2026-10-14): first, as it decides whether a limit ends the work at all.
     { id: 'auto-continue', label: t('exec.autoContinue'), info: t('exec.autoContinueWhy'), unit: t('exec.autoContinueUnit'), value: autoContinue, min: 0, max: 20, set: setAutoContinue, later: saveAutoContinueLater },
+    // The window closed under the work (2026-11-13): opened again on its conversation, and the work goes on there.
+    { id: 'reopen-window', label: t('exec.reopenWindow'), info: t('exec.reopenWindowWhy'), unit: t('exec.reopenWindowUnit'), value: reopenWindow, min: 0, max: 10, set: setReopenWindow, later: saveReopenWindowLater },
     { id: 'min-approaches', label: t('exec.minApproaches'), info: t('exec.minApproachesWhy'), unit: t('exec.minApproachesUnit'), value: approaches, min: 2, max: 20, set: setApproaches, later: saveApproachesLater },
     { id: 'max-review-rounds', label: t('exec.maxReviewRounds'), info: t('exec.maxReviewRoundsWhy'), unit: t('exec.maxReviewRoundsUnit'), value: reviewRounds, min: 1, max: 6, set: setReviewRounds, later: saveReviewRoundsLater },
     { id: 'retry-blocked', label: t('exec.retryBlocked'), info: t('exec.retryBlockedWhy'), unit: t('exec.retryBlockedTimes'), value: retries, min: 0, max: 5, set: setRetries, later: saveRetriesLater },

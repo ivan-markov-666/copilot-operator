@@ -192,7 +192,11 @@ export function whyItStopped(c: TaskContinuation): string {
   }
   if (c.how === 'stopped') {
     const where = c.interruption ? `\n\n${describeInterruption(c.interruption).replace(/when the runner stopped/g, 'when it was stopped')}\n\n` : ' ';
-    return `It was stopped by the operator before it finished — not because anything failed. The files are as you left them.${where}`.trimEnd();
+    // The window closed under it (2026-11-13): said as that, in the runner's own words, not as the operator's Stop.
+    const first = /browser window/.test(c.stoppedBecause ?? '')
+      ? `It stopped because the browser window this conversation is in was closed (${c.stoppedBecause}) — not because anything failed.`
+      : 'It was stopped by the operator before it finished — not because anything failed.';
+    return `${first} The files are as you left them.${where}`.trimEnd();
   }
   const why = c.stoppedBecause ? ` (${c.stoppedBecause})` : '';
   // Out of rounds of fixing: something did say no, and the chat needs to hear it was not waved through.

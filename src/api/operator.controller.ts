@@ -546,6 +546,12 @@ export class OperatorController {
     return result;
   }
 
+  /** "Continue" (2026-11-13): the last message of a conversation, stopped before it was done, carried on from where it got to. */
+  @Post('chat/:id/tasks/:taskId/continue')
+  chatContinue(@Param('id') id: string, @Param('taskId') taskId: string): Promise<unknown> {
+    return this.ops.chatContinue(id, taskId).catch(fail);
+  }
+
   /** After a Stop (two chats, 2026-10-25): the stopped message carried on with one of its subtasks tried again first. */
   @Post('chat/:id/tasks/:taskId/retry-subtask')
   chatRetrySubtask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() body: { n?: unknown; fresh?: unknown } = {}): Promise<unknown> {

@@ -306,6 +306,14 @@ export class WindowClosed extends Error {
   }
 }
 
+/** Said when a window closed under the work cannot be put back on its conversation: it had no address yet. */
+export const NO_ADDRESS_YET =
+  'the browser window was closed before its conversation had an address, so it could not be found again; nothing more was sent';
+
+/** How many times Edge is started again on the profile when a window is reopened, and the pause between (see `reopen`). */
+const REOPEN_TRIES = 10;
+const REOPEN_PAUSE_MS = 1_500;
+
 /**
  * The window had left the conversation the bot put it on, and could not be put back (operator, 2026-11-09; see
  * `ensureOnChat`): the conversation does not open again, or the sign-in the page asked for first was not done in time.
@@ -592,6 +600,38 @@ export class CopilotTransport {
   /** Whether the window went away without this code closing it: its X was pressed, or Edge ended. */
   closedOutside(): boolean {
     return this.gone;
+  }
+
+  /**
+   * The window again, after it was closed under the work (operator, 2026-11-13: "if I close the browser with the chat by
+   * accident, the bot should carry the task on from where it got to"). Edge is started again on the same profile, and
+   * the window put back on the conversation it was on: by its address, after a sign-in when the page asks for one, or by
+   * its name in the sidebar (see `ensureOnChat`). The Edge that was closed may still be on its way out and holding the
+   * profile, so the start is tried again for a while. A conversation that had no address yet — closed before its first
+   * answer — cannot be found again: `WindowClosed`, with the new window open on nothing. When and how often this is done
+   * is the runner's (`KeptWindow` in keptWindow.ts); this only does it.
+   */
+  async reopen(opts: { signal?: AbortSignal } = {}): Promise<OnChat> {
+    // What `close` leaves alone, kept: the conversation the window was on, and the names given to conversations.
+    const want = this.onChat;
+    await this.close();
+    for (let tries = 1; ; tries += 1) {
+      try {
+        await this.open();
+        break;
+      } catch (e) {
+        await this.close().catch(() => undefined);
+        const busy = /already running with this profile|already in use by copilot-operator/i.test((e as Error).message);
+        if (!busy || tries >= REOPEN_TRIES || opts.signal?.aborted) throw e;
+        await new Promise((r) => setTimeout(r, REOPEN_PAUSE_MS));
+      }
+    }
+    this.onChat = want;
+    if (!want || want === 'new') throw new WindowClosed(NO_ADDRESS_YET);
+    await this.p.goto(Url.conversation(want.id), { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    // On it, as nearly always: waited for until its box is there to write in. Elsewhere (a sign-in): `ensureOnChat`.
+    if (parseChatId(this.p.url()) === want.id) await this.composerWithin(this.firstLookMs, opts.signal, 'stopped by the operator while the window was opened again');
+    return await this.ensureOnChat(opts);
   }
 
   /**

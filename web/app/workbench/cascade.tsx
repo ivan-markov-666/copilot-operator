@@ -356,6 +356,27 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
     }
     return started;
   };
+  /*
+   * "Continue" under a message that stopped before it was done (operator, 2026-11-13, "for every stop": the window closed
+   * past the times it is opened again, Stop, the bot stopped or restarted, a limit): the conversation's last message,
+   * carried on in it from where it got to.
+   */
+  const carryOn = async (task: Task): Promise<void> => {
+    if (!session || busy) return;
+    setBusy(true);
+    setSaid('');
+    try {
+      const r = await api.chatContinue(session.id, task.id);
+      if (!r.started) setSaid(r.reason ?? t('chat.carryOnNotStarted'));
+    } catch (e) {
+      setSaid((e as Error).message);
+    } finally {
+      setBusy(false);
+      void readSession();
+      void readThreads();
+      onChange();
+    }
+  };
   const rewind = async (task: Task) => {
     if (!session || busy) return;
     if (!(await confirmDialog(t('chat.rewindConfirm', { n: session.tasks.length - session.tasks.indexOf(task) })))) return;
@@ -693,6 +714,14 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
               <Turn key={task.id} n={i + 1} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />
             ),
           )
+        )}
+        {session && !running && !session.directedBy && stoppedEarly(session.tasks.at(-1)) && (
+          <div className="cs-system cs-carry" role="group" aria-label={t('chat.carryOnLabel')}>
+            <span className="grow">{t('chat.carryOnNote')}</span>
+            <button type="button" className="primary small" disabled={busy} onClick={() => void carryOn(session.tasks.at(-1)!)}>
+              {t('chat.carryOn')}
+            </button>
+          </div>
         )}
         {paused && <p className="cs-system cs-paused" role="status">{t('chat.pausedNote')}</p>}
         {/* Git asks for a password in its own window (2026-10-26): the work waits for it; said where to look. */}
@@ -1087,6 +1116,15 @@ function Ending({ task }: { task: Task }) {
       {text && <CopyButton text={text} what="chat.copySummary" />}
     </div>
   );
+}
+
+/**
+ * A message that stopped before it was done, which "Continue" carries on: stopped (the window closed past the times it is
+ * opened again, Stop, the bot stopped), at a limit, or ended by a limit's count. As `isContinuable` in session/model.ts.
+ */
+function stoppedEarly(task: Task | undefined): boolean {
+  if (!task) return false;
+  return task.status === 'aborted' || task.status === 'limit-reached' || (!!task.limit && (task.status === 'failed' || task.status === 'blocked'));
 }
 
 /** From how many lines an ending is long enough for a second "Copy" under it. */

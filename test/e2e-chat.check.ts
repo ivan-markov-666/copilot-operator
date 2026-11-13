@@ -14,8 +14,9 @@
  *   and tells the next message what was undone;
  * - the browser window stays open when the work on a message has ended, says so in it with an OK, and is the one
  *   the next message works in, in this conversation or a new one (2026-10-19); closed with its X between messages,
- *   the next one opens a new window; closed while a message is worked, that message is stopped, not failed; Stop
- *   leaves it open; a run that is not the chat's, reading the models, and closing the program close it.
+ *   the next one opens a new window; closed while a message is worked, it is opened again on its conversation and the
+ *   work goes on (2026-11-13; e2e-reopen.check.ts holds the rest); Stop leaves it open; a run that is not the chat's,
+ *   reading the models, and closing the program close it.
  *
  *   npm run check:e2e-chat
  */
@@ -25,6 +26,7 @@ import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 import { chatNotice } from '../src/session/chatNotice.js';
+import { ASK_AGAIN } from '../src/transport/keptWindow.js';
 
 const t = new Tally();
 const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
@@ -190,22 +192,26 @@ try {
   const relisted = (await h.run(other.threadId)).tasks.at(-1) as Full;
   t.check('the next message opens a new window, works in it, and leaves it open', [relisted.status, h.chat.opened - openedBefore, h.chat.windows.length, h.chat.noticeUp?.tone], ['done', 1, 1, 'done']);
 
-  // Closed with its X while a message is worked: that message is stopped, as the operator stopping it, and nothing more is sent.
+  /*
+   * Closed with its X while a message is worked (2026-11-13, was a stop since 2026-10-19): opened again at once on its
+   * conversation, and the work goes on there — the answer being written asked for again. See e2e-reopen.check.ts.
+   */
   await h.call<Sent>('POST', '/chat', { text: 'Write four.txt holding exactly four.', threadId: other.threadId });
-  const sentBefore = h.chat.sent.length;
-  h.chat.script((m) => {
-    m.world.closeByHand();
-    return reply.steps(write('four.txt', 'four'));
-  });
+  h.chat.script(
+    (m) => {
+      m.world.closeByHand();
+      return reply.steps(write('four.txt', 'four'));
+    },
+    (m) => {
+      t.check('the answer that reached no window is asked for again, in the same conversation', [m.text, m.chatId], [ASK_AGAIN, otherChat]);
+      return reply.steps(write('four.txt', 'four'));
+    },
+    reply.done(),
+  );
   const cut = (await h.run(other.threadId)).tasks.at(-1) as Full;
-  t.check('closed while it works: the message ends stopped, said so, its steps not run, nothing more sent', [cut.status, cut.reason, file('four.txt'), h.chat.sent.length - sentBefore], ['aborted', 'the browser window was closed; nothing more was sent', null, 1]);
-  t.check('no window is left, and none was opened again for it', [h.chat.windows.length, h.chat.opened - openedBefore], [0, 1]);
+  t.check('closed while it works: opened again on its conversation, and the message done there', [cut.status, file('four.txt'), h.chat.windows.length, h.chat.opened - openedBefore], ['done', 'four', 1, 2]);
   const cutEvents = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${other.threadId}/events`).catch(() => [] as Array<{ type: string; message: string }>);
   t.truthy('not said as an error', !cutEvents.some((e) => e.type === 'session-error' || e.type === 'task-error'), cutEvents.filter((e) => /error/.test(e.type)).map((e) => e.message));
-  await h.call<Sent>('POST', '/chat', { text: 'Write four.txt holding exactly four, again.', threadId: other.threadId });
-  h.chat.script(reply.steps(write('four.txt', 'four')), reply.done());
-  const again = (await h.run(other.threadId)).tasks.at(-1) as Full;
-  t.check('the message after it opens a window again and works', [again.status, file('four.txt'), h.chat.windows.length, h.chat.opened - openedBefore], ['done', 'four', 1, 2]);
 
   const threads = await h.call<Thread[]>('GET', '/chat/threads');
   t.check('the conversations, newest first', threads.map((x) => x.name), ['chat: A different question in a new conversation.', 'chat: Create hi.txt holding exactly the word hi.']);

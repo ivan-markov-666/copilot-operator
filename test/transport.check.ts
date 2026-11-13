@@ -51,6 +51,7 @@ import {
   CLIPBOARD_GUARD,
   ChatLost,
   CopilotTransport,
+  NO_ADDRESS_YET,
   SendRejectedError,
   isReplyTimeout,
   type TransportOptions,
@@ -1218,6 +1219,82 @@ try {
     t.check('with powershell unreachable, the Edge query answers "unknown"', unknown, 'unknown');
     t.check('and "unknown" does not stop the lock being taken (pinned)', [d.error, holder(unknownProfile)], ['', process.pid]);
     d.handle?.release();
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('reopen: a window closed under the work is started again and put back on its conversation', async () => {
+    /*
+     * Operator, 2026-11-13: "if I close the browser with the chat by accident, carry the task on from where it got to".
+     * `reopen` starts Edge again on the profile — tried again while the Edge that was closed still holds it — and puts
+     * the window back on the conversation it was on, by its address. Edge itself is not started here: `open` is the
+     * check's own, a page of this browser that Copilot's addresses are served to by its routes.
+     */
+    const A = '44444444-5555-6666-7777-888888888888';
+    const f = await fixture('reopen', COMPOSER, { signInTimeoutMs: 3_000 });
+    const tr = f.transport;
+    type Held = Internals & { onChat: { id: string } | 'new' | null; firstLookMs: number; open: () => Promise<void> };
+    const held = tr as unknown as Held;
+    held.firstLookMs = 2_000;
+    const served: string[] = [];
+    let starts = 0;
+    /** What the next starts find: the profile still held by the Edge that was closed, or another failure. */
+    const next: string[] = [];
+    held.open = async () => {
+      starts += 1;
+      const problem = next.shift();
+      if (problem) throw new Error(problem);
+      const page = await theBrowser().newPage();
+      pages.push(page);
+      await page.route(/^https:\/\/m365\.cloud\.microsoft\//, async (route) => {
+        if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+        const url = route.request().url();
+        served.push(url.replace(/\?.*$/, ''));
+        const id = parseChatId(url);
+        return await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8">${COMPOSER}<p id="conv">${id ?? 'home'}</p>` });
+      });
+      held.context = page.context();
+      held.page = page;
+      held.watchWindow();
+    };
+    await tr.open();
+    t.check('opened, and put on A', [await tr.openConversation(A), parseChatId(held.page!.url())], [true, A]);
+
+    // The operator's X, then the window again: the first two starts find the profile still held.
+    await held.page!.close();
+    t.check('closed by hand', [tr.isOpen(), tr.closedOutside()], [false, true]);
+    const held2 = 'Microsoft Edge is already running with this profile (process 4242), so a new browser cannot be launched';
+    next.push(held2, held2);
+    const startsBefore = starts;
+    const servedBefore = served.length;
+    const from = Date.now();
+    const back = await tr.reopen();
+    t.check('started again — the third time, once the profile was let go — and back on A by its address', [starts - startsBefore, back, parseChatId(held.page!.url()), served.slice(servedBefore)], [3, { at: 'here' }, A, [`https://m365.cloud.microsoft/chat/conversation/${A}`]]);
+    t.truthy('waiting between the starts', Date.now() - from >= 2_500, `${Date.now() - from} ms`);
+    t.check('open, not closed by hand, still held to A, and its box there to write in', [tr.isOpen(), tr.closedOutside(), held.onChat, await held.page!.locator('#m365-chat-editor-target-element').isVisible()], [true, false, { id: A }, true]);
+    await held.page!.close();
+    t.check('closed by hand again, said again', named(f.events, 'window-closed').length, 2);
+
+    // A start that fails for another reason is not tried again: said at once.
+    next.push('the profile folder could not be read');
+    const startsNow = starts;
+    const other = await rejection(tr.reopen());
+    t.check('another failure to start: said at once, not tried again', [other?.message, starts - startsNow], ['the profile folder could not be read', 1]);
+
+    // A Stop while the profile is held: no more tries.
+    next.push(held2, held2, held2);
+    const stop = new AbortController();
+    stop.abort();
+    const startsStop = starts;
+    const stopped = await rejection(tr.reopen({ signal: stop.signal }));
+    t.check('stopped: the first failure said, no more tries', [stopped?.message, starts - startsStop], [held2, 1]);
+    next.length = 0;
+
+    // A conversation with no address yet — closed before its first answer — cannot be found again.
+    await tr.reopen();
+    held.onChat = 'new';
+    await held.page!.close();
+    const lost = await rejection(tr.reopen());
+    t.check('closed before its conversation had an address: WindowClosed, saying so, with the new window open on nothing', [lost?.name, lost?.message, tr.isOpen()], ['WindowClosed', NO_ADDRESS_YET, true]);
   });
 
   // -------------------------------------------------------------------------------------------

@@ -1346,6 +1346,9 @@ button.linkish:hover { text-decoration: underline; }
 .cs-system { color: var(--muted); font-size: calc(12.5px * var(--scale)); margin: 0; }
 /* Paused (2026-10-20): said where the conversation ends, in the colour of a warning, so it is not taken for stuck. */
 .cs-paused { color: var(--warn, var(--muted)); font-weight: 600; }
+/* "Continue" under a message that stopped before it was done (2026-11-13): what it does, and the button beside it. */
+.cs-carry { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 10px; background: var(--panel); color: var(--ink); }
+.cs-carry .grow { flex: 1 1 220px; min-width: 0; }
 /* Git asks for a password in its own window (2026-10-26): where to look, set apart. */
 .cs-password { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 10px; font-weight: 600; }
 .cs-welcome h3 { margin: 4px 0; }

@@ -20,44 +20,29 @@
  * running in this process — a check script — can call `setTransportFactory`.
  */
 import { CopilotTransport, type TransportOptions } from './copilotTransport.js';
+import { keptWindow, type ChatWindow, type KeptWindow } from './keptWindow.js';
 
 export { ReplyTimeoutError, isReplyTimeout, WindowClosed, ChatLost, type OnChat } from './copilotTransport.js';
+export type { ChatWindow } from './keptWindow.js';
 
-export type ChatTransport = Pick<
-  CopilotTransport,
-  | 'open'
-  | 'close'
-  | 'isOpen'
-  | 'closedOutside'
-  | 'showNotice'
-  | 'clearNotice'
-  | 'ensureSignedIn'
-  | 'newChat'
-  | 'openConversation'
-  | 'openConversationByName'
-  | 'currentChatId'
-  | 'ensureOnChat'
-  | 'nameChat'
-  | 'selectModel'
-  | 'currentModel'
-  | 'listModels'
-  | 'sendAndConfirm'
-  | 'waitForReply'
-  | 'dumpFailure'
-  | 'recentCrash'
-  | 'signOut'
-  | 'gotoChatAs'
-  | 'findAccountsInPage'
->;
+/**
+ * What the runner holds: a window (`ChatWindow`, a `Pick` of the real class), kept for the work while a message is at
+ * work (`KeptWindow`, 2026-11-13). Its own methods are optional here, so the real class alone — the command line's
+ * sign-in and model reads, which hold no message — still is one.
+ */
+export type ChatTransport = ChatWindow & Partial<Pick<KeptWindow, 'holdWindow' | 'releaseWindow' | 'reopenedTimes'>>;
 
-export type TransportFactory = (opts: TransportOptions) => ChatTransport;
+export type TransportFactory = (opts: TransportOptions) => ChatWindow;
 
 const realChat: TransportFactory = (opts) => new CopilotTransport(opts);
 let factory: TransportFactory = realChat;
 
-/** A chat for these options: the real Copilot window, unless a check has put a scripted one in. */
+/**
+ * A chat for these options: the real Copilot window, unless a check has put a scripted one in — either way kept for the
+ * work by the same rules (see keptWindow.ts).
+ */
 export function createTransport(opts: TransportOptions): ChatTransport {
-  return factory(opts);
+  return keptWindow(factory, opts);
 }
 
 /** For checks only: every chat opened from now on comes from `f`. `null` puts the real one back. */

@@ -1520,6 +1520,8 @@ export const api = {
   /** A subtask that ended for a technical reason (two chats): try it again, with a new worker, from where it is, or not. */
   answerRetry: (approvalId: string, choice: RetryChoice) => call<{ ok: boolean }>(`/approvals/${approvalId}/retry`, { method: 'POST', body: JSON.stringify({ choice }) }),
   /** After a Stop (two chats): the stopped message carried on, its subtask `n` tried again first, by a new worker if `fresh`. */
+  /** "Continue" (2026-11-13): the conversation's last message, stopped before it was done, carried on from where it got to. */
+  chatContinue: (threadId: string, taskId: string) => call<StartReply>(`/chat/${threadId}/tasks/${taskId}/continue`, { method: 'POST' }),
   chatRetrySubtask: (threadId: string, taskId: string, n: number, fresh: boolean) =>
     call<StartReply>(`/chat/${threadId}/tasks/${taskId}/retry-subtask`, { method: 'POST', body: JSON.stringify({ n, fresh }) }),
   /** Back to before a message: the folder as it was then; that message and the ones after it taken out. */

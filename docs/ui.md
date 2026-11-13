@@ -946,6 +946,18 @@ it as an existing branch.
 round (`web/lib/useDots.ts`) while the answer Copilot is writing is waited for, until the work has stopped; a press the
 API refused gives it back. "Stop the queue" does the same while its task at work is stopping.
 
+**The Copilot window closed, and "Continue" (2026-11-13).** The operator: "if I close the browser with the chat by
+accident, the bot should carry the task on from where it got to"; asked, they chose the window opened again by itself,
+and "Continue" for every stop. While a message is at work, its Edge window closed — the X, or Edge ending — is opened
+again at once on the same conversation and the work goes on there (`transport/keptWindow.ts`); the chat is asked again
+for an answer it was writing then. Settings → limits → "Open the closed Copilot window again" (`limits.reopenWindow`,
+3 per message; 0 = the X stops the message, as before). The Stop button is the way to stop the work. Under the last
+message of a conversation that stopped before it was done — the window past that number, Stop, the bot stopped or
+restarted, a limit — a row says what "Continue" does, with the button (`.cs-carry`, `api.chatContinue`, `POST
+/chat/:id/tasks/:taskId/continue`): the message carried on in its conversation, the chat told how it stopped and which
+of its last commands ran, with what they printed. Not for a chat Kerrigan directs (hers is carried on), nor for a
+message the conversation has gone on past.
+
 **The bars on top in narrow windows (2026-10-24).** Both bars wrap instead of hiding links (the chat's under 700px) or
 scrolling them out of sight (the pages' on a phone); "Appearance" and "Language" are one item (`NavPair`, `.nav-pair`),
 so they move to the next line together and part only when one line cannot hold both. The chat's bar has "Queue".

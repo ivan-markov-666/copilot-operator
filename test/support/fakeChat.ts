@@ -22,7 +22,8 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChatLost, type ChatTransport, type TransportFactory } from '../../src/transport/chatTransport.js';
+import { ChatLost, WindowClosed, type ChatWindow, type TransportFactory } from '../../src/transport/chatTransport.js';
+import { NO_ADDRESS_YET } from '../../src/transport/copilotTransport.js';
 import type { ModelChoice, ModelLocator, ModelOption, OnChat, ReplyCapture, TransportOptions, WindowNotice } from '../../src/transport/copilotTransport.js';
 import { pageModelFor, sameModel } from '../../src/transport/modelMatch.js';
 
@@ -101,6 +102,14 @@ export class FakeCopilot {
   readonly unopenable = new Set<string>();
   /** Each time a window was put back on its conversation: which, from where, and whether a sign-in came first. */
   readonly returns: Array<{ chatId: string; from: string; signedIn: boolean }> = [];
+  /** Each time a window closed under the work was opened again (`reopen`), and on which conversation, if any. */
+  readonly reopened: Array<{ chatId: string | null }> = [];
+  /** How many of the next reopenings fail as Edge would when the profile stays held: the message then stops. */
+  reopenFails = 0;
+  /** How many of the next messages find the window closing as they are sent: the send fails, as on a closed page. */
+  closeOnSend = 0;
+  /** Called with each message once it is in the conversation, before it is answered: where a check closes the window then. */
+  onSent: ((m: Sent) => void) | null = null;
 
   private readonly queue: Script[] = [];
   private nextChat = 1;
@@ -211,13 +220,15 @@ export class FakeCopilot {
 }
 
 /** One open "window": the transport the runner holds. */
-class FakeChat implements ChatTransport {
+class FakeChat implements ChatWindow {
   private current: FakeConversation | null = null;
   /** The conversation the runner put this window on, kept as the real window keeps it (see `CopilotTransport.ensureOnChat`). */
   private onChat: { id: string } | 'new' | null = null;
   private waiting: Promise<string> | null = null;
   private live = false;
   private gone = false;
+  /** How many times this window was closed by hand: an answer being written when it closed never reaches it. */
+  private closings = 0;
   /** The card up in this window, if any (see `showNotice`). */
   notice: WindowNotice | null = null;
 
@@ -243,8 +254,44 @@ class FakeChat implements ChatTransport {
     if (!this.live) return;
     this.world.closed += 1;
     this.gone = true;
+    this.closings += 1;
     this.shut();
     this.opts.onEvent?.('window-closed');
+  }
+
+  /**
+   * As the real window's `reopen`: Edge started again on the profile, and the window put back on the conversation it was
+   * on, by its address; one with no address yet (closed before its first answer) cannot be: `WindowClosed`. What was
+   * being written when it closed is gone with it.
+   */
+  async reopen(): Promise<OnChat> {
+    // Edge takes a moment to start: what runs on after the close sees the window closed, as it would.
+    await new Promise((r) => setTimeout(r, 20));
+    if (this.world.reopenFails > 0) {
+      this.world.reopenFails -= 1;
+      throw new Error('Microsoft Edge is already running with this profile (process 4242), so a new browser cannot be launched');
+    }
+    this.world.opened += 1;
+    this.live = true;
+    this.gone = false;
+    this.waiting = null;
+    this.notice = null;
+    this.world.windows.push(this);
+    this.opts.onEvent?.('browser-opened', {});
+    const want = this.onChat;
+    if (!want || want === 'new') {
+      this.current = null;
+      this.world.reopened.push({ chatId: null });
+      throw new WindowClosed(NO_ADDRESS_YET);
+    }
+    this.world.reopened.push({ chatId: want.id });
+    const c = this.world.conversations.get(want.id);
+    if (c && !this.world.unopenable.has(want.id)) {
+      this.current = c;
+      return { at: 'here' };
+    }
+    this.current = null;
+    return await this.ensureOnChat();
   }
 
   private shut(): void {
@@ -434,6 +481,10 @@ class FakeChat implements ChatTransport {
   }
 
   async sendAndConfirm(text: string, attachments: string[] = []): Promise<number> {
+    if (this.live && this.world.closeOnSend > 0) {
+      this.world.closeOnSend -= 1;
+      this.closedByHand();
+    }
     this.alive('send');
     if (this.waiting) this.world.problems.push('a message was sent before the reply to the previous one was read');
     if (!this.current) this.current = this.world.newConversation();
@@ -444,9 +495,13 @@ class FakeChat implements ChatTransport {
     const m: Sent = { chatId: chat.id, text, attachments, attached };
     chat.messages.push(m);
     this.world.sent.push(m);
-    this.waiting = this.world.answer(chat, m);
+    const closings = this.closings;
+    this.world.onSent?.(m);
+    const answering = this.world.answer(chat, m);
     // A rejection is read by waitForReply; this keeps it from being reported as unhandled first.
-    this.waiting.catch(() => undefined);
+    answering.catch(() => undefined);
+    // Closed as it was answered (a script that closes the window as the chat writes): the answer reaches no window.
+    this.waiting = this.closings === closings ? answering : null;
     return before;
   }
 
@@ -455,8 +510,10 @@ class FakeChat implements ChatTransport {
     if (!this.waiting) throw new Error('waitForReply with nothing sent');
     const pending = this.waiting;
     this.waiting = null;
+    const closings = this.closings;
     const markdown = await pending;
-    // Closed while the reply was being written: the real wait ends on the closed page, not with the reply.
+    // Closed while the reply was being written: the real wait ends on the closed page, not with the reply — nor in a window opened again since.
+    if (this.closings !== closings) throw new Error('waitForReply: Target page, context or browser has been closed');
     this.alive('waitForReply');
     // A new conversation has its address once it has answered, as the real one.
     if (this.onChat === 'new' && this.current) this.onChat = { id: this.current.id };

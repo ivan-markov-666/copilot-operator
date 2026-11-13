@@ -31,7 +31,7 @@ import type {
   TaskRunGroup,
   VersionControl,
 } from '../session/model.js';
-import { MAX_INSTRUCTION_CHARS, newId, withProblemAt, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
+import { isContinuable, MAX_INSTRUCTION_CHARS, newId, withProblemAt, type Acting, type Actor, type HandoffCard, type HandoffOutcome, type PlanMode, type RetryChoice, type TaskPlan } from '../session/model.js';
 import { handoffOutcomeOf, handoffResultMessage } from '../orchestrator/handoff.js';
 import { runSession, queuedToRun, failedWhileOpening, pickerOptions, type CardHandle, type PlanAnswer, type QuestionAnswer } from '../orchestrator/taskRunner.js';
 import { Hold, WaitsFor } from '../orchestrator/hold.js';
@@ -2723,6 +2723,38 @@ export class OperatorService {
     if (last?.status === 'done') throw new Error(`Subtask ${n} was done; it is not done again.`);
     await this.store.rerunTask(threadId, taskId, {}, { fromAttempt: task.attempt ?? 1, stoppedBecause: task.reason, how: 'stopped', retrySubtask: { n, ...(fresh ? { fresh: true } : {}) } });
     const cfg = await this.settings.load();
+    return await this.start(threadId, cfg.execution.mode);
+  }
+
+  /**
+   * "Continue" under a message that stopped before it was done (operator, 2026-11-13: "for every stop" — a window closed
+   * past the times it is opened again, Stop, the bot itself stopped or restarted, a limit): carried on in its conversation
+   * from where it got to. The chat is told how it stopped and, for one that was stopped, which of its last commands ran,
+   * with the end of what they printed, which was cut off and which never ran — read from its run folder — rather than
+   * only that it was stopped, after which it ran its inspections again (live run, 2026-10-03). Only the last message of
+   * a conversation: one the conversation has gone on past is not carried on in it. A chat Kerrigan directs is hers.
+   */
+  async chatContinue(threadId: string, taskId: string): Promise<StartReply> {
+    await this.init();
+    const session = await this.store.getSession(threadId);
+    if (!session || session.kind !== 'chat') throw new Error('That conversation is not there any more.');
+    if (session.directedBy) throw new Error('Kerrigan directs this chat: carry her conversation on instead.');
+    if (this.running.has(this.runKey(threadId))) throw new Error('The conversation is working: stop it first, or let it finish.');
+    const task = session.tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error('That message is not in this conversation.');
+    if (session.tasks.at(-1)?.id !== taskId) throw new Error('Only the last message of a conversation is carried on: the conversation has gone on past this one.');
+    if (!isContinuable(task)) {
+      throw new Error(task.status === 'done' ? 'This message is done.' : 'Only a message that stopped before it was done is carried on; write the next message instead.');
+    }
+    const cfg = await this.settings.load();
+    const stoppedAt = task.status === 'aborted' && !task.interruption && task.runId ? await readInterruption(join(cfg.resolved.runsDir, task.runId)).catch(() => null) : null;
+    const queued = await this.store.continueTask(threadId, taskId, stoppedAt);
+    await appendSessionLog(cfg.resolved.runsDir, threadId, {
+      type: 'continue',
+      message: `"${queued.title}" carried on as attempt ${queued.attempt ?? 1}, from where it stopped: ${task.reason ?? task.status}`,
+      data: { taskId, attempt: queued.attempt, was: task.status },
+    }).catch(() => undefined);
+    this.bus.publish({ sessionId: threadId, taskId, type: 'task-requeued', level: 'info', message: `"${queued.title}" carried on from where it stopped` });
     return await this.start(threadId, cfg.execution.mode);
   }
 

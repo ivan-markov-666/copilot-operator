@@ -1096,6 +1096,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             doesBg: 'Докато е на пауза: продължава работата оттам, където е задържана.',
           },
           {
+            key: 'chat.carryOn',
+            kind: 'button',
+            en: 'Continue',
+            bg: 'Продължи',
+            doesEn: 'Under the last message of a conversation when it stopped before it was done — its window closed more times than Settings reopen it, Stop, the bot stopped or restarted, a limit: carries it on in the same conversation from where it got to; Copilot is told how it stopped and which of its last commands ran, with what they printed.',
+            doesBg: 'Под последното съобщение на разговор, когато е спряло, преди да е готово — прозорецът му е затварян повече пъти, отколкото Настройките го отварят отново, „Стоп“, ботът е спрял или рестартиран, лимит: продължава го в същия разговор оттам, докъдето е стигнало; на Copilot се казва как е спряло и кои от последните му команди са минали, с изписаното от тях.',
+          },
+          {
             key: 'chat.stop',
             kind: 'button',
             en: 'Stop',
@@ -2651,6 +2659,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Продължавай след лимит',
             doesEn: 'How many times a task stopped by a limit is carried on by itself.',
             doesBg: 'Колко пъти задача, спряна от ограничение, продължава сама.',
+          },
+          {
+            key: 'exec.reopenWindow',
+            kind: 'field',
+            en: 'Open the closed Copilot window again',
+            bg: 'Отваряй отново затворения прозорец на Copilot',
+            doesEn: 'How many times, for one message, the Edge window with the Copilot chat — closed while the message is at work, its X pressed by accident or Edge ending — is opened again on the same conversation and the work carried on there (3 by default); past it the message stops and waits for "Continue". 0: closing the window stops the message. The Stop button stops the work.',
+            doesBg: 'Колко пъти за едно съобщение прозорецът на Edge с чата на Copilot — затворен, докато съобщението е в работа, с X по случайност или спрял Edge — се отваря отново на същия разговор и работата продължава там (по подразбиране 3); над това съобщението спира и чака „Продължи“. 0: затварянето на прозореца спира съобщението. Работата се спира с бутона „Стоп“.',
           },
           {
             key: 'exec.minApproaches',

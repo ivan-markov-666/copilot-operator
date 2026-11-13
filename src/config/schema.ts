@@ -563,6 +563,13 @@ export const RunConfigSchema = z.object({
        */
       autoContinue: z.number().int().min(0).max(20).default(3),
       /*
+       * How many times the chat's Edge window, closed while a message is at work — its X pressed, by accident or not, or
+       * Edge ending — is opened again on its conversation for that message, and the work carried on there (operator,
+       * 2026-11-13; see `transport/keptWindow.ts`). Past it, the message stops and "Continue" carries it on. Zero: a
+       * window closed under the work stops the message, as before. Stop is the way to stop the work. Settings → limits.
+       */
+      reopenWindow: z.number().int().min(0).max(10).default(3),
+      /*
        * The most subtasks the lead of a two-chat conversation may give its worker for one message (2026-10-20). Each
        * subtask is a task of the worker's, with the limits above; this bounds the whole. Settings → Execution.
        */

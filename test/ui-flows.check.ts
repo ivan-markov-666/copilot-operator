@@ -3162,6 +3162,17 @@ try {
     await waitFor('the work to stop', async () => ((await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${threadId}`)).tasks[0]!.status === 'aborted' ? true : null), 30_000).catch(() => undefined);
     await stoppingButton.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
     t.check('stopped: the message ended so, and the button has gone', [(await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${threadId}`)).tasks[0]!.status, await stoppingButton.count()], ['aborted', 0]);
+
+    // "Continue" under the stopped message (2026-11-13): what it does, then the message carried on from where it got to.
+    const carry = page.locator('.cs-carry');
+    await carry.waitFor({ timeout: 10_000 });
+    t.check('under the stopped message: "Continue", saying what it does', [((await carry.getByRole('button').textContent()) ?? '').trim(), ((await carry.textContent()) ?? '').includes(en['chat.carryOnNote']!)], [en['chat.carryOn'], true]);
+    h.chat.script(reply.steps(write('later.txt', 'later')), reply.done());
+    await carry.getByRole('button', { name: en['chat.carryOn']!, exact: true }).click();
+    const statusNow = async (): Promise<string> => (await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${threadId}`)).tasks[0]!.status;
+    await waitFor('the message carried on, and done', async () => ((await statusNow()) === 'done' ? true : null), 30_000).catch(() => undefined);
+    await carry.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+    t.check('carried on: done, its file written, and "Continue" gone', [await statusNow(), existsSync(join(h.repo, 'later.txt')), await carry.count()], ['done', true, 0]);
   });
 
   /*

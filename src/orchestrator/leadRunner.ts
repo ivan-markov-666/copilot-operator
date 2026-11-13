@@ -22,6 +22,7 @@
 import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
+import { CLOSED_NOT_REOPENED } from '../transport/keptWindow.js';
 import type { ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { RunLog } from '../log/runLog.js';
@@ -958,7 +959,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       limitHit = { setting: 'replyTimeoutSec', value: e.seconds };
       return await finish('limit-reached', `replyTimeoutSec (${e.seconds}) reached: ${message}`);
     }
-    if (e instanceof WindowClosed || transport.closedOutside()) return await finish('aborted', 'the browser window was closed; nothing more was sent');
+    // Why, as the kept window says it (2026-11-13): not opened again by Settings, past the times allowed, or not found.
+    if (e instanceof WindowClosed || transport.closedOutside()) return await finish('aborted', e instanceof WindowClosed ? e.message : CLOSED_NOT_REOPENED);
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     return await finish('failed', message);
   }

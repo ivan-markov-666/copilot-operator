@@ -19,6 +19,7 @@ import type { LiveChange, LiveSettings } from '../config/live.js';
 import type { ModelChoice, ModelLocator, ModelOption, ReplyCapture, TransportOptions } from '../transport/copilotTransport.js';
 import { buttonShows, normModel } from '../transport/modelMatch.js';
 import { ChatLost, createTransport, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
+import { CLOSED_NOT_REOPENED } from '../transport/keptWindow.js';
 import { buildChatName, chatCode, loadPointer, savePointer, type ChatPointer } from '../transport/chatSession.js';
 import { parseReply, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { resolveDeviations, describeDeviations, mergeDisputes, describeDisputes, type Step, type Deviation, type Dispute } from '../protocol/replySchema.js';
@@ -685,7 +686,15 @@ export async function openBrowser(
           'The reply came with a file attached. It was not downloaded and will not be run: the runner takes only the text of a reply.',
         'model-menu-stuck':
           'The model menu would not close — Escape, the menu button and a click outside all left it open. Close it in the Edge window; the run goes on.',
-        'window-closed': 'The Edge window was closed. A run in it stops; the next message opens a new one.',
+        'window-closed':
+          'The Edge window was closed. While a message is at work it is opened again on its conversation, as many times as ' +
+          'Settings allow (limits.reopenWindow); between messages, the next message opens a new one.',
+        // Opened again under the work (2026-11-13): see transport/keptWindow.ts.
+        'window-reopening': `Opening Edge again on this conversation (${String(detail?.time ?? '?')} of ${String(detail?.of ?? '?')} for this message), so the work goes on there.`,
+        'window-reopened': 'Back on this conversation in a new Edge window; the work goes on from where it was.',
+        'window-not-reopened': `The window was not opened again: ${String(detail?.reason ?? '')}`,
+        'reply-asked-again': 'The chat was writing its answer when the window was closed; it was asked to send that answer again.',
+        'message-sent-again': 'The window was closed while a message was being sent; it was sent again, saying it is a copy.',
         // The window left its conversation while the work waited (2026-11-09): put back before anything is sent.
         'chat-left': `The Copilot window is no longer on this conversation (it shows ${String(detail?.found ?? 'another page')}). Going back to it before anything is sent.`,
         'chat-returned': `Back on this conversation${detail?.signedIn ? ', after the sign-in' : ''}${detail?.by === 'name' ? ', found by its name in the sidebar' : ''}. The work goes on there.`,
@@ -695,7 +704,7 @@ export async function openBrowser(
         bus.publish({
           sessionId: id,
           type: `browser:${event}`,
-          level: event === 'chat-lost' ? 'error' : event === 'verification-required' || event === 'reply-files-ignored' || event === 'model-menu-stuck' || event === 'chat-left' ? 'warn' : 'info',
+          level: event === 'chat-lost' ? 'error' : ['verification-required', 'reply-files-ignored', 'model-menu-stuck', 'chat-left', 'window-closed', 'window-not-reopened', 'reply-asked-again', 'message-sent-again'].includes(event) ? 'warn' : 'info',
           // An event with no sentence of its own is named, not said as "undefined".
           message: spoken[event] ?? event.replace(/-/g, ' '),
           data: detail,
@@ -3976,8 +3985,10 @@ export async function runTask(
      * Edge left a crash report, which says it was not them.
      */
     if (transport.closedOutside() && !(await transport.recentCrash().catch(() => null))) {
-      sink.event('window-closed', { error: message }, 'the browser window was closed; nothing more is sent', 'warn');
-      return await finish('aborted', 'the browser window was closed; nothing more was sent');
+      // Why, as the kept window says it (2026-11-13): not opened again by Settings, past the times allowed, or not found.
+      const why = e instanceof WindowClosed ? e.message : CLOSED_NOT_REOPENED;
+      sink.event('window-closed', { error: message, reopened: transport.reopenedTimes?.() ?? 0 }, why, 'warn');
+      return await finish('aborted', why);
     }
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     await transport.dumpFailure(log.path('failures'), 'crash').catch(() => undefined);
@@ -4115,6 +4126,12 @@ export async function runSession(
       session = (await store.getSession(sessionId)) as Session;
       let task = session.tasks.find((t) => t.id === queuedTask.id);
       if (!task || task.status !== 'queued') continue;
+      /*
+       * The window, closed under this message, is opened again on its conversation and the work goes on there (operator,
+       * 2026-11-13: "if I close the browser by accident, carry the task on from where it got to"), up to the times
+       * Settings allow for one message — its runs again in a fresh chat and on its own after a limit included.
+       */
+      chat.holdWindow?.(cfg.limits.reopenWindow ?? 3, deps.signal);
       /*
        * A task taken from the queue was started by the operator, never by the retry loop below, which
        * runs its own. A fresh-retry mark on it is left from a retry that was queued and never ran —
@@ -4322,6 +4339,8 @@ export async function runSession(
       throw e;
     }
   } finally {
+    // No message at work: a window closed from now on is the next message's to open. One being opened again is let finish.
+    await transport?.releaseWindow?.().catch(() => undefined);
     // A borrowed window belongs to whoever opened it and stays open for the next session.
     if (!borrowed) {
       // The chat's, still open, is kept for its next message; one the operator closed is let go of.
