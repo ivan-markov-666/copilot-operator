@@ -133,6 +133,7 @@ export default function DefaultsPage() {
       <LoginSection />
       <RoleModelSection role="worker" {...shared} />
       <RoleModelSection role="lead" {...shared} />
+      <RoleModelSection role="kerrigan" {...shared} />
       <RoleModelSection role="review" {...shared} />
       <PickerLocatorsSection catalogue={catalogue} />
       <ExecutionSection />
@@ -1030,13 +1031,13 @@ function LoginSection() {
  * make the three alike, all with the options the model for new conversations has"): each the same picker with the
  * same choices, "Clear", "Read the list from Copilot", when it was read, and its own "by hand".
  */
-type ModelRole = 'worker' | 'lead' | 'review';
+type ModelRole = 'worker' | 'lead' | 'kerrigan' | 'review';
 type RolePlan = {
   section: string;
   pick: string;
   manualId: string;
-  manualKey: 'manualModel' | 'leadManualModel' | 'reviewManualModel';
-  field: 'defaultModel' | 'defaultLeadModel' | 'defaultReviewModel';
+  manualKey: 'manualModel' | 'leadManualModel' | 'kerriganManualModel' | 'reviewManualModel';
+  field: 'defaultModel' | 'defaultLeadModel' | 'defaultKerriganModel' | 'defaultReviewModel';
   title: Key;
   intro: Key;
   info: Key;
@@ -1073,6 +1074,24 @@ const ROLES: Record<ModelRole, RolePlan> = {
     saved: 'def.leadSaved',
     cleared: 'def.leadCleared',
     save: async (name) => (await api.setDefaultLeadModel(name)).defaultLeadModel,
+  },
+  /*
+   * Kerrigan's own (operator, 2026-11-13: "you forgot an option to choose the model Kerrigan uses"): the model of her
+   * conversation; none chosen, the lead's, else the worker's, as before she had one. Her chats are the worker's.
+   */
+  kerrigan: {
+    section: 'kerrigan-model',
+    pick: 'default-kerrigan-model',
+    manualId: 'manual-kerrigan-model',
+    manualKey: 'kerriganManualModel',
+    field: 'defaultKerriganModel',
+    title: 'def.kerriganTitle',
+    intro: 'def.kerriganIntro',
+    info: 'def.kerriganInfo',
+    manualWhy: 'def.kerriganManualWhy',
+    saved: 'def.kerriganSaved',
+    cleared: 'def.kerriganCleared',
+    save: async (name) => (await api.setDefaultKerriganModel(name)).defaultKerriganModel,
   },
   review: {
     section: 'review',
@@ -1166,8 +1185,10 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
         // Not in the file: the default, which is on since 2026-10-17.
         const byDefault = (s.defaults as { copilot?: { manualModel?: boolean } } | undefined)?.copilot?.manualModel !== false;
         const worker = typeof copilot.manualModel === 'boolean' ? copilot.manualModel : byDefault;
+        // Not set: as the part it stands in for — Kerrigan's as the lead's, the others as the worker's (see `modelByHand`).
+        const lead = typeof copilot.leadManualModel === 'boolean' ? copilot.leadManualModel : worker;
         const own = copilot[setting];
-        setOn(typeof own === 'boolean' ? own : worker);
+        setOn(typeof own === 'boolean' ? own : setting === 'kerriganManualModel' ? lead : worker);
       })
       .catch((e) => setErr((e as Error).message));
   }, [setting]);

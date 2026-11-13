@@ -792,6 +792,8 @@ export type ModelCatalogue = {
   defaultReviewModel: string;
   /** The model the lead of two chats starts on (2026-10-23). Empty leaves its chat on whatever it is. */
   defaultLeadModel: string;
+  /** The model Kerrigan's conversation starts on (2026-11-13). Empty: the lead's, else the worker's. */
+  defaultKerriganModel?: string;
 };
 
 export type Session = {
@@ -1577,6 +1579,8 @@ export const api = {
   /** Stores the model new sessions start on. An empty name clears it. */
   setDefaultModel: (model: string) => call<{ defaultModel: string }>('/models/default', { method: 'PUT', body: JSON.stringify({ model }) }),
   setDefaultLeadModel: (model: string) => call<{ defaultLeadModel: string }>('/models/lead-default', { method: 'PUT', body: JSON.stringify({ model }) }),
+  setDefaultKerriganModel: (model: string) =>
+    call<{ defaultKerriganModel: string }>('/models/kerrigan-default', { method: 'PUT', body: JSON.stringify({ model }) }),
   setDefaultReviewModel: (model: string) =>
     call<{ defaultReviewModel: string }>('/models/review-default', { method: 'PUT', body: JSON.stringify({ model }) }),
   /** Opens the browser and re-reads the picker. Slow, and refused while a session runs. */

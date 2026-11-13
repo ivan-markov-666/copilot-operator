@@ -120,9 +120,15 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
    * the runner decides the same way, see `modelByHand` in taskRunner.ts). It replaced "Whatever the chat is on".
    */
   // Settings' model for this conversation's part (2026-10-23): the lead's with two chats, else the worker's.
-  // Kerrigan's conversation takes Settings' model for the lead, as the lead's does (2026-11-12).
+  // Kerrigan's conversation takes Settings' model for Kerrigan, else the lead's, else the worker's (2026-11-13).
   const leading = session ? !!session.lead || !!session.kerrigan : newLead || newKerrigan;
-  const settingsModel = (leading ? catalogue?.defaultLeadModel || catalogue?.defaultModel : catalogue?.defaultModel) ?? '';
+  const herOwn = session ? !!session.kerrigan : newKerrigan;
+  const settingsModel =
+    (herOwn
+      ? catalogue?.defaultKerriganModel || catalogue?.defaultLeadModel || catalogue?.defaultModel
+      : leading
+        ? catalogue?.defaultLeadModel || catalogue?.defaultModel
+        : catalogue?.defaultModel) ?? '';
   const settingsWorkerModel = catalogue?.defaultModel ?? '';
   const sessionModelShown = session ? (session.manualModel || (!session.model && !settingsModel) ? BY_HAND : (session.model ?? '')) : '';
   const newModelShown = newModel === BY_HAND || (!newModel && !settingsModel) ? BY_HAND : newModel;

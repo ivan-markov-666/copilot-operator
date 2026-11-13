@@ -139,6 +139,12 @@ export const RunConfigSchema = z.object({
        */
       defaultLeadModel: z.string().default(''),
       /**
+       * The model Kerrigan's own conversation starts on (operator, 2026-11-13: "add the section in Settings"). Empty, she
+       * starts on the lead's, else the worker's — as before she had one of her own. The chats she sends to are the
+       * worker's (and, with two chats, the lead's), not this.
+       */
+      defaultKerriganModel: z.string().default(''),
+      /**
        * Choose the model by hand (operator's workaround, 2026-10-06): at the start of a run, and of a review's
        * conversation, the runner does not touch the picker; a card in the UI asks the operator to choose the
        * model in the Copilot window and press "Ready". A conversation already on the model is not asked about.
@@ -149,6 +155,8 @@ export const RunConfigSchema = z.object({
       /** The lead's and the review's models chosen by hand, each on its own (2026-10-23); absent, as `manualModel`. */
       leadManualModel: z.boolean().optional(),
       reviewManualModel: z.boolean().optional(),
+      /** Kerrigan's model chosen by hand (2026-11-13); absent, as the lead's (`leadManualModel`, then `manualModel`). */
+      kerriganManualModel: z.boolean().optional(),
       replyTimeoutSec: z.number().int().positive().default(900),
       signInTimeoutSec: z.number().int().positive().default(900),
       humanWaitSec: z.number().int().positive().default(900),

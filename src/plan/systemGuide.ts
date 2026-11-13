@@ -1172,8 +1172,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'Kerrigan\'s model',
             bg: 'Модел на Кериган',
-            doesEn: 'With Kerrigan directing: beside the first model, which is hers; none chosen, Settings\' model for the lead.',
-            doesBg: 'Когато Кериган води: до първия модел, който е неин; ако не е избран — моделът за ръководителя от Настройки.',
+            doesEn: 'With Kerrigan directing: beside the first model, which is hers; none chosen, Settings\' model for Kerrigan, else the lead\'s, else the worker\'s.',
+            doesBg: 'Когато Кериган води: до първия модел, който е неин; ако не е избран — моделът за Кериган от Настройки, иначе този за ръководителя, иначе този за изпълнителя.',
           },
           {
             key: 'chat.kerriganChatsModel',
@@ -2533,8 +2533,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'checkbox',
             en: 'Choose the model by hand at the start of each run',
             bg: 'Избирай модела ръчно в началото на всяко пускане',
-            doesEn: 'In each of the three sections, for that part: nothing is chosen for it; a card asks you to choose its model in the Copilot window and press "Ready". The lead\'s and the review\'s are as the worker\'s until set.',
-            doesBg: 'Във всяка от трите секции, за съответната част: нищо не се избира за нея; карта ви моли да изберете модела ѝ в прозореца на Copilot и да натиснете „Готово“. Тези на ръководителя и на рецензията са като на изпълнителя, докато не се зададат.',
+            doesEn: 'In each of the four sections, for that part: nothing is chosen for it; a card asks you to choose its model in the Copilot window and press "Ready". The lead\'s and the review\'s are as the worker\'s until set; Kerrigan\'s is as the lead\'s.',
+            doesBg: 'Във всяка от четирите секции, за съответната част: нищо не се избира за нея; карта ви моли да изберете модела ѝ в прозореца на Copilot и да натиснете „Готово“. Тези на ръководителя и на рецензията са като на изпълнителя, докато не се зададат; този на Кериган е като на ръководителя.',
           },
           {
             key: 'def.saving',
@@ -2558,6 +2558,21 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Модел за ръководителя',
             doesEn: 'The model the lead of two chats starts on, unless one is chosen under the chat\'s box; best a strong reasoning model. Its picker and buttons are those of the worker\'s section.',
             doesBg: 'Моделът, с който започва ръководителят при два чата, освен ако под полето на чата не е избран друг; най-добре силен модел за разсъждение. Менюто и бутоните му са като в секцията на изпълнителя.',
+          },
+        ],
+      },
+      {
+        headingKey: 'def.kerriganTitle',
+        en: 'Model for Kerrigan',
+        bg: 'Модел за Кериган',
+        controls: [
+          {
+            key: 'def.kerriganTitle',
+            kind: 'note',
+            en: 'Model for Kerrigan',
+            bg: 'Модел за Кериган',
+            doesEn: 'The model Kerrigan\'s own conversation starts on, with "Kerrigan directs", unless one is chosen under the chat\'s box as "Kerrigan\'s model"; none chosen, the lead\'s, else the worker\'s. The chats she sends the work to take the worker\'s (and, with two chats, the lead\'s), not this. Best a strong reasoning model. Its picker and buttons are those of the worker\'s section; its "by hand" is as the lead\'s until set.',
+            doesBg: 'Моделът, с който започва собственият разговор на Кериган при „Кериган води“, освен ако под полето на чата не е избран друг като „Модел на Кериган“; ако не е избран — този на ръководителя, иначе този на изпълнителя. Чатовете, на които тя праща работата, вземат модела на изпълнителя (а при два чата — и на ръководителя), не този. Най-добре силен модел за разсъждение. Менюто и бутоните му са като в секцията на изпълнителя; „ръчно“ е като при ръководителя, докато не се зададе.',
           },
         ],
       },

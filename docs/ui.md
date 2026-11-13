@@ -710,8 +710,8 @@ they chose her questions, plans and retries, with the commands as Settings say.
 
 - "Kerrigan directs" under the chat's box, for a new conversation (`Session.kerrigan`); with it, "Plan mode", "Two chats"
   and "Review" leave the box — they are hers to choose for each message — and her model ("Kerrigan's model", Settings'
-  model for the lead when none) and her chats' model ("Her chats' model", Settings' model for the worker when none)
-  take their place.
+  model for Kerrigan when none, else the lead's, else the worker's — 2026-11-13) and her chats' model ("Her chats'
+  model", Settings' model for the worker when none) take their place.
 - Her conversation is hers, in the same Copilot window: her contract (`prompts/kerrigan1.md`) and the facts of the
   machine (`kerriganBrief`: the foundations, the person's language, the projects with their level 2, the skills, the
   limits, how commands run) once, then each message of the operator's. Every reply is one decision
@@ -1085,7 +1085,18 @@ chat, or the worker of two chats), for the lead (`copilot.defaultLeadModel`, `PU
 chosen, the worker's) and for the review (`copilot.defaultReviewModel`) — three alike sections (`RoleModelSection`),
 each with the same choices, "Clear", "Read the list from Copilot", when it was read, and its own "Choose the model by
 hand" (`manualModel`, `leadManualModel`, `reviewManualModel`; the last two as the worker's until set). `effectiveModels`
-and `modelByHand` read the part's own; the worker takes its own, else Settings' worker model, else the lead's (as before). Under every section, "saved as
+and `modelByHand` read the part's own; the worker takes its own, else Settings' worker model, else the lead's (as before).
+
+**A fourth: the model for Kerrigan (2026-11-13).** Operator: "you forgot an option to choose the model Kerrigan uses".
+The section "Model for Kerrigan" sits after the lead's, alike (`copilot.defaultKerriganModel`, `PUT
+/api/models/kerrigan-default`, `kerriganManualModel`). Her conversation takes the model chosen under the chat's box, else
+Settings' for Kerrigan, else the lead's (what she took from 2026-11-12), else the worker's (`settingsModelOf`); her "by
+hand" is as the lead's until set, and its tick shows that. The chats she sends to are not hers: the worker's (and, with
+two chats, the lead's). A model the page renamed is followed in the setting the name came from (`settingsModelOf(...).setting`
+— before, a lead on the worker's model named the lead's setting and nothing followed). Verified by
+`check:settings-precedence` and the Settings and Kerrigan scenarios of `ui-flows`.
+
+Under every section, "saved as
 you type" is gone: a write shows "Saving." "Saving.." "Saving..." round and round for at least 1.6 s (`useSaving`,
 `SavedNote`), after typing stops, a tick or a choice.
 

@@ -672,6 +672,12 @@ export class OperatorController {
     return this.ops.setDefaultLeadModel(body?.model ?? '').catch(fail);
   }
 
+  /** The model Kerrigan's conversation starts on (2026-11-13). An empty name: the lead's, else the worker's. */
+  @Put('models/kerrigan-default')
+  setDefaultKerriganModel(@Body() body: { model?: string }): Promise<unknown> {
+    return this.ops.setDefaultKerriganModel(body?.model ?? '').catch(fail);
+  }
+
   /** The model of the independent review. An empty name means "the session's own". */
   @Put('models/review-default')
   setDefaultReviewModel(@Body() body: { model?: string }): Promise<unknown> {

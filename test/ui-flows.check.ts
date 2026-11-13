@@ -1479,18 +1479,23 @@ try {
    * model for new conversations had, and its own "by hand"; and "Saving." "Saving.." "Saving..." under a section after
    * a change, where "saved as you type" was.
    */
-  await scenario('Settings: the worker\'s, the lead\'s and the review\'s model alike, each its own "by hand", and "Saving..." after a change', {}, async (h, page, url) => {
+  /*
+   * And Kerrigan's (operator, 2026-11-13: "you forgot an option to choose the model Kerrigan uses"): a fourth section, after
+   * the lead's, alike; her "by hand" shows the lead's until it is set, as the runner takes it.
+   */
+  await scenario('Settings: the worker\'s, the lead\'s, Kerrigan\'s and the review\'s model alike, each its own "by hand", and "Saving..." after a change', {}, async (h, page, url) => {
     // The list read from the scripted chat, as "Read the list from Copilot" does.
     await h.call('POST', '/models/refresh');
     await page.goto(url('/settings'));
-    const sections = ['model', 'lead-model', 'review'];
-    await page.locator('section#lead-model select').waitFor();
-    t.check('three sections, in order: the worker, the lead, the review', await page.locator('section.panel h2').evaluateAll((hs) => hs.map((x) => x.textContent ?? '')).then((all) => all.filter((x) => [en['def.modelTitle'], en['def.leadTitle'], en['def.reviewTitle']].includes(x))), [en['def.modelTitle'], en['def.leadTitle'], en['def.reviewTitle']]);
+    const sections = ['model', 'lead-model', 'kerrigan-model', 'review'];
+    await page.locator('section#kerrigan-model select').waitFor();
+    const titles = [en['def.modelTitle'], en['def.leadTitle'], en['def.kerriganTitle'], en['def.reviewTitle']];
+    t.check('four sections, in order: the worker, the lead, Kerrigan, the review', await page.locator('section.panel h2').evaluateAll((hs) => hs.map((x) => x.textContent ?? '')).then((all) => all.filter((x) => titles.includes(x))), titles);
     const options = async (id: string): Promise<string[]> => await page.locator(`section#${id} select option`).allTextContents();
-    const [worker, lead, review] = await Promise.all(sections.map(options));
-    t.truthy('the same choices in each, the first leaving the chat as it is', JSON.stringify(worker) === JSON.stringify(lead) && JSON.stringify(lead) === JSON.stringify(review) && worker[0] === en['def.modelNone'], { worker, lead, review });
+    const [worker, lead, kerrigan, review] = await Promise.all(sections.map(options));
+    t.truthy('the same choices in each, the first leaving the chat as it is', [lead, kerrigan, review].every((x) => JSON.stringify(x) === JSON.stringify(worker)) && worker[0] === en['def.modelNone'], { worker, lead, kerrigan, review });
     const controls = async (id: string): Promise<string[]> => await page.locator(`section#${id} button:not(.info-btn)`).allTextContents();
-    t.check('and the same buttons, the list\'s date, and a "by hand" of its own', [await controls('lead-model'), await controls('review'), await page.locator('section#lead-model .field-after').count(), await page.locator('section input[type="checkbox"][id^="manual-"]').count()], [await controls('model'), await controls('model'), 1, 3]);
+    t.check('and the same buttons, the list\'s date, and a "by hand" of its own', [await controls('lead-model'), await controls('kerrigan-model'), await controls('review'), await page.locator('section#kerrigan-model .field-after').count(), await page.locator('section input[type="checkbox"][id^="manual-"]').count()], [await controls('model'), await controls('model'), await controls('model'), 1, 4]);
     t.check('no "saved as you type" under any section', await page.getByText('saved as you type').count(), 0);
 
     await page.locator('section#lead-model select').selectOption('Think deeper');
@@ -1514,8 +1519,26 @@ try {
     await page.locator('#manual-lead-model').check();
     await page.locator('section#lead-model .saving').waitFor({ timeout: 3_000 });
     await waitFor('the lead\'s by hand saved', async () => (((await settingsOf(h)).copilot as { leadManualModel?: boolean } | undefined)?.leadManualModel === true ? true : null), 10_000).catch(() => undefined);
-    const copilot = ((await settingsOf(h)).copilot ?? {}) as { manualModel?: boolean; leadManualModel?: boolean; reviewManualModel?: boolean };
-    t.check("a tick saves that part's alone, with \"Saving...\" under it", [copilot.leadManualModel, copilot.manualModel, copilot.reviewManualModel], [true, false, undefined]);
+    const copilot = ((await settingsOf(h)).copilot ?? {}) as { manualModel?: boolean; leadManualModel?: boolean; reviewManualModel?: boolean; kerriganManualModel?: boolean };
+    t.check("a tick saves that part's alone, with \"Saving...\" under it", [copilot.leadManualModel, copilot.manualModel, copilot.reviewManualModel, copilot.kerriganManualModel], [true, false, undefined, undefined]);
+
+    // Kerrigan's: her model saved on its own; her "by hand", not set, shows the lead's (ticked now), then her own.
+    await page.locator('section#kerrigan-model select').selectOption('GPT 5.6 Think deeper');
+    await waitFor("Kerrigan's model saved", async () => ((await h.call<{ defaultKerriganModel?: string }>('GET', '/models')).defaultKerriganModel === 'GPT 5.6 Think deeper' ? true : null), 10_000).catch(() => undefined);
+    const saved = await h.call<{ defaultKerriganModel?: string; defaultLeadModel: string; defaultModel: string }>('GET', '/models');
+    t.check("Kerrigan's model saved, the lead's and the worker's untouched", [saved.defaultKerriganModel, saved.defaultLeadModel, saved.defaultModel], ['GPT 5.6 Think deeper', 'Think deeper', '']);
+    const said = en['def.kerriganSaved']!.replace('{name}', 'GPT 5.6 Think deeper');
+    // Said once "Saving..." has gone.
+    await waitFor("Kerrigan's section says it is saved", async () => (((await page.locator('section#kerrigan-model').textContent()) ?? '').includes(said) ? true : null), 10_000).catch(() => undefined);
+    t.truthy('and the section says so', ((await page.locator('section#kerrigan-model').textContent()) ?? '').includes(said), await page.locator('section#kerrigan-model').textContent());
+    await page.reload();
+    await page.locator('#manual-kerrigan-model').waitFor();
+    await waitFor("Kerrigan's \"by hand\" read", async () => ((await page.locator('#manual-kerrigan-model').isDisabled()) ? null : true), 10_000).catch(() => undefined);
+    t.check("her \"by hand\", not set, shows the lead's (ticked), not the worker's", [await page.locator('#manual-kerrigan-model').isChecked(), await page.locator('#manual-model').isChecked()], [true, false]);
+    await page.locator('#manual-kerrigan-model').uncheck();
+    await waitFor("Kerrigan's by hand saved", async () => (((await settingsOf(h)).copilot as { kerriganManualModel?: boolean } | undefined)?.kerriganManualModel === false ? true : null), 10_000).catch(() => undefined);
+    const after = ((await settingsOf(h)).copilot ?? {}) as { leadManualModel?: boolean; kerriganManualModel?: boolean };
+    t.check('unticked: hers saved as off, the lead\'s still on', [after.kerriganManualModel, after.leadManualModel], [false, true]);
   });
 
   /*
@@ -1530,7 +1553,7 @@ try {
     await page.goto(url('/settings'));
     const section = page.locator('section#picker-locators');
     await section.locator('#picker-model').waitFor();
-    t.check('the section, after the three models', await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['review', 'picker-locators', 'execution'].includes(id))), ['review', 'picker-locators', 'execution']);
+    t.check('the section, after the models', await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['review', 'picker-locators', 'execution'].includes(id))), ['review', 'picker-locators', 'execution']);
     const fields = section.locator('input.picker-locator');
     t.check('five locators, in order, each with its ⓘ', [await fields.evaluateAll((els) => els.map((e) => e.id)), await section.locator('.picker-field .info-btn').count()], [
       ['picker-button', 'picker-rows', 'picker-model', 'picker-provider', 'picker-providerModel'], 5,
@@ -3589,6 +3612,8 @@ try {
    */
   await scenario('Kerrigan directs: her message to a chat, a card she is on and one she leaves to the operator, her report', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h, page, url) => {
     await h.call('PUT', '/models/default', { model: 'Think deeper' });
+    // Settings' model for Kerrigan (2026-11-13): hers, beside the worker's her chats take.
+    await h.call('PUT', '/models/kerrigan-default', { model: 'GPT 5.6 Think deeper' });
     await page.goto(url('/'));
     const directs = page.getByRole('checkbox', { name: en['chat.kerrigan']! });
     await directs.waitFor();
@@ -3600,6 +3625,11 @@ try {
       [await page.getByRole('checkbox', { name: en['chat.lead']! }).count(), await page.getByRole('checkbox', { name: en['chat.planMode']! }).count(), await page.getByRole('checkbox', { name: en['chat.review']! }).count(), await page.locator('#cs-model').count(), await page.locator('#cs-chats-model').count()],
       [0, 0, 0, 1, 1],
     );
+    const shownIn = async (id: string): Promise<string> => ((await page.locator(`${id} option:checked`).textContent()) ?? '').trim();
+    t.check("none chosen under the box: hers as Settings' model for Kerrigan, her chats' as the worker's", [await shownIn('#cs-model'), await shownIn('#cs-chats-model')], [
+      en['chat.modelDefault']!.replace('{model}', 'GPT 5.6 Think deeper'),
+      en['chat.modelDefault']!.replace('{model}', 'Think deeper'),
+    ]);
     let thinking!: () => void;
     const held = new Promise<void>((r) => (thinking = r));
     h.chat.script(

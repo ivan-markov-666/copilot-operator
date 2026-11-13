@@ -1353,6 +1353,7 @@ export class OperatorService {
           if (which === 'model' && (now.defaultModel ?? '').trim() === from) await this.setDefaultModel(to);
           if (which === 'review' && (now.defaultReviewModel ?? '').trim() === from) await this.setDefaultReviewModel(to);
           if (which === 'lead' && (now.defaultLeadModel ?? '').trim() === from) await this.setDefaultLeadModel(to);
+          if (which === 'kerrigan' && (now.defaultKerriganModel ?? '').trim() === from) await this.setDefaultKerriganModel(to);
         },
         seen: async (options, current) => {
           await this.store.saveModels({ options, current: current ?? undefined, readAt: new Date().toISOString() });
@@ -3371,8 +3372,8 @@ export class OperatorService {
    * and which of them is the standing choice.
    */
   async models(): Promise<
-    | (ModelCatalogue & { defaultModel: string; defaultLeadModel: string; defaultReviewModel: string })
-    | { defaultModel: string; defaultLeadModel: string; defaultReviewModel: string; options: []; readAt: null }
+    | (ModelCatalogue & { defaultModel: string; defaultLeadModel: string; defaultKerriganModel: string; defaultReviewModel: string })
+    | { defaultModel: string; defaultLeadModel: string; defaultKerriganModel: string; defaultReviewModel: string; options: []; readAt: null }
   > {
     await this.init();
     const cfg = await this.settings.load();
@@ -3380,7 +3381,10 @@ export class OperatorService {
     const defaultModel = cfg.copilot.defaultModel ?? '';
     const defaultReviewModel = cfg.copilot.defaultReviewModel ?? '';
     const defaultLeadModel = cfg.copilot.defaultLeadModel ?? '';
-    return cached ? { ...cached, defaultModel, defaultLeadModel, defaultReviewModel } : { defaultModel, defaultLeadModel, defaultReviewModel, options: [], readAt: null };
+    const defaultKerriganModel = cfg.copilot.defaultKerriganModel ?? '';
+    return cached
+      ? { ...cached, defaultModel, defaultLeadModel, defaultKerriganModel, defaultReviewModel }
+      : { defaultModel, defaultLeadModel, defaultKerriganModel, defaultReviewModel, options: [], readAt: null };
   }
 
   /**
@@ -3399,6 +3403,19 @@ export class OperatorService {
       message: name.trim() ? `the lead of two chats will start on ${name.trim()}` : 'the lead of two chats leaves the chat on its model',
     });
     return { defaultLeadModel: name.trim() };
+  }
+
+  /** Sets the model Kerrigan's conversation starts on (2026-11-13). An empty name: the lead's, else the worker's. */
+  async setDefaultKerriganModel(name: string): Promise<{ defaultKerriganModel: string }> {
+    await this.init();
+    await this.settings.update((raw) => ({ ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), defaultKerriganModel: name.trim() } }));
+    this.bus.publish({
+      sessionId: '*',
+      type: 'default-kerrigan-model-changed',
+      level: 'info',
+      message: name.trim() ? `Kerrigan will start on ${name.trim()}` : "Kerrigan starts on the lead's model",
+    });
+    return { defaultKerriganModel: name.trim() };
   }
 
   async setDefaultReviewModel(name: string): Promise<{ defaultReviewModel: string }> {
@@ -3547,12 +3564,15 @@ export class OperatorService {
       const work = (saved.defaultModel ?? '').trim();
       const review = (saved.defaultReviewModel ?? '').trim();
       const lead = (saved.defaultLeadModel ?? '').trim();
+      const kerrigan = (saved.defaultKerriganModel ?? '').trim();
       const workNow = work ? pageModelFor(work, options) : null;
       const reviewNow = review ? pageModelFor(review, options) : null;
       const leadNow = lead ? pageModelFor(lead, options) : null;
+      const kerriganNow = kerrigan ? pageModelFor(kerrigan, options) : null;
       if (workNow && !sameModel(workNow.name, work)) await this.setDefaultModel(workNow.name);
       if (reviewNow && !sameModel(reviewNow.name, review)) await this.setDefaultReviewModel(reviewNow.name);
       if (leadNow && !sameModel(leadNow.name, lead)) await this.setDefaultLeadModel(leadNow.name);
+      if (kerriganNow && !sameModel(kerriganNow.name, kerrigan)) await this.setDefaultKerriganModel(kerriganNow.name);
       return catalogue;
     } finally {
       await transport?.close().catch(() => undefined);

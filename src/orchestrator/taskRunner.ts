@@ -244,7 +244,8 @@ export type ModelHooks = {
   askHelp?: (ask: { sessionId: string; asked: string; shown: string | null; why: string; tries: number; manual?: boolean; review?: boolean; role?: 'lead' | 'worker'; actor?: Actor }) => Promise<'recheck' | 'continue' | 'stop'>;
   /** Where the model of this name sat when the operator read the list: chosen there first (see `ModelLocator`). */
   locate?: (name: string) => Promise<ModelLocator | undefined>;
-  renamedDefault?: (which: 'model' | 'lead' | 'review', from: string, to: string) => Promise<void>;
+  /** `which`: the setting the name came from — Settings' model for the worker, the lead, Kerrigan or the review. */
+  renamedDefault?: (which: 'model' | 'lead' | 'kerrigan' | 'review', from: string, to: string) => Promise<void>;
   seen?: (options: ModelOption[], current: string | null) => Promise<void>;
 };
 
@@ -253,7 +254,7 @@ export type ModelHooks = {
  * the line-up read on the way. Returns the sentence that says so, or ''.
  */
 async function followPageModels(
-  which: 'model' | 'lead' | 'review',
+  which: 'model' | 'lead' | 'kerrigan' | 'review',
   wanted: string,
   result: ModelChoice,
   session: Session,
@@ -275,7 +276,8 @@ async function followPageModels(
   } else {
     await hooks?.renamedDefault?.(which, wanted, result.matched!).catch(() => undefined);
   }
-  return `"${wanted}" is no longer offered under that name; the page offers it as "${result.matched}", which was chosen, and ${own ? "the session's" : 'Settings\''} ${which === 'model' ? 'model' : 'review model'} now says so`;
+  const what = which === 'review' ? 'review model' : own ? 'model' : which === 'lead' ? 'model for the lead' : which === 'kerrigan' ? 'model for Kerrigan' : 'model';
+  return `"${wanted}" is no longer offered under that name; the page offers it as "${result.matched}", which was chosen, and ${own ? "the session's" : 'Settings\''} ${what} now says so`;
 }
 
 /** Why a task that was reported as done is being closed as failed. */
@@ -950,6 +952,32 @@ export async function openSessionTransport(
  * by another chat, often a model the picker no longer had — overrode what the operator chose in Settings
  * on every run (operator's rule, 2026-10-06: what is set in Settings outranks the same thing in the JSON).
  */
+/** The part of Settings a conversation's model comes from: Kerrigan's, the lead's, or the worker's (`defaultModel`). */
+export type ModelPart = 'model' | 'lead' | 'kerrigan';
+
+/** Which part of Settings a session's conversation takes its model from. */
+export function modelPartOf(session: Partial<Pick<Session, 'lead' | 'kerrigan'>>): ModelPart {
+  return session.kerrigan ? 'kerrigan' : session.lead ? 'lead' : 'model';
+}
+
+/**
+ * Settings' model for a part, with what stands in for it when none is chosen there: Kerrigan's, else the lead's; the
+ * lead's, else the worker's. `setting` names the one the name comes from, so a model the page renamed is followed there.
+ */
+export function settingsModelOf(
+  part: ModelPart,
+  copilot: Pick<ResolvedConfig['copilot'], 'defaultModel'> & Partial<Pick<ResolvedConfig['copilot'], 'defaultLeadModel' | 'defaultKerriganModel'>>,
+): { model: string; setting: ModelPart } {
+  const own = (x: string | undefined) => (x ?? '').trim();
+  if (part === 'kerrigan' && own(copilot.defaultKerriganModel)) return { model: own(copilot.defaultKerriganModel), setting: 'kerrigan' };
+  if (part !== 'model' && own(copilot.defaultLeadModel)) return { model: own(copilot.defaultLeadModel), setting: 'lead' };
+  return { model: own(copilot.defaultModel), setting: 'model' };
+}
+
+function settingsModelFor(session: Partial<Pick<Session, 'lead' | 'kerrigan'>>, cfg: Pick<ResolvedConfig, 'copilot'>): string {
+  return settingsModelOf(modelPartOf(session), cfg.copilot).model;
+}
+
 export function effectiveModels(
   session: Pick<Session, 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'manualModel' | 'lead'> & Partial<Pick<Session, 'kerrigan'>>,
   cfg: Pick<ResolvedConfig, 'copilot'>,
@@ -961,9 +989,11 @@ export function effectiveModels(
    * Settings' model for the conversation's part (2026-10-23): the lead's for the lead of two chats — the worker's when
    * none is chosen for the lead, as before there were two — else the worker's.
    */
-  // Kerrigan directs as the lead does (2026-11-12): her conversation takes Settings' model for the lead.
-  const directs = !!session.lead || !!session.kerrigan;
-  const fromSettings = ((directs ? cfg.copilot.defaultLeadModel?.trim() || cfg.copilot.defaultModel : cfg.copilot.defaultModel) ?? '').trim();
+  /*
+   * Kerrigan's conversation (2026-11-13): Settings' model for Kerrigan; none chosen there, the lead's, as it was from
+   * 2026-11-12 when she directed as the lead does; none for the lead either, the worker's.
+   */
+  const fromSettings = settingsModelFor(session, cfg);
   const [model, modelFrom]: [string, 'session' | 'settings' | 'plan' | 'none'] = session.manualModel ? ['', 'none'] : pick((session.model ?? '').trim(), session.modelSource, fromSettings);
   const [reviewModel, reviewModelFrom] = pick((session.review?.model ?? '').trim(), session.reviewModelSource, (cfg.copilot.defaultReviewModel ?? '').trim());
   return { model, reviewModel, modelFrom, reviewModelFrom };
@@ -975,8 +1005,12 @@ export function effectiveModels(
  * model and has none from Settings either — its picker shows "by hand" for that, and what it shows is what happens.
  */
 export function modelByHand(session: Pick<Session, 'kind' | 'manualModel' | 'model' | 'review' | 'modelSource' | 'reviewModelSource' | 'lead'> & Partial<Pick<Session, 'kerrigan'>>, cfg: Pick<ResolvedConfig, 'copilot'>): boolean {
-  // Settings' "by hand" for the conversation's part (2026-10-23): the lead's has its own, absent as the worker's; Kerrigan's is the lead's.
-  const settingsSay = session.lead || session.kerrigan ? (cfg.copilot.leadManualModel ?? cfg.copilot.manualModel) : cfg.copilot.manualModel;
+  /*
+   * Settings' "by hand" for the conversation's part (2026-10-23): the lead's has its own, absent as the worker's.
+   * Kerrigan's has her own since 2026-11-13, absent as the lead's.
+   */
+  const lead = cfg.copilot.leadManualModel ?? cfg.copilot.manualModel;
+  const settingsSay = session.kerrigan ? (cfg.copilot.kerriganManualModel ?? lead) : session.lead ? lead : cfg.copilot.manualModel;
   if (settingsSay || session.manualModel) return true;
   return session.kind === 'chat' && !effectiveModels(session, cfg).model;
 }
@@ -1065,7 +1099,8 @@ export async function applySessionModel(
   const hand = await withOperatorHand(transport, wanted, result, hooks, session.id, bus, false, asks);
   result = hand.result;
   const goOnAsItIs = hand.goOnAsItIs;
-  const renamed = await followPageModels(session.lead ? 'lead' : 'model', wanted, result, session, store, hooks, modelFrom);
+  // Followed in the setting the name came from: a part with none of its own takes another's (see `settingsModelOf`).
+  const renamed = await followPageModels(settingsModelOf(modelPartOf(session), cfg.copilot).setting, wanted, result, session, store, hooks, modelFrom);
   if (renamed) bus.publish({ sessionId: session.id, type: 'model-renamed', level: 'warn', message: renamed, data: { asked: wanted, chosen: result.matched } });
 
   bus.publish({
