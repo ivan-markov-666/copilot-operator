@@ -178,6 +178,8 @@ async function rejection(p: Promise<unknown>): Promise<Error | null> {
 
 /** Runs one scenario; an exception in it is a failure of that scenario, and the rest still run. */
 async function section(title: string, body: () => Promise<void>): Promise<void> {
+  // One section alone, while a fix is being made: SECTION=<part of its title>.
+  if (process.env.SECTION && !title.includes(process.env.SECTION)) return;
   console.log(`\n--- ${title} ---`);
   try {
     await body();
@@ -1166,6 +1168,77 @@ try {
   });
 
   // -------------------------------------------------------------------------------------------
+  await section('an attached file: the work page\'s new card and the old chip both found, and one that is not said by its locator', async () => {
+    /*
+     * Work, 2026-11-17: a message over the length sent as text goes with its whole as message-01-in-full.txt. The page
+     * took the file and showed it as a card ("message-01-in-full", "Text file"); the bot waited two minutes for the old
+     * `div.fx-Attachment[aria-label="message-01-in-full.txt"]`, written in the code, and the message ended with
+     * Playwright's own words, colours and all. The three are locators in Settings now (uploadInput, attachment,
+     * attachmentUploaded), their defaults find both looks, and one that finds nothing is said like the others.
+     */
+    type Waits = { inputWaitMs: number; attachWaitMs: number; uploadWaitMs: number };
+    const shorten = (x: CopilotTransport, w: Partial<Waits> = {}): void => {
+      Object.assign(x as unknown as Waits, { inputWaitMs: 500, attachWaitMs: 1_000, uploadWaitMs: 4_000, ...w });
+    };
+    const dir = await mkdtemp(join(base, 'attach-file-'));
+    const file = join(dir, 'message-01-in-full.txt');
+    await writeFile(file, 'the whole message', 'utf8');
+    const WRAP = '<div data-test-id="chat-input-wrapper"><span role="textbox" contenteditable="true" data-lexical-editor="true" style="display:inline-block;min-width:200px;min-height:20px"></span>';
+    const INPUT = '<input type="file" id="upload-file-button" multiple style="display:none">';
+    const onPick = (body: string): string =>
+      `<script>document.getElementById('upload-file-button').addEventListener('change', (ev) => { const f = ev.target.files[0]; const wrap = document.querySelector('[data-test-id="chat-input-wrapper"]'); ${body} });</script>`;
+
+    // The new card (2026-11-17): the name without its extension, "Text file", a spinner while it uploads.
+    const NEW_CARD =
+      "const stem = f.name.replace(/\\.[^.]*$/, ''); wrap.insertAdjacentHTML('afterbegin', '<div class=\"card\"><span class=\"nm\">' + stem + '</span><span>Text file</span><div role=\"progressbar\" id=\"spin\"></div></div>');";
+    const a = await fixture('attach-new', `${WRAP}${INPUT}</div>${onPick(`${NEW_CARD} setTimeout(() => document.getElementById('spin').remove(), 1200);`)}`);
+    shorten(a.transport);
+    const startedA = Date.now();
+    await a.transport.attach([file]);
+    t.check('the new card: attached, nothing said missing', [named(a.events, 'attached').map((e) => e.detail?.name), named(a.events, 'locator-missing').length, named(a.events, 'attachment-upload-unconfirmed').length], [['message-01-in-full.txt'], 0, 0]);
+    t.truthy('and only once its spinner had gone', (await a.page.evaluate(() => document.getElementById('spin') === null)) && Date.now() - startedA >= 1_200, Date.now() - startedA);
+
+    // The old chip: the name in its label, its id SPO_… once uploaded.
+    const OLD_CHIP =
+      "wrap.insertAdjacentHTML('afterbegin', '<div class=\"fx-AttachmentList\"><div class=\"fx-Attachment\" id=\"tmp-1\" aria-label=\"' + f.name + '\">' + f.name + '</div></div>'); setTimeout(() => { document.getElementById('tmp-1').id = 'SPO_abc'; }, 900);";
+    const b = await fixture('attach-old', `${WRAP}${INPUT}</div>${onPick(OLD_CHIP)}`);
+    shorten(b.transport);
+    await b.transport.attach([file]);
+    t.check('the old chip: attached once its id says uploaded', [named(b.events, 'attached').length, named(b.events, 'locator-missing').length, await b.page.evaluate(() => !!document.getElementById('SPO_abc'))], [1, 0, true]);
+
+    // The page takes the file and shows nothing the locator finds: said by its name, the work stopped, the HTML kept.
+    const c = await fixture('attach-none', `${WRAP}${INPUT}</div>${onPick("wrap.insertAdjacentHTML('afterbegin', '<div class=\"other\">a picture of a file</div>');")}`);
+    shorten(c.transport);
+    const none = await rejection(c.transport.attach([file]));
+    const saidC = named(c.events, 'locator-missing');
+    t.check('nothing found: LocatorMissing for "attachment", said as stopping the work', [none?.name, (none as { key?: string } | null)?.key, saidC.map((e) => [e.detail?.key, e.detail?.stopped, e.detail?.locator])], ['LocatorMissing', 'attachment', [['attachment', true, DefaultChatLocators.attachment]]]);
+    t.truthy('its message names the locator and Settings, in plain words (no terminal colours)', /^Not found on Copilot's page: the file attached to the message.*The "attachment" locator found nothing after the file message-01-in-full\.txt was put in the box's file input, within 1 s\..*Settings → "The chat's locators"/s.test(none?.message ?? '') && !(none?.message ?? '').includes(String.fromCharCode(27)), none?.message);
+    t.truthy('the HTML kept, with the box and what the page showed', !!saidC[0]?.detail?.html && (await readFile(String(saidC[0]!.detail!.html), 'utf8')).includes('a picture of a file'), saidC[0]?.detail);
+
+    // No file input: said as uploadInput.
+    const d = await fixture('attach-noinput', `${WRAP}</div>`);
+    shorten(d.transport);
+    const noInput = await rejection(d.transport.attach([file]));
+    t.check('no file input: LocatorMissing for "uploadInput"', [noInput?.name, (noInput as { key?: string } | null)?.key], ['LocatorMissing', 'uploadInput']);
+
+    // Shown, never uploaded: the message goes on, as before, and the locator is said once, not stopping the work.
+    const e = await fixture('attach-spinning', `${WRAP}${INPUT}</div>${onPick(NEW_CARD)}`);
+    shorten(e.transport, { uploadWaitMs: 1_500 });
+    await e.transport.attach([file]);
+    t.check('a spinner that never goes: attached, unconfirmed, "attachmentUploaded" said not stopping', [named(e.events, 'attached').length, named(e.events, 'attachment-upload-unconfirmed').length, named(e.events, 'locator-missing').map((x) => [x.detail?.key, x.detail?.stopped])], [1, 1, [['attachmentUploaded', false]]]);
+
+    // Settings' own, by the name without its extension.
+    const f = await fixture(
+      'attach-own',
+      `${WRAP}${INPUT}</div>${onPick("const stem = f.name.replace(/\\.[^.]*$/, ''); wrap.insertAdjacentHTML('afterbegin', '<div data-file=\"' + stem + '\" data-done=\"1\">x</div>');")}`,
+      { chatLocators: { attachment: '[data-file="{$file_stem}"]', attachmentUploaded: '[data-file="{$file_stem}"][data-done="1"]' } },
+    );
+    shorten(f.transport);
+    await f.transport.attach([file]);
+    t.check("Settings' own locators, with {$file_stem}: used", [named(f.events, 'attached').length, named(f.events, 'locator-missing').length], [1, 0]);
+  });
+
+  // -------------------------------------------------------------------------------------------
   await section('"Check the locators": each looked for in the chat, the newest conversation and its menu, only read', async () => {
     /*
      * Operator, 2026-11-17: "make the 'Check the locators' button too". Served by the page's routes as Copilot has it: a
@@ -1180,7 +1253,7 @@ try {
     const side = (): string => (state.conversations ? `<nav><a href="/chat/conversation/${A}" aria-label="newest">newest</a><a href="/chat/conversation/${B}" aria-label="older">older</a></nav>` : '<nav></nav>');
     const chat = (): string =>
       `<script>window.sends = 0;</script>${side()}<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span>` +
-      `<button aria-label="Send" hidden onclick="window.sends += 1">send</button></div>` +
+      `<button aria-label="Send" hidden onclick="window.sends += 1">send</button><input type="file" id="upload-file-button" multiple style="display:none"></div>` +
       `<script>const box = document.getElementById('m365-chat-editor-target-element'); box.addEventListener('input', () => { document.querySelector('[aria-label=Send]').hidden = !box.textContent.trim(); });</script>`;
     const conversation = (): string =>
       `${chat()}<div data-testid="m365-chat-llm-web-ui-chat-message"><div id="user-message-1">hello</div></div><div data-testid="m365-chat-llm-web-ui-chat-message"><div data-testid="copilot-message-div">hi <button data-testid="CopyButtonTestId" aria-label="Copy">c</button></div></div>` +
@@ -1204,6 +1277,8 @@ try {
     t.check('each looked for: found where it is, the rest said as not on the page then, and why', table(found), [
       'composer:found:1', 'send:found:1', 'userMessage:found:1', 'turn:found:2', 'answer:found:1', 'copy:found:1', 'stop:not-here:writing',
       'conversationLink:found:2', 'chatMore:found:1', 'renameItem:found:1', 'renameInput:not-here:dialog', 'renameSave:not-here:dialog',
+      // The box's file input is there (hidden); an attached file shows only once one is, and the check attaches none.
+      'uploadInput:found:1', 'attachment:not-here:attach', 'attachmentUploaded:not-here:attach',
     ]);
     t.check('only read: nothing sent, the letter for Send taken out, the menu closed, on the newest conversation', [await value<number>(a.page, 'sends'), await a.page.locator('#m365-chat-editor-target-element').innerText(), await a.page.locator('[role=menu]').count(), parseChatId(a.page.url())], [0, '', 0, A]);
     t.check('nothing said as missing', named(a.events, 'locator-missing').length, 0);

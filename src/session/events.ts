@@ -8,6 +8,10 @@
 import { EventEmitter } from 'node:events';
 import type { SessionEvent } from './model.js';
 
+/** A text without a terminal's colour codes (Playwright's errors carry them: [2m … [22m). */
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
+const stripAnsi = (text: string): string => text.replace(ANSI, '');
+
 const HISTORY_PER_SESSION = 500;
 
 export class EventBus {
@@ -19,7 +23,8 @@ export class EventBus {
   }
 
   publish(event: Omit<SessionEvent, 'at'>): SessionEvent {
-    const full: SessionEvent = { at: new Date().toISOString(), ...event };
+    // Playwright colours its errors for a terminal ([2m … [22m): what is said is said without (2026-11-17).
+    const full: SessionEvent = { at: new Date().toISOString(), ...event, ...(typeof event.message === 'string' ? { message: stripAnsi(event.message) } : {}) };
     const list = this.history.get(event.sessionId) ?? [];
     list.push(full);
     if (list.length > HISTORY_PER_SESSION) list.splice(0, list.length - HISTORY_PER_SESSION);

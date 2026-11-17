@@ -24,6 +24,7 @@ import {
   ChatLocatorWhat,
   Css,
   DefaultChatLocators,
+  fillFileLocator,
   fillLocator,
   Label,
   Model,
@@ -37,7 +38,6 @@ import {
   Signal,
   Surface,
   TestId,
-  Upload,
   Url,
   type ChatLocatorKey,
   type ChatLocators,
@@ -516,7 +516,7 @@ export type LocatorCheck = {
   key: ChatLocatorKey;
   status: 'found' | 'none' | 'not-here';
   count: number;
-  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat';
+  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat' | 'attach';
 };
 
 export class CopilotTransport {
@@ -934,6 +934,10 @@ export class CopilotTransport {
       await this.composer().fill('').catch(() => undefined);
     }
     await record('send', send);
+    // The box's file input (hidden: counted, not looked at). An attached file shows only once one is, and none is here.
+    await look('uploadInput');
+    notHere('attachment', 'attach');
+    notHere('attachmentUploaded', 'attach');
     // Stop shows only while Copilot writes.
     const stop = await count('stop');
     if (stop > 0) out.set('stop', { key: 'stop', status: 'found', count: stop });
@@ -2721,23 +2725,66 @@ Current URL: ${url}`);
    * prefix, which is the signal that the upload actually finished.
    */
   async attach(paths: string[]): Promise<void> {
-    await this.p.setInputFiles(Upload.input, paths);
+    /*
+     * By the chat's locators in force (2026-11-17: the work page showed the attached file as a card of its own, and the
+     * old `div.fx-Attachment[aria-label=<name>]`, written in the code, waited two minutes and ended the message with
+     * Playwright's own words). Each can be set in Settings → "The chat's locators" → "Attaching a file"; one that finds
+     * nothing is said by its name, with the page's HTML, like the others.
+     */
+    const input = this.el('uploadInput').first();
+    const there = await input.waitFor({ state: 'attached', timeout: this.inputWaitMs }).then(() => true, () => false);
+    if (!there) throw await this.locatorMissing('uploadInput', 'when a file was to be attached to the message');
+    await input.setInputFiles(paths);
     for (const path of paths) {
       const name = path.split(/[\\/]/).pop() as string;
-      const chip = this.p.locator(`${Upload.chip}[aria-label="${name.replace(/"/g, '\\"')}"]`);
-      await chip.first().waitFor({ state: 'visible', timeout: 120_000 });
-      await this.p
-        .waitForFunction(
-          ({ sel, prefix }) => {
-            const el = document.querySelector(sel);
-            return !!el && (el.id || '').startsWith(prefix);
-          },
-          { sel: `${Upload.chip}[aria-label="${name.replace(/"/g, '\\"')}"]`, prefix: Upload.uploadedIdPrefix },
-          { timeout: 120_000 },
-        )
-        .catch(() => this.emit('attachment-upload-unconfirmed', { name }));
+      const shown = await this.fileEl('attachment', path)
+        .filter({ visible: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: this.attachWaitMs })
+        .then(() => true, (e: unknown) => {
+          if ((e as Error).name !== 'TimeoutError') throw e;
+          return false;
+        });
+      if (!shown) {
+        throw await this.locatorMissing('attachment', `after the file ${name} was put in the box's file input, within ${Math.round(this.attachWaitMs / 1000)} s`);
+      }
+      // Uploaded: the locator finds it, and goes on finding it for a moment (a spinner can come a little after the card).
+      const uploaded = await this.holds(async () => (await this.fileEl('attachmentUploaded', path).count().catch(() => 0)) > 0, this.uploadWaitMs, 2_000);
+      if (!uploaded) {
+        // As before: the message goes on (Send waits while it cannot be pressed); what found nothing is said once a window.
+        this.emit('attachment-upload-unconfirmed', { name });
+        if (!this.warned.has('attachmentUploaded')) {
+          this.warned.add('attachmentUploaded');
+          await this.locatorMissing('attachmentUploaded', `for ${Math.round(this.uploadWaitMs / 1000)} s after the file ${name} was attached`, { stopped: false }).catch(() => undefined);
+        }
+      }
       this.emit('attached', { name });
     }
+  }
+
+  /** How long an attached file may take to show in the box, and to finish uploading (fields, for the checks). */
+  inputWaitMs = 10_000;
+  attachWaitMs = 30_000;
+  uploadWaitMs = 120_000;
+
+  /** An attached file's locator in force, with the file's name put in its place (see `fillFileLocator`). */
+  private fileEl(key: 'attachment' | 'attachmentUploaded', file: string): Locator {
+    return this.p.locator(playwrightSelector(fillFileLocator(this.chatLocators[key], file)));
+  }
+
+  /** Whether `test` comes true within `ms` and stays true for `steadyMs`, looked at every half second. */
+  private async holds(test: () => Promise<boolean>, ms: number, steadyMs: number): Promise<boolean> {
+    const until = Date.now() + ms;
+    let since: number | null = null;
+    while (Date.now() < until) {
+      if (this.p.isClosed()) return false;
+      if (await test()) {
+        since ??= Date.now();
+        if (Date.now() - since >= steadyMs) return true;
+      } else since = null;
+      await this.p.waitForTimeout(500);
+    }
+    return false;
   }
 
   /**

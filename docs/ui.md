@@ -859,7 +859,12 @@ every locator the bot finds the chat by, in three groups:
 - writing and sending: the box, Send, your message;
 - the answer: the messages, the answer, its Copy, Stop;
 - the conversations in the sidebar: the link, a conversation's "More" (a template with `{$chat_id}`), "Rename", the
-  name field, "Save".
+  name field, "Save";
+- attaching a file (added the same evening, after a message too long for text stopped at work): the box's file input,
+  the attached file in the box, and the same once uploaded. The last two are templates with `{$file_name}`
+  (`message-01-in-full.txt`) or `{$file_stem}` (`message-01-in-full`). Their defaults find both the old chip
+  (`div.fx-Attachment[aria-label=…]`, its id `SPO_…` once uploaded) and the new card (its text is the name without the
+  extension; uploaded = no `role=progressbar` left in the box's wrapper). Playwright's `:text-is()` is allowed in CSS.
 
 They are kept as `copilot.chatLocators`, and their defaults (`DefaultChatLocators` in `transport/locators.ts`) are
 what the bot looked for before. A locator is a CSS selector, an XPath, or Playwright's own (`role=button[name="Send"]`,

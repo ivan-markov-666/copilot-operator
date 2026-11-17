@@ -27,12 +27,21 @@ export type ChatKey =
   | 'chatMore'
   | 'renameItem'
   | 'renameInput'
-  | 'renameSave';
-export const CHAT_KEYS: ChatKey[] = ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'];
-export type ChatGroup = 'write' | 'answer' | 'conversations';
+  | 'renameSave'
+  | 'uploadInput'
+  | 'attachment'
+  | 'attachmentUploaded';
+export const CHAT_KEYS: ChatKey[] = [
+  'composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave',
+  'uploadInput', 'attachment', 'attachmentUploaded',
+];
+export type ChatGroup = 'write' | 'attach' | 'answer' | 'conversations';
 export const CHAT_ID = '{$chat_id}';
-/** The placeholder a chat template must hold. */
-export const CHAT_PLACEHOLDER: Partial<Record<ChatKey, string>> = { chatMore: CHAT_ID };
+/** Where an attached file's name goes, and its name without the extension. */
+export const FILE_NAME = '{$file_name}';
+export const FILE_STEM = '{$file_stem}';
+/** The placeholder a chat template must hold (an attached file's: its name, or its name without the extension). */
+export const CHAT_PLACEHOLDER: Partial<Record<ChatKey, string>> = { chatMore: CHAT_ID, attachment: FILE_NAME, attachmentUploaded: FILE_NAME };
 
 /** The placeholder a template must hold; the two elements hold none. */
 export const PLACEHOLDER: Record<PickerKey, string | null> = {
@@ -83,14 +92,19 @@ export function locatorProblem(key: PickerKey | ChatKey, locator: string, doc?: 
   const s = locator.trim();
   if (s === '') return null;
   const needs = key in PLACEHOLDER ? PLACEHOLDER[key as PickerKey] : (CHAT_PLACEHOLDER[key as ChatKey] ?? null);
-  if (needs && !s.includes(needs)) return { kind: 'placeholder', placeholder: needs };
+  if (needs && !s.includes(needs) && !(needs === FILE_NAME && s.includes(FILE_STEM))) return { kind: 'placeholder', placeholder: needs };
   const xpath = s.startsWith('xpath=') || (!s.startsWith('css=') && isXPath(s));
   const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(s);
   if (axis && xpath) return { kind: 'colons', axis: axis[2]! };
   if (!doc) return null;
   // Playwright's own forms (role=…, text=…) and chains (>>): no browser reads them; the bot does.
   if ((/^[a-z][a-z:-]*=/.test(s) && !/^(css|xpath)=/.test(s)) || s.includes('>>')) return null;
-  const text = fillLocator(s.replace(/^(xpath|css)=/, ''), { model: 'Think deeper', provider: 'Claude' }).split(CHAT_ID).join('id');
+  // Nor Playwright's own pseudo-classes in a CSS selector (:text-is("…"), :has-text("…"), :visible).
+  if (!xpath && /:(has-text|text|text-is|text-matches|visible|nth-match)\b/.test(s)) return null;
+  const text = fillLocator(s.replace(/^(xpath|css)=/, ''), { model: 'Think deeper', provider: 'Claude' })
+    .split(CHAT_ID).join('id')
+    .split(FILE_NAME).join('file.txt')
+    .split(FILE_STEM).join('file');
   try {
     if (xpath) doc.evaluate(text, doc, null, XPathResult.ANY_TYPE, null);
     else doc.querySelector(text);

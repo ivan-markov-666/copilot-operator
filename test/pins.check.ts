@@ -41,7 +41,9 @@ import { RunConfigSchema } from '../src/config/schema.js';
 import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
 import { isCopilotOtherPage, isReplyTimeout, isWorkChatAddress, surfaceOfUrl } from '../src/transport/copilotTransport.js';
-import { CHAT_LOCATOR_KEYS, ChatLocatorGroupOf, ChatLocatorWhat, DefaultChatLocators, locatorPrompt, playwrightSelector, resolveChatLocators, Url } from '../src/transport/locators.js';
+import { CHAT_LOCATOR_KEYS, ChatLocatorGroupOf, ChatLocatorWhat, DefaultChatLocators, fillFileLocator, locatorPrompt, playwrightSelector, resolveChatLocators, Url } from '../src/transport/locators.js';
+import { EventBus } from '../src/session/events.js';
+import { chatNotice } from '../src/session/chatNotice.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
 import { branchNameFrom, plannedBranchName, porcelainPaths } from '../src/vcs/git.js';
@@ -647,7 +649,7 @@ try {
    * hand, so I don't have to come back here every time"): their defaults are what the bot looked for before, each has
    * its group in Settings and words a chatbot can find it by; the one template keeps its place for the id.
    */
-  t.check('the chat\'s locators, in Settings\' order', [...CHAT_LOCATOR_KEYS], ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave']);
+  t.check('the chat\'s locators, in Settings\' order', [...CHAT_LOCATOR_KEYS], ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave', 'uploadInput', 'attachment', 'attachmentUploaded']);
   t.check('their defaults: what the bot looked for before they were editable', DefaultChatLocators, {
     composer: '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]',
     send: '[data-test-id="chat-input-wrapper"] >> role=button[name="Send"]',
@@ -661,6 +663,10 @@ try {
     renameItem: 'role=menuitem[name="Rename"]',
     renameInput: '#new-session-name',
     renameSave: 'role=button[name="Save"]',
+    // Until 2026-11-17 written in the code (`Upload`); the two below are pinned by what they find, in the section further down.
+    uploadInput: '#upload-file-button',
+    attachment: DefaultChatLocators.attachment,
+    attachmentUploaded: DefaultChatLocators.attachmentUploaded,
   });
   t.check('each in a group, and each said in words', CHAT_LOCATOR_KEYS.filter((k) => !ChatLocatorGroupOf[k] || !ChatLocatorWhat[k]), []);
   // Every one kept when the settings are read (2026-11-17: the schema written by hand kept only the box's).
@@ -948,6 +954,34 @@ try {
   }
   // A blank entry is not the repository: it names nothing, so it covers nothing.
   t.check('a blank entry covers nothing', [inScope('docs/x.md', ['']), inScope('docs/x.md', ['  '])], [false, false]);
+  // An attached file's three locators (work, 2026-11-17: the old chip, written in the code, waited two minutes for a
+  // card the page now shows differently, and the message ended with Playwright's words, terminal colours and all).
+  t.check('the attached file: three chat locators, in a group of their own', ['uploadInput', 'attachment', 'attachmentUploaded'].map((k) => [(CHAT_LOCATOR_KEYS as readonly string[]).includes(k), ChatLocatorGroupOf[k as 'attachment']]), [[true, 'attach'], [true, 'attach'], [true, 'attach']]);
+  t.check('their defaults: the box\'s file input as before; the old chip by its label, and the new card by its text', [
+    DefaultChatLocators.uploadInput,
+    DefaultChatLocators.attachment.includes('div.fx-Attachment[aria-label="{$file_name}"]'),
+    DefaultChatLocators.attachment.includes(':text-is("{$file_stem}")'),
+    DefaultChatLocators.attachmentUploaded.includes('[id^="SPO_"]'),
+    DefaultChatLocators.attachmentUploaded.includes(':not(:has([role="progressbar"]))'),
+  ], ['#upload-file-button', true, true, true, true]);
+  {
+    const own = resolveChatLocators({ attachment: '[data-file="{$file_stem}"]', attachmentUploaded: '.chip' });
+    t.check('a file template: {$file_stem} will do; one with neither placeholder is not used, and said', [own.locators.attachment, own.locators.attachmentUploaded === DefaultChatLocators.attachmentUploaded, own.problems.length, /attachmentUploaded.*no \{\$file_name\} \(or \{\$file_stem\}\)/.test(own.problems[0] ?? '')], ['[data-file="{$file_stem}"]', true, 1, true]);
+  }
+  t.check('the file\'s name put in (from a Windows path or another), a quote kept inside the quotes', [
+    fillFileLocator('[aria-label="{$file_name}"] :text-is("{$file_stem}")', 'C:\\run\\messages\\message-01-in-full.txt'),
+    fillFileLocator('[aria-label="{$file_name}"]', '/x/a"b.txt'),
+  ], ['[aria-label="message-01-in-full.txt"] :text-is("message-01-in-full")', '[aria-label="a\\"b.txt"]']);
+  t.truthy("the chatbot is told where the file's name goes", /\{\$file_name\}.*\{\$file_stem\}/.test(locatorPrompt('attachment', DefaultChatLocators.attachment)), locatorPrompt('attachment', DefaultChatLocators.attachment));
+  {
+    const ESC = String.fromCharCode(27);
+    const coloured = `locator.waitFor: Timeout 120000ms exceeded. Call log: ${ESC}[2m - waiting for locator('x')${ESC}[22m`;
+    const bus = new EventBus();
+    const said = bus.publish({ sessionId: 's', type: 'task-failed', level: 'error', message: coloured });
+    t.check('what the bus says has no terminal colours', said.message, "locator.waitFor: Timeout 120000ms exceeded. Call log:  - waiting for locator('x')");
+    const notice = chatNotice('bg', [{ title: 'x', status: 'failed', reason: coloured }]);
+    t.truthy("nor the card that says how the chat's work ended", !JSON.stringify(notice).includes(ESC) && JSON.stringify(notice).includes('waiting for locator'), notice);
+  }
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

@@ -233,12 +233,18 @@ export const CHAT_LOCATOR_KEYS = [
   'renameItem',
   'renameInput',
   'renameSave',
+  'uploadInput',
+  'attachment',
+  'attachmentUploaded',
 ] as const;
 export type ChatLocatorKey = (typeof CHAT_LOCATOR_KEYS)[number];
 export type ChatLocators = Record<ChatLocatorKey, string>;
 
 /** Where a conversation's id goes in a template (the sidebar's "More" button of one conversation). */
 export const CHAT_ID = '{$chat_id}';
+/** Where an attached file's name goes (`message-01-in-full.txt`), and its name without the extension (`message-01-in-full`). */
+export const FILE_NAME = '{$file_name}';
+export const FILE_STEM = '{$file_stem}';
 
 export const DefaultChatLocators: ChatLocators = {
   composer: '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]',
@@ -253,10 +259,27 @@ export const DefaultChatLocators: ChatLocators = {
   renameItem: 'role=menuitem[name="Rename"]',
   renameInput: '#new-session-name',
   renameSave: 'role=button[name="Save"]',
+  uploadInput: '#upload-file-button',
+  /*
+   * The attached file in the box, before Send (2026-11-17: the work page shows it as a card with the name without
+   * its extension and "Text file", no longer `div.fx-Attachment[aria-label=<name>]`). Either: the old one by its
+   * label, or, in the box's wrapper, the element whose text is exactly the file's name, with or without the extension.
+   */
+  attachment:
+    `div.fx-Attachment[aria-label="${FILE_NAME}"], [data-test-id="chat-input-wrapper"] :text-is("${FILE_STEM}"), ` +
+    `[data-test-id="chat-input-wrapper"] :text-is("${FILE_NAME}")`,
+  /*
+   * The same, once it is uploaded: the old one's id starts with SPO_ then; on the new page, nothing in the box's wrapper
+   * shows progress any more (a spinner, a progress bar: role=progressbar).
+   */
+  attachmentUploaded:
+    `div.fx-Attachment[aria-label="${FILE_NAME}"][id^="SPO_"], ` +
+    `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_STEM}"), ` +
+    `[data-test-id="chat-input-wrapper"]:not(:has(div.fx-Attachment)):not(:has([role="progressbar"])) :text-is("${FILE_NAME}")`,
 };
 
 /** The groups Settings shows them in, in this order. */
-export type ChatLocatorGroup = 'write' | 'answer' | 'conversations';
+export type ChatLocatorGroup = 'write' | 'attach' | 'answer' | 'conversations';
 export const ChatLocatorGroupOf: Record<ChatLocatorKey, ChatLocatorGroup> = {
   composer: 'write',
   send: 'write',
@@ -270,6 +293,9 @@ export const ChatLocatorGroupOf: Record<ChatLocatorKey, ChatLocatorGroup> = {
   renameItem: 'conversations',
   renameInput: 'conversations',
   renameSave: 'conversations',
+  uploadInput: 'attach',
+  attachment: 'attach',
+  attachmentUploaded: 'attach',
 };
 
 /**
@@ -289,10 +315,27 @@ export const ChatLocatorWhat: Record<ChatLocatorKey, string> = {
   renameItem: 'the "Rename" item of the menu a conversation\'s "More" button opens in the sidebar',
   renameInput: 'the text field of the dialog that renames a conversation',
   renameSave: 'the "Save" button of the dialog that renames a conversation',
+  uploadInput: 'the hidden file input (input type="file") of the box where a message is typed, through which files are attached to the message',
+  attachment: `the file attached to the message, as the box shows it before Send (a card with the file's name); ${FILE_NAME} is where the file's name goes (message-01-in-full.txt), ${FILE_STEM} the name without its extension (message-01-in-full)`,
+  attachmentUploaded: `the same attached file once it has finished uploading (no spinner or progress on it any more); ${FILE_NAME} is where the file's name goes, ${FILE_STEM} the name without its extension`,
 };
 
-/** The placeholder a template must hold; the others hold none. */
-export const ChatPlaceholder: Partial<Record<ChatLocatorKey, string>> = { chatMore: CHAT_ID };
+/** The placeholder a template must hold; the others hold none. An attached file's: its name, or its name without the extension. */
+export const ChatPlaceholder: Partial<Record<ChatLocatorKey, string>> = { chatMore: CHAT_ID, attachment: FILE_NAME, attachmentUploaded: FILE_NAME };
+/** Whether a template holds its placeholder (for a file's, either of the two). */
+export function holdsChatPlaceholder(key: ChatLocatorKey, locator: string): boolean {
+  const needs = ChatPlaceholder[key];
+  if (!needs) return true;
+  return locator.includes(needs) || (needs === FILE_NAME && locator.includes(FILE_STEM));
+}
+
+/** A file template with the file's name put in, safe inside the quotes it stands in. */
+export function fillFileLocator(template: string, file: string): string {
+  const name = file.split(/[\\/]/).pop() ?? file;
+  const stem = name.replace(/\.[^.]*$/, '');
+  const quoted = (v: string) => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return template.split(FILE_NAME).join(quoted(name)).split(FILE_STEM).join(quoted(stem));
+}
 
 /** The chat's locators in force: each one saved in Settings, else the default; one that cannot be used is said in `problems`. */
 export function resolveChatLocators(saved?: Partial<Record<ChatLocatorKey, string>> | null): { locators: ChatLocators; problems: string[] } {
@@ -302,7 +345,11 @@ export function resolveChatLocators(saved?: Partial<Record<ChatLocatorKey, strin
     const own = (saved?.[key] ?? '').trim();
     if (!own) continue;
     const needs = ChatPlaceholder[key];
-    const problem = needs && !own.includes(needs) ? `it has no ${needs}: put it where the conversation's id goes` : locatorSyntaxProblem(own);
+    const problem = needs && !holdsChatPlaceholder(key, own)
+      ? needs === FILE_NAME
+        ? `it has no ${FILE_NAME} (or ${FILE_STEM}): put it where the file's name goes`
+        : `it has no ${needs}: put it where the conversation's id goes`
+      : locatorSyntaxProblem(own);
     if (problem) problems.push(`the chat's ${key} locator in Settings is not used, ${problem}`);
     else locators[key] = own;
   }
@@ -322,7 +369,10 @@ export function locatorPrompt(key: ChatLocatorKey, failed: string): string {
     'Give me one locator that finds exactly this element, and only it: a CSS selector, or an XPath if CSS cannot say it.',
     'Use what stays the same between versions of the page: id, role, aria-label, data-testid, data-test-id and other data-* attributes, the tag.',
     'Do not use class names made of random letters (like azFuQXgw or ___1x5usfw): they change with every new version of the page.',
-    ...(ChatPlaceholder[key] ? [`Keep ${ChatPlaceholder[key]} in it where the conversation's id goes.`] : []),
+    ...(ChatPlaceholder[key] === CHAT_ID ? [`Keep ${CHAT_ID} in it where the conversation's id goes.`] : []),
+    ...(ChatPlaceholder[key] === FILE_NAME
+      ? [`Keep ${FILE_NAME} in it where the file's name goes (message-01-in-full.txt), or ${FILE_STEM} for the name without its extension (message-01-in-full): the attached file in the HTML is message-01-in-full.txt.`]
+      : []),
     'Answer with the locator on the first line, then one line on why it is that element.',
   ].join('\n');
 }

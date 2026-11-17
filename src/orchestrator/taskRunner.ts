@@ -51,7 +51,7 @@ import { collectPolicyManifest, describePolicyManifest } from '../exec/policyMan
 import { assessIsolation, readIsolationSignals } from '../exec/isolation.js';
 import { confinementRefusal, isWithin, sessionRoots, type Confinement } from '../exec/confinement.js';
 import type { StepAuthorizer } from '../exec/authorizer.js';
-import { writeReport } from '../exec/reportFile.js';
+import { stripAnsi, writeReport } from '../exec/reportFile.js';
 import { gapFrom, Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, operatorNotesSection, readOnlyNote } from '../session/compose.js';
@@ -1581,7 +1581,9 @@ export async function runTask(
   const photographed = session.kind === 'chat' && !session.vcs?.enabled;
   let chatCheckpoint = photographed ? task.checkpoint : undefined;
   const chatDir = photographed ? session.projectDir?.trim() ?? '' : '';
-  const finish = async (status: TaskOutcome['status'], reason?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
+  const finish = async (status: TaskOutcome['status'], reasonAsIs?: string, summary?: string, finalReply?: string): Promise<TaskOutcome> => {
+    // An error's text as a terminal would colour it (Playwright's: [2m … [22m) is said without the colours.
+    let reason = reasonAsIs === undefined ? undefined : stripAnsi(reasonAsIs);
     // How it ended as reported; the runner's own checks below can still change it, and the final word is written at the end.
     await record(`ENDING: ${status.toUpperCase()}`, [summary ?? '', reason ? `Reason: ${reason}` : ''].filter(Boolean).join('\n\n') || '(no details)');
 

@@ -8,6 +8,10 @@
 import type { TaskStatus } from './model.js';
 import type { WindowNotice } from '../transport/copilotTransport.js';
 
+/** A text without a terminal's colour codes (Playwright's errors carry them: [2m … [22m). */
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
+const stripAnsi = (text: string): string => text.replace(ANSI, '');
+
 /** A language code of the interface: `en`, `bg`, `de`, … (see `web/lib/lang/languages.ts`). */
 export type NoticeLang = string;
 
@@ -184,7 +188,7 @@ const RIGHT_TO_LEFT = new Set(['ar']);
 
 /** A reason as a line: its first sentence or so, since the whole of it is in the chat. */
 function brief(text: string | undefined, max = 220): string {
-  const one = (text ?? '').replace(/\s+/g, ' ').trim();
+  const one = stripAnsi(text ?? '').replace(/\s+/g, ' ').trim();
   return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
 }
 

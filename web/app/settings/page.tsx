@@ -1225,6 +1225,7 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
 /** The groups, in order, and the locators of each, in order. */
 const CHAT_GROUPS: Array<{ group: ChatGroup; title: Key; keys: ChatKey[] }> = [
   { group: 'write', title: 'chatloc.group.write', keys: ['composer', 'send', 'userMessage'] },
+  { group: 'attach', title: 'chatloc.group.attach', keys: ['uploadInput', 'attachment', 'attachmentUploaded'] },
   { group: 'answer', title: 'chatloc.group.answer', keys: ['turn', 'answer', 'copy', 'stop'] },
   { group: 'conversations', title: 'chatloc.group.conversations', keys: ['conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] },
 ];

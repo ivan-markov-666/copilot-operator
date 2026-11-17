@@ -1611,10 +1611,18 @@ try {
     t.check('its own section, titled, before the model menu\'s', [await section.locator('h2').textContent(), await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['chat-locators', 'picker-locators'].includes(id)))], [en['chatloc.title'], ['chat-locators', 'picker-locators']]);
     t.check('the box to write in: named, with its ⓘ, empty, its default shown in it', [await section.locator('label[for="chat-composer"]').textContent(), await page.locator('#chat-composer').inputValue(), await page.locator('#chat-composer').getAttribute('placeholder')], [en['chatloc.composer'], '', DefaultChatLocators.composer]);
     // Every locator the bot finds the chat by (2026-11-17, the same day): three groups, each field its ⓘ and its default.
-    t.check('three groups, in order', await section.locator('.locator-group > h3').allTextContents(), [en['chatloc.group.write'], en['chatloc.group.answer'], en['chatloc.group.conversations']]);
+    t.check("four groups, in order (an attached file's since the same evening)", await section.locator('.locator-group > h3').allTextContents(), [en['chatloc.group.write'], en['chatloc.group.attach'], en['chatloc.group.answer'], en['chatloc.group.conversations']]);
     const ids = await section.locator('input.picker-locator').evaluateAll((els) => els.map((e) => [e.id, (e as HTMLInputElement).placeholder]));
-    t.check('every locator, in order, each with its default shown', ids, (['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] as const).map((k) => [`chat-${k}`, DefaultChatLocators[k]]));
-    t.check('each with its ⓘ', await section.locator('.picker-field .info-btn').count(), 12);
+    t.check('every locator, in order, each with its default shown', ids, (['composer', 'send', 'userMessage', 'uploadInput', 'attachment', 'attachmentUploaded', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] as const).map((k) => [`chat-${k}`, DefaultChatLocators[k]]));
+    t.check('each with its ⓘ', await section.locator('.picker-field .info-btn').count(), 15);
+    // An attached file's: its default (Playwright's :text-is in CSS) not refused; a template with neither of its places is.
+    await page.locator('#chat-attachment').fill(DefaultChatLocators.attachment);
+    t.check("an attached file's default, with Playwright's :text-is: not refused", await section.locator('.picker-field:has(#chat-attachment) .err').count(), 0);
+    await page.locator('#chat-attachment').fill('[data-file="{$file_stem}"]');
+    t.check('its name without the extension will do for its place', await section.locator('.picker-field:has(#chat-attachment) .err').count(), 0);
+    await page.locator('#chat-attachment').fill('.chip');
+    t.check('neither place: said', await section.locator('.picker-field:has(#chat-attachment) .err').textContent(), en['loc.noPlaceholder'].replace('{ph}', '{$file_name}'));
+    await page.locator('#chat-attachment').fill('');
     await page.locator('#chat-chatMore').fill('button[data-more]');
     t.check('the template without its place for the id: said', await section.locator('.picker-field:has(#chat-chatMore) .err').textContent(), en['loc.noPlaceholder'].replace('{ph}', '{$chat_id}'));
     await page.locator('#chat-chatMore').fill('');
@@ -1727,7 +1735,7 @@ try {
       ['none', `✗ ${en['chatloc.notFound']}`],
       ['not-here', `– ${en['chatloc.notHere']} ${en['chatloc.note.writing']}`],
     ]);
-    t.check('and the count', await section.locator('.locator-check-done').textContent(), en['chatloc.checkDone'].replace('{found}', '10').replace('{none}', '1').replace('{other}', '1'));
+    t.check('and the count', await section.locator('.locator-check-done').textContent(), en['chatloc.checkDone'].replace('{found}', '13').replace('{none}', '1').replace('{other}', '1'));
     const copy = section.locator('.picker-field[data-locator-field="copy"]');
     await waitFor('the one not found in red', async () => ((await copy.evaluate((el) => el.classList.contains('locator-failed'))) ? true : null), 15_000).catch(() => undefined);
     t.check('the one not found: in red, with what to do under it', [await copy.evaluate((el) => el.classList.contains('locator-failed')), await copy.locator('.locator-failure').count()], [true, 1]);
