@@ -19,14 +19,15 @@ import { CopyButton } from './copyButton';
 
 /** Where Settings has a locator's field: the page reads `locator` and goes to it, in red. */
 export function locatorFieldUrl(key: string): string {
-  return `/settings?locator=${encodeURIComponent(key)}#chat-locators`;
+  // One of the operator's own steps (2026-11-17) is in "Steps to the chat", under the chat's locators.
+  return `/settings?locator=${encodeURIComponent(key)}#${key.startsWith('step:') ? 'chat-steps' : 'chat-locators'}`;
 }
 
 /** One failure: what was not found, the locator, and the ways on. `inSettings`: under its field, where "Fix" is not needed. */
 export function LocatorFailureNotice({ failure, inSettings = false, onDismiss }: { failure: LocatorFailureRef; inSettings?: boolean; onDismiss: () => void }) {
   const { t } = useT();
   const fmtTime = useFmtTime();
-  const name = t(`chatloc.${failure.key}` as Key);
+  const name = failure.key.startsWith('step:') ? failure.name || failure.locator : t(`chatloc.${failure.key}` as Key);
   return (
     <div className={`notice ${failure.stopped ? '' : 'caution'} locator-failure`.trim()} role="alert" data-locator={failure.key} style={{ overflowWrap: 'anywhere' }}>
       {!inSettings && <strong>{t(failure.stopped ? 'chatloc.failTitle' : 'chatloc.warnTitle', { name })}</strong>}

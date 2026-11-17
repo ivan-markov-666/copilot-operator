@@ -900,6 +900,39 @@ Verified by:
 - `check:pins`;
 - the ui-flows scenarios "Settings: the chat's locators" and "A locator that found nothing".
 
+**Steps to the chat (2026-11-17).** Operator: "what happens if we want to add or remove a step? Some steps will drop
+out in future and new ones will appear to reach the chat". Settings → "Steps to the chat" (`#chat-steps`, under the
+chat's locators; `transport/chatSteps.ts`) has two parts.
+
+- **The bot's own steps** (`copilot.builtInSteps`, all on by default). Each can be switched off:
+  - declining the first-run dialogs and banners;
+  - closing Office's feedback panel;
+  - naming the conversation in the sidebar.
+- **The operator's own steps** (`copilot.extraSteps`), run in their order. Each says "if this is on the page, do this".
+  - when: when the chat opens (a new chat, a conversation opened again, after a sign-in) or before each message;
+  - a locator;
+  - an action: click it, press a key, wait for it to show, or wait for it to go;
+  - "must be there", and how many seconds to wait;
+  - on or off.
+
+A step that must be there and is not stops the work. It is said like a locator that found nothing: `LocatorMissing`
+with the key `step:<id>`, the page's HTML, and the banner with the step's name. Its row turns red, and
+`?locator=step:<id>` puts the cursor in the row's locator field. Other steps are passed over when their element is not there.
+
+"Check the locators" looks for each step too.
+
+The window open takes the locators and the steps at once (`takeSettings`; `config/live.ts` lists them as "now"). That
+happens at each message's start, for the window left open, and on a save while a message is at work. Before this, a
+locator fixed in Settings was looked for as it was until the kept window closed.
+
+Verified by:
+- `check:transport` ("the steps on the way to the chat");
+- `check:locators`;
+- `check:pins`;
+- `check:live-settings`;
+- `check:e2e-chat` (the window left open takes a locator fixed between two messages);
+- the ui-flows scenario "Settings: Steps to the chat".
+
 **The queue of tasks (2026-10-24).** "Queue" in the bar (`/queue`, `web/app/queue/page.tsx`): tasks written beforehand —
 what to do, a model of its own (empty: "Model for the worker"), where it works ("The folder as it is", or "New branch
 from main"), Review, and the earlier tasks it depends on — run one after another while nobody watches, each in a new

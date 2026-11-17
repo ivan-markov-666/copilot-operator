@@ -54,6 +54,12 @@ console.log('\n--- from Settings to the window that picks the model ---');
 const cfg = RunConfigSchema.parse({ copilot: { pickerLocators: { model: "//b[text()='{$model_name}']" }, pickerSteps: true } });
 t.check('the saved locators, and the step pictures when asked for', pickerOptions(cfg), { pickerLocators: { model: "//b[text()='{$model_name}']" }, modelStepShots: true });
 t.check('nothing saved: nothing passed, the defaults stand', pickerOptions(RunConfigSchema.parse({})), {});
+// The steps on the way to the chat (2026-11-17): passed when they differ from the defaults, as the locators are.
+const withSteps = RunConfigSchema.parse({ copilot: { builtInSteps: { nameChat: false }, extraSteps: [{ id: 'mode', name: 'Chat mode', locator: '#mode' }] } });
+t.check("the bot's own step switched off, and one of the operator's own: passed", pickerOptions(withSteps), {
+  builtInSteps: { popups: true, feedbackPanel: true, nameChat: false },
+  extraSteps: [{ id: 'mode', name: 'Chat mode', when: 'message', locator: '#mode', action: 'click', must: false, waitSec: 2, off: false }],
+});
 
 console.log('\n--- what the Settings page is given ---');
 const h = await startHarness({});

@@ -73,6 +73,11 @@ try {
   const signInsAfterOne = h.chat.signIns;
   const chatId = (await h.call<ChatSession>('GET', `/sessions/${first.threadId}`)).chat?.chatId;
 
+  // A locator fixed in Settings between the two messages (2026-11-17): the window left open takes it with the next one.
+  const before2 = await h.call<{ raw: Record<string, unknown> }>('GET', '/settings');
+  await h.call('PUT', '/settings', { ...before2.raw, copilot: { ...((before2.raw.copilot as Record<string, unknown>) ?? {}), chatLocators: { send: '#my-send' } } });
+  const takenBefore = h.chat.settingsTaken.length;
+
   // The second message changes the first's file, adds one, and makes a branch: the git is the operator's here.
   const second = await h.call<Sent>('POST', '/chat', { text: 'Make hi.txt say hello, add bye.txt, and work on a new branch feature/greet.', threadId: first.threadId });
   t.check('the next message is the next task of the same conversation', [second.threadId, second.needsStart], [first.threadId, false]);
@@ -91,6 +96,7 @@ try {
   t.check('done, on the new branch, with its changes', [two.status, h.git('rev-parse', '--abbrev-ref', 'HEAD'), file('hi.txt'), file('bye.txt')], ['done', 'feature/greet', 'hello', 'bye']);
   t.check('worked in the window the first left open: not opened again, the sign-in looked at again, the card taken away first', [h.chat.opened, h.chat.closed, h.chat.signIns - signInsAfterOne, h.chat.noticesCleared, h.chat.notices.length], [1, 0, 1, 1, 2]);
   t.check('its changed files on the record', two.vcs?.files?.map((f) => f.path).sort(), ['bye.txt', 'hi.txt']);
+  t.check('the window left open took the locator fixed in Settings between the messages', [h.chat.settingsTaken.length > takenBefore, h.chat.settingsTaken.at(-1)?.chatLocators], [true, { send: '#my-send' }]);
 
   // Back to before the second message.
   const back = await h.call<{ ok: boolean; text: string; safety: string }>('POST', `/chat/${first.threadId}/rewind`, { taskId: two.id });

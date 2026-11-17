@@ -12,8 +12,9 @@
  *   - from the next message (`next`): what a message is built on when it starts — the models, plan mode, the shell and
  *     folder a step runs in by default, the project and its folders, the skills, the contract's stop word, the mode a
  *     start takes, and the lead's number of subtasks, which its assignment states;
- *   - when the chat window opens again (`window`): the chat's address, its browser and the waits and locators the
- *     window was opened with; it is kept open between messages.
+ *   - when the chat window opens again (`window`): the chat's address, its browser and the waits the window was opened
+ *     with; it is kept open between messages. Its locators and the steps on the way to the chat are taken at once
+ *     (2026-11-17): the window open is handed them (`takeSettings`).
  *
  * A step that is running, and a card already put to the operator, go on as they began. The locked policy, when there is
  * one, is in what was saved (`loadConfigObject`), so it is taken with the rest and still wins.
@@ -30,6 +31,8 @@ const NOW: Record<string, readonly string[] | '*'> = {
   limits: '*',
   pacing: '*',
   report: '*',
+  // The locators and the steps on the way to the chat (2026-11-17): handed to the window open, at once (`takeSettings`).
+  copilot: ['pickerLocators', 'chatLocators', 'pickerSteps', 'builtInSteps', 'extraSteps'],
 };
 /** Of a section taken whole, what a message is told when it starts: the lead's number of subtasks is its assignment's. */
 const NOT_NOW: Record<string, readonly string[]> = {
@@ -37,7 +40,7 @@ const NOT_NOW: Record<string, readonly string[]> = {
 };
 /** What the chat window was opened with. */
 const WINDOW: Record<string, readonly string[]> = {
-  copilot: ['url', 'profileDir', 'channel', 'headless', 'replyTimeoutSec', 'signInTimeoutSec', 'humanWaitSec', 'keepFailurePage', 'pickerLocators', 'chatLocators', 'pickerSteps'],
+  copilot: ['url', 'profileDir', 'channel', 'headless', 'replyTimeoutSec', 'signInTimeoutSec', 'humanWaitSec', 'keepFailurePage'],
 };
 /** The sections a run compares; the rest (where the bot keeps its records) is read when the bot starts. */
 const SECTIONS = ['copilot', 'task', 'execution', 'report', 'project', 'skills', 'pacing', 'limits'] as const;

@@ -140,6 +140,7 @@ program
     const saved = await settingsOf(installLayout()).load().catch(() => null);
     const transport = new CopilotTransport({
       ...(saved?.copilot.chatLocators ? { chatLocators: saved.copilot.chatLocators } : {}),
+      ...(saved ? { builtInSteps: saved.copilot.builtInSteps, extraSteps: saved.copilot.extraSteps } : {}),
       profileDir: opts.profile,
       transportDir: join(opts.profile, '_transport'),
       chatUrl: opts.url,
@@ -203,6 +204,7 @@ program
     const saved = await settingsOf(installLayout()).load().catch(() => null);
     const transport = new CopilotTransport({
       ...(saved?.copilot.chatLocators ? { chatLocators: saved.copilot.chatLocators } : {}),
+      ...(saved ? { builtInSteps: saved.copilot.builtInSteps, extraSteps: saved.copilot.extraSteps } : {}),
       profileDir: opts.profile,
       transportDir: join(opts.profile, '_transport'),
       chatUrl: opts.url,
@@ -426,6 +428,7 @@ program
     const transport = new CopilotTransport({
       ...(saved?.copilot.pickerLocators ? { pickerLocators: saved.copilot.pickerLocators } : {}),
       ...(saved?.copilot.chatLocators ? { chatLocators: saved.copilot.chatLocators } : {}),
+      ...(saved ? { builtInSteps: saved.copilot.builtInSteps, extraSteps: saved.copilot.extraSteps } : {}),
       profileDir: opts.profile,
       transportDir: join(installLayout().runsDir, '_models'),
       chatUrl: opts.url,

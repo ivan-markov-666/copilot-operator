@@ -88,10 +88,11 @@ export function fillLocator(template: string, names: { model?: string; provider?
  * What is wrong with a locator written for `key`, or null. With a document, whether it parses is tried too: an XPath
  * evaluated, a CSS selector queried, each with a name put in its placeholder.
  */
-export function locatorProblem(key: PickerKey | ChatKey, locator: string, doc?: Document): LocatorProblem | null {
+export function locatorProblem(key: PickerKey | ChatKey | null, locator: string, doc?: Document): LocatorProblem | null {
   const s = locator.trim();
   if (s === '') return null;
-  const needs = key in PLACEHOLDER ? PLACEHOLDER[key as PickerKey] : (CHAT_PLACEHOLDER[key as ChatKey] ?? null);
+  // null: one with no place for a name (a step's of the operator's own, 2026-11-17).
+  const needs = key === null ? null : key in PLACEHOLDER ? PLACEHOLDER[key as PickerKey] : (CHAT_PLACEHOLDER[key as ChatKey] ?? null);
   if (needs && !s.includes(needs) && !(needs === FILE_NAME && s.includes(FILE_STEM))) return { kind: 'placeholder', placeholder: needs };
   const xpath = s.startsWith('xpath=') || (!s.startsWith('css=') && isXPath(s));
   const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(s);

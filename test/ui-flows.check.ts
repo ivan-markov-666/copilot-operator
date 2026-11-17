@@ -1743,6 +1743,78 @@ try {
   });
 
   /*
+   * "Steps to the chat" (operator, 2026-11-17: "what happens if we want to add or remove a step?"): the bot's own, each
+   * switched off; one of the operator's own added, filled in, saved as typed; a key the bot cannot press said; a step
+   * that failed in red with what to do, its row brought into view by the banner's link, which leads to this section.
+   */
+  await scenario('Settings: "Steps to the chat" — the bot\'s own switched off, one of your own added and saved, in red when it failed', {}, async (h, page, url) => {
+    await page.goto(url('/settings'));
+    const section = page.locator('section#chat-steps');
+    await section.locator('#step-builtin-popups').waitFor();
+    t.check("its own section, after the chat's locators", [await section.locator('h2').textContent(), await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['chat-locators', 'chat-steps', 'picker-locators'].includes(id)))], [en['steps.title'], ['chat-locators', 'chat-steps', 'picker-locators']]);
+    t.check("the bot's own: three, each on, each with its ⓘ", [await section.locator('input[id^="step-builtin-"]').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).checked)), await section.locator('.locator-group').first().locator('.info-btn').count()], [[true, true, true], 3]);
+    type Copilot = { builtInSteps?: Record<string, boolean>; extraSteps?: Array<Record<string, unknown>> };
+    const copilotOf = async (): Promise<Copilot> => ((await settingsOf(h)).copilot as Copilot | undefined) ?? {};
+    await page.locator('#step-builtin-nameChat').uncheck();
+    await waitFor('naming switched off, saved', async () => ((await copilotOf()).builtInSteps?.nameChat === false ? true : null), 10_000).catch(() => undefined);
+    t.check('naming switched off: saved, the others as they were', (await copilotOf()).builtInSteps, { popups: true, feedbackPanel: true, nameChat: false });
+
+    t.check('none of your own yet', await section.getByText(en['steps.none']).count(), 1);
+    await section.getByRole('button', { name: en['steps.add'] }).click();
+    const row = section.locator('.step-row').first();
+    await row.waitFor();
+    const id = (await row.getAttribute('data-step')) ?? '';
+    await waitFor('the cursor in its name', async () => ((await page.evaluate(() => document.activeElement?.id)) === `step-name-${id}` ? true : null), 5_000).catch(() => undefined);
+    t.check('a step added: numbered, the cursor in its name', [await row.locator('.step-head strong').textContent(), await page.evaluate(() => document.activeElement?.id)], [en['steps.number'].replace('{n}', '1'), `step-name-${id}`]);
+    t.check('with no locator yet: said', await row.getByText(en['steps.noLocator']).count(), 1);
+    await page.locator(`#step-name-${id}`).fill('Chat mode');
+    await page.locator(`#step-locator-${id}`).fill('role=button[name="Chat"][pressed=false]');
+    await page.locator(`#step-action-${id}`).selectOption('press');
+    await page.locator(`#step-key-${id}`).fill('Hyper');
+    t.check('a key the bot cannot press: said', await row.locator('.err').textContent(), en['steps.badKey']);
+    await page.locator(`#step-key-${id}`).fill('Escape');
+    t.check('a key it can: nothing said', await row.locator('.err').count(), 0);
+    await page.locator(`#step-must-${id}`).check();
+    const saved = await waitFor('the step saved', async () => {
+      const s = (await copilotOf()).extraSteps?.[0];
+      return s && s.key === 'Escape' && s.must === true && s.name === 'Chat mode' ? s : null;
+    }, 10_000).catch(() => null);
+    t.check('saved as typed', saved ? [saved.id, saved.name, saved.when, saved.locator, saved.action, saved.key, saved.must, saved.waitSec, saved.off] : null, [id, 'Chat mode', 'message', 'role=button[name="Chat"][pressed=false]', 'press', 'Escape', true, 2, false]);
+    await page.locator(`#step-locator-${id}`).fill('//span/parent:div');
+    t.check('an XPath axis with one colon: said, as for the chat\'s locators', await row.locator('.err').textContent(), en['loc.twoColons'].split('{axis}').join('parent'));
+    await page.locator(`#step-locator-${id}`).fill('role=button[name="Chat"][pressed=false]');
+
+    // A second one, moved above the first.
+    await section.getByRole('button', { name: en['steps.add'] }).click();
+    await section.locator('.step-row').nth(1).waitFor();
+    const second = (await section.locator('.step-row').nth(1).getAttribute('data-step')) ?? '';
+    await page.locator(`#step-name-${second}`).fill('Close the upload banner');
+    await section.locator('.step-row').nth(1).getByRole('button', { name: en['steps.up'] }).click();
+    const order = await waitFor('the order saved', async () => {
+      const list = (await copilotOf()).extraSteps ?? [];
+      return list.length === 2 && list[0]?.id === second ? list.map((s) => s.id) : null;
+    }, 10_000).catch(() => null);
+    t.check('moved up: the order on the page and saved', [await section.locator('.step-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-step'))), order], [[second, id], [second, id]]);
+    await page.locator(`#step-on-${second}`).uncheck();
+    await waitFor('switched off, saved', async () => ((await copilotOf()).extraSteps?.[0]?.off === true ? true : null), 10_000).catch(() => undefined);
+    t.check('switched off: kept, faded, saved as off', [await section.locator(`.step-row[data-step="${second}"]`).evaluate((el) => el.classList.contains('step-off')), (await copilotOf()).extraSteps?.[0]?.off], [true, true]);
+
+    await waitFor('its locator saved as it is now', async () => ((await copilotOf()).extraSteps?.find((s) => s.id === id)?.locator === 'role=button[name="Chat"][pressed=false]' ? true : null), 10_000).catch(() => undefined);
+
+    // It failed at work: in red here, and the banner elsewhere leads to it.
+    h.ops.recordLocatorFailure({ key: `step:${id}`, name: 'Chat mode', locator: 'role=button[name="Chat"][pressed=false]', why: 'before a message: found nothing within 2 s', stopped: false });
+    await page.goto(url('/queue'));
+    const banner = page.locator(`.locator-failure[data-locator="step:${id}"]`);
+    await banner.waitFor({ timeout: 15_000 }).catch(() => undefined);
+    t.check('the banner: the step by its name', await banner.locator('strong').textContent(), en['chatloc.warnTitle'].replace('{name}', 'Chat mode'));
+    t.check('its "Fix in Settings": to the steps\' section, the step named', await banner.getByRole('link', { name: en['chatloc.fix'] }).getAttribute('href'), `/settings?locator=step%3A${id}#chat-steps`);
+    await banner.getByRole('link', { name: en['chatloc.fix'] }).click();
+    const red = page.locator(`.step-row[data-step="${id}"]`);
+    await waitFor('the step in red', async () => ((await red.evaluate((el) => el.classList.contains('locator-failed')).catch(() => false)) ? true : null), 15_000).catch(() => undefined);
+    t.check('the step that failed: in red, what to do under it, the cursor in its locator', [await red.evaluate((el) => el.classList.contains('locator-failed')), await red.locator('.locator-failure').count(), await page.evaluate(() => document.activeElement?.id)], [true, 1, `step-locator-${id}`]);
+  });
+
+  /*
    * The bars on top in narrow windows (operator, 2026-10-24: "the Queue button is not seen on the chat's page; see that
    * the navigation wraps well on small screens; Appearance and Language always on one line together, unless there is not
    * room for both"): every link and both buttons on screen at every width, wrapped rather than hidden or scrolled away,

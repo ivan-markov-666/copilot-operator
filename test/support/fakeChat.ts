@@ -78,6 +78,10 @@ export class FakeCopilot {
   /** "Check the locators": how many times, and what each locator finds (unset: one element, found). */
   locatorChecks = 0;
   locatorFinds: Partial<Record<ChatLocatorKey, LocatorCheck>> = {};
+  /** What each of the operator's own steps finds when the locators are checked, by its id (unset: found). */
+  stepFinds: Record<string, LocatorCheck['status']> = {};
+  /** Every time a window open was handed Settings saved since it opened (`takeSettings`), what it was handed. */
+  readonly settingsTaken: Array<Parameters<ChatWindow['takeSettings']>[0]> = [];
   /** The name the rename dialog ends up taking for the one asked, or false; unset, the one asked. */
   renameTakes: ((name: string) => string | false) | null = null;
   models: ModelOption[] = [
@@ -240,6 +244,14 @@ class FakeChat implements ChatWindow {
     private readonly world: FakeCopilot,
     readonly opts: TransportOptions,
   ) {}
+
+  /** Settings saved since this window opened, as the real window takes them: its locators and steps from now on. */
+  private taken: Parameters<ChatWindow['takeSettings']>[0] | null = null;
+
+  takeSettings(o: Parameters<ChatWindow['takeSettings']>[0]): void {
+    this.taken = o;
+    this.world.settingsTaken.push(o);
+  }
 
   async open(): Promise<void> {
     this.world.opened += 1;
@@ -488,10 +500,19 @@ class FakeChat implements ChatWindow {
   async checkLocators(): Promise<LocatorCheck[]> {
     this.alive('checkLocators');
     this.world.locatorChecks += 1;
+    const chatLocators = this.taken ? this.taken.chatLocators : this.opts.chatLocators;
     const out = CHAT_LOCATOR_KEYS.map((key): LocatorCheck => this.world.locatorFinds[key] ?? { key, status: 'found', count: 1 });
     for (const c of out) {
       // Said with the locator in force, as the real window says it: Settings' own, else the default.
-      if (c.status === 'none') this.opts.onEvent?.('locator-missing', { key: c.key, locator: resolveChatLocators(this.opts.chatLocators).locators[c.key], why: 'when the locators were checked', stopped: false });
+      if (c.status === 'none') this.opts.onEvent?.('locator-missing', { key: c.key, locator: resolveChatLocators(chatLocators).locators[c.key as ChatLocatorKey], why: 'when the locators were checked', stopped: false });
+    }
+    // The operator's own steps (2026-11-17): found, unless the world says otherwise; a required one not found is said.
+    const own = ((this.taken ? this.taken.extraSteps : this.opts.extraSteps) ?? []).filter((s) => !s.off);
+    for (const s of own) {
+      const status = this.world.stepFinds[s.id] ?? 'found';
+      const key = `step:${s.id}` as const;
+      out.push({ key, status, count: status === 'found' ? 1 : 0 });
+      if (status === 'none') this.opts.onEvent?.('locator-missing', { key, name: s.name, locator: s.locator, why: 'when the locators were checked', stopped: false });
     }
     return out;
   }

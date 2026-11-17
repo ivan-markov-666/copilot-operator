@@ -55,6 +55,10 @@ console.log('--- what a save changes at once, and what it only names ---');
   t.check('a later save names its own change, not the ones before it', again, { now: ['pacing.settleMs'], next: [], window: [] });
   const same = live.take(await load(paced));
   t.check('a save that changes nothing names nothing, and nobody hears of it', [same, heard.length], [{ now: [], next: [], window: [] }, 2]);
+  // The chat's locators and the steps on the way to it (2026-11-17): at once, into the run's own settings (the window open takes them).
+  const located = { ...paced, copilot: { ...paced.copilot, chatLocators: { send: '#mine' }, extraSteps: [{ id: 'mode', name: 'Chat mode', locator: '#mode' }] } };
+  const third = live.take(await load(located));
+  t.check("the chat's locators and the steps: at once, taken into the run's settings", [third.now.sort(), third.window, runCfg.copilot.chatLocators, runCfg.copilot.extraSteps.map((s) => s.id)], [['copilot.chatLocators', 'copilot.extraSteps'], [], { send: '#mine' }, ['mode']]);
 
   const chatCfg = { ...started, execution: { ...started.execution, denyPatterns: chatDenyPatterns(started.execution.denyPatterns) } } as ResolvedConfig;
   const chat = new LiveSettings(chatCfg, true, started);

@@ -10,14 +10,17 @@ import type { ChatKey, PickerKey } from './pickerLocators';
  */
 /** What "Check the locators" found for one (2026-11-17); see `LocatorCheck` in the transport. */
 export type LocatorCheckRef = {
-  key: ChatKey;
+  /** A chat locator's key, or `step:<id>` for one of the operator's own steps on the way to the chat (2026-11-17). */
+  key: ChatKey | `step:${string}`;
   status: 'found' | 'none' | 'not-here';
   count: number;
-  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat';
+  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat' | 'attach' | 'optional' | 'gone';
 };
 
 export type LocatorFailureRef = {
-  key: ChatKey;
+  key: ChatKey | `step:${string}`;
+  /** A step's name, as the operator wrote it. */
+  name?: string;
   locator: string;
   at: string;
   why: string;

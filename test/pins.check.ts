@@ -43,6 +43,7 @@ import { landed, sentTextHead } from '../src/transport/acceptance.js';
 import { isCopilotOtherPage, isReplyTimeout, isWorkChatAddress, surfaceOfUrl } from '../src/transport/copilotTransport.js';
 import { CHAT_LOCATOR_KEYS, ChatLocatorGroupOf, ChatLocatorWhat, DefaultChatLocators, fillFileLocator, locatorPrompt, playwrightSelector, resolveChatLocators, Url } from '../src/transport/locators.js';
 import { EventBus } from '../src/session/events.js';
+import { DefaultBuiltInSteps, isStepKey, keyProblem, stepPrompt, usableSteps } from '../src/transport/chatSteps.js';
 import { chatNotice } from '../src/session/chatNotice.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
@@ -973,6 +974,35 @@ try {
     fillFileLocator('[aria-label="{$file_name}"]', '/x/a"b.txt'),
   ], ['[aria-label="message-01-in-full.txt"] :text-is("message-01-in-full")', '[aria-label="a\\"b.txt"]']);
   t.truthy("the chatbot is told where the file's name goes", /\{\$file_name\}.*\{\$file_stem\}/.test(locatorPrompt('attachment', DefaultChatLocators.attachment)), locatorPrompt('attachment', DefaultChatLocators.attachment));
+  // The steps on the way to the chat (2026-11-17): the bot's own on by default; the operator's own kept, in their order.
+  {
+    const none = RunConfigSchema.parse({}).copilot;
+    t.check("the bot's own steps: all on by default, none of the operator's", [none.builtInSteps, none.extraSteps], [DefaultBuiltInSteps, []]);
+    const kept = RunConfigSchema.parse({ copilot: { builtInSteps: { nameChat: false }, extraSteps: [{ id: 'a', locator: '#x' }, { id: 'b', name: 'Esc', when: 'open', locator: '#y', action: 'press', key: 'Escape', must: true, waitSec: 5 }] } }).copilot;
+    t.check('kept as saved, the rest filled in', [kept.builtInSteps, kept.extraSteps], [
+      { popups: true, feedbackPanel: true, nameChat: false },
+      [
+        { id: 'a', name: '', when: 'message', locator: '#x', action: 'click', must: false, waitSec: 2, off: false },
+        { id: 'b', name: 'Esc', when: 'open', locator: '#y', action: 'press', key: 'Escape', must: true, waitSec: 5, off: false },
+      ],
+    ]);
+    t.check('a step id with a colon or a space is refused', [RunConfigSchema.safeParse({ copilot: { extraSteps: [{ id: 'a:b' }] } }).success, RunConfigSchema.safeParse({ copilot: { extraSteps: [{ id: 'a b' }] } }).success], [false, false]);
+    const used = usableSteps([
+      { id: 'ok', name: 'fine', when: 'message', locator: '#x', action: 'click' },
+      { id: 'off', name: 'off', when: 'message', locator: '#x', action: 'click', off: true },
+      { id: 'nokey', name: 'no key', when: 'message', locator: '#x', action: 'press' },
+      { id: 'axis', name: 'axis', when: 'open', locator: '//span/parent:div', action: 'click' },
+      { id: 'empty', name: '', when: 'open', locator: ' ', action: 'appear' },
+    ]);
+    t.check('taken: the one that can be; off: passed over unsaid; the rest said why', [used.steps.map((s) => s.id), used.problems], [['ok'], [
+      'step 3 "no key" in Settings is not taken: no key is given to press',
+      'step 4 "axis" in Settings is not taken: "parent:" needs two colons: parent::',
+      'step 5 " " in Settings is not taken: it has no locator',
+    ]]);
+    t.check('keys: names and modifiers taken, the rest not', ['Escape', 'Control+Enter', 'F12', 'a', 'Hyper', 'Escape; rm', ''].map((k) => keyProblem(k) === null), [true, true, true, true, false, false, false]);
+    t.check('a step\'s key: step:<id>, nothing else', ['step:mode', 'step:a-b_1', 'step:', 'step:a b', 'composer'].map(isStepKey), [true, true, false, false, false]);
+    t.truthy('the chatbot is told what the step is for, in the operator\'s words', /"Chat mode"/.test(stepPrompt({ name: 'Chat mode', action: 'click' }, '#m')) && stepPrompt({ name: 'Chat mode', action: 'click' }, '#m').includes('#m'), stepPrompt({ name: 'Chat mode', action: 'click' }, '#m'));
+  }
   {
     const ESC = String.fromCharCode(27);
     const coloured = `locator.waitFor: Timeout 120000ms exceeded. Call log: ${ESC}[2m - waiting for locator('x')${ESC}[22m`;

@@ -6,9 +6,13 @@
  */
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { CHAT_LOCATOR_KEYS, type ChatLocatorKey } from '../transport/locators.js';
+import { isStepKey } from '../transport/chatSteps.js';
 
 export type LocatorFailure = {
-  key: ChatLocatorKey;
+  /** A chat locator's key, or `step:<id>` for one of the operator's own steps on the way to the chat (2026-11-17). */
+  key: ChatLocatorKey | `step:${string}`;
+  /** A step's name, as the operator wrote it. */
+  name?: string;
   /** The locator that found nothing, as it was in force then. */
   locator: string;
   /** When. */
@@ -24,7 +28,7 @@ export type LocatorFailure = {
   url?: string;
 };
 
-const isKey = (k: unknown): k is ChatLocatorKey => typeof k === 'string' && (CHAT_LOCATOR_KEYS as readonly string[]).includes(k);
+const isKey = (k: unknown): k is LocatorFailure['key'] => typeof k === 'string' && ((CHAT_LOCATOR_KEYS as readonly string[]).includes(k) || isStepKey(k));
 
 export class LocatorFailures {
   /** One write at a time: two failures in the same second are both kept. */

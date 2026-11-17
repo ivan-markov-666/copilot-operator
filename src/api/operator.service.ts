@@ -14,6 +14,7 @@ import { readFile as readFileText } from 'node:fs/promises';
 import { LocatorFailures, type LocatorFailure } from '../session/locatorFailures.js';
 import { CHAT_LOCATOR_KEYS, locatorPrompt, resolveChatLocators, type ChatLocatorKey } from '../transport/locators.js';
 import { LocatorMissing, type LocatorCheck } from '../transport/copilotTransport.js';
+import { isStepKey, stepKey, stepPrompt } from '../transport/chatSteps.js';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
@@ -1176,14 +1177,15 @@ export class OperatorService {
    */
   recordLocatorFailure(detail: Record<string, unknown>): void {
     const key = detail.key;
-    if (typeof key !== 'string' || !(CHAT_LOCATOR_KEYS as readonly string[]).includes(key) || typeof detail.locator !== 'string') return;
+    if (typeof key !== 'string' || !((CHAT_LOCATOR_KEYS as readonly string[]).includes(key) || isStepKey(key)) || typeof detail.locator !== 'string') return;
     const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
     const html = str(detail.html);
     const picture = str(detail.picture);
     const url = str(detail.url);
     void this.locatorFailures
       .record({
-        key: key as ChatLocatorKey,
+        key: key as LocatorFailure['key'],
+        ...(str(detail.name) ? { name: str(detail.name) } : {}),
         locator: detail.locator,
         at: new Date().toISOString(),
         why: str(detail.why) ?? '',
@@ -1203,12 +1205,18 @@ export class OperatorService {
   async listLocatorFailures(): Promise<Array<Omit<LocatorFailure, 'html' | 'picture'> & { html: boolean; changed: boolean; prompt: string }>> {
     const cfg = await this.settings.load();
     const inForce = resolveChatLocators(cfg.copilot.chatLocators).locators;
-    return (await this.locatorFailures.list()).map(({ html, picture: _picture, ...f }) => ({
-      ...f,
-      html: !!html && existsSync(html),
-      changed: inForce[f.key] !== f.locator,
-      prompt: locatorPrompt(f.key, f.locator),
-    }));
+    // A step's (2026-11-17): changed when its locator is, or it is switched off, made not required, or gone.
+    const steps = new Map(cfg.copilot.extraSteps.map((s) => [stepKey(s.id), s]));
+    return (await this.locatorFailures.list()).map(({ html, picture: _picture, ...f }) => {
+      const step = isStepKey(f.key) ? steps.get(f.key) : undefined;
+      return {
+        ...f,
+        ...(step?.name ? { name: step.name } : {}),
+        html: !!html && existsSync(html),
+        changed: isStepKey(f.key) ? !step || step.off || step.locator !== f.locator || (f.stopped && !step.must) : inForce[f.key as ChatLocatorKey] !== f.locator,
+        prompt: isStepKey(f.key) ? stepPrompt(step ?? { name: f.name ?? '', action: 'click' }, f.locator) : locatorPrompt(f.key as ChatLocatorKey, f.locator),
+      };
+    });
   }
 
   /** The page's HTML kept with a failure, to download: only a file in the bot's runs folder. */
@@ -1226,7 +1234,8 @@ export class OperatorService {
       throw new Error(`The HTML kept for the "${key}" locator is gone (${file}).`);
     });
     const stamp = f.at.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-    return { fileName: `copilot-page-${key}-${stamp}.html`, content };
+    // A step's key holds a colon, which a Windows file name cannot.
+    return { fileName: `copilot-page-${key.replace(/[^\w-]/g, '-')}-${stamp}.html`, content };
   }
 
   async startFailureReport(id: string): Promise<{ fileName: string; content: string }> {
@@ -3563,6 +3572,8 @@ export class OperatorService {
       transport = createTransport({
         // The box to write in by Settings' locator (2026-11-17): the sign-in ends when it shows; one that finds nothing is kept.
         ...(cfg.copilot.chatLocators ? { chatLocators: cfg.copilot.chatLocators } : {}),
+        builtInSteps: cfg.copilot.builtInSteps,
+        extraSteps: cfg.copilot.extraSteps,
         onEvent: (event, detail) => {
           if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
         },
@@ -3696,7 +3707,10 @@ export class OperatorService {
       await transport.open();
       let results: LocatorCheck[];
       try {
-        await transport.ensureSignedIn();
+        // A step of the operator's own that is not there stops the opening, as at work; it is said, and the check goes on.
+        await transport.ensureSignedIn().catch((e: unknown) => {
+          if (!(e instanceof LocatorMissing) || !isStepKey(e.key)) throw e;
+        });
         results = await transport.checkLocators();
       } catch (e) {
         if (!(e instanceof LocatorMissing) || e.key !== 'composer') throw e;

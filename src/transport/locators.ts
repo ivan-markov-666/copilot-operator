@@ -378,7 +378,7 @@ export function locatorPrompt(key: ChatLocatorKey, failed: string): string {
 }
 
 /** An XPath axis written with one colon (`parent:span`), which is not XPath; null when there is none. */
-function locatorSyntaxProblem(locator: string): string | null {
+export function locatorSyntaxProblem(locator: string): string | null {
   const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(locator);
   return axis && isXPath(locator) ? `"${axis[2]}:" needs two colons: ${axis[2]}::` : null;
 }

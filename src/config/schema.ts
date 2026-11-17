@@ -201,6 +201,31 @@ export const RunConfigSchema = z.object({
        * a failed choice keeps the menu (models-select-failed.*).
        */
       pickerSteps: z.boolean().default(false),
+      /**
+       * The steps on the way to the chat (operator, 2026-11-17: "what happens if we want to add or remove a step?"),
+       * see `transport/chatSteps.ts`: the bot's own that can be done without, each on unless switched off; and the
+       * operator's own, in their order, each "if this is on the page, do this" when the chat opens or before each message.
+       * Taken at once by the window open (`config/live.ts`).
+       */
+      builtInSteps: z
+        .object({ popups: z.boolean().default(true), feedbackPanel: z.boolean().default(true), nameChat: z.boolean().default(true) })
+        .prefault({}),
+      extraSteps: z
+        .array(
+          z.object({
+            id: z.string().regex(/^[\w-]{1,40}$/),
+            name: z.string().max(200).default(''),
+            when: z.enum(['open', 'message']).default('message'),
+            locator: z.string().max(4000).default(''),
+            action: z.enum(['click', 'press', 'appear', 'gone']).default('click'),
+            key: z.string().max(60).optional(),
+            must: z.boolean().default(false),
+            waitSec: z.number().min(0).max(600).default(2),
+            off: z.boolean().default(false),
+          }),
+        )
+        .max(100)
+        .default([]),
     })
     .prefault({}),
 

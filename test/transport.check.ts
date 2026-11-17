@@ -58,6 +58,7 @@ import {
 } from '../src/transport/copilotTransport.js';
 import { acquireProfileLock, findEdgeUsingProfile } from '../src/transport/profileLock.js';
 import { DefaultChatLocators } from '../src/transport/locators.js';
+import type { ChatStep } from '../src/transport/chatSteps.js';
 import { buildChatName, chatNameForms, parseChatId } from '../src/transport/chatSession.js';
 import { Tally } from './support/harness.js';
 
@@ -1236,6 +1237,99 @@ try {
     shorten(f.transport);
     await f.transport.attach([file]);
     t.check("Settings' own locators, with {$file_stem}: used", [named(f.events, 'attached').length, named(f.events, 'locator-missing').length], [1, 0]);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('the steps on the way to the chat: the bot\'s own switched off, the operator\'s own taken, one required and missing said', async () => {
+    /*
+     * Operator, 2026-11-17: "what happens if we want to add or remove a step? Some steps will drop out in future and new
+     * ones will appear to reach the chat". Settings → "Steps to the chat": the bot's own that can be done without, each
+     * switched off; and the operator's own, "if this is on the page, do this", when the chat opens or before each
+     * message. One that must be there and is not stops the work like a locator that found nothing, said by its name.
+     */
+    type Steps = { runSteps(when: 'open' | 'message'): Promise<void> };
+    const steps = (x: CopilotTransport): Steps => x as unknown as Steps;
+    const BOX = '<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span>' +
+      '<button aria-label="Send" onclick="window.sent = (window.sent || 0) + 1">send</button></div>';
+    const MODE = '<button id="mode-chat" aria-pressed="false" onclick="this.setAttribute(\'aria-pressed\', \'true\'); window.modeClicks = (window.modeClicks || 0) + 1">Chat</button>';
+    const ESC = '<div id="banner">Uploads go to OneDrive</div><script>document.addEventListener(\'keydown\', (e) => { if (e.key === \'Escape\') window.escapes = (window.escapes || 0) + 1; });</script>';
+    const step = (s: Partial<ChatStep> & { id: string }): ChatStep => ({ name: s.id, when: 'message', locator: '#none', action: 'click', waitSec: 0, ...s });
+
+    // Click: the mode toggle, only while it is not chosen; pressed through `send`, before the message is written.
+    const a = await fixture('steps-click', `${MODE}${BOX}`, { extraSteps: [step({ id: 'mode', name: 'Chat mode', locator: '#mode-chat[aria-pressed="false"]' })] });
+    await a.transport.send('hello');
+    await a.transport.send('again');
+    t.check('a click step: clicked before the first message, not again once the toggle is chosen', [await value<number>(a.page, 'modeClicks'), await value<number>(a.page, 'sent')], [1, 2]);
+    t.check('said each time: clicked, then not there', named(a.events, 'chat-step').map((e) => e.detail?.did), ['clicked', 'not-there']);
+
+    // Press a key while the banner is there; wait for one to show; wait for a spinner to go.
+    const b = await fixture(
+      'steps-keys',
+      `${ESC}${BOX}<div id="spin">loading</div><script>setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<div id=\\'late\\'>ready</div>'), 300); setTimeout(() => document.getElementById('spin').remove(), 500);</script>`,
+      {
+        extraSteps: [
+          step({ id: 'esc', locator: '#banner', action: 'press', key: 'Escape' }),
+          step({ id: 'late', locator: '#late', action: 'appear', waitSec: 3 }),
+          step({ id: 'spin', locator: '#spin', action: 'gone', waitSec: 3 }),
+        ],
+      },
+    );
+    await steps(b.transport).runSteps('message');
+    t.check('press, appear, gone: each done, in their order', [await value<number>(b.page, 'escapes'), named(b.events, 'chat-step').map((e) => [e.detail?.id, e.detail?.did])], [1, [['esc', 'pressed'], ['late', 'appeared'], ['spin', 'gone']]]);
+    t.check('the "open" steps are not taken before a message', named(b.events, 'chat-step').every((e) => e.detail?.when === 'message'), true);
+
+    // Required and not there: the work stops, said by the step's name, with the page kept; one not required is passed over.
+    const c = await fixture('steps-must', `${BOX}<p id="keep">the page</p>`, {
+      extraSteps: [step({ id: 'opt', name: 'Optional banner', locator: '#banner' }), step({ id: 'need', name: 'Chat mode', locator: '#mode-chat', must: true, waitSec: 1 })],
+    });
+    const missing = await rejection(steps(c.transport).runSteps('message'));
+    const said = named(c.events, 'locator-missing');
+    t.check('required and missing: LocatorMissing for "step:need", said with its name, stopping the work', [missing?.name, (missing as { key?: string } | null)?.key, said.map((e) => [e.detail?.key, e.detail?.name, e.detail?.stopped])], ['LocatorMissing', 'step:need', [['step:need', 'Chat mode', true]]]);
+    t.truthy('its message: the step by name, its locator, where Settings has it', /^Your step "Chat mode" must be there, and before a message its locator found nothing within 1 s\. In force: #mode-chat \(Settings → "Steps to the chat"/.test(missing?.message ?? ''), missing?.message);
+    t.truthy("the page's HTML kept for a chatbot", !!said[0]?.detail?.html && (await readFile(String(said[0]!.detail!.html), 'utf8')).includes('id="keep"'), said[0]?.detail);
+    t.check('the one not required: passed over first', named(c.events, 'chat-step').map((e) => [e.detail?.id, e.detail?.did]), [['opt', 'not-there']]);
+
+    // Switched off, or one that cannot be taken: not taken; the latter said once.
+    const d = await fixture('steps-off', `${MODE}${BOX}`, {
+      extraSteps: [step({ id: 'off', locator: '#mode-chat', off: true }), step({ id: 'badkey', locator: '#mode-chat', action: 'press', key: 'Hyper' }), step({ id: 'empty', locator: '  ' })],
+    });
+    await steps(d.transport).runSteps('message');
+    await steps(d.transport).runSteps('message');
+    t.check('off: kept, not taken; a bad key and an empty locator: not taken, each said once', [await value<number>(d.page, 'modeClicks'), named(d.events, 'chat-step').length, named(d.events, 'chat-step-not-used').map((e) => /step (2|3) /.test(String(e.detail?.problem)))], [undefined, 0, [true, true]]);
+
+    // The bot's own: the first-run dialogs left alone when switched off; closed (declined) when on.
+    const POPUP = '<div role="dialog"><button onclick="window.gotIt = (window.gotIt || 0) + 1">Got it</button></div>';
+    const e1 = await fixture('steps-popups-off', `${POPUP}${BOX}`, { builtInSteps: { popups: false } });
+    await e1.transport.dismissPopups();
+    const e2 = await fixture('steps-popups-on', `${POPUP}${BOX}`);
+    await e2.transport.dismissPopups();
+    t.check('first-run dialogs: left when switched off, closed when on (the default)', [await value<number>(e1.page, 'gotIt'), await value<number>(e2.page, 'gotIt')], [undefined, 1]);
+    const f = await fixture('steps-name-off', `${BOX}<nav><a href="/chat/conversation/abc">x</a></nav>`, { builtInSteps: { nameChat: false } });
+    const named1 = await f.transport.nameChat('abc', 'op/x/name', { waitMs: 500 });
+    await f.transport.nameChat('abc', 'op/x/name', { waitMs: 500 });
+    t.check('naming switched off: not named, said once, nothing looked for', [named1, named(f.events, 'chat-name-off').length, named(f.events, 'chat-name-failed').length, named(f.events, 'locator-missing').length], [false, 1, 0, 0]);
+
+    // Settings saved while the window is open: its locators and steps taken at once (the chat's window is kept open).
+    const g = await fixture('steps-take', `${MODE}<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span><button id="go" onclick="window.sent = (window.sent || 0) + 1">go</button></div>`, { chatLocators: { send: '#nowhere' } });
+    Object.assign(g.transport as unknown as { sendWaitMs: number }, { sendWaitMs: 500 });
+    const before = await rejection(g.transport.send('one'));
+    g.transport.takeSettings({ chatLocators: { send: '#go' }, extraSteps: [step({ id: 'mode', locator: '#mode-chat[aria-pressed="false"]' })] });
+    await g.transport.send('two');
+    t.check("a window open takes Settings' locators and steps: Send found by the new one, the new step taken", [(before as { key?: string } | null)?.key, await value<number>(g.page, 'sent'), await value<number>(g.page, 'modeClicks')], ['send', 1, 1]);
+
+    // When the chat opens: taken after the chat is reached, as the work machine's start reaches it.
+    const HOME = 'https://m365.cloud.microsoft/chat?es=SSR';
+    const h = await fixture('steps-open', '<p>blank</p>', { signInTimeoutMs: 2_000, extraSteps: [step({ id: 'welcome', when: 'open', locator: '#welcome-close', waitSec: 2 }), step({ id: 'msg', locator: '#welcome-close' })] });
+    Object.assign(h.transport as unknown as { firstLookMs: number; settleMs: number }, { firstLookMs: 4_000, settleMs: 300 });
+    await h.page.route(/^https:\/\/m365\.cloud\.microsoft\//, async (route) => {
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      return await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html><meta charset="utf-8">${BOX}<button id="welcome-close" onclick="window.welcomed = (window.welcomed || 0) + 1; this.remove()">OK, thanks</button>`,
+      });
+    });
+    await h.transport.ensureSignedIn(HOME);
+    t.check('a step for when the chat opens: taken once the chat is reached; the message one not', [await value<number>(h.page, 'welcomed'), named(h.events, 'chat-step').map((e) => [e.detail?.id, e.detail?.did])], [1, [['welcome', 'clicked']]]);
   });
 
   // -------------------------------------------------------------------------------------------

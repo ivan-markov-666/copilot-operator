@@ -47,6 +47,7 @@ import {
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { chatNameForms, parseChatId } from './chatSession.js';
 import { strippedPageHtml } from './pageHtml.js';
+import { DefaultBuiltInSteps, stepKey, usableSteps, type BuiltInSteps, type ChatStep, type StepWhen } from './chatSteps.js';
 
 /**
  * The chat did not finish a reply within `copilot.replyTimeoutSec`.
@@ -95,6 +96,9 @@ export type TransportOptions = {
   pickerLocators?: Partial<Record<PickerLocatorKey, string>>;
   /** The chat page's locators saved in Settings (`copilot.chatLocators`, 2026-11-17): the box to write in; left out, the default. */
   chatLocators?: Partial<Record<ChatLocatorKey, string>>;
+  /** The bot's own steps that can be switched off, and the operator's own steps on the way to the chat (2026-11-17, `chatSteps.ts`). */
+  builtInSteps?: Partial<BuiltInSteps>;
+  extraSteps?: ChatStep[];
   modelAppearMs?: number;
   modelAttempts?: number;
   /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
@@ -494,7 +498,8 @@ declare global {
  */
 export class LocatorMissing extends Error {
   constructor(
-    readonly key: ChatLocatorKey,
+    /** A chat locator's key, or `step:<id>` for one of the operator's own steps (see `chatSteps.ts`). */
+    readonly key: ChatLocatorKey | `step:${string}`,
     readonly locator: string,
     message: string,
     readonly html?: string,
@@ -513,10 +518,11 @@ export class LocatorMissing extends Error {
  * nothing and the button was found by its name in the conversation's row, as the bot finds it then.
  */
 export type LocatorCheck = {
-  key: ChatLocatorKey;
+  /** A chat locator's key, or `step:<id>` for one of the operator's own steps. */
+  key: ChatLocatorKey | `step:${string}`;
   status: 'found' | 'none' | 'not-here';
   count: number;
-  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat' | 'attach';
+  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat' | 'attach' | 'optional' | 'gone';
 };
 
 export class CopilotTransport {
@@ -534,9 +540,17 @@ export class CopilotTransport {
   /** The window went away without `close`: its X pressed, or Edge ended (2026-10-19). */
   private gone = false;
   /** The model menu's locators in force: Settings' own, else the defaults (see `resolvePickerLocators`). */
-  private readonly locators: PickerLocators;
+  private locators: PickerLocators;
   /** The chat page's locators in force — the box to write in: Settings' own, else the default (see `resolveChatLocators`). */
-  private readonly chatLocators: ChatLocators;
+  private chatLocators: ChatLocators;
+  /** The bot's own steps as Settings switch them, the operator's own steps taken, and why one saved is not (2026-11-17). */
+  private builtIn: BuiltInSteps;
+  private steps: ChatStep[];
+  private stepProblems: string[];
+  /** A picture at each step of choosing a model (Settings' `pickerSteps`). */
+  private stepShots: boolean;
+  /** Said once a window: the conversation is not named (its step switched off); a step passed over that is not required. */
+  private nameOffSaid = false;
   /** Why a chat locator saved in Settings is not used; said once, when the chat is first opened. */
   private chatLocatorProblems: string[];
   /** Why a locator saved in Settings is not used; said once, at the first choice or reading of the models. */
@@ -584,7 +598,34 @@ export class CopilotTransport {
     this.chatLocators = chat.locators;
     this.chatLocatorProblems = chat.problems;
     this.locatorProblems = problems;
+    this.builtIn = { ...DefaultBuiltInSteps, ...(opts.builtInSteps ?? {}) };
+    const own = usableSteps(opts.extraSteps);
+    this.steps = own.steps;
+    this.stepProblems = own.problems;
+    this.stepShots = !!opts.modelStepShots;
     this.chatOrigin = surfaceOfUrl(opts.chatUrl) === 'work' ? new URL(opts.chatUrl).origin : Url.origin;
+  }
+
+  /**
+   * Settings saved since this window opened (2026-11-17): the locators, the model menu's and the chat's, and the steps
+   * on the way to the chat. The chat's window is kept open between messages, and a locator fixed in Settings went on
+   * being looked for as it was until the window closed; each message's run hands the window what Settings say now, and
+   * a save while a message is at work does the same. What cannot be used is said as when a window opens.
+   */
+  takeSettings(o: Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots' | 'builtInSteps' | 'extraSteps'>): void {
+    const picker = resolvePickerLocators(o.pickerLocators);
+    this.locators = picker.locators;
+    this.locatorProblems = picker.problems;
+    const chat = resolveChatLocators(o.chatLocators);
+    if (JSON.stringify(chat.locators) !== JSON.stringify(this.chatLocators)) this.warned.clear();
+    this.chatLocators = chat.locators;
+    this.chatLocatorProblems = chat.problems;
+    this.builtIn = { ...DefaultBuiltInSteps, ...(o.builtInSteps ?? {}) };
+    const own = usableSteps(o.extraSteps);
+    this.steps = own.steps;
+    this.stepProblems = own.problems;
+    this.stepShots = !!o.modelStepShots;
+    this.emit('settings-taken', { steps: this.steps.length, builtIn: this.builtIn });
   }
 
   /** Says, once, which locators saved in Settings could not be used and why. */
@@ -866,20 +907,7 @@ export class CopilotTransport {
   ): Promise<LocatorMissing> {
     const stopped = opts.stopped ?? true;
     const locator = this.chatLocators[key];
-    const open = !!this.page && !this.page.isClosed();
-    const dir = join(this.opts.transportDir, '..', 'failures');
-    const tag = `locator-${key}-${Date.now()}`;
-    let picture: string | undefined;
-    let html: string | undefined;
-    if (open) {
-      await mkdir(dir, { recursive: true }).catch(() => undefined);
-      const png = join(dir, `${tag}.png`);
-      if (await this.p.screenshot({ path: png, fullPage: true }).then(() => true, () => false)) picture = png;
-      const text = await this.p.evaluate(strippedPageHtml, ChatLocatorGroupOf[key] === 'conversations').catch(() => '');
-      const file = join(dir, `${tag}.html`);
-      if (text && (await writeFile(file, text, 'utf8').then(() => true, () => false))) html = file;
-    }
-    const url = open ? whereIs(this.p.url()) : undefined;
+    const { picture, html, url } = await this.keepPage(`locator-${key}-${Date.now()}`, ChatLocatorGroupOf[key] === 'conversations');
     this.emit('locator-missing', { key, locator, why, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}) });
     const files = [picture ? `A picture of the page: ${picture}.` : '', html ? `The page's HTML, for a chatbot to find the right locator in: ${html}.` : ''].filter(Boolean).join(' ');
     const message =
@@ -887,6 +915,82 @@ export class CopilotTransport {
       `Not found on Copilot's page: ${ChatLocatorWhat[key]}. The "${key}" locator found nothing ${why}. In force: ${locator} ` +
         `(Settings → "The chat's locators"). ${files}`.trim();
     return new LocatorMissing(key, locator, message, html, picture);
+  }
+
+  /** A picture of the page and its HTML for a chatbot (see `pageHtml.ts`), in the failures folder; where the page was. */
+  private async keepPage(tag: string, keepSidebar: boolean): Promise<{ picture?: string; html?: string; url?: string }> {
+    if (!this.page || this.page.isClosed()) return {};
+    const dir = join(this.opts.transportDir, '..', 'failures');
+    await mkdir(dir, { recursive: true }).catch(() => undefined);
+    const out: { picture?: string; html?: string; url?: string } = { url: whereIs(this.p.url()) };
+    const png = join(dir, `${tag}.png`);
+    if (await this.p.screenshot({ path: png, fullPage: true }).then(() => true, () => false)) out.picture = png;
+    const text = await this.p.evaluate(strippedPageHtml, keepSidebar).catch(() => '');
+    const file = join(dir, `${tag}.html`);
+    if (text && (await writeFile(file, text, 'utf8').then(() => true, () => false))) out.html = file;
+    return out;
+  }
+
+  /**
+   * The operator's own steps for `when` (2026-11-17, see `chatSteps.ts`), in their order: "if this is on the page, do
+   * this". One that must be there and is not, within its seconds, stops the work like a locator that found nothing,
+   * said by its name; one that need not be is passed over.
+   */
+  private async runSteps(when: StepWhen, signal?: AbortSignal): Promise<void> {
+    for (const problem of this.stepProblems.splice(0)) this.emit('chat-step-not-used', { problem });
+    for (const step of this.steps) {
+      if (step.when !== when) continue;
+      if (signal?.aborted) throw new StoppedByOperator('stopped by the operator during a step on the way to the chat');
+      await this.runStep(step);
+    }
+  }
+
+  private async runStep(step: ChatStep): Promise<void> {
+    const ms = Math.max(0, step.waitSec ?? 2) * 1000;
+    const shown = this.p.locator(playwrightSelector(step.locator)).filter({ visible: true }).first();
+    const said = { id: step.id, name: step.name, when: step.when, action: step.action };
+    if (step.action === 'gone') {
+      // Waited for to go, when it is there: a spinner, a banner that leaves by itself.
+      if ((await shown.count().catch(() => 0)) === 0) return this.emit('chat-step', { ...said, did: 'not-there' });
+      const went = ms > 0 && (await shown.waitFor({ state: 'hidden', timeout: ms }).then(() => true, () => false));
+      if (went) return this.emit('chat-step', { ...said, did: 'gone' });
+      if (step.must) throw await this.stepMissing(step, `was still on the page after ${Math.round(ms / 1000)} s`);
+      return this.emit('chat-step', { ...said, did: 'still-there' });
+    }
+    // 0 seconds: only a look at the page as it is (a wait of no time would see nothing, even what is there).
+    const there =
+      ms === 0
+        ? (await shown.count().catch(() => 0)) > 0
+        : await shown.waitFor({ state: 'visible', timeout: ms }).then(() => true, () => false);
+    if (!there) {
+      if (step.must) throw await this.stepMissing(step, `found nothing within ${Math.round(ms / 1000)} s`);
+      return this.emit('chat-step', { ...said, did: 'not-there' });
+    }
+    try {
+      if (step.action === 'click') await shown.click({ timeout: 10_000 });
+      else if (step.action === 'press') await this.p.keyboard.press((step.key ?? '').trim());
+      this.emit('chat-step', { ...said, did: step.action === 'appear' ? 'appeared' : step.action === 'press' ? 'pressed' : 'clicked' });
+    } catch (e) {
+      if (step.must) throw await this.stepMissing(step, `was found, and ${step.action === 'press' ? 'the key could not be pressed' : 'could not be clicked'}: ${(e as Error).message.split('\n')[0]}`);
+      this.emit('chat-step', { ...said, did: 'failed', error: (e as Error).message.split('\n')[0] });
+    }
+  }
+
+  /** One of the operator's own steps that must be there and is not: said like a locator that found nothing. */
+  private async stepMissing(step: ChatStep, why: string, stopped = true): Promise<LocatorMissing> {
+    const key = stepKey(step.id) as `step:${string}`;
+    const { picture, html, url } = await this.keepPage(`step-${step.id}-${Date.now()}`, false);
+    const when = step.when === 'open' ? 'when the chat opened' : 'before a message';
+    this.emit('locator-missing', { key, name: step.name, locator: step.locator, why: `${when}: ${why}`, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}) });
+    const files = [picture ? `A picture of the page: ${picture}.` : '', html ? `The page's HTML, for a chatbot to find the right locator in: ${html}.` : ''].filter(Boolean).join(' ');
+    return new LocatorMissing(
+      key,
+      step.locator,
+      `Your step "${step.name || step.locator}" must be there, and ${when} its locator ${why}. In force: ${step.locator} ` +
+        `(Settings → "Steps to the chat"; switch the step off there, or make it not required, to go on without it). ${files}`.trim(),
+      html,
+      picture,
+    );
   }
 
   /** A locator that found nothing where the work goes on without it (a conversation's name): said once a window. */
@@ -977,8 +1081,21 @@ export class CopilotTransport {
     // The rename dialog is not opened: renaming is not this check's to do.
     notHere('renameInput', 'dialog');
     notHere('renameSave', 'dialog');
+    // The operator's own steps (2026-11-17): what each finds now; one required not found is in red, the rest as they are.
+    const ownSteps: LocatorCheck[] = [];
+    for (const step of this.steps) {
+      const key = stepKey(step.id) as `step:${string}`;
+      const n = await this.p.locator(playwrightSelector(step.locator)).filter({ visible: true }).count().catch(() => 0);
+      if (n > 0) ownSteps.push({ key, status: 'found', count: n });
+      else if (step.action === 'gone') ownSteps.push({ key, status: 'not-here', count: 0, note: 'gone' });
+      else if (step.must) {
+        ownSteps.push({ key, status: 'none', count: 0 });
+        await this.stepMissing(step, 'found nothing when the locators were checked', false).catch(() => undefined);
+      } else ownSteps.push({ key, status: 'not-here', count: 0, note: 'optional' });
+    }
+    for (const c of ownSteps) out.set(c.key as ChatLocatorKey, c);
     this.emit('locators-checked', { found: [...out.values()].filter((c) => c.status === 'found').length, none: [...out.values()].filter((c) => c.status === 'none').map((c) => c.key) });
-    return CHAT_LOCATOR_KEYS.map((k) => out.get(k) ?? { key: k, status: 'not-here', count: 0 });
+    return [...CHAT_LOCATOR_KEYS.map((k) => out.get(k) ?? ({ key: k, status: 'not-here', count: 0 } as LocatorCheck)), ...ownSteps];
   }
 
   /** Whether the box to write in is empty: a message clicked away with Send leaves it so. */
@@ -1344,6 +1461,7 @@ Current URL: ${url}`);
       throw await this.notTheChat();
     }
     await this.assertWorkSurface();
+    await this.runSteps('open', opts.signal);
   }
 
   async newChat(): Promise<void> {
@@ -1359,6 +1477,7 @@ Current URL: ${url}`);
         throw await this.locatorMissing('composer', 'on a new chat, within a minute');
       });
     await this.dismissPopups();
+    await this.runSteps('open');
     this.onChat = 'new';
   }
 
@@ -1370,7 +1489,10 @@ Current URL: ${url}`);
     const at = await this.arrive(path, undefined, '');
     if (at === 'elsewhere' || (at === 'no-box' && !(await this.isChatReady(5_000)))) return false;
     const there = parseChatId(this.p.url()) === chatId;
-    if (there) this.onChat = { id: chatId };
+    if (there) {
+      this.onChat = { id: chatId };
+      await this.runSteps('open');
+    }
     return there;
   }
 
@@ -1388,6 +1510,7 @@ Current URL: ${url}`);
       this.onChat = { id };
       this.chatNames.set(id, name);
     }
+    await this.runSteps('open');
     return true;
   }
 
@@ -1447,6 +1570,7 @@ Current URL: ${url}`);
         if (parseChatId(this.p.url()) !== want.id) break;
         this.onChat = want;
         await this.dismissPopups().catch(() => undefined);
+        await this.runSteps('open', opts.signal);
         this.emit('chat-returned', { chatId: want.id, by: 'address', signedIn, from });
         return { at: 'returned', chatId: want.id, from, by: 'address', signedIn };
       }
@@ -1494,6 +1618,8 @@ Current URL: ${url}`);
    * something else entirely.
    */
   async dismissPopups(): Promise<void> {
+    // Switched off in Settings → "Steps to the chat" (2026-11-17).
+    if (!this.builtIn.popups) return;
     for (const name of ['Got it', 'Close', 'Dismiss', 'No thanks', 'Skip', 'Set later', 'Not now', 'Maybe later', 'Reject All', 'Reject all']) {
       const b = this.p.getByRole('button', { name, exact: true });
       if ((await b.count()) > 0 && (await b.first().isVisible().catch(() => false))) {
@@ -1512,6 +1638,12 @@ Current URL: ${url}`);
    * of it when Copilot's dialog refused that one (see `chatNameForms`) — or false when it could not be renamed.
    */
   async nameChat(chatId: string, name: string, opts: { waitMs?: number } = {}): Promise<string | false> {
+    // Switched off in Settings → "Steps to the chat" (2026-11-17): the conversation keeps Copilot's own title.
+    if (!this.builtIn.nameChat) {
+      if (!this.nameOffSaid) this.emit('chat-name-off', { chatId, name });
+      this.nameOffSaid = true;
+      return false;
+    }
     const row = this.el('conversationLink').and(this.p.locator(`[href*="${chatId}"]`)).first();
     // Waited for, like everything below: a new chat's row appears in the sidebar some seconds after the
     // reply, and `count()` read it as missing and returned without a word (live run 2026-10-03). The run
@@ -2109,7 +2241,7 @@ Current URL: ${url}`);
     let shot = 0;
     /** With `modelStepShots`, a picture and the menu's HTML at each step, numbered, beside the transport's files. */
     const picture = async (label: string): Promise<void> => {
-      if (!this.opts.modelStepShots) return;
+      if (!this.stepShots) return;
       shot += 1;
       await this.captureMenu(`step-${String(shot).padStart(2, '0')}-${label.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 40)}`, await this.readMenuRows().catch(() => [])).catch(() => undefined);
     };
@@ -2567,6 +2699,7 @@ Current URL: ${url}`);
       throw new Error('Refusing to send an empty message: the composer requires text.');
     }
     await this.clearBlockers();
+    await this.runSteps('message');
     if (attachments.length > 0) await this.attach(attachments);
 
     const composer = this.composer();
@@ -2620,6 +2753,7 @@ Current URL: ${url}`);
    * scoped now, so the panel being open is untidy rather than fatal.
    */
   private async dismissFeedbackPanel(): Promise<void> {
+    if (!this.builtIn.feedbackPanel) return;
     const panel = this.p.locator(Css.feedbackPanel);
     if ((await panel.count()) === 0) return;
     this.emit('feedback-panel-open');

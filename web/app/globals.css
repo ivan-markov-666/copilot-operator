@@ -1525,6 +1525,12 @@ button.linkish:hover { text-decoration: underline; }
 .locator-check { margin: 8px 0 4px; align-items: center; }
 .locator-checked.found { color: var(--ok); }
 .locator-checked.none { color: var(--bad); }
+/* The steps on the way to the chat (2026-11-17): each of the operator's own in a box; one switched off, faded. */
+.step-row { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+.step-row.step-off { opacity: 0.7; }
+.step-row.locator-failed { border-color: var(--bad); }
+.step-head { align-items: center; gap: 8px; flex-wrap: wrap; }
+.step-head .spacer { flex: 1 1 auto; }
 .picker-example { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
 .picker-how { margin: 8px 0 4px; }
 .picker-how summary { cursor: var(--cur-pointer); font-weight: 600; font-size: calc(13px * var(--scale)); }

@@ -651,13 +651,23 @@ export function speakFor(transport: ChatTransport, sessionId: string, opts: { al
   if (opts.alone) speaker.alone = true;
 }
 
+/** The settings a window open takes at once (`takeSettings`): its locators and the steps on the way to the chat. */
+const WINDOW_NOW = new Set(['copilot.pickerLocators', 'copilot.chatLocators', 'copilot.pickerSteps', 'copilot.builtInSteps', 'copilot.extraSteps']);
+
 /** The model menu's locators and its step pictures, as Settings have them (2026-10-24), for every window that picks a model. */
 /** The locators Settings hold for the Copilot window: the model menu's, and the chat page's own (the box to write in, 2026-11-17). */
-export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots'> {
+export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots' | 'builtInSteps' | 'extraSteps'> {
+  // The steps on the way to the chat (2026-11-17): only what differs from the defaults, as the locators. Left out, a
+  // window takes the defaults (`takeSettings` too: a step deleted or switched back on goes with the next one).
+  const builtIn = cfg.copilot.builtInSteps;
+  const switchedOff = !!builtIn && Object.values(builtIn).some((on) => on === false);
+  const own = cfg.copilot.extraSteps ?? [];
   return {
     ...(cfg.copilot.pickerLocators ? { pickerLocators: cfg.copilot.pickerLocators } : {}),
     ...(cfg.copilot.chatLocators ? { chatLocators: cfg.copilot.chatLocators } : {}),
     ...(cfg.copilot.pickerSteps ? { modelStepShots: true } : {}),
+    ...(switchedOff ? { builtInSteps: builtIn } : {}),
+    ...(own.length > 0 ? { extraSteps: own } : {}),
   };
 }
 
@@ -707,7 +717,13 @@ export async function openBrowser(
         'chat-returned': `Back on this conversation${detail?.signedIn ? ', after the sign-in' : ''}${detail?.by === 'name' ? ', found by its name in the sidebar' : ''}. The work goes on there.`,
         'chat-lost': 'The conversation could not be opened again, by its address or by its name. Nothing was sent, and nothing went into another chat.',
         // A locator of the chat that found nothing (2026-11-17): which, and where Settings has it; the API keeps it for the red field.
-        'locator-missing': `Not found on Copilot's page: the "${String(detail?.key ?? '')}" locator (${String(detail?.locator ?? '')}) found nothing ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "The chat's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`,
+        'locator-missing': String(detail?.key ?? '').startsWith('step:')
+          ? `Your step "${String(detail?.name || detail?.locator || '')}" (${String(detail?.locator ?? '')}) ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "Steps to the chat" shows it in red, with the page's HTML for a chatbot to find the right one in.`
+          : `Not found on Copilot's page: the "${String(detail?.key ?? '')}" locator (${String(detail?.locator ?? '')}) found nothing ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "The chat's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`,
+        // The steps on the way to the chat (2026-11-17).
+        'chat-step-not-used': `A step of yours in Settings is not taken: ${String(detail?.problem ?? '')}`,
+        'chat-name-off': "The conversation is not named in Copilot's sidebar: that step is switched off in Settings → \"Steps to the chat\".",
+        'chat-step': `Your step "${String(detail?.name ?? '')}": ${String(detail?.did ?? '')}`,
         // Copilot showed another of its pages, its home page, instead of the chat (2026-11-17): the chat opened from it.
         'chat-page-elsewhere': `Copilot showed its page ${String(detail?.found ?? '')} instead of the chat; opening the chat ${detail?.by === 'link' ? "by the page's own link to it" : `at ${String(detail?.to ?? '')}`}.`,
       };
@@ -2036,6 +2052,8 @@ export async function runTask(
    */
   let policyRevision = 1;
   const tookSettings = async (change: LiveChange): Promise<void> => {
+    // The locators and the steps on the way to the chat, fixed in Settings: the window open looks by them from now on.
+    if (change.now.some((name) => WINDOW_NOW.has(name))) transport.takeSettings(pickerOptions(cfg));
     pacer.retune({ enabled: cfg.pacing.enabled, settleMs: cfg.pacing.settleMs, maxMessagesPerHour: cfg.pacing.maxMessagesPerHour, gapMs: gapFrom(cfg.pacing) });
     const later = [...change.next, ...change.window];
     sink.event('settings-changed', change,
@@ -4132,6 +4150,8 @@ export async function runSession(
       if (borrowed) {
         speakFor(borrowed, session.id, { alone: !!deps.chatWindow });
         bus.publish({ sessionId, type: 'browser-reused', level: 'info', message: deps.chatWindow ? 'using the browser window the last message left open' : 'using the browser window that is already open' });
+        // The window the last message left open, told what Settings say now: a locator fixed there since is looked by.
+        borrowed.takeSettings(pickerOptions(cfg));
         if (deps.chatWindow) {
           await borrowed.clearNotice().catch(() => undefined);
           await borrowed.ensureSignedIn(undefined, { signal: deps.signal });

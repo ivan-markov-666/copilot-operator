@@ -17,7 +17,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { api, type LocatorCheckRef, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
+import { api, type LocatorCheckRef, type LocatorFailureRef, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
 import { CHAT_KEYS, fillLocator, locatorProblem, PICKER_KEYS, type ChatGroup, type ChatKey, type LocatorProblem, type PickerKey } from '../../lib/pickerLocators';
 import { LocatorFailureNotice, useLocatorFailures } from '../locatorFailure';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
@@ -1364,8 +1364,292 @@ function ChatLocatorsSection() {
           : !err && <p className="muted small">{t('loc.loading')}</p>}
         <SavedNote msg={msg} saving={saving} />
       </section>
+      <ChatStepsSection failures={failures} checked={checked} />
     </SavingContext.Provider>
   );
+}
+
+// ---------------------------------------------------------------------------------------
+// The steps on the way to the chat (operator, 2026-11-17)
+// ---------------------------------------------------------------------------------------
+
+type StepWhen = 'open' | 'message';
+type StepAction = 'click' | 'press' | 'appear' | 'gone';
+type StepRow = { id: string; name: string; when: StepWhen; locator: string; action: StepAction; key?: string; must?: boolean; waitSec?: number; off?: boolean };
+type BuiltInKey = 'popups' | 'feedbackPanel' | 'nameChat';
+const BUILT_INS: Array<{ key: BuiltInKey; label: Key; why: Key }> = [
+  { key: 'popups', label: 'steps.popups', why: 'steps.popupsWhy' },
+  { key: 'feedbackPanel', label: 'steps.feedbackPanel', why: 'steps.feedbackPanelWhy' },
+  { key: 'nameChat', label: 'steps.nameChat', why: 'steps.nameChatWhy' },
+];
+const STEP_ACTIONS: StepAction[] = ['click', 'press', 'appear', 'gone'];
+
+/** A new step's own id: what its failure is kept under (`step:<id>`), whatever it is renamed or moved to. */
+function newStepId(): string {
+  return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/**
+ * The steps on the way to the chat (operator, 2026-11-17: "what happens if we want to add or remove a step? Some steps
+ * will drop out in future and new ones will appear to reach the chat"): the bot's own that can be done without, each
+ * switched off here; and the operator's own, in their order, each "if this is on the page, do this" when the chat opens
+ * or before each message. One that must be there and is not stops the work and is in red here, with the page's HTML,
+ * as a locator of the chat is; `?locator=step:<id>` brings its row into view. Saved as typed; the window open takes them
+ * at once (see `transport/chatSteps.ts`).
+ */
+function ChatStepsSection({
+  failures,
+  checked,
+}: {
+  failures: { list: LocatorFailureRef[]; dismiss: (key: string) => Promise<void>; reload: () => Promise<void> };
+  checked: { results: LocatorCheckRef[] } | null;
+}) {
+  const { t } = useT();
+  const { saving, track } = useSaving();
+  const [builtIn, setBuiltIn] = useState<Record<BuiltInKey, boolean> | null>(null);
+  const [steps, setSteps] = useState<StepRow[] | null>(null);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => {
+        const copilot = (s.raw.copilot as Record<string, unknown> | undefined) ?? {};
+        const own = (copilot.builtInSteps as Partial<Record<BuiltInKey, boolean>> | undefined) ?? {};
+        setBuiltIn({ popups: own.popups !== false, feedbackPanel: own.feedbackPanel !== false, nameChat: own.nameChat !== false });
+        setSteps(Array.isArray(copilot.extraSteps) ? (copilot.extraSteps as StepRow[]) : []);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  // The step the address names (the banner's "Fix in Settings"): its row into view, the cursor in its locator.
+  const ready = steps !== null;
+  useEffect(() => {
+    if (!ready) return;
+    const key = new URLSearchParams(window.location.search).get('locator');
+    if (!key || !key.startsWith('step:')) return;
+    const field = document.getElementById(`step-locator-${key.slice(5)}`) as HTMLInputElement | null;
+    if (!field) return;
+    field.scrollIntoView({ block: 'center' });
+    field.focus();
+  }, [ready]);
+
+  // One write at a time, each on the file as the last one left it.
+  const write = (change: (copilot: Record<string, unknown>) => Record<string, unknown>): Promise<void> => {
+    const run = async () => {
+      try {
+        const base = (await api.settings()).raw;
+        const copilot = change({ ...((base.copilot as Record<string, unknown>) ?? {}) });
+        setMsg('');
+        await track(api.saveSettings({ ...base, copilot }));
+        setMsg(t('loc.saved'));
+        setErr('');
+        await failures.reload();
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    };
+    const done = queue.current.then(run, run);
+    queue.current = done.catch(() => undefined);
+    return done;
+  };
+  const saveStepsLater = useDebouncedSave<StepRow[]>((list) => write((c) => ({ ...c, extraSteps: list })));
+  const change = (list: StepRow[], atOnce = false): void => {
+    setSteps(list);
+    if (atOnce) void write((c) => ({ ...c, extraSteps: list }));
+    else saveStepsLater(list);
+  };
+  const edit = (id: string, patch: Partial<StepRow>, atOnce = false): void => {
+    if (!steps) return;
+    change(steps.map((s) => (s.id === id ? { ...s, ...patch } : s)), atOnce);
+  };
+  const move = (i: number, by: -1 | 1): void => {
+    if (!steps) return;
+    const j = i + by;
+    if (j < 0 || j >= steps.length) return;
+    const next = [...steps];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    change(next, true);
+  };
+  const add = (): void => {
+    if (!steps) return;
+    const id = newStepId();
+    change([...steps, { id, name: '', when: 'message', locator: '', action: 'click', must: false, waitSec: 2, off: false }], true);
+    // Its name first: what it is for.
+    window.setTimeout(() => document.getElementById(`step-name-${id}`)?.focus(), 50);
+  };
+  const remove = async (i: number): Promise<void> => {
+    if (!steps) return;
+    const step = steps[i]!;
+    if (!(await confirmDialog(t('steps.removeConfirm', { name: step.name || t('steps.number', { n: i + 1 }) }), { okLabel: t('steps.remove'), danger: true }))) return;
+    change(steps.filter((_, k) => k !== i), true);
+  };
+  const saveBuiltIn = (key: BuiltInKey, on: boolean): void => {
+    if (!builtIn) return;
+    const next = { ...builtIn, [key]: on };
+    setBuiltIn(next);
+    void write((c) => ({ ...c, builtInSteps: next }));
+  };
+
+  return (
+    <section className="panel" id="chat-steps" aria-labelledby="chat-steps-title">
+      <h2 id="chat-steps-title">{t('steps.title')}</h2>
+      <p className="muted small">{t('steps.intro')}</p>
+      {err && <div className="err">{err}</div>}
+      {builtIn && steps ? (
+        <>
+          <div className="locator-group">
+            <h3>{t('steps.builtInTitle')}</h3>
+            {BUILT_INS.map((b) => (
+              <div key={b.key} className="settings-field">
+                <div className="field-label check-label">
+                  <input id={`step-builtin-${b.key}`} type="checkbox" checked={builtIn[b.key]} onChange={(e) => saveBuiltIn(b.key, e.target.checked)} />
+                  <label htmlFor={`step-builtin-${b.key}`}>{t(b.label)}</label>
+                  <InfoTip label={t('info.about', { name: t(b.label) })} text={t(b.why)} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="locator-group">
+            <h3>{t('steps.ownTitle')}</h3>
+            <p className="muted small">{t('steps.ownIntro')}</p>
+            {steps.length === 0 && <p className="muted small">{t('steps.none')}</p>}
+            {steps.map((s, i) => {
+              const key = `step:${s.id}`;
+              const failed = failures.list.find((f) => f.key === key) ?? null;
+              const result = checked?.results.find((r) => r.key === key) ?? null;
+              const problem = s.locator.trim() ? locatorProblem(null, s.locator, document) : null;
+              const badKey = s.action === 'press' ? keyProblemOf(s.key) : null;
+              return (
+                <div key={s.id} className={`step-row${failed ? ' locator-failed' : ''}${s.off ? ' step-off' : ''}`} data-locator-field={key} data-step={s.id}>
+                  <div className="row step-head">
+                    <strong>{t('steps.number', { n: i + 1 })}</strong>
+                    <span className="muted small">{s.name}</span>
+                    <span className="spacer" />
+                    <button type="button" className="quiet" onClick={() => move(i, -1)} disabled={i === 0} aria-label={t('steps.up')} title={t('steps.up')}>
+                      ↑
+                    </button>
+                    <button type="button" className="quiet" onClick={() => move(i, 1)} disabled={i === steps.length - 1} aria-label={t('steps.down')} title={t('steps.down')}>
+                      ↓
+                    </button>
+                    <button type="button" className="quiet" onClick={() => void remove(i)}>
+                      {t('steps.remove')}
+                    </button>
+                  </div>
+                  <div className="settings-field">
+                    <div className="field-label check-label">
+                      <input id={`step-on-${s.id}`} type="checkbox" checked={!s.off} onChange={(e) => edit(s.id, { off: !e.target.checked }, true)} />
+                      <label htmlFor={`step-on-${s.id}`}>{t('steps.on')}</label>
+                      <InfoTip label={t('info.about', { name: t('steps.on') })} text={t('steps.onWhy')} />
+                    </div>
+                  </div>
+                  <Field id={`step-name-${s.id}`} label={t('steps.name')} info={t('steps.nameWhy')}>
+                    <input id={`step-name-${s.id}`} type="text" value={s.name} maxLength={200} onChange={(e) => edit(s.id, { name: e.target.value })} />
+                  </Field>
+                  <Field id={`step-when-${s.id}`} label={t('steps.when')} info={t('steps.whenWhy')}>
+                    <select id={`step-when-${s.id}`} value={s.when} onChange={(e) => edit(s.id, { when: e.target.value as StepWhen }, true)}>
+                      <option value="open">{t('steps.whenOpen')}</option>
+                      <option value="message">{t('steps.whenMessage')}</option>
+                    </select>
+                  </Field>
+                  <div className="settings-field picker-field">
+                    <FieldName htmlFor={`step-locator-${s.id}`} label={t('steps.locator')} info={t('steps.locatorWhy')} />
+                    <div className="field-control">
+                      <input
+                        id={`step-locator-${s.id}`}
+                        type="text"
+                        className="picker-locator"
+                        spellCheck={false}
+                        autoComplete="off"
+                        value={s.locator}
+                        aria-invalid={problem || failed || !s.locator.trim() ? true : undefined}
+                        onChange={(e) => edit(s.id, { locator: e.target.value })}
+                      />
+                    </div>
+                    {!s.locator.trim() ? (
+                      <div className="muted small field-after">{t('steps.noLocator')}</div>
+                    ) : problem ? (
+                      <div className="err field-after" role="alert">
+                        {problem.kind === 'colons' ? t('loc.twoColons', { axis: problem.axis }) : problem.kind === 'xpath' ? t('loc.badXPath', { msg: problem.message }) : problem.kind === 'css' ? t('loc.badCss', { msg: problem.message }) : ''}
+                      </div>
+                    ) : null}
+                    {result && (
+                      <p className={`small field-after locator-checked ${result.status}`} data-status={result.status}>
+                        {result.status === 'found' ? `✓ ${t('chatloc.found', { n: result.count })}` : result.status === 'none' ? `✗ ${t('chatloc.notFound')}` : `– ${t('chatloc.notHere')}`}
+                        {result.note && <span className="muted"> {t(`chatloc.note.${result.note}` as Key)}</span>}
+                      </p>
+                    )}
+                    {failed && (
+                      <div className="field-after">
+                        <LocatorFailureNotice failure={failed} inSettings onDismiss={() => void failures.dismiss(key)} />
+                      </div>
+                    )}
+                  </div>
+                  <Field id={`step-action-${s.id}`} label={t('steps.action')} info={t('steps.actionWhy')}>
+                    <select id={`step-action-${s.id}`} value={s.action} onChange={(e) => edit(s.id, { action: e.target.value as StepAction }, true)}>
+                      {STEP_ACTIONS.map((a) => (
+                        <option key={a} value={a}>
+                          {t(`steps.action.${a}` as Key)}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  {s.action === 'press' && (
+                    <Field id={`step-key-${s.id}`} label={t('steps.key')} info={t('steps.keyWhy')}>
+                      <input id={`step-key-${s.id}`} type="text" value={s.key ?? ''} maxLength={60} placeholder="Escape" aria-invalid={badKey ? true : undefined} onChange={(e) => edit(s.id, { key: e.target.value })} />
+                    </Field>
+                  )}
+                  {badKey && (
+                    <div className="err field-after" role="alert">
+                      {t('steps.badKey')}
+                    </div>
+                  )}
+                  <div className="settings-field">
+                    <div className="field-label check-label">
+                      <input id={`step-must-${s.id}`} type="checkbox" checked={!!s.must} onChange={(e) => edit(s.id, { must: e.target.checked }, true)} />
+                      <label htmlFor={`step-must-${s.id}`}>{t('steps.must')}</label>
+                      <InfoTip label={t('info.about', { name: t('steps.must') })} text={t('steps.mustWhy')} />
+                    </div>
+                  </div>
+                  <Field id={`step-wait-${s.id}`} label={t('steps.waitSec')} info={t('steps.waitSecWhy')} unit={t('steps.seconds')}>
+                    <input
+                      id={`step-wait-${s.id}`}
+                      type="number"
+                      min={0}
+                      max={600}
+                      step={1}
+                      value={s.waitSec ?? 2}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        if (Number.isFinite(v) && v >= 0 && v <= 600) edit(s.id, { waitSec: v });
+                      }}
+                    />
+                  </Field>
+                </div>
+              );
+            })}
+            <div className="row" style={{ marginTop: 8 }}>
+              <button type="button" onClick={add}>
+                {t('steps.add')}
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        !err && <p className="muted small">{t('loc.loading')}</p>
+      )}
+      <SavedNote msg={msg} saving={saving} />
+    </section>
+  );
+}
+
+/** A key Playwright can press, as the bot checks it (`keyProblem` in transport/chatSteps.ts); null when it can be. */
+function keyProblemOf(key: string | undefined): string | null {
+  const k = (key ?? '').trim();
+  if (!k) return 'none';
+  return /^(?:(?:Control|Shift|Alt|Meta)\+)*(?:[A-Za-z0-9]|F(?:[1-9]|1[0-2])|Escape|Enter|Tab|Space|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown)$/.test(k) ? null : 'bad';
 }
 
 // ---------------------------------------------------------------------------------------

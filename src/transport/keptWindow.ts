@@ -47,6 +47,7 @@ export type ChatWindow = Pick<
   | 'currentModel'
   | 'listModels'
   | 'checkLocators'
+  | 'takeSettings'
   | 'sendAndConfirm'
   | 'waitForReply'
   | 'dumpFailure'
@@ -298,6 +299,11 @@ export class KeptWindow implements ChatWindow {
 
   checkLocators(...a: Parameters<ChatWindow['checkLocators']>): ReturnType<ChatWindow['checkLocators']> {
     return this.withWindow(() => this.inner.checkLocators(...a));
+  }
+
+  /** Settings saved since the window opened: taken by it, open or not (a window opened again is the same one). */
+  takeSettings(...a: Parameters<ChatWindow['takeSettings']>): void {
+    this.inner.takeSettings(...a);
   }
 }
 
