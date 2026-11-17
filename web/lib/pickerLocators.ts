@@ -11,6 +11,10 @@ export const PROVIDER_NAME = '{$provider_name}';
 export type PickerKey = 'button' | 'rows' | 'model' | 'provider' | 'providerModel';
 export const PICKER_KEYS: PickerKey[] = ['button', 'rows', 'model', 'provider', 'providerModel'];
 
+/** The chat page's own locators (2026-11-17): the box to write in. Elements, with no placeholder. */
+export type ChatKey = 'composer';
+export const CHAT_KEYS: ChatKey[] = ['composer'];
+
 /** The placeholder a template must hold; the two elements hold none. */
 export const PLACEHOLDER: Record<PickerKey, string | null> = {
   button: null,
@@ -56,10 +60,10 @@ export function fillLocator(template: string, names: { model?: string; provider?
  * What is wrong with a locator written for `key`, or null. With a document, whether it parses is tried too: an XPath
  * evaluated, a CSS selector queried, each with a name put in its placeholder.
  */
-export function locatorProblem(key: PickerKey, locator: string, doc?: Document): LocatorProblem | null {
+export function locatorProblem(key: PickerKey | ChatKey, locator: string, doc?: Document): LocatorProblem | null {
   const s = locator.trim();
   if (s === '') return null;
-  const needs = PLACEHOLDER[key];
+  const needs = key in PLACEHOLDER ? PLACEHOLDER[key as PickerKey] : null;
   if (needs && !s.includes(needs)) return { kind: 'placeholder', placeholder: needs };
   const xpath = s.startsWith('xpath=') || (!s.startsWith('css=') && isXPath(s));
   const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(s);

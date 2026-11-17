@@ -203,6 +203,43 @@ export function pageQuery(locator: string): { xpath: boolean; text: string } {
 }
 
 /**
+ * The chat page's own locators, as the operator writes them (2026-11-17: "a field in Settings to set it by hand", after
+ * the work machine's Copilot changed its box to write in). `composer`: the box to write in. Until 2026-11 a span with
+ * the id `m365-chat-editor-target-element`; on 2026-11-17 the work page's is
+ * `<span role="textbox" contenteditable="true" aria-label="Message Copilot" data-lexical-editor="true">`, with no id, inside
+ * the same wrapper as before (`data-test-id="chat-input-wrapper"`). The default finds either. A locator that finds an
+ * element around the box (a wrapper picked in the page's inspector) is taken for the box inside it (see `composer()`).
+ * An XPath when it starts as one does, else a CSS selector, as the model menu's; an empty one is the default.
+ */
+export const CHAT_LOCATOR_KEYS = ['composer'] as const;
+export type ChatLocatorKey = (typeof CHAT_LOCATOR_KEYS)[number];
+export type ChatLocators = Record<ChatLocatorKey, string>;
+
+export const DefaultChatLocators: ChatLocators = {
+  composer: '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]',
+};
+
+/** The chat's locators in force: each one saved in Settings, else the default; one that cannot be used is said in `problems`. */
+export function resolveChatLocators(saved?: Partial<Record<ChatLocatorKey, string>> | null): { locators: ChatLocators; problems: string[] } {
+  const locators = { ...DefaultChatLocators };
+  const problems: string[] = [];
+  for (const key of CHAT_LOCATOR_KEYS) {
+    const own = (saved?.[key] ?? '').trim();
+    if (!own) continue;
+    const problem = locatorSyntaxProblem(own);
+    if (problem) problems.push(`the chat's ${key} locator in Settings is not used, ${problem}`);
+    else locators[key] = own;
+  }
+  return { locators, problems };
+}
+
+/** An XPath axis written with one colon (`parent:span`), which is not XPath; null when there is none. */
+function locatorSyntaxProblem(locator: string): string | null {
+  const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(locator);
+  return axis && isXPath(locator) ? `"${axis[2]}:" needs two colons: ${axis[2]}::` : null;
+}
+
+/**
  * What is wrong with a locator written for `key`, said for the operator, or null. A template without its placeholder
  * would find the same element for every name; an axis written with one colon (`parent:span`) is not XPath. Whether
  * an XPath parses at all is checked where there is a parser for it: the Settings page tries it in the browser.
@@ -280,8 +317,8 @@ export function xpathText(text: string): string {
 
 /** CSS selectors for things that have neither a test id nor an accessible name. */
 export const Css = {
-  /** The composer element. Its DOM id has been stable so far. */
-  composer: '#m365-chat-editor-target-element',
+  /** The composer element: the default of the chat's locator (`DefaultChatLocators`); a run takes Settings' own. */
+  composer: DefaultChatLocators.composer,
   /**
    * The composer's own wrapper, and the reason every Send lookup goes through it.
    *
@@ -386,8 +423,8 @@ export const Surface = {
    * the sign-in was refused as "not the Microsoft 365 Copilot chat" because only the old host was known.
    */
   workHosts: ['m365.cloud.microsoft', 'copilot.cloud.microsoft'],
-  /** Only the work surface has this composer id and these test ids. */
-  workMarkers: ['#m365-chat-editor-target-element'],
+  /** Only the work surface has this composer (the chat's locator in force decides; this is its default). */
+  workMarkers: [DefaultChatLocators.composer],
   consumerHosts: ['copilot.microsoft.com', 'www.bing.com', 'bing.com'],
   /** Chips that only the consumer surface shows. */
   consumerMarkers: ['Shop', 'Play'],

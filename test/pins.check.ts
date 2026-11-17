@@ -41,7 +41,7 @@ import { RunConfigSchema } from '../src/config/schema.js';
 import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
 import { isCopilotOtherPage, isReplyTimeout, isWorkChatAddress, surfaceOfUrl } from '../src/transport/copilotTransport.js';
-import { Url } from '../src/transport/locators.js';
+import { DefaultChatLocators, resolveChatLocators, Url } from '../src/transport/locators.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
 import { branchNameFrom, plannedBranchName, porcelainPaths } from '../src/vcs/git.js';
@@ -632,6 +632,15 @@ try {
     'https://www.bing.com/chat?ru=https%3A%2F%2Fm365.cloud.microsoft%2Fchat',
     'about:blank',
   ].map((u) => [isWorkChatAddress(u), isCopilotOtherPage(u)]), [[false, false], [false, false], [false, false], [false, false]]);
+  /*
+   * The box to write in (2026-11-17): the work page's box changed, and Settings may name it. The default finds the old box
+   * and the new one; a locator saved is used, trimmed; one that cannot be used is not, and is said.
+   */
+  t.check('the default box locator: the old id, and the new box in its wrapper', DefaultChatLocators.composer, '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]');
+  t.check('nothing saved: the default', resolveChatLocators(undefined), { locators: DefaultChatLocators, problems: [] });
+  t.check('an empty one: the default', resolveChatLocators({ composer: '   ' }), { locators: DefaultChatLocators, problems: [] });
+  t.check('one saved: used, trimmed', resolveChatLocators({ composer: ' [data-lexical-editor="true"] ' }).locators.composer, '[data-lexical-editor="true"]');
+  t.check('one that cannot be used: the default, and why', resolveChatLocators({ composer: '//span/parent:div' }), { locators: DefaultChatLocators, problems: ['the chat\'s composer locator in Settings is not used, "parent:" needs two colons: parent::'] });
   t.check("the chat's addresses on the host it was found on", [Url.origin + Url.newChatPath, Url.conversation(uuid, 'https://copilot.cloud.microsoft'), 'https://copilot.cloud.microsoft' + Url.conversationPath(uuid)], [Url.newChat, `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`, `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`]);
 
   /*

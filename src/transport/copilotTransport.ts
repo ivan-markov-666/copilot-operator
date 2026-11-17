@@ -26,6 +26,7 @@ import {
   pageQuery,
   playwrightSelector,
   Rename,
+  resolveChatLocators,
   resolvePickerLocators,
   Sidebar,
   Signal,
@@ -33,6 +34,8 @@ import {
   TestId,
   Upload,
   Url,
+  type ChatLocatorKey,
+  type ChatLocators,
   type PickerLocatorKey,
   type PickerLocators,
 } from './locators.js';
@@ -84,6 +87,8 @@ export type TransportOptions = {
   modelStepShots?: boolean;
   /** The model menu's locators saved in Settings (`copilot.pickerLocators`); each one left out is the default. */
   pickerLocators?: Partial<Record<PickerLocatorKey, string>>;
+  /** The chat page's locators saved in Settings (`copilot.chatLocators`, 2026-11-17): the box to write in; left out, the default. */
+  chatLocators?: Partial<Record<ChatLocatorKey, string>>;
   modelAppearMs?: number;
   modelAttempts?: number;
   /** Whether a failure dump keeps the page's HTML as well as a screenshot. See `copilot.keepFailurePage`. */
@@ -491,6 +496,10 @@ export class CopilotTransport {
   private gone = false;
   /** The model menu's locators in force: Settings' own, else the defaults (see `resolvePickerLocators`). */
   private readonly locators: PickerLocators;
+  /** The chat page's locators in force — the box to write in: Settings' own, else the default (see `resolveChatLocators`). */
+  private readonly chatLocators: ChatLocators;
+  /** Why a chat locator saved in Settings is not used; said once, when the chat is first opened. */
+  private chatLocatorProblems: string[];
   /** Why a locator saved in Settings is not used; said once, at the first choice or reading of the models. */
   private locatorProblems: string[];
   /** Whether the rows' locator has been said not to work in the page (see `readMenuRows`). */
@@ -522,6 +531,9 @@ export class CopilotTransport {
   constructor(private readonly opts: TransportOptions) {
     const { locators, problems } = resolvePickerLocators(opts.pickerLocators);
     this.locators = locators;
+    const chat = resolveChatLocators(opts.chatLocators);
+    this.chatLocators = chat.locators;
+    this.chatLocatorProblems = chat.problems;
     this.locatorProblems = problems;
     this.chatOrigin = surfaceOfUrl(opts.chatUrl) === 'work' ? new URL(opts.chatUrl).origin : Url.origin;
   }
@@ -758,8 +770,26 @@ export class CopilotTransport {
     }
   }
 
+  /**
+   * The box to write in, by the chat's locator in force (Settings' own, else the default; 2026-11-17). What it finds is
+   * taken if it can be written in, else the first box inside it that can: a locator copied from the page's inspector for
+   * an element around the box (the operator's of 2026-11-17 named the box's wrapper, `data-chat-input-pill`) finds it all
+   * the same.
+   */
   private composer(): Locator {
-    return this.p.locator(Css.composer).first();
+    return this.p
+      .locator(playwrightSelector(this.chatLocators.composer))
+      .first()
+      .locator("xpath=descendant-or-self::*[(@contenteditable and @contenteditable != 'false') or self::textarea]")
+      .first();
+  }
+
+  /** What the message says when the box is not found: its locator in force, and where Settings has it. */
+  private composerHint(): string {
+    return (
+      `If the picture shows the chat with its box to write in, the box's locator does not find it: ${this.chatLocators.composer} ` +
+      '(Settings → "The chat\'s locators" → "Box to write in").'
+    );
   }
 
   /** Whether the composer shows within `ms`, looked for a second at a time; a Stop ends the wait with `StoppedByOperator`. */
@@ -783,10 +813,13 @@ export class CopilotTransport {
     return `${this.chatOrigin}${path}`;
   }
 
-  /** Keeps the host the page is on when it is one of the chat's addresses: the chat's addresses are opened there from then on. */
+  /**
+   * Keeps the host the chat was found on — its box there, and staying — when it is the work Copilot's: the chat's
+   * addresses are opened there from then on. Whatever the path: on 2026-11-17 the work machine's chat was at `/home`.
+   */
   private learnChatOrigin(): void {
     const url = this.p.url();
-    if (isWorkChatAddress(url)) this.chatOrigin = new URL(url).origin;
+    if (surfaceOfUrl(url) === 'work') this.chatOrigin = new URL(url).origin;
   }
 
   /** Whether the box to write in is still there, on the same page, after `settleMs`: one that showed on the way elsewhere is not. */
@@ -882,7 +915,8 @@ export class CopilotTransport {
     await this.dumpFailure(dir, tag).catch(() => undefined);
     return new Error(
       `Copilot showed its page ${whereIs(url)} instead of the chat, and the chat did not open from there ` +
-        `(by its address on that host, nor by a link to it on the page). Nothing was sent. A picture of the page: ${join(dir, `${tag}.png`)}
+        `(by its address on that host, nor by a link to it on the page). Nothing was sent. A picture of the page: ${join(dir, `${tag}.png`)}. ` +
+        `${this.composerHint()}
 Current URL: ${url}`,
     );
   }
@@ -899,7 +933,8 @@ Current URL: ${url}`,
   async surface(): Promise<'work' | 'consumer' | 'sign-in' | 'unknown'> {
     const where = surfaceOfUrl(this.p.url());
     if (where !== 'work') return where;
-    const hasWorkComposer = (await this.p.locator(Surface.workMarkers[0]).count()) > 0;
+    // The box by the chat's locator in force (2026-11-17: the work page's box changed, and Settings may name it).
+    const hasWorkComposer = (await this.composer().count().catch(() => 0)) > 0;
     return hasWorkComposer ? 'work' : 'unknown';
   }
 
@@ -985,7 +1020,7 @@ Current URL: ${url}`,
       const dir = join(this.opts.transportDir, '..', 'failures');
       const tag = `not-the-chat-${Date.now()}`;
       await this.dumpFailure(dir, tag).catch(() => undefined);
-      picture = ` A picture of the page: ${join(dir, `${tag}.png`)}`;
+      picture = ` A picture of the page: ${join(dir, `${tag}.png`)}. ${this.composerHint()}`;
     }
     throw new Error(`${explain[where] ?? explain.unknown}${picture}
 Current URL: ${url}`);
@@ -1084,6 +1119,8 @@ Current URL: ${url}`);
    * types credentials; it only waits for the composer to appear.
    */
   async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal } = {}): Promise<void> {
+    // A box locator saved in Settings that cannot be used: said once, before the box is looked for with the default.
+    for (const problem of this.chatLocatorProblems.splice(0)) this.emit('chat-locator-not-used', { problem });
     // Copilot's home page, where no conversation is expected until the run enters one.
     this.onChat = null;
     await this.p.goto(url, { waitUntil: 'domcontentloaded' });

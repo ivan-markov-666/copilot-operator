@@ -18,7 +18,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { api, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
-import { fillLocator, locatorProblem, PICKER_KEYS, type LocatorProblem, type PickerKey } from '../../lib/pickerLocators';
+import { CHAT_KEYS, fillLocator, locatorProblem, PICKER_KEYS, type ChatKey, type LocatorProblem, type PickerKey } from '../../lib/pickerLocators';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
@@ -135,6 +135,7 @@ export default function DefaultsPage() {
       <RoleModelSection role="lead" {...shared} />
       <RoleModelSection role="kerrigan" {...shared} />
       <RoleModelSection role="review" {...shared} />
+      <ChatLocatorsSection />
       <PickerLocatorsSection catalogue={catalogue} />
       <ExecutionSection />
       <ProgramsSection />
@@ -1217,6 +1218,90 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
 
 
 // ---------------------------------------------------------------------------------------
+// The chat page's locators (operator, 2026-11-17)
+// ---------------------------------------------------------------------------------------
+
+const CHAT_FIELDS: Array<{ key: ChatKey; label: Key; why: Key }> = [{ key: 'composer', label: 'chatloc.composer', why: 'chatloc.composerWhy' }];
+
+/**
+ * How the bot finds the chat itself in the Copilot window (operator, 2026-11-17: "a field in Settings to set it by
+ * hand", after the work page's box to write in changed and every start was refused as "not the Microsoft 365 Copilot
+ * chat"): the box to write in. Checked as it is typed and saved when nothing is wrong with it, as the model menu's; an
+ * empty one is the default, which the field shows. Taken by the next Copilot window.
+ */
+function ChatLocatorsSection() {
+  const { t } = useT();
+  const { saving, track } = useSaving();
+  const [saved, setSaved] = useState<Record<ChatKey, string> | null>(null);
+  const [defaults, setDefaults] = useState<Record<ChatKey, string> | null>(null);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => {
+        const copilot = (s.raw.copilot as Record<string, unknown> | undefined) ?? {};
+        const own = (copilot.chatLocators as Partial<Record<ChatKey, string>> | undefined) ?? {};
+        setSaved(Object.fromEntries(CHAT_KEYS.map((k) => [k, own[k] ?? ''])) as Record<ChatKey, string>);
+        setDefaults(s.chat?.defaults ?? null);
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  // One write at a time, each on the file as the last one left it (as the model menu's section writes).
+  const saveLocator = (key: ChatKey, value: string): Promise<void> => {
+    const run = async () => {
+      try {
+        const base = (await api.settings()).raw;
+        const copilot = { ...((base.copilot as Record<string, unknown>) ?? {}) };
+        const own = { ...((copilot.chatLocators as Record<string, string> | undefined) ?? {}) };
+        if (value.trim()) own[key] = value.trim();
+        else delete own[key];
+        if (Object.keys(own).length === 0) delete copilot.chatLocators;
+        else copilot.chatLocators = own;
+        setMsg('');
+        await track(api.saveSettings({ ...base, copilot }));
+        setMsg(t('loc.saved'));
+        setErr('');
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    };
+    const done = queue.current.then(run, run);
+    queue.current = done.catch(() => undefined);
+    return done;
+  };
+
+  return (
+    <SavingContext.Provider value={track}>
+      <section className="panel" id="chat-locators" aria-labelledby="chat-locators-title">
+        <h2 id="chat-locators-title">{t('chatloc.title')}</h2>
+        <p className="muted small">{t('chatloc.intro')}</p>
+        {err && <div className="err">{err}</div>}
+        {saved && defaults
+          ? CHAT_FIELDS.map((f) => (
+              <LocatorField
+                key={f.key}
+                field={f.key}
+                idPrefix="chat"
+                label={t(f.label)}
+                why={t(f.why)}
+                initial={saved[f.key]}
+                fallback={defaults[f.key]}
+                example={null}
+                onSave={(v) => saveLocator(f.key, v)}
+              />
+            ))
+          : !err && <p className="muted small">{t('loc.loading')}</p>}
+        <SavedNote msg={msg} saving={saving} />
+      </section>
+    </SavingContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
 // The model menu's locators (operator, 2026-10-24)
 // ---------------------------------------------------------------------------------------
 
@@ -1355,6 +1440,7 @@ function PickerLocatorsSection({ catalogue }: { catalogue: ModelCatalogue | null
  */
 function LocatorField({
   field,
+  idPrefix = 'picker',
   label,
   why,
   initial,
@@ -1362,7 +1448,9 @@ function LocatorField({
   example,
   onSave,
 }: {
-  field: PickerKey;
+  field: PickerKey | ChatKey;
+  /** The field's id is `<idPrefix>-<field>`: `picker-…` for the model menu's, `chat-…` for the chat page's. */
+  idPrefix?: string;
   label: string;
   why: string;
   initial: string;
@@ -1374,7 +1462,7 @@ function LocatorField({
   const [text, setText] = useState(initial);
   const [problem, setProblem] = useState<LocatorProblem | null>(null);
   const saveLater = useDebouncedSave<string>((v) => onSave(v));
-  const id = `picker-${field}`;
+  const id = `${idPrefix}-${field}`;
   const change = (v: string) => {
     setText(v);
     const p = locatorProblem(field, v, document);

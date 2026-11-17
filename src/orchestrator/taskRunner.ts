@@ -652,8 +652,13 @@ export function speakFor(transport: ChatTransport, sessionId: string, opts: { al
 }
 
 /** The model menu's locators and its step pictures, as Settings have them (2026-10-24), for every window that picks a model. */
-export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'modelStepShots'> {
-  return { ...(cfg.copilot.pickerLocators ? { pickerLocators: cfg.copilot.pickerLocators } : {}), ...(cfg.copilot.pickerSteps ? { modelStepShots: true } : {}) };
+/** The locators Settings hold for the Copilot window: the model menu's, and the chat page's own (the box to write in, 2026-11-17). */
+export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots'> {
+  return {
+    ...(cfg.copilot.pickerLocators ? { pickerLocators: cfg.copilot.pickerLocators } : {}),
+    ...(cfg.copilot.chatLocators ? { chatLocators: cfg.copilot.chatLocators } : {}),
+    ...(cfg.copilot.pickerSteps ? { modelStepShots: true } : {}),
+  };
 }
 
 export async function openBrowser(

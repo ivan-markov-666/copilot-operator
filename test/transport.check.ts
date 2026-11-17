@@ -57,6 +57,7 @@ import {
   type TransportOptions,
 } from '../src/transport/copilotTransport.js';
 import { acquireProfileLock, findEdgeUsingProfile } from '../src/transport/profileLock.js';
+import { DefaultChatLocators } from '../src/transport/locators.js';
 import { buildChatName, chatNameForms, parseChatId } from '../src/transport/chatSession.js';
 import { Tally } from './support/harness.js';
 
@@ -1016,6 +1017,75 @@ try {
     t.truthy('a new chat: refused the same way', /^Copilot showed its page https:\/\/copilot\.cloud\.microsoft\/home instead of the chat/.test((await rejection(tr.newChat()))?.message ?? ''));
     const lost = await timed(() => tr.openConversation(A).then((ok) => { if (ok) throw new Error('opened'); }));
     t.check('a conversation: not opened — the caller looks for it by its name — in seconds', [lost.error?.message ?? null, lost.ms < 10_000], [null, true]);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('the box to write in of 17 November 2026, and the box\'s locator in Settings', async () => {
+    /*
+     * Operator, 2026-11-17, with 0.1.88: "Copilot showed its page https://copilot.cloud.microsoft/home instead of the chat"
+     * — and its picture showed the chat. Copilot's chat is at /home now (its /chat goes there), and its box to write in is
+     * no longer the span with the id `m365-chat-editor-target-element`: it is a Lexical editor, as the operator's
+     * inspector showed it, inside the same wrapper as before. Served here as the work page has it: the old host's chat
+     * goes to the new host's /home, and so does the new host's /chat. The box's locator is Settings' own when set
+     * (`copilot.chatLocators.composer`), else the default, which finds the old box and this one.
+     */
+    const OLD = 'https://m365.cloud.microsoft';
+    const NEW = 'https://copilot.cloud.microsoft';
+    const BOX = '<span role="textbox" contenteditable="true" tabindex="0" aria-label="Message Copilot" aria-multiline="true" data-copilot-initial-focus="" data-lexical-editor="true" style="display:inline-block;min-width:320px;min-height:24px;border:1px solid #888"><p><br></p></span>';
+    // The work page's box, in its wrapper, with Send beside it; `own` puts a box of another shape outside the wrapper instead.
+    const page = (own: boolean): string =>
+      `<title>Copilot</title><h1><span>Hi, how can I help?</span></h1><script>window.sent = [];</script>
+      <div data-test-id="chat-input-wrapper" id="m365-chat-input-shared-container"><div><div class="azFuQXgw" data-chat-input-root><div class="MXYyX0cx" data-chat-input-pill>
+        <div class="UWtvTmFf"><span aria-hidden="true" class="TFlDcUdq">Message Copilot</span><div class="cFhyQ01M"><span class="fai-EditorInput">${own ? '' : BOX}</span></div></div>
+        <button aria-label="Send" onclick="window.sent.push((document.querySelector('[data-lexical-editor], #my-box') || {}).innerText)">send</button>
+      </div></div></div></div>${own ? '<div id="my-box" contenteditable="true" style="min-width:320px;min-height:24px;border:1px solid #888"></div>' : ''}`;
+    const state = { own: false };
+    const open = async (name: string, chatLocators?: Record<string, string>): Promise<Fixture> => {
+      const f = await fixture(name, '<p>blank</p>', { signInTimeoutMs: 2_000, ...(chatLocators ? { chatLocators } : {}) });
+      const held = f.transport as unknown as { firstLookMs: number; settleMs: number; otherPageMs: number };
+      held.firstLookMs = 4_000;
+      held.settleMs = 600;
+      held.otherPageMs = 600;
+      await f.page.route(/^https:\/\/(m365|copilot)\.cloud\.microsoft\//, async (route) => {
+        if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+        const url = new URL(route.request().url());
+        const html = (body: string): Promise<void> => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8">${body}` });
+        // The old host's chat, and the new host's, both go to the new host's /home, where the chat is.
+        if (url.pathname !== '/home') return await html(`<script>location.replace(${JSON.stringify(`${NEW}/home?es=SSR&redirfrom=mcmToCcm`)})</script>`);
+        return await html(page(state.own));
+      });
+      return f;
+    };
+    const at = (f: Fixture): string => f.page.url().replace(/\?.*$/, '');
+
+    // The default: the work page's new box is found, at /home, which is the chat.
+    const a = await open('box-2026-11-17');
+    const signedIn = await rejection(a.transport.ensureSignedIn(`${OLD}/chat`));
+    t.check('the new box, by the default locator: signed in on /home, not refused', [signedIn?.message ?? null, at(a)], [null, `${NEW}/home`]);
+    t.check('nothing taken for a sign-in, no move away from the chat', [named(a.events, 'sign-in-required').length, named(a.events, 'chat-page-elsewhere').length], [0, 0]);
+    t.check('the host the chat was found on is kept, though its address is /home', (a.transport as unknown as { chatOrigin: string }).chatOrigin, NEW);
+    t.check('a new chat: on /home, its box there', [await rejection(a.transport.newChat()).then((e) => e?.message ?? null), at(a)], [null, `${NEW}/home`]);
+    await a.transport.send('hello from the bot');
+    t.check('a message is written in the new box and sent with its Send', await value<string[]>(a.page, 'sent'), ['hello from the bot']);
+
+    // A box the default does not find: refused, saying the box's locator in force and where Settings has it.
+    state.own = true;
+    const b = await open('box-own-default');
+    const refused = await rejection(b.transport.ensureSignedIn(`${OLD}/chat`));
+    t.truthy('a box the default does not find: the message names the locator in force and the Settings field', (refused?.message ?? '').includes(`the box's locator does not find it: ${DefaultChatLocators.composer} (Settings → "The chat's locators" → "Box to write in").`), refused?.message);
+
+    // Settings' locator for it: found, and written in.
+    const c = await open('box-own-settings', { composer: '  #my-box ' });
+    t.check("Settings' locator: signed in, and the message goes in that box", [await rejection(c.transport.ensureSignedIn(`${OLD}/chat`)).then((e) => e?.message ?? null), await c.transport.send('in my box').then(() => value<string[]>(c.page, 'sent'))], [null, ['in my box']]);
+
+    // The operator's own locator from the inspector named the box's wrapper: the box inside it is the one written in.
+    state.own = false;
+    const d = await open('box-wrapper', { composer: '#m365-chat-input-shared-container > div > div > div.MXYyX0cx' });
+    t.check("a locator of the box's wrapper: the box inside it is used", [await rejection(d.transport.ensureSignedIn(`${OLD}/chat`)).then((e) => e?.message ?? null), await d.transport.send('through the wrapper').then(() => value<string[]>(d.page, 'sent'))], [null, ['through the wrapper']]);
+
+    // One saved that cannot be used: said, and the default is used.
+    const e = await open('box-bad-xpath', { composer: '//div/parent:span' });
+    t.check('a saved locator that cannot be used: the default, and said why', [await rejection(e.transport.ensureSignedIn(`${OLD}/chat`)).then((x) => x?.message ?? null), named(e.events, 'chat-locator-not-used').map((x) => x.detail?.problem)], [null, ['the chat\'s composer locator in Settings is not used, "parent:" needs two colons: parent::']]);
   });
 
   // -------------------------------------------------------------------------------------------

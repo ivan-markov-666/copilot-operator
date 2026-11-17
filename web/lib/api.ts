@@ -1,7 +1,7 @@
 /**
  * The browser side of the API. One place that knows the base URL and how errors come back.
  */
-import type { PickerKey } from './pickerLocators';
+import type { ChatKey, PickerKey } from './pickerLocators';
 
 export const API = process.env.NEXT_PUBLIC_COP_API ?? 'http://127.0.0.1:4000/api';
 
@@ -1367,6 +1367,8 @@ export const api = {
       resolved: Record<string, unknown>;
       /** The model menu's locators' defaults, and where a choice's pictures are kept (2026-10-24). */
       picker?: { defaults: Record<PickerKey, string>; dirs: { run: string; read: string } };
+      /** The chat page's own locators (2026-11-17): their defaults, which Settings shows and puts back. */
+      chat?: { defaults: Record<ChatKey, string> };
       /**
        * The programs the bot may start (2026-10-26): the platform each reaches with the operator's access, by program;
        * the ones that can be set to read only; the list in force, which a policy lock may have narrowed.

@@ -2592,6 +2592,23 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
         ],
       },
       {
+        headingKey: 'chatloc.title',
+        en: "The chat's locators",
+        bg: 'Локатори на чата',
+        controls: [
+          {
+            key: 'chatloc.composer',
+            kind: 'field',
+            en: 'Box to write in',
+            bg: 'Поле за писане',
+            doesEn:
+              'How the bot finds the box it writes its messages in (2026-11-17): a CSS selector, or an XPath starting with /; empty is the default, which finds the box of before November 2026 and the one of 17 November 2026. A locator of an element around the box works too. When a start is refused as "not the Microsoft 365 Copilot chat" and its picture shows the chat, this is the one to change. The next Copilot window takes it.',
+            doesBg:
+              'Как ботът намира полето, в което пише съобщенията си (2026-11-17): CSS селектор или XPath, започващ с /; празно е стойността по подразбиране, която намира полето отпреди ноември 2026 и това от 17 ноември 2026. Става и локатор на елемент около полето. Когато стартът е отказан с „not the Microsoft 365 Copilot chat“, а снимката му показва чата, сменя се този. Важи от следващия прозорец на Copilot.',
+          },
+        ],
+      },
+      {
         headingKey: 'loc.title',
         en: "The model menu's locators",
         bg: 'Локатори на менюто за модели',

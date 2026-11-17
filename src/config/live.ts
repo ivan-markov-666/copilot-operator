@@ -37,7 +37,7 @@ const NOT_NOW: Record<string, readonly string[]> = {
 };
 /** What the chat window was opened with. */
 const WINDOW: Record<string, readonly string[]> = {
-  copilot: ['url', 'profileDir', 'channel', 'headless', 'replyTimeoutSec', 'signInTimeoutSec', 'humanWaitSec', 'keepFailurePage', 'pickerLocators', 'pickerSteps'],
+  copilot: ['url', 'profileDir', 'channel', 'headless', 'replyTimeoutSec', 'signInTimeoutSec', 'humanWaitSec', 'keepFailurePage', 'pickerLocators', 'chatLocators', 'pickerSteps'],
 };
 /** The sections a run compares; the rest (where the bot keeps its records) is read when the bot starts. */
 const SECTIONS = ['copilot', 'task', 'execution', 'report', 'project', 'skills', 'pacing', 'limits'] as const;

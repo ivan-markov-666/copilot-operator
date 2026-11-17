@@ -1599,6 +1599,33 @@ try {
   });
 
   /*
+   * The chat's own locators (operator, 2026-11-17: "a field in Settings to set it by hand", after the work page's box to
+   * write in changed): the box to write in, in a section of its own before the model menu's, as those are: the default
+   * shown in the field, checked as typed, saved, "Default" puts it back.
+   */
+  await scenario("Settings: the chat's locators — the box to write in, saved, put back to the default", {}, async (h, page, url) => {
+    const { DefaultChatLocators } = await import('../src/transport/locators.js');
+    await page.goto(url('/settings'));
+    const section = page.locator('section#chat-locators');
+    await section.locator('#chat-composer').waitFor();
+    t.check('its own section, titled, before the model menu\'s', [await section.locator('h2').textContent(), await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['chat-locators', 'picker-locators'].includes(id)))], [en['chatloc.title'], ['chat-locators', 'picker-locators']]);
+    t.check('the box to write in: named, with its ⓘ, empty, its default shown in it', [await section.locator('label[for="chat-composer"]').textContent(), await section.locator('.picker-field .info-btn').count(), await page.locator('#chat-composer').inputValue(), await page.locator('#chat-composer').getAttribute('placeholder')], [en['chatloc.composer'], 1, '', DefaultChatLocators.composer]);
+    const saved = async (): Promise<Record<string, string> | undefined> => ((await settingsOf(h)).copilot as { chatLocators?: Record<string, string> } | undefined)?.chatLocators;
+    // Not an unclosed bracket: the browser closes that one itself at the end, as CSS does.
+    await page.locator('#chat-composer').fill('span[role=="textbox"]');
+    t.truthy('a CSS selector the browser cannot read: said, and not saved', ((await section.locator('.err').textContent()) ?? '').startsWith(en['loc.badCss'].replace('{msg}', '')), await section.locator('.err').textContent());
+    await page.waitForTimeout(1_600);
+    t.check('nothing saved for it', await saved(), undefined);
+    await page.locator('#chat-composer').fill('[data-chat-input-pill] [data-lexical-editor="true"]');
+    await waitFor('the box locator saved', async () => ((await saved())?.composer ? true : null), 10_000).catch(() => undefined);
+    t.check('a good one: saved after the typing stops, under copilot.chatLocators', [await section.locator('.err').count(), await saved()], [0, { composer: '[data-chat-input-pill] [data-lexical-editor="true"]' }]);
+    t.check("the model menu's locators untouched", ((await settingsOf(h)).copilot as { pickerLocators?: unknown } | undefined)?.pickerLocators, undefined);
+    await section.locator('.picker-field:has(#chat-composer) button', { hasText: en['loc.default'] }).click();
+    await waitFor('the default put back', async () => ((await saved()) === undefined ? true : null), 10_000).catch(() => undefined);
+    t.check('"Default": the field empty, nothing saved for it', [await page.locator('#chat-composer').inputValue(), await saved()], ['', undefined]);
+  });
+
+  /*
    * The bars on top in narrow windows (operator, 2026-10-24: "the Queue button is not seen on the chat's page; see that
    * the navigation wraps well on small screens; Appearance and Language always on one line together, unless there is not
    * room for both"): every link and both buttons on screen at every width, wrapped rather than hidden or scrolled away,

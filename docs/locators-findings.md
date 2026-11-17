@@ -288,8 +288,20 @@ changing anything, reading all five entries including both inside the GPT group,
   - The chat's addresses are then opened on the host the chat was found on (`chatOrigin`), not through the old host's
     redirect.
   - When neither way gets past the page, it is said as such, with a screenshot (`not-the-chat-*.png` in `failures`).
-  - **Not verified live:** what the home page shows, whether it has a link to the chat, and whether
-    `copilot.cloud.microsoft/chat` opened directly stays on the chat. The first such start leaves a picture to find out.
+  - **Found the same day with 0.1.88** (its picture, and the operator's inspector): `/home` **is** the chat. Copilot's
+    `/chat` goes there, and the box to write in changed. It is no longer the span `#m365-chat-editor-target-element`. It is
+    a Lexical editor, `<span role="textbox" contenteditable="true" aria-label="Message Copilot" data-lexical-editor="true"
+    data-copilot-initial-focus>`, inside the same wrapper as before:
+    `<div data-test-id="chat-input-wrapper" id="m365-chat-input-shared-container">` → `[data-chat-input-root]` →
+    `[data-chat-input-pill]` → `.fai-EditorInput`. The page greets with "Hi, how can I help?".
+  - The box's locator is now Settings' own (`copilot.chatLocators.composer`, section "The chat's locators"). Its default,
+    `DefaultChatLocators.composer`, finds both the old box and the new one.
+  - A locator that names an element around the box is taken for the box inside it.
+  - The chat is whatever page shows the box and keeps it, whatever its address. Its host is kept for the chat's
+    addresses from then on.
+  - When the box is not found, the refusal names the locator in force and the Settings field.
+  - **Not verified live** with the new box: Send (looked for by name inside the wrapper), the answer and its Copy, and a
+    conversation's address.
 
 ## Not yet verified
 

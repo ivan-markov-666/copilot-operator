@@ -3485,6 +3485,8 @@ export class OperatorService {
       await this.init();
       const cfg = await this.settings.load();
       transport = createTransport({
+        // The box to write in by Settings' locator (2026-11-17): the sign-in ends when it shows.
+        ...(cfg.copilot.chatLocators ? { chatLocators: cfg.copilot.chatLocators } : {}),
         profileDir: cfg.resolved.profileDir,
         transportDir: join(cfg.resolved.runsDir, '_login'),
         chatUrl: cfg.copilot.url,

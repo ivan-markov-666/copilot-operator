@@ -184,6 +184,17 @@ export const RunConfigSchema = z.object({
         })
         .optional(),
       /**
+       * The chat page's locators (operator, 2026-11-17: "a field in Settings to set it by hand", after the work page's
+       * box to write in changed and the start was refused as "not the Microsoft 365 Copilot chat"): the box to write in.
+       * Left out, or empty, the default in `transport/locators.ts` (`DefaultChatLocators`); one that cannot be used is
+       * not, and the run says why. Taken by the next Copilot window.
+       */
+      chatLocators: z
+        .object({
+          composer: z.string().optional(),
+        })
+        .optional(),
+      /**
        * A picture and the menu's HTML at every step of choosing a model, with what each locator found (operator,
        * 2026-10-24: "an option in Settings to keep this information"), beside the run's other browser files. Off: only
        * a failed choice keeps the menu (models-select-failed.*).

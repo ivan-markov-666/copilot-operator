@@ -14,7 +14,7 @@ import { SettingsUnusableError } from './settings.js';
 import { PolicyLockUnusableError } from '../config/lockedPolicy.js';
 import { CHANGED_ON_DISK } from '../session/workspace.js';
 import { join } from 'node:path';
-import { DefaultPickerLocators, type PickerLocators } from '../transport/locators.js';
+import { DefaultChatLocators, DefaultPickerLocators, type ChatLocators, type PickerLocators } from '../transport/locators.js';
 import { platformTools } from '../exec/platforms.js';
 import { readOnlyCapable } from '../exec/readOnly.js';
 
@@ -88,6 +88,7 @@ export class OperatorController {
     defaults: unknown;
     resolved: unknown;
     picker: { defaults: PickerLocators; dirs: { run: string; read: string } };
+    chat: { defaults: ChatLocators };
     programs: { platforms: Record<string, string>; readOnly: string[]; inForce: string[] };
     scripts: { inForce: Record<string, { own: boolean; written: boolean }>; writtenScripts: 'ask' | 'run' };
   }> {
@@ -104,7 +105,9 @@ export class OperatorController {
     const programs = { platforms: platformTools(), readOnly: readOnlyCapable(), inForce: resolved.execution.allowedPrograms };
     // The scripts the bot may run, as in force (2026-10-27): a lock may have emptied the boxes for its own.
     const scripts = { inForce: resolved.execution.scripts, writtenScripts: resolved.execution.writtenScripts };
-    return { raw, defaults, resolved: resolved.resolved, picker, programs, scripts };
+    // The chat page's own locators (2026-11-17): their defaults, which Settings shows and puts back.
+    const chat = { defaults: DefaultChatLocators };
+    return { raw, defaults, resolved: resolved.resolved, picker, chat, programs, scripts };
   }
 
   /** Saved, and taken at once by the work going on where it can be (2026-11-03): the answer says what was, and what waits. */

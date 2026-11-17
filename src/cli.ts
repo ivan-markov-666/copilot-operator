@@ -136,7 +136,10 @@ program
       }
     }
 
+    // The box to write in by Settings' locator (2026-11-17): the sign-in ends when it shows.
+    const saved = await settingsOf(installLayout()).load().catch(() => null);
     const transport = new CopilotTransport({
+      ...(saved?.copilot.chatLocators ? { chatLocators: saved.copilot.chatLocators } : {}),
       profileDir: opts.profile,
       transportDir: join(opts.profile, '_transport'),
       chatUrl: opts.url,
@@ -197,7 +200,9 @@ program
   .option('-p, --profile <dir>', 'profile directory', DEFAULT_PROFILE)
   .option('--url <url>', 'chat url', Url.chat)
   .action(async (opts: { profile: string; url: string }) => {
+    const saved = await settingsOf(installLayout()).load().catch(() => null);
     const transport = new CopilotTransport({
+      ...(saved?.copilot.chatLocators ? { chatLocators: saved.copilot.chatLocators } : {}),
       profileDir: opts.profile,
       transportDir: join(opts.profile, '_transport'),
       chatUrl: opts.url,
@@ -420,6 +425,7 @@ program
     const saved = await settingsOf(installLayout()).load().catch(() => null);
     const transport = new CopilotTransport({
       ...(saved?.copilot.pickerLocators ? { pickerLocators: saved.copilot.pickerLocators } : {}),
+      ...(saved?.copilot.chatLocators ? { chatLocators: saved.copilot.chatLocators } : {}),
       profileDir: opts.profile,
       transportDir: join(installLayout().runsDir, '_models'),
       chatUrl: opts.url,
