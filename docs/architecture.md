@@ -6,7 +6,7 @@ No mouse/keyboard OS automation, no Copilot API for v1.
 
 ## 1. Principles
 
-- **One surface: the Copilot web app.** `https://m365.cloud.microsoft/chat` (Microsoft is consolidating to `https://copilot.cloud.microsoft`). Everything the bot does is DOM interaction through Playwright.
+- **One surface: the Copilot web app.** `https://m365.cloud.microsoft/chat` (Microsoft is consolidating to `https://copilot.cloud.microsoft`; a window goes on to the chat's addresses on the host it found the chat on, and from Copilot's home page to its chat — see `docs/locators-findings.md`, "Where the chat is"). Everything the bot does is DOM interaction through Playwright.
 - **Real browser, real profile.** Playwright launches the Edge that is already installed on the laptop (`channel: 'msedge'`) with a persistent profile directory owned by the bot. Playwright does not inject custom HTTP headers; the only automation signal is `navigator.webdriver === true`, which we do not hide. See 2.9 for what pacing does and does not change about that.
 - **The human signs in, the bot never touches credentials.** First run opens the browser headed; the user completes the Entra login + MFA. Cookies and tokens live in the profile folder, so later runs are automatic until the tenant expires the session. When that happens the bot detects the login page, pauses, and asks the user to sign in again.
 - **Copilot is the brain, the bot is the hands.** The bot does not interpret free text. Copilot is instructed (by the user's opening messages) to answer in a strict machine-readable format. The bot parses that format, executes, reports back, and loops.

@@ -108,8 +108,6 @@ export type ReplyCapture = {
   codeBlocksDom: string[];
 };
 
-const ORIGIN = 'https://m365.cloud.microsoft';
-
 /**
  * Which Copilot an address is, by its host — not by whether the text appears anywhere in it: the
  * consumer Copilot and a sign-in page carry the work chat's address in their query (`ru=`,
@@ -128,6 +126,22 @@ export function surfaceOfUrl(url: string): 'work' | 'consumer' | 'sign-in' | 'un
   if (Surface.consumerHosts.some(on)) return 'consumer';
   if (Surface.workHosts.some(on)) return 'work';
   return 'unknown';
+}
+
+/** Whether an address is the work Copilot's chat — a new chat, a conversation, the list of chats — on either of its hosts. */
+export function isWorkChatAddress(url: string): boolean {
+  if (surfaceOfUrl(url) !== 'work') return false;
+  const path = new URL(url).pathname.replace(/\/+$/, '');
+  return path === '/chat' || path.startsWith('/chat/');
+}
+
+/**
+ * Whether an address is another page of the work Copilot, not its chat: its home page
+ * (`copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm`, where the work machine's start ended on 2026-11-17), or any
+ * other of its own. Signed in, then — a sign-in page is on Microsoft's sign-in host — and only away from the chat.
+ */
+export function isCopilotOtherPage(url: string): boolean {
+  return surfaceOfUrl(url) === 'work' && !isWorkChatAddress(url);
 }
 
 /**
@@ -313,6 +327,11 @@ export const NO_ADDRESS_YET =
 /** How many times Edge is started again on the profile when a window is reopened, and the pause between (see `reopen`). */
 const REOPEN_TRIES = 10;
 const REOPEN_PAUSE_MS = 1_500;
+/** How long the box is waited for on the work Copilot's host before the page is said not to be its chat. */
+const SURFACE_WAIT_MS = 5_000;
+
+/** Where a window sent to the chat ended up (see `arrive`). */
+type Arrival = 'chat' | 'elsewhere' | 'no-box';
 
 /**
  * The window had left the conversation the bot put it on, and could not be put back (operator, 2026-11-09; see
@@ -489,11 +508,22 @@ export class CopilotTransport {
   private readonly chatNames = new Map<string, string>();
   /** How long a page is given to show the composer before it is taken to be asking for a sign-in. */
   private firstLookMs = 15_000;
+  /**
+   * The host the chat was last found on, which the chat's addresses are opened on (2026-11-17): the address set in
+   * Settings when it is the work Copilot's, else the old host, until the chat is found on the new one. Going through
+   * the old host's redirect is what ended the work machine's start on Copilot's home page.
+   */
+  private chatOrigin: string;
+  /** How long the box to write in must stay before the page is taken for the chat: one that showed on its way elsewhere is not. */
+  private settleMs = 2_000;
+  /** How long another page of the work Copilot is given to turn into its chat on its own before the bot opens the chat. */
+  private otherPageMs = 3_000;
 
   constructor(private readonly opts: TransportOptions) {
     const { locators, problems } = resolvePickerLocators(opts.pickerLocators);
     this.locators = locators;
     this.locatorProblems = problems;
+    this.chatOrigin = surfaceOfUrl(opts.chatUrl) === 'work' ? new URL(opts.chatUrl).origin : Url.origin;
   }
 
   /** Says, once, which locators saved in Settings could not be used and why. */
@@ -628,7 +658,7 @@ export class CopilotTransport {
     }
     this.onChat = want;
     if (!want || want === 'new') throw new WindowClosed(NO_ADDRESS_YET);
-    await this.p.goto(Url.conversation(want.id), { waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    await this.p.goto(this.chatAddress(Url.conversationPath(want.id)), { waitUntil: 'domcontentloaded' }).catch(() => undefined);
     // On it, as nearly always: waited for until its box is there to write in. Elsewhere (a sign-in): `ensureOnChat`.
     if (parseChatId(this.p.url()) === want.id) await this.composerWithin(this.firstLookMs, opts.signal, 'stopped by the operator while the window was opened again');
     return await this.ensureOnChat(opts);
@@ -748,6 +778,115 @@ export class CopilotTransport {
     }
   }
 
+  /** One of the chat's addresses (`Url.newChatPath`, `Url.conversationPath`) on the host the chat was last found on. */
+  private chatAddress(path: string): string {
+    return `${this.chatOrigin}${path}`;
+  }
+
+  /** Keeps the host the page is on when it is one of the chat's addresses: the chat's addresses are opened there from then on. */
+  private learnChatOrigin(): void {
+    const url = this.p.url();
+    if (isWorkChatAddress(url)) this.chatOrigin = new URL(url).origin;
+  }
+
+  /** Whether the box to write in is still there, on the same page, after `settleMs`: one that showed on the way elsewhere is not. */
+  private async boxStays(): Promise<boolean> {
+    const at = whereIs(this.p.url());
+    await this.p.waitForTimeout(this.settleMs);
+    return whereIs(this.p.url()) === at && (await this.composer().isVisible().catch(() => false));
+  }
+
+  /**
+   * After the window was sent to the chat (`path`, one of its addresses): whether it got there. Operator, 2026-11-17:
+   * the start ended on "The page is not the Microsoft 365 Copilot chat" at
+   * `copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm` — the box to write in had shown, and a few seconds later the
+   * page was Copilot's home page, with none, and the bot neither waited nor went to the chat from there.
+   *
+   * - `chat`: the box is there and stays (`boxStays`). The host it is on is the chat's from then on (`learnChatOrigin`).
+   * - `elsewhere`: the page is another of the work Copilot's own (`isCopilotOtherPage`), and stayed one after the chat
+   *   was opened from it — by `path` on the page's own host, then, for a new chat, by the page's link to its chat. It
+   *   is not a sign-in, and is not waited on as one.
+   * - `no-box`: anything else with no box within `firstLookMs` — a sign-in page, the consumer Copilot, a chat slow to
+   *   load — left to the caller, as before.
+   *
+   * Looked at a second at a time, so a Stop ends it at once; another of Copilot's pages is given `otherPageMs` to turn
+   * into the chat on its own, not the whole first look.
+   */
+  private async arrive(path: string, signal: AbortSignal | undefined, stopped: string): Promise<Arrival> {
+    for (let move = 0; ; move += 1) {
+      const until = Date.now() + this.firstLookMs;
+      let otherSince = 0;
+      for (;;) {
+        if ((await this.composerWithin(Math.max(1, Math.min(1_000, until - Date.now())), signal, stopped)) && (await this.boxStays())) {
+          this.learnChatOrigin();
+          return 'chat';
+        }
+        const other = isCopilotOtherPage(this.p.url());
+        otherSince = other ? otherSince || Date.now() : 0;
+        if (other && Date.now() - otherSince >= this.otherPageMs) break;
+        if (Date.now() >= until) {
+          if (other) break;
+          return 'no-box';
+        }
+      }
+      if (move >= 2) return 'elsewhere';
+      const found = whereIs(this.p.url());
+      if (move === 0) {
+        const to = `${new URL(this.p.url()).origin}${path}`;
+        this.emit('chat-page-elsewhere', { found, by: 'address', to: whereIs(to) });
+        await this.p.goto(to, { waitUntil: 'domcontentloaded' });
+      } else {
+        // A conversation's address is the only way to it: a link to the chat would open a new one.
+        if (path !== Url.newChatPath) return 'elsewhere';
+        const link = await this.chatLink();
+        if (!link) return 'elsewhere';
+        this.emit('chat-page-elsewhere', { found, by: 'link', to: whereIs(link.href) });
+        await link.at.click({ timeout: 5_000 }).catch(() => undefined);
+      }
+    }
+  }
+
+  /**
+   * The page's own link to its chat, for another of Copilot's pages that the chat's address did not get past: an anchor
+   * on the page's host to `/chat`, shown, and opening in this window. Nothing else on the page is clicked.
+   */
+  private async chatLink(): Promise<{ at: Locator; href: string } | null> {
+    const found = await this.p
+      .evaluate(() => {
+        const links = [...document.querySelectorAll<HTMLAnchorElement>('a[href]')];
+        const i = links.findIndex((a) => {
+          let u: URL;
+          try {
+            u = new URL(a.href);
+          } catch {
+            return false;
+          }
+          const box = a.getBoundingClientRect();
+          const shown = box.width > 0 && box.height > 0 && getComputedStyle(a).visibility !== 'hidden';
+          return u.origin === location.origin && u.pathname.replace(/\/+$/, '') === '/chat' && (!a.target || a.target === '_self') && shown;
+        });
+        return i < 0 ? null : { i, href: links[i]!.href };
+      })
+      .catch(() => null);
+    return found ? { at: this.p.locator('a[href]').nth(found.i), href: found.href } : null;
+  }
+
+  /**
+   * The error for a window that would not go to the chat from another of Copilot's pages (`arrive`'s `elsewhere`), with
+   * a picture of the page — a screenshot always, its HTML when Settings keep it — so the next look is at what it showed.
+   */
+  private async notTheChat(): Promise<Error> {
+    const url = this.p.url();
+    const dir = join(this.opts.transportDir, '..', 'failures');
+    const tag = `not-the-chat-${Date.now()}`;
+    await this.dumpFailure(dir, tag).catch(() => undefined);
+    return new Error(
+      `Copilot showed its page ${whereIs(url)} instead of the chat, and the chat did not open from there ` +
+        `(by its address on that host, nor by a link to it on the page). Nothing was sent. A picture of the page: ${join(dir, `${tag}.png`)}
+Current URL: ${url}`,
+    );
+  }
+
   /**
    * Which Copilot we actually landed on.
    *
@@ -820,9 +959,17 @@ export class CopilotTransport {
     await this.p.goto(target.toString(), { waitUntil: 'domcontentloaded' });
   }
 
-  /** Throws with an explanation when the profile is not on the work Copilot. */
+  /**
+   * Throws with an explanation when the profile is not on the work Copilot. On the work Copilot's host with no box to
+   * write in, the box is waited for a few seconds rather than looked for once (2026-11-17: the page was changing); a
+   * page that is still not the chat leaves a picture of itself, since its address alone does not say what it showed.
+   */
   async assertWorkSurface(): Promise<void> {
-    const where = await this.surface();
+    let where = await this.surface();
+    if (where === 'unknown' && surfaceOfUrl(this.p.url()) === 'work') {
+      await this.composerWithin(SURFACE_WAIT_MS, undefined, '');
+      where = await this.surface();
+    }
     if (where === 'work') return;
     const url = this.p.url();
     const explain: Record<string, string> = {
@@ -833,7 +980,14 @@ export class CopilotTransport {
       'sign-in': 'The profile is signed out. Run "cop login".',
       unknown: 'The page is not the Microsoft 365 Copilot chat.',
     };
-    throw new Error(`${explain[where] ?? explain.unknown}
+    let picture = '';
+    if (where === 'unknown') {
+      const dir = join(this.opts.transportDir, '..', 'failures');
+      const tag = `not-the-chat-${Date.now()}`;
+      await this.dumpFailure(dir, tag).catch(() => undefined);
+      picture = ` A picture of the page: ${join(dir, `${tag}.png`)}`;
+    }
+    throw new Error(`${explain[where] ?? explain.unknown}${picture}
 Current URL: ${url}`);
   }
 
@@ -939,7 +1093,12 @@ Current URL: ${url}`);
      * ends the wait at once, rather than after the whole sign-in timeout, fifteen minutes by default (2026-10-17).
      */
     const stoppedHere = 'stopped by the operator while waiting for the sign-in';
-    if (!(await this.composerWithin(this.firstLookMs, opts.signal, stoppedHere))) {
+    /*
+     * The chat; or another of Copilot's own pages, which the chat is opened from (2026-11-17: Copilot's home page, where
+     * the work machine's start ended); or a page asking for a sign-in, the only one waited on for the operator.
+     */
+    let at = await this.arrive(Url.newChatPath, opts.signal, stoppedHere);
+    if (at === 'no-box') {
       this.emit('sign-in-required', { url: this.p.url() });
       if (!(await this.composerWithin(this.opts.signInTimeoutMs, opts.signal, stoppedHere))) {
         throw new Error(
@@ -948,16 +1107,26 @@ Current URL: ${url}`);
         );
       }
       this.emit('signed-in');
+      // A sign-in may come back to Copilot's home page rather than to its chat.
+      at = await this.arrive(Url.newChatPath, opts.signal, stoppedHere);
     }
+    if (at === 'elsewhere') throw await this.notTheChat();
 
     await this.clearBlockers();
+    // The page may have moved on while the blockers were looked at, as the work machine's did: once more to the chat.
+    if ((await this.surface()) !== 'work' && (await this.arrive(Url.newChatPath, opts.signal, stoppedHere)) === 'elsewhere') {
+      throw await this.notTheChat();
+    }
     await this.assertWorkSurface();
   }
 
   async newChat(): Promise<void> {
     this.onChat = null;
-    await this.p.goto(Url.newChat, { waitUntil: 'domcontentloaded' });
-    await this.composer().waitFor({ state: 'visible' });
+    await this.p.goto(this.chatAddress(Url.newChatPath), { waitUntil: 'domcontentloaded' });
+    // Another of Copilot's pages instead (2026-11-17): the chat opened from it, and said so when it would not.
+    if ((await this.arrive(Url.newChatPath, undefined, '')) === 'elsewhere') throw await this.notTheChat();
+    // A chat slow to load: the rest of the minute it was always given (the page's default timeout).
+    await this.composer().waitFor({ state: 'visible', timeout: 45_000 });
     await this.dismissPopups();
     this.onChat = 'new';
   }
@@ -965,8 +1134,10 @@ Current URL: ${url}`);
   /** Reopens a conversation by its id. Returns false when it no longer opens. */
   async openConversation(chatId: string): Promise<boolean> {
     this.onChat = null;
-    await this.p.goto(Url.conversation(chatId), { waitUntil: 'domcontentloaded' });
-    if (!(await this.isChatReady(20_000))) return false;
+    const path = Url.conversationPath(chatId);
+    await this.p.goto(this.chatAddress(path), { waitUntil: 'domcontentloaded' });
+    const at = await this.arrive(path, undefined, '');
+    if (at === 'elsewhere' || (at === 'no-box' && !(await this.isChatReady(5_000)))) return false;
     const there = parseChatId(this.p.url()) === chatId;
     if (there) this.onChat = { id: chatId };
     return there;
@@ -1035,9 +1206,13 @@ Current URL: ${url}`);
     this.emit('chat-left', { chatId: want.id, found: from });
     const stopped = 'stopped by the operator while waiting for the sign-in';
     let signedIn = false;
+    const path = Url.conversationPath(want.id);
     for (let tries = 0; tries < 3; tries += 1) {
-      await this.p.goto(Url.conversation(want.id), { waitUntil: 'domcontentloaded' });
-      if (await this.composerWithin(this.firstLookMs, opts.signal, stopped)) {
+      await this.p.goto(this.chatAddress(path), { waitUntil: 'domcontentloaded' });
+      // Another of Copilot's pages, the conversation's address not getting past it (2026-11-17): by its name, not a sign-in.
+      const at = await this.arrive(path, opts.signal, stopped);
+      if (at === 'elsewhere') break;
+      if (at === 'chat') {
         if (parseChatId(this.p.url()) !== want.id) break;
         this.onChat = want;
         await this.dismissPopups().catch(() => undefined);

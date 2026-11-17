@@ -393,13 +393,23 @@ export const Surface = {
   consumerMarkers: ['Shop', 'Play'],
 } as const;
 
-/** Chat URL. Microsoft is consolidating this to copilot.cloud.microsoft. */
+/**
+ * Chat URL. Microsoft is consolidating this to copilot.cloud.microsoft.
+ *
+ * The bot starts on `origin`; from then on a window goes to the chat's addresses on the host it found the chat on
+ * (`chatOrigin` in copilotTransport.ts), not through the old host's redirect: on 2026-11-17 the work machine's
+ * `m365.cloud.microsoft/chat` ended on `copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm`, Copilot's home page,
+ * with no box to write in.
+ */
 export const Url = {
   chat: 'https://m365.cloud.microsoft/chat',
-  /** "New chat" is an anchor, so a plain navigation is equivalent to clicking it. */
+  origin: 'https://m365.cloud.microsoft',
+  /** A new chat, on whichever host. "New chat" is an anchor, so a plain navigation is equivalent to clicking it. */
+  newChatPath: '/chat?es=SSR',
   newChat: 'https://m365.cloud.microsoft/chat?es=SSR',
-  /** Every conversation has a stable address: /chat/conversation/<uuid>. */
-  conversation: (id: string) => `https://m365.cloud.microsoft/chat/conversation/${id}?es=SSR`,
+  /** Every conversation has a stable address: /chat/conversation/<uuid>, on whichever host. */
+  conversationPath: (id: string) => `/chat/conversation/${id}?es=SSR`,
+  conversation: (id: string, origin = 'https://m365.cloud.microsoft') => `${origin}/chat/conversation/${id}?es=SSR`,
   /** Full chat list, used as the last resort when looking a chat up by name. */
   allChats: 'https://m365.cloud.microsoft/chat/all?es=SSR',
 } as const;

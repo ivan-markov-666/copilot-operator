@@ -272,6 +272,25 @@ and reading it back, refusing a name the menu does not offer (`Claude Sonnet 5`)
 changing anything, reading all five entries including both inside the GPT group, selecting
 `GPT 5.6 Quick response` from that group and confirming it, and switching back to `Auto`.
 
+## Where the chat is: two hosts, and Copilot's other pages
+
+- **2026-10-13:** the work machine's `m365.cloud.microsoft/chat` landed on
+  `copilot.cloud.microsoft/chat?es=SSR&redirfrom=mcmToCcm`, the same chat with the same composer. Both hosts are the
+  work Copilot's (`Surface.workHosts`), judged by the host only (`surfaceOfUrl`).
+- **2026-11-17:** the same start ended on `copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm`, Copilot's home
+  page. The composer had shown first (no sign-in was asked for); a few seconds later the page was the home page, with
+  none, and the start was refused as "The page is not the Microsoft 365 Copilot chat".
+  - The bot now tells the chat (`/chat`, `/chat/...` on either host: `isWorkChatAddress`) from another page of the work
+    Copilot (`isCopilotOtherPage`).
+  - A box to write in counts only when it stays (`boxStays`).
+  - From another page of Copilot, the bot opens the chat on that page's host, then by the page's own link to `/chat`
+    (`arrive`). It is never taken for a sign-in.
+  - The chat's addresses are then opened on the host the chat was found on (`chatOrigin`), not through the old host's
+    redirect.
+  - When neither way gets past the page, it is said as such, with a screenshot (`not-the-chat-*.png` in `failures`).
+  - **Not verified live:** what the home page shows, whether it has a link to the chat, and whether
+    `copilot.cloud.microsoft/chat` opened directly stays on the chat. The first such start leaves a picture to find out.
+
 ## Not yet verified
 
 1. That a real Playwright-launched Edge with its own profile passes this tenant's Conditional Access. The sign-in used for this probe happened in a different browser.

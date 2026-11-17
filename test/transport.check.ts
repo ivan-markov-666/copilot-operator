@@ -922,6 +922,103 @@ try {
   });
 
   // -------------------------------------------------------------------------------------------
+  await section("Copilot's home page instead of the chat: the chat is opened from it, on the host it is on", async () => {
+    /*
+     * Operator, 2026-11-17: the start ended on "The page is not the Microsoft 365 Copilot chat. Current URL:
+     * https://copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm". The box to write in had shown — no sign-in was asked
+     * for — and seven seconds after the window opened the page was Copilot's home page, with none; the bot looked once and
+     * gave up. Served here by the page's routes, on both hosts: the old host's chat shows the box and moves to the new
+     * host's home page a moment later (`flicker`), or at once with no box (as a server's redirect would); the home page
+     * has no box, and a link to its chat that moves the page without loading it, as Copilot's own links do (`homeLink`);
+     * the new host's chat has the box, or, loaded by its address, sends to the home page as well (`chatBounces`).
+     * The transport's waits are shortened from the test side: the first look, the box staying, the other page's grace.
+     */
+    const OLD = 'https://m365.cloud.microsoft';
+    const NEW = 'https://copilot.cloud.microsoft';
+    const HOME = `${NEW}/home?es=SSR&redirfrom=mcmToCcm`;
+    const A = '55555555-6666-7777-8888-999999999999';
+    const state = { flicker: true, homeLink: true, chatBounces: false, served: [] as string[] };
+    const f = await fixture('copilot-home', '<p>blank</p>', { signInTimeoutMs: 3_000 });
+    const tr = f.transport;
+    type Timing = { firstLookMs: number; settleMs: number; otherPageMs: number; chatOrigin: string };
+    const held = tr as unknown as Timing;
+    held.firstLookMs = 6_000;
+    held.settleMs = 800;
+    held.otherPageMs = 800;
+    const link = `<nav><a id="to-chat" href="/chat?es=SSR">Chat</a></nav><script>
+      document.getElementById('to-chat').addEventListener('click', (e) => {
+        e.preventDefault();
+        history.pushState({}, '', '/chat?es=SSR');
+        document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(COMPOSER)});
+      });</script>`;
+    await f.page.route(/^https:\/\/(m365|copilot)\.cloud\.microsoft\//, async (route) => {
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      const url = new URL(route.request().url());
+      state.served.push(`${url.origin}${url.pathname}`);
+      const html = (body: string): Promise<void> => route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8">${body}` });
+      const toHome = (ms: number): string => `<script>setTimeout(() => location.replace(${JSON.stringify(HOME)}), ${ms})</script>`;
+      if (url.origin === OLD) return await html(state.flicker ? `${COMPOSER}${toHome(300)}` : toHome(0));
+      if (url.pathname === '/home') return await html(`<title>Copilot</title><p>Recent files</p>${state.homeLink ? link : ''}`);
+      if (state.chatBounces) return await html(toHome(0));
+      return await html(`<title>Copilot</title>${COMPOSER}<p id="conv">${parseChatId(url.href) ?? 'new'}</p>`);
+    });
+    const at = (): string => f.page.url().replace(/\?.*$/, '');
+    const box = async (): Promise<boolean> => await f.page.locator('#m365-chat-editor-target-element').isVisible();
+    const timed = async (run: () => Promise<unknown>): Promise<{ ms: number; error: Error | null }> => {
+      const from = Date.now();
+      const error = await run().then(() => null, (e: unknown) => e as Error);
+      return { ms: Date.now() - from, error };
+    };
+
+    // As on the work machine: the box shows, then the page is Copilot's home page.
+    let seen = f.events.length;
+    let served = state.served.length;
+    const flick = await timed(() => tr.ensureSignedIn(`${OLD}/chat`));
+    t.check('the box shown, then the home page: signed in, not refused as "not the Microsoft 365 Copilot chat"', flick.error?.message ?? null, null);
+    t.check('on the new host\'s chat, with its box', [at(), await box()], [`${NEW}/chat`, true]);
+    t.check('the chat opened by its address on the host the home page is on, and said', [named(f.events.slice(seen), 'chat-page-elsewhere').map((e) => e.detail), state.served.slice(served)], [[{ found: `${NEW}/home`, by: 'address', to: `${NEW}/chat` }], [`${OLD}/chat`, `${NEW}/home`, `${NEW}/chat`]]);
+    t.check('not taken for a sign-in', named(f.events.slice(seen), 'sign-in-required').length, 0);
+
+    // From then on, the chat's addresses on the host it was found on: not through the old host's redirect.
+    t.check('the host the chat was found on is kept', held.chatOrigin, NEW);
+    served = state.served.length;
+    await tr.newChat();
+    t.check('a new chat: straight to the new host', [state.served.slice(served), at()], [[`${NEW}/chat`], `${NEW}/chat`]);
+    served = state.served.length;
+    t.check('a conversation: straight to the new host, and opened', [await tr.openConversation(A), state.served.slice(served), parseChatId(f.page.url())], [true, [`${NEW}/chat/conversation/${A}`], A]);
+
+    // A redirect with no box at all: Copilot's home page is not waited on as a sign-in for the whole first look.
+    state.flicker = false;
+    seen = f.events.length;
+    const direct = await timed(() => tr.ensureSignedIn(`${OLD}/chat`));
+    t.check('no box at all on the way: on the chat all the same, no sign-in asked for', [direct.error?.message ?? null, at(), named(f.events.slice(seen), 'sign-in-required').length], [null, `${NEW}/chat`, 0]);
+    t.truthy('and without waiting out the first look', direct.ms < 5_000, `${direct.ms} ms`);
+
+    // The chat's address sends to the home page as well: the page's own link to its chat is followed.
+    state.flicker = true;
+    state.chatBounces = true;
+    seen = f.events.length;
+    const byLink = await timed(() => tr.ensureSignedIn(`${OLD}/chat`));
+    t.check('its address sends to the home page too: the home page\'s link to the chat', [byLink.error?.message ?? null, at(), await box()], [null, `${NEW}/chat`, true]);
+    t.check('said both ways, in order', named(f.events.slice(seen), 'chat-page-elsewhere').map((e) => e.detail?.by), ['address', 'link']);
+
+    // Neither gets past the home page: said as what it is, with a picture of it — not a sign-in, not fifteen minutes.
+    state.homeLink = false;
+    seen = f.events.length;
+    const stuck = await timed(() => tr.ensureSignedIn(`${OLD}/chat`));
+    t.truthy('neither way: refused, naming the page found and what was tried', /^Copilot showed its page https:\/\/copilot\.cloud\.microsoft\/home instead of the chat, and the chat did not open from there \(by its address on that host, nor by a link to it on the page\)\. Nothing was sent\./.test(stuck.error?.message ?? ''), stuck.error?.message);
+    t.truthy('with the full address last, as before', (stuck.error?.message ?? '').endsWith(`\nCurrent URL: ${HOME}`), stuck.error?.message);
+    const pictures = await readdir(f.failures).catch(() => [] as string[]);
+    const png = pictures.find((x) => /^not-the-chat-\d+\.png$/.test(x));
+    t.truthy('a picture of the page is kept, and the message says where', !!png && (stuck.error?.message ?? '').includes(join(f.failures, png)), { pictures, message: stuck.error?.message });
+    t.check('its address beside it', png ? (await readFile(join(f.failures, png.replace(/\.png$/, '.url.txt')), 'utf8').catch(() => '')) : '', HOME);
+    t.check('not taken for a sign-in, and over in seconds', [named(f.events.slice(seen), 'sign-in-required').length, stuck.ms < 10_000], [0, true]);
+    t.truthy('a new chat: refused the same way', /^Copilot showed its page https:\/\/copilot\.cloud\.microsoft\/home instead of the chat/.test((await rejection(tr.newChat()))?.message ?? ''));
+    const lost = await timed(() => tr.openConversation(A).then((ok) => { if (ok) throw new Error('opened'); }));
+    t.check('a conversation: not opened — the caller looks for it by its name — in seconds', [lost.error?.message ?? null, lost.ms < 10_000], [null, true]);
+  });
+
+  // -------------------------------------------------------------------------------------------
   await section('copyLastReply goes through the clipboard guard', async () => {
     /*
      * The reply is the markdown the page tries to copy, caught by CLIPBOARD_GUARD before it reaches

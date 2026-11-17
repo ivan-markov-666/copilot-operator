@@ -701,6 +701,8 @@ export async function openBrowser(
         'chat-left': `The Copilot window is no longer on this conversation (it shows ${String(detail?.found ?? 'another page')}). Going back to it before anything is sent.`,
         'chat-returned': `Back on this conversation${detail?.signedIn ? ', after the sign-in' : ''}${detail?.by === 'name' ? ', found by its name in the sidebar' : ''}. The work goes on there.`,
         'chat-lost': 'The conversation could not be opened again, by its address or by its name. Nothing was sent, and nothing went into another chat.',
+        // Copilot showed another of its pages, its home page, instead of the chat (2026-11-17): the chat opened from it.
+        'chat-page-elsewhere': `Copilot showed its page ${String(detail?.found ?? '')} instead of the chat; opening the chat ${detail?.by === 'link' ? "by the page's own link to it" : `at ${String(detail?.to ?? '')}`}.`,
       };
       for (const id of new Set(speaker.alone ? [speaker.id] : [speaker.id, sessionId])) {
         bus.publish({

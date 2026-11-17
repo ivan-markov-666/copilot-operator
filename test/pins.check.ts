@@ -40,7 +40,7 @@ import type { RunResult } from '../src/exec/runner.js';
 import { RunConfigSchema } from '../src/config/schema.js';
 import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
-import { isReplyTimeout, surfaceOfUrl } from '../src/transport/copilotTransport.js';
+import { isCopilotOtherPage, isReplyTimeout, isWorkChatAddress, surfaceOfUrl } from '../src/transport/copilotTransport.js';
 import { Url } from '../src/transport/locators.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
@@ -607,6 +607,32 @@ try {
   t.check('a sign-in page that returns to the work chat is a sign-in page', surfaceOfUrl('https://login.microsoftonline.com/common/oauth2/v2.0/authorize?redirect_uri=https%3A%2F%2Fcopilot.cloud.microsoft%2F'), 'sign-in');
   t.check('a host that only ends like one is not it', surfaceOfUrl('https://evilcopilot.cloud.microsoft.example.com/chat'), 'unknown');
   t.check('not an address', surfaceOfUrl('about:blank'), 'unknown');
+
+  /*
+   * The chat, or another of the work Copilot's pages (2026-11-17): the work machine's start ended on
+   * copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm, Copilot's home page, refused as "not the Microsoft 365
+   * Copilot chat". Another of its pages is one the chat is opened from; a sign-in page or the consumer Copilot is not.
+   */
+  console.log("\n--- the work Copilot's chat, or another of its pages ---");
+  t.check('the chat, a conversation, the list of chats, on both hosts', [
+    'https://m365.cloud.microsoft/chat',
+    'https://copilot.cloud.microsoft/chat?es=SSR&redirfrom=mcmToCcm',
+    `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`,
+    'https://m365.cloud.microsoft/chat/all?es=SSR',
+    'https://copilot.cloud.microsoft/chat/',
+  ].map((u) => [isWorkChatAddress(u), isCopilotOtherPage(u)]), [[true, false], [true, false], [true, false], [true, false], [true, false]]);
+  t.check('the home page the start ended on, and the others: another of its pages', [
+    'https://copilot.cloud.microsoft/home?es=SSR&redirfrom=mcmToCcm',
+    'https://m365.cloud.microsoft/',
+    'https://copilot.cloud.microsoft/chats',
+  ].map((u) => [isWorkChatAddress(u), isCopilotOtherPage(u)]), [[false, true], [false, true], [false, true]]);
+  t.check('a sign-in page, the consumer Copilot, an address that only carries the chat: neither', [
+    'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?redirect_uri=https%3A%2F%2Fcopilot.cloud.microsoft%2Fchat',
+    'https://copilot.microsoft.com/chat',
+    'https://www.bing.com/chat?ru=https%3A%2F%2Fm365.cloud.microsoft%2Fchat',
+    'about:blank',
+  ].map((u) => [isWorkChatAddress(u), isCopilotOtherPage(u)]), [[false, false], [false, false], [false, false], [false, false]]);
+  t.check("the chat's addresses on the host it was found on", [Url.origin + Url.newChatPath, Url.conversation(uuid, 'https://copilot.cloud.microsoft'), 'https://copilot.cloud.microsoft' + Url.conversationPath(uuid)], [Url.newChat, `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`, `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`]);
 
   /*
    * Whether a sent message landed.
