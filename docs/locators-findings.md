@@ -302,6 +302,9 @@ changing anything, reading all five entries including both inside the GPT group,
   - When the box is not found, the refusal names the locator in force and the Settings field.
   - **Not verified live** with the new box: Send (looked for by name inside the wrapper), the answer and its Copy, and a
     conversation's address.
+  - Every locator of the chat is editable since then: Settings → "The chat's locators", `copilot.chatLocators`,
+    `DefaultChatLocators`. When one finds nothing, the bot names it, keeps the page's HTML for a chatbot, and Settings
+    shows its field in red (see `docs/ui.md`, "The chat's locators, and the one that found nothing").
 
 ## Not yet verified
 

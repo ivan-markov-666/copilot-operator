@@ -215,6 +215,47 @@ export class OperatorController {
     return this.ops.recentStartFailures(unanswered === '1' || unanswered === 'true');
   }
 
+  /**
+   * The chat's locators that found nothing where the bot needed them (2026-11-17): the last time for each, whether it
+   * has been changed in Settings since, and the text for a chatbot. Read by the banner on every page and by Settings.
+   */
+  @Get('locators/failures')
+  locatorFailures(): Promise<unknown> {
+    return this.ops.listLocatorFailures();
+  }
+
+  /**
+   * The page's HTML kept with one, to hand to a chatbot. Always a download, never a page of this origin: what the page
+   * held is not this program's, however much of it was taken out.
+   */
+  @Get('locators/failures/:key/html')
+  async locatorFailureHtml(@Param('key') key: string, @Res() res: Response): Promise<void> {
+    try {
+      const { fileName, content } = await this.ops.locatorFailureHtml(key);
+      res.type('application/octet-stream');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.setHeader('x-content-type-options', 'nosniff');
+      res.send(Buffer.from(content, 'utf8'));
+    } catch (e) {
+      failText(res, e);
+    }
+  }
+
+  /**
+   * "Check the locators" (2026-11-17): the Copilot window opened, each of the chat's locators looked for, and what each
+   * found. Takes as long as the window takes to open, a sign-in included.
+   */
+  @Post('locators/check')
+  checkLocators(): Promise<unknown> {
+    return this.ops.checkLocators().catch(fail);
+  }
+
+  /** Closed by the operator: its banner and its red go. */
+  @Delete('locators/failures/:key')
+  async dismissLocatorFailure(@Param('key') key: string): Promise<{ dismissed: boolean }> {
+    return { dismissed: await this.ops.locatorFailures.dismiss(key) };
+  }
+
   /** One of them as a text file: the error, where it stopped, the run's record, the events and the console. */
   @Get('start/failures/:id/report')
   async startFailureReport(@Param('id') id: string, @Res() res: Response): Promise<void> {

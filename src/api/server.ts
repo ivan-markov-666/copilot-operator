@@ -167,7 +167,11 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
     throw e;
   });
 
-  await app.listen(PORT, '127.0.0.1');
+  // A port that cannot be taken (in use, or reserved by Windows: EACCES) closes what was opened, so a caller can try another.
+  await app.listen(PORT, '127.0.0.1').catch(async (e: unknown) => {
+    await app.close().catch(() => undefined);
+    throw e;
+  });
 
   // Close whatever the previous process left open before anyone can look at it, rather than
   // waiting for the first request to trigger it.

@@ -569,7 +569,7 @@ export default function QueuePage() {
  */
 function BusyLine({ busy, running }: { busy: QueueBusy; running: boolean }) {
   const { t } = useT();
-  const what = busy.kind === 'chat' ? t('q.busyChat', { title: busy.title }) : busy.kind === 'models' ? t('q.busyModels') : t('q.busyLogin');
+  const what = busy.kind === 'chat' ? t('q.busyChat', { title: busy.title }) : busy.kind === 'models' ? t('q.busyModels') : busy.kind === 'locators' ? t('q.busyLocators') : t('q.busyLogin');
   return (
     <p className="small queue-busy" role="status">
       <span className="wb-live" aria-hidden="true" /> {t(running ? 'q.busyRunning' : 'q.busyIdle', { what })}{' '}

@@ -3,6 +3,31 @@
  */
 import type { ChatKey, PickerKey } from './pickerLocators';
 
+/**
+ * A chat locator that found nothing where the bot needed it (2026-11-17): which, when, as it was in force, what the
+ * bot was doing, whether the work stopped on it; whether its locator has been changed in Settings since; whether the
+ * page's HTML can be downloaded; and the text that asks a chatbot for the right one.
+ */
+/** What "Check the locators" found for one (2026-11-17); see `LocatorCheck` in the transport. */
+export type LocatorCheckRef = {
+  key: ChatKey;
+  status: 'found' | 'none' | 'not-here';
+  count: number;
+  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat';
+};
+
+export type LocatorFailureRef = {
+  key: ChatKey;
+  locator: string;
+  at: string;
+  why: string;
+  stopped: boolean;
+  html: boolean;
+  url?: string;
+  changed: boolean;
+  prompt: string;
+};
+
 export const API = process.env.NEXT_PUBLIC_COP_API ?? 'http://127.0.0.1:4000/api';
 
 /** The address of a session's page, with an optional in-page anchor (a task id, `new-task`). */
@@ -219,7 +244,7 @@ export type ParkedAnswerInput =
   | { resume: true }
   | { stop: true };
 /** What has the browser now, other than the queue's own task: the queue's next task starts after it (2026-10-25). */
-export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' };
+export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' } | { kind: 'locators' };
 /** `parkAfterSec`: how long a task may wait for the operator before it is set aside (2026-10-26); 0: as long as it takes. */
 export type Queue = { items: QueueItem[]; running: boolean; updatedAt: string; busy?: QueueBusy; parkAfterSec?: number };
 
@@ -1429,6 +1454,10 @@ export const api = {
   start: (id: string, mode: 'confirm' | 'unattended') =>
     call<StartReply>(`/sessions/${id}/start`, { method: 'POST', body: JSON.stringify({ mode }) }, { timeoutMs: 120_000 }),
   /** Starts that did not get as far as a first task, newest first. */
+  locatorFailures: () => call<LocatorFailureRef[]>('/locators/failures'),
+  checkLocators: () => call<{ checkedAt: string; results: LocatorCheckRef[] }>('/locators/check', { method: 'POST', body: '{}' }, { timeoutMs: null }),
+  locatorHtmlUrl: (key: string) => withToken(`${API}/locators/failures/${encodeURIComponent(key)}/html`),
+  dismissLocatorFailure: (key: string) => call<{ dismissed: boolean }>(`/locators/failures/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   startFailures: (unansweredOnly = false) => call<StartFailureRef[]>(`/start/failures${unansweredOnly ? '?unanswered=1' : ''}`),
   /** One of them as a text file: the error, the run's record, the events and the console of those moments. */
   startFailureUrl: (id: string) => withToken(`${API}/start/failures/${encodeURIComponent(id)}/report`),

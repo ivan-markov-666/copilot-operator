@@ -101,7 +101,7 @@ export function parkAfterMs(q: Pick<Queue, 'parkAfterSec'>): number | null {
 }
 
 /** Work that has the browser: a message of the chat (its conversation and what it is), a reading of the models, the sign-in. */
-export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' };
+export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' } | { kind: 'locators' };
 
 export const MAX_QUEUE_ITEMS = 50;
 

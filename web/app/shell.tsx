@@ -15,6 +15,7 @@ import { AwaitingSpotlight } from './awaiting';
 import { SettingsTakenNotice } from './settingsTaken';
 import { DoneLabel } from './doneLabel';
 import { StartFailureBanner } from './startFailure';
+import { LocatorFailureBanner } from './locatorFailure';
 import { Logo } from './logo';
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -24,6 +25,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <div className="wb-root">
         <GlobalApprovals />
         <StartFailureBanner />
+        <LocatorFailureBanner />
         <main id="main" className="wb-main">
           {children}
         </main>
@@ -50,6 +52,8 @@ export function Shell({ children }: { children: ReactNode }) {
       <GlobalApprovals />
       {/* And a run that was accepted and then could not begin, with what happened as a file. */}
       <StartFailureBanner />
+      {/* And a locator of the chat that found nothing, with the way to its field in Settings (2026-11-17). */}
+      <LocatorFailureBanner />
       <main id="main">{children}</main>
       <AwaitingSpotlight />
       <SettingsTakenNotice />

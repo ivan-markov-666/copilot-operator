@@ -1010,9 +1010,10 @@ try {
     t.truthy('neither way: refused, naming the page found and what was tried', /^Copilot showed its page https:\/\/copilot\.cloud\.microsoft\/home instead of the chat, and the chat did not open from there \(by its address on that host, nor by a link to it on the page\)\. Nothing was sent\./.test(stuck.error?.message ?? ''), stuck.error?.message);
     t.truthy('with the full address last, as before', (stuck.error?.message ?? '').endsWith(`\nCurrent URL: ${HOME}`), stuck.error?.message);
     const pictures = await readdir(f.failures).catch(() => [] as string[]);
-    const png = pictures.find((x) => /^not-the-chat-\d+\.png$/.test(x));
-    t.truthy('a picture of the page is kept, and the message says where', !!png && (stuck.error?.message ?? '').includes(join(f.failures, png)), { pictures, message: stuck.error?.message });
-    t.check('its address beside it', png ? (await readFile(join(f.failures, png.replace(/\.png$/, '.url.txt')), 'utf8').catch(() => '')) : '', HOME);
+    const png = pictures.find((x) => /^locator-composer-\d+\.png$/.test(x));
+    const html = pictures.find((x) => /^locator-composer-\d+\.html$/.test(x));
+    t.truthy('a picture of the page and its HTML are kept, and the message says where', !!png && !!html && (stuck.error?.message ?? '').includes(join(f.failures, png)) && (stuck.error?.message ?? '').includes(join(f.failures, html)), { pictures, message: stuck.error?.message });
+    t.check("said as the box's locator (2026-11-17: it was the box)", [stuck.error?.name, (stuck.error as { key?: string } | null)?.key, named(f.events.slice(seen), 'locator-missing').map((e) => [e.detail?.key, e.detail?.stopped])], ['LocatorMissing', 'composer', [['composer', true]]]);
     t.check('not taken for a sign-in, and over in seconds', [named(f.events.slice(seen), 'sign-in-required').length, stuck.ms < 10_000], [0, true]);
     t.truthy('a new chat: refused the same way', /^Copilot showed its page https:\/\/copilot\.cloud\.microsoft\/home instead of the chat/.test((await rejection(tr.newChat()))?.message ?? ''));
     const lost = await timed(() => tr.openConversation(A).then((ok) => { if (ok) throw new Error('opened'); }));
@@ -1086,6 +1087,141 @@ try {
     // One saved that cannot be used: said, and the default is used.
     const e = await open('box-bad-xpath', { composer: '//div/parent:span' });
     t.check('a saved locator that cannot be used: the default, and said why', [await rejection(e.transport.ensureSignedIn(`${OLD}/chat`)).then((x) => x?.message ?? null), named(e.events, 'chat-locator-not-used').map((x) => x.detail?.problem)], [null, ['the chat\'s composer locator in Settings is not used, "parent:" needs two colons: parent::']]);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section("a locator that finds nothing: which one, the page's HTML for a chatbot, and a message never sent twice", async () => {
+    /*
+     * Operator, 2026-11-17: "a mechanism that detects which locator exactly the bot failed on … the bot saves the page's
+     * HTML and gives it to the user, to give to a chatbot". Every place the bot needs an element of the chat says, when
+     * its locator finds nothing, which locator it was (`LocatorMissing`, `locator-missing`), and keeps a picture and the
+     * page's HTML with scripts, styles, handlers and the sidebar's conversation names taken out. The transport's waits are
+     * shortened from the test side.
+     */
+    type Waits = { sendWaitMs: number; acceptMs: number; turnsGraceMs: number; answerStillMs: number };
+    const shorten = (x: CopilotTransport): void => {
+      Object.assign(x as unknown as Waits, { sendWaitMs: 1_000, acceptMs: 1_500, turnsGraceMs: 800, answerStillMs: 1_000 });
+    };
+    const BOX = '<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span>';
+    const SIDE = '<nav><a href="/chat/conversation/11111111-2222-3333-4444-555555555555" aria-label="Payroll secrets">Payroll secrets</a></nav>';
+    const EXTRA = '<script>window.ran = 1;</script><style>.x{color:red}</style><div onclick="window.ran = 2" style="color:blue" id="keep-me">x</div>';
+    const filesOf = async (f: Fixture, key: string): Promise<{ png?: string; html?: string }> => {
+      const all = await readdir(f.failures).catch(() => [] as string[]);
+      const png = all.find((x) => new RegExp(`^locator-${key}-\\d+\\.png$`).test(x));
+      const html = all.find((x) => new RegExp(`^locator-${key}-\\d+\\.html$`).test(x));
+      return { ...(png ? { png: join(f.failures, png) } : {}), ...(html ? { html: join(f.failures, html) } : {}) };
+    };
+
+    // Send: no button by its locator.
+    const a = await fixture('loc-send', `${SIDE}${BOX}</div>${EXTRA}`);
+    shorten(a.transport);
+    const noSend = await rejection(a.transport.send('hello'));
+    t.check('no Send: LocatorMissing for "send", said as stopping the work', [noSend?.name, (noSend as { key?: string } | null)?.key, named(a.events, 'locator-missing').map((e) => [e.detail?.key, e.detail?.stopped])], ['LocatorMissing', 'send', [['send', true]]]);
+    t.truthy('its message: what it is, the locator in force, where Settings has it', /^Not found on Copilot's page: the button that sends the typed message.*The "send" locator found nothing after the message was written in the box, within 1 s\. In force: \[data-test-id="chat-input-wrapper"\] >> role=button\[name="Send"\] \(Settings → "The chat's locators"\)\./s.test(noSend?.message ?? ''), noSend?.message);
+    const sendFiles = await filesOf(a, 'send');
+    const page = sendFiles.html ? await readFile(sendFiles.html, 'utf8') : '';
+    t.truthy('a picture and the HTML kept, and named in the message', !!sendFiles.png && !!sendFiles.html && (noSend?.message ?? '').includes(sendFiles.html), { sendFiles, message: noSend?.message });
+    t.check('the HTML: the box and its wrapper kept; no script, no style, no handler, no conversation name', [page.includes('chat-input-wrapper'), page.includes('id="keep-me"'), /<script/i.test(page), /<style/i.test(page), /onclick/i.test(page), /style=/i.test(page), page.includes('Payroll secrets')], [true, true, false, false, false, false, false]);
+    t.check('and the page itself untouched', await a.page.evaluate(() => [document.querySelectorAll('script').length > 0, !!document.querySelector('nav')]), [true, true]);
+
+    // The same page with Send by Settings' own locator.
+    const b = await fixture('loc-send-own', `${BOX}</div><button id="my-send" onclick="window.sent = (window.sent || 0) + 1">go</button>`, { chatLocators: { send: '#my-send' } });
+    await b.transport.send('hello');
+    t.check("Settings' own Send locator: used", await value<number>(b.page, 'sent'), 1);
+
+    // Sent — the box emptied — and nothing of the conversation found: said, and not sent a second time.
+    const c = await fixture('loc-turn', `${BOX}<button aria-label="Send" onclick="window.sends = (window.sends || 0) + 1; document.getElementById('m365-chat-editor-target-element').textContent = ''; document.body.insertAdjacentHTML('beforeend', '<div class=&quot;msg&quot;>hello</div>')">send</button></div>`);
+    shorten(c.transport);
+    const noTurn = await rejection(c.transport.sendAndConfirm('hello'));
+    t.check('nothing of the conversation found after a send: LocatorMissing for "turn"', [noTurn?.name, (noTurn as { key?: string } | null)?.key], ['LocatorMissing', 'turn']);
+    t.check('and the message was sent once, not again', await value<number>(c.page, 'sends'), 1);
+
+    // The answer: begun, then standing still with no Copy anywhere.
+    const d = await fixture('loc-copy', `${BOX}</div><div data-testid="m365-chat-llm-web-ui-chat-message">you</div><div data-testid="copilot-message-div">An answer, written and done.</div>`);
+    shorten(d.transport);
+    const noCopy = await rejection(d.transport.waitForReply(0));
+    t.check('an answer standing still with no Copy anywhere: LocatorMissing for "copy", before the reply time', [noCopy?.name, (noCopy as { key?: string } | null)?.key], ['LocatorMissing', 'copy']);
+    const e = await fixture('loc-answer', `${BOX}</div><div data-testid="m365-chat-llm-web-ui-chat-message">you</div><div class="reply">An answer the locator does not find.</div>`);
+    shorten(e.transport);
+    t.check('a turn begun and no answer found at all: LocatorMissing for "answer"', ((await rejection(e.transport.waitForReply(0))) as { key?: string } | null)?.key, 'answer');
+    const g = await fixture('loc-turns-none', `${BOX}</div><div class="msg">you</div>`);
+    shorten(g.transport);
+    t.check('not one message of the conversation found while the answer is awaited: LocatorMissing for "turn"', ((await rejection(g.transport.waitForReply(0))) as { key?: string } | null)?.key, 'turn');
+    // A Copy missing from the newest answer only is Copilot's, not the locator's: the wait goes on to the reply time.
+    const h = await fixture('loc-copy-elsewhere', `${BOX}</div><div data-testid="m365-chat-llm-web-ui-chat-message">you</div><div data-testid="copilot-message-div">old <button data-testid="CopyButtonTestId" aria-label="Copy">c</button></div><div data-testid="m365-chat-llm-web-ui-chat-message">2</div><div data-testid="copilot-message-div">new, no copy yet</div>`, { replyTimeoutMs: 2_500 });
+    shorten(h.transport);
+    t.check('a Copy only the newest answer lacks: the reply time, not the locator', (await rejection(h.transport.waitForReply(1)))?.name, 'ReplyTimeoutError');
+
+    // A conversation's name: the work goes on, and the locator is said once, as not stopping it; the sidebar is kept, names out.
+    const k = await fixture('loc-rename', `${BOX}</div>${SIDE}`);
+    shorten(k.transport);
+    const named1 = await k.transport.nameChat('11111111-2222-3333-4444-555555555555', 'op/x/name', { waitMs: 1_000 });
+    t.check('naming without its "More" button: not named, the work goes on', named1, false);
+    const said = named(k.events, 'locator-missing');
+    t.check('said once, as the "More" locator, not stopping the work', said.map((x) => [x.detail?.key, x.detail?.stopped]), [['chatMore', false]]);
+    const sideHtml = said[0]?.detail?.html ? await readFile(String(said[0]!.detail!.html), 'utf8') : '';
+    t.check("the sidebar kept for a sidebar locator, the conversation's name put out", [sideHtml.includes('/chat/conversation/11111111-2222-3333-4444-555555555555'), sideHtml.includes('Payroll secrets'), sideHtml.includes('chat title')], [true, false, true]);
+    await k.transport.nameChat('11111111-2222-3333-4444-555555555555', 'op/x/name', { waitMs: 1_000 });
+    t.check('a second try in the same window: not said again', named(k.events, 'locator-missing').length, 1);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  await section('"Check the locators": each looked for in the chat, the newest conversation and its menu, only read', async () => {
+    /*
+     * Operator, 2026-11-17: "make the 'Check the locators' button too". Served by the page's routes as Copilot has it: a
+     * new chat whose Send shows only once the box holds text, a sidebar with two conversations, the newest one's page
+     * with its messages, answer and Copy, and its "More" button opening a menu with "Rename". The check reads and looks:
+     * the letter typed for Send is taken out again, nothing is sent, the menu is closed again, the dialog never opened.
+     */
+    const A = '66666666-7777-8888-9999-aaaaaaaaaaaa';
+    const B = '77777777-8888-9999-aaaa-bbbbbbbbbbbb';
+    const HOME = 'https://m365.cloud.microsoft/chat?es=SSR';
+    const state = { conversations: true };
+    const side = (): string => (state.conversations ? `<nav><a href="/chat/conversation/${A}" aria-label="newest">newest</a><a href="/chat/conversation/${B}" aria-label="older">older</a></nav>` : '<nav></nav>');
+    const chat = (): string =>
+      `<script>window.sends = 0;</script>${side()}<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span>` +
+      `<button aria-label="Send" hidden onclick="window.sends += 1">send</button></div>` +
+      `<script>const box = document.getElementById('m365-chat-editor-target-element'); box.addEventListener('input', () => { document.querySelector('[aria-label=Send]').hidden = !box.textContent.trim(); });</script>`;
+    const conversation = (): string =>
+      `${chat()}<div data-testid="m365-chat-llm-web-ui-chat-message"><div id="user-message-1">hello</div></div><div data-testid="m365-chat-llm-web-ui-chat-message"><div data-testid="copilot-message-div">hi <button data-testid="CopyButtonTestId" aria-label="Copy">c</button></div></div>` +
+      `<button data-chat-history-more-button-conversation-id="${A}" aria-label="More" onclick="document.body.insertAdjacentHTML('beforeend', '<div role=&quot;menu&quot;><div role=&quot;menuitem&quot;>Rename</div></div>')">…</button>` +
+      `<script>document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelector('[role=menu]')?.remove(); });</script>`;
+    const open = async (name: string, chatLocators?: Record<string, string>): Promise<Fixture> => {
+      const f = await fixture(name, '<p>blank</p>', { signInTimeoutMs: 2_000, ...(chatLocators ? { chatLocators } : {}) });
+      Object.assign(f.transport as unknown as { firstLookMs: number; settleMs: number }, { firstLookMs: 4_000, settleMs: 300 });
+      await f.page.route(/^https:\/\/m365\.cloud\.microsoft\//, async (route) => {
+        if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+        const id = parseChatId(route.request().url());
+        return await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8">${id ? conversation() : chat()}` });
+      });
+      await f.transport.ensureSignedIn(HOME);
+      return f;
+    };
+    const table = (rs: Array<{ key: string; status: string; count: number; note?: string }>): string[] => rs.map((r) => `${r.key}:${r.status}${r.count ? `:${r.count}` : ''}${r.note ? `:${r.note}` : ''}`);
+
+    const a = await open('check-all');
+    const found = await a.transport.checkLocators();
+    t.check('each looked for: found where it is, the rest said as not on the page then, and why', table(found), [
+      'composer:found:1', 'send:found:1', 'userMessage:found:1', 'turn:found:2', 'answer:found:1', 'copy:found:1', 'stop:not-here:writing',
+      'conversationLink:found:2', 'chatMore:found:1', 'renameItem:found:1', 'renameInput:not-here:dialog', 'renameSave:not-here:dialog',
+    ]);
+    t.check('only read: nothing sent, the letter for Send taken out, the menu closed, on the newest conversation', [await value<number>(a.page, 'sends'), await a.page.locator('#m365-chat-editor-target-element').innerText(), await a.page.locator('[role=menu]').count(), parseChatId(a.page.url())], [0, '', 0, A]);
+    t.check('nothing said as missing', named(a.events, 'locator-missing').length, 0);
+
+    // One set in Settings that finds nothing: said, as a failure the work went on without, its HTML kept.
+    const b = await open('check-bad', { copy: '[data-testid="NoSuchCopy"]' });
+    const bad = await b.transport.checkLocators();
+    t.check("Settings' own Copy finding nothing: not found, and said", [table(bad).find((x) => x.startsWith('copy:')), named(b.events, 'locator-missing').map((e) => [e.detail?.key, e.detail?.stopped, !!e.detail?.html])], ['copy:none', [['copy', false, true]]]);
+
+    // No conversation in the sidebar: what only a conversation holds is not looked for, and said so.
+    state.conversations = false;
+    const c = await open('check-empty');
+    const empty = await c.transport.checkLocators();
+    t.check('no conversation: the sidebar\'s link not found; the answer\'s and the menu\'s not on the page then', table(empty).filter((x) => /^(conversationLink|turn|userMessage|answer|copy|chatMore|renameItem):/.test(x)), [
+      'userMessage:not-here:noConversation', 'turn:not-here:noConversation', 'answer:not-here:noConversation', 'copy:not-here:noConversation',
+      'conversationLink:none', 'chatMore:not-here:noConversation', 'renameItem:not-here:noConversation',
+    ]);
+    state.conversations = true;
   });
 
   // -------------------------------------------------------------------------------------------

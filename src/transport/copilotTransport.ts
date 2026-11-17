@@ -18,7 +18,12 @@ import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
 import { landed } from './acceptance.js';
 import {
   Blocker,
+  CHAT_ID,
+  CHAT_LOCATOR_KEYS,
+  ChatLocatorGroupOf,
+  ChatLocatorWhat,
   Css,
+  DefaultChatLocators,
   fillLocator,
   Label,
   Model,
@@ -41,6 +46,7 @@ import {
 } from './locators.js';
 import { acquireProfileLock, type LockHandle } from './profileLock.js';
 import { chatNameForms, parseChatId } from './chatSession.js';
+import { strippedPageHtml } from './pageHtml.js';
 
 /**
  * The chat did not finish a reply within `copilot.replyTimeoutSec`.
@@ -480,6 +486,39 @@ declare global {
   }
 }
 
+/**
+ * A locator of the chat that found nothing where the bot needed it (operator, 2026-11-17: "a mechanism that detects
+ * which locator exactly the bot failed on, so we can easily see which locator has to be updated"): which one, as it
+ * was in force, and the page's HTML and picture kept for finding the right one. The runner says it like any other
+ * error; the transport has said it already (`locator-missing`), which the API keeps for Settings (`LocatorFailures`).
+ */
+export class LocatorMissing extends Error {
+  constructor(
+    readonly key: ChatLocatorKey,
+    readonly locator: string,
+    message: string,
+    readonly html?: string,
+    readonly picture?: string,
+  ) {
+    super(message);
+    this.name = 'LocatorMissing';
+  }
+}
+
+/**
+ * What "Check the locators" found for one of the chat's locators (2026-11-17): something (`found`, how many), nothing
+ * (`none`: its field goes red), or not looked for because what it finds was not on the page then (`not-here`): Stop
+ * shows only while Copilot writes (`writing`), the rename dialog is not opened (`dialog`), no conversation to look in
+ * (`noConversation`), no "More" button to open its menu with (`noMenu`). `byName`: the default "More" locator found
+ * nothing and the button was found by its name in the conversation's row, as the bot finds it then.
+ */
+export type LocatorCheck = {
+  key: ChatLocatorKey;
+  status: 'found' | 'none' | 'not-here';
+  count: number;
+  note?: 'writing' | 'dialog' | 'noConversation' | 'noMenu' | 'byName' | 'noChat';
+};
+
 export class CopilotTransport {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
@@ -527,6 +566,16 @@ export class CopilotTransport {
   private settleMs = 2_000;
   /** How long another page of the work Copilot is given to turn into its chat on its own before the bot opens the chat. */
   private otherPageMs = 3_000;
+  /** How long the answer is waited for with not one message of the conversation found, before the `turn` locator is said. */
+  private turnsGraceMs = 20_000;
+  /** How long Copilot's newest answer may stand still, not written and not finished, before its locator is said. */
+  private answerStillMs = 60_000;
+  /** The locators said already in this window, where the work went on without them: said once. */
+  private readonly warned = new Set<ChatLocatorKey>();
+  /** How long Send is waited for once the message is in the box. */
+  private sendWaitMs = 20_000;
+  /** How long a message sent is waited for in the conversation before it is taken as not accepted. */
+  private acceptMs = 30_000;
 
   constructor(private readonly opts: TransportOptions) {
     const { locators, problems } = resolvePickerLocators(opts.pickerLocators);
@@ -778,7 +827,7 @@ export class CopilotTransport {
    */
   private composer(): Locator {
     return this.p
-      .locator(playwrightSelector(this.chatLocators.composer))
+      .locator(this.sel('composer'))
       .first()
       .locator("xpath=descendant-or-self::*[(@contenteditable and @contenteditable != 'false') or self::textarea]")
       .first();
@@ -790,6 +839,147 @@ export class CopilotTransport {
       `If the picture shows the chat with its box to write in, the box's locator does not find it: ${this.chatLocators.composer} ` +
       '(Settings → "The chat\'s locators" → "Box to write in").'
     );
+  }
+
+  /** A chat locator in force, as Playwright takes it; `chatId` goes where a template has its place. */
+  private sel(key: ChatLocatorKey, chatId?: string): string {
+    const s = this.chatLocators[key];
+    return playwrightSelector(chatId === undefined ? s : s.split(CHAT_ID).join(chatId));
+  }
+
+  /** What a chat locator in force finds in the page. */
+  private el(key: ChatLocatorKey, chatId?: string): Locator {
+    return this.p.locator(this.sel(key, chatId));
+  }
+
+  /**
+   * A locator that found nothing where the bot needed it (2026-11-17): a picture of the page and its HTML for a chatbot
+   * to find the right one in (scripts, styles and the sidebar out — see `pageHtml.ts`), kept in the failures folder, and
+   * said (`locator-missing`, which the API keeps so Settings can show the field in red). The error to throw when the
+   * work cannot go on without it; `stopped: false` when it goes on (a conversation's name). `message` is given the
+   * sentence naming the files.
+   */
+  private async locatorMissing(
+    key: ChatLocatorKey,
+    why: string,
+    opts: { stopped?: boolean; chatId?: string; message?: (files: string) => string } = {},
+  ): Promise<LocatorMissing> {
+    const stopped = opts.stopped ?? true;
+    const locator = this.chatLocators[key];
+    const open = !!this.page && !this.page.isClosed();
+    const dir = join(this.opts.transportDir, '..', 'failures');
+    const tag = `locator-${key}-${Date.now()}`;
+    let picture: string | undefined;
+    let html: string | undefined;
+    if (open) {
+      await mkdir(dir, { recursive: true }).catch(() => undefined);
+      const png = join(dir, `${tag}.png`);
+      if (await this.p.screenshot({ path: png, fullPage: true }).then(() => true, () => false)) picture = png;
+      const text = await this.p.evaluate(strippedPageHtml, ChatLocatorGroupOf[key] === 'conversations').catch(() => '');
+      const file = join(dir, `${tag}.html`);
+      if (text && (await writeFile(file, text, 'utf8').then(() => true, () => false))) html = file;
+    }
+    const url = open ? whereIs(this.p.url()) : undefined;
+    this.emit('locator-missing', { key, locator, why, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}) });
+    const files = [picture ? `A picture of the page: ${picture}.` : '', html ? `The page's HTML, for a chatbot to find the right locator in: ${html}.` : ''].filter(Boolean).join(' ');
+    const message =
+      opts.message?.(files) ??
+      `Not found on Copilot's page: ${ChatLocatorWhat[key]}. The "${key}" locator found nothing ${why}. In force: ${locator} ` +
+        `(Settings → "The chat's locators"). ${files}`.trim();
+    return new LocatorMissing(key, locator, message, html, picture);
+  }
+
+  /** A locator that found nothing where the work goes on without it (a conversation's name): said once a window. */
+  private async warnLocator(key: ChatLocatorKey, why: string, chatId?: string): Promise<void> {
+    if (this.warned.has(key) || !this.page || this.page.isClosed()) return;
+    if ((await this.el(key, chatId).count().catch(() => 1)) > 0) return;
+    this.warned.add(key);
+    await this.locatorMissing(key, why, { stopped: false, ...(chatId ? { chatId } : {}) });
+  }
+
+  /**
+   * Looks for each of the chat's locators in force in the page (operator, 2026-11-17: "make the 'Check the locators'
+   * button too"), and says for each what it found. Only reads and looks:
+   * - the chat as it was opened: its box, and its Send (one letter typed and taken out again, if Send shows only with
+   *   text; nothing is sent);
+   * - the sidebar;
+   * - the newest conversation in it, opened by its address: its messages, its answers, their Copy;
+   * - its "More" button, whose menu is opened and closed again with Escape, for "Rename".
+   * The rename dialog is not opened, and Stop shows only while Copilot writes: those are said as not on the page then.
+   * One that finds nothing is said as a failure the work went on without (`locator-missing`, its HTML kept), so its
+   * field goes red in Settings.
+   */
+  async checkLocators(): Promise<LocatorCheck[]> {
+    const out = new Map<ChatLocatorKey, LocatorCheck>();
+    const why = 'when the locators were checked ("Check the locators" in Settings)';
+    const count = async (key: ChatLocatorKey, chatId?: string): Promise<number> => await this.el(key, chatId).count().catch(() => 0);
+    const record = async (key: ChatLocatorKey, n: number, chatId?: string, note?: LocatorCheck['note']): Promise<number> => {
+      out.set(key, { key, status: n > 0 ? 'found' : 'none', count: n, ...(note ? { note } : {}) });
+      if (n === 0) await this.locatorMissing(key, why, { stopped: false, ...(chatId ? { chatId } : {}) }).catch(() => undefined);
+      return n;
+    };
+    const look = async (key: ChatLocatorKey, chatId?: string): Promise<number> => await record(key, await count(key, chatId), chatId);
+    const notHere = (key: ChatLocatorKey, note: NonNullable<LocatorCheck['note']>): void => {
+      out.set(key, { key, status: 'not-here', count: 0, note });
+    };
+
+    // The chat as it was opened: its box, and its Send.
+    const box = await look('composer');
+    let send = await count('send');
+    if (send === 0 && box > 0) {
+      // Send shown only once the box holds text: one letter, taken out again. Nothing is sent.
+      await this.composer().fill('x').catch(() => undefined);
+      await this.p.waitForTimeout(500);
+      send = await count('send');
+      await this.composer().fill('').catch(() => undefined);
+    }
+    await record('send', send);
+    // Stop shows only while Copilot writes.
+    const stop = await count('stop');
+    if (stop > 0) out.set('stop', { key: 'stop', status: 'found', count: stop });
+    else notHere('stop', 'writing');
+
+    // The sidebar, and the newest conversation in it, opened by its address: only read.
+    const links = await look('conversationLink');
+    const href = links > 0 ? await this.el('conversationLink').first().getAttribute('href').catch(() => null) : null;
+    const chatId = href ? parseChatId(href) : null;
+    const opened = chatId ? await this.openConversation(chatId).catch(() => false) : false;
+    if (opened && chatId) {
+      for (const key of ['turn', 'userMessage', 'answer', 'copy'] as const) await look(key);
+      // Its "More" button: by the locator; at its default and finding nothing, by its name in the row, as the bot does.
+      let more = this.el('chatMore', chatId).first();
+      let found = await count('chatMore', chatId);
+      let note: LocatorCheck['note'];
+      if (found === 0 && this.chatLocators.chatMore === DefaultChatLocators.chatMore) {
+        const row = this.el('conversationLink').and(this.p.locator(`[href*="${chatId}"]`)).first();
+        const byName = row.locator('xpath=ancestor-or-self::*[self::li or self::div][1]').getByRole('button', { name: Rename.moreButtonLabel, exact: true });
+        const n = await byName.count().catch(() => 0);
+        if (n > 0) {
+          more = byName.first();
+          found = n;
+          note = 'byName';
+        }
+      }
+      await record('chatMore', found, chatId, note);
+      if (found > 0) {
+        await this.press(more).catch(() => undefined);
+        await this.el('renameItem').first().waitFor({ state: 'visible', timeout: 3_000 }).catch(() => undefined);
+        await look('renameItem');
+        await this.dismissOpenMenu().catch(() => undefined);
+      } else notHere('renameItem', 'noMenu');
+    } else {
+      for (const key of ['turn', 'userMessage', 'answer', 'copy', 'chatMore', 'renameItem'] as const) notHere(key, 'noConversation');
+    }
+    // The rename dialog is not opened: renaming is not this check's to do.
+    notHere('renameInput', 'dialog');
+    notHere('renameSave', 'dialog');
+    this.emit('locators-checked', { found: [...out.values()].filter((c) => c.status === 'found').length, none: [...out.values()].filter((c) => c.status === 'none').map((c) => c.key) });
+    return CHAT_LOCATOR_KEYS.map((k) => out.get(k) ?? { key: k, status: 'not-here', count: 0 });
+  }
+
+  /** Whether the box to write in is empty: a message clicked away with Send leaves it so. */
+  private async boxIsEmpty(): Promise<boolean> {
+    return ((await this.composer().innerText({ timeout: 2_000 }).catch(() => 'unread')) ?? '').trim() === '';
   }
 
   /** Whether the composer shows within `ms`, looked for a second at a time; a Stop ends the wait with `StoppedByOperator`. */
@@ -910,15 +1100,13 @@ export class CopilotTransport {
    */
   private async notTheChat(): Promise<Error> {
     const url = this.p.url();
-    const dir = join(this.opts.transportDir, '..', 'failures');
-    const tag = `not-the-chat-${Date.now()}`;
-    await this.dumpFailure(dir, tag).catch(() => undefined);
-    return new Error(
-      `Copilot showed its page ${whereIs(url)} instead of the chat, and the chat did not open from there ` +
-        `(by its address on that host, nor by a link to it on the page). Nothing was sent. A picture of the page: ${join(dir, `${tag}.png`)}. ` +
-        `${this.composerHint()}
+    // Most likely the box itself (2026-11-17: Copilot's chat was at /home, its box changed): said as the box's locator.
+    return await this.locatorMissing('composer', `on ${whereIs(url)}, which did not turn into the chat`, {
+      message: (files) =>
+        `Copilot showed its page ${whereIs(url)} instead of the chat, and the chat did not open from there ` +
+        `(by its address on that host, nor by a link to it on the page). Nothing was sent. ${files} ${this.composerHint()}
 Current URL: ${url}`,
-    );
+    });
   }
 
   /**
@@ -1015,14 +1203,11 @@ Current URL: ${url}`,
       'sign-in': 'The profile is signed out. Run "cop login".',
       unknown: 'The page is not the Microsoft 365 Copilot chat.',
     };
-    let picture = '';
     if (where === 'unknown') {
-      const dir = join(this.opts.transportDir, '..', 'failures');
-      const tag = `not-the-chat-${Date.now()}`;
-      await this.dumpFailure(dir, tag).catch(() => undefined);
-      picture = ` A picture of the page: ${join(dir, `${tag}.png`)}. ${this.composerHint()}`;
+      throw await this.locatorMissing('composer', `on ${whereIs(url)}`, { message: (files) => `${explain.unknown} ${files} ${this.composerHint()}
+Current URL: ${url}` });
     }
-    throw new Error(`${explain[where] ?? explain.unknown}${picture}
+    throw new Error(`${explain[where] ?? explain.unknown}
 Current URL: ${url}`);
   }
 
@@ -1162,8 +1347,13 @@ Current URL: ${url}`);
     await this.p.goto(this.chatAddress(Url.newChatPath), { waitUntil: 'domcontentloaded' });
     // Another of Copilot's pages instead (2026-11-17): the chat opened from it, and said so when it would not.
     if ((await this.arrive(Url.newChatPath, undefined, '')) === 'elsewhere') throw await this.notTheChat();
-    // A chat slow to load: the rest of the minute it was always given (the page's default timeout).
-    await this.composer().waitFor({ state: 'visible', timeout: 45_000 });
+    // A chat slow to load: the rest of the minute it was always given (the page's default timeout); none by then, said.
+    await this.composer()
+      .waitFor({ state: 'visible', timeout: 45_000 })
+      .catch(async (e: unknown) => {
+        if ((e as Error).name !== 'TimeoutError') throw e;
+        throw await this.locatorMissing('composer', 'on a new chat, within a minute');
+      });
     await this.dismissPopups();
     this.onChat = 'new';
   }
@@ -1182,7 +1372,7 @@ Current URL: ${url}`);
 
   /** Finds a conversation by its exact name in the sidebar. */
   async openConversationByName(name: string): Promise<boolean> {
-    const row = this.p.locator(`${Sidebar.conversationLink}[aria-label="${name.replace(/"/g, '\\"')}"]`);
+    const row = this.el('conversationLink').and(this.p.locator(`[aria-label="${name.replace(/"/g, '\\"')}"]`));
     if ((await row.count()) === 0) return false;
     // The conversation it is, from the link's own address: the page's follows a moment after the click.
     const href = await row.first().getAttribute('href').catch(() => null);
@@ -1318,7 +1508,7 @@ Current URL: ${url}`);
    * of it when Copilot's dialog refused that one (see `chatNameForms`) — or false when it could not be renamed.
    */
   async nameChat(chatId: string, name: string, opts: { waitMs?: number } = {}): Promise<string | false> {
-    const row = this.p.locator(`${Sidebar.conversationLink}[href*="${chatId}"]`).first();
+    const row = this.el('conversationLink').and(this.p.locator(`[href*="${chatId}"]`)).first();
     // Waited for, like everything below: a new chat's row appears in the sidebar some seconds after the
     // reply, and `count()` read it as missing and returned without a word (live run 2026-10-03). The run
     // tries again later when it is still not there (see `nameIfStillUnnamed` in taskRunner.ts).
@@ -1327,6 +1517,8 @@ Current URL: ${url}`);
       await row.waitFor({ state: 'attached', timeout: waitMs });
     } catch {
       this.emit('chat-name-failed', { chatId, name, error: `the conversation did not appear in the sidebar within ${Math.round(waitMs / 1000)} s` });
+      // Not one conversation in the sidebar by its locator: the locator's, said; this one not there yet is not.
+      await this.warnLocator('conversationLink', 'in the sidebar, while the conversation was to be named').catch(() => undefined);
       return false;
     }
 
@@ -1340,6 +1532,8 @@ Current URL: ${url}`);
      * own auto-generated titles instead of the name this runner gave them.
      */
     let opened = false;
+    // Which locator the step under way looks for: the one said when it finds nothing.
+    let step: ChatLocatorKey = 'chatMore';
     try {
       await row.scrollIntoViewIfNeeded().catch(() => undefined);
       // Briefly: a hover the sidebar takes waits out the page's whole timeout otherwise.
@@ -1350,22 +1544,26 @@ Current URL: ${url}`);
        * section header — and Playwright retried for the whole minute (live 2026-10-05), so `press` clicks
        * the element itself when the mouse cannot reach it.
        */
-      const byChat = this.p.locator(Rename.moreButtonForChat(chatId)).first();
-      const more = (await byChat.count()) > 0
+      const byChat = this.el('chatMore', chatId).first();
+      // Through the row by its name only while the locator is the default: one set in Settings is the one used.
+      const more = (await byChat.count()) > 0 || this.chatLocators.chatMore !== DefaultChatLocators.chatMore
         ? byChat
         : row.locator('xpath=ancestor-or-self::*[self::li or self::div][1]').getByRole('button', { name: Rename.moreButtonLabel, exact: true }).first();
       await more.waitFor({ state: 'attached', timeout: 5_000 });
       await this.press(more);
       opened = true;
 
-      const item = this.p.getByRole('menuitem', { name: Rename.menuItem, exact: true }).first();
+      step = 'renameItem';
+      const item = this.el('renameItem').first();
       await item.waitFor({ state: 'visible', timeout: 5_000 });
       await this.press(item);
       opened = false;
 
-      const input = this.p.locator(Rename.input);
+      step = 'renameInput';
+      const input = this.el('renameInput').first();
       await input.waitFor({ state: 'visible', timeout: 10_000 });
-      const save = this.p.getByRole('button', { name: Rename.saveText, exact: true }).first();
+      step = 'renameSave';
+      const save = this.el('renameSave').first();
       /*
        * Offered in shorter forms until the dialog takes one. Copilot refuses a name it counts as longer than 50
        * characters, by a count that is not always ours, and its dialog then stays open over the chat (2026-10-17: "the
@@ -1406,6 +1604,8 @@ Current URL: ${url}`);
       return wanted;
     } catch (e) {
       this.emit('chat-name-failed', { chatId, name, error: (e as Error).message });
+      // The step's locator, when it finds nothing: said (the name is the work's convenience; the work goes on).
+      await this.warnLocator(step, `while the conversation was being named "${name}"`, chatId).catch(() => undefined);
       return false;
     } finally {
       // Whatever happened, the sidebar is left as it was found. A menu left hanging over the
@@ -2338,8 +2538,8 @@ Current URL: ${url}`);
    * counted, with the rendered count as the fallback for a page that does not carry it.
    */
   private async turnCount(): Promise<number> {
-    return await this.p.evaluate((turnSel: string) => {
-      const nodes = Array.from(document.querySelectorAll(turnSel));
+    // By the `turn` locator in force (2026-11-17), whatever its kind: CSS, XPath or Playwright's own.
+    return await this.el('turn').evaluateAll((nodes: Element[]) => {
       let size = 0;
       for (const n of nodes) {
         const carrier = n.matches('[aria-setsize]') ? n : (n.querySelector('[aria-setsize]') ?? n.closest('[aria-setsize]'));
@@ -2347,18 +2547,14 @@ Current URL: ${url}`);
         if (!Number.isNaN(v) && v > size) size = v;
       }
       return size > 0 ? size : nodes.length;
-    }, `[data-testid="${TestId.turn}"]`);
+    });
   }
 
   /** The newest user message as shown, for telling "landed but not counted" from "not sent". */
   private async lastUserTurnText(): Promise<string> {
-    return await this.p
-      .evaluate(() => {
-        const nodes = document.querySelectorAll('[id^="user-message-"]');
-        const last = nodes[nodes.length - 1] as HTMLElement | undefined;
-        return last ? last.innerText : '';
-      })
-      .catch(() => '');
+    const all = this.el('userMessage');
+    const n = await all.count().catch(() => 0);
+    return n > 0 ? ((await all.nth(n - 1).innerText({ timeout: 2_000 }).catch(() => '')) ?? '') : '';
   }
 
   /** Puts text in the composer and clicks Send. Enter is not used: it does not submit. */
@@ -2370,11 +2566,16 @@ Current URL: ${url}`);
     if (attachments.length > 0) await this.attach(attachments);
 
     const composer = this.composer();
+    // The box, before it is clicked: none, its locator is said, rather than a minute's wait on the click.
+    if (!(await this.composerWithin(10_000, undefined, ''))) throw await this.locatorMissing('composer', 'when a message was to be written in it');
     await composer.click();
     await composer.fill(text);
 
     const send = await this.sendButton();
-    await send.waitFor({ state: 'visible', timeout: 20_000 });
+    await send.waitFor({ state: 'visible', timeout: this.sendWaitMs }).catch(async (e: unknown) => {
+      if ((e as Error).name !== 'TimeoutError') throw e;
+      throw await this.locatorMissing('send', `after the message was written in the box, within ${Math.round(this.sendWaitMs / 1000)} s`);
+    });
     await send.click();
     this.emit('message-sent', { chars: text.length, attachments: attachments.length });
   }
@@ -2389,9 +2590,9 @@ Current URL: ${url}`);
    * change here is the attribute name rather than the button.
    */
   private async sendButton(): Promise<Locator> {
-    const wrapper = this.p.locator(Css.composerWrapper);
-    if ((await wrapper.count()) > 0) {
-      return wrapper.first().getByRole('button', { name: Label.send, exact: true }).first();
+    // Settings' own; or the default — the Send in the box's wrapper — wherever the wrapper is on the page.
+    if (this.chatLocators.send !== DefaultChatLocators.send || (await this.p.locator(Css.composerWrapper).count()) > 0) {
+      return this.el('send').first();
     }
 
     const submit = this.p.locator(Css.composerSendSubmit);
@@ -2453,12 +2654,24 @@ Current URL: ${url}`);
       }
       await this.send(text, attachments);
 
-      const accepted = await this.waitForAccepted(before, 30_000, text, shownBefore);
+      const accepted = await this.waitForAccepted(before, this.acceptMs, text, shownBefore);
       if (accepted) return before;
 
       const found = await this.detectBlocker();
       lastProblem = found.kind === 'none' ? 'the message did not appear in the chat' : `${found.kind}: ${found.reason}`;
       this.emit('send-not-accepted', { attempt, problem: lastProblem });
+      /*
+       * Sent — the box is empty — and neither a message of the conversation nor the one sent is found: the locators, not
+       * the chat (2026-11-17). Said, and not sent again: a message that did land would be in the chat twice.
+       */
+      if (
+        found.kind === 'none' &&
+        (await this.boxIsEmpty()) &&
+        (await this.el('turn').count().catch(() => 0)) === 0 &&
+        (await this.el('userMessage').count().catch(() => 0)) === 0
+      ) {
+        throw await this.locatorMissing('turn', "after a message was sent: the box emptied, and neither the conversation's messages nor the message sent were found (the userMessage locator found nothing either)");
+      }
 
       if (found.kind !== 'none') {
         const cleared = await this.handleBlocker(found);
@@ -2543,35 +2756,26 @@ Current URL: ${url}`);
     const startedAt = Date.now();
     const deadline = startedAt + this.opts.replyTimeoutMs;
 
-    const state = async (): Promise<{ turns: number; streaming: boolean; finished: boolean }> =>
-      await this.p.evaluate(
-        ({ turnSel, stopLabel, wrapperSel, copySel }) => {
-          // The conversation's size as the app reports it, not the rendered count: see turnCount.
-          const nodes = Array.from(document.querySelectorAll(turnSel));
-          let size = 0;
-          for (const n of nodes) {
-            const carrier = n.matches('[aria-setsize]') ? n : (n.querySelector('[aria-setsize]') ?? n.closest('[aria-setsize]'));
-            const v = carrier ? Number(carrier.getAttribute('aria-setsize')) : NaN;
-            if (!Number.isNaN(v) && v > size) size = v;
-          }
-          const turns = size > 0 ? size : nodes.length;
-          const streaming = Array.from(document.querySelectorAll('button')).some(
-            (b) => b.getAttribute('aria-label') === stopLabel,
-          );
-          const wrappers = document.querySelectorAll(wrapperSel);
-          const last = wrappers[wrappers.length - 1];
-          return { turns, streaming, finished: !streaming && !!last && !!last.querySelector(copySel) };
-        },
-        {
-          turnSel: `[data-testid="${TestId.turn}"]`,
-          stopLabel: Label.stopGenerating,
-          wrapperSel: Signal.answerWrapper,
-          copySel: Signal.copyButtonInAnswer,
-        },
-      );
+    /*
+     * Through the chat's locators in force (2026-11-17: each can be set in Settings): the conversation's size as the app
+     * reports it (see turnCount), whether Copilot is still writing, and whether its newest answer is finished — its Copy
+     * button there — with how long that answer's text is, to tell one standing still.
+     */
+    const state = async (): Promise<{ turns: number; streaming: boolean; finished: boolean; answers: number; chars: number }> => {
+      const turns = await this.turnCount();
+      const streaming = (await this.el('stop').count()) > 0;
+      const answers = this.el('answer');
+      const n = await answers.count();
+      const newest = n > 0 ? answers.nth(n - 1) : null;
+      const chars = newest ? await newest.evaluate((el) => (el.textContent ?? '').length).catch(() => 0) : 0;
+      const finished = !streaming && !!newest && (await newest.locator(this.sel('copy')).count()) > 0;
+      return { turns, streaming, finished, answers: n, chars };
+    };
 
     let sawNewTurn = false;
-    let last = { turns: previousTurns, streaming: false, finished: false };
+    let last = { turns: previousTurns, streaming: false, finished: false, answers: 0, chars: 0 };
+    // Since when Copilot's newest answer has stood still, not written and not finished (see below).
+    let still = { since: Date.now(), chars: -1, answers: -1 };
 
     while (Date.now() < deadline) {
       if (this.p.isClosed()) {
@@ -2599,6 +2803,27 @@ Current URL: ${url}`);
 
       if (last.turns > previousTurns) sawNewTurn = true;
       if (sawNewTurn && last.finished) break;
+
+      /*
+       * What a locator that no longer finds its element looks like (2026-11-17), said rather than waiting out the whole
+       * reply time: not one message of the conversation found, though the message sent is in it; or Copilot's answer
+       * begun, then standing still — not written any more, never finished — with no answer found at all, or no Copy
+       * button anywhere on the page. A Copy missing from the newest answer alone is Copilot's, not the locator's.
+       */
+      if (last.turns === 0 && Date.now() - startedAt >= this.turnsGraceMs) {
+        throw await this.locatorMissing('turn', 'while the answer was awaited: not one message of the conversation was found, though the message sent is in it');
+      }
+      if (sawNewTurn && !last.streaming) {
+        if (last.chars !== still.chars || last.answers !== still.answers) still = { since: Date.now(), chars: last.chars, answers: last.answers };
+        else if (Date.now() - still.since >= this.answerStillMs) {
+          if (last.answers === 0) {
+            throw await this.locatorMissing('answer', `while the answer was awaited: Copilot's turn began and, ${Math.round((Date.now() - startedAt) / 1000)} s on, no answer was found`);
+          }
+          if ((await this.el('copy').count().catch(() => 1)) === 0) {
+            throw await this.locatorMissing('copy', `in Copilot's answers: the newest had not changed for ${Math.round(this.answerStillMs / 1000)} s, was not being written, and no answer had a Copy button`);
+          }
+        }
+      } else still = { since: Date.now(), chars: -1, answers: -1 };
 
       // Only look for blockers while nothing is streaming, so the check stays cheap.
       if (!last.streaming) {
@@ -2671,7 +2896,7 @@ Current URL: ${url}`);
    * all reachable from one locator.
    */
   private lastAnswer(): Locator {
-    return this.p.getByTestId(TestId.assistantMessage).last();
+    return this.el('answer').last();
   }
 
   private async lastMessageText(): Promise<string> {
@@ -2709,7 +2934,7 @@ Current URL: ${url}`);
    * as degraded, because that text is known to be lossy.
    */
   private async copyLastReply(): Promise<{ markdown: string; degraded: boolean }> {
-    const copy = this.lastAnswer().getByTestId(TestId.copyResponse).first();
+    const copy = this.lastAnswer().locator(this.sel('copy')).first();
     try {
       /*
        * Two guards around one click, both about the neighbours.

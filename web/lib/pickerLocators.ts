@@ -11,9 +11,28 @@ export const PROVIDER_NAME = '{$provider_name}';
 export type PickerKey = 'button' | 'rows' | 'model' | 'provider' | 'providerModel';
 export const PICKER_KEYS: PickerKey[] = ['button', 'rows', 'model', 'provider', 'providerModel'];
 
-/** The chat page's own locators (2026-11-17): the box to write in. Elements, with no placeholder. */
-export type ChatKey = 'composer';
-export const CHAT_KEYS: ChatKey[] = ['composer'];
+/**
+ * The chat page's own locators (2026-11-17), as `src/transport/locators.ts` has them: the box to write in, Send, the
+ * messages and the answer, the conversations in the sidebar. Elements; one template, with the conversation's id.
+ */
+export type ChatKey =
+  | 'composer'
+  | 'send'
+  | 'userMessage'
+  | 'turn'
+  | 'answer'
+  | 'copy'
+  | 'stop'
+  | 'conversationLink'
+  | 'chatMore'
+  | 'renameItem'
+  | 'renameInput'
+  | 'renameSave';
+export const CHAT_KEYS: ChatKey[] = ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'];
+export type ChatGroup = 'write' | 'answer' | 'conversations';
+export const CHAT_ID = '{$chat_id}';
+/** The placeholder a chat template must hold. */
+export const CHAT_PLACEHOLDER: Partial<Record<ChatKey, string>> = { chatMore: CHAT_ID };
 
 /** The placeholder a template must hold; the two elements hold none. */
 export const PLACEHOLDER: Record<PickerKey, string | null> = {
@@ -63,13 +82,15 @@ export function fillLocator(template: string, names: { model?: string; provider?
 export function locatorProblem(key: PickerKey | ChatKey, locator: string, doc?: Document): LocatorProblem | null {
   const s = locator.trim();
   if (s === '') return null;
-  const needs = key in PLACEHOLDER ? PLACEHOLDER[key as PickerKey] : null;
+  const needs = key in PLACEHOLDER ? PLACEHOLDER[key as PickerKey] : (CHAT_PLACEHOLDER[key as ChatKey] ?? null);
   if (needs && !s.includes(needs)) return { kind: 'placeholder', placeholder: needs };
   const xpath = s.startsWith('xpath=') || (!s.startsWith('css=') && isXPath(s));
   const axis = /(^|[/[(|\s])(ancestor-or-self|ancestor|attribute|child|descendant-or-self|descendant|following-sibling|following|parent|preceding-sibling|preceding|self):(?!:)/.exec(s);
   if (axis && xpath) return { kind: 'colons', axis: axis[2]! };
   if (!doc) return null;
-  const text = fillLocator(s.replace(/^(xpath|css)=/, ''), { model: 'Think deeper', provider: 'Claude' });
+  // Playwright's own forms (role=…, text=…) and chains (>>): no browser reads them; the bot does.
+  if ((/^[a-z][a-z:-]*=/.test(s) && !/^(css|xpath)=/.test(s)) || s.includes('>>')) return null;
+  const text = fillLocator(s.replace(/^(xpath|css)=/, ''), { model: 'Think deeper', provider: 'Claude' }).split(CHAT_ID).join('id');
   try {
     if (xpath) doc.evaluate(text, doc, null, XPathResult.ANY_TYPE, null);
     else doc.querySelector(text);

@@ -1518,6 +1518,13 @@ button.linkish:hover { text-decoration: underline; }
 .picker-field { grid-template-columns: minmax(0, 1fr); }
 .picker-field .field-control > input.picker-locator { flex: 1 1 320px; max-width: none; font-family: var(--mono); font-size: calc(12.5px * var(--scale)); }
 .picker-field > .field-after { grid-column: 1 / -1; }
+/* The chat's locators (2026-11-17): in groups; one the bot found nothing with, in red, with what to do under it. */
+.locator-group > h3 { margin: 14px 0 4px; font-size: calc(14px * var(--scale)); }
+.locator-failed .field-control > input.picker-locator { border-color: var(--bad); outline: 2px solid var(--bad); outline-offset: 0; background: var(--bad-soft); }
+.locator-failed .field-label label { color: var(--bad); }
+.locator-check { margin: 8px 0 4px; align-items: center; }
+.locator-checked.found { color: var(--ok); }
+.locator-checked.none { color: var(--bad); }
 .picker-example { font-family: var(--mono); font-size: calc(12px * var(--scale)); overflow-wrap: anywhere; }
 .picker-how { margin: 8px 0 4px; }
 .picker-how summary { cursor: var(--cur-pointer); font-weight: 600; font-size: calc(13px * var(--scale)); }

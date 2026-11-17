@@ -851,6 +851,50 @@ saved, shown filled with a name from the list. "Keep a picture of every step of 
 (`copilot.pickerSteps`) keeps numbered pictures and the menu's HTML; a failed choice always keeps
 `models-select-failed.png/.html/.json`, the last with what each locator found.
 
+**The chat's locators, and the one that found nothing (2026-11-17).** Operator, the day Copilot's box to write in
+changed: "a way to change each of the locators by hand, so I don't have to come back here every time … a mechanism that
+detects which locator exactly the bot failed on … the field painted red … the bot saves the page's HTML and gives it to
+the user, to hand to a chatbot". Settings → "The chat's locators" (`#chat-locators`, before the model menu's) holds
+every locator the bot finds the chat by, in three groups:
+- writing and sending: the box, Send, your message;
+- the answer: the messages, the answer, its Copy, Stop;
+- the conversations in the sidebar: the link, a conversation's "More" (a template with `{$chat_id}`), "Rename", the
+  name field, "Save".
+
+They are kept as `copilot.chatLocators`, and their defaults (`DefaultChatLocators` in `transport/locators.ts`) are
+what the bot looked for before. A locator is a CSS selector, an XPath, or Playwright's own (`role=button[name="Send"]`,
+chained with `>>`).
+
+Where the bot needs an element and its locator finds nothing, the transport keeps a picture and the page's HTML, and says
+which locator it was (`LocatorMissing`, event `locator-missing`; `locatorMissing` in `copilotTransport.ts`):
+- the box, at the start, on a new chat, before writing;
+- Send, after writing;
+- the messages, after a message that left the box was found nowhere (said, and not sent a second time);
+- the answer or its Copy, when the answer stood still a minute, not written and never finished;
+- the sidebar's, when naming a conversation (the work goes on).
+
+The HTML has its scripts, styles, handlers and inline styles taken out (`transport/pageHtml.ts`). The sidebar is taken
+out too, or, for a sidebar locator, kept with the conversations' names put out.
+
+The API keeps the last failure of each locator (`data/locator-failures.json`, `session/locatorFailures.ts`;
+`GET /api/locators/failures`, `GET …/:key/html` as a download only, `DELETE …/:key`). Each comes with whether its
+locator has been changed in Settings since, and the text that asks a chatbot for the right one (`locatorPrompt`).
+
+On every page a banner names it (`web/app/locatorFailure.tsx`) with four ways on:
+- "Fix in Settings": `/settings?locator=<key>`, the field in red with the cursor in it;
+- "Download the HTML";
+- "Copy for a chatbot";
+- "Close".
+
+A failure that stopped the work takes the operator to its field once, by itself. Changing the locator takes the red
+and the banner away.
+
+Verified by:
+- `check:transport` ("a locator that finds nothing");
+- `check:locators`;
+- `check:pins`;
+- the ui-flows scenarios "Settings: the chat's locators" and "A locator that found nothing".
+
 **The queue of tasks (2026-10-24).** "Queue" in the bar (`/queue`, `web/app/queue/page.tsx`): tasks written beforehand —
 what to do, a model of its own (empty: "Model for the worker"), where it works ("The folder as it is", or "New branch
 from main"), Review, and the earlier tasks it depends on — run one after another while nobody watches, each in a new

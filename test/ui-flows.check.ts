@@ -1609,7 +1609,18 @@ try {
     const section = page.locator('section#chat-locators');
     await section.locator('#chat-composer').waitFor();
     t.check('its own section, titled, before the model menu\'s', [await section.locator('h2').textContent(), await page.locator('section.panel').evaluateAll((all) => all.map((s) => s.id).filter((id) => ['chat-locators', 'picker-locators'].includes(id)))], [en['chatloc.title'], ['chat-locators', 'picker-locators']]);
-    t.check('the box to write in: named, with its ⓘ, empty, its default shown in it', [await section.locator('label[for="chat-composer"]').textContent(), await section.locator('.picker-field .info-btn').count(), await page.locator('#chat-composer').inputValue(), await page.locator('#chat-composer').getAttribute('placeholder')], [en['chatloc.composer'], 1, '', DefaultChatLocators.composer]);
+    t.check('the box to write in: named, with its ⓘ, empty, its default shown in it', [await section.locator('label[for="chat-composer"]').textContent(), await page.locator('#chat-composer').inputValue(), await page.locator('#chat-composer').getAttribute('placeholder')], [en['chatloc.composer'], '', DefaultChatLocators.composer]);
+    // Every locator the bot finds the chat by (2026-11-17, the same day): three groups, each field its ⓘ and its default.
+    t.check('three groups, in order', await section.locator('.locator-group > h3').allTextContents(), [en['chatloc.group.write'], en['chatloc.group.answer'], en['chatloc.group.conversations']]);
+    const ids = await section.locator('input.picker-locator').evaluateAll((els) => els.map((e) => [e.id, (e as HTMLInputElement).placeholder]));
+    t.check('every locator, in order, each with its default shown', ids, (['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] as const).map((k) => [`chat-${k}`, DefaultChatLocators[k]]));
+    t.check('each with its ⓘ', await section.locator('.picker-field .info-btn').count(), 12);
+    await page.locator('#chat-chatMore').fill('button[data-more]');
+    t.check('the template without its place for the id: said', await section.locator('.picker-field:has(#chat-chatMore) .err').textContent(), en['loc.noPlaceholder'].replace('{ph}', '{$chat_id}'));
+    await page.locator('#chat-chatMore').fill('');
+    await page.locator('#chat-send').fill('[data-test-id="chat-input-wrapper"] >> role=button[name="Send it"]');
+    t.check("Playwright's own form, chained: not refused", await section.locator('.picker-field:has(#chat-send) .err').count(), 0);
+    await page.locator('#chat-send').fill('');
     const saved = async (): Promise<Record<string, string> | undefined> => ((await settingsOf(h)).copilot as { chatLocators?: Record<string, string> } | undefined)?.chatLocators;
     // Not an unclosed bracket: the browser closes that one itself at the end, as CSS does.
     await page.locator('#chat-composer').fill('span[role=="textbox"]');
@@ -1623,6 +1634,104 @@ try {
     await section.locator('.picker-field:has(#chat-composer) button', { hasText: en['loc.default'] }).click();
     await waitFor('the default put back', async () => ((await saved()) === undefined ? true : null), 10_000).catch(() => undefined);
     t.check('"Default": the field empty, nothing saved for it', [await page.locator('#chat-composer').inputValue(), await saved()], ['', undefined]);
+  });
+
+  /*
+   * A locator that found nothing (operator, 2026-11-17: "after it fails, the user is taken to the place where the
+   * locator is updated, the field painted red … the bot saves the page's HTML and gives it to the user"): a banner on
+   * every page with the way to its field, the HTML and the text for a chatbot; in Settings the field in red with the
+   * same under it, the cursor in it; changed there, the red and the banner go. One that stopped the work takes the
+   * operator to its field once, by itself.
+   */
+  await scenario('A locator that found nothing: the banner, its field in red in Settings, fixed there; taken there once', {}, async (h, page, url) => {
+    const { DefaultChatLocators } = await import('../src/transport/locators.js');
+    const dir = join(h.runsDir, 'some-run', 'failures');
+    mkdirSync(dir, { recursive: true });
+    const html = join(dir, 'locator-send-1.html');
+    writeFileSync(html, '<!doctype html><html><body><div data-test-id="chat-input-wrapper"></div></body></html>', 'utf8');
+    // One the work went on without: the banner, not taken anywhere.
+    h.ops.recordLocatorFailure({ key: 'send', locator: DefaultChatLocators.send, why: 'after the message was written in the box', stopped: false, html });
+    await waitFor('kept', async () => ((await h.call<unknown[]>('GET', '/locators/failures')).length ? true : null), 10_000).catch(() => undefined);
+    await page.goto(url('/system'));
+    const banner = page.locator('.locator-failure[data-locator="send"]');
+    await banner.waitFor({ timeout: 15_000 });
+    t.check('the banner: what was not found, the locator, and the ways on', [
+      await banner.locator('strong').textContent(),
+      ((await banner.textContent()) ?? '').includes(DefaultChatLocators.send),
+      await banner.locator('a', { hasText: en['chatloc.fix'] }).getAttribute('href'),
+      // A download link: the attribute is there, empty.
+      (await banner.locator('a', { hasText: en['chatloc.html'] }).getAttribute('download')) !== null,
+      await banner.locator('button', { hasText: en['chatloc.prompt'] }).count(),
+    ], [en['chatloc.warnTitle'].replace('{name}', en['chatloc.send']), true, '/settings?locator=send#chat-locators', true, 1]);
+    t.truthy('and the page stayed where it was', page.url().includes('/system'), page.url());
+
+    await banner.locator('a', { hasText: en['chatloc.fix'] }).click();
+    await page.waitForURL(/\/settings\?locator=send/, { timeout: 15_000 });
+    const field = page.locator('.picker-field[data-locator-field="send"]');
+    await field.locator('.locator-failure').waitFor({ timeout: 15_000 });
+    await waitFor('the cursor in the field', async () => ((await page.evaluate(() => document.activeElement?.id)) === 'chat-send' ? true : null), 10_000).catch(() => undefined);
+    t.check('in Settings: the field in red, the cursor in it, what to do under it, no banner over the page', [
+      await field.evaluate((el) => el.classList.contains('locator-failed')),
+      await page.evaluate(() => document.activeElement?.id),
+      await page.locator('#chat-send').getAttribute('aria-invalid'),
+      await field.locator('.locator-failure a', { hasText: en['chatloc.html'] }).count(),
+      await page.locator('.locator-failure').count(),
+    ], [true, 'chat-send', 'true', 1, 1]);
+
+    await page.locator('#chat-send').fill('#new-send');
+    await waitFor('the red gone', async () => ((await field.evaluate((el) => el.classList.contains('locator-failed'))) ? null : true), 15_000).catch(() => undefined);
+    t.check('changed there: saved, and the red and its note gone', [((await settingsOf(h)).copilot as { chatLocators?: Record<string, string> } | undefined)?.chatLocators, await field.evaluate((el) => el.classList.contains('locator-failed')), await field.locator('.locator-failure').count()], [{ send: '#new-send' }, false, 0]);
+    await page.goto(url('/system'));
+    await page.waitForTimeout(1_500);
+    t.check('and no banner for it any more', await page.locator('.locator-failure').count(), 0);
+
+    // One that stopped the work: taken to its field, once.
+    h.ops.recordLocatorFailure({ key: 'copy', locator: DefaultChatLocators.copy, why: "in Copilot's answers", stopped: true });
+    await page.goto(url('/system'));
+    const taken = await page.waitForURL(/\/settings\?locator=copy/, { timeout: 20_000 }).then(() => true, () => false);
+    t.check('one that stopped the work: taken to its field', [taken, page.url().includes('locator=copy')], [true, true]);
+    await page.goto(url('/system'));
+    await page.locator('.locator-failure[data-locator="copy"]').waitFor({ timeout: 15_000 });
+    await page.waitForTimeout(2_000);
+    t.check('once: back on another page, it stays there, with the banner', [page.url().includes('/system'), await page.locator('.locator-failure[data-locator="copy"] strong').textContent()], [true, en['chatloc.failTitle'].replace('{name}', en['chatloc.copy'])]);
+    await page.locator('.locator-failure[data-locator="copy"] button', { hasText: en['chatloc.dismiss'] }).click();
+    await waitFor('closed', async () => ((await h.call<unknown[]>('GET', '/locators/failures')).length === 0 ? true : null), 10_000).catch(() => undefined);
+    // The list keeps Send's as changed (the page shows none such); Copy's, closed, is gone from it.
+    const left = await h.call<Array<{ key: string; changed: boolean }>>('GET', '/locators/failures');
+    t.check('closed: gone from the page and from the list; what is left is only the one changed since', [await page.locator('.locator-failure').count(), left.map((x) => [x.key, x.changed])], [0, [['send', true]]]);
+  });
+
+  /*
+   * "Check the locators" (operator, 2026-11-17): a button in the section; what each locator found under its field —
+   * found, not found (and red, with what to do), not on the page then and why — and a line with the count.
+   */
+  await scenario('Settings: "Check the locators" — what each found under its field, the one not found in red', {}, async (h, page, url) => {
+    h.chat.locatorFinds = {
+      copy: { key: 'copy', status: 'none', count: 0 },
+      stop: { key: 'stop', status: 'not-here', count: 0, note: 'writing' },
+      composer: { key: 'composer', status: 'found', count: 1 },
+    };
+    await page.goto(url('/settings'));
+    const section = page.locator('section#chat-locators');
+    await section.locator('#chat-composer').waitFor();
+    const button = section.locator('.locator-check button', { hasText: en['chatloc.check'] });
+    t.check('the button, with its ⓘ', [await button.count(), await section.locator('.locator-check .info-btn').count()], [1, 1]);
+    await button.click();
+    await section.locator('.locator-check-done').waitFor({ timeout: 20_000 });
+    const said = async (key: string): Promise<[string | null, string | null]> => {
+      const p = section.locator(`.picker-field[data-locator-field="${key}"] .locator-checked`);
+      return [await p.getAttribute('data-status'), await p.textContent()];
+    };
+    t.check('under each field, what it found', [await said('composer'), await said('copy'), await said('stop')], [
+      ['found', `✓ ${en['chatloc.found'].replace('{n}', '1')}`],
+      ['none', `✗ ${en['chatloc.notFound']}`],
+      ['not-here', `– ${en['chatloc.notHere']} ${en['chatloc.note.writing']}`],
+    ]);
+    t.check('and the count', await section.locator('.locator-check-done').textContent(), en['chatloc.checkDone'].replace('{found}', '10').replace('{none}', '1').replace('{other}', '1'));
+    const copy = section.locator('.picker-field[data-locator-field="copy"]');
+    await waitFor('the one not found in red', async () => ((await copy.evaluate((el) => el.classList.contains('locator-failed'))) ? true : null), 15_000).catch(() => undefined);
+    t.check('the one not found: in red, with what to do under it', [await copy.evaluate((el) => el.classList.contains('locator-failed')), await copy.locator('.locator-failure').count()], [true, 1]);
+    t.check('one window, opened and closed again', [h.chat.locatorChecks, h.chat.windows.filter((w) => w.isOpen()).length], [1, 0]);
   });
 
   /*

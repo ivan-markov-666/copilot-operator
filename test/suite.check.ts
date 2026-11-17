@@ -19,7 +19,9 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Tally } from './support/harness.js';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
+import { freePort, startHarness, Tally } from './support/harness.js';
 
 const t = new Tally();
 const root = join(import.meta.dirname, '..');
@@ -67,5 +69,35 @@ t.check('each of those says why in its opening comment', live.filter((f) => !/Co
 t.check('every npm run the suite names exists', missingScripts, []);
 t.truthy('and the suite is not empty', files.size > 40, files.size);
 console.log(`  ${files.size} checks reached; run by hand: ${live.join(', ') || 'none'}`);
+
+/*
+ * A port that cannot be taken does not end the suite (2026-11-17): check:model-help ended `npm run check:all` on
+ * "listen EACCES 127.0.0.1:52651" — Windows reserves ranges of ports as it goes, and the one the system had just handed
+ * out was reserved before the API listened on it. The API's start now gives the error back, with what it opened
+ * closed, and the harness tries another port. Here the first port it is handed is held by another server.
+ */
+console.log('\n--- the harness tries another port when one cannot be taken ---');
+{
+  const held = createServer();
+  await new Promise<void>((resolve) => held.listen(0, '127.0.0.1', () => resolve()));
+  const taken = (held.address() as AddressInfo).port;
+  const tried: number[] = [];
+  let h: Awaited<ReturnType<typeof startHarness>> | undefined;
+  try {
+    h = await startHarness({
+      ports: async () => {
+        const port = tried.length === 0 ? taken : await freePort();
+        tried.push(port);
+        return port;
+      },
+    });
+    t.check('the taken port tried first, then another, and the API answers there', [tried.length, tried[0], tried[1] !== taken, (await h.call<{ ok?: boolean }>('GET', '/health').then(() => true, () => false))], [2, taken, true, true]);
+  } catch (e) {
+    t.truthy('started on another port, without ending the process', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h?.stop().catch(() => undefined);
+    await new Promise((r) => held.close(r));
+  }
+}
 
 t.finish();

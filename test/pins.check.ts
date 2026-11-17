@@ -41,7 +41,7 @@ import { RunConfigSchema } from '../src/config/schema.js';
 import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
 import { isCopilotOtherPage, isReplyTimeout, isWorkChatAddress, surfaceOfUrl } from '../src/transport/copilotTransport.js';
-import { DefaultChatLocators, resolveChatLocators, Url } from '../src/transport/locators.js';
+import { CHAT_LOCATOR_KEYS, ChatLocatorGroupOf, ChatLocatorWhat, DefaultChatLocators, locatorPrompt, playwrightSelector, resolveChatLocators, Url } from '../src/transport/locators.js';
 import { parseWatsonMetadata, findRecentCrash, describeCrash } from '../src/transport/edgeCrash.js';
 import { Pacer, sleep } from '../src/util/pacing.js';
 import { branchNameFrom, plannedBranchName, porcelainPaths } from '../src/vcs/git.js';
@@ -641,6 +641,36 @@ try {
   t.check('an empty one: the default', resolveChatLocators({ composer: '   ' }), { locators: DefaultChatLocators, problems: [] });
   t.check('one saved: used, trimmed', resolveChatLocators({ composer: ' [data-lexical-editor="true"] ' }).locators.composer, '[data-lexical-editor="true"]');
   t.check('one that cannot be used: the default, and why', resolveChatLocators({ composer: '//span/parent:div' }), { locators: DefaultChatLocators, problems: ['the chat\'s composer locator in Settings is not used, "parent:" needs two colons: parent::'] });
+
+  /*
+   * Every locator the bot finds the chat by, editable (operator, 2026-11-17: "a way to change each of the locators by
+   * hand, so I don't have to come back here every time"): their defaults are what the bot looked for before, each has
+   * its group in Settings and words a chatbot can find it by; the one template keeps its place for the id.
+   */
+  t.check('the chat\'s locators, in Settings\' order', [...CHAT_LOCATOR_KEYS], ['composer', 'send', 'userMessage', 'turn', 'answer', 'copy', 'stop', 'conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave']);
+  t.check('their defaults: what the bot looked for before they were editable', DefaultChatLocators, {
+    composer: '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]',
+    send: '[data-test-id="chat-input-wrapper"] >> role=button[name="Send"]',
+    userMessage: '[id^="user-message-"]',
+    turn: '[data-testid="m365-chat-llm-web-ui-chat-message"]',
+    answer: '[data-testid="copilot-message-div"]',
+    copy: '[data-testid="CopyButtonTestId"]',
+    stop: 'button[aria-label="Stop generating"]',
+    conversationLink: 'a[href*="/chat/conversation/"]',
+    chatMore: 'button[data-chat-history-more-button-conversation-id="{$chat_id}"]',
+    renameItem: 'role=menuitem[name="Rename"]',
+    renameInput: '#new-session-name',
+    renameSave: 'role=button[name="Save"]',
+  });
+  t.check('each in a group, and each said in words', CHAT_LOCATOR_KEYS.filter((k) => !ChatLocatorGroupOf[k] || !ChatLocatorWhat[k]), []);
+  // Every one kept when the settings are read (2026-11-17: the schema written by hand kept only the box's).
+  const kept = RunConfigSchema.parse({ copilot: { chatLocators: Object.fromEntries(CHAT_LOCATOR_KEYS.map((k) => [k, `#${k}`])) } }).copilot.chatLocators;
+  t.check('every chat locator saved is kept when the settings are read', kept, Object.fromEntries(CHAT_LOCATOR_KEYS.map((k) => [k, `#${k}`])));
+  t.check('the template without its place for the id: not used, and why', resolveChatLocators({ chatMore: 'button[data-more]' }).problems, ['the chat\'s chatMore locator in Settings is not used, it has no {$chat_id}: put it where the conversation\'s id goes']);
+  t.check('Playwright\'s own forms as they are; a CSS chain to one, CSS first', [playwrightSelector('role=button[name="Send"]'), playwrightSelector('[data-test-id="w"] >> role=button[name="Send"]'), playwrightSelector('//button'), playwrightSelector('text=Send')], ['role=button[name="Send"]', 'css=[data-test-id="w"] >> role=button[name="Send"]', 'xpath=//button', 'text=Send']);
+  const prompt = locatorPrompt('send', '#old-send');
+  t.truthy('the text for a chatbot: what to find, the locator that stopped finding it, what to use and not', [ChatLocatorWhat.send, '#old-send', 'aria-label', 'data-testid', 'azFuQXgw'].every((x) => prompt.includes(x)), prompt);
+  t.truthy('and for the template, to keep its place', locatorPrompt('chatMore', 'x').includes('Keep {$chat_id} in it'), locatorPrompt('chatMore', 'x'));
   t.check("the chat's addresses on the host it was found on", [Url.origin + Url.newChatPath, Url.conversation(uuid, 'https://copilot.cloud.microsoft'), 'https://copilot.cloud.microsoft' + Url.conversationPath(uuid)], [Url.newChat, `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`, `https://copilot.cloud.microsoft/chat/conversation/${uuid}?es=SSR`]);
 
   /*

@@ -190,7 +190,8 @@ export function isXPath(locator: string): boolean {
 /** A locator as Playwright takes it: `xpath=` or `css=` in front, unless it names its engine already. */
 export function playwrightSelector(locator: string): string {
   const s = locator.trim();
-  if (/^(xpath|css)=/.test(s)) return s;
+  // An engine named by its prefix — css=, xpath=, or Playwright's own: role=button[name="Send"], text=…, id=… — as it is.
+  if (/^[a-z][a-z:-]*=/.test(s)) return s;
   return isXPath(s) ? `xpath=${s}` : `css=${s}`;
 }
 
@@ -203,21 +204,95 @@ export function pageQuery(locator: string): { xpath: boolean; text: string } {
 }
 
 /**
- * The chat page's own locators, as the operator writes them (2026-11-17: "a field in Settings to set it by hand", after
- * the work machine's Copilot changed its box to write in). `composer`: the box to write in. Until 2026-11 a span with
- * the id `m365-chat-editor-target-element`; on 2026-11-17 the work page's is
- * `<span role="textbox" contenteditable="true" aria-label="Message Copilot" data-lexical-editor="true">`, with no id, inside
- * the same wrapper as before (`data-test-id="chat-input-wrapper"`). The default finds either. A locator that finds an
- * element around the box (a wrapper picked in the page's inspector) is taken for the box inside it (see `composer()`).
- * An XPath when it starts as one does, else a CSS selector, as the model menu's; an empty one is the default.
+ * The chat page's own locators, as the operator writes them (2026-11-17). First the box to write in ("a field in
+ * Settings to set it by hand", after the work page's box changed); the same day, every one the bot finds the chat by
+ * ("a way to change each of the locators by hand, so I don't have to come back here every time"). Settings, "The
+ * chat's locators", in three groups: writing and sending, the answer, the conversations in the sidebar. The model
+ * menu's have their own section (`PickerLocators`).
+ *
+ * A locator is a CSS selector, an XPath (starting with `/` or `(`), or one of Playwright's own forms named by its prefix
+ * (`role=button[name="Send"]`, `text=…`), chained with `>>`. An empty one is the default below, which is what the bot
+ * looked for before they were editable. When one finds nothing where the bot needs it, the bot says which, keeps the
+ * page's HTML for a chatbot to read the right one from, and Settings shows the field in red (see `LocatorMissing`).
+ *
+ * The box: until 2026-11 a span with the id `m365-chat-editor-target-element`; on 2026-11-17 the work page's is
+ * `<span role="textbox" contenteditable="true" aria-label="Message Copilot" data-lexical-editor="true">`, with no id,
+ * inside the same wrapper as before (`data-test-id="chat-input-wrapper"`). The default finds either; a locator that
+ * finds an element around the box is taken for the box inside it (see `composer()`).
  */
-export const CHAT_LOCATOR_KEYS = ['composer'] as const;
+export const CHAT_LOCATOR_KEYS = [
+  'composer',
+  'send',
+  'userMessage',
+  'turn',
+  'answer',
+  'copy',
+  'stop',
+  'conversationLink',
+  'chatMore',
+  'renameItem',
+  'renameInput',
+  'renameSave',
+] as const;
 export type ChatLocatorKey = (typeof CHAT_LOCATOR_KEYS)[number];
 export type ChatLocators = Record<ChatLocatorKey, string>;
 
+/** Where a conversation's id goes in a template (the sidebar's "More" button of one conversation). */
+export const CHAT_ID = '{$chat_id}';
+
 export const DefaultChatLocators: ChatLocators = {
   composer: '#m365-chat-editor-target-element, [data-test-id="chat-input-wrapper"] [role="textbox"][contenteditable="true"]',
+  send: '[data-test-id="chat-input-wrapper"] >> role=button[name="Send"]',
+  userMessage: '[id^="user-message-"]',
+  turn: '[data-testid="m365-chat-llm-web-ui-chat-message"]',
+  answer: '[data-testid="copilot-message-div"]',
+  copy: '[data-testid="CopyButtonTestId"]',
+  stop: 'button[aria-label="Stop generating"]',
+  conversationLink: 'a[href*="/chat/conversation/"]',
+  chatMore: `button[data-chat-history-more-button-conversation-id="${CHAT_ID}"]`,
+  renameItem: 'role=menuitem[name="Rename"]',
+  renameInput: '#new-session-name',
+  renameSave: 'role=button[name="Save"]',
 };
+
+/** The groups Settings shows them in, in this order. */
+export type ChatLocatorGroup = 'write' | 'answer' | 'conversations';
+export const ChatLocatorGroupOf: Record<ChatLocatorKey, ChatLocatorGroup> = {
+  composer: 'write',
+  send: 'write',
+  userMessage: 'write',
+  turn: 'answer',
+  answer: 'answer',
+  copy: 'answer',
+  stop: 'answer',
+  conversationLink: 'conversations',
+  chatMore: 'conversations',
+  renameItem: 'conversations',
+  renameInput: 'conversations',
+  renameSave: 'conversations',
+};
+
+/**
+ * What each one is, in words a chatbot that reads the page's HTML can find it by (the text it is handed with the HTML,
+ * see `locatorPrompt`), and the failure says.
+ */
+export const ChatLocatorWhat: Record<ChatLocatorKey, string> = {
+  composer: 'the box at the bottom of the chat where a message is typed (an editable element: contenteditable or a textarea)',
+  send: "the button that sends the typed message, beside the box where it is typed (not the feedback panel's Send)",
+  userMessage: 'the message the user sent, as the conversation shows it (each one; the bot reads the newest)',
+  turn: "each message of the conversation, the user's and Copilot's (the elements that carry aria-setsize when the conversation is long)",
+  answer: "each of Copilot's answers, as a whole: the element that holds the answer's text and its toolbar (copy, like, dislike)",
+  copy: "the Copy button in the toolbar of Copilot's answer (it copies the whole answer)",
+  stop: 'the button shown while Copilot is still writing its answer, which stops it ("Stop generating")',
+  conversationLink: 'the link to a conversation in the sidebar of conversations (its address holds /chat/conversation/<id> or the like)',
+  chatMore: `the "More" button of one conversation in the sidebar, the one that opens its menu (Rename, Delete…); ${CHAT_ID} is where the conversation's id goes`,
+  renameItem: 'the "Rename" item of the menu a conversation\'s "More" button opens in the sidebar',
+  renameInput: 'the text field of the dialog that renames a conversation',
+  renameSave: 'the "Save" button of the dialog that renames a conversation',
+};
+
+/** The placeholder a template must hold; the others hold none. */
+export const ChatPlaceholder: Partial<Record<ChatLocatorKey, string>> = { chatMore: CHAT_ID };
 
 /** The chat's locators in force: each one saved in Settings, else the default; one that cannot be used is said in `problems`. */
 export function resolveChatLocators(saved?: Partial<Record<ChatLocatorKey, string>> | null): { locators: ChatLocators; problems: string[] } {
@@ -226,11 +301,30 @@ export function resolveChatLocators(saved?: Partial<Record<ChatLocatorKey, strin
   for (const key of CHAT_LOCATOR_KEYS) {
     const own = (saved?.[key] ?? '').trim();
     if (!own) continue;
-    const problem = locatorSyntaxProblem(own);
+    const needs = ChatPlaceholder[key];
+    const problem = needs && !own.includes(needs) ? `it has no ${needs}: put it where the conversation's id goes` : locatorSyntaxProblem(own);
     if (problem) problems.push(`the chat's ${key} locator in Settings is not used, ${problem}`);
     else locators[key] = own;
   }
   return { locators, problems };
+}
+
+/**
+ * The text a chatbot is handed with the page's HTML to find a locator in (operator, 2026-11-17: "the goal is to give
+ * the HTML to a chatbot and have it say which locator it is and what its selector is"). In English: the chatbot reads
+ * it, not the operator, and Copilot's page is in English on the work machine.
+ */
+export function locatorPrompt(key: ChatLocatorKey, failed: string): string {
+  return [
+    'The attached file is the HTML of the Microsoft 365 Copilot chat page in a browser (scripts, styles and the list of conversations taken out).',
+    `Find this element in it: ${ChatLocatorWhat[key]}.`,
+    `This locator used to find it and now finds nothing: ${failed}`,
+    'Give me one locator that finds exactly this element, and only it: a CSS selector, or an XPath if CSS cannot say it.',
+    'Use what stays the same between versions of the page: id, role, aria-label, data-testid, data-test-id and other data-* attributes, the tag.',
+    'Do not use class names made of random letters (like azFuQXgw or ___1x5usfw): they change with every new version of the page.',
+    ...(ChatPlaceholder[key] ? [`Keep ${ChatPlaceholder[key]} in it where the conversation's id goes.`] : []),
+    'Answer with the locator on the first line, then one line on why it is that element.',
+  ].join('\n');
 }
 
 /** An XPath axis written with one colon (`parent:span`), which is not XPath; null when there is none. */

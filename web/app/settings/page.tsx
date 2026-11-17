@@ -17,8 +17,9 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { api, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
-import { CHAT_KEYS, fillLocator, locatorProblem, PICKER_KEYS, type ChatKey, type LocatorProblem, type PickerKey } from '../../lib/pickerLocators';
+import { api, type LocatorCheckRef, type ModelCatalogue, type ProjectDefault, type Skill } from '../../lib/api';
+import { CHAT_KEYS, fillLocator, locatorProblem, PICKER_KEYS, type ChatGroup, type ChatKey, type LocatorProblem, type PickerKey } from '../../lib/pickerLocators';
+import { LocatorFailureNotice, useLocatorFailures } from '../locatorFailure';
 import { useT, useFmtTime, type Key } from '../../lib/i18n';
 import { confirmDialog } from '../dialog';
 import { ModelPicker } from '../modelPicker';
@@ -1221,13 +1222,21 @@ function ManualModelToggle({ id, setting, why }: { id: string; setting: RolePlan
 // The chat page's locators (operator, 2026-11-17)
 // ---------------------------------------------------------------------------------------
 
-const CHAT_FIELDS: Array<{ key: ChatKey; label: Key; why: Key }> = [{ key: 'composer', label: 'chatloc.composer', why: 'chatloc.composerWhy' }];
+/** The groups, in order, and the locators of each, in order. */
+const CHAT_GROUPS: Array<{ group: ChatGroup; title: Key; keys: ChatKey[] }> = [
+  { group: 'write', title: 'chatloc.group.write', keys: ['composer', 'send', 'userMessage'] },
+  { group: 'answer', title: 'chatloc.group.answer', keys: ['turn', 'answer', 'copy', 'stop'] },
+  { group: 'conversations', title: 'chatloc.group.conversations', keys: ['conversationLink', 'chatMore', 'renameItem', 'renameInput', 'renameSave'] },
+];
 
 /**
- * How the bot finds the chat itself in the Copilot window (operator, 2026-11-17: "a field in Settings to set it by
- * hand", after the work page's box to write in changed and every start was refused as "not the Microsoft 365 Copilot
- * chat"): the box to write in. Checked as it is typed and saved when nothing is wrong with it, as the model menu's; an
- * empty one is the default, which the field shows. Taken by the next Copilot window.
+ * How the bot finds the chat itself in the Copilot window (operator, 2026-11-17: first "a field in Settings to set it
+ * by hand" for the box to write in, after the work page's box changed; then "a way to change each of the locators by
+ * hand, so I don't have to come back here every time"): every locator the bot finds the chat by, in three groups.
+ * Checked as typed and saved when nothing is wrong, as the model menu's; an empty one is the default, which the field
+ * shows. One the bot found nothing with is in red, with the page's HTML and the text for a chatbot under it, until it
+ * is changed here or closed; `?locator=<key>` in the address (the banner's "Fix in Settings", or a failure that stopped
+ * the work) brings its field into view and puts the cursor in it. Taken by the next Copilot window.
  */
 function ChatLocatorsSection() {
   const { t } = useT();
@@ -1237,6 +1246,24 @@ function ChatLocatorsSection() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const failures = useLocatorFailures();
+  // "Check the locators" (2026-11-17): under way, and what it found for each.
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<{ checkedAt: string; results: LocatorCheckRef[] } | null>(null);
+  const [checkErr, setCheckErr] = useState('');
+  const check = async (): Promise<void> => {
+    setChecking(true);
+    setCheckErr('');
+    try {
+      setChecked(await api.checkLocators());
+      await failures.reload();
+    } catch (e) {
+      setCheckErr((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const count = (status: LocatorCheckRef['status']): number => checked?.results.filter((r) => r.status === status).length ?? 0;
 
   useEffect(() => {
     api
@@ -1249,6 +1276,17 @@ function ChatLocatorsSection() {
       })
       .catch((e) => setErr((e as Error).message));
   }, []);
+
+  // The field the address names, once the fields are there: into view, the cursor in it.
+  useEffect(() => {
+    if (!saved || !defaults) return;
+    const key = new URLSearchParams(window.location.search).get('locator');
+    if (!key || !(CHAT_KEYS as string[]).includes(key)) return;
+    const field = document.getElementById(`chat-${key}`) as HTMLInputElement | null;
+    if (!field) return;
+    field.scrollIntoView({ block: 'center' });
+    field.focus();
+  }, [saved, defaults]);
 
   // One write at a time, each on the file as the last one left it (as the model menu's section writes).
   const saveLocator = (key: ChatKey, value: string): Promise<void> => {
@@ -1265,6 +1303,8 @@ function ChatLocatorsSection() {
         await track(api.saveSettings({ ...base, copilot }));
         setMsg(t('loc.saved'));
         setErr('');
+        // A locator changed is no longer the one that found nothing: its red goes with the next reading.
+        await failures.reload();
       } catch (e) {
         setErr((e as Error).message);
       }
@@ -1279,20 +1319,46 @@ function ChatLocatorsSection() {
       <section className="panel" id="chat-locators" aria-labelledby="chat-locators-title">
         <h2 id="chat-locators-title">{t('chatloc.title')}</h2>
         <p className="muted small">{t('chatloc.intro')}</p>
+        <details className="picker-how">
+          <summary>{t('chatloc.howTitle')}</summary>
+          <p className="small">{t('chatloc.how')}</p>
+        </details>
         {err && <div className="err">{err}</div>}
+        <div className="row locator-check">
+          <button type="button" onClick={() => void check()} disabled={checking || !saved}>
+            {checking ? t('chatloc.checking') : t('chatloc.check')}
+          </button>
+          <InfoTip label={t('info.about', { name: t('chatloc.check') })} text={t('chatloc.checkWhy')} />
+        </div>
+        {checkErr && <div className="err" role="alert">{checkErr}</div>}
+        {checked && (
+          <p className="muted small locator-check-done" role="status">
+            {t('chatloc.checkDone', { found: count('found'), none: count('none'), other: count('not-here') })}
+          </p>
+        )}
         {saved && defaults
-          ? CHAT_FIELDS.map((f) => (
-              <LocatorField
-                key={f.key}
-                field={f.key}
-                idPrefix="chat"
-                label={t(f.label)}
-                why={t(f.why)}
-                initial={saved[f.key]}
-                fallback={defaults[f.key]}
-                example={null}
-                onSave={(v) => saveLocator(f.key, v)}
-              />
+          ? CHAT_GROUPS.map((g) => (
+              <div key={g.group} className="locator-group">
+                <h3>{t(g.title)}</h3>
+                {g.keys.map((key) => {
+                  const failed = failures.list.find((f) => f.key === key) ?? null;
+                  return (
+                    <LocatorField
+                      key={key}
+                      field={key}
+                      idPrefix="chat"
+                      label={t(`chatloc.${key}` as Key)}
+                      why={t(`chatloc.${key}Why` as Key)}
+                      initial={saved[key]}
+                      fallback={defaults[key]}
+                      example={null}
+                      failed={failed ? <LocatorFailureNotice failure={failed} inSettings onDismiss={() => void failures.dismiss(key)} /> : null}
+                      checked={checked?.results.find((r) => r.key === key) ?? null}
+                      onSave={(v) => saveLocator(key, v)}
+                    />
+                  );
+                })}
+              </div>
             ))
           : !err && <p className="muted small">{t('loc.loading')}</p>}
         <SavedNote msg={msg} saving={saving} />
@@ -1446,6 +1512,8 @@ function LocatorField({
   initial,
   fallback,
   example,
+  failed = null,
+  checked = null,
   onSave,
 }: {
   field: PickerKey | ChatKey;
@@ -1456,6 +1524,10 @@ function LocatorField({
   initial: string;
   fallback: string;
   example: { name: string; names: { model?: string; provider?: string } } | null;
+  /** A failure of this locator (2026-11-17): the field in red, and what to do under it. */
+  failed?: ReactNode;
+  /** What "Check the locators" found for it (2026-11-17), said under it. */
+  checked?: LocatorCheckRef | null;
   onSave: (value: string) => Promise<void>;
 }) {
   const { t } = useT();
@@ -1480,7 +1552,7 @@ function LocatorField({
     : '';
   const inForce = text.trim() || fallback;
   return (
-    <div className="settings-field picker-field">
+    <div className={`settings-field picker-field${failed ? ' locator-failed' : ''}`} data-locator-field={field}>
       <FieldName htmlFor={id} label={label} info={why} />
       <div className="field-control">
         <input
@@ -1491,7 +1563,7 @@ function LocatorField({
           autoComplete="off"
           value={text}
           placeholder={fallback}
-          aria-invalid={problem ? true : undefined}
+          aria-invalid={problem || failed ? true : undefined}
           onChange={(e) => change(e.target.value)}
         />
         <button
@@ -1520,6 +1592,17 @@ function LocatorField({
           )}
         </p>
       )}
+      {checked && (
+        <p className={`small field-after locator-checked ${checked.status}`} data-status={checked.status}>
+          {checked.status === 'found'
+            ? `✓ ${t('chatloc.found', { n: checked.count })}`
+            : checked.status === 'none'
+              ? `✗ ${t('chatloc.notFound')}`
+              : `– ${t('chatloc.notHere')}`}
+          {checked.note && <span className="muted"> {t(`chatloc.note.${checked.note}` as Key)}</span>}
+        </p>
+      )}
+      {failed && <div className="field-after">{failed}</div>}
     </div>
   );
 }

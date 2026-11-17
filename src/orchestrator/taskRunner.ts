@@ -706,6 +706,8 @@ export async function openBrowser(
         'chat-left': `The Copilot window is no longer on this conversation (it shows ${String(detail?.found ?? 'another page')}). Going back to it before anything is sent.`,
         'chat-returned': `Back on this conversation${detail?.signedIn ? ', after the sign-in' : ''}${detail?.by === 'name' ? ', found by its name in the sidebar' : ''}. The work goes on there.`,
         'chat-lost': 'The conversation could not be opened again, by its address or by its name. Nothing was sent, and nothing went into another chat.',
+        // A locator of the chat that found nothing (2026-11-17): which, and where Settings has it; the API keeps it for the red field.
+        'locator-missing': `Not found on Copilot's page: the "${String(detail?.key ?? '')}" locator (${String(detail?.locator ?? '')}) found nothing ${String(detail?.why ?? '')}. ${detail?.stopped === false ? 'The work goes on without it. ' : ''}Settings → "The chat's locators" shows it in red, with the page's HTML for a chatbot to find the right one in.`,
         // Copilot showed another of its pages, its home page, instead of the chat (2026-11-17): the chat opened from it.
         'chat-page-elsewhere': `Copilot showed its page ${String(detail?.found ?? '')} instead of the chat; opening the chat ${detail?.by === 'link' ? "by the page's own link to it" : `at ${String(detail?.to ?? '')}`}.`,
       };
@@ -713,7 +715,7 @@ export async function openBrowser(
         bus.publish({
           sessionId: id,
           type: `browser:${event}`,
-          level: event === 'chat-lost' ? 'error' : ['verification-required', 'reply-files-ignored', 'model-menu-stuck', 'chat-left', 'window-closed', 'window-not-reopened', 'reply-asked-again', 'message-sent-again'].includes(event) ? 'warn' : 'info',
+          level: event === 'chat-lost' || (event === 'locator-missing' && detail?.stopped !== false) ? 'error' : event === 'locator-missing' ? 'warn' : ['verification-required', 'reply-files-ignored', 'model-menu-stuck', 'chat-left', 'window-closed', 'window-not-reopened', 'reply-asked-again', 'message-sent-again'].includes(event) ? 'warn' : 'info',
           // An event with no sentence of its own is named, not said as "undefined".
           message: spoken[event] ?? event.replace(/-/g, ' '),
           data: detail,

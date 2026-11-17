@@ -24,7 +24,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ChatLost, WindowClosed, type ChatWindow, type TransportFactory } from '../../src/transport/chatTransport.js';
 import { NO_ADDRESS_YET } from '../../src/transport/copilotTransport.js';
-import type { ModelChoice, ModelLocator, ModelOption, OnChat, ReplyCapture, TransportOptions, WindowNotice } from '../../src/transport/copilotTransport.js';
+import type { LocatorCheck, ModelChoice, ModelLocator, ModelOption, OnChat, ReplyCapture, TransportOptions, WindowNotice } from '../../src/transport/copilotTransport.js';
+import { CHAT_LOCATOR_KEYS, resolveChatLocators, type ChatLocatorKey } from '../../src/transport/locators.js';
 import { pageModelFor, sameModel } from '../../src/transport/modelMatch.js';
 
 /** One message the runner sent, with the text of every file it attached. */
@@ -74,6 +75,9 @@ export class FakeCopilot {
   sidebarLate = 0;
   /** How many times a conversation was asked to be named. */
   nameTries = 0;
+  /** "Check the locators": how many times, and what each locator finds (unset: one element, found). */
+  locatorChecks = 0;
+  locatorFinds: Partial<Record<ChatLocatorKey, LocatorCheck>> = {};
   /** The name the rename dialog ends up taking for the one asked, or false; unset, the one asked. */
   renameTakes: ((name: string) => string | false) | null = null;
   models: ModelOption[] = [
@@ -478,6 +482,18 @@ class FakeChat implements ChatWindow {
 
   async listModels(): Promise<{ options: ModelOption[]; current: string | null; note?: string }> {
     return { options: this.lineUp(), current: this.world.currentModel };
+  }
+
+  /** "Check the locators": what the world says each finds; one that finds nothing is said as the real window says it. */
+  async checkLocators(): Promise<LocatorCheck[]> {
+    this.alive('checkLocators');
+    this.world.locatorChecks += 1;
+    const out = CHAT_LOCATOR_KEYS.map((key): LocatorCheck => this.world.locatorFinds[key] ?? { key, status: 'found', count: 1 });
+    for (const c of out) {
+      // Said with the locator in force, as the real window says it: Settings' own, else the default.
+      if (c.status === 'none') this.opts.onEvent?.('locator-missing', { key: c.key, locator: resolveChatLocators(this.opts.chatLocators).locators[c.key], why: 'when the locators were checked', stopped: false });
+    }
+    return out;
   }
 
   async sendAndConfirm(text: string, attachments: string[] = []): Promise<number> {

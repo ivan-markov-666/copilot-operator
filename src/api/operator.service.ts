@@ -9,6 +9,11 @@
 import { pageModelFor, sameModel } from '../transport/modelMatch.js';
 import { Injectable } from '@nestjs/common';
 import { existsSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
+import { readFile as readFileText } from 'node:fs/promises';
+import { LocatorFailures, type LocatorFailure } from '../session/locatorFailures.js';
+import { CHAT_LOCATOR_KEYS, locatorPrompt, resolveChatLocators, type ChatLocatorKey } from '../transport/locators.js';
+import { LocatorMissing, type LocatorCheck } from '../transport/copilotTransport.js';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { chosenHome, defaultHome, installLayout } from '../config/layout.js';
@@ -207,7 +212,7 @@ const LANGUAGE_NAMES: Record<string, string> = {
 };
 
 /** Who has the browser profile: a conversation's run, a read of the model list, or the sign-in. */
-type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'models' } | { kind: 'login' };
+type BrowserHolder = { kind: 'run'; sessionId: string } | { kind: 'models' } | { kind: 'login' } | { kind: 'locators' };
 
 /** Who is asking for the browser, so a refusal can be said in terms of what they pressed. */
 type BrowserAsk = BrowserHolder;
@@ -417,6 +422,13 @@ function browserRefusal(held: BrowserHolder, ask: BrowserAsk): string {
       : 'the sign-in window is open and has the browser profile; finish signing in first';
   }
   if (ask.kind === 'login') return loginWhileBusy;
+  // "Check the locators" (2026-11-17) holds the browser for the moment it looks.
+  if (held.kind === 'locators') {
+    return ask.kind === 'locators'
+      ? 'The locators are already being checked.'
+      : "the chat's locators are being checked in the browser; start this once that has finished";
+  }
+  if (ask.kind === 'locators') return 'The browser profile is in use right now (a run, or a reading of the models). Check the locators once it has finished.';
   if (held.kind === 'models') {
     return ask.kind === 'models'
       ? 'The model list is already being read.'
@@ -457,6 +469,8 @@ export class OperatorService {
   readonly layout = installLayout();
   readonly projectRoot = this.layout.projectRoot;
   readonly dataDir = this.layout.dataDir;
+  /** The chat's locators that found nothing, the last time for each (2026-11-17): the banner's and Settings' red fields. */
+  readonly locatorFailures = new LocatorFailures(join(this.layout.dataDir, 'locator-failures.json'));
   readonly settings = settingsOf(this.layout);
   readonly store = new SessionStore(this.dataDir, join(this.layout.promptsDir, 'level1.md'));
   readonly bus = new EventBus();
@@ -478,6 +492,8 @@ export class OperatorService {
   private readonly passwordAsked = new Map<string, string>();
   private readonly followsActing = this.bus.subscribe('*', (e) => {
     if (e.type === 'acting' && e.data) this.acting.set(e.sessionId, e.data as Acting);
+    // A chat locator that found nothing (2026-11-17): kept for the banner and Settings.
+    else if (e.type === 'browser:locator-missing' && e.data) this.recordLocatorFailure(e.data);
     else if (e.type === 'browser:sign-in-required' || e.type === 'browser:verification-required') {
       // The Copilot window waits for the operator to sign in, or to show a person is there: not counted (2026-10-29).
       this.holdOf(e.sessionId)?.waitFor(`${e.type}:${e.sessionId}`);
@@ -1153,6 +1169,66 @@ export class OperatorService {
    * One of them as a file: what failed and where, the run's record, the sessions' events from the press,
    * and the console lines from the press to a few seconds after — secret-shaped text taken out.
    */
+  /**
+   * A chat locator that found nothing where the bot needed it (the transport's `locator-missing`, operator 2026-11-17:
+   * "a mechanism that detects which locator exactly the bot failed on"): kept as the last one for that locator, for the
+   * banner on every page and the field in red in Settings.
+   */
+  recordLocatorFailure(detail: Record<string, unknown>): void {
+    const key = detail.key;
+    if (typeof key !== 'string' || !(CHAT_LOCATOR_KEYS as readonly string[]).includes(key) || typeof detail.locator !== 'string') return;
+    const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+    const html = str(detail.html);
+    const picture = str(detail.picture);
+    const url = str(detail.url);
+    void this.locatorFailures
+      .record({
+        key: key as ChatLocatorKey,
+        locator: detail.locator,
+        at: new Date().toISOString(),
+        why: str(detail.why) ?? '',
+        stopped: detail.stopped !== false,
+        ...(html ? { html } : {}),
+        ...(picture ? { picture } : {}),
+        ...(url ? { url } : {}),
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * The failures kept, each with whether its locator has been changed in Settings since (then it is no longer the one
+   * that found nothing, and the banner and the red go), whether its HTML is there to download, and the text for a
+   * chatbot. The files' places are not given out: the HTML is downloaded through the API.
+   */
+  async listLocatorFailures(): Promise<Array<Omit<LocatorFailure, 'html' | 'picture'> & { html: boolean; changed: boolean; prompt: string }>> {
+    const cfg = await this.settings.load();
+    const inForce = resolveChatLocators(cfg.copilot.chatLocators).locators;
+    return (await this.locatorFailures.list()).map(({ html, picture: _picture, ...f }) => ({
+      ...f,
+      html: !!html && existsSync(html),
+      changed: inForce[f.key] !== f.locator,
+      prompt: locatorPrompt(f.key, f.locator),
+    }));
+  }
+
+  /** The page's HTML kept with a failure, to download: only a file in the bot's runs folder. */
+  async locatorFailureHtml(key: string): Promise<{ fileName: string; content: string }> {
+    const f = await this.locatorFailures.get(key);
+    if (!f?.html) throw new Error(`No HTML is kept for the "${key}" locator.`);
+    const cfg = await this.settings.load();
+    const runs = resolve(cfg.resolved.runsDir);
+    const file = resolve(f.html);
+    const inside = relative(runs, file);
+    if (!inside || inside.startsWith('..') || isAbsolute(inside)) {
+      throw new Error(`The HTML kept for the "${key}" locator is not in the bot's runs folder.`);
+    }
+    const content = await readFileText(file, 'utf8').catch(() => {
+      throw new Error(`The HTML kept for the "${key}" locator is gone (${file}).`);
+    });
+    const stamp = f.at.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    return { fileName: `copilot-page-${key}-${stamp}.html`, content };
+  }
+
   async startFailureReport(id: string): Promise<{ fileName: string; content: string }> {
     await this.init();
     const f = this.startFailures.get(id);
@@ -3485,8 +3561,11 @@ export class OperatorService {
       await this.init();
       const cfg = await this.settings.load();
       transport = createTransport({
-        // The box to write in by Settings' locator (2026-11-17): the sign-in ends when it shows.
+        // The box to write in by Settings' locator (2026-11-17): the sign-in ends when it shows; one that finds nothing is kept.
         ...(cfg.copilot.chatLocators ? { chatLocators: cfg.copilot.chatLocators } : {}),
+        onEvent: (event, detail) => {
+          if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
+        },
         profileDir: cfg.resolved.profileDir,
         transportDir: join(cfg.resolved.runsDir, '_login'),
         chatUrl: cfg.copilot.url,
@@ -3554,6 +3633,9 @@ export class OperatorService {
         keepFailurePage: cfg.copilot.keepFailurePage,
         // The rows' locator reads the names (Settings' own, 2026-10-24).
         ...pickerOptions(cfg),
+        onEvent: (event, detail) => {
+          if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
+        },
       });
       await this.closeChatWindow('reading the models needs the browser');
       await transport.open();
@@ -3576,6 +3658,54 @@ export class OperatorService {
       if (leadNow && !sameModel(leadNow.name, lead)) await this.setDefaultLeadModel(leadNow.name);
       if (kerriganNow && !sameModel(kerriganNow.name, kerrigan)) await this.setDefaultKerriganModel(kerriganNow.name);
       return catalogue;
+    } finally {
+      await transport?.close().catch(() => undefined);
+      this.releaseBrowser(claim.holder);
+    }
+  }
+
+  /**
+   * "Check the locators" (operator, 2026-11-17): the Copilot window opened as for reading the models, each of the chat's
+   * locators looked for (`checkLocators`, which only reads and looks), and the window closed. One that found nothing is
+   * kept as a failure (its field red, its HTML kept); one found whose failure is still kept has it taken away: it works
+   * again. The box itself not found: the chat did not open, said for the box, the others not looked for.
+   */
+  async checkLocators(): Promise<{ checkedAt: string; results: LocatorCheck[] }> {
+    const claim = this.claimBrowser({ kind: 'locators' });
+    if ('refused' in claim) throw new Error(claim.refused);
+    let transport: ChatTransport | null = null;
+    try {
+      await this.init();
+      const cfg = await this.settings.load();
+      transport = createTransport({
+        profileDir: cfg.resolved.profileDir,
+        transportDir: join(cfg.resolved.runsDir, '_locators'),
+        chatUrl: cfg.copilot.url,
+        channel: cfg.copilot.channel,
+        headless: cfg.copilot.headless,
+        replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
+        signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
+        humanWaitMs: cfg.copilot.humanWaitSec * 1000,
+        keepFailurePage: cfg.copilot.keepFailurePage,
+        ...pickerOptions(cfg),
+        onEvent: (event, detail) => {
+          if (event === 'locator-missing' && detail) this.recordLocatorFailure(detail);
+        },
+      });
+      await this.closeChatWindow('checking the locators needs the browser');
+      await transport.open();
+      let results: LocatorCheck[];
+      try {
+        await transport.ensureSignedIn();
+        results = await transport.checkLocators();
+      } catch (e) {
+        if (!(e instanceof LocatorMissing) || e.key !== 'composer') throw e;
+        results = CHAT_LOCATOR_KEYS.map((key): LocatorCheck => (key === 'composer' ? { key, status: 'none', count: 0 } : { key, status: 'not-here', count: 0, note: 'noChat' }));
+      }
+      // Found now: no longer a failure, whatever was kept.
+      const kept = await this.locatorFailures.list();
+      for (const r of results) if (r.status === 'found' && kept.some((f) => f.key === r.key)) await this.locatorFailures.dismiss(r.key);
+      return { checkedAt: new Date().toISOString(), results };
     } finally {
       await transport?.close().catch(() => undefined);
       this.releaseBrowser(claim.holder);

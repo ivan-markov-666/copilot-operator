@@ -171,7 +171,7 @@ export async function seedPlan(dataDir: string, plan: unknown, projectDir = ''):
  * which is how a check restarts the program after killing it — and those are left in place on
  * `stop` unless `own` makes this harness the one that cleans them up.
  */
-export async function startHarness(opts: { settings?: Record<string, unknown>; dirs?: HarnessDirs; own?: boolean; webDir?: string } = {}): Promise<Harness> {
+export async function startHarness(opts: { settings?: Record<string, unknown>; dirs?: HarnessDirs; own?: boolean; webDir?: string; /** The ports tried, in turn; a check of the retry hands one that is taken first. */ ports?: () => Promise<number> } = {}): Promise<Harness> {
   const dirs = opts.dirs ?? (await makeDirs(opts.settings));
   const own = opts.own ?? !opts.dirs;
   const { base, dataDir, runsDir, repo } = dirs;
@@ -181,8 +181,23 @@ export async function startHarness(opts: { settings?: Record<string, unknown>; d
   process.env.COP_DATA_DIR = dataDir;
 
   const { startApi } = await import('../../src/api/server.js');
-  const port = await freePort();
-  const api = await startApi({ port, quiet: true, webDir: opts.webDir });
+  /*
+   * A free port, tried again on another when it cannot be taken after all: on 2026-11-17 check:model-help ended the
+   * whole suite on "listen EACCES 127.0.0.1:52651" — Windows (Hyper-V / WinNAT) reserves ranges of ports as it goes
+   * (`netsh interface ipv4 show excludedportrange protocol=tcp`), and the port the system had just handed out was
+   * reserved before the API listened on it.
+   */
+  const { port, api } = await (async (): Promise<{ port: number; api: StartedApi }> => {
+    for (let tries = 1; ; tries += 1) {
+      const port = await (opts.ports ?? freePort)();
+      try {
+        return { port, api: await startApi({ port, quiet: true, webDir: opts.webDir }) };
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (tries >= 5 || (code !== 'EACCES' && code !== 'EADDRINUSE')) throw e;
+      }
+    }
+  })();
   const origin = `http://127.0.0.1:${port}`;
 
   const ops = api.app.get(OperatorService);

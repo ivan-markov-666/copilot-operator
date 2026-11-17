@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 import { SCRIPT_KINDS, type ScriptKind } from '../exec/scriptKinds.js';
+import { CHAT_LOCATOR_KEYS, type ChatLocatorKey } from '../transport/locators.js';
 import { parse as parseYaml } from 'yaml';
 import { readHandWritten } from './handWritten.js';
 import { applyPolicyLock, readPolicyLocks, type LockOutcome, type LockablePolicy } from './lockedPolicy.js';
@@ -185,14 +186,14 @@ export const RunConfigSchema = z.object({
         .optional(),
       /**
        * The chat page's locators (operator, 2026-11-17: "a field in Settings to set it by hand", after the work page's
-       * box to write in changed and the start was refused as "not the Microsoft 365 Copilot chat"): the box to write in.
-       * Left out, or empty, the default in `transport/locators.ts` (`DefaultChatLocators`); one that cannot be used is
-       * not, and the run says why. Taken by the next Copilot window.
+       * box to write in changed and the start was refused as "not the Microsoft 365 Copilot chat"; then "each of the
+       * locators"): every one the bot finds the chat by. Left out, or empty, the default in `transport/locators.ts`
+       * (`DefaultChatLocators`); one that cannot be used is not, and the run says why. Taken by the next Copilot window.
+       * Made from the keys themselves: written out by hand, it kept only the box's, and a locator saved for Send was
+       * dropped when the settings were read.
        */
       chatLocators: z
-        .object({
-          composer: z.string().optional(),
-        })
+        .object(Object.fromEntries(CHAT_LOCATOR_KEYS.map((k) => [k, z.string().optional()])) as Record<ChatLocatorKey, z.ZodOptional<z.ZodString>>)
         .optional(),
       /**
        * A picture and the menu's HTML at every step of choosing a model, with what each locator found (operator,
