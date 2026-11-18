@@ -83,6 +83,7 @@
     "check:e2e-interrupt": "tsx test/e2e-interrupt.check.ts",
     "check:ui": "node scripts/build-package.mjs && tsx test/ui.check.ts && tsx test/ui-flows.check.ts",
     "check:all": "npm run typecheck && npm run check && npm run check:ui && npm run check:release",
+    "check:parallel": "node scripts/check-parallel.mjs",
     "check:e2e-vcs": "tsx test/e2e-vcs.check.ts",
     "check:noattach": "tsx test/noattach.check.ts",
     "check:guard": "tsx test/guard.check.ts",

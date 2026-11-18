@@ -614,8 +614,16 @@ These cost real investigation and are worth knowing before touching the code.
 ## Checks
 
 ```bash
-npm run check          # all of them
+npm run check          # all of them, one after another
+npm run check:all      # the types, all of them, the interface and the package: about 75 minutes
+npm run check:parallel # the same, several at a time: about half the time
 ```
+
+`check:parallel` (`scripts/check-parallel.mjs`) runs 2 to 4 at a time (`-- --jobs N`), the slowest first by the
+times of the last run, the few that use what the machine shares (the clipboard, processes, the profile lock) alone
+after the others, and `check:release` last. A check that fails among the others is run again alone and said as
+"failed under load": still a failure. Each check's output is kept in a file under the temp folder, named at the end
+with the failures and the slowest ten. `-- --only e2e` runs only the checks whose name holds "e2e".
 
 Each one prints what it exercised rather than asserting silently, so a failure is readable.
 There is no live-tenant test: that is the part that needs a human and a signed-in browser.
