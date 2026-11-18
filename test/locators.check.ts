@@ -140,4 +140,52 @@ console.log('\n--- "Check the locators": through the API, a window opened and cl
   }
 }
 
+console.log('\n--- the one file for a chatbot (2026-11-18): downloaded, all it needs in it, the piece of the page first ---');
+{
+  const h = await startHarness();
+  try {
+    const failures = join(h.runsDir, 'chatbot-run', 'failures');
+    await mkdir(failures, { recursive: true });
+    const page = join(failures, 'locator-renameSave-1.html');
+    const piece = join(failures, 'locator-renameSave-1.piece.html');
+    await writeFile(page, '<!doctype html>\n<html><body><main>the whole page itself</main><div role="dialog"><input id="new-session-name"><button>OK</button></div></body></html>', 'utf8');
+    await writeFile(piece, '<div role="dialog"><input id="new-session-name"><button>OK</button></div>', 'utf8');
+    h.ops.recordLocatorFailure({ key: 'renameSave', locator: DefaultChatLocators.renameSave, why: 'while the conversation was being named "op/x"', stopped: false, html: page, piece, around: 'the element the "renameInput" locator finds' });
+    const get = (key: string, lang?: string): Promise<Response> =>
+      fetch(`http://127.0.0.1:${h.api.port}/api/locators/failures/${encodeURIComponent(key)}/chatbot${lang ? `?lang=${lang}` : ''}`, { headers: { 'x-cop-token': h.api.token } });
+    const res = await waitFor('the file', async () => {
+      const r = await get('renameSave', 'bg');
+      return r.status === 200 ? r : null;
+    }, 10_000).catch(() => null);
+    const cd = res?.headers.get('content-disposition') ?? '';
+    t.check('a download, never a page: a .txt named for the locator', [res?.status, res?.headers.get('content-type')?.split(';')[0], /attachment/.test(cd), /for-chatbot-renameSave-\d{8}-\d{6}\.txt/.test(cd), res?.headers.get('x-content-type-options')], [200, 'application/octet-stream', true, true, 'nosniff']);
+    const text = res ? await res.text() : '';
+    const at = (s: string): number => text.indexOf(s);
+    t.check('in it: the goal, what failed, the old locator, the piece in Part 1, the whole page in Part 2, the language', [
+      at('**Your goal:**') > 0,
+      text.includes('the "Save" button of the dialog that renames a conversation'),
+      text.includes(DefaultChatLocators.renameSave),
+      at('<div role="dialog"><input id="new-session-name">') > at('## Part 1') && at('<div role="dialog"><input id="new-session-name">') < at('## Part 2'),
+      at('<main>the whole page itself</main>') > at('## Part 2'),
+      text.includes('Speak to the user in Bulgarian'),
+    ], [true, true, true, true, true, true]);
+    t.truthy('the list does not give out where the piece is', !JSON.stringify(await h.call('GET', '/locators/failures')).includes('piece.html'));
+
+    // One kept before the piece was, its page outside the runs folder: still a file, with the way by hand.
+    h.ops.recordLocatorFailure({ key: 'copy', locator: DefaultChatLocators.copy, why: 'x', stopped: true, html: join(h.base, 'elsewhere.html') });
+    await writeFile(join(h.base, 'elsewhere.html'), "<p>not the bot's</p>", 'utf8');
+    const old = await waitFor('the second file', async () => {
+      const r = await get('copy');
+      return r.status === 200 ? await r.text() : null;
+    }, 10_000).catch(() => '');
+    t.check("no piece, and a page outside the runs folder not read: no Part 1, no page, the way by hand, English", [old.includes('there is no Part 1'), old.includes("not the bot's"), old.includes('The page itself was not saved'), old.includes('Copy outerHTML'), old.includes('Speak to the user in English')], [true, false, true, true, true]);
+    const none = await h.raw('GET', '/locators/failures/stop/chatbot');
+    t.check('none kept for it: refused, said', [none.status, String(none.body).includes('No failure is kept for the "stop" locator')], [400, true]);
+  } catch (e) {
+    t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await h.stop();
+  }
+}
+
 t.finish();

@@ -4,7 +4,8 @@
  * each. Kept in the data folder, so a failure seen before a restart is still shown; read by the banner on every page
  * and by Settings, where the locator's field is in red, until the locator is changed there or the operator closes it.
  */
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeFileAtomically } from './store.js';
 import { CHAT_LOCATOR_KEYS, type ChatLocatorKey } from '../transport/locators.js';
 import { isStepKey } from '../transport/chatSteps.js';
 
@@ -68,12 +69,14 @@ export class LocatorFailures {
     return had;
   }
 
+  /*
+   * Through the store's own atomic write, which tries again when Windows refuses the rename for a moment (2026-11-18:
+   * a failure recorded while the banner, polling every few seconds, was reading the file was lost without a word: the
+   * rename onto a file open for reading was refused, and the error swallowed).
+   */
   private async change(edit: (all: LocatorFailure[]) => LocatorFailure[]): Promise<void> {
     const run = async () => {
-      const next = edit(await this.list());
-      const tmp = `${this.file}.tmp`;
-      await writeFile(tmp, JSON.stringify(next, null, 2), 'utf8');
-      await rename(tmp, this.file);
+      await writeFileAtomically(this.file, async () => JSON.stringify(edit(await this.list()), null, 2));
     };
     const done = this.queue.then(run, run);
     this.queue = done.catch(() => undefined);

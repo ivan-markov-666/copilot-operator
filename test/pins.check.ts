@@ -41,7 +41,8 @@ import { RunConfigSchema } from '../src/config/schema.js';
 import { buildChatName, chatCode, makeRunId, parseChatId, MAX_CHAT_NAME } from '../src/transport/chatSession.js';
 import { landed, sentTextHead } from '../src/transport/acceptance.js';
 import { isCopilotOtherPage, isReplyTimeout, isWorkChatAddress, surfaceOfUrl } from '../src/transport/copilotTransport.js';
-import { CHAT_LOCATOR_KEYS, ChatLocatorGroupOf, ChatLocatorWhat, DefaultChatLocators, fillFileLocator, locatorPrompt, playwrightSelector, resolveChatLocators, Url } from '../src/transport/locators.js';
+import { CHAT_LOCATOR_KEYS, ChatLocatorGroupOf, ChatLocatorNear, ChatLocatorShows, ChatLocatorWhat, DefaultChatLocators, fillFileLocator, locatorPrompt, NearPlaces, playwrightSelector, resolveChatLocators, StepNear, Url } from '../src/transport/locators.js';
+import { chatbotFile, languageName, PAGE_CAP } from '../src/session/chatbotFile.js';
 import { EventBus } from '../src/session/events.js';
 import { DefaultBuiltInSteps, isStepKey, keyProblem, stepPrompt, usableSteps } from '../src/transport/chatSteps.js';
 import { chatNotice } from '../src/session/chatNotice.js';
@@ -1002,6 +1003,31 @@ try {
     t.check('keys: names and modifiers taken, the rest not', ['Escape', 'Control+Enter', 'F12', 'a', 'Hyper', 'Escape; rm', ''].map((k) => keyProblem(k) === null), [true, true, true, true, false, false, false]);
     t.check('a step\'s key: step:<id>, nothing else', ['step:mode', 'step:a-b_1', 'step:', 'step:a b', 'composer'].map(isStepKey), [true, true, false, false, false]);
     t.truthy('the chatbot is told what the step is for, in the operator\'s words', /"Chat mode"/.test(stepPrompt({ name: 'Chat mode', action: 'click' }, '#m')) && stepPrompt({ name: 'Chat mode', action: 'click' }, '#m').includes('#m'), stepPrompt({ name: 'Chat mode', action: 'click' }, '#m'));
+  }
+
+  {
+    // The one file for a chatbot (2026-11-18): where the piece is taken, when the element shows, and what the file says.
+    const known = new Set<string>([...CHAT_LOCATOR_KEYS, ...Object.keys(NearPlaces)]);
+    t.check('every locator has where to look near it, never itself, only locators and places', CHAT_LOCATOR_KEYS.filter((k) => !ChatLocatorNear[k]?.length || ChatLocatorNear[k].includes(k) || ChatLocatorNear[k].some((n) => !known.has(n))), []);
+    t.check("and when it is on the screen, for finding it by hand", CHAT_LOCATOR_KEYS.filter((k) => !(ChatLocatorShows[k] ?? '').trim()), []);
+    t.truthy("the operator's own steps look in a dialog first", StepNear[0] === 'dialog' && StepNear.every((n) => known.has(n)), StepNear);
+    const failure = { key: 'renameSave' as const, locator: 'role=button[name="Save"]', at: '2026-11-18T09:05:59.000Z', why: 'while the conversation was being named "op/x"', stopped: false, around: 'the element the "renameInput" locator finds' };
+    const piece = '<div role="dialog"><input id="new-session-name"><button>OK</button></div>';
+    const page = '<!doctype html>\n<html><body><main>```weird``` page</main>' + piece + '</body></html>';
+    const bg = chatbotFile({ failure, piece, page, lang: 'bg' });
+    const at = (s: string): number => bg.indexOf(s);
+    t.check('the file: instructions first, then Part 1 the piece, then Part 2 the page', [at('**Your goal:**') > 0, at('## How to answer') < at('## Part 1'), at('## If the element is in neither part') < at('## Part 1'), at(piece) > at('## Part 1') && at(piece) < at('## Part 2'), at('```weird```') > at('## Part 2')], [true, true, true, true, true]);
+    t.check('what failed, the old locator, where it goes, the language', [bg.includes('the "Save" button of the dialog that renames a conversation'), bg.includes('`role=button[name="Save"]`'), bg.includes('Settings → "The chat\'s locators", the field in red'), bg.includes('Speak to the user in Bulgarian'), bg.includes('around the element the "renameInput" locator finds')], [true, true, true, true, true]);
+    t.truthy('the way by hand: bring it on the screen, F12, Ctrl+Shift+C, Copy outerHTML', /F12[\s\S]*Ctrl\+Shift\+C[\s\S]*Copy outerHTML/.test(bg) && bg.includes(ChatLocatorShows.renameSave), bg);
+    t.truthy("a page holding ``` is fenced with more backticks, so it never closes its own block", bg.includes('````html\n<!doctype html>'), bg.slice(at('## Part 2'), at('## Part 2') + 80));
+    t.check('another language, or none: English', [chatbotFile({ failure, piece, page }).includes('Speak to the user in English'), chatbotFile({ failure, piece, page, lang: 'xx' }).includes('Speak to the user in English'), languageName('de')], [true, true, 'German']);
+    const noPiece = chatbotFile({ failure: { ...failure, around: undefined }, piece: '', page: '' });
+    t.check('nothing kept: no Part 1, no page, and the way by hand', [noPiece.includes('there is no Part 1'), noPiece.includes('The page itself was not saved'), noPiece.includes('Copy outerHTML')], [true, true, true]);
+    const big = chatbotFile({ failure, piece, page: 'x'.repeat(PAGE_CAP + 10) });
+    t.truthy('a page longer than the cap is cut, and said', big.includes(`it is ${PAGE_CAP + 10} characters long`) && big.length < PAGE_CAP + 20_000, big.length);
+    t.check("a template's placeholder kept: the file's name, the conversation's id", [chatbotFile({ failure: { ...failure, key: 'attachmentUploaded' }, piece, page }).includes('Keep {$file_name} in it'), chatbotFile({ failure: { ...failure, key: 'chatMore' }, piece, page }).includes('Keep {$chat_id} in it'), bg.includes('Keep {$')], [true, true, false]);
+    const step = chatbotFile({ failure: { ...failure, key: 'step:mode', name: 'Chat mode', why: 'when the chat opened: found nothing within 2 s' }, step: { name: 'Chat mode', action: 'click', when: 'open' }, piece, page });
+    t.check("one of the operator's own steps: by its name, in Steps to the chat, when it is met", [step.includes('"Chat mode"'), step.includes('Settings → "Steps to the chat"'), step.includes('right after the chat opens'), step.includes('when the chat opened: found nothing within 2 s')], [true, true, true, true]);
   }
   {
     const ESC = String.fromCharCode(27);

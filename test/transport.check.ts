@@ -1169,6 +1169,40 @@ try {
   });
 
   // -------------------------------------------------------------------------------------------
+  await section('the piece of the page for a chatbot, around what was found near the missing one; a rename Save not found, the name given with Enter', async () => {
+    /*
+     * Operator, 2026-11-18: "the piece of code where the new locator most likely is", in one file for a chatbot. The
+     * piece is the largest part, of at most 40 000 characters, around an element found near the one missing (the box
+     * for Send, the rename field for Save). At work the same day the rename dialog's Save was not found and the dialog
+     * was left open over the chat: the name is now given with Enter, and a dialog that takes neither is closed.
+     */
+    const FAR = `<main id="far">${'<p>an old message of the conversation</p>'.repeat(2_000)}</main>`;
+    const BOX = '<div data-test-id="chat-input-wrapper"><span id="m365-chat-editor-target-element" contenteditable="true" style="display:inline-block;min-width:200px;min-height:20px"></span><button id="attach-here">+</button></div>';
+    const a = await fixture('piece-send', `${FAR}${BOX}`);
+    Object.assign(a.transport as unknown as { sendWaitMs: number }, { sendWaitMs: 1_000 });
+    await rejection(a.transport.send('hello'));
+    const said = (named(a.events, 'locator-missing')[0]?.detail ?? {}) as Record<string, unknown>;
+    const piece = typeof said.piece === 'string' ? await readFile(said.piece, 'utf8') : '';
+    t.check("Send not found: the piece is the box's area, the far conversation left out, and what it is around said", [said.key, piece.includes('chat-input-wrapper'), piece.includes('attach-here'), piece.includes('an old message'), piece.length > 0 && piece.length <= 40_000, String(said.around ?? '').includes('"composer"')], ['send', true, true, false, true, true]);
+    const whole = typeof said.html === 'string' ? await readFile(said.html, 'utf8') : '';
+    t.truthy('and the whole page kept beside it, as before', whole.includes('an old message') && whole.includes('chat-input-wrapper'));
+
+    // The rename dialog's Save not found by its locator, in a dialog that takes Enter: named all the same.
+    const ENTER = "d.querySelector('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') d.querySelector('[data-count=Save]').click(); }); document.body.appendChild(d);";
+    const r = await fixture('rename-enter', SIDEBAR(true, 'escape').replace('document.body.appendChild(d);', ENTER) + FAR, { chatLocators: { renameSave: '#no-such-save' } });
+    t.check('Save not found: the name given with Enter, and taken', await r.transport.nameChat('ID-42', 'op/x/enter'), 'op/x/enter');
+    const rs = named(r.events, 'locator-missing').map((e) => (e.detail ?? {}) as Record<string, unknown>);
+    const rp = typeof rs[0]?.piece === 'string' ? await readFile(String(rs[0].piece), 'utf8') : '';
+    t.check("said as the Save locator, not stopping the work; its piece the dialog as it was open, its own button in it", [rs.map((x) => [x.key, x.stopped]), rp.includes('new-session-name'), rp.includes('data-count="Save"'), rp.includes('an old message')], [[['renameSave', false]], true, true, false]);
+    t.check('the sidebar shows the name, and no dialog is left', [await r.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label'), await r.page.locator('#new-session-name').count()], ['op/x/enter', 0]);
+
+    // A dialog that takes no Enter either: not named, and closed, not left over the chat.
+    const n = await fixture('rename-no-enter', SIDEBAR(true, 'escape') + FAR, { chatLocators: { renameSave: '#no-such-save' } });
+    t.check('Save not found and no Enter taken: not named', await n.transport.nameChat('ID-42', 'op/x/none'), false);
+    t.check('the dialog closed, the name unchanged, the failure said', [await n.page.locator('#new-session-name').count(), await n.page.locator('a[href="/chat/conversation/ID-42"]').getAttribute('aria-label'), named(n.events, 'chat-name-failed').length], [0, 'old', 1]);
+  });
+
+  // -------------------------------------------------------------------------------------------
   await section('an attached file: the work page\'s new card and the old chip both found, and one that is not said by its locator', async () => {
     /*
      * Work, 2026-11-17: a message over the length sent as text goes with its whole as message-01-in-full.txt. The page
