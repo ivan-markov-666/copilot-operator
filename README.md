@@ -433,8 +433,8 @@ and a worker, which runs the commands of each subtask and reports back — two c
 same Copilot window, the lead asking you only what nobody else can decide. "Pause" holds the work at its next message or command and becomes
 "Continue". The interface speaks nine languages (English, Bulgarian, German, Spanish, French,
 Portuguese, Japanese, Korean, Arabic), chosen from "Language". "Kerrigan" on the home screen hands out a persona to
-give another chat, which then helps you write tasks for this one (optional); she knows your projects,
-with the level 2 you write for each in Settings. A project in Settings can be marked "For
+give another chat, which then helps you write tasks for this one and answers any question about the
+program (optional); she knows your projects, with the level 2 you write for each in Settings. A project in Settings can be marked "For
 reference only": the bot reads it and runs what only reads it, and whatever a command changes there
 — files, branches, what is staged — is put back after that command, and the chat is told. See
 [`docs/ui.md`](docs/ui.md); the Sessions page, the task register and plans from JSON were removed
@@ -579,6 +579,13 @@ new control the operator would ever be told to press has to be added to the guid
 persona does not know it exists. The same check reads the pages themselves, so a label that is
 still in the dictionary but that nothing renders any more fails too, and it holds the labels
 Kerrigan quotes in her own prose to the same standard.
+
+She knows the whole program, not only how to write a task (2026-11-18): every screen of the guide is in her
+text, the cards and notices shown on every page included, so the operator can just ask her how something works.
+She also takes the file a locator's notice gives ("Download the file for a chatbot") and answers with the new
+locator. The same check holds her under 100,000 characters, so she still fits in the box of a chat like Copilot's,
+which refuses about 120,000; what is too detailed for a helper stays out (`EVERY_PAGE_SKIP` in `kerrigan.ts`).
+She carries the version and the settings of the moment she is taken, so she is taken again after an update.
 
 ## Notable findings
 

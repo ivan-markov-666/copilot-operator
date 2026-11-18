@@ -1257,9 +1257,11 @@ try {
     t.truthy('the logo is beside the name in the bar on top', (await page.locator('.wb-brand svg.brand-logo').count()) === 1, await page.locator('.wb-brand').innerHTML());
     // What Kerrigan is, in the room under her button (operator, 2026-10-22: "short and clear; no empty space there").
     const aboutBox = page.locator('.wb-welcome .kerrigan-about');
-    t.check('under her button: what Kerrigan is, and three things she is for', [await aboutBox.getByRole('heading').textContent(), await aboutBox.locator('li').count()], [en['kerrigan.aboutTitle'], 3]);
+    t.check('under her button: what Kerrigan is, four things she is for, and four steps to use her', [await aboutBox.getByRole('heading').textContent(), await aboutBox.locator('ul > li').count(), await aboutBox.locator('ol > li').count()], [en['kerrigan.aboutTitle'], 4, 4]);
     const aboutText = (await aboutBox.textContent()) ?? '';
     t.truthy('and how to use her, by the names of her menu\'s items', aboutText.includes(`“${en['kerrigan.copy']}”`) && aboutText.includes(`“${en['kerrigan.save']}”`) && aboutText.includes(en['kerrigan.aboutNote']!), aboutText);
+    // Operator, 2026-11-18: she knows the program in full and can be asked about it; the file for a chatbot is for her too.
+    t.truthy('she can be asked anything about the program, the locator file goes to her, and she is taken again after an update', aboutText.includes('ask it anything about it') && aboutText.includes(`“${en['chatloc.file']}”`) && aboutText.includes(en['kerrigan.aboutFresh']!), aboutText);
     t.check(
       'right under the button',
       await page.evaluate(() => document.querySelector('.wb-welcome .kerrigan-about')!.getBoundingClientRect().top >= document.querySelector('.wb-welcome .kerrigan')!.getBoundingClientRect().bottom - 1),

@@ -1476,7 +1476,7 @@ button.linkish:hover { text-decoration: underline; }
 .kerrigan-about h3 { margin: 0 0 6px; font-size: calc(14.5px * var(--scale)); }
 .kerrigan-about p { margin: 6px 0; }
 .kerrigan-about .kerrigan-about-uses { margin-bottom: 2px; font-weight: 600; }
-.kerrigan-about ul { margin: 0 0 6px; padding-inline-start: 20px; }
+.kerrigan-about ul, .kerrigan-about ol { margin: 0 0 6px; padding-inline-start: 20px; }
 .kerrigan-about li { margin: 2px 0; }
 .wb-appear { width: 290px; }
 .wb-appear-label { margin: 10px 0 4px !important; color: var(--muted); font-size: calc(12px * var(--scale)); text-transform: uppercase; letter-spacing: 0.04em; }

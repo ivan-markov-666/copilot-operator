@@ -129,8 +129,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'link',
             en: 'Settings',
             bg: 'Настройки',
-            doesEn: 'Opens Settings: the projects with their level 2, the sign-in to Copilot, the models of the work and of the review, how a task runs; and the base prompt, to read.',
-            doesBg: 'Отваря Настройки: проектите с техния шаблон ниво 2, входа в Copilot, моделите на работата и на рецензията, как върви една задача; и основния prompt, за четене.',
+            doesEn: 'Opens Settings: the projects with their level 2, the sign-in to Copilot, the models (the worker\'s, the lead\'s, Kerrigan\'s, the review\'s), the skills, the locators and the steps to the chat, how a task runs, the programs and scripts the bot may start; and the base prompt, to read.',
+            doesBg: 'Отваря Настройки: проектите с техния шаблон ниво 2, входа в Copilot, моделите (на изпълнителя, на ръководителя, на Кериган, на рецензията), skill-овете, локаторите и стъпките до чата, как върви една задача, програмите и скриптовете, които ботът може да пуска; и основния prompt, за четене.',
           },
           {
             key: 'nav.system',
@@ -161,8 +161,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'To the top of the page',
             bg: 'Най-горе на страницата',
-            doesEn: 'The round ↑ button at the right edge of a page more than two screens long, such as the register: back to the top.',
-            doesBg: 'Кръглият бутон ↑ в десния край на страница, по-дълга от два екрана, например регистъра: обратно най-горе.',
+            doesEn: 'The round ↑ button at the right edge of a page more than two screens long: back to the top.',
+            doesBg: 'Кръглият бутон ↑ в десния край на страница, по-дълга от два екрана: обратно най-горе.',
           },
           {
             key: 'scroll.bottom',
@@ -218,9 +218,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'The work did not start',
             bg: 'Работата не започна',
             doesEn:
-              'In the start window when its button did not start the work, on / under the run buttons once the window is closed, and on every page when a run was accepted and then could not begin (the browser, the profile, the sign-in, a session refused at its turn): the error itself and where it stopped.',
+              'On every page, when a message was accepted and its work then could not begin — the browser, its profile, the sign-in: the error itself and where it stopped.',
             doesBg:
-              'В прозореца за старт, когато бутонът му не е стартирал работата, на / под бутоните за пускане след затварянето му, и на всяка страница, когато пускане е прието, а после не е могло да започне (браузърът, профилът, влизането, сесия, отказана на своя ред): самата грешка и къде е спряло.',
+              'На всяка страница, когато съобщение е прието, а работата по него после не е могла да започне — браузърът, профилът му, входът: самата грешка и къде е спряло.',
           },
           {
             key: 'startfail.download',
@@ -265,9 +265,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Fix in Settings',
             bg: 'Поправи в Settings',
             doesEn:
-              'On every page, when a locator of the chat found nothing (2026-11-17): opens Settings → "The chat\'s locators" at that locator\'s field, in red, the cursor in it. A failure that stopped the work opens it once by itself.',
+              'On every page, when a locator of the chat found nothing: opens Settings → "The chat\'s locators" at that locator\'s field, in red, the cursor in it. A failure that stopped the work opens it once by itself.',
             doesBg:
-              'На всяка страница, когато локатор на чата не е намерил нищо (2026-11-17): отваря Settings → „Локатори на чата“ на полето на този локатор, в червено, с курсора в него. Провал, спрял работата, го отваря веднъж сам.',
+              'На всяка страница, когато локатор на чата не е намерил нищо: отваря Settings → „Локатори на чата“ на полето на този локатор, в червено, с курсора в него. Провал, спрял работата, го отваря веднъж сам.',
           },
           {
             key: 'chatloc.file',
@@ -275,9 +275,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Download the file for a chatbot',
             bg: 'Изтегли файл за чатбота',
             doesEn:
-              'One file with all a chatbot needs to give the right locator (2026-11-18): what to do and why, what failed and when, the old locator, the part of the page where the element most likely is (around an element near it that was found), the whole page without scripts, styles and conversation names, and how the chatbot walks you through finding it in Edge (F12) when it is in neither. Attach it to Copilot or any other chatbot and send it, with nothing else to write; the chatbot speaks the interface\'s language.',
+              'One file with all a chatbot needs to give the right locator: what to do and why, what failed and when, the old locator, the part of the page where the element most likely is (around an element near it that was found), the whole page without scripts, styles and conversation names, and how the chatbot walks you through finding it in Edge (F12) when it is in neither. Attach it to Copilot or any other chatbot and send it, with nothing else to write; the chatbot speaks the interface\'s language.',
             doesBg:
-              'Един файл с всичко, което е нужно на чатбот, за да даде правилния локатор (2026-11-18): какво да направи и защо, какво се е провалило и кога, старият локатор, частта от страницата, където елементът най-вероятно е (около близък елемент, който е намерен), цялата страница без скриптове, стилове и имена на разговори, и как чатботът да ви преведе през търсенето в Edge (F12), ако го няма в нито една от тях. Прикачете го в Copilot или друг чатбот и го пратете, без да пишете нищо друго; чатботът говори на езика на интерфейса.',
+              'Един файл с всичко, което е нужно на чатбот, за да даде правилния локатор: какво да направи и защо, какво се е провалило и кога, старият локатор, частта от страницата, където елементът най-вероятно е (около близък елемент, който е намерен), цялата страница без скриптове, стилове и имена на разговори, и как чатботът да ви преведе през търсенето в Edge (F12), ако го няма в нито една от тях. Прикачете го в Copilot или друг чатбот и го пратете, без да пишете нищо друго; чатботът говори на езика на интерфейса.',
           },
           {
             key: 'chatloc.dismiss',
@@ -286,6 +286,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Затвори',
             doesEn: 'Closes the notice of this locator, on every page and in Settings; changing the locator in Settings takes it away too.',
             doesBg: 'Затваря съобщението за този локатор, на всяка страница и в Settings; смяната на локатора в Settings също го маха.',
+          },
+          {
+            key: 'chatloc.warnTitle',
+            kind: 'note',
+            en: 'The bot could not find "{name}" on Copilot\'s page; the work went on without it',
+            bg: 'Ботът не намери „{name}“ в страницата на Copilot; работата продължи без него',
+            doesEn:
+              'The same notice, for something the work can do without — naming the conversation, the sign that an attached file finished uploading: the work went on, more slowly or with that left undone; fixing the locator is the same.',
+            doesBg:
+              'Същото съобщение, за нещо, без което работата може — именуването на разговора, знакът, че прикачен файл е качен: работата е продължила, по-бавно или без това; поправката на локатора е същата.',
           },
         ],
       },
@@ -300,9 +310,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Step {n} is waiting for you',
             bg: 'Стъпка {n} чака вашето решение',
             doesEn:
-              'At the top of every page: one card per waiting step, with its session (a link) and the exact command. The browser tab shows "(n) waiting for you".',
+              'A card for each step that waits for you, with the exact command. The browser tab shows "(n) waiting for you".',
             doesBg:
-              'Горе на всяка страница: по една карта за всяка чакаща стъпка, със сесията ѝ (връзка) и точната команда. Разделът на браузъра показва „(n) чака вас“.',
+              'Карта за всяка стъпка, която чака вас, с точната команда. Разделът на браузъра показва „(n) чака вас“.',
           },
           {
             key: 'awaiting.title',
@@ -310,9 +320,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: "Waiting for the user's action",
             bg: 'Изчаква се действие от потребителя',
             doesEn:
-              "While anything waits for you — a command to run or skip, a question, a plan, commands handed over to run yourself, a subtask's choices, the model to choose by hand, Git's password window — the rest of the window is darkened, the card is left lit inside a ring, and this label is shown large over the darkened part. It needs no button: it goes when you answer. Nothing is blocked; you can still click and read everything. The chat opens on the conversation that asks and moves to the card, even when it was closed or scrolled up; the keyboard goes to the card unless you are typing somewhere.",
+              'While anything waits for you — a command, a question, a plan, commands to run yourself, a subtask\'s choices, the model to choose by hand, Git\'s password window — the rest of the window is darkened and this label shown large over it, the card lit inside a ring; it goes when you answer, and nothing is blocked meanwhile. The chat opens on the conversation that asks and moves to the card.',
             doesBg:
-              'Докато нещо чака вас — команда за изпълнение или пропускане, въпрос, план, команди, предадени ви да ги пуснете сами, избор за подзадача, модел за избиране на ръка, прозорецът на Git за парола — останалата част от прозореца се затъмнява, картата остава осветена в рамка и този надпис се показва голям над затъмненото. Не иска бутон: изчезва, когато отговорите. Нищо не е блокирано; пак можете да натискате и четете всичко. Чатът се отваря на разговора, който пита, и отива на картата, дори да е бил затворен или скролнат нагоре; клавиатурата отива на картата, освен ако пишете някъде.',
+              'Докато нещо чака вас — команда, въпрос, план, команди за ръчно пускане, избор за подзадача, модел за избиране на ръка, прозорецът на Git за парола — останалата част от прозореца се затъмнява и този надпис се показва голям над нея, а картата е осветена в рамка; изчезва, когато отговорите, и междувременно нищо не е блокирано. Чатът се отваря на разговора, който пита, и отива на картата.',
           },
           {
             key: 'approval.run',
@@ -393,8 +403,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Stop',
             bg: 'Спри',
-            doesEn: 'Nothing is sent: the session stops, its tasks stay queued.',
-            doesBg: 'Нищо не се изпраща: сесията спира, задачите ѝ остават на опашката.',
+            doesEn: 'Nothing is sent: the work on the message stops.',
+            doesBg: 'Нищо не се изпраща: работата по съобщението спира.',
           },
           {
             key: 'approval.leadModelTitle',
@@ -494,8 +504,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'Welcome',
             bg: 'Добре дошъл',
-            doesEn: 'The editor with nothing open: the folder the chat works in, and Kerrigan.',
-            doesBg: 'Редакторът, когато нищо не е отворено: папката, в която работи чатът, и Кериган.',
+            doesEn: 'The heading of the editor when nothing is open and no folder is chosen; with a folder open, its name is the heading instead. Under it: the folder the chat works in, and Kerrigan.',
+            doesBg: 'Заглавието на редактора, когато нищо не е отворено и не е избрана папка; с отворена папка заглавието е името ѝ. Под него: папката, в която работи чатът, и Кериган.',
           },
           {
             key: 'wb.closeTab',
@@ -518,8 +528,18 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: '{n} waiting for you',
             bg: 'чакат теб: {n}',
-            doesEn: 'In the status bar: how many commands or plans wait for an answer; brings the card on top into view.',
-            doesBg: 'В лентата най-долу: колко команди или планове чакат отговор; показва картата горе.',
+            doesEn: 'In the status bar: how many cards wait for an answer — commands, questions, plans, models, scripts to run yourself; pressed, it opens the conversation that asks and brings its card into view.',
+            doesBg: 'В лентата за състояние: колко карти чакат отговор — команди, въпроси, планове, модели, скриптове за ръчно пускане; натиснат, отваря разговора, който пита, и показва картата му.',
+          },
+          {
+            key: 'done.label',
+            kind: 'note',
+            en: 'Done',
+            bg: 'Готово',
+            doesEn:
+              'Large, in the middle of the window, once nothing runs, the queue is over and nothing waits for you: "Done", or "Finished: …" with how it ended when the last work did not end well. Not after your own Stop. The first click or key takes it away.',
+            doesBg:
+              'Голямо, в средата на прозореца, щом нищо не работи, опашката е минала и нищо не чака вас: „Готово“, или „Приключи: …“ с това как е завършило, когато последната работа не е завършила добре. Не след вашето Стоп. Първото натискане или клавиш го маха.',
           },
         ],
       },
@@ -596,8 +616,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Git',
             bg: 'Git',
-            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes, each file with its letter (M modified, A added, D deleted, R renamed, U untracked, ! in conflict) and its lines, and the branch\'s commits; a file opens its two versions side by side, a commit opens to its files. A file opens as a preview, as in VS Code: its tab\'s name in italics, and the next file opened with one click — from Git, the files, the search or Go to File — takes its place; a double click on the file opens it to stay, and a double click on the tab keeps it and shows the file among the folder\'s files ("Files"). At its top, the person\'s own commit and push (below); a file\'s "+" stages it and its "−" unstages it, and the same beside a list\'s heading takes the whole list. Two numbers on the button: above, the files not committed yet; below, every file changed on this branch, committed or not, against the branch "Compared with" names (a number that is 0 is not shown; the button\'s tooltip says both).',
-            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените — всеки файл с буквата си (M променен, A добавен, D изтрит, R преименуван, U непроследен, ! в конфликт) и редовете си — и комитите на клона; файл отваря двете си версии една до друга, комит се разгъва до файловете си. Файлът се отваря за преглед, както във VS Code: името на раздела му е в курсив, а следващият файл, отворен с едно щракване — от Git, от файловете, от търсенето или от „Отиди на файл“ —, заема мястото му; двоен клик върху файла го отваря да остане, а двоен клик върху раздела го задържа и показва файла сред файловете на папката („Файлове“). Най-горе — собственият комит и push на човека (по-долу); „+“ на файл го подготвя, „−“ го изважда от подготвените, а същото до заглавието на списък взима целия списък. Две числа върху бутона: горе — файловете, които още не са комитнати; долу — всички файлове, променени на този клон, комитнати или не, спрямо клона в „Сравнен с“ (число 0 не се показва; подсказката на бутона казва и двете).',
+            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes (each file with its letter — M, A, D, R, U, ! in conflict — and its lines), and the branch\'s commits; a file opens its two versions side by side, a commit its files. A file opens as a preview, as in VS Code: its tab in italics, replaced by the next file opened with one click; a double click keeps it. A file\'s "+" stages it and its "−" unstages it; beside a list\'s heading, the whole list. The button\'s two numbers: the files not committed yet, and every file changed on this branch.',
+            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените (всеки файл с буквата си — M, A, D, R, U, ! в конфликт — и редовете си) и комитите на клона; файл отваря двете си версии една до друга, комит — файловете си. Файлът се отваря за преглед, както във VS Code: разделът му е в курсив и се заменя от следващия файл, отворен с едно щракване; двоен клик го задържа. „+“ на файл го подготвя, „−“ го изважда от подготвените; до заглавието на списък — целия списък. Двете числа на бутона: файловете, които още не са комитнати, и всички файлове, променени на този клон.',
           },
           {
             key: 'wb.refresh',
@@ -620,8 +640,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'disclosure',
             en: 'On this branch',
             bg: 'На този клон',
-            doesEn: 'At the top of the git view: every file the branch changed, as a pull request shows them — its commits and what is not committed yet together — with its lines; a dot (●) marks the ones with something not committed yet. Over them, how many commits the branch is ahead and behind, and "All", "Committed" and "Not committed" to show only some. A file opens where the branch began against it as it is now. The branch\'s own commits are marked in "Commits", with a line where it began.',
-            doesBg: 'Най-горе в изгледа git: всеки файл, който клонът е променил, както ги показва pull request — комитите му и некомитнатото заедно — с редовете си; точка (●) отбелязва тези, в които има нещо некомитнато. Над тях — с колко комита клонът е напред и назад, и „Всички“, „Комитнати“ и „Некомитнати“, за да се покажат само някои. Файлът се отваря както е бил, където е започнал клонът, срещу това, какъвто е сега. Собствените комити на клона са отбелязани в „Комити“, с линия, където е започнал.',
+            doesEn: 'At the top of the git view: every file the branch changed, committed or not, as a pull request shows them (● marks what is not committed yet), how many commits it is ahead and behind, and filters for all, the committed and the not committed. A file opens where the branch began against it as it is now.',
+            doesBg: 'Най-горе в изгледа git: всеки файл, променен от клона, комитнат или не, както ги показва pull request (● отбелязва некомитнатото), с колко комита е напред и назад, и филтри за всички, комитнатите и некомитнатите. Файл се отваря като началото на клона срещу сегашното си състояние.',
           },
           {
             key: 'git.against',
@@ -636,8 +656,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Commit',
             bg: 'Комитни',
-            doesEn: 'At the top of the git view, under the message box (Ctrl+Enter there does the same): commits the staged files with that message, under the person\'s own name for git — the person\'s own commit, not the chat\'s. It runs the project\'s hooks, as a terminal would, unless one of them is not the project\'s own (not committed, changed since its commit, or committed by the bot): then it names them and why, and the person chooses "Without hooks", "Run them anyway" (remembered while they stay as they are) or "Cancel". Every line git and the hooks print shows as it comes; when it does not go through, a sentence says why over git\'s own words — and when git has no name for the person, a form for it. Nothing is ever amended or forced.',
-            doesBg: 'Най-горе в изгледа git, под полето за съобщението (Ctrl+Enter там прави същото): комитва подготвените файлове с това съобщение, с името на човека в git — собственият комит на човека, не на чата. Пуска hook-овете на проекта, както би го направил терминал, освен ако някой от тях не е собствен на проекта (не е комитнат, променен е след комита си или е комитнат от бота): тогава ги назовава и казва защо, а човекът избира „Без hook-ове“, „Пусни ги все пак“ (запомня се, докато са такива) или „Откажи“. Всеки ред, който git и hook-овете отпечатват, се вижда, докато идва; когато не мине, едно изречение казва защо, над собствените думи на git — а когато git няма име за човека, има форма за него. Нищо никога не се поправя (amend) и не се налага насила.',
+            doesEn: 'At the top of the git view, under the message box (Ctrl+Enter there does the same): commits the staged files with that message, under the person\'s own name for git — their commit, not the chat\'s. The project\'s hooks run as in a terminal, unless one is not the project\'s own: then it names it and asks — "Without hooks", "Run them anyway" or "Cancel". When it does not go through, a sentence says why over git\'s own words. Nothing is ever amended or forced.',
+            doesBg: 'Най-горе в изгледа git, под полето за съобщението (Ctrl+Enter там прави същото): комитва подготвените файлове с това съобщение, с името на човека в git — неговият комит, не на чата. Hook-овете на проекта се пускат както в терминал, освен ако някой не е собствен на проекта: тогава го назовава и пита — „Без hook-ове“, „Пусни ги все пак“ или „Откажи“. Когато не мине, едно изречение казва защо, над собствените думи на git. Нищо никога не се поправя (amend) и не се налага насила.',
           },
           {
             key: 'git.commitAll',
@@ -652,8 +672,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Push ↑{n}',
             bg: 'Push ↑{n}',
-            doesEn: 'Beside "Commit": sends the branch\'s commits to the branch it follows on the remote, with how many go. When the remote asks for a password, Git opens its own window for it (the view says so), which the bot never reads. Never forced: when the remote has commits the branch has not, it is refused and the view says to get them first. The project\'s pre-push hook (Git LFS\'s, for one) runs as for "Commit".',
-            doesBg: 'До „Комитни“: изпраща комитите на клона в клона, който той следва в отдалеченото хранилище, с това колко са. Когато отдалеченото хранилище иска парола, Git отваря свой прозорец за нея (изгледът го казва), който ботът никога не чете. Никога насила: когато отдалеченото хранилище има комити, които клонът няма, push-ът се отказва и изгледът казва първо да се вземат. Pre-push hook-ът на проекта (например на Git LFS) се пуска както при „Комитни“.',
+            doesEn: 'Beside "Commit": sends the branch\'s commits to the branch it follows on the remote. A password goes into Git\'s own window. Never forced: when the remote has commits the branch has not, it is refused and the view says to get them first. The pre-push hook runs as for a commit.',
+            doesBg: 'До бутона за комит: изпраща комитите на клона към клона, който той следи на remote. Паролата се въвежда в собствения прозорец на Git. Никога насила: когато remote има комити, които клонът няма, се отказва и изгледът казва първо да се вземат. Hook-ът pre-push се пуска както при комит.',
           },
           {
             key: 'git.publish',
@@ -748,8 +768,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Appearance: theme and text',
             bg: 'Изглед: тема и текст',
-            doesEn: 'The last icon: how the page looks, here and now — the theme (System, the default, follows the machine\'s light or dark; Light; Dark), the text size a step at a time (A− and A+), and the reading aids (underline links, less motion, higher contrast, thick focus outline, night light). Kept in this browser; the same as the Appearance page.',
-            doesBg: 'Последната икона: как изглежда страницата, тук и веднага — темата (Системна, по подразбиране, следва светлото или тъмното на машината; Светла; Тъмна), размерът на текста стъпка по стъпка (A− и A+) и помощните средства за четене (подчертани връзки, по-малко движение, по-висок контраст, дебела рамка на фокуса, нощна светлина). Пазят се в този браузър; същите като на страницата Изглед.',
+            doesEn: 'What the "Appearance" button in the bar on top says when pointed at: the theme (System, the default, follows the machine\'s light or dark; Light; Dark), the text size a step at a time (A− and A+), and the reading aids (underline links, less motion, higher contrast, thick focus outline, night light, the system\'s cursor). Kept in this browser.',
+            doesBg: 'Какво казва бутонът „Изглед“ в лентата горе, когато го посочите: темата (Системна, по подразбиране, следва светлата или тъмната на машината; Светла; Тъмна), размерът на текста стъпка по стъпка (A− и A+) и помощните опции (подчертани връзки, по-малко движение, по-висок контраст, дебела рамка на фокуса, нощна светлина, курсорът на системата). Пази се в този браузър.',
           },
           {
             key: 'ap.smaller',
@@ -886,9 +906,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Asked by: {who}',
             bg: 'Иска: {who}',
             doesEn:
-              'On every card — a command to allow, the model to choose, a plan, the lead\'s question — and, without "Asked by", on the line "Working…" and along the bottom: who it is, in its own colour. Plan mode (the chat writing its plan; nothing changes yet), Lead (of two chats), Worker (the chat that does the work), Reviewer (the independent check).',
+              'On every card — a command to allow, the model to choose, a plan, a question — and, without "Asked by", on the line "Working…" and along the bottom: who it is, in its own colour. Plan mode (the chat writing its plan; nothing changes yet), Lead (of two chats), Worker (the chat that does the work), Reviewer (the independent check), Kerrigan (when she directs the chats).',
             doesBg:
-              'На всяка карта — команда за разрешаване, модел за избор, план, въпрос на ръководителя — и, без „Иска“, на реда „Работи…“ и по долната лента: кой е, в свой цвят. Режим на плана (чатът пише плана си; нищо още не се променя), Ръководител (на двата чата), Изпълнител (чатът, който върши работата), Рецензент (независимата проверка).',
+              'На всяка карта — команда за разрешаване, модел за избиране, план, въпрос — и, без „Пита:“, на реда „Работи…“ и долу: кой е, в свой цвят. Режим план (чатът пише плана си; още нищо не се променя), Ръководител (при два чата), Изпълнител (чатът, който върши работата), Рецензент (независимата проверка), Кериган (когато тя ръководи чатовете).',
           },
           {
             key: 'chat.thread',
@@ -927,8 +947,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: '⎇ New branch from main',
             bg: '⎇ Нов бранч от main',
-            doesEn: 'Under the chat\'s box, beside the skills: fetches the latest of the remote\'s main and opens a window to make a new local branch from it for the next task — not tracking main, so its work is never pushed there by mistake. If the remote asks for a password or a key\'s passphrase, Git opens its own window for it: the operator types it there, it goes straight to Git, the bot never reads it. Off while a task works, and where the folder is not a repository.',
-            doesBg: 'Под полето на чата, до skill-овете: взима последното от main на remote и отваря прозорец, в който от него се прави нов локален бранч за следващата задача — не следи main, така че работата му никога не отива там по грешка. Ако remote-ът поиска парола или паролата на ключ, Git отваря свой прозорец за нея: операторът я въвежда там, тя отива направо в Git, ботът никога не я чете. Неактивен, докато работи задача, и когато папката не е хранилище.',
+            doesEn: 'Under the chat\'s box, beside the skills: fetches the latest of the remote\'s main and opens a window to make a new local branch from it for the next task — not tracking main, so its work is never pushed there by mistake. A password or a key\'s passphrase goes into Git\'s own window. Off while a task works, and where the folder is not a repository.',
+            doesBg: 'Под полето на чата, до skill-овете: взима последното от main на remote и отваря прозорец за нов локален клон от него за следващата задача — без да следи main, така че работата му никога не отива там по грешка. Парола или passphrase на ключ се въвежда в собствения прозорец на Git. Изключен, докато работи задача, и където папката не е хранилище.',
           },
           {
             key: 'nb.title',
@@ -951,8 +971,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'Not committed: {n} file(s)',
             bg: 'Некомитнато: {n} файл(а)',
-            doesEn: 'What is not committed, and the choice: take it to the new branch, as it is (refused by Git, with nothing moved, when the remote\'s main changed the same files — then putting it aside is chosen); put it aside, kept whole as a commit on a branch of its own (cop/saved/…), and start clean; or commit it on the branch the folder is on now, as one commit under the person\'s git name, not pushed, and start clean (not on a detached HEAD). Nothing is ever deleted.',
-            doesBg: 'Какво не е комитнато и изборът: да се вземе в новия бранч, както е (Git отказва, без да мести нищо, ако main на remote е променил същите файлове — тогава се избира „настрана“); да се остави настрана, пазено изцяло като commit в отделен бранч (cop/saved/…), и да се започне чисто; или да се commit-не в бранча, на който е папката сега, като един commit с git името на човека, без push, и да се започне чисто (не и на откъснат HEAD). Нищо никога не се изтрива.',
+            doesEn: 'What is not committed, and the choice: take it to the new branch as it is (refused by Git, nothing moved, when main changed the same files); put it aside as a commit on a branch of its own (cop/saved/…) and start clean; or commit it on the branch the folder is on, under the person\'s git name, not pushed. Nothing is ever deleted.',
+            doesBg: 'Некомитнатото и изборът: да се вземе в новия клон, както е (Git го отказва, без нищо да мести, когато main е сменил същите файлове); да се остави настрана като комит в отделен клон (cop/saved/…) и да се започне чисто; или да се комитне в клона, на който е папката, с името на човека в git, без push. Нищо никога не се изтрива.',
           },
           {
             key: 'nb.commitDetached',
@@ -1103,8 +1123,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Send',
             bg: 'Изпрати',
-            doesEn: 'Sends the message and starts it on the branch the folder is on; nothing is asked about branches. The Copilot window stays open when the work on it has ended, says so with an OK, and the next message works in it; close it with its X whenever you like (a message it is working on then stops, and the next one opens a new window).',
-            doesBg: 'Изпраща съобщението и го пуска на клона, на който е папката; нищо не се пита за клонове. Прозорецът на Copilot остава отворен, когато работата по него свърши, казва го с бутон „ОК“, и следващото съобщение работи в него; затворете го с X, когато пожелаете (съобщение, по което работи, тогава спира, а следващото отваря нов прозорец).',
+            doesEn: 'Sends the message and starts it on the branch the folder is on; nothing is asked about branches. The Copilot window stays open when the work on it has ended, says so with an OK, and the next message works in it; close it with its X when nothing is at work. Closed in the middle of a message, it is opened again on its conversation and the answer asked for again, as many times as Settings → Execution allow (3 by default); then the message stops, and "Continue" carries it on.',
+            doesBg: 'Изпраща съобщението и го пуска на бранча, на който е папката; нищо не се пита за бранчове. Прозорецът на Copilot остава отворен, когато работата в него свърши, казва го с „ОК“ и следващото съобщение работи в него; затворете го с X, когато нищо не работи. Затворен по средата на съобщение, той се отваря отново на разговора си и отговорът се иска пак, толкова пъти, колкото позволява Настройки → Изпълнение (3 по подразбиране); после съобщението спира и „Продължи“ го продължава.',
           },
           {
             key: 'chat.sendNote',
@@ -1199,8 +1219,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'checkbox',
             en: 'Kerrigan directs',
             bg: 'Кериган води',
-            doesEn: 'Kerrigan directs, for a new conversation: the message goes to Kerrigan, who works in the person\'s place. She looks first in what Copilot reaches for them (mail, Teams chats, meeting transcripts, shared files) and has a chat look in the code; writes the messages for chats of their own, choosing plan mode, two chats, the review and the skill for each; answers their questions, plans and cut-off subtasks, or leaves a card to the person with why and what she would choose; judges each result and goes on — in the same chat or a new one — until the task is done, then reports. Commands still run as Settings say; platform access, scripts to run by hand, passwords, sign-ins and a model chosen by hand stay the person\'s. With it, "Plan mode", "Two chats" and "Review" are hers to choose and are not shown.',
-            doesBg: 'Кериган води, за нов разговор: съобщението отива при Кериган, която работи вместо човека. Първо търси в това, до което Copilot стига за него (поща, чатове в Teams, записи на срещи, споделени файлове), и праща чат да погледне в кода; пише съобщенията за отделни чатове, като за всяко избира режим на план, два чата, рецензия и skill; отговаря на въпросите им, плановете и прекъснатите подзадачи или оставя карта на човека с причина и какво би избрала; преценява всеки резултат и продължава — в същия чат или в нов — докато задачата е готова, после дава отчет. Командите пак вървят, както казват Настройки; достъпът до платформи, скриптовете за ръчно пускане, паролите, входът и ръчно избраният модел остават на човека. С него „Режим на план“, „Два чата“ и „Рецензия“ са неин избор и не се показват.',
+            doesEn: 'For a new conversation: the message goes to Kerrigan, who works in the person\'s place — looks in what Copilot reaches for them and has a chat look in the code, writes the messages for chats of her own, answers their cards or leaves one to the person with why, judges each result and goes on until the task is done, then reports. Commands still run as Settings say; platform access, scripts to run by hand, passwords and a model chosen by hand stay the person\'s. With it, "Plan mode", "Two chats" and "Review" are hers to choose and are not shown.',
+            doesBg: 'За нов разговор: съобщението отива при Кериган, която работи вместо човека — търси в това, до което Copilot стига за него, и праща чат да погледне в кода, пише съобщенията за свои чатове, отговаря на картите им или оставя карта на човека с причината, преценява всеки резултат и продължава, докато задачата е готова, после дава отчет. Командите пак вървят, както казват Настройки; достъпът до платформи, скриптовете за ръчно пускане, паролите и ръчно избраният модел остават на човека. С него „Режим на план“, „Два чата“ и „Рецензия“ са неин избор и не се показват.',
           },
           {
             key: 'chat.kerriganModel',
@@ -1233,6 +1253,46 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             bg: 'Отвори разговора на Кериган',
             doesEn: 'At the top of a chat Kerrigan directs: back to her conversation, where her decisions and the cards waiting are.',
             doesBg: 'Най-горе в чат, който Кериган води: обратно към нейния разговор, където са решенията ѝ и чакащите карти.',
+          },
+          {
+            key: 'kz.directedBy',
+            kind: 'note',
+            en: 'Kerrigan sends this chat its messages and answers its cards.',
+            bg: 'Кериган праща на този чат съобщенията му и отговаря на картите му.',
+            doesEn:
+              'Over a chat that Kerrigan directs: its messages are hers, and so are the answers on its cards, unless she leaves one to you.',
+            doesBg:
+              'Над чат, който Кериган ръководи: съобщенията му са нейни, както и отговорите на картите му, освен ако не остави някой на вас.',
+          },
+          {
+            key: 'kz.thinking',
+            kind: 'note',
+            en: 'Kerrigan is answering this card. You may still answer it yourself.',
+            bg: 'Кериган отговаря на тази карта. Може и сами да отговорите.',
+            doesEn:
+              'On a card of a chat she directs, while she decides: your own answer, given first, is the one taken.',
+            doesBg:
+              'На карта на чат, който тя ръководи, докато решава: вашият отговор, даден пръв, е този, който се взема.',
+          },
+          {
+            key: 'kz.yoursOnCard',
+            kind: 'note',
+            en: 'Kerrigan leaves this to you: {why}',
+            bg: 'Кериган оставя това на вас: {why}',
+            doesEn:
+              'On a card she leaves to you — a business decision, money, something that cannot be undone, access —, with why; the work waits for your answer.',
+            doesBg:
+              'На карта, която тя оставя на вас — бизнес решение, пари, нещо необратимо, достъп, — с причината; работата чака отговора ви.',
+          },
+          {
+            key: 'kz.suggests',
+            kind: 'note',
+            en: 'She would choose: {answer}',
+            bg: 'Тя би избрала: {answer}',
+            doesEn:
+              'Under it: what she would choose; you may press it, or answer otherwise.',
+            doesBg:
+              'Под него: какво би избрала тя; можете да го натиснете или да отговорите иначе.',
           },
           {
             key: 'chat.leadModel',
@@ -1327,8 +1387,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'The chat asks you',
             bg: 'Чатът ви пита',
-            doesEn: 'A question from the chat itself (plan mode or the worker), on a card, with its answers to click — its recommended one first, highlighted — and a field for another. An answer marked "runs: …" has the bot run that command when it is chosen; nothing to type by hand. When the chat lets more than one be chosen, a line under the question says so: a press marks an answer chosen (again, takes it off) and "Send the choice" sends them, with what is written in the field. "Copy the question" takes the question, why, every answer offered and how it is answered.',
-            doesBg: 'Въпрос от самия чат (режим на плана или изпълнителя), на карта, с отговори за избор — препоръчаният първи, открояван — и поле за друг. Отговор с „изпълнява: …“ кара бота да пусне тази команда, когато бъде избран; нищо не се пише на ръка. Когато чатът позволява да се изберат повече от един, ред под въпроса казва това: натискане отбелязва отговор като избран (отново — маха го), а „Изпрати избора“ ги изпраща, с написаното в полето. „Копирай въпроса“ взема въпроса, защо, всички предложени отговори и как се отговаря.',
+            doesEn: 'A question from the chat itself (plan mode or the worker), on a card, with its answers to click — its recommended one first — and a field for another. An answer marked "runs: …" has the bot run that command when it is chosen. When more than one may be chosen, a press marks an answer (again, takes it off) and "Send the choice" sends them. "Copy the question" takes the question, why and every answer offered.',
+            doesBg: 'Въпрос от самия чат (режим на плана или изпълнителя), на карта, с отговори за избор — препоръчаният първи — и поле за друг. Отговор с „изпълнява: …“ кара бота да пусне тази команда, когато бъде избран. Когато може да се изберат повече от един, натискане отбелязва отговор (отново — маха го), а „Изпрати избора“ ги изпраща. „Копирай въпроса“ взема въпроса, защо и всички предложени отговори.',
           },
           {
             key: 'chat.optionRecommended',
@@ -1343,16 +1403,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'field',
             en: 'Your answer',
             bg: 'Вашият отговор',
-            doesEn: 'On the lead\'s card: your answer, written out; or press one of the choices it offered above.',
-            doesBg: 'На картата на ръководителя: отговорът ви, написан; или натиснете някой от вариантите, които е предложил отгоре.',
+            doesEn: 'On every question card — the chat\'s, the lead\'s, a queue task\'s set aside: your answer, written out; or press one of the answers offered above.',
+            doesBg: 'На всяка карта с въпрос — на чата, на ръководителя, на задача от опашката, оставена настрана: вашият отговор, написан; или натиснете някой от предложените отговори над него.',
           },
           {
             key: 'lead.send',
             kind: 'button',
             en: 'Send the answer',
             bg: 'Изпрати отговора',
-            doesEn: 'Sends your answer to the lead, and the work goes on.',
-            doesBg: 'Изпраща отговора ви на ръководителя и работата продължава.',
+            doesEn: 'Sends your answer to whoever asked — the chat or the lead — and the work goes on.',
+            doesBg: 'Изпраща отговора ви на този, който пита — чата или ръководителя, — и работата продължава.',
           },
           {
             key: 'chat.sendChosen',
@@ -1431,8 +1491,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Stop the task',
             bg: 'Спри задачата',
-            doesEn: 'Stops the task at the lead\'s question; what was done so far stays.',
-            doesBg: 'Спира задачата на въпроса на ръководителя; направеното дотук остава.',
+            doesEn: 'On a question card and on "Run this yourself": stops the task there; what was done so far stays.',
+            doesBg: 'На карта с въпрос и на „Пуснете го сами“: спира задачата там; направеното дотук остава.',
           },
           {
             key: 'retry.title',
@@ -2197,8 +2257,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'select',
             en: 'Where it works',
             bg: 'Къде работи',
-            doesEn: '"The folder as it is", or "New branch from main": a branch of its own from main, fetched from the server when that needs no password, else the local main.',
-            doesBg: '„Папката както е“ или „Нов бранч от main“: свой бранч от main, взет от сървъра, ако това не иска парола, иначе от локалния main.',
+            doesEn: '"The folder as it is", or "New branch from main": a branch of its own, made from the remote\'s main when the task is added (Git\'s password window may open then), and brought up to the remote\'s main when the task starts, if nothing was done on it yet.',
+            doesBg: '„Папката както е“ или „Нов бранч от main“: отделен бранч, направен от main на remote при добавянето на задачата (тогава може да се отвори прозорецът на Git за парола) и обновен до main на remote, когато задачата започне, ако по него още нищо не е правено.',
           },
           {
             key: 'q.dependsOn',
@@ -2262,8 +2322,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'While a message is at work, a change here takes effect at once where it can: the rules a step is judged by, the limits, the pauses and the reports. The models, plan mode, the project, the skills and the like apply from the next message; the chat window\'s own settings from the next time it opens.',
             bg: 'Докато работи съобщение, промяна тук влиза в сила веднага, където може: правилата, по които се преценява всяка стъпка, ограниченията, паузите и отчетите. Моделите, режимът с план, проектът, уменията и други такива важат от следващото съобщение, а настройките на самия прозорец на чата — от следващото му отваряне.',
-            doesEn: 'A setting saved while a message is at work (2026-11-03): the programs, scripts, read-only and run-without-asking choices, downloads, deny patterns, isolation, step timeouts, limits, pauses and reports take effect at once, for the next step or the next message to the chat; the models, plan mode, the shell and folder, the project, the skills, the lead\'s number of subtasks and the stop word from the next message; the chat window\'s address, browser, waits and model-menu locators from the next time the window opens. A step that is running and a card already shown go on as they began.',
-            doesBg: 'Настройка, записана докато работи съобщение (2026-11-03): програмите, скриптовете, „само за справка“ и „пускай без да питаш“, изтеглянията, забранените шаблони, изолацията, времето на стъпките, ограниченията, паузите и отчетите влизат в сила веднага, от следващата стъпка или следващото съобщение към чата; моделите, режимът с план, обвивката и папката, проектът, уменията, броят подзадачи на водещия и думата за край — от следващото съобщение; адресът на чата, браузърът, чакането и локаторите на менюто с модели — от следващото отваряне на прозореца. Стъпка, която вече върви, и карта, която вече е показана, продължават, както са започнали.',
+            doesEn: 'A setting saved while a message is at work: the rules a step is judged by (programs, scripts, downloads, deny patterns…), the limits, pauses and reports, the locators and the steps to the chat take effect at once, in the open Copilot window too; the models, plan mode, the folder, the project and the skills from the next message; the window\'s address, browser and waits when it opens again.',
+            doesBg: 'Настройка, записана докато работи съобщение: правилата за стъпките (програми, скриптове, изтегляния, забранени шаблони…), ограниченията, паузите и отчетите, локаторите и стъпките до чата важат веднага, и в отворения прозорец на Copilot; моделите, „Първо план“, папката, проектът и skill-овете — от следващото съобщение; адресът, браузърът и изчакванията на прозореца — когато се отвори отново.',
           },
           {
             key: 'live.close',
@@ -2536,8 +2596,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'select',
             en: 'Model',
             bg: 'Модел',
-            doesEn: 'The model the worker starts on — the chat that does the work: the one chat, or the worker of two chats — unless one is chosen under the chat\'s box. The three model sections (worker, lead, review) are alike: this picker, "Clear", "Read the list from Copilot", when the list was read, and their own "by hand".',
-            doesBg: 'Моделът, с който започва изпълнителят — чатът, който върши работата: единственият чат или изпълнителят при два чата, — освен ако под полето на чата не е избран друг. Трите секции за модел (изпълнител, ръководител, рецензия) са еднакви: това меню, „Изчисти“, „Прочети списъка от Copilot“, кога е прочетен списъкът и своето „ръчно“.',
+            doesEn: 'The model the worker starts on — the chat that does the work: the one chat, or the worker of two chats — unless one is chosen under the chat\'s box. The four model sections (worker, lead, Kerrigan, review) are alike: this picker, "Clear", "Read the list from Copilot", when the list was read, and their own "by hand".',
+            doesBg: 'Моделът, с който започва изпълнителят — чатът, който върши работата: единственият чат или изпълнителят при два чата, — освен ако под полето на чата не е избран друг. Четирите секции за модел (изпълнител, ръководител, Кериган, рецензия) са еднакви: това меню, „Изчисти“, „Прочети списъка от Copilot“, кога е прочетен списъкът и своето „ръчно“.',
           },
           {
             key: 'def.modelNone',
@@ -2560,16 +2620,16 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Read the list from Copilot',
             bg: 'Прочети списъка от Copilot',
-            doesEn: 'Opens Copilot for a moment and reads the models its picker offers; the three sections share the list.',
-            doesBg: 'Отваря Copilot за момент и прочита моделите, които предлага изборът му; трите секции делят списъка.',
+            doesEn: 'Opens Copilot for a moment and reads the models its picker offers; the four sections share the list.',
+            doesBg: 'Отваря Copilot за момент и прочита моделите, които предлага изборът му; четирите секции делят списъка.',
           },
           {
             key: 'def.manualModel',
             kind: 'checkbox',
             en: 'Choose the model by hand at the start of each run',
             bg: 'Избирай модела ръчно в началото на всяко пускане',
-            doesEn: 'In each of the four sections, for that part: nothing is chosen for it; a card asks you to choose its model in the Copilot window and press "Ready". The lead\'s and the review\'s are as the worker\'s until set; Kerrigan\'s is as the lead\'s.',
-            doesBg: 'Във всяка от четирите секции, за съответната част: нищо не се избира за нея; карта ви моли да изберете модела ѝ в прозореца на Copilot и да натиснете „Готово“. Тези на ръководителя и на рецензията са като на изпълнителя, докато не се зададат; този на Кериган е като на ръководителя.',
+            doesEn: 'In each of the four sections, for that part: nothing is chosen for it; a card asks you to choose its model in the Copilot window and press "Ready — continue". The lead\'s and the review\'s are as the worker\'s until set; Kerrigan\'s is as the lead\'s.',
+            doesBg: 'Във всяка от четирите секции, за съответната част: нищо не се избира за нея; карта ви моли да изберете модела ѝ в прозореца на Copilot и да натиснете „Готово — продължи“. Тези на ръководителя и на рецензията са като на изпълнителя, докато не се зададат; този на Кериган е като на ръководителя.',
           },
           {
             key: 'def.saving',
@@ -2606,8 +2666,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'Model for Kerrigan',
             bg: 'Модел за Кериган',
-            doesEn: 'The model Kerrigan\'s own conversation starts on, with "Kerrigan directs", unless one is chosen under the chat\'s box as "Kerrigan\'s model"; none chosen, the lead\'s, else the worker\'s. The chats she sends the work to take the worker\'s (and, with two chats, the lead\'s), not this. Best a strong reasoning model. Its picker and buttons are those of the worker\'s section; its "by hand" is as the lead\'s until set.',
-            doesBg: 'Моделът, с който започва собственият разговор на Кериган при „Кериган води“, освен ако под полето на чата не е избран друг като „Модел на Кериган“; ако не е избран — този на ръководителя, иначе този на изпълнителя. Чатовете, на които тя праща работата, вземат модела на изпълнителя (а при два чата — и на ръководителя), не този. Най-добре силен модел за разсъждение. Менюто и бутоните му са като в секцията на изпълнителя; „ръчно“ е като при ръководителя, докато не се зададе.',
+            doesEn: 'The model Kerrigan\'s own conversation starts on, with "Kerrigan directs", unless one is chosen under the chat\'s box; none chosen, the lead\'s, else the worker\'s. The chats she sends the work to take the worker\'s (and the lead\'s), not this. Best a strong reasoning model.',
+            doesBg: 'Моделът, с който започва собственият разговор на Кериган при „Кериган води“, освен ако под полето на чата не е избран друг; без избор — този на ръководителя, иначе на изпълнителя. Чатовете, на които тя дава работата, ползват модела на изпълнителя (и на ръководителя), не този. Най-добре силен модел за разсъждение.',
           },
         ],
       },
@@ -2637,9 +2697,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Check the locators',
             bg: 'Провери локаторите',
             doesEn:
-              'Opens the Copilot window, as reading the models does, and looks for each locator: the box and Send, the sidebar, the newest conversation (opened by its address) and its "More" menu (opened and closed again). It only reads; nothing is sent or renamed. Under each field: found, not found (then in red, with the page\'s HTML), or not on the page then and why.',
+              'Opens the Copilot window, as reading the models does, and looks for each locator: the box and Send, the sidebar, the newest conversation (opened by its address) and its "More" menu (opened and closed again), and the steps to the chat. It only reads; nothing is sent or renamed. Under each field: found, not found (then in red, with the file for a chatbot), or not on the page then and why.',
             doesBg:
-              'Отваря прозореца на Copilot, както при четенето на моделите, и търси всеки локатор: полето и Send, страничната лента, най-новия разговор (отворен по адреса му) и менюто му „More“ (отворено и затворено отново). Само чете; нищо не се изпраща и не се преименува. Под всяко поле: намерен, ненамерен (тогава в червено, с HTML-а на страницата) или не беше на страницата тогава и защо.',
+              'Отваря прозореца на Copilot, както при четенето на моделите, и търси всеки локатор: полето и „Send“, страничната лента, най-новия разговор (отворен по адреса му) и менюто му „More“ (отворено и затворено пак), и стъпките до чата. Само чете; нищо не се изпраща и не се преименува. Под всяко поле: намерен, не е намерен (тогава в червено, с файла за чатбота) или не е на страницата тогава и защо.',
           },
           {
             key: 'chatloc.composer',
@@ -2647,17 +2707,17 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Box to write in',
             bg: 'Поле за писане',
             doesEn:
-              'How the bot finds the box it writes its messages in (2026-11-17): a CSS selector, or an XPath starting with /; empty is the default, which finds the box of before November 2026 and the one of 17 November 2026. A locator of an element around the box works too. When a start is refused as "not the Microsoft 365 Copilot chat" and its picture shows the chat, this is the one to change. The next Copilot window takes it.',
+              'How the bot finds the box it writes its messages in: a CSS selector, or an XPath starting with /; empty is the default. A locator of an element around the box works too. When a start is refused as "not the Microsoft 365 Copilot chat" and its picture shows the chat, this is the one to change. A change takes effect at once, in the Copilot window that is open too.',
             doesBg:
-              'Как ботът намира полето, в което пише съобщенията си (2026-11-17): CSS селектор или XPath, започващ с /; празно е стойността по подразбиране, която намира полето отпреди ноември 2026 и това от 17 ноември 2026. Става и локатор на елемент около полето. Когато стартът е отказан с „not the Microsoft 365 Copilot chat“, а снимката му показва чата, сменя се този. Важи от следващия прозорец на Copilot.',
+              'Как ботът намира полето, в което пише съобщенията си: CSS селектор или XPath, започващ с /; празно е стойността по подразбиране. Локатор на елемент около полето също става. Когато пускане е отказано като „не е чатът на Microsoft 365 Copilot“, а снимката му показва чата, този трябва да се смени. Промяната важи веднага, и в отворения прозорец на Copilot.',
           },
           {
             key: 'chatloc.howTitle',
             kind: 'disclosure',
             en: 'How to find the right locator',
             bg: 'Как да намерите правилния локатор',
-            doesEn: 'Opens the steps: download the page\'s HTML, give it to a chatbot with the text "Copy for a chatbot", put the locator it answers in the field in red; or by hand, with Inspect and Ctrl+F.',
-            doesBg: 'Отваря стъпките: изтеглете HTML-а на страницата, дайте го на чатбот с текста от „Копирай за чатбот“, сложете локатора, който върне, в полето в червено; или на ръка, с Inspect и Ctrl+F.',
+            doesEn: 'Opens the steps: download the file for a chatbot ("Download the file for a chatbot"), attach it to any chatbot — Kerrigan too — and send it, nothing else to write; put the locator it answers in the field in red. Or by hand, with Inspect and Ctrl+F.',
+            doesBg: 'Отваря стъпките: изтеглете файла за чатбота („Изтегли файл за чатбота“), прикачете го в който и да е чатбот — и в Кериган — и го пратете, без да пишете нищо друго; сложете локатора, с който отговори, в полето в червено. Или на ръка, с Inspect и Ctrl+F.',
           },
           {
             key: 'chatloc.send',
@@ -2839,8 +2899,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'field',
             en: 'Name',
             bg: 'Име',
-            doesEn: 'The step\'s name in your words, shown in the bot\'s messages and given to a chatbot with the page\'s HTML.',
-            doesBg: 'Името на стъпката с твои думи, показва се в съобщенията на бота и се дава на чатбот с HTML-а на страницата.',
+            doesEn: 'The step\'s name in your words, shown in the bot\'s messages and in the file for a chatbot.',
+            doesBg: 'Името на стъпката с ваши думи, показвано в съобщенията на бота и във файла за чатбота.',
           },
           {
             key: 'steps.when',
@@ -2871,8 +2931,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'field',
             en: 'Locator',
             bg: 'Локатор',
-            doesEn: 'What the step looks for on the page (CSS, XPath or Playwright\'s own); only what is visible counts. In red when a required step found nothing, with the page\'s HTML.',
-            doesBg: 'Какво търси стъпката на страницата (CSS, XPath или формата на Playwright); брои се само видимото. В червено, когато задължителна стъпка не е намерила нищо, с HTML-а на страницата.',
+            doesEn: 'What the step looks for on the page (CSS, XPath or Playwright\'s own); only what is visible counts. In red when a required step found nothing, with the file for a chatbot.',
+            doesBg: 'Какво търси стъпката в страницата (CSS, XPath или собствения на Playwright); брои се само видимото. В червено, когато задължителна стъпка не е намерила нищо, с файла за чатбота.',
           },
           {
             key: 'steps.action',
@@ -3213,8 +3273,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'select',
             en: 'How commands run',
             bg: 'Как се изпълняват командите',
-            doesEn: 'The one place to choose whether the commands the chat sends wait for the operator or run at once, for every message (the chat has no menu for it since 2026-10-23). A change holds from the next message.',
-            doesBg: 'Единственото място, където се избира дали командите от чата чакат оператора, или се изпълняват веднага, за всяко съобщение (чатът няма меню за това от 2026-10-23). Промяната важи от следващото съобщение.',
+            doesEn: 'The one place to choose whether the commands the chat sends wait for the operator or run at once, for every message (the chat has no menu for it). A change holds from the next message.',
+            doesBg: 'Единственото място, където се избира дали командите от чата чакат оператора, или се изпълняват веднага, за всяко съобщение (чатът няма меню за това). Промяната важи от следващото съобщение.',
           },
           {
             key: 'exec.startModeAsk',
@@ -3581,9 +3641,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Change…',
             bg: 'Смени…',
             doesEn:
-              'Opens a field for another folder (and "Browse…" for the machine\'s folder dialog), with a checkbox to copy what is in the folder now — settings, conversations, logs and the Edge profile, so the sign-in stays — and "Use this folder". Nothing already in the new folder is overwritten. It takes effect when the bot is started again; until then the row says "From the next start: …". Not offered for a clone or when COP_HOME sets the folder, and refused while work is going on.',
+              'Opens a field for another folder (and the machine\'s folder dialog), with a checkbox to copy what is there now — settings, conversations, logs, the Edge profile — and the button that uses it. Nothing in the new folder is overwritten; it takes effect when the bot is started again. Not offered for a clone or when COP_HOME sets the folder, and refused while work is going on.',
             doesBg:
-              'Отваря поле за друга папка (и „Преглед…“ за прозореца за избор на папка), с отметка да се копира и това, което е в папката сега — настройки, разговори, дневници и профилът в Edge, за да остане вписването — и „Използвай тази папка“. Нищо, което вече е в новата папка, не се презаписва. Важи от следващото пускане на бота; дотогава редът казва „От следващото пускане: …“. Не се предлага за копие на хранилището или когато COP_HOME задава папката и се отказва, докато върви работа.',
+              'Отваря поле за друга папка (и прозореца за избор на папка), с отметка да се копира каквото има сега — настройки, разговори, логове, профилът на Edge — и бутона, който я ползва. Нищо в новата папка не се презаписва; важи, когато ботът се пусне отново. Не се предлага за клонинг или когато COP_HOME задава папката, и се отказва, докато върви работа.',
           },
           {
             key: 'sys.homeReset',

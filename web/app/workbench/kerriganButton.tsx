@@ -31,8 +31,21 @@ export function KerriganAbout() {
         <li>{t('kerrigan.aboutUse1')}</li>
         <li>{t('kerrigan.aboutUse2')}</li>
         <li>{t('kerrigan.aboutUse3')}</li>
+        <li>{t('kerrigan.aboutUse4', { file: t('chatloc.file') })}</li>
       </ul>
-      <p>{t('kerrigan.aboutHow', { button: t('kerrigan.button'), copy: t('kerrigan.copy'), save: t('kerrigan.save') })}</p>
+      {/*
+       * How to use her, step by step (operator, 2026-11-18: "she knows exactly how this software works and is used; the
+       * user can ask her after loading her memory into an LLM of their choosing — describe how, for whoever does not
+       * know yet").
+       */}
+      <p className="kerrigan-about-uses">{t('kerrigan.aboutStepsTitle')}</p>
+      <ol>
+        <li>{t('kerrigan.aboutStep1', { button: t('kerrigan.button'), copy: t('kerrigan.copy'), save: t('kerrigan.save') })}</li>
+        <li>{t('kerrigan.aboutStep2')}</li>
+        <li>{t('kerrigan.aboutStep3')}</li>
+        <li>{t('kerrigan.aboutStep4')}</li>
+      </ol>
+      <p className="muted small">{t('kerrigan.aboutFresh')}</p>
       <p className="muted small">{t('kerrigan.aboutNote')}</p>
     </section>
   );
