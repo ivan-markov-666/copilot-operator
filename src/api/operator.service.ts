@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, relative } from 'node:path';
 import { readFile as readFileText } from 'node:fs/promises';
 import { LocatorFailures, type LocatorFailure } from '../session/locatorFailures.js';
+import { chatbotFile } from '../session/chatbotFile.js';
 import { CHAT_LOCATOR_KEYS, locatorPrompt, resolveChatLocators, type ChatLocatorKey } from '../transport/locators.js';
 import { LocatorMissing, type LocatorCheck } from '../transport/copilotTransport.js';
 import { isStepKey, stepKey, stepPrompt } from '../transport/chatSteps.js';
@@ -1182,6 +1183,8 @@ export class OperatorService {
     const html = str(detail.html);
     const picture = str(detail.picture);
     const url = str(detail.url);
+    const piece = str(detail.piece);
+    const around = str(detail.around);
     void this.locatorFailures
       .record({
         key: key as LocatorFailure['key'],
@@ -1193,6 +1196,7 @@ export class OperatorService {
         ...(html ? { html } : {}),
         ...(picture ? { picture } : {}),
         ...(url ? { url } : {}),
+        ...(piece ? { piece, ...(around ? { around } : {}) } : {}),
       })
       .catch(() => undefined);
   }
@@ -1207,7 +1211,7 @@ export class OperatorService {
     const inForce = resolveChatLocators(cfg.copilot.chatLocators).locators;
     // A step's (2026-11-17): changed when its locator is, or it is switched off, made not required, or gone.
     const steps = new Map(cfg.copilot.extraSteps.map((s) => [stepKey(s.id), s]));
-    return (await this.locatorFailures.list()).map(({ html, picture: _picture, ...f }) => {
+    return (await this.locatorFailures.list()).map(({ html, picture: _picture, piece: _piece, around: _around, ...f }) => {
       const step = isStepKey(f.key) ? steps.get(f.key) : undefined;
       return {
         ...f,
@@ -1223,19 +1227,42 @@ export class OperatorService {
   async locatorFailureHtml(key: string): Promise<{ fileName: string; content: string }> {
     const f = await this.locatorFailures.get(key);
     if (!f?.html) throw new Error(`No HTML is kept for the "${key}" locator.`);
-    const cfg = await this.settings.load();
-    const runs = resolve(cfg.resolved.runsDir);
-    const file = resolve(f.html);
-    const inside = relative(runs, file);
-    if (!inside || inside.startsWith('..') || isAbsolute(inside)) {
-      throw new Error(`The HTML kept for the "${key}" locator is not in the bot's runs folder.`);
-    }
-    const content = await readFileText(file, 'utf8').catch(() => {
-      throw new Error(`The HTML kept for the "${key}" locator is gone (${file}).`);
-    });
+    const content = await this.keptFailureFile(key, f.html, 'HTML');
     const stamp = f.at.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
     // A step's key holds a colon, which a Windows file name cannot.
     return { fileName: `copilot-page-${key.replace(/[^\w-]/g, '-')}-${stamp}.html`, content };
+  }
+
+  /**
+   * The one file for a chatbot (operator, 2026-11-18: "everything in one file; the user takes it and sends it to the
+   * chat, and that is all"): what to do, the goal, what failed, the old locator, the piece of the page where the element
+   * most likely is, the whole page, and how to find it by hand when it is in neither. See `session/chatbotFile.ts`.
+   * Made from what is kept, also for a failure kept before the piece was (then without it).
+   */
+  async locatorFailureChatbotFile(key: string, lang?: string): Promise<{ fileName: string; content: string }> {
+    const f = await this.locatorFailures.get(key);
+    if (!f) throw new Error(`No failure is kept for the "${key}" locator.`);
+    const page = f.html ? await this.keptFailureFile(key, f.html, 'HTML').catch(() => '') : '';
+    const piece = f.piece ? await this.keptFailureFile(key, f.piece, 'piece of HTML').catch(() => '') : '';
+    const cfg = await this.settings.load();
+    const step = isStepKey(f.key) ? cfg.copilot.extraSteps.find((s) => stepKey(s.id) === f.key) : undefined;
+    const content = chatbotFile({ failure: f, step, piece, page, ...(lang ? { lang } : {}) });
+    const stamp = f.at.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    return { fileName: `for-chatbot-${key.replace(/[^\w-]/g, '-')}-${stamp}.txt`, content };
+  }
+
+  /** A file kept with a failure, read: only one in the bot's runs folder. */
+  private async keptFailureFile(key: string, path: string, what: string): Promise<string> {
+    const cfg = await this.settings.load();
+    const runs = resolve(cfg.resolved.runsDir);
+    const file = resolve(path);
+    const inside = relative(runs, file);
+    if (!inside || inside.startsWith('..') || isAbsolute(inside)) {
+      throw new Error(`The ${what} kept for the "${key}" locator is not in the bot's runs folder.`);
+    }
+    return await readFileText(file, 'utf8').catch(() => {
+      throw new Error(`The ${what} kept for the "${key}" locator is gone (${file}).`);
+    });
   }
 
   async startFailureReport(id: string): Promise<{ fileName: string; content: string }> {

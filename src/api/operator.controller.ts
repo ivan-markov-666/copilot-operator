@@ -242,6 +242,24 @@ export class OperatorController {
   }
 
   /**
+   * The one file for a chatbot (2026-11-18): everything it needs to give the right locator, the piece of the page and
+   * the whole page included (see `session/chatbotFile.ts`). A download, like the HTML; `lang` is the language the
+   * chatbot is told to speak to the operator in.
+   */
+  @Get('locators/failures/:key/chatbot')
+  async locatorFailureChatbotFile(@Param('key') key: string, @Query('lang') lang: string | undefined, @Res() res: Response): Promise<void> {
+    try {
+      const { fileName, content } = await this.ops.locatorFailureChatbotFile(key, typeof lang === 'string' ? lang.slice(0, 8) : undefined);
+      res.type('application/octet-stream');
+      res.setHeader('content-disposition', contentDisposition(fileName));
+      res.setHeader('x-content-type-options', 'nosniff');
+      res.send(Buffer.from(content, 'utf8'));
+    } catch (e) {
+      failText(res, e);
+    }
+  }
+
+  /**
    * "Check the locators" (2026-11-17): the Copilot window opened, each of the chat's locators looked for, and what each
    * found. Takes as long as the window takes to open, a sign-in included.
    */

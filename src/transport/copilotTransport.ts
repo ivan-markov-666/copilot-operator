@@ -11,7 +11,7 @@
  *   3. A message cannot consist of an attachment alone; Send stays disabled without text.
  */
 import { buttonShows, normModel, pageModelFor, sameModel } from './modelMatch.js';
-import { chromium, type BrowserContext, type Page, type Locator } from 'playwright';
+import { chromium, type BrowserContext, type ElementHandle, type Page, type Locator } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findRecentCrash, describeCrash, type EdgeCrash } from './edgeCrash.js';
@@ -21,6 +21,7 @@ import {
   CHAT_ID,
   CHAT_LOCATOR_KEYS,
   ChatLocatorGroupOf,
+  ChatLocatorNear,
   ChatLocatorWhat,
   Css,
   DefaultChatLocators,
@@ -28,6 +29,7 @@ import {
   fillLocator,
   Label,
   Model,
+  NearPlaces,
   ModelPicking,
   pageQuery,
   playwrightSelector,
@@ -36,11 +38,13 @@ import {
   resolvePickerLocators,
   Sidebar,
   Signal,
+  StepNear,
   Surface,
   TestId,
   Url,
   type ChatLocatorKey,
   type ChatLocators,
+  type NearPlace,
   type PickerLocatorKey,
   type PickerLocators,
 } from './locators.js';
@@ -903,12 +907,16 @@ export class CopilotTransport {
   private async locatorMissing(
     key: ChatLocatorKey,
     why: string,
-    opts: { stopped?: boolean; chatId?: string; message?: (files: string) => string } = {},
+    opts: { stopped?: boolean; chatId?: string; file?: string; message?: (files: string) => string } = {},
   ): Promise<LocatorMissing> {
     const stopped = opts.stopped ?? true;
     const locator = this.chatLocators[key];
-    const { picture, html, url } = await this.keepPage(`locator-${key}-${Date.now()}`, ChatLocatorGroupOf[key] === 'conversations');
-    this.emit('locator-missing', { key, locator, why, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}) });
+    const { picture, html, url, piece, around } = await this.keepPage(`locator-${key}-${Date.now()}`, ChatLocatorGroupOf[key] === 'conversations', {
+      near: ChatLocatorNear[key],
+      ...(opts.chatId ? { chatId: opts.chatId } : {}),
+      ...(opts.file ? { file: opts.file } : {}),
+    });
+    this.emit('locator-missing', { key, locator, why, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}), ...(piece ? { piece, around } : {}) });
     const files = [picture ? `A picture of the page: ${picture}.` : '', html ? `The page's HTML, for a chatbot to find the right locator in: ${html}.` : ''].filter(Boolean).join(' ');
     const message =
       opts.message?.(files) ??
@@ -917,18 +925,58 @@ export class CopilotTransport {
     return new LocatorMissing(key, locator, message, html, picture);
   }
 
-  /** A picture of the page and its HTML for a chatbot (see `pageHtml.ts`), in the failures folder; where the page was. */
-  private async keepPage(tag: string, keepSidebar: boolean): Promise<{ picture?: string; html?: string; url?: string }> {
+  /**
+   * A picture of the page and its HTML for a chatbot (see `pageHtml.ts`), in the failures folder; where the page was.
+   * With `near` (2026-11-18), also the piece of the page where the element not found most likely is: around the first
+   * of those that finds something (`ChatLocatorNear`), and what that was (`around`).
+   */
+  private async keepPage(
+    tag: string,
+    keepSidebar: boolean,
+    near?: { near: Array<ChatLocatorKey | NearPlace>; chatId?: string; file?: string },
+  ): Promise<{ picture?: string; html?: string; url?: string; piece?: string; around?: string }> {
     if (!this.page || this.page.isClosed()) return {};
     const dir = join(this.opts.transportDir, '..', 'failures');
     await mkdir(dir, { recursive: true }).catch(() => undefined);
-    const out: { picture?: string; html?: string; url?: string } = { url: whereIs(this.p.url()) };
+    const out: { picture?: string; html?: string; url?: string; piece?: string; around?: string } = { url: whereIs(this.p.url()) };
     const png = join(dir, `${tag}.png`);
     if (await this.p.screenshot({ path: png, fullPage: true }).then(() => true, () => false)) out.picture = png;
-    const text = await this.p.evaluate(strippedPageHtml, keepSidebar).catch(() => '');
+    const anchor = near ? await this.nearAnchor(near).catch(() => null) : null;
+    const kept = await this.p.evaluate(strippedPageHtml, { keepSidebar, anchor: anchor?.handle ?? null, cap: 40_000 }).catch(() => ({ page: '', piece: '' }));
+    await anchor?.handle.dispose().catch(() => undefined);
     const file = join(dir, `${tag}.html`);
-    if (text && (await writeFile(file, text, 'utf8').then(() => true, () => false))) out.html = file;
+    if (kept.page && (await writeFile(file, kept.page, 'utf8').then(() => true, () => false))) out.html = file;
+    const pieceFile = join(dir, `${tag}.piece.html`);
+    if (anchor && kept.piece && (await writeFile(pieceFile, kept.piece, 'utf8').then(() => true, () => false))) {
+      out.piece = pieceFile;
+      out.around = anchor.what;
+    }
     return out;
+  }
+
+  /** The first of `near` that finds something on the page: the element (the newest of a conversation's), and what it is. */
+  private async nearAnchor(near: { near: Array<ChatLocatorKey | NearPlace>; chatId?: string; file?: string }): Promise<{ handle: ElementHandle; what: string } | null> {
+    for (const n of near.near) {
+      const place = (NearPlaces as Record<string, { selector: string; what: string }>)[n];
+      const key = place ? null : (n as ChatLocatorKey);
+      let found: Locator;
+      if (place) found = this.p.locator(place.selector);
+      else if (key === 'attachment' || key === 'attachmentUploaded') {
+        if (!near.file) continue;
+        found = this.fileEl(key, near.file);
+      } else if (key === 'chatMore') {
+        if (!near.chatId) continue;
+        found = this.el(key, near.chatId);
+      } else found = this.el(key as ChatLocatorKey);
+      const newest = key === 'answer' || key === 'turn' || key === 'userMessage' || key === 'copy';
+      // One that shows first; a hidden one (the file input) only when none shows.
+      for (const which of [found.filter({ visible: true }), found]) {
+        if ((await which.count().catch(() => 0)) === 0) continue;
+        const handle = await (newest ? which.last() : which.first()).elementHandle({ timeout: 1_000 }).catch(() => null);
+        if (handle) return { handle, what: place ? place.what : `the element the "${key}" locator finds: ${ChatLocatorWhat[key as ChatLocatorKey]}` };
+      }
+    }
+    return null;
   }
 
   /**
@@ -979,9 +1027,9 @@ export class CopilotTransport {
   /** One of the operator's own steps that must be there and is not: said like a locator that found nothing. */
   private async stepMissing(step: ChatStep, why: string, stopped = true): Promise<LocatorMissing> {
     const key = stepKey(step.id) as `step:${string}`;
-    const { picture, html, url } = await this.keepPage(`step-${step.id}-${Date.now()}`, false);
+    const { picture, html, url, piece, around } = await this.keepPage(`step-${step.id}-${Date.now()}`, false, { near: StepNear });
     const when = step.when === 'open' ? 'when the chat opened' : 'before a message';
-    this.emit('locator-missing', { key, name: step.name, locator: step.locator, why: `${when}: ${why}`, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}) });
+    this.emit('locator-missing', { key, name: step.name, locator: step.locator, why: `${when}: ${why}`, stopped, ...(html ? { html } : {}), ...(picture ? { picture } : {}), ...(url ? { url } : {}), ...(piece ? { piece, around } : {}) });
     const files = [picture ? `A picture of the page: ${picture}.` : '', html ? `The page's HTML, for a chatbot to find the right locator in: ${html}.` : ''].filter(Boolean).join(' ');
     return new LocatorMissing(
       key,
@@ -1710,6 +1758,18 @@ Current URL: ${url}`);
       const refused: string[] = [];
       for (const form of chatNameForms(name)) {
         await input.fill(form);
+        /*
+         * Its Save not found (work, 2026-11-18: role=button[name="Save"] found nothing, and the dialog was left open
+         * over the chat): said, with the dialog's HTML while it is still open, and the name given with Enter, which
+         * such a field takes. Once only: a dialog that takes no Enter is closed with Cancel below.
+         */
+        if (!(await save.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false))) {
+          await this.warnLocator('renameSave', `while the conversation was being named "${name}"`, chatId).catch(() => undefined);
+          await input.press('Enter').catch(() => undefined);
+          if (await this.renameTaken(input, save)) wanted = form;
+          else refused.push(form);
+          break;
+        }
         await this.press(save);
         if (await this.renameTaken(input, save)) {
           wanted = form;
@@ -1742,6 +1802,8 @@ Current URL: ${url}`);
       this.emit('chat-name-failed', { chatId, name, error: (e as Error).message });
       // The step's locator, when it finds nothing: said (the name is the work's convenience; the work goes on).
       await this.warnLocator(step, `while the conversation was being named "${name}"`, chatId).catch(() => undefined);
+      // A rename dialog it stopped in is not left open over the chat (work, 2026-11-18): closed, after its HTML is kept.
+      if (step === 'renameInput' || step === 'renameSave') await this.p.keyboard.press('Escape').catch(() => undefined);
       return false;
     } finally {
       // Whatever happened, the sidebar is left as it was found. A menu left hanging over the
@@ -2889,7 +2951,7 @@ Current URL: ${url}`);
         this.emit('attachment-upload-unconfirmed', { name });
         if (!this.warned.has('attachmentUploaded')) {
           this.warned.add('attachmentUploaded');
-          await this.locatorMissing('attachmentUploaded', `for ${Math.round(this.uploadWaitMs / 1000)} s after the file ${name} was attached`, { stopped: false }).catch(() => undefined);
+          await this.locatorMissing('attachmentUploaded', `for ${Math.round(this.uploadWaitMs / 1000)} s after the file ${name} was attached`, { stopped: false, file: path }).catch(() => undefined);
         }
       }
       this.emit('attached', { name });

@@ -1460,6 +1460,8 @@ export const api = {
   locatorFailures: () => call<LocatorFailureRef[]>('/locators/failures'),
   checkLocators: () => call<{ checkedAt: string; results: LocatorCheckRef[] }>('/locators/check', { method: 'POST', body: '{}' }, { timeoutMs: null }),
   locatorHtmlUrl: (key: string) => withToken(`${API}/locators/failures/${encodeURIComponent(key)}/html`),
+  /** The one file for a chatbot (2026-11-18): everything it needs, the page included; `lang` is the language it speaks in. */
+  locatorChatbotUrl: (key: string, lang: string) => withToken(`${API}/locators/failures/${encodeURIComponent(key)}/chatbot?lang=${encodeURIComponent(lang)}`),
   dismissLocatorFailure: (key: string) => call<{ dismissed: boolean }>(`/locators/failures/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   startFailures: (unansweredOnly = false) => call<StartFailureRef[]>(`/start/failures${unansweredOnly ? '?unanswered=1' : ''}`),
   /** One of them as a text file: the error, the run's record, the events and the console of those moments. */

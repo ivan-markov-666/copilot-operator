@@ -6,16 +6,19 @@
  * taken to the place where the locator is updated, the field painted red … and the bot saves the page's HTML and gives
  * it to the user, to hand to a chatbot that says which locator it is and what its selector is").
  *
- * On every page, under the start failures: which locator, when, and four ways on — to its field in Settings (in red
- * there), the page's HTML, the text for the chatbot, close. A failure that stopped the work takes the operator to the
- * field once, by itself. Gone once the locator is changed in Settings (`changed`), or closed.
+ * On every page, under the start failures: which locator, when, and three ways on — to its field in Settings (in red
+ * there), the one file for a chatbot, close. A failure that stopped the work takes the operator to the field once, by
+ * itself. Gone once the locator is changed in Settings (`changed`), or closed.
+ *
+ * The file (operator, 2026-11-18: "too many things for the user to do … everything in one file, the user takes it and
+ * sends it to the chat, and that is all") holds what the HTML and the text for the chatbot held apart before, with the
+ * piece of the page where the element most likely is: downloaded, attached to a chatbot, sent.
  */
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { api, type LocatorFailureRef } from '../lib/api';
 import { useFmtTime, useT, type Key } from '../lib/i18n';
 import { usePoll } from '../lib/usePoll';
-import { CopyButton } from './copyButton';
 
 /** Where Settings has a locator's field: the page reads `locator` and goes to it, in red. */
 export function locatorFieldUrl(key: string): string {
@@ -25,7 +28,7 @@ export function locatorFieldUrl(key: string): string {
 
 /** One failure: what was not found, the locator, and the ways on. `inSettings`: under its field, where "Fix" is not needed. */
 export function LocatorFailureNotice({ failure, inSettings = false, onDismiss }: { failure: LocatorFailureRef; inSettings?: boolean; onDismiss: () => void }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const fmtTime = useFmtTime();
   const name = failure.key.startsWith('step:') ? failure.name || failure.locator : t(`chatloc.${failure.key}` as Key);
   return (
@@ -36,17 +39,15 @@ export function LocatorFailureNotice({ failure, inSettings = false, onDismiss }:
       </p>
       {failure.why && <p className="muted small" style={{ margin: '4px 0' }}>{failure.why}</p>}
       <div className="row" style={{ marginTop: 6 }}>
+        {/* First: what is done first, the file to a chatbot; then its answer goes in the field. */}
+        <a className="button-link" href={api.locatorChatbotUrl(failure.key, locale)} download data-chatbot-file>
+          {t('chatloc.file')}
+        </a>
         {!inSettings && (
           <a className="button-link" href={locatorFieldUrl(failure.key)}>
             {t('chatloc.fix')}
           </a>
         )}
-        {failure.html && (
-          <a className="button-link" href={api.locatorHtmlUrl(failure.key)} download>
-            {t('chatloc.html')}
-          </a>
-        )}
-        <CopyButton text={failure.prompt} what="chatloc.promptWhy" label="chatloc.prompt" />
         <button type="button" className="quiet" onClick={onDismiss}>
           {t('chatloc.dismiss')}
         </button>

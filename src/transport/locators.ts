@@ -320,6 +320,63 @@ export const ChatLocatorWhat: Record<ChatLocatorKey, string> = {
   attachmentUploaded: `the same attached file once it has finished uploading (no spinner or progress on it any more); ${FILE_NAME} is where the file's name goes, ${FILE_STEM} the name without its extension`,
 };
 
+/**
+ * Places on the page an element that is not found is most likely near, when none of the chat's own locators finds
+ * something beside it (operator, 2026-11-18: "the piece of code where the new locator probably is").
+ */
+export const NearPlaces = {
+  wrapper: { selector: '[data-test-id="chat-input-wrapper"], [data-testid="chat-input-wrapper"]', what: 'the area around the box where a message is typed' },
+  dialog: { selector: '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]', what: 'the dialog open on the page' },
+  menu: { selector: '[role="menu"], [role="listbox"]', what: 'the menu open on the page' },
+  main: { selector: 'main, [role="main"]', what: 'the main part of the page, where the conversation is' },
+  sidebar: { selector: 'nav, [role="navigation"], aside', what: 'the sidebar with the list of conversations' },
+} as const;
+export type NearPlace = keyof typeof NearPlaces;
+
+/**
+ * Where to look for each element that was not found, nearest first: another of the chat's locators that finds
+ * something beside it (the box for its Send, the rename dialog's field for its Save), or a place (`NearPlaces`). The
+ * first that finds something gives the piece of the page handed to a chatbot.
+ */
+export const ChatLocatorNear: Record<ChatLocatorKey, Array<ChatLocatorKey | NearPlace>> = {
+  composer: ['wrapper', 'send', 'uploadInput', 'main'],
+  send: ['composer', 'wrapper', 'uploadInput'],
+  userMessage: ['turn', 'answer', 'main'],
+  turn: ['userMessage', 'answer', 'main'],
+  answer: ['turn', 'copy', 'userMessage', 'main'],
+  copy: ['answer', 'turn', 'main'],
+  stop: ['composer', 'send', 'wrapper', 'answer'],
+  conversationLink: ['sidebar'],
+  chatMore: ['conversationLink', 'sidebar'],
+  renameItem: ['menu', 'chatMore', 'sidebar'],
+  renameInput: ['dialog', 'renameSave', 'sidebar'],
+  renameSave: ['renameInput', 'dialog'],
+  uploadInput: ['composer', 'wrapper', 'send'],
+  attachment: ['composer', 'wrapper', 'uploadInput'],
+  attachmentUploaded: ['attachment', 'composer', 'wrapper'],
+};
+/** For one of the operator's own steps, whose element can be anywhere: a dialog first (most are), then the box's area. */
+export const StepNear: Array<ChatLocatorKey | NearPlace> = ['dialog', 'wrapper', 'composer', 'main'];
+
+/** When each one is on the screen, for a person to bring it there and find it by hand in the browser's developer tools. */
+export const ChatLocatorShows: Record<ChatLocatorKey, string> = {
+  composer: 'open Copilot\'s chat: the box is at the bottom of the page',
+  send: 'type a word in the box at the bottom of the chat: the Send button is beside it (do not send it)',
+  userMessage: 'open a conversation that has messages: each message the user sent is shown in it',
+  turn: 'open a conversation that has messages',
+  answer: 'open a conversation in which Copilot has answered',
+  copy: 'open a conversation in which Copilot has answered, and point the mouse at an answer: the Copy button is in the row of small buttons under it',
+  stop: 'send Copilot a question that takes a long answer, and while it is still writing, the Stop button shows (near the box at the bottom)',
+  conversationLink: 'open the sidebar with the list of conversations (the button at the top left, if it is closed)',
+  chatMore: 'in the sidebar, point the mouse at a conversation: its "More" button (three dots) shows on its row',
+  renameItem: 'in the sidebar, click a conversation\'s "More" button (three dots): the menu with "Rename" opens',
+  renameInput: 'in the sidebar, click a conversation\'s "More" button (three dots), then "Rename": the dialog with the field opens',
+  renameSave: 'in the sidebar, click a conversation\'s "More" button (three dots), then "Rename": the dialog opens; its button that saves the name is the one wanted (do not click it)',
+  uploadInput: 'it is never on the screen: it is the hidden <input type="file"> near the box at the bottom, found in Elements with Ctrl+F and input[type="file"]',
+  attachment: 'attach a file to the message with the box\'s attach button (a paper clip or a "+"): its card shows in the box',
+  attachmentUploaded: 'attach a file to the message with the box\'s attach button (a paper clip or a "+") and wait until it has finished uploading (no spinner or progress on its card): the card as it is then is wanted',
+};
+
 /** The placeholder a template must hold; the others hold none. An attached file's: its name, or its name without the extension. */
 export const ChatPlaceholder: Partial<Record<ChatLocatorKey, string>> = { chatMore: CHAT_ID, attachment: FILE_NAME, attachmentUploaded: FILE_NAME };
 /** Whether a template holds its placeholder (for a file's, either of the two). */

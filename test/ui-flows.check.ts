@@ -1667,10 +1667,13 @@ try {
       await banner.locator('strong').textContent(),
       ((await banner.textContent()) ?? '').includes(DefaultChatLocators.send),
       await banner.locator('a', { hasText: en['chatloc.fix'] }).getAttribute('href'),
-      // A download link: the attribute is there, empty.
-      (await banner.locator('a', { hasText: en['chatloc.html'] }).getAttribute('download')) !== null,
-      await banner.locator('button', { hasText: en['chatloc.prompt'] }).count(),
-    ], [en['chatloc.warnTitle'].replace('{name}', en['chatloc.send']), true, '/settings?locator=send#chat-locators', true, 1]);
+      // One file for a chatbot (2026-11-18), first: a download link, the attribute there, empty; the interface's language.
+      (await banner.locator('a', { hasText: en['chatloc.file'] }).getAttribute('download')) !== null,
+      /\/locators\/failures\/send\/chatbot\?lang=en/.test((await banner.locator('a', { hasText: en['chatloc.file'] }).getAttribute('href')) ?? ''),
+      await banner.locator('.row > a').first().textContent(),
+      // No longer two things to do apart: no HTML link, no text to copy.
+      await banner.locator('button', { hasText: /chatbot/i }).count(),
+    ], [en['chatloc.warnTitle'].replace('{name}', en['chatloc.send']), true, '/settings?locator=send#chat-locators', true, true, en['chatloc.file'], 0]);
     t.truthy('and the page stayed where it was', page.url().includes('/system'), page.url());
 
     await banner.locator('a', { hasText: en['chatloc.fix'] }).click();
@@ -1682,7 +1685,7 @@ try {
       await field.evaluate((el) => el.classList.contains('locator-failed')),
       await page.evaluate(() => document.activeElement?.id),
       await page.locator('#chat-send').getAttribute('aria-invalid'),
-      await field.locator('.locator-failure a', { hasText: en['chatloc.html'] }).count(),
+      await field.locator('.locator-failure a', { hasText: en['chatloc.file'] }).count(),
       await page.locator('.locator-failure').count(),
     ], [true, 'chat-send', 'true', 1, 1]);
 

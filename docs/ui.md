@@ -885,11 +885,18 @@ The API keeps the last failure of each locator (`data/locator-failures.json`, `s
 `GET /api/locators/failures`, `GET …/:key/html` as a download only, `DELETE …/:key`). Each comes with whether its
 locator has been changed in Settings since, and the text that asks a chatbot for the right one (`locatorPrompt`).
 
-On every page a banner names it (`web/app/locatorFailure.tsx`) with four ways on:
+On every page a banner names it (`web/app/locatorFailure.tsx`) with three ways on:
+- "Download the file for a chatbot" (2026-11-18, `GET …/:key/chatbot?lang=`, `session/chatbotFile.ts`): one file to
+  attach to any chatbot with nothing else to write. It holds what to do and the goal, what failed, the old locator, the
+  piece of the page where the element most likely is, the whole page, and how the chatbot walks the operator through
+  finding the element in Edge (F12) when it is in neither. The piece is taken when the failure is kept: around the
+  first element found near it (`ChatLocatorNear`: the box for its Send, the rename field for its Save…), the largest
+  part of at most 40 000 characters. The chatbot is told to speak the interface's language;
 - "Fix in Settings": `/settings?locator=<key>`, the field in red with the cursor in it;
-- "Download the HTML";
-- "Copy for a chatbot";
 - "Close".
+
+When the rename dialog's Save is not found, the name is given with Enter, and a dialog that takes neither is closed:
+it is no longer left open over the chat.
 
 A failure that stopped the work takes the operator to its field once, by itself. Changing the locator takes the red
 and the banner away.

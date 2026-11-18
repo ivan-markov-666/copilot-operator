@@ -270,22 +270,14 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
               'На всяка страница, когато локатор на чата не е намерил нищо (2026-11-17): отваря Settings → „Локатори на чата“ на полето на този локатор, в червено, с курсора в него. Провал, спрял работата, го отваря веднъж сам.',
           },
           {
-            key: 'chatloc.html',
+            key: 'chatloc.file',
             kind: 'link',
-            en: 'Download the HTML',
-            bg: 'Изтегли HTML',
+            en: 'Download the file for a chatbot',
+            bg: 'Изтегли файл за чатбота',
             doesEn:
-              'The page\'s HTML at the moment the locator found nothing, scripts, styles and the sidebar\'s conversation names taken out: the file to give a chatbot with "Copy for a chatbot", which answers with the right locator.',
+              'One file with all a chatbot needs to give the right locator (2026-11-18): what to do and why, what failed and when, the old locator, the part of the page where the element most likely is (around an element near it that was found), the whole page without scripts, styles and conversation names, and how the chatbot walks you through finding it in Edge (F12) when it is in neither. Attach it to Copilot or any other chatbot and send it, with nothing else to write; the chatbot speaks the interface\'s language.',
             doesBg:
-              'HTML-ът на страницата в момента, в който локаторът не е намерил нищо, без скриптове, стилове и имената на разговорите от страничната лента: файлът, който се дава на чатбот заедно с „Копирай за чатбот“, и той отговаря с правилния локатор.',
-          },
-          {
-            key: 'chatloc.prompt',
-            kind: 'button',
-            en: 'Copy for a chatbot',
-            bg: 'Копирай за чатбот',
-            doesEn: 'Copies the text that asks a chatbot, given the HTML file, for the locator of this element: what it is, the locator that stopped finding it, and what a good locator uses.',
-            doesBg: 'Копира текста, който пита чатбот, получил HTML файла, за локатора на този елемент: какъв е, локаторът, който е спрял да го намира, и какво ползва добрият локатор.',
+              'Един файл с всичко, което е нужно на чатбот, за да даде правилния локатор (2026-11-18): какво да направи и защо, какво се е провалило и кога, старият локатор, частта от страницата, където елементът най-вероятно е (около близък елемент, който е намерен), цялата страница без скриптове, стилове и имена на разговори, и как чатботът да ви преведе през търсенето в Edge (F12), ако го няма в нито една от тях. Прикачете го в Copilot или друг чатбот и го пратете, без да пишете нищо друго; чатботът говори на езика на интерфейса.',
           },
           {
             key: 'chatloc.dismiss',

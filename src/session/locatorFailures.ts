@@ -24,6 +24,9 @@ export type LocatorFailure = {
   /** The page's HTML for a chatbot (see `transport/pageHtml.ts`), and a picture of the page: files in the failures folder. */
   html?: string;
   picture?: string;
+  /** The piece of that HTML where the element most likely is (2026-11-18), a file beside it, and what it was taken around. */
+  piece?: string;
+  around?: string;
   /** Where the page was, without its query. */
   url?: string;
 };
