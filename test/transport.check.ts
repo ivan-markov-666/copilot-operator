@@ -1374,6 +1374,10 @@ try {
     g.transport.takeSettings({ chatLocators: { send: '#go' }, extraSteps: [step({ id: 'mode', locator: '#mode-chat[aria-pressed="false"]' })] });
     await g.transport.send('two');
     t.check("a window open takes Settings' locators and steps: Send found by the new one, the new step taken", [(before as { key?: string } | null)?.key, await value<number>(g.page, 'sent'), await value<number>(g.page, 'modeClicks')], ['send', 1, 1]);
+    // Its waits too (bug hunt 2026-11-18): the window kept open went on with the ones it was opened with.
+    g.transport.takeSettings({ replyTimeoutMs: 4_321_000, signInTimeoutMs: 1_234_000, humanWaitMs: 2_345_000 });
+    const waits = (g.transport as unknown as { opts: { replyTimeoutMs: number; signInTimeoutMs: number; humanWaitMs?: number } }).opts;
+    t.check('and its waits: the reply, the sign-in, the verification', [waits.replyTimeoutMs, waits.signInTimeoutMs, waits.humanWaitMs], [4_321_000, 1_234_000, 2_345_000]);
 
     // When the chat opens: taken after the chat is reached, as the work machine's start reaches it.
     const HOME = 'https://m365.cloud.microsoft/chat?es=SSR';

@@ -186,7 +186,7 @@ function Field({ id, label, info, unit, children }: { id: string; label: string;
  * worked somewhere else. A select or a checkbox is a decision the moment it moves, so it is
  * written at once; text needs the pause, or every keystroke would be a request.
  */
-function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): (value: T) => void {
+function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): ((value: T) => void) & { cancel: () => void } {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<{ value: T } | null>(null);
   const latest = useRef(save);
@@ -200,7 +200,7 @@ function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): (v
     if (timer.current) clearTimeout(timer.current);
     if (pending.current) void latest.current(pending.current.value);
   }, []);
-  return (value: T) => {
+  const later = (value: T) => {
     if (timer.current) clearTimeout(timer.current);
     pending.current = { value };
     timer.current = setTimeout(() => {
@@ -208,6 +208,16 @@ function useDebouncedSave<T>(save: (value: T) => Promise<unknown>, ms = 900): (v
       void latest.current(value);
     }, ms);
   };
+  /*
+   * What waits, dropped: called before a save made at once of the same thing (bug hunt 2026-11-18), which the waiting
+   * one, older, wrote over 0.9 s later — "Default" pressed after typing, a box ticked after typing in the same step.
+   */
+  const cancel = (): void => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    pending.current = null;
+  };
+  return Object.assign(later, { cancel });
 }
 
 /**
@@ -1458,8 +1468,11 @@ function ChatStepsSection({
   const saveStepsLater = useDebouncedSave<StepRow[]>((list) => write((c) => ({ ...c, extraSteps: list })));
   const change = (list: StepRow[], atOnce = false): void => {
     setSteps(list);
-    if (atOnce) void write((c) => ({ ...c, extraSteps: list }));
-    else saveStepsLater(list);
+    if (atOnce) {
+      // What typing left waiting is in `list` already: dropped, so it does not write the older list over this.
+      saveStepsLater.cancel();
+      void write((c) => ({ ...c, extraSteps: list }));
+    } else saveStepsLater(list);
   };
   const edit = (id: string, patch: Partial<StepRow>, atOnce = false): void => {
     if (!steps) return;
@@ -1857,6 +1870,8 @@ function LocatorField({
           onClick={() => {
             setText('');
             setProblem(null);
+            // The typing's save, still waiting, would put the typed one back over the default (2026-11-18).
+            saveLater.cancel();
             void onSave('');
           }}
         >

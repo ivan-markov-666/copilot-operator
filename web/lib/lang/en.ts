@@ -578,7 +578,7 @@ export const en = {
   'exec.maxMessageCharsUnit': 'characters, the rest attached as a file',
   'exec.maxMessageCharsWhy': 'The most characters the bot sends to Copilot in one message as typed text. Every message it writes is checked against it — the instructions, a task with its notes, a report, the review\'s, the lead\'s.\n\nA longer message is not cut off: its beginning goes as text, said to be only the beginning, and the whole of it goes with it as an attached text file for Copilot to read; the run\'s log says so.\n\nLower it if Copilot refuses or cuts long messages; raise it if your Copilot takes more.\n\nDefault: 120000.',
   'exec.replyTimeoutWhy':
-    'How long the bot waits for Copilot to finish writing one reply, from the moment the message is sent. Slow models and long answers can take several minutes.\n\nA reply not finished in time stops the task as failed (“Copilot did not finish a reply within …”), with a screenshot of the chat kept in the run\'s folder; “Keep going after a limit” can carry it on.\n\nDefault: 900 seconds (15 minutes). Raise it if your model often needs longer. Applies to runs started from now on.',
+    'How long the bot waits for Copilot to finish writing one reply, from the moment the message is sent. Slow models and long answers can take several minutes.\n\nA reply not finished in time stops the task as failed (“Copilot did not finish a reply within …”), with a screenshot of the chat kept in the run\'s folder; “Keep going after a limit” can carry it on.\n\nDefault: 900 seconds (15 minutes). Raise it if your model often needs longer. Applies at once, to the chat window that is open too.',
   // the start window: where the work starts, and a start that did not happen (startDialog.tsx)
   'startdlg.title': 'Where the work starts',
   'pm.copyPlan': 'Copy the plan',
@@ -1062,7 +1062,6 @@ export const en = {
   'q.intro': 'Tasks written beforehand and run one after another while you are away, each in a new chat on its own model, which the bot chooses itself. A task may depend on earlier ones: when one of them fails, it is skipped, and the queue goes on with the next task that does not depend on it. Commands run as Settings → Execution says.',
   'q.folder': 'In {dir}.',
   'q.noFolder': 'No project folder is open: open one in the chat first.',
-  'q.byHand': 'Settings choose the model by hand: each task would wait for you to choose it.',
   'q.byHandLink': 'Change it in Settings',
   'q.noModel': 'A task would wait for a model to be chosen by hand: with no model of its own it needs "Model for the worker" (or "Model for the lead") in Settings, and when it is reviewed, "Model for the review". The queue will not start until they are chosen.',
   'q.run': 'Run the queue',

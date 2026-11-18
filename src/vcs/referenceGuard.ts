@@ -271,7 +271,17 @@ export class ReferenceGuard {
 /** What the chat is told about the projects for reference, before it starts. Empty when there are none. */
 export function referenceNote(projects: ReferenceProject[], workDir: string): string {
   if (projects.length === 0) return '';
-  const here = projects.some((p) => resolve(p.dir).toLowerCase() === resolve(workDir).toLowerCase());
+  /*
+   * The folder worked in is one of them, or inside one (bug hunt 2026-11-18: `C:\P` for reference, the chat in
+   * `C:\P\app`): every change is put back there too, so the chat is told it can only read — it was told only when the
+   * folders were the same, and spent its rounds on changes put back after every step.
+   */
+  const work = resolve(workDir).toLowerCase();
+  const holding = projects.find((p) => {
+    const dir = resolve(p.dir).toLowerCase().replace(/[\\/]+$/, '');
+    return work === dir || work.startsWith(`${dir}\\`) || work.startsWith(`${dir}/`);
+  });
+  const here = !!holding && resolve(holding.dir).toLowerCase() === work;
   return [
     '## Projects for reference only',
     '',
@@ -279,7 +289,11 @@ export function referenceNote(projects: ReferenceProject[], workDir: string): st
     'file written, moved or removed, nothing installed or built into them, no git command that changes something.',
     'After every step the runner compares them with how they were when this task began, puts back whatever changed,',
     'and does not run the rest of that round.',
-    ...(here ? ['', 'The folder you work in is one of them: this task can only read, run what reads, and report.'] : []),
+    ...(holding
+      ? ['', here
+        ? 'The folder you work in is one of them: this task can only read, run what reads, and report.'
+        : `The folder you work in is inside one of them (${holding.name}): this task can only read, run what reads, and report.`]
+      : []),
     '',
     ...projects.map((p) => `- ${p.name}: ${p.dir}`),
   ].join('\n');

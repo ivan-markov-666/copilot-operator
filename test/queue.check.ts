@@ -241,6 +241,17 @@ try {
   t.truthy('and was sent with its skill', queueText.includes('## Skill: new-test') && queueText.includes('Tests live in tests/e2e, one file per page.'), queueText.slice(-600));
   const qs = await h.call<{ skill?: { name: string } ; tasks: Array<{ skill?: { name: string } }> }>('GET', `/sessions/${after.sessionId}`);
   t.check('its message keeps the skill it was sent with', qs.tasks[0]!.skill?.name, 'new-test');
+  /*
+   * The skill taken out of Settings afterwards (bug hunt 2026-11-18): every edit of the queue was refused for the task
+   * done with it — adding, moving, removing another — and a task done cannot be edited. Only a task that will run is
+   * held to the skills Settings have.
+   */
+  await h.call('PUT', '/skills', { skills: [] });
+  const doneOne = { id: 'q7', prompt: 'Add a test for the login page.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, skill: 'new-test', status: 'done' };
+  const added = await h.raw('PUT', '/queue', { items: [doneOne, { id: 'q8', prompt: 'Write notes.txt.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false }] });
+  t.check('its skill taken out of Settings: the task done with it does not block adding another', [added.status, (added.body as QueueView).items?.map((x) => x.status)], [200, ['done', 'waiting']]);
+  const again = await h.raw('PUT', '/queue', { items: [{ ...doneOne, status: 'waiting' }] });
+  t.check('but put back to run with it: refused, and said', [again.status, (again.body as { message?: string }).message], [400, 'Task 1 is sent with the skill "new-test", which is not in Settings → Skills.']);
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
@@ -434,7 +445,8 @@ try {
   writeFileSync(join(dirs.dataDir, 'queue.json'), JSON.stringify({ running: true, updatedAt: '', items: [item('a', { status: 'running', sessionId: 'gone' }), item('b'), item('c', { status: 'parked', sessionId: 's-c', why: 'waits for you: its plan, to approve' })] }), 'utf8');
   h2 = await startHarness({ dirs, own: true });
   const q = await h2.call<QueueView>('GET', '/queue');
-  t.check('opened again: not running, the task in flight stopped and why, the rest waiting, a parked one still parked', [q.running, q.items.map((x) => x.status), q.items[0]!.why, q.items[2]!.why], [false, ['stopped', 'waiting', 'parked'], 'the bot was closed while it ran', 'waits for you: its plan, to approve']);
+  // The one in flight waits to carry on in its own chat (2026-11-18): stopped, what depends on it was skipped at the next run.
+  t.check('opened again: not running, the task in flight waiting to carry on and why, the rest waiting, a parked one still parked', [q.running, q.items.map((x) => x.status), q.items[0]!.resume ?? false, q.items[0]!.why, q.items[2]!.why], [false, ['waiting', 'waiting', 'parked'], true, 'the bot was closed while it ran; it carries on from where it stopped, in its own chat, when the queue is run again', 'waits for you: its plan, to approve']);
   await h2.call('PUT', '/queue', { items: [{ id: 'b', prompt: 'task b', model: '', dependsOn: [], branch: 'folder', review: false }] });
   // No model of its own and none in Settings: it would wait for somebody to choose one by hand, and nobody is there.
   const refused = await h2.raw('POST', '/queue/run');
@@ -482,6 +494,174 @@ try {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
   await h3?.stop();
+}
+
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description ("every task needs a model named … since nobody is
+ * there to choose one by hand"): Settings' "by hand", on by default, put every task of the queue on its model's card,
+ * and each was set aside after the wait, its model named or not. The model named is chosen by the bot now.
+ */
+console.log('\n--- Settings choose the model by hand: the queue\'s tasks have their named model chosen by the bot ---');
+let h4: Harness | null = null;
+try {
+  h4 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto', manualModel: true, leadManualModel: true, reviewManualModel: true } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  await h4.call('PUT', '/queue/settings', { parkAfterSec: 5 });
+  await h4.call<QueueView>('PUT', '/queue', { items: [{ id: 'm1', prompt: 'Write m.txt holding exactly m.', model: 'Think deeper', dependsOn: [], branch: 'folder', review: false }] });
+  h4.chat.script(reply.steps(write('m.txt', 'm')), reply.done());
+  const before = h4.chat.modelRequests.length;
+  await h4.call('POST', '/queue/run');
+  const done = await waitFor('the queue to end', async () => {
+    const q = await h4!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 60_000);
+  t.check('done, not set aside on a card for its model', [done.items.map((x) => x.status), done.items[0]!.why ?? null], [['done'], null]);
+  t.check('its model was chosen by the bot', h4.chat.modelRequests.slice(before), ['Think deeper']);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h4?.stop();
+}
+
+/*
+ * Found 2026-11-18: a queue task with two chats and "Plan first", set aside at the lead's plan and approved later, was
+ * told the single chat's words — reply with status "continue" — which is not a status of the lead's, and it was asked
+ * again for its format. It is told in the lead's words now.
+ */
+console.log('\n--- two chats, plan first: the lead\'s plan approved on the card the queue kept, told in the lead\'s words ---');
+let h5: Harness | null = null;
+try {
+  h5 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto' } } });
+  await h5.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h5.call('PUT', '/queue', { items: [{ id: 'l1', name: 'Led', prompt: 'Create result.txt holding hello.', model: '', dependsOn: [], branch: 'folder', review: false, plan: true, lead: true }] });
+  h5.chat.script(reply.lead.plan({ steps: ['write result.txt', 'read it back'] }, { understanding: 'A file result.txt holding hello.' }));
+  await h5.call('POST', '/queue/run');
+  await waitFor('the lead\'s plan to be set aside', async () => {
+    const q = await h5!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? q : null;
+  }, 60_000);
+  await h5.call('POST', '/queue/items/l1/answer', { decision: 'approve' });
+  let resumed = '';
+  h5.chat.script((m) => {
+    resumed = m.text;
+    return reply.lead.blocked('Stopping here: this only checks what the lead was told.', 'nothing');
+  });
+  await h5.call('POST', '/queue/run');
+  await waitFor('the queue to end', async () => {
+    const q = await h5!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 60_000);
+  t.truthy('the lead told its plan is approved, and to give the worker the first subtask, not to reply "continue"',
+    resumed.includes('The operator approved your plan.') && resumed.includes('status "delegate"') && !resumed.includes('status "continue"'), resumed.slice(0, 1500));
+  t.check('and not asked again for its format', h5.chat.problems, []);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h5?.stop();
+}
+
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description ("Stop the queue … the rest wait"): the task at
+ * work was marked stopped, and the next "Run the queue" skipped every task that depends on it at once; only "Run again"
+ * was left, which starts it over in a new chat. It waits to carry on now, in its own chat, before the others.
+ */
+console.log('\n--- "Stop the queue" while a task works: it carries on when the queue runs again; what depends on it is not skipped ---');
+let h6: Harness | null = null;
+try {
+  h6 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto' } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  await h6.call('PUT', '/queue', { items: [
+    { id: 's1', prompt: 'Write s1.txt holding s1.', model: '', dependsOn: [], branch: 'folder', review: false },
+    { id: 's2', prompt: 'Write s2.txt holding s2.', model: '', dependsOn: ['s1'], branch: 'folder', review: false },
+  ] });
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  h6.chat.script(async () => {
+    await held;
+    return reply.steps(write('s1.txt', 's1'));
+  });
+  await h6.call('POST', '/queue/run');
+  await waitFor('the first task to be answering', async () => (h6!.chat.pending === 0 ? true : null), 30_000);
+  await h6.call('POST', '/queue/stop');
+  release();
+  const stopped = await waitFor('the queue to stop', async () => {
+    const q = await h6!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status !== 'running' ? q : null;
+  }, 60_000);
+  t.check('stopped with the queue: it waits to carry on, and the one that depends on it waits, not skipped', [stopped.items.map((x) => x.status), stopped.items[0]!.resume ?? false], [['waiting', 'waiting'], true]);
+  let carried = '';
+  h6.chat.script(
+    (m) => {
+      carried = m.text;
+      return reply.steps(write('s1.txt', 's1'));
+    },
+    reply.done('I wrote s1.txt holding the word s1 and read it back.'),
+    reply.steps(write('s2.txt', 's2')),
+    reply.done('I wrote s2.txt holding the word s2 and read it back.'),
+  );
+  await h6.call('POST', '/queue/run');
+  const done = await waitFor('the queue to end', async () => {
+    const q = await h6!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  t.check('run again: it carried on in its own chat, then the one that depends on it ran', [done.items.map((x) => x.status), done.items[0]!.sessionId === stopped.items[0]!.sessionId], [['done', 'done'], true]);
+  t.truthy('the chat told to carry on, not given the task anew', carried.includes('Continue task'), carried.slice(0, 600));
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h6?.stop();
+}
+
+/*
+ * Found 2026-11-18: a task on "the folder as it is", set aside at its plan, carried on on whatever branch the task after
+ * it left the folder on — a branch made for another task — though its card says it carries on where it began. It is
+ * put back on the branch it began on. And a card in its chat answered for a run that is not the queue's task now is
+ * refused; one stopped is said so on its record, not offered again.
+ */
+console.log('\n--- a task on the folder, set aside, carries on on the branch it began on; a card of another run is refused ---');
+let h7: Harness | null = null;
+try {
+  h7 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto' } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  await h7.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h7.call('PUT', '/queue', { items: [
+    { id: 'a1', name: 'Folder, planned', prompt: 'Write a.txt holding a.', model: '', dependsOn: [], branch: 'folder', review: false, plan: true },
+    { id: 'b1', name: 'On its branch', prompt: 'Write b.txt holding b.', model: '', dependsOn: [], branch: 'main', review: false },
+  ] });
+  h7.chat.script(reply.plan({ files: ['a.txt'] }), reply.steps(write('b.txt', 'b')), reply.done('I wrote b.txt holding the word b and read it back.'));
+  await h7.call('POST', '/queue/run');
+  const first = await waitFor('the queue to go round once', async () => {
+    const q = await h7!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  t.check('the planned one set aside, the other done on its own branch, the folder left there', [first.items.map((x) => x.status), h7.git('rev-parse', '--abbrev-ref', 'HEAD').startsWith('queue/b1')], [['parked', 'done'], true]);
+  const parked = first.items[0] as QueueItem;
+  const stale = await h7.raw('POST', '/queue/items/a1/answer', { decision: 'approve', sessionId: 'an-earlier-run' });
+  t.truthy('an answer from the card of another run of it: refused, saying so', stale.status === 400 && /another run/.test(JSON.stringify(stale.body)), stale);
+  await h7.call('POST', '/queue/items/a1/answer', { decision: 'approve', sessionId: parked.sessionId });
+  h7.chat.script(reply.steps(write('a.txt', 'a')), reply.done('I wrote a.txt holding the word a, as the plan said, and read it back.'));
+  await h7.call('POST', '/queue/run');
+  const second = await waitFor('the queue to end', async () => {
+    const q = await h7!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  t.check('carried on back on main, where it began: its file there, not on the other task\'s branch', [second.items[0]!.status, h7.git('rev-parse', '--abbrev-ref', 'HEAD'), existsSync(join(h7.repo, 'a.txt'))], ['done', 'main', true]);
+
+  // A card stopped: said so on the task's record, so its chat does not offer it again.
+  await h7.call('PUT', '/queue', { items: [{ id: 'c1', name: 'Planned again', prompt: 'Write c.txt holding c.', model: '', dependsOn: [], branch: 'folder', review: false, plan: true }] });
+  h7.chat.script(reply.plan({ files: ['c.txt'] }));
+  await h7.call('POST', '/queue/run');
+  const cParked = await waitFor('the plan to be set aside', async () => {
+    const q = await h7!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? (q.items[0] as QueueItem) : null;
+  }, 60_000);
+  await h7.call('POST', '/queue/items/c1/answer', { stop: true });
+  const cTask = (await h7.call<{ tasks: Array<{ parked?: { answer?: { kind: string } } }> }>('GET', `/sessions/${cParked.sessionId}`)).tasks[0];
+  t.check('stopped at its card: the record says so, and the card is not offered again in its chat', cTask?.parked?.answer?.kind, 'stopped');
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h7?.stop();
 }
 
 t.finish();

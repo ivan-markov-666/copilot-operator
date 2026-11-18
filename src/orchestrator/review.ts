@@ -22,7 +22,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { installLayout } from '../config/layout.js';
 import type { ResolvedConfig } from '../config/schema.js';
-import type { ChatTransport } from '../transport/chatTransport.js';
+import { ChatLost, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
 import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
 import { describeFindings, findingId, isGrounded, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
@@ -774,6 +774,8 @@ ${machineNote}` : contract);
       await pacer.settle();
     }
   } catch (e) {
+    // The window closed, or its conversation lost: not the review failing, the work's to stop on (`gateOnReview`).
+    if (e instanceof ChatLost || e instanceof WindowClosed) throw e;
     return { verdict: 'error', findings: [], stepsRun, iterations, problem: (e as Error).message };
   }
 }

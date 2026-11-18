@@ -41,7 +41,10 @@ t.check('how an attempt ended, as a category', [
   classifySubtaskEnd({ status: 'blocked' }),
   classifySubtaskEnd({ status: 'limit-reached', limit: { setting: 'maxIterations', value: 60 } }),
   classifySubtaskEnd({ status: 'failed', failure: { kind: 'transport', detail: 'x' } }, { stopped: true }),
-], [null, 'USER_STOPPED', 'TRANSIENT_CHAT_FAILURE', 'TRANSIENT_CHAT_FAILURE', 'TRANSIENT_CHAT_FAILURE', 'COMMAND_INFRASTRUCTURE_FAILURE', 'TASK_EVIDENCE_FAILURE', 'TASK_EVIDENCE_FAILURE', 'TASK_EVIDENCE_FAILURE', 'USER_STOPPED']);
+  // Its conversation lost (2026-11-18): stopped, by the chat and not the operator, so a fault of the means.
+  classifySubtaskEnd({ status: 'aborted', failure: { kind: 'transport', detail: 'ChatLost' } }),
+  classifySubtaskEnd({ status: 'aborted', failure: { kind: 'transport', detail: 'ChatLost' } }, { stopped: true }),
+], [null, 'USER_STOPPED', 'TRANSIENT_CHAT_FAILURE', 'TRANSIENT_CHAT_FAILURE', 'TRANSIENT_CHAT_FAILURE', 'COMMAND_INFRASTRUCTURE_FAILURE', 'TASK_EVIDENCE_FAILURE', 'TASK_EVIDENCE_FAILURE', 'TASK_EVIDENCE_FAILURE', 'USER_STOPPED', 'TRANSIENT_CHAT_FAILURE', 'USER_STOPPED']);
 const step = (command: string, outcome: string, exitCode?: number) => ({ kind: 'step' as const, iteration: 1, id: 1, command, output: '', outcome, ...(exitCode !== undefined ? { exitCode } : {}), failed: outcome !== 'completed' });
 const facts = stepFacts([step('a', 'completed', 0), step('b', 'refused'), step('c', 'hard-timeout'), step('d', 'spawn-error'), step('e', 'completed', 1)]);
 t.check('the commands: began, finished, cut off, and what finished', [facts.started, facts.completed, facts.cutOff, facts.done.map((d) => d.command)], [3, 2, ['c'], ['a', 'e']]);
@@ -87,7 +90,7 @@ t.truthy('carried on: what finished is not to be run again', continued.startsWit
 
 type Attempt = SubtaskAttempt;
 type Round = { n: number; status: string; subtask?: { n: number; taskId: string; title: string; attempts?: Attempt[]; maxAttempts?: number; report?: string } };
-type LeadTask = { id: string; status: string; reason?: string; lead?: { rounds: Round[]; subtasks: number; maxSubtasks: number; workerSessionId?: string } };
+type LeadTask = { id: string; status: string; reason?: string; summary?: string; lead?: { rounds: Round[]; subtasks: number; maxSubtasks: number; workerSessionId?: string } };
 type Sent = { threadId: string; taskId: string };
 type Approval = { id: string; sessionId: string; taskId: string; retry?: { n: number; attempt: number; maxAttempts: number; category: string; sideEffects: string; choices: string[]; reason: string } };
 type WorkerSession = { tasks: Array<{ id: string; title: string; status: string }> };
@@ -380,5 +383,79 @@ await scenario('15: a record from before there were attempts is tried again all 
   const job = await leadTask(h, sent.threadId);
   t.check('carried on: its one attempt as the record had it, then the second', [job.status, subOf(job, 1).attempts?.map((a) => [a.attempt, a.status])], ['done', [[1, 'aborted'], [2, 'done']]]);
 });
+
+/*
+ * Found 2026-11-18: "Try again" after a Stop copied the stopped attempt's rounds with its record and counted them against
+ * this attempt's limit, so a Stop near the last round ended the next attempt at the limit as soon as the retried
+ * subtask's report went out, the lead's answer to it thrown away. The rounds before are not this attempt's.
+ */
+await scenario('"Try again" after a Stop near the round limit: the rounds before are not counted against it', { subtaskRetryMode: 'same', maxIterations: 2 }, async (h) => {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  h.chat.script(
+    reply.lead.delegate({ title: 'Write result.txt', readOnly: false, goal: 'Create result.txt holding exactly the word hello.' }, understood),
+    async () => {
+      await held;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+  );
+  const sent = await begin(h);
+  await waitFor('the worker to be answering', async () => h.chat.pending === 0, 20_000);
+  await h.call('POST', `/sessions/${sent.threadId}/stop`, {});
+  release();
+  await h.idle();
+  const stopped = await leadTask(h, sent.threadId);
+  h.chat.script(reply.steps(write('result.txt', 'hello')), reply.done(WORKER_DONE), reply.lead.done(LEAD_DONE));
+  await h.call('POST', `/chat/${sent.threadId}/tasks/${stopped.id}/retry-subtask`, { n: 1 });
+  await h.idle();
+  const job = await leadTask(h, sent.threadId);
+  t.check('the retried subtask\'s report answered by the lead: done, not ended at the limit', [job.status, job.summary ?? null], ['done', LEAD_DONE]);
+});
+
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description: a card the queue kept, answered later with
+ * "Restore the snapshot", put the folder back to the start of the subtask's LAST attempt — with what the attempts before
+ * it changed still there — and the next attempt was told to carry on from the folder as it was left. Now it is put back
+ * to the subtask's start, as the run itself puts it, and told so.
+ */
+await scenario('a card the queue kept, answered later with "Restore the snapshot": put back to the subtask\'s start, and told so', { subtaskRetryMode: 'same' }, async (h) => {
+  type QueueView = { running: boolean; items: Array<{ id: string; status: string; sessionId?: string }> };
+  await h.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h.call('PUT', '/queue', { items: [{ id: 'r1', prompt: ASSIGNMENT, model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, lead: true }] });
+  h.chat.script(
+    reply.lead.delegate({ title: 'Write result.txt', readOnly: false, goal: 'Create result.txt holding exactly the word hello.' }, understood),
+    // The first attempt changes the folder, then the chat fails: tried again by itself, carried on from it.
+    reply.steps(write('one.txt', 'one')),
+    cutOff,
+    cutOff,
+    // The second is cut off in a command: what it changed is not known, and the card is put to the operator.
+    reply.steps({ cmd: "Set-Content -Path two.txt -Value 'two'; Start-Sleep -Seconds 30", expect: 'fast' }),
+    cutOff,
+    cutOff,
+  );
+  await h.call('POST', '/queue/run');
+  await waitFor('the card to be set aside', async () => {
+    const q = await h.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]!.status === 'parked' ? q : null;
+  }, 90_000);
+  t.check('both attempts left their files before the answer', [existsSync(join(h.repo, 'one.txt')), existsSync(join(h.repo, 'two.txt'))], [true, true]);
+  await h.call('POST', '/queue/items/r1/answer', { choice: 'restore' });
+  let again = '';
+  h.chat.script(
+    (m) => {
+      again = m.text;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+    reply.done(WORKER_DONE),
+    reply.lead.done(LEAD_DONE),
+  );
+  await h.call('POST', '/queue/run');
+  const done = await waitFor('the queue to end', async () => {
+    const q = await h.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  t.check('put back to the subtask\'s start: neither attempt\'s file is there; then done', [existsSync(join(h.repo, 'one.txt')), existsSync(join(h.repo, 'two.txt')), done.items[0]!.status], [false, false, 'done']);
+  t.truthy('the worker is told the folder was put back, to start over', again.includes('The folder was put back to how it was when the subtask began') && !again.includes('Carry on from the folder'), again.slice(-900));
+}, { commandTimeoutSec: 2, idleTimeoutSec: 2 });
 
 t.finish();

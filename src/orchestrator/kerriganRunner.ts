@@ -910,6 +910,11 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
     }
     // Why, as the kept window says it (2026-11-13): not opened again by Settings, past the times allowed, or not found.
     if (e instanceof WindowClosed || transport.closedOutside()) return await finish('aborted', e instanceof WindowClosed ? e.message : CLOSED_NOT_REOPENED);
+    // A conversation the window could not be put back on, nothing sent: stopped, and Continue tries it again (2026-11-18).
+    if (e instanceof ChatLost) {
+      sink.event('chat-lost', { chatId: e.chatId, found: e.found }, message, 'warn');
+      return await finish('aborted', message);
+    }
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     return await finish('failed', message);
   }

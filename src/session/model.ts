@@ -572,7 +572,9 @@ export type ParkedAnswer =
   | { kind: 'question'; answer: string; /** A handoff: whether the operator ran the commands (before 2026-10-27). */ ran?: boolean; /** A handoff: how the operator answered it. */ outcome?: HandoffOutcome; /** A question of several answers: the ones chosen, and what was written besides (2026-11-02). */ chosen?: string[]; written?: string }
   | { kind: 'retry'; choice: RetryChoice }
   | { kind: 'command'; decision: 'run' | 'skip' }
-  | { kind: 'resume' };
+  | { kind: 'resume' }
+  /** Stopped at its card (2026-11-18): it does not carry on, and its chat does not offer the card again. */
+  | { kind: 'stopped' };
 
 export type Parked = {
   kind: ParkedKind;
@@ -886,7 +888,8 @@ export type TaskContinuation = {
    * Two chats, after a Stop (2026-10-25): the subtask the operator chose to try again first, by its number, in a fresh
    * worker's conversation or not; the lead is then told how it went, with the plan and the reports it already has.
    */
-  retrySubtask?: { n: number; fresh?: boolean };
+  /** `restored`: the folder was put back to the subtask's start first (a card the queue kept, 2026-11-18). */
+  retrySubtask?: { n: number; fresh?: boolean; restored?: boolean };
 };
 
 /** How an attempt ended without the work being done: what is said to the chat that carries it on. */

@@ -349,4 +349,55 @@ await scenario('stopped while her chat works, then carried on: "same" goes on in
   t.truthy('the file written in the end', existsSync(join(h.repo, 'result.txt')) && readFileSync(join(h.repo, 'result.txt'), 'utf8').trim() === 'hello');
 });
 
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description: "Pause" pressed in a chat she directs held her
+ * run, but the chat read whether it was held by its own id, so its button never said "Continue" and a second press did
+ * nothing.
+ */
+await scenario('"Pause" in a chat she directs: it says it is held, and "Continue" there lets it go on', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  h.chat.script(
+    reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt' }),
+    async () => {
+      await gate;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+    reply.done('I wrote result.txt with Set-Content; it holds hello.'),
+    reply.kerrigan.done(),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  const chatId = await waitFor('her chat at work', async () => {
+    const k = (await sessionOf(h, sent.threadId)).tasks.at(-1)?.kerrigan;
+    return k?.chats.length === 1 && h.chat.sent.filter((m) => !m.contract).length >= 2 ? k.chats[0]! : null;
+  }, 30_000);
+  await h.call('POST', `/sessions/${chatId}/pause`, {});
+  t.check('paused from her chat: the chat says it is held', (await h.call<{ paused: boolean }>('GET', `/sessions/${chatId}`)).paused, true);
+  await h.call('POST', `/sessions/${chatId}/resume`, {});
+  t.check('and "Continue" there: no longer held', (await h.call<{ paused: boolean }>('GET', `/sessions/${chatId}`)).paused, false);
+  release();
+  await h.idle();
+  t.check('it went on to the end', (await sessionOf(h, sent.threadId)).tasks.at(-1)?.status, 'done');
+});
+
+/*
+ * Found 2026-11-18: "Stop the task" on a card of a chat she directs stopped only that chat's task; she was told it
+ * stopped and went on directing. The operator stopped the work: her run stops with it.
+ */
+await scenario('"Stop" on a card of a chat she directs: the whole of her work stops, nothing more is sent', { execution: { mode: 'confirm', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  h.chat.script(
+    reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt' }),
+    reply.steps(write('result.txt', 'hello')),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'confirm' });
+  const card = await waitFor('the chat\'s command card', async () => (await pending(h, sent.threadId)).find((a) => a.sessionId !== sent.threadId && (a as { description?: string }).description?.includes('result.txt')) ?? null, 30_000);
+  const before = h.chat.sent.length;
+  await h.call('POST', `/approvals/${card.id}`, { action: 'abort' });
+  await h.idle();
+  const hers = (await sessionOf(h, sent.threadId)).tasks.at(-1)!;
+  t.check('her message stopped too, nothing more sent to her or the chat, the file not written', [hers.status, h.chat.sent.length - before, existsSync(join(h.repo, 'result.txt'))], ['aborted', 0, false]);
+});
+
 t.finish();

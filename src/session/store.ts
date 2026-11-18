@@ -863,7 +863,16 @@ async function removeFile(path: string): Promise<void> {
 async function replaceFile(path: string, content: string): Promise<void> {
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, content, 'utf8');
+  await moveOver(tmp, path);
+}
 
+/**
+ * Moves a file written beside another over it, trying again while Windows refuses for a moment (see `replaceFile`), and
+ * takes the file written away when it cannot. Also the workbench editor's save (bug hunt 2026-11-18): it renamed once, so
+ * a save while VS Code or a virus scanner had the file open failed, and left its `.cop-save-…` file in the project,
+ * where "Commit all" could take it.
+ */
+export async function moveOver(tmp: string, path: string): Promise<void> {
   const backoffMs = [10, 25, 60, 120, 250, 500];
   for (let attempt = 0; ; attempt += 1) {
     try {

@@ -92,7 +92,6 @@ export default function QueuePage() {
   const [queue, setQueue] = useState<Queue | null>(null);
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
   const [ws, setWs] = useState<Workspace | null>(null);
-  const [byHand, setByHand] = useState(false);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   /** The task being edited, or null while a new one is written. */
@@ -127,15 +126,10 @@ export default function QueuePage() {
     api.models().then(setCatalogue).catch(() => undefined);
     api.workspace().then(setWs).catch(() => undefined);
     api.skills().then((r) => setSkills(r.skills)).catch(() => undefined);
-    // Chosen by hand in Settings, every task of the queue would wait for the operator: said here.
-    api
-      .settings()
-      .then((s) => {
-        const copilot = (s.raw.copilot as { manualModel?: boolean } | undefined) ?? {};
-        const byDefault = (s.defaults as { copilot?: { manualModel?: boolean } } | undefined)?.copilot?.manualModel !== false;
-        setByHand(typeof copilot.manualModel === 'boolean' ? copilot.manualModel : byDefault);
-      })
-      .catch(() => undefined);
+    /*
+     * Settings' "by hand" is not said here any more (bug hunt 2026-11-18): the queue's tasks have their named model chosen
+     * by the bot whatever Settings say (`start`), since nobody is there to choose one, so it no longer parks them all.
+     */
   }, []);
 
   const items = queue?.items ?? [];
@@ -262,11 +256,6 @@ export default function QueuePage() {
         <h2 id="queue-title">{t('q.title')}</h2>
         <p className="muted small">{t('q.intro')}</p>
         {ws && <p className="small queue-folder">{ws.ok ? t('q.folder', { dir: ws.dir }) : t('q.noFolder')}</p>}
-        {byHand && (
-          <p className="why warned-text queue-by-hand">
-            {t('q.byHand')} <Link href="/settings#model">{t('q.byHandLink')}</Link>
-          </p>
-        )}
         {unnamed && (
           <p className="why warned-text queue-no-model">
             {t('q.noModel')} <Link href="/settings#model">{t('q.byHandLink')}</Link>

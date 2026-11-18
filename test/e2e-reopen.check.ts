@@ -176,6 +176,26 @@ await scenario('past the times Settings allow: the message stops, saying so, and
   t.truthy('and why it stopped: its window closed, not a Stop', told.includes('It stopped because the browser window this conversation is in was closed (the browser window was closed 2 times') && !told.includes('stopped by the operator'), told.slice(0, 600));
 });
 
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description: a window closed during the review, and not opened
+ * again, was said as the review's own error, which takes the work unreviewed, and the message ended "done". It stops, as
+ * a window closed anywhere else stops it, and "Continue" is there for it.
+ */
+await scenario('closed during the review, not opened again: the message stops, not "done" unreviewed', { limits: { reopenWindow: 0 } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Write r.txt holding exactly r.', model: 'Think deeper', review: true, reviewModel: 'Think deeper' });
+  h.chat.script(
+    reply.steps(write('r.txt', 'r')),
+    reply.done(),
+    (m) => {
+      m.world.closeByHand();
+      return reply.prose('Looking at the changes now.');
+    },
+  );
+  const r1 = (await h.run(sent.threadId)).tasks.at(-1)! as TaskView & { review?: { verdict: string; problem?: string } };
+  t.check('closed while the review worked: stopped and said so, its file written, not taken as done', [r1.status, r1.reason, fileOf(h, 'r.txt')], ['aborted', CLOSED_NOT_REOPENED, 'r']);
+  t.truthy('the review on its record as cut off, not as passed', r1.review?.verdict === 'error' && /cut off/.test(r1.review?.problem ?? ''), r1.review);
+});
+
 await scenario('with 0, closing the window stops the message, as before; "Continue" tells the chat which commands ran and what they printed', { limits: { reopenWindow: 0 } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: 'Wait, say slept well, then write f.txt holding exactly f.', model: 'Think deeper' });
   h.chat.script((m) => {
@@ -313,9 +333,40 @@ await scenario('the model card stopped: the run stops, a note goes with the mess
   const r = await h.call<{ started: boolean }>('POST', `/chat/${sent.threadId}/tasks/${sent.taskId}/continue`);
   t.check('"Continue" under a message never sent: started', r.started, true);
   const again = await waitFor('the model card again', async () => (await h.call<Array<Card & { model?: unknown }>>('GET', '/approvals')).find((c) => !!c.model && c.sessionId === sent.threadId && c.id !== first.id), 20_000);
+  /*
+   * A locator fixed in Settings while the model's card waits (bug hunt 2026-11-18): the notice says it is in force at
+   * once, but only a task at work handed it to the window, and none is at work yet.
+   */
+  const set = await h.call<{ raw: Record<string, unknown> }>('GET', '/settings');
+  const takenBefore = h.chat.settingsTaken.length;
+  await h.call('PUT', '/settings', { ...set.raw, copilot: { ...((set.raw.copilot as Record<string, unknown>) ?? {}), chatLocators: { send: '#fixed-send' } } });
+  t.check('a locator fixed while the model\'s card waits: the open window takes it at once', [h.chat.settingsTaken.length > takenBefore, h.chat.settingsTaken.at(-1)?.chatLocators], [true, { send: '#fixed-send' }]);
   await h.call('POST', `/approvals/${again.id}`, { action: 'run' });
   await h.idle();
   t.check('done, the file written', [(await lastOf(h, sent.threadId)).status, fileOf(h, 'm.txt')], ['done', 'm']);
+});
+
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description: a Stop pressed as the run ended — "idle" written,
+ * the run adding up how it went — wrote "stopping" over it, and nothing undid it: the conversation read as working for
+ * good ("Stopping…", Go back refused, New chat off) until the next message. Pressed at that moment here, by hand.
+ */
+await scenario('a Stop pressed as the message ends: the conversation is not left "stopping"', {}, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Write z.txt holding exactly z.', model: 'Think deeper' });
+  h.chat.script(reply.steps(write('z.txt', 'z')), reply.done());
+  type Bus = { subscribe: (id: string, fn: (e: { type: string }) => void) => () => void };
+  const bus = (h.ops as unknown as { bus: Bus }).bus;
+  let pressed = false;
+  const off = bus.subscribe(sent.threadId, (e) => {
+    if (e.type !== 'session-finished' || pressed) return;
+    pressed = true;
+    void h.ops.stop(sent.threadId);
+  });
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  off();
+  const after = await h.call<{ status: string; tasks: Array<{ status: string }> }>('GET', `/sessions/${sent.threadId}`);
+  t.check('Stop pressed as it ended: the message done, the conversation idle again', [pressed, after.tasks.at(-1)?.status, after.status], [true, 'done', 'idle']);
 });
 
 await scenario('"Continue" while the browser is busy: refused, and the message keeps its Continue', {}, async (h) => {

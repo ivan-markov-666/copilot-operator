@@ -1561,7 +1561,7 @@ function ParkedHere({ session, task }: { session: Session; task: Task }) {
   const item = session.queueItem;
   return (
     <div className="cs-parked">
-      <ParkedCard parked={task.parked} onAnswer={async (answer) => void (await api.answerParked(item, answer))} />
+      <ParkedCard parked={task.parked} onAnswer={async (answer) => void (await api.answerParked(item, { ...answer, sessionId: session.id }))} />
     </div>
   );
 }

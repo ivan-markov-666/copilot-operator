@@ -1647,6 +1647,35 @@ try {
   });
 
   /*
+   * Found 2026-11-18 (bug hunt): a save made at once — "Default" pressed, "Must be there" ticked — was written over by
+   * the typing's own save, still waiting its 0.9 s, with the older value: the field showed one thing, the file said
+   * another. What waits is dropped when a save is made at once.
+   */
+  await scenario('Settings: a typed save still waiting does not write over one made at once', {}, async (h, page, url) => {
+    await page.goto(url('/settings'));
+    const locators = page.locator('section#chat-locators');
+    await locators.locator('#chat-composer').waitFor();
+    type Copilot = { chatLocators?: Record<string, string>; extraSteps?: Array<Record<string, unknown>> };
+    const copilotOf = async (): Promise<Copilot> => ((await settingsOf(h)).copilot as Copilot | undefined) ?? {};
+    await page.locator('#chat-composer').fill('[data-typed-then-default]');
+    await locators.locator('.picker-field:has(#chat-composer) button', { hasText: en['loc.default'] }).click();
+    await page.waitForTimeout(1_800);
+    t.check('typed, then "Default" at once: the field empty, and nothing saved for it after the pause', [await page.locator('#chat-composer').inputValue(), (await copilotOf()).chatLocators?.composer], ['', undefined]);
+
+    const steps = page.locator('section#chat-steps');
+    await steps.getByRole('button', { name: en['steps.add'] }).click();
+    const row = steps.locator('.step-row').first();
+    await row.waitFor();
+    const id = (await row.getAttribute('data-step')) ?? '';
+    await page.locator(`#step-name-${id}`).fill('Typed then ticked');
+    await page.locator(`#step-locator-${id}`).fill('role=button[name="Chat"]');
+    await page.locator(`#step-must-${id}`).check();
+    await page.waitForTimeout(1_800);
+    const saved = (await copilotOf()).extraSteps?.find((s) => s.id === id);
+    t.check('typed, then "Must be there" ticked at once: saved ticked, with what was typed', [saved?.must, saved?.name, saved?.locator], [true, 'Typed then ticked', 'role=button[name="Chat"]']);
+  });
+
+  /*
    * A locator that found nothing (operator, 2026-11-17: "after it fails, the user is taken to the place where the
    * locator is updated, the field painted red … the bot saves the page's HTML and gives it to the user"): a banner on
    * every page with the way to its field, the HTML and the text for a chatbot; in Settings the field in red with the
@@ -2061,9 +2090,14 @@ try {
     await waitFor('the button to say it is stopping', async () => (((await button.textContent()) ?? '').startsWith(word) ? true : null), 10_000).catch(() => undefined);
     t.check('pressed: off, "Stopping the queue" with its dots', [await button.isDisabled(), /^Stopping the queue\.{1,3}$/.test(((await button.textContent()) ?? '').trim())], [true, true]);
     answer();
-    await page.locator('.queue-item.is-stopped').waitFor({ timeout: 30_000 });
+    // It waits to carry on in its own chat at the next run (2026-11-18): marked stopped, what depended on it was skipped.
+    await page.locator('.queue-item.is-waiting .queue-why').waitFor({ timeout: 30_000 });
     await page.getByRole('button', { name: en['q.run']!, exact: true }).waitFor({ timeout: 10_000 });
-    t.check('stopped: the task says so, and "Run the queue" is back', [await page.locator('.queue-item .queue-status').allTextContents(), await page.getByRole('button', { name: en['q.run']!, exact: true }).isDisabled()], [[en['q.stopped']], true]);
+    t.check('stopped: the task waits to carry on and says so, and "Run the queue" is back, to carry it on', [
+      await page.locator('.queue-item .queue-status').allTextContents(),
+      ((await page.locator('.queue-item .queue-why').textContent()) ?? '').includes('it carries on from where it stopped'),
+      await page.getByRole('button', { name: en['q.run']!, exact: true }).isDisabled(),
+    ], [[en['q.waiting']], true, false]);
   });
 
   await scenario('Settings: every ⓘ says what its field is for; in Execution each number its default, each list all its choices', {}, async (h, page, url) => {
@@ -3145,7 +3179,8 @@ try {
       await notice.getByRole('button', { name: en['live.close'] }).click();
       await page.locator('#reply-timeout').fill('700');
       await notice.waitFor({ timeout: 8_000 });
-      t.check("the reply's wait: when the chat window opens again", await said(), en['live.window']);
+      // At once since 2026-11-18: the window open is handed it (it kept the one it was opened with, for days).
+      t.check("the reply's wait: in force at once, the open window too", await said(), en['live.now']);
       await notice.getByRole('button', { name: en['live.close'] }).click();
     } finally {
       release();

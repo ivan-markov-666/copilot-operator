@@ -226,6 +226,75 @@ await scenario('the operator: a question answered, a plan sent back and then app
   t.truthy('the second assignment went into the same conversation, without the contract again', h.chat.sent.filter((m) => m.contract === 'lead').length === 1 && h.chat.sent.some((m) => m.text.startsWith('New assignment in this same conversation.')), '');
 });
 
+/*
+ * Found 2026-11-18: "Continue" after a Stop in a subtask numbered the lead's subtasks from 1 again, under the reports of
+ * the ones before in its conversation, and the lead was never told the subtask cut off had no report. Counted on now,
+ * and said.
+ */
+await scenario('"Continue" after a Stop in a subtask: counted on from it, and the lead told that one has no report', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  h.chat.script(
+    reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt holding exactly the word hello.', readOnly: false }, { understanding: 'A file result.txt holding hello.' }),
+    async () => {
+      await held;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await waitFor('the worker to be answering', async () => h.chat.pending === 0, 20_000);
+  await h.call('POST', `/sessions/${sent.threadId}/stop`, {});
+  release();
+  await h.idle();
+  const stopped = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  let told = '';
+  let workerGot = '';
+  h.chat.script(
+    (m) => {
+      told = m.text;
+      return reply.lead.delegate({ title: 'Write result.txt again', goal: 'Create result.txt holding exactly the word hello.', readOnly: false });
+    },
+    (m) => {
+      workerGot = m.text;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+    reply.done('I wrote result.txt with Set-Content; it holds hello, exactly as the subtask asked.'),
+    reply.lead.done('The worker wrote result.txt holding hello; nothing else was changed in the folder.'),
+  );
+  await h.call('POST', `/chat/${sent.threadId}/tasks/${stopped.id}/continue`);
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('done, the subtask given after the Stop counted on: 2 in all', [stopped.status, job.status, job.lead?.subtasks], ['aborted', 'done', 2]);
+  t.truthy('the lead told subtask 1 was cut off and has no report, and that the next is 2', told.includes('Subtask 1 (Write result.txt) was cut off') && told.includes('The next subtask you give is number 2'), told.slice(0, 1200));
+  t.truthy('the worker given it as subtask 2', workerGot.includes('it is subtask 2 of a larger assignment'), workerGot.slice(0, 300));
+});
+
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description ("with Plan first … approved before anything
+ * changes"): only the lead's contract asked it to wait for its plan, and a subtask that changes the folder, given before
+ * any plan, went to the worker. It is not given now; the lead is told to send the plan first. A survey may go before.
+ */
+await scenario('plans approved: a subtask that changes the folder before the plan is not given; a survey is', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true, planMode: true });
+  let told = '';
+  h.chat.script(
+    reply.lead.delegate({ title: 'Survey the project', readOnly: true }, { understanding: 'A file result.txt holding hello.' }),
+    reply.steps('Get-ChildItem -Name'),
+    reply.done('The folder holds README.md and nothing else the assignment names.'),
+    reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt holding exactly the word hello.', readOnly: false }),
+    (m) => {
+      told = m.text;
+      return reply.lead.blocked('The plan comes first here; I stop so the operator can decide.', 'nothing: this only checks the order');
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('the survey went to the worker; the change did not, and nothing was written', [job.lead?.subtasks, existsSync(join(h.repo, 'result.txt'))], [1, false]);
+  t.truthy('the lead was told to send its plan first', told.includes('Send your plan first') && told.includes('not given to the worker'), told.slice(0, 600));
+});
+
 await scenario('asked before each command: the worker\'s steps wait under the lead\'s conversation, "run the rest" switches the run', { execution: { mode: 'confirm', isolation: 'none-accepted' } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
   h.chat.script(
@@ -284,6 +353,34 @@ await scenario('the window left a conversation while a card waited: the lead\'s 
   t.check('the worker\'s report went into the worker\'s conversation, not the lead\'s the window showed', [reportWent, job.status, existsSync(join(h.repo, 'result.txt'))], [workerChat, 'done', true]);
   t.check('the lead\'s conversation got only the lead\'s messages after it', h.chat.conversations.get(leadChat)!.messages.slice(leadsBefore).every((m) => m.text.startsWith('Report of subtask 1')), true);
   t.check('each put back on its own, from where the window was', h.chat.returns.map((r) => [r.chatId, r.from]), [[leadChat, "Copilot's home page"], [workerChat, `conversation ${leadChat}`]]);
+});
+
+/*
+ * The lead's conversation will not open again (bug hunt 2026-11-18): the message ended "failed", where no Continue is
+ * offered, though nothing was sent and its own words say to carry on once the page lets it. It is stopped now, and
+ * Continue goes back to the lead's conversation.
+ */
+await scenario('the lead\'s conversation will not open again: stopped, not failed, and Continue carries the lead on in it', { execution: { mode: 'confirm', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  h.chat.script(reply.lead.ask('Which folder do you mean: the old one or the new one?', ['the old one', 'the new one'], { understanding: 'A file result.txt holding hello.' }));
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'confirm' });
+  const question = await waitFor('the lead\'s question', async () => (await h.call<Approval[]>('GET', `/approvals?session=${sent.threadId}`)).find((a) => a.question) ?? null, 20_000);
+  const leadChat = h.chat.sent.find((m) => m.contract === 'lead')!.chatId;
+  const home = h.chat.leavePage();
+  h.chat.unopenable.add(leadChat);
+  await h.call('POST', `/approvals/${question.id}/answer`, { text: 'the new one' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.check('the lead\'s message ends stopped, and the page the window showed got nothing', [job.status, home?.messages.length], ['aborted', 0]);
+  h.chat.unopenable.delete(leadChat);
+  let wentTo = '';
+  h.chat.script((m) => {
+    wentTo = m.chatId;
+    return reply.lead.done('Nothing more was needed: the operator answered the question, and the work is delivered.');
+  });
+  const went = await h.call<{ started: boolean }>('POST', `/chat/${sent.threadId}/tasks/${job.id}/continue`);
+  await h.idle();
+  t.check('"Continue" carries the lead on in its own conversation, to the end', [went.started, (await sessionOf(h, sent.threadId)).tasks[0]!.status, wentTo], [true, 'done', leadChat]);
 });
 
 await scenario('limits and conversations: the subtasks run out, a fresh worker, the wrong format, a note while it works', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { maxSubtasks: 2 } }, async (h) => {
@@ -372,8 +469,12 @@ await scenario('Stop while the worker works: the subtask and the message stop, n
   t.truthy('the lead is told to continue where the work got to, why it stopped, and not given the assignment again', carried.startsWith('Continue assignment 1:') && carried.includes('stopped by the operator') && carried.includes('Do not start over') && !carried.includes('## Assignment'), carried.slice(0, 500));
   const after = (await sessionOf(h, sent.threadId)).tasks[0]!;
   t.check('its first reply need not restate the assignment: it ended done', after.status, 'done');
-  // The stopped attempt's rounds stay on its record, not written over by the next; the next counts its own subtasks.
-  t.check('the stopped attempt keeps its rounds and its subtask; the new one starts its count from nothing', [after.attempts?.at(-1)?.lead?.subtasks, after.attempts?.at(-1)?.lead?.rounds.at(-1)?.subtask?.title, after.lead?.subtasks, after.lead?.rounds.length], [1, 'Write result.txt', 0, 1]);
+  /*
+   * The stopped attempt's rounds stay on its record, not written over by the next; the next has its own rounds, and
+   * counts its subtasks on from the ones before (bug hunt 2026-11-18: numbered from 1 again under the reports above).
+   */
+  t.check('the stopped attempt keeps its rounds and its subtask; the new one has its own rounds and counts on from it', [after.attempts?.at(-1)?.lead?.subtasks, after.attempts?.at(-1)?.lead?.rounds.at(-1)?.subtask?.title, after.lead?.subtasks, after.lead?.rounds.length], [1, 'Write result.txt', 1, 1]);
+  t.truthy('and the lead is told the subtask cut off has no report', carried.includes('Subtask 1 (Write result.txt) was cut off'), carried.slice(0, 900));
 });
 
 t.finish();

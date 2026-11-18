@@ -20,8 +20,8 @@
  *
  *   npm run check:e2e-chat
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { startHarness, waitFor, Tally, type Harness, type TaskView } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
@@ -75,7 +75,8 @@ try {
 
   // A locator fixed in Settings between the two messages (2026-11-17): the window left open takes it with the next one.
   const before2 = await h.call<{ raw: Record<string, unknown> }>('GET', '/settings');
-  await h.call('PUT', '/settings', { ...before2.raw, copilot: { ...((before2.raw.copilot as Record<string, unknown>) ?? {}), chatLocators: { send: '#my-send' } } });
+  // And the reply wait (bug hunt 2026-11-18): the window kept open went on with the one it was opened with, for days.
+  await h.call('PUT', '/settings', { ...before2.raw, copilot: { ...((before2.raw.copilot as Record<string, unknown>) ?? {}), chatLocators: { send: '#my-send' }, replyTimeoutSec: 1234 } });
   const takenBefore = h.chat.settingsTaken.length;
 
   // The second message changes the first's file, adds one, and makes a branch: the git is the operator's here.
@@ -96,7 +97,7 @@ try {
   t.check('done, on the new branch, with its changes', [two.status, h.git('rev-parse', '--abbrev-ref', 'HEAD'), file('hi.txt'), file('bye.txt')], ['done', 'feature/greet', 'hello', 'bye']);
   t.check('worked in the window the first left open: not opened again, the sign-in looked at again, the card taken away first', [h.chat.opened, h.chat.closed, h.chat.signIns - signInsAfterOne, h.chat.noticesCleared, h.chat.notices.length], [1, 0, 1, 1, 2]);
   t.check('its changed files on the record', two.vcs?.files?.map((f) => f.path).sort(), ['bye.txt', 'hi.txt']);
-  t.check('the window left open took the locator fixed in Settings between the messages', [h.chat.settingsTaken.length > takenBefore, h.chat.settingsTaken.at(-1)?.chatLocators], [true, { send: '#my-send' }]);
+  t.check('the window left open took the locator fixed in Settings between the messages, and the reply wait', [h.chat.settingsTaken.length > takenBefore, h.chat.settingsTaken.at(-1)?.chatLocators, h.chat.settingsTaken.at(-1)?.replyTimeoutMs], [true, { send: '#my-send' }, 1_234_000]);
 
   // Back to before the second message.
   const back = await h.call<{ ok: boolean; text: string; safety: string }>('POST', `/chat/${first.threadId}/rewind`, { taskId: two.id });
@@ -410,6 +411,22 @@ try {
   t.check('saved over a version that is no longer on disk: refused with 409, nothing written', [stale.status, readFileSync(join(h.repo, 'crlf.txt'), 'utf8')], [409, '\ufeffone\r\ntwo\r\nthree\r\n']);
   await h.call('PUT', '/workspace/file', { path: 'crlf.txt', text: 'mine\n' });
   t.check('saved with no version: over whatever is there', readFileSync(join(h.repo, 'crlf.txt'), 'utf8'), '\ufeffmine\r\n');
+  /*
+   * Saved while another program has the file open for a moment, without letting it be replaced \u2014 an editor, a virus
+   * scanner (bug hunt 2026-11-18): it was renamed once, refused, and its `.cop-save-\u2026` file left in the project. Now
+   * the move is tried again as the bot's own records' writes are, and nothing is left behind.
+   */
+  if (process.platform === 'win32') {
+    const held = join(h.repo, 'held.txt');
+    writeFileSync(held, 'before\n', 'utf8');
+    const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$f = [IO.File]::Open('${held.replace(/'/g, "''")}', 'Open', 'Read', 'Read'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 400; $f.Close()`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    await new Promise<void>((done) => holder.stdout!.on('data', (d: Buffer) => d.toString().includes('held') && done()));
+    const savedHeld = await h.raw('PUT', '/workspace/file', { path: 'held.txt', text: 'after\n' });
+    await new Promise<void>((done) => (holder.exitCode !== null ? done() : holder.on('exit', () => done())));
+    t.check('saved while another program held the file a moment: saved, and no file of its own left beside it',
+      [savedHeld.status, readFileSync(held, 'utf8'), readdirSync(h.repo).filter((f) => f.includes('.cop-save-'))], [200, 'after\n', []]);
+  }
   t.truthy('and the version it answered with is the new one', saved.version !== opened.version, saved);
   writeFileSync(join(h.repo, 'lf.txt'), 'a\nb\n', 'utf8');
   await h.call('PUT', '/workspace/file', { path: 'lf.txt', text: 'a\r\nb\r\nc\r\n' });
@@ -599,7 +616,7 @@ console.log('\n--- the page left the conversation while the work waited: the nex
     const h = hl;
     type Ev = { type: string; message: string; level?: string };
     type Ask = { id: string; description: string };
-    type View = { chat?: { chatId: string }; tasks: Array<{ status: string; reason?: string }> };
+    type View = { chat?: { chatId: string }; tasks: Array<{ id: string; status: string; reason?: string }> };
     const view = async (id: string): Promise<View> => await h.call<View>('GET', `/sessions/${id}`);
     const events = async (id: string): Promise<Ev[]> => await h.call<Ev[]>('GET', `/sessions/${id}/events`);
     const exists = (p: string): boolean => existsSync(join(h.repo, p));
@@ -657,7 +674,8 @@ console.log('\n--- the page left the conversation while the work waited: the nex
     await h.call('POST', `/approvals/${third.id}`, { action: 'run' });
     await h.idle();
     const lost = (await view(one.threadId)).tasks[2];
-    t.check('the message ends failed, nothing more was sent, and the new chat the window showed got nothing', [lost?.status, into(beforeLost), elsewhere?.messages.length], ['failed', [], 0]);
+    // Stopped, not failed (bug hunt 2026-11-18): "failed" offered no Continue, though its own words say to carry on.
+    t.check('the message ends stopped, nothing more was sent, and the new chat the window showed got nothing', [lost?.status, into(beforeLost), elsewhere?.messages.length], ['aborted', [], 0]);
     t.truthy('its reason says the conversation could not be opened again and nothing went into another chat',
       /no longer on this conversation .* could not be opened again, by its address or by its name in the sidebar, so nothing was sent, and nothing went into another chat/.test(lost?.reason ?? ''), lost?.reason);
     t.check('the record says so as an error', (await events(one.threadId)).find((e) => e.type === 'browser:chat-lost')?.level, 'error');
@@ -665,6 +683,14 @@ console.log('\n--- the page left the conversation while the work waited: the nex
     const tried = await events(one.threadId);
     t.check('the report is not tried again and again', [tried.filter((e) => e.type === 'browser:chat-lost').length, tried.filter((e) => e.type === 'report-send-failed').length], [1, 0]);
     t.check('its report was not asked for', h.chat.discard(), 1);
+    // The conversation opens again (the operator signed in, Copilot is back): "Continue" carries the message on in it.
+    h.chat.unopenable.delete(chatId!);
+    h.chat.script(reply.done());
+    const beforeOn = h.chat.exchanged.length;
+    const went = await h.call<{ started: boolean }>('POST', `/chat/${one.threadId}/tasks/${lost!.id}/continue`);
+    await h.idle();
+    t.check('"Continue" is offered on it, and carries it on in its own conversation to the end',
+      [went.started, (await view(one.threadId)).tasks[2]?.status, into(beforeOn)], [true, 'done', [chatId]]);
     t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
   } catch (e) {
     t.truthy('the scenarios of a page that left its conversation ran without throwing', false, (e as Error).stack ?? String(e));

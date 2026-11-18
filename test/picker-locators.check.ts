@@ -51,12 +51,19 @@ t.check(
 );
 
 console.log('\n--- from Settings to the window that picks the model ---');
+/** What is passed besides the window's waits, which every window is handed as Settings have them (2026-11-18). */
+const locatorsOf = (o: ReturnType<typeof pickerOptions>): Record<string, unknown> => {
+  const { replyTimeoutMs: _r, signInTimeoutMs: _s, humanWaitMs: _h, ...rest } = o;
+  return rest;
+};
 const cfg = RunConfigSchema.parse({ copilot: { pickerLocators: { model: "//b[text()='{$model_name}']" }, pickerSteps: true } });
-t.check('the saved locators, and the step pictures when asked for', pickerOptions(cfg), { pickerLocators: { model: "//b[text()='{$model_name}']" }, modelStepShots: true });
-t.check('nothing saved: nothing passed, the defaults stand', pickerOptions(RunConfigSchema.parse({})), {});
+t.check('the saved locators, and the step pictures when asked for', locatorsOf(pickerOptions(cfg)), { pickerLocators: { model: "//b[text()='{$model_name}']" }, modelStepShots: true });
+t.check('nothing saved: nothing passed, the defaults stand', locatorsOf(pickerOptions(RunConfigSchema.parse({}))), {});
+const waited = pickerOptions(RunConfigSchema.parse({ copilot: { replyTimeoutSec: 1200, signInTimeoutSec: 300, humanWaitSec: 600 } }));
+t.check("the window's waits, as Settings have them, in milliseconds", [waited.replyTimeoutMs, waited.signInTimeoutMs, waited.humanWaitMs], [1_200_000, 300_000, 600_000]);
 // The steps on the way to the chat (2026-11-17): passed when they differ from the defaults, as the locators are.
 const withSteps = RunConfigSchema.parse({ copilot: { builtInSteps: { nameChat: false }, extraSteps: [{ id: 'mode', name: 'Chat mode', locator: '#mode' }] } });
-t.check("the bot's own step switched off, and one of the operator's own: passed", pickerOptions(withSteps), {
+t.check("the bot's own step switched off, and one of the operator's own: passed", locatorsOf(pickerOptions(withSteps)), {
   builtInSteps: { popups: true, feedbackPanel: true, nameChat: false },
   extraSteps: [{ id: 'mode', name: 'Chat mode', when: 'message', locator: '#mode', action: 'click', must: false, waitSec: 2, off: false }],
 });
@@ -71,7 +78,7 @@ try {
   const raw = (await h.call<{ raw: Record<string, unknown> }>('GET', '/settings')).raw;
   await h.call('PUT', '/settings', { ...raw, copilot: { ...((raw.copilot as Record<string, unknown>) ?? {}), pickerLocators: { provider: "//b[text()='{$provider_name}']" }, pickerSteps: true } });
   const loaded = await h.ops.settings.load();
-  t.check('saved, it is what a run is given', pickerOptions(loaded), { pickerLocators: { provider: "//b[text()='{$provider_name}']" }, modelStepShots: true });
+  t.check('saved, it is what a run is given', locatorsOf(pickerOptions(loaded)), { pickerLocators: { provider: "//b[text()='{$provider_name}']" }, modelStepShots: true });
 } catch (e) {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {

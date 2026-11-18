@@ -616,7 +616,14 @@ export class CopilotTransport {
    * being looked for as it was until the window closed; each message's run hands the window what Settings say now, and
    * a save while a message is at work does the same. What cannot be used is said as when a window opens.
    */
-  takeSettings(o: Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots' | 'builtInSteps' | 'extraSteps'>): void {
+  takeSettings(o: Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots' | 'builtInSteps' | 'extraSteps'> & Partial<Pick<TransportOptions, 'replyTimeoutMs' | 'signInTimeoutMs' | 'humanWaitMs'>>): void {
+    /*
+     * The waits too (bug hunt 2026-11-18): the window kept open between messages went on, for days, with the reply,
+     * sign-in and verification waits it was opened with, though Settings had changed them.
+     */
+    if (o.replyTimeoutMs !== undefined) this.opts.replyTimeoutMs = o.replyTimeoutMs;
+    if (o.signInTimeoutMs !== undefined) this.opts.signInTimeoutMs = o.signInTimeoutMs;
+    if (o.humanWaitMs !== undefined) this.opts.humanWaitMs = o.humanWaitMs;
     const picker = resolvePickerLocators(o.pickerLocators);
     this.locators = picker.locators;
     this.locatorProblems = picker.problems;

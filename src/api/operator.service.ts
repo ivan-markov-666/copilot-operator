@@ -106,6 +106,15 @@ function sameFolder(a: string, b: string): boolean {
   const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
   return a.trim() !== '' && norm(a) === norm(b);
 }
+
+/** Why a queue's task waits to carry on, in its own chat, at the queue's next run (2026-11-18). */
+const CARRIES_ON_AFTER = (what: string): string => `${what}; it carries on from where it stopped, in its own chat, when the queue is run again`;
+
+/** Whether a folder is another, or inside it: Windows paths, as `sameFolder` reads them. */
+function folderInside(inner: string, outer: string): boolean {
+  const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+  return inner.trim() !== '' && outer.trim() !== '' && (norm(inner) === norm(outer) || norm(inner).startsWith(`${norm(outer)}\\`));
+}
 import { saveWorkspaceFile, workspaceFile, workspaceFiles, workspaceInfo, workspaceRaw, type WorkspaceInfo } from '../session/workspace.js';
 import { searchWorkspace, type SearchOptions, type SearchResult } from '../session/workspaceSearch.js';
 import { restoreCheckpoint } from '../session/checkpoint.js';
@@ -136,6 +145,7 @@ import { createNewBranch, planNewBranch, setAsideUncommitted, type NewBranchPlan
 import { commitAsOperator, identityOf, pushAsOperator, setIdentity, stageFiles, TrustedHooks, type GitOp, type HookChoice } from '../vcs/operatorGit.js';
 import { askpassProgram, closePasswordWindows } from '../vcs/remoteAuth.js';
 import { planApprovedMessage, planReviseMessage } from '../orchestrator/planMode.js';
+import { leadPlanApproved, leadPlanRevise } from '../orchestrator/leadRunner.js';
 import { coveredByArtifacts } from '../vcs/artifacts.js';
 import { botVersion } from '../config/version.js';
 import { exportEntries, exportFileName as homeExportName, exportSizes } from '../config/exportHome.js';
@@ -676,7 +686,7 @@ export class OperatorService {
     await this.init();
     const all = await this.store.listSessions();
     // The pauses of the run going on, for the page to take them off the minutes it shows (2026-10-21).
-    return all.map((s) => ({ ...s, running: this.running.has(s.id), paused: this.running.get(s.id)?.hold.held ?? false, ...this.pausesOf(s.id) }));
+    return all.map((s) => ({ ...s, running: this.running.has(s.id), paused: this.running.get(this.runKey(s.id))?.hold.held ?? false, ...this.pausesOf(s.id) }));
   }
 
   async getSession(
@@ -686,12 +696,16 @@ export class OperatorService {
     const s = await this.store.getSession(id);
     if (!s) return null;
     const pending = [...this.waiting.values()].filter((w) => w.approval.sessionId === id).map((w) => w.approval);
-    return { ...s, running: this.running.has(id), paused: this.running.get(id)?.hold.held ?? false, ...this.pausesOf(id), pending, runMode: this.running.get(id)?.mode };
+    /*
+     * Held or not, as its run is: a chat Kerrigan directs is held with hers (bug hunt 2026-11-18: "Pause" there held her
+     * run, `pause` goes up the chain, but the chat read its own id, so the button never said "Continue").
+     */
+    return { ...s, running: this.running.has(id), paused: this.running.get(this.runKey(id))?.hold.held ?? false, ...this.pausesOf(id), pending, runMode: this.running.get(id)?.mode };
   }
 
   /** The pauses of the run going on in a session, from "Pause" to "Continue"; none when nothing runs or it was never paused. */
   private pausesOf(id: string): { pauses?: Array<{ from: string; to?: string }> } {
-    const pauses = this.running.get(id)?.hold.pauses ?? [];
+    const pauses = this.running.get(this.runKey(id))?.hold.pauses ?? [];
     return pauses.length > 0 ? { pauses } : {};
   }
 
@@ -1368,6 +1382,13 @@ export class OperatorService {
     const cfg: ResolvedConfig = session.kind === 'chat' ? { ...loaded, execution: { ...loaded.execution, denyPatterns: chatDenyPatterns(loaded.execution.denyPatterns) } } : loaded;
     // The run's own settings; a save while it goes on changes them in place (`saveSettings`), and these rules with them.
     const runCfg = { ...cfg, execution: { ...cfg.execution, mode } } as ResolvedConfig;
+    /*
+     * A task of the queue (bug hunt 2026-11-18): nobody is there to choose a model by hand, so the model it names, or
+     * Settings name, is chosen by the bot, whatever Settings say — "by hand" is on by default, and every task of the
+     * queue waited on its model's card and was set aside. One with no model named is refused at "Run the queue"
+     * (`queueWithoutModel`). The models are taken when a message starts, so a save under the run does not undo it.
+     */
+    if (session.queueItem) runCfg.copilot = { ...runCfg.copilot, manualModel: false, leadManualModel: false, reviewManualModel: false, kerriganManualModel: false };
     const live = new LiveSettings(runCfg, session.kind === 'chat', loaded);
     const policy: PolicyConfig = { mode, ...stepRules(runCfg) };
     /*
@@ -1514,13 +1535,22 @@ export class OperatorService {
         }
         return tally;
       })
-      .finally(() => {
+      .finally(async () => {
         for (const [id, w] of this.waiting) {
           if (this.runKey(w.approval.sessionId) === sessionId) {
             w.resolve({ action: 'abort', reason: 'the run ended' });
             this.waiting.delete(id);
           }
         }
+        /*
+         * A Stop that landed as the run ended (bug hunt 2026-11-18): the run had written "idle", and was only adding up
+         * how it went, when `stop` wrote "stopping" over it, which nothing undid: the conversation read as working for
+         * good — "Stopping…", Go back refused, New chat off — until the next message. Before the run is let go of, so no
+         * other run of the session can have begun.
+         */
+        await this.store.updateSession(sessionId, (s) => {
+          if (s.status === 'stopping') s.status = 'idle';
+        }).catch(() => undefined);
         this.running.delete(sessionId);
       });
 
@@ -2131,7 +2161,15 @@ export class OperatorService {
     await this.changeQueue((x) => {
       x.running = false;
       for (const item of x.items) {
-        if (item.status === 'running') Object.assign(item, { status: 'stopped', why: 'the bot was closed while it ran', endedAt: new Date().toISOString() });
+        /*
+         * It carries on, in its own chat, when the queue is run again (bug hunt 2026-11-18): marked stopped, every task
+         * that depends on it was skipped at the next run, and only "Run again", which starts it over, was left.
+         */
+        if (item.status === 'running') {
+          Object.assign(item, item.sessionId
+            ? { status: 'waiting', resume: true, why: CARRIES_ON_AFTER('the bot was closed while it ran'), endedAt: new Date().toISOString() }
+            : { status: 'waiting', why: undefined });
+        }
       }
     });
   }
@@ -2163,7 +2201,17 @@ export class OperatorService {
     if ('problem' in checked) throw new Error(checked.problem);
     // A skill is one of Settings' (2026-10-25); whether it is for the folder is said when the task runs, in its chat.
     const { skills } = await this.skills();
-    const unknown = checked.items.findIndex((x) => x.skill && !skills.some((k) => k.name === x.skill));
+    /*
+     * Only a task that will run with it (bug hunt 2026-11-18): one done, failed or skipped with a skill taken out of
+     * Settings since blocked every edit of the queue, and cannot itself be edited. A new one, one whose skill changes,
+     * and one that waits or is put back to wait are held to Settings' skills.
+     */
+    const before = new Map((await this.readQueue()).items.map((x) => [x.id, x]));
+    const runs = (x: (typeof checked.items)[number]): boolean => {
+      const was = before.get(x.id);
+      return !was || was.skill !== x.skill || (x.status ?? was.status) === 'waiting';
+    };
+    const unknown = checked.items.findIndex((x) => x.skill && runs(x) && !skills.some((k) => k.name === x.skill));
     if (unknown >= 0) {
       const name = checked.items[unknown]!.skill!;
       throw new Error(`Task ${unknown + 1} is sent with the skill "${name}", which is not in Settings → Skills${skills.length > 0 ? `; there are ${skills.map((k) => k.name).join(', ')}` : ''}.`);
@@ -2345,11 +2393,25 @@ export class OperatorService {
     const item = q.items.find((x) => x.id === itemId);
     if (!item) throw new Error('That task is not in the queue any more.');
     if (item.status !== 'parked' || !item.sessionId) throw new Error('That task is not waiting for an answer.');
+    /*
+     * The card of another run of it (bug hunt 2026-11-18): a card left in the chat of an earlier run — stopped, run
+     * again, or a task removed whose id a new one took — answered the card the queue's task waits on now, unseen.
+     */
+    if (typeof input?.sessionId === 'string' && input.sessionId !== item.sessionId) {
+      throw new Error('That card is of another run of this task: what the task waits for now is on the queue\'s page.');
+    }
     const s = await this.store.getSession(item.sessionId);
     const task = s?.tasks.find((t) => t.parked && !t.parked.answer);
     // Stopped whatever its record says (2026-11-18): a Stop that failed with the record gone left the task, and the ones
     // that depend on it, waiting for good.
     if (input?.stop === true) {
+      // Said on the record too, so its chat does not offer the card again (bug hunt 2026-11-18).
+      if (s && task) {
+        await this.store.updateSession(s.id, (x) => {
+          const t = x.tasks.find((y) => y.id === task.id);
+          if (t?.parked && !t.parked.answer) t.parked.answer = { kind: 'stopped', at: new Date().toISOString() };
+        }).catch(() => undefined);
+      }
       return await this.withBusy(await this.changeQueue((x) => this.setQueueItem(x, itemId, { status: 'stopped', why: 'stopped by the operator at its card', waitsFor: undefined })));
     }
     if (!s || !task?.parked) throw new Error('What that task waited for is not on its record any more; run it again.');
@@ -2397,18 +2459,21 @@ export class OperatorService {
       await this.changeQueue((x) => this.setQueueItem(x, item.id, { ...ended, endedAt: now() }));
       // Stopped — from the queue, or the chat's Stop: the rest wait for the operator. Parked: the queue goes on.
       if (ended.status === 'stopped') return;
+      // Stopped with the queue, to carry on at the next run: the loop sees the queue stopped and ends (2026-11-18).
+      if (ended.status === 'waiting' && !(await this.readQueue()).running) return;
     }
   }
 
   /** One task of the queue, in a new chat — or, answered after it was parked, in its own — to its end. */
-  private async runQueueItem(item: QueueItem): Promise<{ status: QueueStatus; why?: string; sessionId?: string }> {
+  private async runQueueItem(item: QueueItem): Promise<{ status: QueueStatus; why?: string; sessionId?: string; resume?: boolean }> {
     const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const stillRunning = async () => (await this.readQueue()).running;
     // Read afresh each time: the browser is let go of by other work while this waits.
     const holder = (): BrowserHolder | null => this.browser;
     // The browser may be the chat's, or a reading of the models': the task waits its turn.
+    // Stopped before it began: it waits as it did (2026-11-18), not "stopped", which skipped what depends on it.
     while (holder()) {
-      if (this.queueClosing || !(await stillRunning())) return { status: 'stopped', why: 'the queue was stopped before it began' };
+      if (this.queueClosing || !(await stillRunning())) return { status: 'waiting', why: undefined };
       await pause(1_000);
     }
     const ws = await this.workspace();
@@ -2417,11 +2482,45 @@ export class OperatorService {
 
     let sessionId: string;
     let taskId: string;
+    /** Carried on with "Continue" in its own chat: stopped with the queue, or the bot closed under it (2026-11-18). */
+    let carryOn = false;
     if (item.resume && item.sessionId) {
-      const carried = await this.resumeParked(item.sessionId, ws.dir);
-      if ('problem' in carried) return { status: 'failed', why: carried.problem, sessionId: item.sessionId };
+      const s0 = await this.store.getSession(item.sessionId);
+      const answered = s0?.tasks.find((t) => t.parked?.answer && t.parked.answer.kind !== 'stopped');
+      const last = s0?.tasks.at(-1);
+      if (!s0 || !last) return { status: 'failed', why: 'its chat is not there any more; run it again' };
+      /*
+       * Back on the branch it began on, a task on "the folder as it is" (bug hunt 2026-11-18): it carried on on whatever
+       * branch the task after it left the folder on — one made for another task. What that left uncommitted is put
+       * aside first, kept whole and not pushed, as before a task on a branch of its own.
+       */
+      const began = (answered ?? last).checkpoint?.branch;
+      if (ws.isRepo && !s0.vcs?.enabled && began) {
+        const onNow = (await git(ws.dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => null))?.stdout || null;
+        if (onNow !== began) {
+          const aside = await setAsideUncommitted(ws.dir, `the queue's task "${itemTitle(item)}" carries on on ${began}, where it began, and the folder held changes left on ${onNow ?? 'a detached HEAD'}`);
+          if (aside && 'problem' in aside) return { status: 'failed', why: `what was not committed in the folder could not be put aside before it: ${aside.problem}`, sessionId: s0.id };
+          const back = await git(ws.dir, ['switch', began]);
+          if (!back.ok) return { status: 'failed', why: `it could not be put back on ${began}, where it began: ${(back.stderr || back.stdout).trim().slice(0, 300)}`, sessionId: s0.id };
+          this.bus.publish({ sessionId: s0.id, type: 'queue-back-on-branch', level: 'info',
+            message: `back on ${began}, where it began, before it carries on (the folder was on ${onNow ?? 'a detached HEAD'})${aside ? `; what was not committed there is kept on ${aside.saved}, not pushed` : ''}`,
+            data: { branch: began, was: onNow, ...(aside ? { saved: aside.saved } : {}) } });
+        }
+      }
+      if (answered) {
+        const carried = await this.resumeParked(item.sessionId, ws.dir);
+        if ('problem' in carried) return { status: 'failed', why: carried.problem, sessionId: item.sessionId };
+        taskId = carried.taskId;
+      } else {
+        // Finished in its chat meanwhile, or ended there in a way "Continue" does not carry on: as it ended.
+        if (last.status !== 'queued' && !isContinuable(last)) {
+          const status = statusOfTask(last.status);
+          return { status, ...(status !== 'done' ? { why: last.reason ?? `it ended ${last.status}` } : {}), sessionId: s0.id };
+        }
+        taskId = last.id;
+        carryOn = true;
+      }
       sessionId = item.sessionId;
-      taskId = carried.taskId;
     } else {
       // Settings may have changed since the queue was started.
       const unnamed = this.queueWithoutModel([item], cfg);
@@ -2500,17 +2599,20 @@ export class OperatorService {
      * is looked at and taken in the same moment — `start` takes it before it awaits anything.
      */
     while (holder()) {
-      if (this.queueClosing || !(await stillRunning())) return { status: 'stopped', why: 'the queue was stopped before it began', sessionId };
+      if (this.queueClosing || !(await stillRunning())) return { status: 'waiting', resume: true, why: CARRIES_ON_AFTER('the queue was stopped before it began'), sessionId };
       await pause(1_000);
     }
     this.queueAtWork.add(sessionId);
+    /** Stopped with the queue: it carries on at the next run rather than counting as stopped (2026-11-18). */
+    let asked = false;
     try {
-      const reply = await this.start(sessionId, cfg.execution.mode);
+      const reply: { started: boolean; reason?: string } = carryOn
+        ? await this.chatContinue(sessionId, taskId).catch((e: unknown) => ({ started: false, reason: (e as Error).message }))
+        : await this.start(sessionId, cfg.execution.mode);
       if (!reply.started) return { status: 'failed', why: reply.reason ?? 'it did not start', sessionId };
       // Until its run has ended and its window let the browser go, so the next one can have it.
-      let asked = false;
       while (this.running.has(sessionId) || (holder()?.kind === 'run' && (holder() as { sessionId?: string }).sessionId === sessionId)) {
-        if (this.queueClosing) return { status: 'stopped', why: 'the bot was closed while it ran', sessionId };
+        if (this.queueClosing) return { status: 'waiting', resume: true, why: CARRIES_ON_AFTER('the bot was closed while it ran'), sessionId };
         if (!asked && !(await stillRunning())) {
           asked = true;
           await this.stop(sessionId).catch(() => undefined);
@@ -2531,6 +2633,10 @@ export class OperatorService {
       });
       return { status: 'parked', why, sessionId };
     }
+    // Stopped with the queue ("Stop the queue … the rest wait"): it carries on, in its own chat, at the next run.
+    if ((asked || !(await stillRunning())) && task && (task.status === 'queued' || isContinuable(task))) {
+      return { status: 'waiting', resume: true, why: CARRIES_ON_AFTER('the queue was stopped while it ran'), sessionId };
+    }
     const status = statusOfTask(task?.status);
     return { status, ...(status !== 'done' ? { why: task?.reason ?? `it ended ${task?.status ?? 'without a record'}` } : {}), sessionId };
   }
@@ -2543,21 +2649,29 @@ export class OperatorService {
    */
   private async resumeParked(sessionId: string, dir: string): Promise<{ taskId: string } | { problem: string }> {
     const s = await this.store.getSession(sessionId);
-    const task = s?.tasks.find((t) => t.parked?.answer);
+    // Not one stopped at its card (2026-11-18): that is an answer that does not carry it on.
+    const task = s?.tasks.find((t) => t.parked?.answer && t.parked.answer.kind !== 'stopped');
     const p = task?.parked;
     const a = p?.answer;
-    if (!s || !task || !p || !a) return { problem: 'its answer is not on its record any more; run it again' };
+    if (!s || !task || !p || !a || a.kind === 'stopped') return { problem: 'its answer is not on its record any more; run it again' };
     const continuing: NonNullable<Task['continuing']> = { fromAttempt: task.attempt ?? 1, stoppedBecause: task.reason, how: 'parked', parkedFor: p.kind };
     let note = '';
     let approvedPlan: TaskPlan | undefined;
     const command = p.approval.description.replace(/^\[[\w-]+\]\s*/, '');
+    /*
+     * The lead's plan, with two chats (bug hunt 2026-11-18): told in the lead's words. The single chat's said to reply
+     * with status "continue", which is not the lead's, and it was asked again for its format.
+     */
+    const ofLead = !!task.lead;
     if (a.kind === 'plan') {
+      const revised = a.note?.trim() || 'Make the plan more concrete: name the files and the stages.';
       if (a.decision === 'approve' && p.approval.plan) {
         approvedPlan = { ...p.approval.plan.plan, approved: { by: 'operator', at: a.at, ...(a.note?.trim() ? { note: a.note.trim() } : {}) } };
-        note = planApprovedMessage(approvedPlan.approved!);
+        // Carried on, the lead may give as many subtasks again as Settings allow (see `runLeadTask`).
+        note = ofLead ? leadPlanApproved(approvedPlan.approved!, Math.max(1, (await this.settings.load()).limits.maxSubtasks ?? 20)) : planApprovedMessage(approvedPlan.approved!);
       } else {
         continuing.replan = true;
-        note = planReviseMessage(a.note?.trim() || 'Make the plan more concrete: name the files and the stages.', p.approval.plan?.plan.version ?? 1);
+        note = ofLead ? leadPlanRevise(revised, p.approval.plan?.plan.version ?? 1) : planReviseMessage(revised, p.approval.plan?.plan.version ?? 1);
       }
     } else if (a.kind === 'question') {
       const handed = p.approval.question?.handoff;
@@ -2572,15 +2686,28 @@ export class OperatorService {
           : `${asked}The operator answers: ${a.answer}${run ? `\n\nThat answer carries a command: send \`${run}\` as your next step.` : ''}`;
     } else if (a.kind === 'retry' && p.approval.retry) {
       const r = p.approval.retry;
-      if (a.choice === 'accept') note = `Subtask ${r.n} (${r.title}) is taken as failed, at the operator's word: decide what to do next without it.`;
-      else {
+      const worker = await this.store.getSession(p.approval.sessionId);
+      if (a.choice === 'accept') {
+        /*
+         * With what its last attempt ended on (bug hunt 2026-11-18): the lead was given only that it failed, where the
+         * run itself gives it the subtask's report.
+         */
+        const last = worker?.tasks.find((t) => t.id === p.approval.taskId);
+        const ended = last ? [`Its last attempt ended ${last.status}${last.reason ? `: ${last.reason}` : ''}.`, ...(last.summary?.trim() ? ['', 'The worker\'s summary:', '', last.summary.trim()] : [])] : [];
+        note = [`Subtask ${r.n} (${r.title}) is taken as failed, at the operator's word: decide what to do next without it.`, ...(ended.length > 0 ? ['', ...ended] : [])].join('\n');
+      } else {
         if (a.choice === 'restore') {
-          const worker = await this.store.getSession(p.approval.sessionId);
-          const cp = worker?.tasks.find((t) => t.id === p.approval.taskId)?.checkpoint;
+          /*
+           * To the subtask's start, its first attempt's photograph, as the run puts it back (bug hunt 2026-11-18): the
+           * card's own task is the last attempt's, whose photograph holds what the attempts before it changed.
+           */
+          const first = [...(task.lead?.rounds ?? [])].reverse().find((x) => x.subtask?.n === r.n)?.subtask?.attempts?.[0]?.taskId ?? p.approval.taskId;
+          const cp = worker?.tasks.find((t) => t.id === first)?.checkpoint;
           const back = cp ? await restoreCheckpoint(dir, cp) : { ok: false as const, problem: 'the subtask\'s start was not photographed' };
           if (!back.ok) return { problem: `the folder could not be put back to the subtask's start (${back.problem}); answer it again with another choice` };
         }
-        continuing.retrySubtask = { n: r.n, ...(a.choice === 'fresh' ? { fresh: true } : {}) };
+        // Put back: the next attempt is told it starts over, not to carry on from what the last one left.
+        continuing.retrySubtask = { n: r.n, ...(a.choice === 'fresh' ? { fresh: true } : {}), ...(a.choice === 'restore' ? { restored: true } : {}) };
       }
     } else if (a.kind === 'command') {
       if (a.decision === 'run') {
@@ -3005,6 +3132,8 @@ export class OperatorService {
     w.resolvePlan({ decision: action, ...(text ? { note: text } : {}), ...(as ? { by: as.by } : {}) });
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
       message: `plan: ${action}${text ? ' (with a note)' : ''}${as ? `, by Kerrigan${as.why ? ` — ${as.why}` : ''}` : ''}`, data: { approvalId, action, plan: true, ...(as ? { by: as.by } : {}) } });
+    // The operator's Stop on the plan of a chat inside another's run stops the run (see `decide`); Kerrigan's is her own.
+    if (action === 'stop' && !as && this.runKey(w.approval.sessionId) !== w.approval.sessionId) void this.stop(w.approval.sessionId).catch(() => undefined);
     return { ok: true };
   }
 
@@ -3045,6 +3174,12 @@ export class OperatorService {
      * of a model the bot could not choose, a failure it is, and is said with what the page offers.
      */
     if (w.approval.model?.manual && action === 'abort') void this.stop(w.approval.sessionId).catch(() => undefined);
+    /*
+     * "Stop the task" or "Abort task" on a card of a conversation inside another's run — the worker of two chats, a chat
+     * Kerrigan directs (bug hunt 2026-11-18): it ended only that conversation's task, and the lead, or Kerrigan, was told
+     * it stopped and went on. The operator stopped the work: the run stops, as the chat's Stop stops it.
+     */
+    else if (action === 'abort' && this.runKey(w.approval.sessionId) !== w.approval.sessionId) void this.stop(w.approval.sessionId).catch(() => undefined);
     return { ok: true };
   }
 
@@ -3528,6 +3663,17 @@ export class OperatorService {
         if (seen.has(key)) throw new Error(`Two projects are named "${o.name}". Names are how the folders are told apart, so each needs its own.`);
         seen.add(key);
       }
+      /*
+       * A project that may be changed inside one for reference only (bug hunt 2026-11-18): every change made in it would
+       * be put back after each step, so no task there could finish. Refused, with what to do.
+       */
+      const all = [{ name: name || rootDir, rootDir, readOnly }, ...others].filter((p) => p.rootDir);
+      for (const w of all.filter((p) => !p.readOnly)) {
+        const r = all.find((p) => p.readOnly && p !== w && folderInside(w.rootDir, p.rootDir));
+        if (r) {
+          throw new Error(`${w.name} (${w.rootDir}) is inside ${r.name} (${r.rootDir}), which is for reference only: every change made in it would be put back after each step. Untick "for reference only" on ${r.name}, or list for reference only the folders of it beside ${w.name}.`);
+        }
+      }
 
       // What the removed Desktop copies left in the stored project is dropped with the next save.
       const { mirror: _m, desktop: _d, mirrorToDesktop: _t, ...rest } = current as typeof current & { mirror?: unknown; desktop?: unknown; mirrorToDesktop?: unknown };
@@ -3726,9 +3872,6 @@ export class OperatorService {
         chatUrl: cfg.copilot.url,
         channel: cfg.copilot.channel,
         headless: cfg.copilot.headless,
-        replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
-        signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
-        humanWaitMs: cfg.copilot.humanWaitSec * 1000,
         keepFailurePage: cfg.copilot.keepFailurePage,
         // The rows' locator reads the names (Settings' own, 2026-10-24).
         ...pickerOptions(cfg),
@@ -3782,9 +3925,6 @@ export class OperatorService {
         chatUrl: cfg.copilot.url,
         channel: cfg.copilot.channel,
         headless: cfg.copilot.headless,
-        replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
-        signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
-        humanWaitMs: cfg.copilot.humanWaitSec * 1000,
         keepFailurePage: cfg.copilot.keepFailurePage,
         ...pickerOptions(cfg),
         onEvent: (event, detail) => {

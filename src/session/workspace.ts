@@ -6,9 +6,10 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { git, looksLikeRepo, repoState } from '../vcs/git.js';
+import { moveOver } from './store.js';
 
 export type WorkspaceInfo = { dir: string; name: string; ok: boolean; isRepo: boolean; branch?: string; problem?: string };
 
@@ -131,6 +132,6 @@ export async function saveWorkspaceFile(dir: string, path: string, text: string,
   // Written beside it and moved over it, so a file is never left half written.
   const temp = `${full}.cop-save-${process.pid}`;
   await writeFile(temp, bytes);
-  await rename(temp, full);
+  await moveOver(temp, full);
   return { path: clean, version: versionOf(bytes), size: bytes.length };
 }

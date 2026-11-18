@@ -2058,8 +2058,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Stop the queue',
             bg: 'Спри опашката',
-            doesEn: 'Stops the task at work, as the chat\'s Stop does; the rest wait.',
-            doesBg: 'Спира задачата, която работи, както Спри в чата; останалите чакат.',
+            doesEn: 'Stops the task at work, as the chat\'s Stop does; it carries on from there, and the rest after it, when the queue is run again.',
+            doesBg: 'Спира задачата, която работи, както Спри в чата; тя продължава оттам, а след нея и останалите, когато опашката се пусне пак.',
           },
           {
             key: 'q.stopping',

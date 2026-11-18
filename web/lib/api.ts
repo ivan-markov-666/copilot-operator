@@ -239,13 +239,17 @@ export type HandoffCard = {
 /** How the operator answered a handoff: ran it, sent it back for a correction, or will not run it. */
 export type HandoffOutcome = 'ran' | 'revise' | 'declined';
 
-export type ParkedAnswerInput =
+export type ParkedAnswerInput = (
   | { decision: 'approve' | 'revise'; note?: string }
   | { answer: string; /** A handoff: false when the operator did not run the commands. */ ran?: boolean; /** A handoff: how it was answered. */ outcome?: HandoffOutcome; /** A question of several answers: the ones chosen, by their place (2026-11-02). */ chosen?: number[] }
   | { choice: RetryChoice }
   | { decision: 'run' | 'skip' }
   | { resume: true }
-  | { stop: true };
+  | { stop: true }
+) & {
+  /** The chat whose card it is (2026-11-18): refused when the queue's task has run again in another since. */
+  sessionId?: string;
+};
 /** What has the browser now, other than the queue's own task: the queue's next task starts after it (2026-10-25). */
 export type QueueBusy = { kind: 'chat'; sessionId: string; title: string } | { kind: 'models' } | { kind: 'login' } | { kind: 'locators' };
 /** `parkAfterSec`: how long a task may wait for the operator before it is set aside (2026-10-26); 0: as long as it takes. */

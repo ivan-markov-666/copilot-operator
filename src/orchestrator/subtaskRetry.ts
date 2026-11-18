@@ -56,7 +56,8 @@ export function stepFacts(steps: StepEntry[]): StepFacts {
  */
 export function classifySubtaskEnd(task: Pick<Task, 'status' | 'limit' | 'stopCode' | 'failure'>, opts: { stopped?: boolean } = {}): SubtaskFailure | null {
   if (task.status === 'done') return null;
-  if (opts.stopped || task.status === 'aborted') return 'USER_STOPPED';
+  // Aborted by a fault of the chat (its conversation lost, 2026-11-18), not by the operator: a fault of the means.
+  if (opts.stopped || (task.status === 'aborted' && task.failure?.kind !== 'transport')) return 'USER_STOPPED';
   if (task.stopCode === 'environment' || task.failure?.kind === 'shell') return 'COMMAND_INFRASTRUCTURE_FAILURE';
   if (task.stopCode === 'format-repair-exhausted' || task.limit?.setting === 'maxFormatRetries') return 'TRANSIENT_CHAT_FAILURE';
   if (task.limit?.setting === 'replyTimeoutSec') return 'TRANSIENT_CHAT_FAILURE';

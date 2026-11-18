@@ -652,11 +652,15 @@ export function speakFor(transport: ChatTransport, sessionId: string, opts: { al
 }
 
 /** The settings a window open takes at once (`takeSettings`): its locators and the steps on the way to the chat. */
-const WINDOW_NOW = new Set(['copilot.pickerLocators', 'copilot.chatLocators', 'copilot.pickerSteps', 'copilot.builtInSteps', 'copilot.extraSteps']);
+const WINDOW_NOW = new Set([
+  'copilot.pickerLocators', 'copilot.chatLocators', 'copilot.pickerSteps', 'copilot.builtInSteps', 'copilot.extraSteps',
+  // The window's waits (2026-11-18), which the window kept open between messages went on with for days.
+  'copilot.replyTimeoutSec', 'copilot.signInTimeoutSec', 'copilot.humanWaitSec',
+]);
 
 /** The model menu's locators and its step pictures, as Settings have them (2026-10-24), for every window that picks a model. */
 /** The locators Settings hold for the Copilot window: the model menu's, and the chat page's own (the box to write in, 2026-11-17). */
-export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots' | 'builtInSteps' | 'extraSteps'> {
+export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<TransportOptions, 'pickerLocators' | 'chatLocators' | 'modelStepShots' | 'builtInSteps' | 'extraSteps' | 'replyTimeoutMs' | 'signInTimeoutMs' | 'humanWaitMs'> {
   // The steps on the way to the chat (2026-11-17): only what differs from the defaults, as the locators. Left out, a
   // window takes the defaults (`takeSettings` too: a step deleted or switched back on goes with the next one).
   const builtIn = cfg.copilot.builtInSteps;
@@ -668,6 +672,10 @@ export function pickerOptions(cfg: Pick<ResolvedConfig, 'copilot'>): Pick<Transp
     ...(cfg.copilot.pickerSteps ? { modelStepShots: true } : {}),
     ...(switchedOff ? { builtInSteps: builtIn } : {}),
     ...(own.length > 0 ? { extraSteps: own } : {}),
+    // Its waits, as Settings have them now (2026-11-18): a window kept open is handed them with each message.
+    replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
+    signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
+    humanWaitMs: cfg.copilot.humanWaitSec * 1000,
   };
 }
 
@@ -678,6 +686,8 @@ export async function openBrowser(
   sessionId: string,
   /** The run's Stop: a sign-in still awaited ends with it. */
   signal?: AbortSignal,
+  /** The run's settings: a locator or a step fixed while the sign-in is awaited is handed to the window at once. */
+  live?: Pick<LiveSettings, 'onChange'>,
 ): Promise<ChatTransport> {
   const speaker: { id: string; alone?: boolean } = { id: sessionId };
   const transport = createTransport({
@@ -686,9 +696,6 @@ export async function openBrowser(
     chatUrl: cfg.copilot.url,
     channel: cfg.copilot.channel,
     headless: cfg.copilot.headless,
-    replyTimeoutMs: cfg.copilot.replyTimeoutSec * 1000,
-    signInTimeoutMs: cfg.copilot.signInTimeoutSec * 1000,
-    humanWaitMs: cfg.copilot.humanWaitSec * 1000,
     keepFailurePage: cfg.copilot.keepFailurePage,
     ...pickerOptions(cfg),
     onEvent: (event, detail) => {
@@ -749,6 +756,10 @@ export async function openBrowser(
    * or read of the models, the one the error asks for, was refused as "Edge is already running with
    * this profile" until the window was closed by hand.
    */
+  // Until the run has the window (`runSession` hands it what is saved from then on): bug hunt 2026-11-18.
+  const unlive = live?.onChange((change) => {
+    if (change.now.some((name) => WINDOW_NOW.has(name))) transport.takeSettings(pickerOptions(cfg));
+  });
   try {
     await transport.open();
     await transport.ensureSignedIn(undefined, { signal });
@@ -757,6 +768,8 @@ export async function openBrowser(
     await transport.close().catch(() => undefined);
     // Closed with its X while it opened or the sign-in was awaited: a stop, not a failure to start (2026-10-19).
     throw byHand ? new WindowClosed() : e;
+  } finally {
+    unlive?.();
   }
   return transport;
 }
@@ -939,8 +952,9 @@ export async function openSessionTransport(
   bus: EventBus,
   runsDir: string,
   signal?: AbortSignal,
+  live?: Pick<LiveSettings, 'onChange'>,
 ): Promise<ChatTransport> {
-  const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id, signal);
+  const transport = await openBrowser(cfg, bus, join(runsDir, '_browser'), session.id, signal, live);
   /*
    * Closed on any failure to enter the conversation, not only a conversation that will not reopen: the caller has no
    * transport yet, so a page that would not load left the window open on the profile with nobody holding it.
@@ -2783,6 +2797,8 @@ export async function runTask(
       const beforeReview: ProcessSnapshot | null = processesBefore ? await snapshotProcesses(work.cwd, processesBefore.since).catch(() => null) : null;
       let roundLeftovers: Array<{ name: string; ports: number[] }> = [];
       let outcome: ReviewOutcome;
+      /** What cut the review off, when it was not the review's own failing: the window closed, the conversation lost. */
+      let reviewCut: unknown;
       try {
         await transport.newChat();
         if (model || (reviewByHand && deps.models?.askHelp)) {
@@ -2862,6 +2878,7 @@ export async function runTask(
           record,
         });
       } catch (e) {
+        reviewCut = e;
         outcome = { verdict: 'error', findings: [], stepsRun: 0, iterations: 0, problem: (e as Error).message };
       } finally {
         // Back to the conversation that did the work, whatever happened in the other one. A
@@ -2896,6 +2913,22 @@ export async function runTask(
         sink.event('review-stopped', { round: reviewRounds, stepsRun: outcome.stepsRun },
           `the operator stopped the run during review round ${reviewRounds}; the work is neither accepted nor sent back`, 'warn');
         return 'stopped';
+      }
+
+      /*
+       * The window closed during the review and not opened again, or a conversation lost (bug hunt 2026-11-18): said as
+       * the review's error, which accepts the work unreviewed, so the task ended "done" where everywhere else it ends
+       * stopped, with Continue. Thrown on, for the end of the task to say it as it says it anywhere (see `runTask`).
+       */
+      if (transport.closedOutside() || reviewCut instanceof ChatLost || reviewCut instanceof WindowClosed) {
+        await saveReview({
+          verdict: 'error',
+          rounds: reviewRounds,
+          stepsRun: outcome.stepsRun,
+          problem: `review round ${reviewRounds} was cut off: ${outcome.problem ?? 'the browser window was closed'}`,
+          model: model || undefined,
+        });
+        throw reviewCut instanceof Error ? reviewCut : new WindowClosed(CLOSED_NOT_REOPENED);
       }
 
       /*
@@ -4064,6 +4097,19 @@ export async function runTask(
       sink.event('window-closed', { error: message, reopened: transport.reopenedTimes?.() ?? 0 }, why, 'warn');
       return await finish('aborted', why);
     }
+    /*
+     * The window could not be put back on its conversation (2026-11-09), nothing sent: a stop, not a failure of the work
+     * (bug hunt 2026-11-18: it ended "failed", where no Continue is offered, though its own words say to continue once
+     * signed in). Continue goes back to the conversation again. A fault of the means all the same, so a worker's subtask
+     * that ends so may be tried again (`classifySubtaskEnd`), as any fault of the chat may.
+     */
+    if (e instanceof ChatLost) {
+      sink.event('chat-lost', { chatId: e.chatId, found: e.found }, message, 'warn');
+      await setTask((t) => {
+        t.failure = { kind: 'transport', detail: message.slice(0, 400) };
+      }).catch(() => undefined);
+      return await finish('aborted', message);
+    }
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     await transport.dumpFailure(log.path('failures'), 'crash').catch(() => undefined);
     /*
@@ -4153,6 +4199,17 @@ export async function runSession(
   /** Whether the queue stopped because the operator asked it to hold, rather than because it ended. */
   let paused = false;
 
+  /*
+   * The locators and the steps on the way to the chat, fixed in Settings while this run goes (bug hunt 2026-11-18): the
+   * window takes them at once, as the notice says, whatever the run is doing — waiting for a sign-in or on the model's
+   * card, or the lead or Kerrigan at their turn. Only a task at work handed them on before (`tookSettings` in
+   * `runTask`); the window opened for the run is handed them while it waits for the sign-in too (`openBrowser`).
+   */
+  const unwindow =
+    deps.live?.onChange((change) => {
+      if (transport && change.now.some((name) => WINDOW_NOW.has(name))) transport.takeSettings(pickerOptions(cfg));
+    }) ?? ((): void => undefined);
+
   try {
     session = await joinGroupConversation(store, session, bus);
 
@@ -4170,7 +4227,7 @@ export async function runSession(
       } else {
         await deps.beforeBrowser?.();
         // The chat's window outlives this message, so what it keeps goes where the batch's window keeps its own.
-        transport = await openSessionTransport(cfg, session, bus, deps.chatWindow ? cfg.resolved.runsDir : sessionRunsDir, deps.signal);
+        transport = await openSessionTransport(cfg, session, bus, deps.chatWindow ? cfg.resolved.runsDir : sessionRunsDir, deps.signal, deps.live);
         if (deps.chatWindow) speakFor(transport, session.id, { alone: true });
       }
     } catch (e) {
@@ -4415,6 +4472,7 @@ export async function runSession(
       throw e;
     }
   } finally {
+    unwindow();
     // No message at work: a window closed from now on is the next message's to open. One being opened again is let finish.
     await transport?.releaseWindow?.().catch(() => undefined);
     // A borrowed window belongs to whoever opened it and stays open for the next session.

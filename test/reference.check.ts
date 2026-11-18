@@ -142,6 +142,10 @@ console.log('\n--- what the chat is told ---');
   const note = referenceNote([{ name: 'tests', dir: 'C:\\x\\tests' }], 'C:\\x\\app');
   t.truthy('the projects and the rule', note.includes('## Projects for reference only') && note.includes('- tests: C:\\x\\tests') && note.includes('puts back whatever changed'), note);
   t.truthy('the chat\'s own folder among them: it can only read', referenceNote([{ name: 'app', dir: 'C:\\x\\app' }], 'C:\\x\\app').includes('The folder you work in is one of them'), referenceNote([{ name: 'app', dir: 'C:\\x\\app' }], 'C:\\x\\app'));
+  // Inside one (bug hunt 2026-11-18): every change put back there too, and the chat was not told.
+  const inside = referenceNote([{ name: 'all of it', dir: 'C:\\x' }], 'C:\\x\\app');
+  t.truthy('the chat\'s own folder inside one of them: it can only read, and is told which', inside.includes('The folder you work in is inside one of them (all of it)') && inside.includes('can only read'), inside);
+  t.truthy('a folder only named like one is not inside it', !referenceNote([{ name: 'x', dir: 'C:\\x' }], 'C:\\xy\\app').includes('The folder you work in'), '');
 }
 
 console.log('\n--- Settings, and a chat message end to end ---');
@@ -155,6 +159,10 @@ console.log('\n--- Settings, and a chat message end to end ---');
     t.check('saved: the other project is for reference, the chat\'s is not', [saved.readOnly, saved.others[0]?.readOnly], [false, true]);
     const renamed = await h.call<Project>('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: ref }] });
     t.check('a list saved without the box keeps it', renamed.others[0]?.readOnly, true);
+    // A project that may be changed, inside one for reference only (bug hunt 2026-11-18): every change in it put back.
+    const around = await h.raw('PUT', '/project', { others: [{ name: 'the tests, renamed', rootDir: ref, readOnly: true }, { name: 'everything', rootDir: h.base, readOnly: true }] });
+    t.truthy('the chat\'s project inside one for reference only: refused, saying why', around.status === 400 && /is inside everything .* which is for reference only/.test(JSON.stringify(around.body)), around);
+    t.check('and nothing saved', (await h.call<Project>('GET', '/project')).others.map((o) => o.name), ['the tests, renamed']);
 
     const aBefore = bytes(join(ref, 'a.txt'));
     h.chat.script(

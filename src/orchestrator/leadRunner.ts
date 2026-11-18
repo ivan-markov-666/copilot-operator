@@ -21,7 +21,7 @@
  */
 import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
+import { ChatLost, isReplyTimeout, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
 import { CLOSED_NOT_REOPENED } from '../transport/keptWindow.js';
 import type { ReplyCapture } from '../transport/copilotTransport.js';
 import { buildChatName, chatCode, savePointer, type ChatPointer } from '../transport/chatSession.js';
@@ -99,12 +99,15 @@ export function assignmentMessage(task: Pick<Task, 'title' | 'prompt' | 'skill'>
  * conversation, told why it stopped, to carry on from where the work got to — the subtasks and their reports are above
  * it — rather than to start the assignment again.
  */
-export function continuationMessage(task: Pick<Task, 'title' | 'continuing'>, n: number, facts: AssignmentFacts): string {
+export function continuationMessage(task: Pick<Task, 'title' | 'continuing'>, n: number, facts: AssignmentFacts, unreported?: { n: number; title: string }): string {
   const instruction = task.continuing?.instruction?.trim();
   return [
     `Continue assignment ${n}: ${task.title.trim() || 'untitled'}, in this same conversation. ${task.continuing ? whyItStopped(task.continuing) : ''}`.trim(),
     '',
     'Do not start over: the subtasks so far and the worker\'s reports are above in this conversation. Say in "notes" where the work got to, and carry on from there in the lead\'s format.',
+    ...(unreported
+      ? ['', `Subtask ${unreported.n} (${unreported.title}) was cut off when the work stopped, and has no report: what it did is not known. Give it again, or a subtask that checks what it left, if the work still needs it. The next subtask you give is number ${unreported.n + 1}.`]
+      : []),
     ...(instruction ? ['', 'The operator adds this, which wins where it and the assignment disagree:', '', instruction] : []),
     '',
     `You may give the worker up to ${facts.maxSubtasks} more subtask(s) for it.`,
@@ -166,6 +169,12 @@ export function noSubtasksLeft(max: number): string {
     'Deliver what the work has found (status "done", with what is missing said plainly in "answer"), or stop (status "blocked", with what would let it go on in "needed").',
   ].join('\n');
 }
+
+/** What the lead is told when it gives a subtask that changes the folder before the operator approved its plan. */
+export const PLAN_BEFORE_CHANGES = [
+  'That subtask was not given to the worker: it changes the folder ("readOnly": false), and the operator approves plans in this conversation, so nothing changes before your plan is approved.',
+  'Send your plan first ("status": "plan"). A survey that changes nothing ("readOnly": true) may still be given before it.',
+].join('\n');
 
 /** The plan, as the lead is told it was approved. */
 export function leadPlanApproved(approval: NonNullable<TaskPlan['approved']>, left: number): string {
@@ -589,7 +598,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
    * then back to the lead with the report of its last attempt and how the others went. `resume`: after a Stop, the
    * subtask the operator chose to try again, with the attempts it already had, carried on from the folder as it is.
    */
-  const runSubtask = async (given: Given, round: LeadRound, resume?: { n: number; fresh: boolean; from: NonNullable<LeadRound['subtask']>; firstPrompt: string }): Promise<{ report: string } | 'stopped'> => {
+  const runSubtask = async (given: Given, round: LeadRound, resume?: { n: number; fresh: boolean; restored?: boolean; from: NonNullable<LeadRound['subtask']>; firstPrompt: string }): Promise<{ report: string } | 'stopped'> => {
     let n: number;
     if (resume) n = resume.n;
     else {
@@ -611,7 +620,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     await saveLead();
 
     let attempt = (sub.attempts?.length ?? 0) + 1;
-    let how: { fresh: boolean; continued: boolean; restored: boolean; by?: SubtaskAttempt['by'] } = resume ? { fresh: resume.fresh, continued: true, restored: false, by: 'after-stop' } : { fresh: given.fresh, continued: false, restored: false };
+    // Put back to its start before (a card the queue kept, 2026-11-18): told it starts over, not to carry on.
+    let how: { fresh: boolean; continued: boolean; restored: boolean; by?: SubtaskAttempt['by'] } = resume ? { fresh: resume.fresh, continued: !resume.restored, restored: !!resume.restored, by: 'after-stop' } : { fresh: given.fresh, continued: false, restored: false };
     // What the attempt before left, for the next one's message: what finished, what was cut off, what changed so far.
     let previous: { why: string; done: StepFacts['done']; cutOff: string[] } | undefined;
     let changedSoFar: string[] = [];
@@ -621,7 +631,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       const lastTask = w?.tasks.find((x) => x.id === last.taskId);
       const facts = stepFacts(await stepsOfTask(lastTask));
       previous = { why: last.reason ? `${FAILURE_WORDS[last.category ?? 'USER_STOPPED']}: ${last.reason}` : FAILURE_WORDS[last.category ?? 'USER_STOPPED'], done: facts.done, cutOff: facts.cutOff };
-      changedSoFar = [...new Set(resume.from.attempts.flatMap((a) => (w?.tasks.find((x) => x.id === a.taskId)?.vcs?.files ?? []).map((f) => f.path)))];
+      // Put back to the subtask's start: nothing the attempts before changed is there any more.
+      changedSoFar = resume.restored ? [] : [...new Set(resume.from.attempts.flatMap((a) => (w?.tasks.find((x) => x.id === a.taskId)?.vcs?.files ?? []).map((f) => f.path)))];
     }
     let ended: { out: TaskOutcome; done: Task; workerId: string } | undefined;
 
@@ -751,7 +762,14 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     const contract = (await store.getLead1()).content.trim();
     // Carried on in its own conversation: told why it stopped, and to go on from there (see `continuationMessage`).
     const carryingOn = !!task.continuing && !!session.contractSent;
-    const assignment = carryingOn ? continuationMessage(task, n || 1, facts) : assignmentMessage(task, n || 1, facts, !!session.contractSent);
+    /*
+     * The attempt carried on (bug hunt 2026-11-18): its subtasks are counted on, not numbered from 1 again under the
+     * reports of 1 to k above in the conversation, and one it was cut off in, with no report, is named to the lead.
+     */
+    const prior = carryingOn ? task.attempts?.at(-1)?.lead : undefined;
+    const lastGiven = prior ? [...prior.rounds].reverse().find((r) => r.subtask)?.subtask : undefined;
+    const unreported = lastGiven && !lastGiven.report && !task.continuing?.retrySubtask ? { n: lastGiven.n, title: lastGiven.title } : undefined;
+    const assignment = carryingOn ? continuationMessage(task, n || 1, facts, unreported) : assignmentMessage(task, n || 1, facts, !!session.contractSent);
     await setTask((t) => {
       t.firstMessage = session.contractSent ? assignment : `${contract}\n\n---\n\n${assignment}`;
     });
@@ -772,9 +790,16 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
      * folder as it is; then the lead is told to carry on, with that subtask's report.
      */
     const retryFirst = carryingOn ? task.continuing?.retrySubtask : undefined;
+    /*
+     * The rounds of the attempt before, copied with its record when a subtask is tried again after a Stop: not this
+     * attempt's to count against its limit (bug hunt 2026-11-18: a Stop near the last round ended the next attempt at
+     * the limit as soon as the retried subtask's report went out).
+     */
+    let roundsBefore = 0;
     const before = retryFirst ? task.attempts?.at(-1)?.lead : undefined;
     const from = before && retryFirst ? [...before.rounds].reverse().find((r) => r.subtask?.n === retryFirst.n)?.subtask : undefined;
     if (retryFirst && before && from) {
+      roundsBefore = before.rounds.length;
       lead.rounds = JSON.parse(JSON.stringify(before.rounds)) as LeadRound[];
       lead.subtasks = before.subtasks;
       if (before.ledger) lead.ledger = before.ledger;
@@ -795,11 +820,17 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       const ran = await runSubtask(
         { title: from.title, readOnly: !!from.readOnly, fresh: !!retryFirst.fresh, prompt: () => firstTask?.prompt ?? '' },
         round,
-        { n: retryFirst.n, fresh: !!retryFirst.fresh, from: { ...from, attempts }, firstPrompt: firstTask?.prompt ?? '' },
+        { n: retryFirst.n, fresh: !!retryFirst.fresh, ...(retryFirst.restored ? { restored: true } : {}), from: { ...from, attempts }, firstPrompt: firstTask?.prompt ?? '' },
       );
       if (ran === 'stopped') return await finish('aborted', 'stopped by the operator');
       markdown = await tell(afterStopRetryMessage(assignment, retryFirst.n, ran.report));
     } else {
+      if (prior) {
+        lead.subtasks = prior.subtasks;
+        limit = prior.subtasks + max;
+        lead.maxSubtasks = limit;
+        await saveLead();
+      }
       markdown = await tell(assignment);
     }
 
@@ -809,11 +840,16 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     let understood = carryingOn;
     let planVersion = 0;
     let revisions: TaskPlan['revisions'] = [];
+    /*
+     * Whether a plan of this message was approved: in this attempt, or, carried on, in one before it (a plan approved on
+     * a card the queue kept, or before a Stop) — what lets a subtask that changes the folder go to the worker.
+     */
+    let planApproved = !!task.plan?.approved || (!!task.continuing && (task.attempts ?? []).some((a) => !!a.plan?.approved));
     const maxRounds = (): number => Math.max(1, cfg.limits.maxIterations);
 
     for (;;) {
       if (signal?.aborted) return await finish('aborted', 'stopped by the operator');
-      if (lead.rounds.length >= maxRounds()) {
+      if (lead.rounds.length - roundsBefore >= maxRounds()) {
         limitHit = { setting: 'maxIterations', value: maxRounds() };
         return await finish('limit-reached', `maxIterations (${maxRounds()}) reached: the lead's replies`);
       }
@@ -872,6 +908,16 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             markdown = await tell(noSubtasksLeft(limit));
             break;
           }
+          /*
+           * Plans approved by the operator, and none approved yet (bug hunt 2026-11-18): only the contract asked the lead to
+           * wait, and a subtask that changes the folder went to the worker all the same. A survey that changes nothing may
+           * go before the plan, as the contract says; anything else waits for the plan's approval.
+           */
+          if (facts.planApproval && !planApproved && !r.subtask!.readOnly) {
+            sink.event('lead-plan-first', { round: round.n, title: r.subtask!.title }, `the lead gave a subtask that changes the folder before its plan was approved; told to send the plan first: ${r.subtask!.title}`, 'warn');
+            markdown = await tell(PLAN_BEFORE_CHANGES);
+            break;
+          }
           const ran = await runSubtask(givenOf(r.subtask!), round);
           if (ran === 'stopped') return await finish('aborted', 'stopped by the operator');
           markdown = await tell(ran.report);
@@ -903,6 +949,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           await setTask((t) => {
             if (t.plan) t.plan.approved = approved;
           });
+          planApproved = true;
           markdown = await tell(leadPlanApproved(approved, limit - lead.subtasks));
           break;
         }
@@ -961,6 +1008,11 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     }
     // Why, as the kept window says it (2026-11-13): not opened again by Settings, past the times allowed, or not found.
     if (e instanceof WindowClosed || transport.closedOutside()) return await finish('aborted', e instanceof WindowClosed ? e.message : CLOSED_NOT_REOPENED);
+    // A conversation the window could not be put back on, nothing sent: stopped, and Continue tries it again (2026-11-18).
+    if (e instanceof ChatLost) {
+      sink.event('chat-lost', { chatId: e.chatId, found: e.found }, message, 'warn');
+      return await finish('aborted', message);
+    }
     sink.event('task-error', { error: message, stack: (e as Error).stack }, message, 'error');
     return await finish('failed', message);
   }
