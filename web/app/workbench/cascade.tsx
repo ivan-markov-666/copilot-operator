@@ -1130,6 +1130,13 @@ function Ending({ task }: { task: Task }) {
  */
 function stoppedEarly(task: Task | undefined): boolean {
   if (!task) return false;
+  /*
+   * A queue task set aside waits for its answer on its card (2026-11-18): carried on from here instead, its queue entry
+   * lost what it waited for, and every button on the card, Stop included, failed from then on.
+   */
+  if (task.parked && !task.parked.answer) return false;
+  // Never sent (2026-11-18): stopped before it went out, its start refused, or the bot closed first; sent as it is.
+  if (task.status === 'queued') return true;
   return task.status === 'aborted' || task.status === 'limit-reached' || (!!task.limit && (task.status === 'failed' || task.status === 'blocked'));
 }
 

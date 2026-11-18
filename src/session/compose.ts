@@ -259,6 +259,20 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
   if (input.continuing && input.contractAlreadySent) {
     const title = input.taskTitle.trim() || 'untitled';
     /*
+     * Carried on with no plan approved yet, in plan mode (2026-11-18): not "carry on from your plan" — there is none the
+     * operator approved — but plan first, as the plan-mode note says, and nothing changes until the plan is approved.
+     */
+    if (input.planNote) {
+      const message =
+        `Continue task ${input.taskNumber}: ${title}, in this same conversation. ${whyItStopped(input.continuing)} ` +
+        `Its plan was not approved yet, so the work does not go on from where it stopped: plan first, as below — look at ` +
+        `what is there now, changing nothing — and send the plan for approval. Step numbering restarts at 1.\n\n` +
+        `${input.planNote}\n\n` +
+        (instruction ? `${instructionSection(instruction.text)}\n\n` : '') +
+        `${runnerBlock(input)}`.trimEnd();
+      return { messages: [message], firstMessage: message };
+    }
+    /*
      * After a failure, with the operator's new prompt: told how it ended and why, that its files are
      * there, and what to do now — not "carry on from your plan", which is the plan that failed.
      */

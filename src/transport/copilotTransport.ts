@@ -1491,10 +1491,26 @@ Current URL: ${url}`);
     let at = await this.arrive(Url.newChatPath, opts.signal, stoppedHere);
     if (at === 'no-box') {
       this.emit('sign-in-required', { url: this.p.url() });
-      if (!(await this.composerWithin(this.opts.signInTimeoutMs, opts.signal, stoppedHere))) {
+      /*
+       * On Copilot's own chat page, no sign-in page in sight, and still no box after a while (2026-11-18): most likely the
+       * box's locator, which finds nothing on a page Copilot changed — and the bot waited the whole sign-in time (15
+       * minutes by default) and then said "the sign-in was not completed", with no locator named. Said once, then, as the
+       * box's locator, the page's file for a chatbot kept; the wait for a sign-in goes on, since Copilot may also ask for
+       * one on its own page.
+       */
+      const firstLook = Math.min(this.boxSuspectMs, this.opts.signInTimeoutMs);
+      const soon = await this.composerWithin(firstLook, opts.signal, stoppedHere);
+      if (!soon && isWorkChatAddress(this.p.url()) && !this.warned.has('composer')) {
+        this.warned.add('composer');
+        await this.locatorMissing('composer', `on ${whereIs(this.p.url())}, Copilot's own chat page and not a sign-in page, for ${Math.round(firstLook / 1000)} s: if you are signed in, the box's locator is the one to fix (the bot goes on waiting for a sign-in meanwhile)`, { stopped: false }).catch(() => undefined);
+      }
+      if (!soon && !(await this.composerWithin(Math.max(1, this.opts.signInTimeoutMs - firstLook), opts.signal, stoppedHere))) {
         throw new Error(
           `The sign-in was not completed within ${Math.round(this.opts.signInTimeoutMs / 1000)} s (Settings → copilot.signInTimeoutSec). ` +
-            'Sign in in the open Edge window, then start again.',
+            'Sign in in the open Edge window, then start again.' +
+            (this.warned.has('composer') && isWorkChatAddress(this.p.url())
+              ? ` If you were signed in, the box to write in was not found on Copilot's chat page: fix "Box to write in" in Settings → "The chat's locators" (its notice has the file for a chatbot). In force: ${this.chatLocators.composer}`
+              : ''),
         );
       }
       this.emit('signed-in');
@@ -2962,6 +2978,8 @@ Current URL: ${url}`);
   inputWaitMs = 10_000;
   attachWaitMs = 30_000;
   uploadWaitMs = 120_000;
+  /** How long Copilot's own chat page may show no box before its locator is said as the likely cause (a field, for the checks). */
+  boxSuspectMs = 30_000;
 
   /** An attached file's locator in force, with the file's name put in its place (see `fillFileLocator`). */
   private fileEl(key: 'attachment' | 'attachmentUploaded', file: string): Locator {

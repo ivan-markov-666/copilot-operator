@@ -304,4 +304,49 @@ await scenario('the same chat carried on; a reply in the wrong shape sent back; 
   t.check('her contract was not sent again', h.chat.sent.filter((m) => m.contract === 'kerrigan').length, 1);
 });
 
+/*
+ * Found 2026-11-18 (a review of the code against Kerrigan's description): "Continue" under her message, stopped while a
+ * chat of hers was at work, started her over with no chats — "same" was refused, the chat she was directing was lost
+ * with its conversation, and the count of what she may send began again.
+ */
+await scenario('stopped while her chat works, then carried on: "same" goes on in that chat, and what she sent is counted on', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  h.chat.script(
+    reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt' }),
+    async () => {
+      await gate;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await waitFor('her chat at work', async () => (await sessionOf(h, sent.threadId)).tasks.at(-1)?.kerrigan?.chats.length === 1 && h.chat.sent.filter((m) => !m.contract).length >= 2, 30_000);
+  await h.call('POST', `/sessions/${sent.threadId}/stop`);
+  release();
+  await h.idle();
+  const stopped = (await sessionOf(h, sent.threadId)).tasks.at(-1)!;
+  const chatId = stopped.kerrigan?.chats[0];
+  t.check('her message stopped, with the chat she was directing', [stopped.status, stopped.kerrigan?.chats.length, stopped.kerrigan?.sent], ['aborted', 1, 1]);
+
+  let toldHer = '';
+  h.chat.script(
+    (m) => {
+      toldHer = m.text;
+      return reply.kerrigan.send('Carry on: make result.txt hold exactly hello, then read it back with Get-Content.', { chat: 'same', title: 'Finish result.txt' });
+    },
+    reply.steps(write('result.txt', 'hello')),
+    reply.done('result.txt holds hello, as Get-Content printed.'),
+    reply.kerrigan.done('Done: result.txt holds hello, as the chat read it back.', ['Get-Content result.txt printed hello']),
+  );
+  const r = await h.call<{ started: boolean }>('POST', `/chat/${sent.threadId}/tasks/${stopped.id}/continue`);
+  await h.idle();
+  const done = (await sessionOf(h, sent.threadId)).tasks.at(-1)!;
+  const second = done.kerrigan?.rounds.find((x) => x.send)?.send;
+  t.check('carried on: "same" went to the chat she was directing, not refused', [r.started, done.status, second?.chat, second?.sessionId === chatId, done.kerrigan?.chats], [true, 'done', 'same', true, [chatId]]);
+  t.check('what she sent is counted on from the attempt before', done.kerrigan?.sent, 2);
+  t.truthy('she was told she was carried on', toldHer.length > 0 && !/No chat of yours is there yet/.test(JSON.stringify(done.kerrigan?.rounds ?? [])), toldHer.slice(0, 300));
+  t.truthy('the file written in the end', existsSync(join(h.repo, 'result.txt')) && readFileSync(join(h.repo, 'result.txt'), 'utf8').trim() === 'hello');
+});
+
 t.finish();

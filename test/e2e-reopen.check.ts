@@ -283,6 +283,117 @@ await scenario('"Continue" after Stop; refused for a message the conversation ha
   t.truthy('a stopped message the conversation went on past: refused, saying why', refused.status === 400 && /the conversation has gone on past this one/.test(String((refused.body as { message?: string }).message)), refused);
 });
 
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description of the product:
+ *   - "Stop" on the card that asks for the model only answered the card: a single chat was said as a start that did not
+ *     happen, and its message was left "waiting to start" with no Continue;
+ *   - "Add to it" while the run started (the window, the sign-in, that card) made a message of its own;
+ *   - "Continue" while the browser was busy put the message back on the queue, was refused, and left no Continue;
+ *   - with two chats, "Stop" on the worker's model card ended the message failed, with no Continue.
+ */
+await scenario('the model card stopped: the run stops, a note goes with the message, and Continue sends it as it is', { copilot: { manualModel: true } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Write m.txt holding exactly m.' });
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  const first = await waitFor('the model card', async () => (await h.call<Array<Card & { model?: unknown }>>('GET', '/approvals')).find((c) => !!c.model && c.sessionId === sent.threadId), 20_000);
+  const added = await h.call<Sent & { noted?: boolean }>('POST', '/chat', { text: 'Write it in lower case.', threadId: sent.threadId });
+  t.check('"Add to it" while the run starts: a note to the message about to go, not a message of its own', [added.noted, added.taskId, (await h.session(sent.threadId)).tasks.length], [true, sent.taskId, 1]);
+  await h.call('POST', `/approvals/${first.id}`, { action: 'abort' });
+  await h.idle();
+  t.check('stopped there: the message not sent, waiting to be sent', [(await lastOf(h, sent.threadId)).status, h.chat.sent.filter((m) => !m.contract).length], ['queued', 0]);
+  const failures = await h.call<unknown[]>('GET', '/start/failures');
+  t.check('not said as a start that did not happen', JSON.stringify(failures).includes(sent.threadId), false);
+
+  h.chat.script(
+    (m) => {
+      t.truthy('sent as it is, with the note: not "carried on"', m.text.includes('Write m.txt holding exactly m.') && m.text.includes('Write it in lower case.') && !m.text.includes('Continue task 1'), m.text.slice(-900));
+      return reply.steps(write('m.txt', 'm'));
+    },
+    reply.done(),
+  );
+  const r = await h.call<{ started: boolean }>('POST', `/chat/${sent.threadId}/tasks/${sent.taskId}/continue`);
+  t.check('"Continue" under a message never sent: started', r.started, true);
+  const again = await waitFor('the model card again', async () => (await h.call<Array<Card & { model?: unknown }>>('GET', '/approvals')).find((c) => !!c.model && c.sessionId === sent.threadId && c.id !== first.id), 20_000);
+  await h.call('POST', `/approvals/${again.id}`, { action: 'run' });
+  await h.idle();
+  t.check('done, the file written', [(await lastOf(h, sent.threadId)).status, fileOf(h, 'm.txt')], ['done', 'm']);
+});
+
+await scenario('"Continue" while the browser is busy: refused, and the message keeps its Continue', {}, async (h) => {
+  const x = await h.call<Sent>('POST', '/chat', { text: 'Look at the files.', model: 'Think deeper' });
+  let release: () => void = () => undefined;
+  let gate = new Promise<void>((r) => (release = r));
+  h.chat.script(async () => {
+    await gate;
+    return reply.steps('Get-ChildItem -Name');
+  });
+  await h.call('POST', `/sessions/${x.threadId}/start`, { mode: 'unattended' });
+  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 20_000);
+  await h.call('POST', `/sessions/${x.threadId}/stop`);
+  release();
+  await h.idle();
+  t.check('the first conversation stopped', (await lastOf(h, x.threadId)).status, 'aborted');
+
+  // Another conversation at work holds the browser.
+  const y = await h.call<Sent>('POST', '/chat', { text: 'Look at the other files.', model: 'Think deeper' });
+  gate = new Promise<void>((r) => (release = r));
+  h.chat.script(async () => {
+    await gate;
+    return reply.done();
+  });
+  await h.call('POST', `/sessions/${y.threadId}/start`, { mode: 'unattended' });
+  await waitFor('the other message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the other files.')), 20_000);
+  const refused = await h.raw('POST', `/chat/${x.threadId}/tasks/${x.taskId}/continue`);
+  t.check('"Continue" while another conversation works: refused', refused.status, 400);
+  t.check('and nothing changed: still stopped, so Continue is still there', (await lastOf(h, x.threadId)).status, 'aborted');
+  release();
+  await h.idle();
+
+  h.chat.script(reply.steps('Get-ChildItem -Name'), reply.done());
+  const r = await carryOn(h, x.threadId, x.taskId);
+  t.check('once the browser is free, Continue carries it on', [r.started, (await lastOf(h, x.threadId)).status], [true, 'done']);
+});
+
+// 2026-11-18: what going back undid was told only with a new message; "Continue" after going back said nothing of it.
+await scenario('"Continue" after going back: the chat is told what was undone', {}, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Look at the files.', model: 'Think deeper' });
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  h.chat.script(async () => {
+    await gate;
+    return reply.steps('Get-ChildItem -Name');
+  });
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await waitFor('the message to reach the chat', async () => h.chat.sent.some((m) => m.text.includes('Look at the files.')), 20_000);
+  await h.call('POST', `/sessions/${sent.threadId}/stop`);
+  release();
+  await h.idle();
+  await h.call<Sent>('POST', '/chat', { text: 'Write r.txt holding exactly r.', threadId: sent.threadId });
+  h.chat.script(reply.steps(write('r.txt', 'r')), reply.done());
+  await h.run(sent.threadId);
+  const second = await lastOf(h, sent.threadId);
+  await h.call('POST', `/chat/${sent.threadId}/rewind`, { taskId: second.id });
+  t.check('gone back to before the second message: the first, stopped, is the last again', [(await lastOf(h, sent.threadId)).id, (await lastOf(h, sent.threadId)).status, fileOf(h, 'r.txt')], [sent.taskId, 'aborted', null]);
+  h.chat.script(
+    (m) => {
+      t.truthy('"Continue" tells the chat what was undone', m.text.includes('The operator went back to before the message "Write r.txt'), m.text.slice(-900));
+      return reply.steps('Get-ChildItem -Name');
+    },
+    reply.done(),
+  );
+  const r = await carryOn(h, sent.threadId, sent.taskId);
+  t.check('carried on, and done', [r.started, (await lastOf(h, sent.threadId)).status], [true, 'done']);
+});
+
+await scenario("two chats, the worker's model card stopped: the message stops, and Continue is there", {}, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Write v.txt holding exactly v.', model: 'Think deeper', lead: true, workerManualModel: true });
+  h.chat.script(reply.lead.delegate({ title: 'Write v.txt', readOnly: false }, { understanding: 'v.txt at the root holding v; done when it is read back.' }));
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  const card = await waitFor("the worker's model card", async () => (await h.call<Array<Card & { model?: unknown }>>('GET', '/approvals')).find((c) => !!c.model && c.sessionId !== sent.threadId), 20_000);
+  await h.call('POST', `/approvals/${card.id}`, { action: 'abort' });
+  await h.idle();
+  t.check("the lead's message stopped, not failed: Continue carries it on", (await lastOf(h, sent.threadId)).status, 'aborted');
+});
+
 await scenario('two chats: opened again on the worker\'s conversation, and the lead goes on', {}, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: 'Write w.txt holding exactly w.', model: 'Think deeper', lead: true });
   let workerIn = '';

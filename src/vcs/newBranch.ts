@@ -217,6 +217,48 @@ async function keepUncommitted(dir: string, head: string, branch: string | null,
   }
 }
 
+/**
+ * What is not committed in the folder, put aside as "New branch from main" puts it aside: one commit on a branch of its
+ * own (`<prefix>saved/<when>`, never pushed), checked whole, and only then taken out of the folder, which is left clean
+ * on the branch it is on. Nothing is deleted. Null when there was nothing to put aside.
+ *
+ * For the queue (2026-11-18): a task that works on "the folder as it is" leaves its changes uncommitted, and the next
+ * task with a branch of its own was refused for them ("There are uncommitted changes … Commit or stash them first"), the
+ * tasks depending on it skipped, in a queue nobody was watching.
+ */
+export async function setAsideUncommitted(folder: string, why: string, prefix = 'cop/'): Promise<{ saved: string; commit: string; files: number } | { problem: string } | null> {
+  const top = await git(folder, ['rev-parse', '--show-toplevel']);
+  const repoDir = top.ok && top.stdout ? resolve(top.stdout) : folder;
+  const changed = porcelainPaths((await git(repoDir, ['status', '--porcelain', '--untracked-files=no'])).stdout);
+  const untracked = lines((await git(repoDir, ['ls-files', '--others', '--exclude-standard'])).stdout);
+  if (changed.length === 0 && untracked.length === 0) return null;
+  const head = (await git(repoDir, ['rev-parse', '--verify', '--quiet', 'HEAD'])).stdout;
+  if (!head) return { problem: 'the repository has no commit yet to keep the changes on top of' };
+  const here = (await git(repoDir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout || null;
+  const saved = await freeBranchName(repoDir, `${branchNameFrom(['saved'], prefix)}/${stamp()}`);
+  const message = [
+    'Keep uncommitted work',
+    '',
+    `Everything that was not committed in the folder on ${here ?? 'a detached HEAD'} (${short(head)}), kept here: ${why}`,
+    'To take a file back: git restore --source <this branch> -- <path>',
+    '',
+    ...[...changed.map((p) => `- changed: ${p}`), ...untracked.map((p) => `- new: ${p}`)].slice(0, 300),
+    '',
+    'Committed by copilot-operator. Not pushed.',
+    '',
+  ].join('\n');
+  const kept = await keepUncommitted(repoDir, head, saved, message);
+  if ('problem' in kept) return { problem: kept.problem };
+  // Kept whole: now out of the folder — the tracked changes put back, the new files kept on the branch taken out.
+  const restored = await git(repoDir, ['restore', '--staged', '--worktree', '--source', 'HEAD', '--', '.'], 300_000);
+  if (!restored.ok) return { problem: `the changes are kept on ${saved}, but could not be taken out of the folder: ${restored.stderr}` };
+  for (let i = 0; i < untracked.length; i += 100) {
+    const cleaned = await git(repoDir, ['--literal-pathspecs', 'clean', '-fd', '--quiet', '--', ...untracked.slice(i, i + 100)], 300_000);
+    if (!cleaned.ok) return { problem: `the new files are kept on ${saved}, but could not be taken out of the folder: ${cleaned.stderr}` };
+  }
+  return { saved, commit: kept.commit, files: changed.length + untracked.length };
+}
+
 /** The bot's own name on a commit. */
 const BOT_AUTHOR = ['-c', 'user.name=copilot-operator', '-c', `user.email=${RUNNER_EMAIL}`];
 

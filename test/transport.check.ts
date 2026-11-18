@@ -1093,6 +1093,30 @@ try {
   });
 
   // -------------------------------------------------------------------------------------------
+  await section("no box on Copilot's own chat page: said as the box's locator while the sign-in is waited for", async () => {
+    /*
+     * Found 2026-11-18, reviewing the code against Kerrigan's description: on Copilot's /chat with a box its locator did
+     * not find, the bot took it for a sign-in, waited the whole sign-in time (15 minutes by default) and then said "the
+     * sign-in was not completed" — no red field, no file for a chatbot. Now the box's locator is said after a while, and
+     * the end says it too; the wait goes on, since Copilot may also ask for a sign-in on its own page.
+     */
+    const f = await fixture('chat-no-box', '<p>blank</p>', { signInTimeoutMs: 3_000, chatLocators: { composer: '#no-such-box' } });
+    const held = f.transport as unknown as { firstLookMs: number; settleMs: number; otherPageMs: number; boxSuspectMs: number };
+    held.firstLookMs = 800;
+    held.settleMs = 300;
+    held.otherPageMs = 600;
+    held.boxSuspectMs = 1_000;
+    await f.page.route(/^https:\/\/(m365|copilot)\.cloud\.microsoft\//, async (route) => {
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      // The chat itself, at /chat, its box of a shape the locator in force does not find.
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><meta charset="utf-8"><title>Copilot</title><div data-test-id="chat-input-wrapper"><span role="textbox" contenteditable="true">x</span><button aria-label="Send">s</button></div>' });
+    });
+    const failed = await rejection(f.transport.ensureSignedIn('https://copilot.cloud.microsoft/chat'));
+    const said = named(f.events, 'locator-missing').map((e) => (e.detail ?? {}) as Record<string, unknown>);
+    t.check("said as the box's locator, not stopping the wait, with the page kept for a chatbot", [said.map((x) => [x.key, x.stopped]), typeof said[0]?.html === 'string'], [[['composer', false]], true]);
+    t.truthy("and the end names the box's locator, not only the sign-in", /The sign-in was not completed/.test(failed?.message ?? '') && /fix "Box to write in" in Settings/.test(failed?.message ?? '') && (failed?.message ?? '').includes('#no-such-box'), failed?.message);
+  });
+
   await section("a locator that finds nothing: which one, the page's HTML for a chatbot, and a message never sent twice", async () => {
     /*
      * Operator, 2026-11-17: "a mechanism that detects which locator exactly the bot failed on … the bot saves the page's

@@ -195,7 +195,13 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
     sink.event('acting', acting, `at work now: ${actor === 'kerrigan' ? 'Kerrigan' : actor}`);
   };
   const maxSends = (): number => Math.max(1, cfg.limits.maxKerriganSends ?? 6);
-  const k: KerriganRecord = { rounds: [], sent: 0, maxSends: maxSends(), messages: 0, chats: [] };
+  /*
+   * Carried on (2026-11-18): the attempt before, of this same message — its chats, and how many messages she sent. Each
+   * attempt started from none, so "same" was refused ("no chat of yours is there yet"), the chat she was directing was
+   * lost with its conversation, and the most messages she may send began again.
+   */
+  const before = task.continuing ? task.attempts?.at(-1)?.kerrigan : undefined;
+  const k: KerriganRecord = { rounds: [], sent: before?.sent ?? 0, maxSends: maxSends(), messages: 0, chats: [...(before?.chats ?? [])] };
   const save = async (): Promise<void> => {
     const copy = JSON.parse(JSON.stringify(k)) as KerriganRecord;
     await setTask((t) => {
@@ -357,7 +363,8 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
   let lastChat: Session | null = null;
   let lastTitle = '';
   {
-    const earlier = [...session.tasks].reverse().find((x) => x.id !== task.id && (x.kerrigan?.chats.length ?? 0) > 0);
+    // This message's own attempt before, when it is carried on; else the last message of hers that sent to a chat.
+    const earlier = (before?.chats.length ?? 0) > 0 ? { kerrigan: before! } : [...session.tasks].reverse().find((x) => x.id !== task.id && (x.kerrigan?.chats.length ?? 0) > 0);
     const id = earlier?.kerrigan?.chats.at(-1);
     const found = id ? await store.getSession(id) : null;
     if (found) {

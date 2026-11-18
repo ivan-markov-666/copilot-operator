@@ -113,19 +113,39 @@ const AZ_READ = /^(?:list|show|query|exists|wait|version|what-if|(?:list|show|ge
 const AZ_WRITE =
   /^(?:create|delete|update|set|unset|add|remove|start|stop|restart|reboot|deploy|redeploy|reimage|deallocate|generalize|capture|resize|scale|swap|assign|unassign|purge|recover|restore|backup|renew|regenerate|rotate|reset|import|upload|sync|move|lock|unlock|enable|disable|approve|reject|attach|detach|connect|disconnect|apply|cancel|abort|run|invoke|execute|install|uninstall|register|unregister|grant|revoke|push|tag|untag|migrate|upgrade|failover|promote|convert|link|unlink|clear|flush|cordon|drain|retry|rerun|trigger|publish|release|merge|close|reopen|accept|archive|unarchive|schedule|power-off|rollback|repair|refresh|replace|rename|copy|patch|put|post|send|mount|unmount|activate|deactivate|pause|resume|suspend|terminate|kill)(?:-[a-z0-9-]+)?$/;
 
+/** az's own options, which it takes anywhere, before its command too: alone, and with a value. */
+const AZ_GLOBAL_FLAGS = new Set(['--debug', '--verbose', '--only-show-errors']);
+const AZ_GLOBAL_WITH_VALUE = new Set(['--output', '-o', '--query', '--subscription']);
+
 /**
  * One `az` invocation. Its command is the group path and the verb at its end, the words before the first option:
  * `az storage account list --query ...` is `storage account list`, read by `list`. `--help` anywhere only prints help.
  */
 function azReading(args: CallArg[]): Reading {
   if (args.some((a) => !a.dynamic && /^(?:--help|-h)$/i.test(a.literal))) return { kind: 'reads' };
+  /*
+   * az's own options may come before its command (2026-11-18: `az -o none group delete -n rg --yes` was read as `az`
+   * alone, "nothing but the version", and ran with no card where az is read only). Those are passed over, with the value
+   * of one that takes a value; any other option there is not read as anything, and is put to the operator.
+   */
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i]!;
+    if (a.dynamic) return { kind: 'unclear', why: 'a word of the az command is known only when it runs' };
+    if (!a.literal.startsWith('-')) break;
+    const name = a.literal.split('=')[0]!.toLowerCase();
+    if (name === '--version' && args.length === 1) return { kind: 'reads' };
+    if (AZ_GLOBAL_FLAGS.has(name)) i += 1;
+    else if (AZ_GLOBAL_WITH_VALUE.has(name)) i += a.literal.includes('=') ? 1 : 2;
+    else return { kind: 'unclear', why: `az's option ${a.literal} comes before its command, and is not one of az's own options this check knows` };
+  }
   const path: string[] = [];
-  for (const a of args) {
+  for (const a of args.slice(i)) {
     if (a.dynamic) return { kind: 'unclear', why: 'a word of the az command is known only when it runs' };
     if (a.literal.startsWith('-')) break;
     path.push(a.literal.toLowerCase());
   }
-  // `az`, `az --version`: nothing but the version or the help.
+  // `az`, `az --version`, `az -o table`: nothing but the version or the help.
   if (path.length === 0) return { kind: 'reads' };
   const p = path.join(' ');
   if (path[0] === 'rest') {

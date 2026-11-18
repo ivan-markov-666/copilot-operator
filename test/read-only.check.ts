@@ -92,6 +92,11 @@ const refusals: Array<[string, RegExp]> = [
   ['az storage blob download -c c -n f -f out.txt', /downloads a file/],
   ['az interactive', /waits for a person/],
   ['az vm list; az vm delete -n x -g rg --yes', /"az vm delete" changes something/],
+  // az's own options before its command (2026-11-18: these were read as "az" alone, and ran with no card).
+  ['az -o none group delete -n rg --yes', /"az group delete" changes something/],
+  ['az --only-show-errors vm delete -n x -g rg --yes', /"az vm delete" changes something/],
+  ['az --output=json --debug group delete -n rg', /"az group delete" changes something/],
+  ['az --subscription prod group delete -n rg', /"az group delete" changes something/],
 ];
 for (const [cmd, why] of refusals) check(`refused: ${cmd}`, why.test(reason(cmd)), true);
 
@@ -103,8 +108,14 @@ for (const cmd of [
   'cmd /c "az vm delete -n x"',
   'Start-Process az -ArgumentList "vm","delete"',
   'Write-Output "az vm delete -n x"',
+  // An option before the command that is not one of az's own: not read as anything.
+  'az --foo group delete -n rg',
+  'az -x vm list',
 ]) {
   check(`unclear: ${cmd}`, kind(cmd), 'unclear');
+}
+for (const cmd of ['az -o table vm list', 'az --debug group show -n rg1', 'az --query "[].name" -o tsv group list', 'az -o table']) {
+  check(`reads: ${cmd} (its own options passed over)`, kind(cmd), 'reads');
 }
 
 console.log('\n--- nothing to read: no az, or az not set to read only ---');

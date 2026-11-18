@@ -132,7 +132,7 @@ import { sessionRoots } from '../exec/confinement.js';
 import { dirtyPolicy } from '../vcs/snapshot.js';
 import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
-import { createNewBranch, planNewBranch, type NewBranchPlan, type NewBranchResult } from '../vcs/newBranch.js';
+import { createNewBranch, planNewBranch, setAsideUncommitted, type NewBranchPlan, type NewBranchResult } from '../vcs/newBranch.js';
 import { commitAsOperator, identityOf, pushAsOperator, setIdentity, stageFiles, TrustedHooks, type GitOp, type HookChoice } from '../vcs/operatorGit.js';
 import { askpassProgram, closePasswordWindows } from '../vcs/remoteAuth.js';
 import { planApprovedMessage, planReviseMessage } from '../orchestrator/planMode.js';
@@ -1008,6 +1008,11 @@ export class OperatorService {
     const holder: BrowserHolder = ask.kind === 'run' ? { kind: 'run', sessionId: ask.sessionId } : { kind: ask.kind };
     this.browser = holder;
     return { holder };
+  }
+
+  /** Why a run of `sessionId` could not have the browser now, without taking it; null when it could. */
+  private browserBusyFor(sessionId: string): string | null {
+    return this.browser ? browserRefusal(this.browser, { kind: 'run', sessionId }) : null;
   }
 
   private releaseBrowser(holder: BrowserHolder): void {
@@ -1962,10 +1967,16 @@ export class OperatorService {
         }
         throw new Error('Kerrigan is at work with this chat: write to her conversation, or Stop her first.');
       }
-      if (inFlight && this.running.has(session.id)) {
+      /*
+       * While the run starts — the window opening, the sign-in, the model's card — its message is still queued (2026-11-18:
+       * "Add to it" then made a message of its own, refused to start and left waiting). The note goes with that message,
+       * which takes the notes not sent yet with its opening.
+       */
+      const atWork = inFlight ?? (this.running.has(session.id) ? session.tasks.find((t) => t.status === 'queued') : undefined);
+      if (atWork && this.running.has(session.id)) {
         if (skill) throw new Error(`A skill goes with a new message, and this one would be a note to the message at work. Send /${skill.name} when it has finished.`);
-        await this.addTaskNote(session.id, inFlight.id, text);
-        return { threadId: session.id, taskId: inFlight.id, noted: true, needsStart: false };
+        await this.addTaskNote(session.id, atWork.id, text);
+        return { threadId: session.id, taskId: atWork.id, noted: true, needsStart: false };
       }
     } else {
       const ws = await this.workspace();
@@ -2036,14 +2047,18 @@ export class OperatorService {
       });
     }
     // After going back, the conversation is told with this message: it still holds what was undone.
-    const pending = (await this.store.getSession(session.id))?.rewindNote;
-    if (pending) {
-      await this.store.addTaskNote(session.id, task.id, pending);
-      await this.store.updateSession(session.id, (s) => {
-        s.rewindNote = undefined;
-      });
-    }
+    await this.moveRewindNote(session.id, task.id);
     return { threadId: session.id, taskId: task.id, needsStart: false };
+  }
+
+  /** What going back undid, told to the conversation with the next message that goes to it: a new one, or one carried on. */
+  private async moveRewindNote(sessionId: string, taskId: string): Promise<void> {
+    const pending = (await this.store.getSession(sessionId))?.rewindNote;
+    if (!pending) return;
+    await this.store.addTaskNote(sessionId, taskId, pending);
+    await this.store.updateSession(sessionId, (s) => {
+      s.rewindNote = undefined;
+    });
   }
 
   // --- the queue of tasks (2026-10-24) ----------------------------------------------------------------
@@ -2332,10 +2347,12 @@ export class OperatorService {
     if (item.status !== 'parked' || !item.sessionId) throw new Error('That task is not waiting for an answer.');
     const s = await this.store.getSession(item.sessionId);
     const task = s?.tasks.find((t) => t.parked && !t.parked.answer);
-    if (!s || !task?.parked) throw new Error('What that task waited for is not on its record any more; run it again.');
+    // Stopped whatever its record says (2026-11-18): a Stop that failed with the record gone left the task, and the ones
+    // that depend on it, waiting for good.
     if (input?.stop === true) {
       return await this.withBusy(await this.changeQueue((x) => this.setQueueItem(x, itemId, { status: 'stopped', why: 'stopped by the operator at its card', waitsFor: undefined })));
     }
+    if (!s || !task?.parked) throw new Error('What that task waited for is not on its record any more; run it again.');
     const answer = parkedAnswerFrom(task.parked, input);
     if ('problem' in answer) throw new Error(answer.problem);
     await this.store.updateSession(s.id, (x) => {
@@ -2459,6 +2476,24 @@ export class OperatorService {
         ).catch(() => undefined);
       }
       await this.changeQueue((x) => this.setQueueItem(x, item.id, { sessionId }));
+    }
+    /*
+     * On a branch of its own, in a folder another task left changes in (2026-11-18): those are put aside, kept whole on a
+     * branch of their own and never pushed, as "New branch from main" puts them aside — or the task is refused for them,
+     * and so is every task that depends on it, in a queue nobody is watching. Left alone when the folder is already on
+     * this task's own branch: what is there is its own work, carried on.
+     */
+    const runOn = (await this.store.getSession(sessionId))?.vcs;
+    if (ws.isRepo && runOn?.enabled && runOn.startFrom === 'existing-branch' && runOn.existingBranch) {
+      const onNow = (await git(ws.dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => null))?.stdout || null;
+      if (onNow !== runOn.existingBranch) {
+        const aside = await setAsideUncommitted(ws.dir, `the queue's task "${itemTitle(item)}" works on its own branch ${runOn.existingBranch}, and the folder held changes left on ${onNow ?? 'a detached HEAD'}`);
+        if (aside && 'problem' in aside) return { status: 'failed', why: `what was not committed in the folder could not be put aside before it: ${aside.problem}`, sessionId };
+        if (aside) {
+          this.bus.publish({ sessionId, type: 'queue-set-aside', level: 'warn',
+            message: `what was not committed in the folder (${aside.files} file(s), on ${onNow ?? 'a detached HEAD'}) was put aside on ${aside.saved}, not pushed, before this task started on its own branch` });
+        }
+      }
     }
     /*
      * A message of the chat sent meanwhile has the browser: this one starts after it, never refused for it. The browser
@@ -2834,6 +2869,9 @@ export class OperatorService {
     if (!sub) throw new Error(`The message has no subtask ${n}.`);
     const last = sub.attempts?.at(-1);
     if (last?.status === 'done') throw new Error(`Subtask ${n} was done; it is not done again.`);
+    // The browser first, as for Continue (2026-11-18): nothing changes when it is not free.
+    const busy = this.browserBusyFor(threadId);
+    if (busy) throw new Error(busy);
     await this.store.rerunTask(threadId, taskId, {}, { fromAttempt: task.attempt ?? 1, stoppedBecause: task.reason, how: 'stopped', retrySubtask: { n, ...(fresh ? { fresh: true } : {}) } });
     const cfg = await this.settings.load();
     return await this.start(threadId, cfg.execution.mode);
@@ -2856,12 +2894,28 @@ export class OperatorService {
     const task = session.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error('That message is not in this conversation.');
     if (session.tasks.at(-1)?.id !== taskId) throw new Error('Only the last message of a conversation is carried on: the conversation has gone on past this one.');
+    /*
+     * The browser first (2026-11-18): the message was put back on the queue and then refused the browser — another
+     * conversation, the queue, a read of the models had it — and was left "waiting to start", with no Continue and only
+     * "Go back" under it. Now nothing changes when the browser is not free.
+     */
+    // A queue task set aside is answered on its card (2026-11-18): carried on here, its queue entry lost what it waited for.
+    if (task.parked && !task.parked.answer) throw new Error('This message waits for an answer on its card in the queue: answer it there, and the queue carries it on.');
+    const busy = this.browserBusyFor(threadId);
+    if (busy) throw new Error(busy);
+    const cfg = await this.settings.load();
+    /*
+     * A message never sent (2026-11-18): stopped while the window opened, the sign-in was awaited or the model chosen, its
+     * start refused, or the bot closed first. It is sent now as it is: not "carried on", which Copilot never saw begin.
+     */
+    if (task.status === 'queued') return await this.start(threadId, cfg.execution.mode);
     if (!isContinuable(task)) {
       throw new Error(task.status === 'done' ? 'This message is done.' : 'Only a message that stopped before it was done is carried on; write the next message instead.');
     }
-    const cfg = await this.settings.load();
     const stoppedAt = task.status === 'aborted' && !task.interruption && task.runId ? await readInterruption(join(cfg.resolved.runsDir, task.runId)).catch(() => null) : null;
     const queued = await this.store.continueTask(threadId, taskId, stoppedAt);
+    // After going back, the conversation is told with the message that carries on, as with a new one (2026-11-18).
+    await this.moveRewindNote(threadId, taskId);
     await appendSessionLog(cfg.resolved.runsDir, threadId, {
       type: 'continue',
       message: `"${queued.title}" carried on as attempt ${queued.attempt ?? 1}, from where it stopped: ${task.reason ?? task.status}`,
@@ -2984,6 +3038,13 @@ export class OperatorService {
     w.resolve(decision);
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
       message: `step ${w.approval.stepId}: ${action}`, data: { approvalId, action } });
+    /*
+     * "Stop" on the card that asks for the model to be chosen by hand (2026-11-18): the run stops, as the chat's own Stop
+     * stops it — nothing failed, the operator stopped. Only the card was answered before: the work then ended "failed"
+     * with two chats or Kerrigan, with no Continue, and a single chat was said as a start that did not happen. On the card
+     * of a model the bot could not choose, a failure it is, and is said with what the page offers.
+     */
+    if (w.approval.model?.manual && action === 'abort') void this.stop(w.approval.sessionId).catch(() => undefined);
     return { ok: true };
   }
 
@@ -3167,7 +3228,7 @@ export class OperatorService {
           'use-current-branch': `Use the current branch instead of ${g.baseBranch ?? 'the base branch'}`,
           'allow-snapshot': 'Take uncommitted changes as a starting snapshot',
         };
-        note('snapshot-approval-required', `${g.repoDir}: nothing runs until one of these is pressed under "Prepare version control for this run" on the Sessions page: ${fixes.map((f) => `"${label[f] ?? f}"`).join(', ')}`, { repoDir: g.repoDir, actions: fixes }, ids, 'warn');
+        note('snapshot-approval-required', `${g.repoDir}: nothing runs until what is not committed there is dealt with. Commit what is not committed in the folder (the Git view), or put it aside ("⎇ New branch from main" → "Put them aside"), then run it again.`, { repoDir: g.repoDir, actions: fixes }, ids, 'warn');
       }
     }
     const open = groups.filter((g) => !g.ready);
@@ -3191,7 +3252,7 @@ export class OperatorService {
         ? [
             'Version control is not ready for this run, so nothing was opened or sent. ' +
               open.map((g) => `${g.repoDir}: ${g.problem ?? 'it needs your approval'}`).join(' ') +
-              ' Fix it under "Prepare version control for this run" on the Sessions page.',
+              ' Commit what is not committed in the folder (the Git view), or put it aside ("⎇ New branch from main" → "Put them aside"), then run it again.',
           ]
         : []),
       ...(contradictions.length > 0 ? [`${open.length > 0 ? '' : 'Nothing was opened or sent. '}${contradictions.join(' ')}`] : []),
@@ -3320,7 +3381,7 @@ export class OperatorService {
     if (!group || group.ready) return null;
     // The panel is named only where it has a fix to offer: for a chain waiting on its predecessor the remedy is that one's Continue (live run 2026-10-04).
     const panel = group.actions.some((a) => a.available && a.id !== 'review-inputs');
-    return `Version control is not ready for "${session.name}", so it did not start and its tasks stay queued: ${group.problem ?? 'it needs your approval'}${panel ? ' Fix it under "Prepare version control for this run" on the Sessions page.' : ''}`;
+    return `Version control is not ready for "${session.name}", so it did not start and its tasks stay queued: ${group.problem ?? 'it needs your approval'}${panel ? ' Commit what is not committed in the folder (the Git view), or put it aside ("⎇ New branch from main" → "Put them aside"), then run it again.' : ''}`;
   }
 
   /** Recorded in the run's log just before the browser is opened for it: see `runPreflight`. */

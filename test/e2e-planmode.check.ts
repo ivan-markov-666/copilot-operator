@@ -197,6 +197,43 @@ await scenario('stopped at its plan: the task ends, with nothing changed', { exe
   t.check('no step ran', h.chat.sent.filter((m) => !m.contract).length, 1);
 });
 
+/*
+ * Found 2026-11-18 (a review of the code against Kerrigan's description): a task stopped at its plan's card, then
+ * carried on, skipped the plan — continuing never planned again — and changed files with no plan approved. The same
+ * held for the carrying on after a limit. Now, with no plan approved, it plans first.
+ */
+await scenario('stopped at its plan, then carried on: it plans again, and nothing changes before the plan is approved', { execution: { planMode: 'approve' } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'replanned')] });
+  h.chat.script(reply.plan());
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
+  const first = await planWaiting(h, 1);
+  await h.call('POST', `/approvals/${first.id}/plan`, { action: 'stop' });
+  await h.idle();
+  const stopped = await taskOf(h, s!.id);
+  t.check('stopped at its plan', [stopped.status, stopped.plan?.approved], ['aborted', undefined]);
+
+  h.chat.script(
+    (m) => {
+      t.truthy('carried on with no plan approved: asked for a plan first, not to carry on with the work', m.text.includes('## Plan first (plan mode)') && m.text.includes('Its plan was not approved yet') && !m.text.includes('start from your plan'), m.text.slice(-1500));
+      return reply.plan();
+    },
+    (m) => {
+      t.truthy('then approved by the operator, and only then the work', m.text.startsWith('The operator approved your plan.'), m.text.slice(0, 200));
+      return write('result.txt', 'finished');
+    },
+    reply.done(),
+  );
+  await h.call('POST', `/sessions/${s!.id}/tasks/${stopped.id}/continue`, {});
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
+  const again = await planWaiting(h, 1);
+  t.truthy('the plan waits on its card again', !!again && again.id !== first.id, again);
+  t.truthy('nothing was written before it was approved', !existsSync(join(h.repo, 'result.txt')));
+  await h.call('POST', `/approvals/${again.id}/plan`, { action: 'approve' });
+  await runSteps(h);
+  const task = await taskOf(h, s!.id);
+  t.check('done, on the plan approved in this attempt', [task.status, task.plan?.approved?.by], ['done', 'operator']);
+});
+
 await scenario('a session\'s own setting outranks Settings: from the import, and from the session page', { execution: { planMode: 'auto' } }, async (h) => {
   const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'own', { planMode: 'off' })] });
   t.check('the import keeps the session\'s own setting', (await h.session(s!.id) as unknown as { planMode?: string }).planMode, 'off');

@@ -288,6 +288,10 @@ try {
   t.check('the queue keeps what it waits for, and says so', [parkedItem.waitsFor?.kind, parkedItem.why, !!(parkedItem.waitsFor?.approval as { plan?: unknown } | undefined)?.plan], ['plan', 'waits for you: its plan, to approve', true]);
   const s1 = await hp.call<Sess>('GET', `/sessions/${parkedItem.sessionId}`);
   t.check('and so does the task\'s record', [s1.tasks[0]!.status, s1.tasks[0]!.parked?.kind, s1.tasks[0]!.parked?.answer ?? null], ['aborted', 'plan', null]);
+  // 2026-11-18: "Continue" in its chat took what it waited for off its record, and every button on its card failed after.
+  const carried = await hp.raw('POST', `/chat/${parkedItem.sessionId}/tasks/${s1.tasks[0]!.id}/continue`);
+  t.truthy('"Continue" in its chat is refused: it is answered on its card', carried.status === 400 && /answer it there/.test(JSON.stringify(carried.body)), carried);
+  t.check('and what it waits for is still on its record', (await hp.call<Sess>('GET', `/sessions/${parkedItem.sessionId}`)).tasks[0]!.parked?.kind, 'plan');
   t.check('an answer that does not fit the card is refused', (await hp.raw('POST', '/queue/items/p1/answer', { decision: 'revise' })).status, 400);
   const answered = await hp.call<QueueView>('POST', '/queue/items/p1/answer', { decision: 'approve', note: 'Keep it short.' });
   t.check('answered: it waits to carry on, first', [answered.items[0]!.status, (answered.items[0] as QueueItem).resume], ['waiting', true]);
@@ -442,6 +446,42 @@ try {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
   await h2?.stop();
+}
+
+/*
+ * Found 2026-11-18, reviewing the code against Kerrigan's description: a task on "the folder as it is" leaves its
+ * changes uncommitted, and the next task on a branch of its own was refused for them ("There are uncommitted changes …
+ * Commit or stash them first", and "on the Sessions page", which is gone), with what depends on it skipped. Now those
+ * changes are put aside, kept whole on a branch of their own and not pushed, and the task runs.
+ */
+console.log('\n--- a task on the folder as it is, then one on a branch of its own: what the first left is put aside ---');
+let h3: Harness | null = null;
+try {
+  h3 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto' } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  h3.git('remote', 'add', 'origin', join(h3.base, 'no-such-server.git'));
+  await h3.call<QueueView>('PUT', '/queue', { items: [
+    { id: 'f1', prompt: 'Write left.txt holding exactly left.', model: '', dependsOn: [], branch: 'folder', review: false },
+    { id: 'b1', prompt: 'Write b.txt holding exactly b.', model: '', dependsOn: [], branch: 'main', review: false },
+  ] });
+  h3.chat.script(reply.steps(write('left.txt', 'left')), reply.done(), reply.steps(write('b.txt', 'b')), reply.done());
+  await h3.call('POST', '/queue/run');
+  const done = await waitFor('the queue to end', async () => {
+    const q = await h3!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 120_000);
+  t.check('both done: the one on its own branch not refused for what the first left', [done.items.map((x) => x.status), done.items[1]!.why ?? null], [['done', 'done'], null]);
+  const saved = h3.git('branch', '--list', 'cop/saved/*', '--format=%(refname:short)').split('\n').filter(Boolean);
+  t.check('what the first left is kept whole on a branch of its own', [saved.length, saved[0] ? h3.git('show', `${saved[0]}:left.txt`).trim() : null], [1, 'left']);
+  const second = await h3.call<{ tasks: Array<{ vcs?: { branch?: string } }> }>('GET', `/sessions/${done.items[1]!.sessionId}`);
+  const branch = second.tasks[0]?.vcs?.branch ?? '';
+  t.truthy('the second task\'s work committed on its own branch, without what the first left', branch.startsWith('queue/b1') && h3.git('show', `${branch}:b.txt`).trim() === 'b' && !h3.git('ls-tree', '--name-only', branch).split('\n').includes('left.txt'), { branch, tree: h3.git('ls-tree', '--name-only', branch) });
+  const said = (await h3.call<Array<{ type: string; message: string }>>('GET', `/sessions/${done.items[1]!.sessionId}/events`)).find((e) => e.type === 'queue-set-aside');
+  t.truthy('and it is said, with where it was put', !!said && said.message.includes(saved[0] ?? '?') && said.message.includes('not pushed'), said);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h3?.stop();
 }
 
 t.finish();

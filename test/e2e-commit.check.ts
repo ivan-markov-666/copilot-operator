@@ -71,7 +71,8 @@ await scenario('a dirty tree refuses the run before the browser opens', async (h
   // Since 2026-10-02 version control is checked before anything opens the browser: the start itself is refused.
   const r = await h.call<{ started: boolean; reason?: string }>('POST', `/sessions/${s!.id}/start`, { mode: 'unattended' });
   t.check('the run does not start', r.started, false);
-  t.truthy('the reason names the file and where to fix it', /uncommitted changes \(mine\.txt\)/.test(r.reason ?? '') && /Prepare version control for this run/.test(r.reason ?? ''), r.reason);
+  // Not the Sessions page, which went on 2026-10-20 (2026-11-18): what to do in the program as it is.
+  t.truthy('the reason names the file and where to fix it', /uncommitted changes \(mine\.txt\)/.test(r.reason ?? '') && /Commit what is not committed in the folder \(the Git view\), or put it aside/.test(r.reason ?? '') && !/Sessions page/.test(r.reason ?? ''), r.reason);
   t.check('no browser was opened and nothing sent', [h.chat.opened, h.chat.sent.length], [0, 0]);
   t.check('the task is still queued', (await h.session(s!.id)).tasks[0]!.status, 'queued');
   t.check("the operator's file is untouched and still uncommitted", h.git('status', '--porcelain'), '?? mine.txt');

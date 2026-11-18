@@ -1085,6 +1085,11 @@ export async function applySessionModel(
     const hand = wanted && buttonShows(shown, wanted)
       ? { result: { ok: true, current: wanted, by: 'already' } as ModelChoice, goOnAsItIs: false }
       : await withOperatorHand(transport, wanted, { ok: false, current: shown, reason: why }, hooks, session.id, bus, true, asks);
+    /*
+     * Stopped on the card (2026-11-18): the run stops, as the card's "Stop" says — with a model named too, which asked
+     * the operator a second time ("could not choose the model") before.
+     */
+    if ('stopped' in hand && hand.stopped) return { refused: 'The model was to be chosen by hand, and the operator stopped the run. Nothing was sent.' };
     if (!wanted) {
       const now = await transport.currentModel().catch(() => null);
       if (hand.result.ok || hand.goOnAsItIs) {
@@ -1185,7 +1190,7 @@ async function withOperatorHand(
   /** For the review's own conversation: the card says so, and why its model is best another, stronger one. For the
    * lead's or the worker's conversation of the two-chat mode: the card says which it is (2026-10-20). */
   opts: { review?: boolean; role?: 'lead' | 'worker'; actor?: Actor } = {},
-): Promise<{ result: ModelChoice; goOnAsItIs: boolean }> {
+): Promise<{ result: ModelChoice; goOnAsItIs: boolean; stopped?: true }> {
   let result = first;
   for (let tries = 1; !result.ok && hooks?.askHelp; tries += 1) {
     const shown = await transport.currentModel().catch(() => null);
@@ -1206,7 +1211,7 @@ async function withOperatorHand(
       ...(opts.role ? { role: opts.role } : {}),
       actor: opts.actor ?? (opts.review ? 'review' : opts.role ?? 'worker'),
     });
-    if (answer === 'stop') return { result, goOnAsItIs: false };
+    if (answer === 'stop') return { result, goOnAsItIs: false, stopped: true };
     if (answer === 'continue') {
       bus.publish({ sessionId, type: 'model-help-continue', level: 'warn', message: `the operator chose to go on with the model the chat is on ("${shown ?? 'unknown'}")${wanted ? `, not "${wanted}"` : ''}`, data: { asked: wanted, shown } });
       return { result: { ok: false, current: shown, reason: `the operator chose to go on with "${shown ?? 'unknown'}"` }, goOnAsItIs: true };
@@ -2125,8 +2130,13 @@ export async function runTask(
      * the way a read-only task is wherever the task has a branch of its own.
      */
     const planMode: PlanMode = session.planMode ?? cfg.execution.planMode ?? 'off';
-    // A continued task does not plan again, unless its plan was sent back while the queue had it set aside (2026-10-26).
-    let planning = planMode !== 'off' && (!task.continuing || task.continuing.replan === true);
+    /*
+     * A continued task does not plan again when a plan was approved for it — it carries on from that plan — nor when it
+     * was sent back while the queue had it set aside it does (2026-10-26). One carried on with no plan approved at all
+     * plans first (2026-11-18: a Stop at the plan's card, a restart, or a limit while planning, then "Continue" or the
+     * carrying on after a limit, went straight to the work, and files changed with no plan approved).
+     */
+    let planning = planMode !== 'off' && (!task.continuing || task.continuing.replan === true || !approvedPlanOf(task));
     await actingNow(planning ? 'plan' : 'worker');
     const planEnforced = planning && onOwnBranch;
     let planVersion = 0;
