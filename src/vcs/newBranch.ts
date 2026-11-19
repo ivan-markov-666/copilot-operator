@@ -274,7 +274,12 @@ export async function putBackAside(folder: string, saved: string): Promise<{ fil
   const files = lines((await git(repoDir, ['diff', '--name-only', `${commit}^`, commit])).stdout).length;
   const laid = await git(repoDir, [...BOT_AUTHOR, 'cherry-pick', '--no-commit', commit], 300_000);
   if (!laid.ok) {
-    await git(repoDir, ['cherry-pick', '--abort']);
+    /*
+     * Taken back as a merge is (2026-11-19): a pick with --no-commit leaves no cherry-pick for "--abort" to end, and the
+     * folder was left half merged, conflict markers in it. `reset --merge` takes back what the pick laid — the clash, the
+     * new files — and keeps an edit of the folder's own elsewhere, which a pick never touches (it refuses first).
+     */
+    await git(repoDir, ['reset', '--merge']);
     return { problem: `its changes could not be laid on what the folder holds now (${(laid.stderr || laid.stdout).split(/\r?\n/)[0]}); they are kept on ${saved}` };
   }
   // Not staged, as they were: the new files new again, the changed ones changed.

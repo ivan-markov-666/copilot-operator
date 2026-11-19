@@ -17,7 +17,7 @@
  */
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { api, type HandoffOutcome, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
+import { api, parkedOver, type HandoffOutcome, type Approval, type ChatThread, type LeadRound, type ModelCatalogue, type RetryChoice, type Session, type Skill, type Story, type StoryEntry, type SubtaskAttempt, type SubtaskFailure, type Task, type Workspace } from '../../lib/api';
 import type { Key } from '../../lib/lang/types';
 import { useFmtClock, useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
@@ -32,7 +32,7 @@ import { BY_HAND, ModelPicker } from '../modelPicker';
 import { ChangesButton } from '../diffView';
 import { CopyAll, CopyButton } from '../copyButton';
 import { RichText } from '../richText';
-import { PlanCard } from '../approvals';
+import { PlanCard, RunAllOff } from '../approvals';
 import { ActorChip } from '../actor';
 import { PlanView } from '../planView';
 import { StatusMark } from './workbench';
@@ -738,6 +738,13 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             <CopyAll text={t('chat.passwordWaiting')} />
           </div>
         )}
+        {/* Copilot asks for a sign-in (2026-11-19): the work waits for it, and goes on by itself once signed in. */}
+        {running && activity?.signIn && (
+          <div className="cs-system cs-password" role="alert" data-awaits={`sign-in:${session?.id ?? ''}`} tabIndex={-1}>
+            {t('chat.signInWaiting')}
+            <CopyAll text={t('chat.signInWaiting')} />
+          </div>
+        )}
         {said && <p className="cs-system" role="status">{said}</p>}
       </div>
 
@@ -1136,7 +1143,7 @@ function stoppedEarly(task: Task | undefined): boolean {
    * A queue task set aside waits for its answer on its card (2026-11-18): carried on from here instead, its queue entry
    * lost what it waited for, and every button on the card, Stop included, failed from then on.
    */
-  if (task.parked && !task.parked.answer) return false;
+  if (!parkedOver(task.parked)) return false;
   // Never sent (2026-11-18): stopped before it went out, its start refused, or the bot closed first; sent as it is.
   if (task.status === 'queued') return true;
   return task.status === 'aborted' || task.status === 'limit-reached' || (!!task.limit && (task.status === 'failed' || task.status === 'blocked'));
@@ -1280,9 +1287,10 @@ function AskCard({ approval, onDecided }: { approval: Approval; onDecided: Decid
       {(approval.scripts?.length ?? 0) > 0 && <WrittenScripts scripts={approval.scripts!} />}
       <div className="row">
         <button type="button" className="primary" {...mark('run')} onClick={() => void answer('run')}>{t('chat.askRun')}</button>
-        {!approval.network && !approval.platform && <button type="button" {...mark('run-all')} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
+        {!approval.network && !approval.platform && !approval.runAllOff && <button type="button" {...mark('run-all')} onClick={() => void answer('run-all')}>{t('chat.askRunAll')}</button>}
         <button type="button" {...mark('skip')} onClick={() => void answer('skip')}>{t('chat.askSkip')}</button>
       </div>
+      <RunAllOff approval={approval} />
       {err && (
         <p className="err" role="alert">
           {err}

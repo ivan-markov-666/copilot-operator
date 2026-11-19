@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { api, type Approval, type GitArea, type GitCounts, type Session, type Task, type Workspace } from '../../lib/api';
 import { useGitBase } from '../../lib/gitBase';
 import { usePoll } from '../../lib/usePoll';
+import { discardDraft, hasUnkept, keepTabs, readTabs } from '../../lib/drafts';
 import { useT } from '../../lib/i18n';
 import { NavPair } from '../nav';
 import { Explorer } from './explorer';
@@ -122,13 +123,46 @@ function WorkbenchInner() {
   usePoll(load, 3000);
   const readWorkspace = useCallback(() => api.workspace().then(setWorkspace).catch(() => undefined), []);
   usePoll(readWorkspace, 10_000);
+  /*
+   * The tabs are the folder's they were opened in (second bug hunt, 2026-11-19): kept in this browser by folder, with
+   * every edit not saved (`lib/drafts.ts`), and put back as they were left when that folder is open again — after
+   * Settings, a reload, another folder. "Open a folder" kept the tabs of the one before, and Ctrl+S wrote one folder's
+   * edit into the other's file of the same name.
+   */
+  const [tabsDir, setTabsDir] = useState<string | null>(null);
+  const openDir = workspace?.ok ? workspace.dir : null;
+  useEffect(() => {
+    if (!openDir || openDir === tabsDir) return;
+    const kept = readTabs(openDir);
+    setTabs(kept.tabs);
+    setActive(kept.tabs.some((x) => tabKey(x) === kept.active) ? kept.active : kept.tabs[0] ? tabKey(kept.tabs[0]) : '');
+    setUnsaved(new Set());
+    setTabsDir(openDir);
+  }, [openDir, tabsDir]);
+  useEffect(() => {
+    if (!tabsDir) return;
+    keepTabs(tabsDir, tabs.filter((x): x is Tab & { kind: 'file' } => x.kind === 'file').map((x) => ({ kind: 'file', path: x.path, ...(x.preview ? { preview: true } : {}) })), active);
+  }, [tabsDir, tabs, active]);
+  // An edit this browser could not keep: the page asks before it is left (a reload, the tab closed, an address typed).
+  useEffect(() => {
+    const ask = (e: BeforeUnloadEvent): void => {
+      if (!hasUnkept()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, []);
   /** "Open a folder": the machine's folder dialog, and the folder kept as the project in Settings. */
   const openFolder = useCallback(async () => {
     try {
       const pick = await api.browseFolder(workspace?.dir || undefined);
-      if (!pick.ok) return;
-      const st = await api.settings();
-      await api.saveSettings({ ...st.raw, project: { ...((st.raw.project as Record<string, unknown> | undefined) ?? {}), rootDir: pick.path } });
+      // Why the dialog did not open, said (2026-11-19): nothing happened, and nothing said why.
+      if (!pick.ok) {
+        if (pick.reason) setProblem(pick.reason);
+        return;
+      }
+      await api.openProjectFolder(pick.path);
       await readWorkspace();
     } catch (e) {
       setProblem((e as Error).message);
@@ -183,6 +217,7 @@ function WorkbenchInner() {
     if (tab?.kind === 'file' && unsaved.has(tab.path)) {
       if (!(await confirmDialog(t('ed.closeUnsaved', { name: tab.path.split('/').pop() ?? tab.path })))) return;
       onDirty(tab.path, false);
+      if (tabsDir) discardDraft(tabsDir, tab.path);
     }
     setTabs((all) => {
       const i = all.findIndex((x) => tabKey(x) === key);
@@ -413,13 +448,14 @@ function WorkbenchInner() {
               <GitDiff key={tabKey(activeTab)} area={activeTab.area} path={activeTab.path} commit={activeTab.commit} />
             ) : null}
             {/* Every open file stays loaded, hidden when its tab is not in front: an edit not saved yet survives a change of tab. */}
-            {tabs.map((tab) =>
-              tab.kind === 'file' ? (
-                <div key={tabKey(tab)} className="wb-file-pane" hidden={tabKey(tab) !== active}>
-                  <FileView path={tab.path} onDirty={onDirty} goTo={goTo?.path === tab.path ? goTo : undefined} onOpenFile={(p) => open({ kind: 'file', path: p })} />
-                </div>
-              ) : null,
-            )}
+            {tabsDir &&
+              tabs.map((tab) =>
+                tab.kind === 'file' ? (
+                  <div key={`${tabsDir}|${tabKey(tab)}`} className="wb-file-pane" hidden={tabKey(tab) !== active}>
+                    <FileView dir={tabsDir} path={tab.path} onDirty={onDirty} goTo={goTo?.path === tab.path ? goTo : undefined} onOpenFile={(p) => open({ kind: 'file', path: p })} />
+                  </div>
+                ) : null,
+              )}
           </div>
           {layout.bottomOpen && <Splitter axis="y" label={t('wb.resize')} onDrag={(d) => setL({ bottom: clamp(layout.bottom - d, 90, 700) })} />}
           <BottomPanel

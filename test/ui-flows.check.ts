@@ -2749,6 +2749,67 @@ try {
   });
 
   /*
+   * Found 2026-11-19 (second bug hunt): an edit not saved lived only in the page — Settings in the bar on top, a reload,
+   * the page opening Settings by itself at a locator that found nothing, lost it without a word. And "Open a folder"
+   * kept the tabs of the folder before, whose Ctrl+S wrote one folder's edit into the other's file of the same name, and
+   * the project kept the name, level 2 and "for reference only" of the one before. Now each folder keeps its tabs and
+   * edits in this browser; a file is saved only in the folder it was opened in; a folder opened is the project with its own.
+   */
+  await scenario('the editor: an edit not saved survives Settings and a reload; each folder its own tabs; a file saved only where it was opened', {}, async (h, page, url) => {
+    const a = h.repo;
+    const b = join(h.base, 'other');
+    mkdirSync(b, { recursive: true });
+    writeFileSync(join(a, 'greet.ts'), 'export const a = 1;\n');
+    writeFileSync(join(b, 'greet.ts'), 'export const b = 2;\n');
+    const raw = (await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings')).raw;
+    await h.call('PUT', '/settings', { ...raw, project: { ...(raw.project ?? {}), rootDir: a, name: 'alpha', level2: 'Notes of alpha.', readOnly: false, others: [] } });
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'greet.ts' }).click();
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(pane);
+    await pane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('// kept');
+    const tab = page.getByRole('tab', { name: /greet\.ts/ });
+    await tab.locator('.wb-unsaved').waitFor();
+
+    await page.locator('.wb-menu').getByRole('link', { name: en['nav.defaults']!, exact: true }).click();
+    await page.waitForURL(/\/settings/);
+    await page.goto(url('/'));
+    await tab.locator('.wb-unsaved').waitFor({ timeout: 15_000 }).catch(() => undefined);
+    t.truthy('Settings and back: its tab open again, the edit there, not saved', (await tab.locator('.wb-unsaved').count()) === 1 && (await editorText(page.locator('.wb-file-pane:not([hidden])'))).endsWith('// kept'), await editorText(page.locator('.wb-file-pane:not([hidden])')).catch(() => ''));
+    await page.reload();
+    await tab.locator('.wb-unsaved').waitFor({ timeout: 15_000 }).catch(() => undefined);
+    t.truthy('a reload: the same', (await tab.locator('.wb-unsaved').count()) === 1 && (await editorText(page.locator('.wb-file-pane:not([hidden])'))).endsWith('// kept'), '');
+    t.check('nothing saved meanwhile', readFileSync(join(a, 'greet.ts'), 'utf8'), 'export const a = 1;\n');
+
+    // Another folder opened: the project, with its own; the tabs its own.
+    await h.call('POST', '/workspace/open', { dir: b });
+    const project = async (): Promise<Record<string, unknown>> => ((await h.call<{ raw: Record<string, Record<string, unknown>> }>('GET', '/settings')).raw.project ?? {}) as Record<string, unknown>;
+    const onB = await project();
+    t.check('another folder opened: the project, with nothing of the one before', [onB.rootDir, onB.name, onB.level2, onB.readOnly], [b, '', '', false]);
+    await page.reload();
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'greet.ts' }).waitFor();
+    t.check('its tabs its own: none of the folder before', await page.getByRole('tab', { name: /greet\.ts/ }).count(), 0);
+    const into = await h.raw('PUT', '/workspace/file', { path: 'greet.ts', text: 'export const a = 1;\n// kept', dir: a });
+    t.check('a file opened in the folder before, saved now: refused, the other folder\'s file untouched', [into.status, readFileSync(join(b, 'greet.ts'), 'utf8')], [400, 'export const b = 2;\n']);
+
+    // Back: the project with its own name and notes, its tab and its edit, saved where it was opened.
+    await h.call('POST', '/workspace/open', { dir: a });
+    const onA = await project();
+    t.check('opened again: the project with its own name and notes', [onA.rootDir, onA.name, onA.level2], [a, 'alpha', 'Notes of alpha.']);
+    await page.reload();
+    await tab.locator('.wb-unsaved').waitFor({ timeout: 15_000 }).catch(() => undefined);
+    await page.locator('.wb-file-pane:not([hidden]) .ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+S');
+    await page.locator('.wb-file-pane:not([hidden]) .ed-bar').getByText(en['ed.saved']!).waitFor();
+    t.check('its edit saved in its own folder', [readFileSync(join(a, 'greet.ts'), 'utf8'), readFileSync(join(b, 'greet.ts'), 'utf8')], ['export const a = 1;\n// kept', 'export const b = 2;\n']);
+    await page.reload();
+    await editorText(page.locator('.wb-file-pane:not([hidden])'));
+    t.check('saved: nothing kept for it any more', await tab.locator('.wb-unsaved').count(), 0);
+  });
+
+  /*
    * Plan mode in the chat (2026-10-20, "as in Claude Code"): turned on under the box, the message first gets a plan,
    * asked about in the conversation — even with commands run without asking — and the work only after it is approved.
    */

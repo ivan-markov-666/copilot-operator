@@ -832,6 +832,52 @@ function inTurn<T>(path: string, work: () => Promise<T>): Promise<T> {
  * setting put back whatever another had changed in between. If it throws, nothing is written. Like
  * any work in a turn, it must not wait for another turn on the same file (see `inTurn`).
  */
+/**
+ * A file of the bot's own records that is there but cannot be used (2026-11-19). Read as empty, it was written over by
+ * the next change: a queue.json the machine lost power over, or another program held, came back as an empty queue,
+ * and the next task added wrote it over — every task and every card kept for the operator gone, without a word. As
+ * `SettingsUnusableError` refuses for settings.json.
+ */
+export class StoreFileUnusable extends Error {
+  constructor(
+    readonly path: string,
+    problem: string,
+  ) {
+    super(`${path} ${problem}. Nothing has been saved over it: mend it, or move it away to start that list again empty.`);
+    this.name = 'StoreFileUnusable';
+  }
+}
+
+/**
+ * A JSON file of the bot's own records, read to be changed and written back: undefined when it is not there or holds
+ * nothing (a list not begun); a moment's lock by another program — a virus scanner, a sync client — waited out, as a
+ * write's is (`moveOver`); anything else refused (`StoreFileUnusable`), so it is never written over.
+ */
+export async function readStoreJson<T>(path: string): Promise<T | undefined> {
+  const backoffMs = [10, 25, 60, 120, 250, 500];
+  for (let attempt = 0; ; attempt += 1) {
+    let text: string;
+    try {
+      text = await readFile(path, 'utf8');
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      if (code === 'ENOENT') return undefined;
+      if ((code === 'EBUSY' || code === 'EPERM' || code === 'EACCES') && attempt < backoffMs.length) {
+        await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+        continue;
+      }
+      throw new StoreFileUnusable(path, `could not be read (${code || (e as Error).message})`);
+    }
+    const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+    if (body.trim() === '') return undefined;
+    try {
+      return JSON.parse(body) as T;
+    } catch (e) {
+      throw new StoreFileUnusable(path, `is not valid JSON (${(e as Error).message})`);
+    }
+  }
+}
+
 export async function writeFileAtomically(path: string, content: string | (() => Promise<string>)): Promise<void> {
   await inTurn(path, async () => replaceFile(path, typeof content === 'string' ? content : await content()));
 }

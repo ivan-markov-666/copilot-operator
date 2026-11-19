@@ -267,7 +267,7 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
         <button className="primary" {...mark('run')} onClick={() => void decide('run')}>
           {t('approval.run')}
         </button>
-        {!approval.network && !approval.platform && (
+        {!approval.network && !approval.platform && !approval.runAllOff && (
           <button {...mark('run-all')} onClick={() => void decide('run-all')} title={t('approval.runAllWhy')}>
             {t('approval.runAll')}
           </button>
@@ -279,8 +279,25 @@ function ApprovalCard({ approval, sessionName, onDecided }: { approval: Approval
           {t('approval.abort')}
         </button>
       </div>
+      <RunAllOff approval={approval} />
       <CopyAll text={cardCopy(t, approval, t('approval.title', { n: approval.stepId }))} />
     </div>
+  );
+}
+
+/**
+ * Why "Run this and the rest" is not on a command's card, and where that is changed (2026-11-19): under the default
+ * Settings it was offered on every card and refused at every press.
+ */
+export function RunAllOff({ approval }: { approval: Approval }) {
+  const { t } = useT();
+  const off = approval.runAllOff;
+  if (!off) return null;
+  // Where it is changed is in its words: a link away from the workbench would leave edits not saved behind.
+  return (
+    <p className="muted small" data-run-all-off={off}>
+      {t(`approval.runAllOff.${off}`)}
+    </p>
   );
 }
 

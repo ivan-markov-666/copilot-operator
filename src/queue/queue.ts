@@ -265,6 +265,14 @@ export function skippedBecause(because: QueueItem): string {
   return `it depends on "${itemTitle(because)}", which ${what}`;
 }
 
+/**
+ * Whether the queue holds a chat for this task: set aside with its card, or carrying on in it at its next turn. A task
+ * the queue lets go of — taken out, run again, started over — has its chat's card closed (2026-11-19).
+ */
+export function holdsChat(x: Pick<QueueItem, 'sessionId' | 'status' | 'resume'>): boolean {
+  return !!x.sessionId && (x.status === 'parked' || (x.status === 'waiting' && x.resume === true));
+}
+
 /** A task's status from how its message ended. */
 export function statusOfTask(taskStatus: string | undefined): QueueStatus {
   return taskStatus === 'done' ? 'done' : taskStatus === 'aborted' ? 'stopped' : 'failed';

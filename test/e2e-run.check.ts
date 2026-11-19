@@ -168,8 +168,10 @@ await scenario('"Run this and the rest" that cannot be given is said, and a card
   const [s] = await h.importPlan(plan(h, 'runall', [greeting]));
   h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8", "Set-Content -Path more.txt -Value 'more' -Encoding utf8"), reply.done());
   await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
-  type Approval = { id: string; stepId: number };
+  type Approval = { id: string; stepId: number; runAllOff?: string };
   const first = await waitFor('the first step to wait', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
+  // Not offered on the card, saying why (2026-11-19); a press from a page that still shows it is refused as before.
+  t.check('the card says "Run this and the rest" is off: the allowlist is empty', first.runAllOff, 'allowlist');
   const all = await h.raw('POST', `/approvals/${first.id}`, { action: 'run-all' });
   const said = (all.body as { message?: string }).message ?? '';
   t.check('"Run this and the rest" is refused', all.status, 400);
@@ -182,6 +184,17 @@ await scenario('"Run this and the rest" that cannot be given is said, and a card
   await h.call('POST', `/approvals/${second.id}`, { action: 'run' });
   await h.idle();
   t.check('the task is done, both steps run', [(await h.session(s!.id)).tasks[0]!.status, h.git('show', 'cop/runall:more.txt')], ['done', 'more']);
+});
+
+await scenario('"Run this and the rest" that can be given is offered, with nothing said against it', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'runallok', [greeting]));
+  h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8"), reply.done());
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
+  const first = await waitFor('the step to wait', async () => (await h.call<Array<{ id: string; runAllOff?: string }>>('GET', '/approvals'))[0]);
+  t.check('nothing stands in its way', first.runAllOff, undefined);
+  await h.call('POST', `/approvals/${first.id}`, { action: 'run-all' });
+  await h.idle();
+  t.check('given, the task is done', (await h.session(s!.id)).tasks[0]!.status, 'done');
 });
 
 await scenario('a reply that is not in the format is sent back, not guessed at', {}, async (h) => {

@@ -274,10 +274,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'link',
             en: 'Download the file for a chatbot',
             bg: 'Изтегли файл за чатбота',
-            doesEn:
-              'One file with all a chatbot needs to give the right locator: what to do and why, what failed and when, the old locator, the part of the page where the element most likely is (around an element near it that was found), the whole page without scripts, styles and conversation names, and how the chatbot walks you through finding it in Edge (F12) when it is in neither. Attach it to Copilot or any other chatbot and send it, with nothing else to write; the chatbot speaks the interface\'s language.',
-            doesBg:
-              'Един файл с всичко, което е нужно на чатбот, за да даде правилния локатор: какво да направи и защо, какво се е провалило и кога, старият локатор, частта от страницата, където елементът най-вероятно е (около близък елемент, който е намерен), цялата страница без скриптове, стилове и имена на разговори, и как чатботът да ви преведе през търсенето в Edge (F12), ако го няма в нито една от тях. Прикачете го в Copilot или друг чатбот и го пратете, без да пишете нищо друго; чатботът говори на езика на интерфейса.',
+            doesEn: 'One file with all a chatbot needs to give the right locator: what failed and the old locator, the part of the page where the element most likely is, the whole page without scripts and styles, and how to find it in Edge (F12) when it is in neither. Attach it to any chatbot and send it, writing nothing; it answers in the interface\'s language.',
+            doesBg: 'Един файл с всичко, нужно на чатбот, за да даде правилния локатор: какво се е провалило и старият локатор, частта от страницата, където елементът най-вероятно е, цялата страница без скриптове и стилове, и как да го намерите в Edge (F12), ако го няма в тях. Прикачете го на който и да е чатбот и го пратете, без да пишете нищо; той отговаря на езика на интерфейса.',
           },
           {
             key: 'chatloc.dismiss',
@@ -616,8 +614,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Git',
             bg: 'Git',
-            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes (each file with its letter — M, A, D, R, U, ! in conflict — and its lines), and the branch\'s commits; a file opens its two versions side by side, a commit its files. A file opens as a preview, as in VS Code: its tab in italics, replaced by the next file opened with one click; a double click keeps it. A file\'s "+" stages it and its "−" unstages it; beside a list\'s heading, the whole list. The button\'s two numbers: the files not committed yet, and every file changed on this branch.',
-            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените (всеки файл с буквата си — M, A, D, R, U, ! в конфликт — и редовете си) и комитите на клона; файл отваря двете си версии една до друга, комит — файловете си. Файлът се отваря за преглед, както във VS Code: разделът му е в курсив и се заменя от следващия файл, отворен с едно щракване; двоен клик го задържа. „+“ на файл го подготвя, „−“ го изважда от подготвените; до заглавието на списък — целия списък. Двете числа на бутона: файловете, които още не са комитнати, и всички файлове, променени на този клон.',
+            doesEn: 'Shows the open folder\'s git: the branch, the staged changes and the changes (each file with its letter — M, A, D, R, U, ! in conflict), and the branch\'s commits; a file opens its two versions side by side, a commit its files. One click opens a preview (its tab in italics, replaced by the next); a double click keeps it. A file\'s "+" stages it, "−" unstages it; beside a heading, the whole list. The button\'s two numbers: the files not committed, and those changed on this branch.',
+            doesBg: 'Показва git на отворената папка: клона, подготвените промени и промените (всеки файл с буквата си — M, A, D, R, U, ! в конфликт) и комитите на клона; файл отваря двете си версии една до друга, комит — файловете си. Едно щракване отваря преглед (разделът в курсив, заменя се от следващия); двоен клик го задържа. „+“ на файл го подготвя, „−“ го изважда; до заглавие — целия списък. Двете числа на бутона: некомитнатите файлове и променените на този клон.',
           },
           {
             key: 'wb.refresh',
@@ -656,8 +654,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Commit',
             bg: 'Комитни',
-            doesEn: 'At the top of the git view, under the message box (Ctrl+Enter there does the same): commits the staged files with that message, under the person\'s own name for git — their commit, not the chat\'s. The project\'s hooks run as in a terminal, unless one is not the project\'s own: then it names it and asks — "Without hooks", "Run them anyway" or "Cancel". When it does not go through, a sentence says why over git\'s own words. Nothing is ever amended or forced.',
-            doesBg: 'Най-горе в изгледа git, под полето за съобщението (Ctrl+Enter там прави същото): комитва подготвените файлове с това съобщение, с името на човека в git — неговият комит, не на чата. Hook-овете на проекта се пускат както в терминал, освен ако някой не е собствен на проекта: тогава го назовава и пита — „Без hook-ове“, „Пусни ги все пак“ или „Откажи“. Когато не мине, едно изречение казва защо, над собствените думи на git. Нищо никога не се поправя (amend) и не се налага насила.',
+            doesEn: 'At the top of the git view, under the message box (Ctrl+Enter there does the same): commits the staged files with that message, under the person\'s own git name. The project\'s hooks run as in a terminal; one not the project\'s own is named and asked about — "Without hooks", "Run them anyway" or "Cancel". A failure is said in a sentence over git\'s own words. Nothing is ever amended or forced.',
+            doesBg: 'Най-горе в изгледа git, под полето за съобщението (Ctrl+Enter там прави същото): комитва подготвените файлове с това съобщение, с името на човека в git. Hook-овете на проекта се пускат както в терминал; чужд на проекта се назовава и се пита — „Без hook-ове“, „Пусни ги все пак“ или „Откажи“. Неуспехът се казва с едно изречение над думите на git. Нищо не се поправя (amend) и не се налага насила.',
           },
           {
             key: 'git.commitAll',
@@ -896,9 +894,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'LIVE',
             bg: 'LIVE',
             doesEn:
-              'Beside "Chat" while the bot works, red (amber while paused); on hover it says who is at work. The browser tab says how it stands, in English whatever language the page is in: "Working... — copilot-operator", "Paused", "Waiting for you (1)" when something waits for the operator, "Waiting for your password"; then how the last message ended — "Done", "Error", "Stopped", "Blocked", "Limit reached".',
+              'Beside "Chat" while the bot works, red (amber while paused); on hover it says who is at work. The browser tab says how it stands, in English whatever language the page is in: "Working... — copilot-operator", "Paused", "Waiting for you (1)" when something waits for the operator, "Waiting for your password", "Waiting for you to sign in"; then how the last message ended — "Done", "Error", "Stopped", "Blocked", "Limit reached".',
             doesBg:
-              'До „Чат“, докато ботът работи — червено (жълто на пауза); при посочване казва кой работи. Табът на браузъра казва как стоят нещата, на английски на всеки език на страницата: „Working... — copilot-operator“, „Paused“, „Waiting for you (1)“, когато нещо чака оператора, „Waiting for your password“; после как е свършило последното съобщение — „Done“, „Error“, „Stopped“, „Blocked“, „Limit reached“.',
+              'До „Чат“, докато ботът работи — червено (жълто на пауза); при посочване казва кой работи. Табът на браузъра казва как стоят нещата, на английски на всеки език на страницата: „Working... — copilot-operator“, „Paused“, „Waiting for you (1)“, когато нещо чака оператора, „Waiting for your password“, „Waiting for you to sign in“; после как е свършило последното съобщение — „Done“, „Error“, „Stopped“, „Blocked“, „Limit reached“.',
           },
           {
             key: 'actor.asks',
@@ -947,8 +945,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: '⎇ New branch from main',
             bg: '⎇ Нов бранч от main',
-            doesEn: 'Under the chat\'s box, beside the skills: fetches the latest of the remote\'s main and opens a window to make a new local branch from it for the next task — not tracking main, so its work is never pushed there by mistake. A password or a key\'s passphrase goes into Git\'s own window. Off while a task works, and where the folder is not a repository.',
-            doesBg: 'Под полето на чата, до skill-овете: взима последното от main на remote и отваря прозорец за нов локален клон от него за следващата задача — без да следи main, така че работата му никога не отива там по грешка. Парола или passphrase на ключ се въвежда в собствения прозорец на Git. Изключен, докато работи задача, и където папката не е хранилище.',
+            doesEn: 'Under the chat\'s box, beside the skills: fetches the latest of the remote\'s main and opens a window to make a new local branch from it for the next task — not tracking main, so its work is never pushed there by mistake. A password or a key\'s passphrase goes into Git\'s own window. Off while a task works, and where the folder is not a repository. Uncommitted work of a queue task set aside on the folder is put aside for it, not taken along.',
+            doesBg: 'Под полето на чата, до skill-овете: взима последното от main на remote и отваря прозорец за нов локален клон от него за следващата задача — без да следи main, така че работата му никога не отива там по грешка. Парола или passphrase на ключ се въвежда в собствения прозорец на Git. Изключен, докато работи задача, и където папката не е хранилище. Некомитнатата работа на задача от опашката, оставена настрана в папката, се оставя настрана за нея, не се взима.',
           },
           {
             key: 'nb.title',
@@ -1051,8 +1049,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Open a folder',
             bg: 'Отвори папка',
-            doesEn: 'Opens the machine\'s folder dialog; the folder chosen becomes the project the chat and the Files view work on (Settings → project folder).',
-            doesBg: 'Отваря прозореца за избор на папка; избраната става проектът, върху който работят чатът и изгледът „Файлове“ (Настройки → папка на проекта).',
+            doesEn: 'Opens the machine\'s folder dialog; the folder chosen becomes the project the chat and the Files view work on, with its own name, level 2 and "for reference only" — those of the one before are kept for it.',
+            doesBg: 'Отваря прозореца за избор на папка; избраната става проектът, върху който работят чатът и „Файлове“, със свои име, ниво 2 и „само за справка“ — тези на предишния се пазят за него.',
           },
           {
             key: 'chat.input',
@@ -1123,8 +1121,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Send',
             bg: 'Изпрати',
-            doesEn: 'Sends the message and starts it on the branch the folder is on; nothing is asked about branches. The Copilot window stays open when the work on it has ended, says so with an OK, and the next message works in it; close it with its X when nothing is at work. Closed in the middle of a message, it is opened again on its conversation and the answer asked for again, as many times as Settings → Execution allow (3 by default); then the message stops, and "Continue" carries it on.',
-            doesBg: 'Изпраща съобщението и го пуска на бранча, на който е папката; нищо не се пита за бранчове. Прозорецът на Copilot остава отворен, когато работата в него свърши, казва го с „ОК“ и следващото съобщение работи в него; затворете го с X, когато нищо не работи. Затворен по средата на съобщение, той се отваря отново на разговора си и отговорът се иска пак, толкова пъти, колкото позволява Настройки → Изпълнение (3 по подразбиране); после съобщението спира и „Продължи“ го продължава.',
+            doesEn: 'Sends the message and starts it on the branch the folder is on. The Copilot window stays open when the work ends, says so with an OK, and the next message works in it; close it with its X when nothing works. Closed mid-message, it is opened again on its conversation and the answer asked again, as many times as Settings → Execution allow (3 by default); then the message stops, and "Continue" carries it on.',
+            doesBg: 'Изпраща съобщението и го пуска на бранча, на който е папката. Прозорецът на Copilot остава отворен, когато работата свърши, казва го с „ОК“ и следващото съобщение работи в него; затворете го с X, когато нищо не работи. Затворен по средата на съобщение, се отваря отново на разговора си и отговорът се иска пак, колкото пъти позволява Настройки → Изпълнение (3 по подразбиране); после съобщението спира и „Продължи“ го продължава.',
           },
           {
             key: 'chat.sendNote',
@@ -1211,8 +1209,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'checkbox',
             en: 'Two chats',
             bg: 'Два чата',
-            doesEn: 'Two chats, for a new conversation: the message goes to a lead, which restates it, has a worker survey the project, plans, gives the worker one subtask at a time and judges each report, until the result is ready in the form asked for; the worker runs the commands. Both are conversations in the same Copilot window. A started conversation shows how it began. With it, there is no "Review": the lead judges the worker.',
-            doesBg: 'Два чата, за нов разговор: съобщението отива при ръководител, който го преразказва, пуска изпълнител да огледа проекта, прави план, дава на изпълнителя по една подзадача и преценява всеки доклад, докато резултатът стане готов в поискания вид; изпълнителят пуска командите. И двата са разговори в един и същ прозорец на Copilot. Започнатият разговор показва как е започнал. С него няма „Рецензия“: ръководителят преценява изпълнителя.',
+            doesEn: 'Two chats, for a new conversation: the message goes to a lead, which restates it, has a worker survey the project, plans, gives the worker one subtask at a time and judges each report until the result is ready; the worker runs the commands. Both are conversations in the same Copilot window. With it, there is no "Review": the lead judges the worker.',
+            doesBg: 'Два чата, за нов разговор: съобщението отива при ръководител, който го преразказва, пуска изпълнител да огледа проекта, прави план, дава на изпълнителя по една подзадача и преценява всеки доклад, докато резултатът е готов; изпълнителят пуска командите. И двата са разговори в един прозорец на Copilot. С него няма „Рецензия“: ръководителят преценява изпълнителя.',
           },
           {
             key: 'chat.kerrigan',
@@ -1571,8 +1569,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Run this and the rest',
             bg: 'Изпълни тази и останалите',
-            doesEn: 'Runs it and stops asking for the rest of this message.',
-            doesBg: 'Изпълнява я и спира да пита за останалото от това съобщение.',
+            doesEn: 'Runs it and stops asking for the rest of this message. Not offered where Settings do not let a run go on unasked (no isolation, no programs listed, a policy lock): the card says which.',
+            doesBg: 'Изпълнява я и спира да пита за останалото от това съобщение. Не се предлага, където Настройки не позволяват това (без изолация, без изброени програми, заключване): картата казва кое.',
           },
           {
             key: 'chat.askSkip',
@@ -1618,8 +1616,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Save',
             bg: 'Запази',
-            doesEn: 'Saves the file (also Ctrl+S), over the version that was opened: a file changed on disk meanwhile is not overwritten without asking. A tab with changes not saved has a dot; closing it asks first.',
-            doesBg: 'Запазва файла (и с Ctrl+S), върху версията, която е била отворена: файл, променен на диска междувременно, не се презаписва без питане. Раздел с незапазени промени има точка; затварянето му пита първо.',
+            doesEn: 'Saves the file (also Ctrl+S), over the version that was opened: a file changed on disk meanwhile is not overwritten without asking. A tab with changes not saved has a dot; closing it asks first. Edits not saved are kept in this browser, by folder, with their tabs: back after Settings, a reload or another folder.',
+            doesBg: 'Запазва файла (и с Ctrl+S), върху версията, която е била отворена: файл, променен на диска междувременно, не се презаписва без питане. Раздел с незапазени промени има точка; затварянето му пита първо. Незаписаните промени се пазят в този браузър, по папка, с табовете си: връщат се след Настройки, презареждане или друга папка.',
           },
           {
             key: 'ed.revert',
@@ -1887,8 +1885,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'tab',
             en: 'Problems',
             bg: 'Проблеми',
-            doesEn: 'What did not go well in the conversation open in the chat — a message that ended unfinished, stopped or at a limit, and why; a check that failed. A press on one opens it under its line: all of what it says (the line shows only its start), the review\'s evidence for a finding, what it comes from, when it happened, the chat and the message it is of; a second press folds it. The count is of the ones not marked seen. Empty on a new chat.',
-            doesBg: 'Какво не е минало добре в отворения в чата разговор — съобщение, завършило незавършено, спряно или при ограничение, и защо; проверка, която не е минала. Натискане на проблем го отваря под реда му: всичко, което казва (редът показва само началото), доказателството на прегледа за находка, от какво идва, кога се е случил, чатът и съобщението, към които е; второ натискане го свива. Броят е на тези, които не са отбелязани като видени. Празно при нов чат.',
+            doesEn: 'What did not go well in the conversation open in the chat — a message that ended unfinished, stopped or at a limit, and why; a check that failed. A press opens one in full under its line — the review\'s evidence, where it comes from, when, its chat and message; a second press folds it. The count is of those not marked seen.',
+            doesBg: 'Какво не е минало добре в отворения разговор — съобщение, завършило незавършено, спряно или при ограничение, и защо; проверка, която не е минала. Натискане го отваря изцяло под реда му — доказателството на прегледа, откъде идва, кога, чатът и съобщението му; второ натискане го свива. Броят е на неотбелязаните като видени.',
           },
           {
             key: 'wb.problemsInfoLabel',
@@ -1994,8 +1992,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'Waits for you',
             bg: 'Чака вас',
-            doesEn: 'The status of a task set aside while it waited for the operator: under it, its card with what it waits for, to answer now; it carries on from where it stopped at the queue\'s next turn.',
-            doesBg: 'Състоянието на задача, оставена настрана, докато е чакала оператора: под нея е картата ѝ с това, което чака, за отговор сега; продължава оттам, където е спряла, при следващия ход на опашката.',
+            doesEn: 'The status of a task set aside while it waited for the operator: under it, its card with what it waits for, to answer now; it carries on from where it stopped at the queue\'s next turn. Taken out or run again, its chat\'s card closes and "Continue" carries it on there; answered, the queue carries it on.',
+            doesBg: 'Състоянието на задача, оставена настрана, докато е чакала оператора: под нея е картата ѝ с това, което чака, за отговор сега; продължава оттам, където е спряла, при следващия ход на опашката. Махната или пусната отново, картата в чата ѝ се затваря и „Продължи“ я продължава там; отговорена — продължава я опашката.',
           },
           {
             key: 'pk.approve',
@@ -2696,10 +2694,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Check the locators',
             bg: 'Провери локаторите',
-            doesEn:
-              'Opens the Copilot window, as reading the models does, and looks for each locator: the box and Send, the sidebar, the newest conversation (opened by its address) and its "More" menu (opened and closed again), and the steps to the chat. It only reads; nothing is sent or renamed. Under each field: found, not found (then in red, with the file for a chatbot), or not on the page then and why.',
-            doesBg:
-              'Отваря прозореца на Copilot, както при четенето на моделите, и търси всеки локатор: полето и „Send“, страничната лента, най-новия разговор (отворен по адреса му) и менюто му „More“ (отворено и затворено пак), и стъпките до чата. Само чете; нищо не се изпраща и не се преименува. Под всяко поле: намерен, не е намерен (тогава в червено, с файла за чатбота) или не е на страницата тогава и защо.',
+            doesEn: 'Opens the Copilot window and looks for each locator — the box and Send, the sidebar, the newest conversation and its "More" menu (opened and closed again) — and the steps to the chat. It only reads; nothing is sent or renamed. Under each field: found, not found (in red, with the file for a chatbot), or not on the page then and why.',
+            doesBg: 'Отваря прозореца на Copilot и търси всеки локатор — полето и „Send“, страничната лента, най-новия разговор и менюто му „More“ (отворено и затворено пак) — и стъпките до чата. Само чете; нищо не се изпраща и не се преименува. Под всяко поле: намерен, не е намерен (в червено, с файла за чатбота) или не е на страницата тогава и защо.',
           },
           {
             key: 'chatloc.composer',

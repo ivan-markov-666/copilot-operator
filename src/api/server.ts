@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { installLayout, type InstallLayout } from '../config/layout.js';
 import { moveLegacyHome } from '../config/home.js';
 import { captureTerminal } from '../log/terminal.js';
+import { acquireApiLock } from './apiLock.js';
 
 export type StartOptions = {
   /** Defaults to COP_API_PORT, then 4000. */
@@ -164,6 +165,16 @@ export async function startApi(opts: StartOptions = {}): Promise<StartedApi> {
   const ops = app.get(OperatorService);
   const cfg = await ops.settings.load().catch(async (e: unknown) => {
     await app.close();
+    throw e;
+  });
+
+  /*
+   * The records are this process's, or another copilot-operator runs on them and this one does not start (second bug
+   * hunt, 2026-11-19): started anyway, it put the other's work to rest below — its task marked stopped, its queue
+   * stopped — and the two wrote the same files. Before the port and before anything is recovered.
+   */
+  await acquireApiLock(dataDir, PORT).catch(async (e: unknown) => {
+    await app.close().catch(() => undefined);
     throw e;
   });
 

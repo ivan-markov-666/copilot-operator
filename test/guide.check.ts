@@ -311,6 +311,7 @@ const tabSays = new Set(
   [
     tabTitle(1, activity({}), 3, false),
     tabTitle(0, activity({ password: true }), 3, false),
+    tabTitle(0, activity({ signIn: true }), 3, false),
     tabTitle(0, activity({ paused: true }), 3, false),
     tabTitle(0, activity({ running: true }), 3, false),
     tabTitle(0, activity({ starting: true }), 3, false),

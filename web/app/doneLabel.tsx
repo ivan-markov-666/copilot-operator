@@ -41,7 +41,9 @@ export function DoneLabel() {
     return () => watch.disconnect();
   }, []);
   // Only a stop of the operator's own says nothing (bug hunt 2026-11-18): every stop did, a window closed included.
-  const end = activity && !activity.running && !activity.starting && !activity.queue && activity.last && !activity.last.byOperator ? activity.last : null;
+  // Nor while a task of the queue waits for an answer on its card (2026-11-19): "Finished: aborted" was said, the queue's
+  // own stop to set it aside.
+  const end = activity && !activity.running && !activity.starting && !activity.queue && !activity.parked && activity.last && !activity.last.byOperator ? activity.last : null;
   const shown = end !== null && end.at !== seen && !waits;
   useEffect(() => {
     if (!shown || !end) return;

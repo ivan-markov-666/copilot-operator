@@ -29,5 +29,10 @@ process.on('uncaughtException', (error) => {
 
 startApi().catch((e: unknown) => {
   console.error((e as Error).message);
+  // Said in words too (2026-11-19): the bare "listen EADDRINUSE" left the operator to guess what holds the port.
+  if ((e as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+    const port = Number(process.env.COP_API_PORT ?? 4000);
+    console.error(`Port ${port} is taken. If copilot-operator is running already, open http://127.0.0.1:${port}/ ; otherwise another program has the port: close it, or start this one with COP_API_PORT set to another.`);
+  }
   process.exit(1);
 });

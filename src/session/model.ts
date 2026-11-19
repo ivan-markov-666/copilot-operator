@@ -13,6 +13,7 @@ import type { Handoff } from './handoff.js';
 import type { Interruption } from './interruption.js';
 import type { ChatPointer } from '../transport/chatSession.js';
 import type { ShellInventory } from '../exec/shells.js';
+import type { UnattendedBlock } from '../exec/policy.js';
 
 export type TaskStatus =
   | 'queued'
@@ -574,7 +575,18 @@ export type ParkedAnswer =
   | { kind: 'command'; decision: 'run' | 'skip' }
   | { kind: 'resume' }
   /** Stopped at its card (2026-11-18): it does not carry on, and its chat does not offer the card again. */
-  | { kind: 'stopped' };
+  | { kind: 'stopped' }
+  /**
+   * Let go of by the queue (2026-11-19): its task taken out, run again or started over, or set aside again in another
+   * chat — every button of its card failed, Stop included, and "Continue" was refused. The card is closed, and
+   * "Continue" carries the message on in its own chat.
+   */
+  | { kind: 'released' };
+
+/** Whether a set-aside task's card is over — stopped, or let go of by the queue — so that "Continue" carries it on. */
+export function parkedOver(parked: { answer?: { kind: string } } | undefined): boolean {
+  return !parked || parked.answer?.kind === 'stopped' || parked.answer?.kind === 'released';
+}
 
 export type Parked = {
   kind: ParkedKind;
@@ -1328,6 +1340,11 @@ export type PendingApproval = {
   network?: string;
   /** Set when the step reaches a platform with the operator's access (2026-10-23): its name, as the card says it. */
   platform?: string;
+  /**
+   * Set when "Run this and the rest" cannot be given to this run (2026-11-19: offered on every card, refused at every
+   * press under the default Settings, which have no isolation): what stands in the way, for the card to say instead.
+   */
+  runAllOff?: UnattendedBlock;
   /**
    * Set when the program is set to read only and this command could not be read as only reading (2026-10-26): why.
    * Asked in every mode, Settings' agreement or not; it may change something.

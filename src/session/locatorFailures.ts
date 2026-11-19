@@ -4,8 +4,7 @@
  * each. Kept in the data folder, so a failure seen before a restart is still shown; read by the banner on every page
  * and by Settings, where the locator's field is in red, until the locator is changed there or the operator closes it.
  */
-import { readFile } from 'node:fs/promises';
-import { writeFileAtomically } from './store.js';
+import { readStoreJson, writeFileAtomically } from './store.js';
 import { CHAT_LOCATOR_KEYS, type ChatLocatorKey } from '../transport/locators.js';
 import { isStepKey } from '../transport/chatSteps.js';
 
@@ -40,14 +39,16 @@ export class LocatorFailures {
 
   constructor(private readonly file: string) {}
 
+  /** As kept, for the banner and Settings: one that cannot be read shows none (the change below refuses it). */
   async list(): Promise<LocatorFailure[]> {
-    try {
-      const raw = JSON.parse(await readFile(this.file, 'utf8')) as unknown;
-      if (!Array.isArray(raw)) return [];
-      return raw.filter((f): f is LocatorFailure => !!f && typeof f === 'object' && isKey((f as LocatorFailure).key) && typeof (f as LocatorFailure).locator === 'string' && typeof (f as LocatorFailure).at === 'string');
-    } catch {
-      return [];
-    }
+    return await this.read().catch(() => []);
+  }
+
+  /** As kept; one there but not readable is refused (2026-11-19), so a change never writes it over. */
+  private async read(): Promise<LocatorFailure[]> {
+    const raw = await readStoreJson<unknown>(this.file);
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((f): f is LocatorFailure => !!f && typeof f === 'object' && isKey((f as LocatorFailure).key) && typeof (f as LocatorFailure).locator === 'string' && typeof (f as LocatorFailure).at === 'string');
   }
 
   async get(key: string): Promise<LocatorFailure | null> {
@@ -76,7 +77,7 @@ export class LocatorFailures {
    */
   private async change(edit: (all: LocatorFailure[]) => LocatorFailure[]): Promise<void> {
     const run = async () => {
-      await writeFileAtomically(this.file, async () => JSON.stringify(edit(await this.list()), null, 2));
+      await writeFileAtomically(this.file, async () => JSON.stringify(edit(await this.read()), null, 2));
     };
     const done = this.queue.then(run, run);
     this.queue = done.catch(() => undefined);

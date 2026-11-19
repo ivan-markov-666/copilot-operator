@@ -789,4 +789,210 @@ try {
   await h8?.stop();
 }
 
+/*
+ * Found 2026-11-19 (second bug hunt): a task whose conversation could not be put back (ended stopped since 2026-11-18,
+ * so that "Continue" is offered) stopped the whole queue left running overnight, as the operator's Stop does, and
+ * what came after it waited. Only the operator's Stop stops the queue: such a task failed, the others run.
+ */
+console.log('\n--- a task whose conversation is lost: it fails, and the queue goes on ---');
+let h9: Harness | null = null;
+try {
+  h9 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto' } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  await h9.call('PUT', '/queue', { items: [
+    { id: 'a3', name: 'Loses its chat', prompt: 'Write x.txt holding x.', model: '', dependsOn: [], branch: 'folder', review: false },
+    { id: 'b3', name: 'After it', prompt: 'Write y.txt holding y.', model: '', dependsOn: [], branch: 'folder', review: false },
+  ] });
+  h9.chat.script(
+    (m) => {
+      // Deleted in Copilot while the step runs: the window cannot be put back on it for the report.
+      h9!.chat.unopenable.add(m.chatId);
+      h9!.chat.leavePage();
+      return reply.steps(write('x.txt', 'x'));
+    },
+    reply.steps(write('y.txt', 'y')),
+    reply.done('I wrote y.txt holding the word y and read it back.'),
+  );
+  await h9.call('POST', '/queue/run');
+  const ended = await waitFor('the queue to stop', async () => {
+    const q = await h9!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running') ? q : null;
+  }, 90_000);
+  t.check('the one that lost its chat failed, saying why; the one after it ran', [
+    ended.items.map((x) => x.status),
+    /could not be opened again/.test(ended.items[0]?.why ?? ''),
+    existsSync(join(h9.repo, 'y.txt')),
+  ], [['failed', 'done'], true, true]);
+  h9.chat.discard();
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h9?.stop();
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt), the cards of tasks set aside:
+ * - one answered on its card, then "Continue" in its chat: the answer was filed under the attempt before and lost;
+ *   "Continue" is refused, saying the queue carries it on with the answer;
+ * - one the queue lets go of — taken out, run again — kept its card in its chat, where every button failed, Stop
+ *   included, and "Continue" was refused: the card is closed, Stop on it is taken, and "Continue" carries it on;
+ * - while one waits, "Finished: aborted" was said: the work is not over, and the activity says one waits.
+ */
+console.log('\n--- the cards of tasks set aside: answered, carried on by the queue; let go of, carried on in their chats ---');
+let h10: Harness | null = null;
+try {
+  h10 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', questions: 'ask' }, copilot: { defaultModel: 'Auto' } } });
+  await h10.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  const asks = (id: string, name: string) => ({ id, name, prompt: `Ask me which name to use for ${id}.txt.`, model: '', dependsOn: [], branch: 'folder', review: false });
+  await h10.call('PUT', '/queue', { items: [asks('a4', 'Asks first')] });
+  h10.chat.script(reply.ask('Which name should a4.txt hold?', ['north', 'south'], 'The task leaves it to you.'));
+  await h10.call('POST', '/queue/run');
+  const a4 = await waitFor('it to be set aside', async () => {
+    const q = await h10!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]?.status === 'parked' ? (q.items[0] as QueueItem) : null;
+  }, 60_000);
+  const act = await h10.call<{ parked?: number }>('GET', '/activity');
+  t.check('while it waits, the activity says one is set aside (so "Done" is not said)', act.parked, 1);
+  type View = { tasks: Array<{ id: string; parked?: { answer?: { kind: string } } }> };
+  const a4Task = (await h10.call<View>('GET', `/sessions/${a4.sessionId}`)).tasks[0]!;
+  await h10.call('POST', '/queue/items/a4/answer', { answer: 'north', sessionId: a4.sessionId });
+  const early = await h10.raw('POST', `/chat/${a4.sessionId}/tasks/${a4Task.id}/continue`);
+  t.truthy('answered on its card, "Continue" in its chat is refused: the queue carries it on with the answer', early.status === 400 && /answered on its card/.test(JSON.stringify(early.body)), early.body);
+
+  // Taken out of the queue, answered or not: its card closed, and "Continue" carries it on in its chat.
+  await h10.call('PUT', '/queue', { items: [] });
+  const released = (await h10.call<View>('GET', `/sessions/${a4.sessionId}`)).tasks[0]!;
+  t.check('taken out after it was answered: its card is closed as let go of', released.parked?.answer?.kind, 'released');
+  h10.chat.script(reply.done('I asked which name a4.txt should hold; the queue let the task go, so nothing more was written.'));
+  const went = await h10.call<{ started: boolean }>('POST', `/chat/${a4.sessionId}/tasks/${a4Task.id}/continue`);
+  t.check('and "Continue" carries it on in its chat', went.started, true);
+  await h10.idle();
+
+  // Set aside, then taken out before it was answered: Stop on its card is taken, not refused.
+  await h10.call('PUT', '/queue', { items: [asks('b4', 'Asks next')] });
+  h10.chat.script(reply.ask('Which name should b4.txt hold?', ['east', 'west'], 'The task leaves it to you.'));
+  await h10.call('POST', '/queue/run');
+  const b4 = await waitFor('it to be set aside', async () => {
+    const q = await h10!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]?.status === 'parked' ? (q.items[0] as QueueItem) : null;
+  }, 60_000);
+  await h10.call('PUT', '/queue', { items: [] });
+  const stop = await h10.raw('POST', '/queue/items/b4/answer', { stop: true, sessionId: b4.sessionId });
+  const b4Task = (await h10.call<View>('GET', `/sessions/${b4.sessionId}`)).tasks[0]!;
+  t.check('taken out before it was answered: its card closed, and Stop on it is taken', [stop.status < 300, b4Task.parked?.answer?.kind], [true, 'released']);
+  t.check('nothing set aside any more', (await h10.call<{ parked?: number }>('GET', '/activity')).parked, undefined);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h10?.stop();
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt): a sign-in Copilot asks for in a queue left running was waited for fifteen
+ * minutes, then the task failed and what depended on it was skipped; nothing said the work waited for one, and "Sign in
+ * to Copilot" was refused "once the run has finished". Now a task of the queue waits for it as long as it takes, the
+ * tab and the chat say so, "Sign in to Copilot" points to that window, and once signed in the task goes on by itself.
+ */
+console.log('\n--- a sign-in asked for in the queue: waited for as long as it takes, said, and the task goes on ---');
+let h13: Harness | null = null;
+try {
+  h13 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended' }, copilot: { defaultModel: 'Auto', signInTimeoutSec: 60 } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  let signIn!: () => void;
+  await h13.call('PUT', '/queue', { items: [{ id: 'a7', name: 'Signed out meanwhile', prompt: 'Write s.txt holding s.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  h13.chat.script(
+    () => {
+      // The account signed out while the step runs: the window finds a sign-in on its way back to the conversation.
+      h13!.chat.leavePage();
+      h13!.chat.signInOnReturn = 1;
+      h13!.chat.signInWait = new Promise<void>((r) => (signIn = r));
+      return reply.steps(write('s.txt', 's'));
+    },
+    reply.done('I wrote s.txt holding the word s and read it back.'),
+  );
+  await h13.call('POST', '/queue/run');
+  await waitFor('the work to wait for the sign-in', async () => ((await h13!.call<{ signIn?: boolean }>('GET', '/activity')).signIn ? true : null), 60_000);
+  t.check('the queue\'s window waits for a sign-in as long as it takes, not the fifteen minutes of Settings', (h13.chat.windowOptions.at(-1)?.signInTimeoutMs ?? 0) >= 7 * 24 * 3600 * 1000, true);
+  const login = await h13.raw('POST', '/login', {});
+  t.truthy('"Sign in to Copilot" points to the window that waits for it', login.status === 400 && /waiting for you to sign in: sign in there/.test(JSON.stringify(login.body)), login.body);
+  signIn();
+  const ended = await waitFor('the queue to end', async () => {
+    const q = await h13!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 60_000);
+  t.check('signed in: the task went on by itself, done', [ended.items[0]?.status, (await h13.call<{ signIn?: boolean }>('GET', '/activity')).signIn], ['done', undefined]);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h13?.stop();
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt): a queue.json there but not readable — the machine lost power over it, another
+ * program held it — was read as an empty queue, and the next change wrote that over it: every task and every card kept
+ * for the operator gone, without a word. Refused now, naming the file; the file kept as it was.
+ */
+console.log('\n--- a queue file there but not readable: refused, never written over ---');
+let h12: Harness | null = null;
+try {
+  h12 = await startHarness({ settings: { copilot: { defaultModel: 'Auto' } } });
+  const file = join(h12.dataDir, 'queue.json');
+  const broken = '{"items": [{"id": "a6", "name": "Kept", "prompt": "Write k.txt."';
+  writeFileSync(file, broken, 'utf8');
+  const read = await h12.raw('GET', '/queue');
+  const add = await h12.raw('PUT', '/queue', { items: [{ id: 'b6', name: 'New', prompt: 'Write n.txt holding n.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  t.check('read and changed: refused, naming the file; the file as it was', [
+    read.status,
+    add.status,
+    JSON.stringify(add.body).includes('queue.json') && /not valid JSON/.test(JSON.stringify(add.body)),
+    readFileSync(file, 'utf8'),
+  ], [400, 400, true, broken]);
+  writeFileSync(file, '', 'utf8');
+  const fresh = await h12.call<QueueView>('PUT', '/queue', { items: [{ id: 'b6', name: 'New', prompt: 'Write n.txt holding n.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  t.check('an empty one is a queue not begun: the task added', fresh.items.map((x) => x.id), ['b6']);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h12?.stop();
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt): the work of a task on "the folder as it is", set aside with its changes not
+ * committed, was lost track of. "New branch from main" took it to the new branch — the task carried on without it,
+ * Copilot not told — or put it aside, whose nobody knew. Taken along now refused, saying so; put aside, it is kept for
+ * the task. And stopped at its card, its chat is told where work put aside for it is kept.
+ */
+console.log('\n--- the work of a task set aside on the folder: "New branch" keeps it for the task; a Stop says where it is ---');
+let h11: Harness | null = null;
+try {
+  h11 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', questions: 'ask' }, copilot: { defaultModel: 'Auto' } } });
+  const remote = join(h11.base, 'remote.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+  h11.git('remote', 'add', 'origin', remote);
+  h11.git('push', '-q', '-u', 'origin', 'main');
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  await h11.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h11.call('PUT', '/queue', { items: [{ id: 'a5', name: 'Folder, asks', prompt: 'Write w.txt holding w, then ask me which name to use.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  h11.chat.script(reply.steps(write('w.txt', 'w')), reply.ask('Which name should it hold?', ['north', 'south'], 'The task leaves it to you.'));
+  await h11.call('POST', '/queue/run');
+  const a5 = await waitFor('it to be set aside', async () => {
+    const q = await h11!.call<QueueView>('GET', '/queue');
+    return !q.running && q.items[0]?.status === 'parked' ? (q.items[0] as QueueItem) : null;
+  }, 60_000);
+  const plan = await h11.call<{ ok: boolean; fingerprint: string; suggested: string }>('POST', '/workspace/new-branch/preview', { fetch: true });
+  const take = await h11.raw('POST', '/workspace/new-branch', { name: plan.suggested, carry: 'take', fingerprint: plan.fingerprint });
+  t.truthy('taken to the new branch: refused, naming the task whose work it is', take.status === 400 && /Folder, asks/.test(JSON.stringify(take.body)) && h11.git('symbolic-ref', '--short', 'HEAD') === 'main', take.body);
+  const aside = await h11.call<{ ok: boolean; saved?: { branch: string } }>('POST', '/workspace/new-branch', { name: plan.suggested, carry: 'aside', fingerprint: plan.fingerprint });
+  const kept = ((await h11.call<QueueView>('GET', '/queue')).items[0] as QueueItem).setAside;
+  t.check('put aside: kept for the task, to be put back when it carries on', [aside.ok, !!aside.saved, kept], [true, true, aside.saved ? [aside.saved.branch] : []]);
+  // Stopped at its card: nothing puts it back now, and its chat is told where it is.
+  await h11.call('POST', '/queue/items/a5/answer', { stop: true, sessionId: a5.sessionId });
+  const notes = JSON.stringify((await h11.call<{ tasks: Array<{ notes?: unknown }> }>('GET', `/sessions/${a5.sessionId}`)).tasks.at(-1)?.notes ?? '');
+  t.truthy('stopped at its card: its chat is told where its work is kept', !!aside.saved && notes.includes(aside.saved.branch), notes.slice(0, 400));
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h11?.stop();
+}
+
 t.finish();

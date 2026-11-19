@@ -12,6 +12,8 @@
  *   npm run check:locators
  */
 import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHarness, Tally, waitFor } from './support/harness.js';
 import { CHAT_LOCATOR_KEYS, DefaultChatLocators } from '../src/transport/locators.js';
@@ -185,6 +187,31 @@ console.log('\n--- the one file for a chatbot (2026-11-18): downloaded, all it n
     t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
   } finally {
     await h.stop();
+  }
+}
+
+/*
+ * Found 2026-11-19 (second bug hunt): a list of the bot's own read as empty when it could not be read, and the next
+ * change wrote that over it. The failures' list there but broken: a new failure is refused, the file kept as it was.
+ */
+console.log('\n--- a list of failures there but not readable: never written over ---');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'cop-failures-'));
+  try {
+    const file = join(dir, 'locator-failures.json');
+    writeFileSync(file, '[{"key": "send", "locator": "x", "at": "2026-11-19T00:00:00Z"', 'utf8');
+    const kept = new LocatorFailures(file);
+    const refused = await kept.record({ key: 'composer', locator: 'y', at: '2026-11-19T00:00:01Z', where: 'test' } as never).then(() => '', (e: unknown) => (e as Error).message);
+    t.check('recorded over a broken list: refused, naming the file; the file as it was; listed as none', [
+      refused.includes(file) && /not valid JSON/.test(refused),
+      readFileSync(file, 'utf8'),
+      (await kept.list()).length,
+    ], [true, '[{"key": "send", "locator": "x", "at": "2026-11-19T00:00:00Z"', 0]);
+    writeFileSync(file, '', 'utf8');
+    await kept.record({ key: 'composer', locator: 'y', at: '2026-11-19T00:00:01Z', where: 'test' } as never);
+    t.check('an empty one is a list not begun: recorded', (await kept.list()).map((f) => f.key), ['composer']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

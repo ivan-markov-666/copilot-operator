@@ -11,7 +11,7 @@ import type { InstallLayout } from './layout.js';
 import type { ZipEntry } from '../util/zip.js';
 
 /** Files of the data folder never exported, by name: this machine's key and the API's own bookkeeping. */
-const NEVER = new Set(['api-token', 'dev-pids.json', '.cop-lock.json']);
+const NEVER = new Set(['api-token', 'dev-pids.json', '.cop-lock.json', 'api.lock.json']);
 
 type Found = { path: string; size: number; mtime: Date };
 

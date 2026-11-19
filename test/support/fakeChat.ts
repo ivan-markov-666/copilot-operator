@@ -106,6 +106,10 @@ export class FakeCopilot {
   onChatChecks = 0;
   /** How many of the next returns to a conversation the page had left find a sign-in first: the session ran out meanwhile. */
   signInOnReturn = 0;
+  /** While set, such a sign-in is not done until it settles: the operator has not signed in yet. */
+  signInWait: Promise<void> | null = null;
+  /** The options every window was opened with: its waits, its locators. */
+  readonly windowOptions: Array<{ signInTimeoutMs?: number }> = [];
   /** Conversations that no longer open, by their address or by their name: deleted in Copilot. */
   readonly unopenable = new Set<string>();
   /** Each time a window was put back on its conversation: which, from where, and whether a sign-in came first. */
@@ -147,7 +151,10 @@ export class FakeCopilot {
 
   /** The factory to hand to `setTransportFactory`. Every chat it makes shares this one "Copilot". */
   factory(): TransportFactory {
-    return (opts) => new FakeChat(this, opts);
+    return (opts) => {
+      this.windowOptions.push({ signInTimeoutMs: opts.signInTimeoutMs });
+      return new FakeChat(this, opts);
+    };
   }
 
   /** The operator closes the newest open window with its X: every call on it after that fails as the real page does. */
@@ -420,6 +427,7 @@ class FakeChat implements ChatWindow {
       this.world.signInOnReturn -= 1;
       this.world.signIns += 1;
       this.opts.onEvent?.('sign-in-required', { url: 'https://login.microsoftonline.com/' });
+      if (this.world.signInWait) await this.world.signInWait;
       this.opts.onEvent?.('signed-in');
       signedIn = true;
     }

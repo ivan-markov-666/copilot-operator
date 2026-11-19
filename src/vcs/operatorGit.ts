@@ -22,11 +22,12 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { git, gitLive, RUNNER_EMAIL } from './git.js';
 import { askpassProgram, closePasswordWindows, operatorFetchEnv, passwordWindowOpen } from './remoteAuth.js';
 import { workspaceGit } from '../session/workspaceGit.js';
+import { readStoreJson, writeFileAtomically } from '../session/store.js';
 
 /** Why a hook file that would run is not taken as the project's own. */
 export type HookWhy = 'not-committed' | 'changed' | 'by-bot';
@@ -128,17 +129,15 @@ const repoKey = (top: string): string => slash(resolve(top)).replace(/\/+$/, '')
 export class TrustedHooks {
   constructor(private readonly file: string) {}
 
+  /** As kept; one there but not readable is refused (2026-11-19), so an addition never writes the others over. */
   private async read(): Promise<Record<string, Record<string, string>>> {
-    try {
-      const data = JSON.parse(await readFile(this.file, 'utf8')) as unknown;
-      return data && typeof data === 'object' ? (data as Record<string, Record<string, string>>) : {};
-    } catch {
-      return {};
-    }
+    const data = await readStoreJson<unknown>(this.file);
+    return data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, Record<string, string>>) : {};
   }
 
+  /** Not readable: not trusted, so the hook is asked about again. */
   async has(top: string, path: string, sha: string): Promise<boolean> {
-    return !!sha && (await this.read())[repoKey(top)]?.[path] === sha;
+    return !!sha && (await this.read().catch(() => ({}) as Record<string, Record<string, string>>))[repoKey(top)]?.[path] === sha;
   }
 
   async add(top: string, hooks: FlaggedHook[]): Promise<void> {
@@ -148,7 +147,8 @@ export class TrustedHooks {
     for (const h of hooks) mine[h.path] = h.sha;
     all[repoKey(top)] = mine;
     await mkdir(dirname(this.file), { recursive: true });
-    await writeFile(this.file, `${JSON.stringify(all, null, 2)}\n`, 'utf8');
+    // Through a temporary file and a rename, retried as Windows needs (2026-11-19): written in place, a crash left it cut.
+    await writeFileAtomically(this.file, `${JSON.stringify(all, null, 2)}\n`);
   }
 }
 

@@ -371,6 +371,18 @@ export function scriptNetworkReason(command: string, cwd: string): string | null
  * run where every step came back refused — a gate that breaks the working bot is a gate that gets
  * switched off, and the fix was to make the condition reachable rather than to soften it.
  */
+/**
+ * What keeps a run from going on unasked, by kind (2026-11-19): the same rule as `unattendedPrecondition`, for a card to
+ * say in the operator's language, with where it is changed, instead of offering "Run this and the rest" to refuse it.
+ */
+export type UnattendedBlock = 'lock' | 'isolation' | 'allowlist';
+export function unattendedBlock(cfg: Pick<PolicyConfig, 'allowedPrograms' | 'isolation' | 'lockedToConfirm'>): UnattendedBlock | null {
+  if (cfg.lockedToConfirm) return 'lock';
+  if (unattendedIsolationRefusal('unattended', cfg.isolation ?? 'none')) return 'isolation';
+  if (!cfg.allowedPrograms || cfg.allowedPrograms.length === 0) return 'allowlist';
+  return null;
+}
+
 export function unattendedPrecondition(cfg: Pick<PolicyConfig, 'mode' | 'allowedPrograms' | 'isolation' | 'lockedToConfirm'>): string | null {
   if (cfg.mode !== 'unattended') return null;
   if (cfg.lockedToConfirm) {

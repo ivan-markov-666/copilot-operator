@@ -217,6 +217,13 @@ export type QueueItem = {
 /** What a task of the queue waited for when it was set aside (2026-10-26). See `Parked` in src/session/model.ts. */
 export type ParkedKind = 'plan' | 'question' | 'retry' | 'command' | 'model' | 'password';
 export type Parked = { kind: ParkedKind; at: string; approval: Approval; answer?: { kind: string; at: string } };
+/**
+ * Whether a set-aside task's card is over — stopped, or let go of by the queue — so that "Continue" carries it on; one
+ * answered otherwise is carried on by the queue, with the answer (2026-11-19). As the server's `parkedOver`.
+ */
+export function parkedOver(parked: Pick<Parked, 'answer'> | undefined): boolean {
+  return !parked || parked.answer?.kind === 'stopped' || parked.answer?.kind === 'released';
+}
 /** The operator's answer to it, as the card sends it; `{ stop: true }` stops the task. */
 /**
  * Commands the chat handed to the operator to run themselves (2026-10-26; revisions 2026-10-27): the lines, the folder,
@@ -734,6 +741,10 @@ export type Activity = {
   queue?: boolean;
   /** How the last message ended, while nothing runs (2026-10-23). */
   last?: { status: string; at: string; byOperator?: boolean };
+  /** Tasks of the queue set aside, waiting for an answer on their cards (2026-11-19): the work is not over. */
+  parked?: number;
+  /** Copilot's window waits for the operator to sign in (2026-11-19); the work goes on by itself once signed in. */
+  signIn?: boolean;
 };
 
 export type RunMode = 'confirm' | 'unattended';
@@ -903,6 +914,8 @@ export type Approval = {
   network?: string;
   /** Set when the step reaches a platform with the operator's access (Azure, AWS, GitHub…); asked about in every run. */
   platform?: string;
+  /** Set when "Run this and the rest" cannot be given to this run: what stands in the way (2026-11-19). */
+  runAllOff?: 'lock' | 'isolation' | 'allowlist';
   /** Set when its program is set to read only and this command could not be read as only reading: why, in English. */
   readOnly?: string;
   /** Scripts the bot wrote that this step runs, which Settings let it run, each with its text (2026-10-27). */
@@ -1506,10 +1519,14 @@ export const api = {
     call<SearchResult>(
       `/workspace/search?${new URLSearchParams({ q, case: o.matchCase ? '1' : '', word: o.wholeWord ? '1' : '', regex: o.regex ? '1' : '', include: o.include, exclude: o.exclude }).toString()}`,
     ),
-  workspaceFile: (path: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}`),
-  /** The editor's text over a file of the folder, over `base`, the version it was opened at (409 when it changed since). */
-  saveWorkspaceFile: (path: string, text: string, base?: string) =>
-    call<{ path: string; version: string; size: number }>('/workspace/file', { method: 'PUT', body: JSON.stringify({ path, text, ...(base ? { base } : {}) }) }),
+  /** `dir`: the folder it was opened in; refused when another is open now (2026-11-19). */
+  workspaceFile: (path: string, dir?: string) => call<WorkspaceFile>(`/workspace/file?path=${encodeURIComponent(path)}${dir ? `&dir=${encodeURIComponent(dir)}` : ''}`),
+  /**
+   * The editor's text over a file of the folder, over `base`, the version it was opened at (409 when it changed since);
+   * `dir`, the folder it was opened in: refused when another is open now, so one folder's edit never lands in another's.
+   */
+  saveWorkspaceFile: (path: string, text: string, base?: string, dir?: string) =>
+    call<{ path: string; version: string; size: number }>('/workspace/file', { method: 'PUT', body: JSON.stringify({ path, text, ...(base ? { base } : {}), ...(dir ? { dir } : {}) }) }),
   /** The open folder's git: what changed, staged and not, and the branch's commits. Read-only. */
   workspaceGit: () => call<WorkspaceGit>('/workspace/git'),
   /** Everything the branch changed against `base` (one of the branches it lists), as a pull request shows it. */
@@ -1585,6 +1602,8 @@ export const api = {
   /** Opens the machine's own folder dialog. Resolves when the operator picks or cancels. */
   // Open until the operator closes the folder picker.
   browseFolder: (start?: string) => call<FolderPick>('/browse-folder', { method: 'POST', body: JSON.stringify({ start }) }, { timeoutMs: null }),
+  /** "Open a folder": it becomes the project, with its own name, level 2 and "for reference only" (2026-11-19). */
+  openProjectFolder: (dir: string) => call<unknown>('/workspace/open', { method: 'POST', body: JSON.stringify({ dir }) }),
   /**
    * The bot's folder from its next start: `dir`, or null for the default; `copy` copies what is in the folder now
    * (`kept` names what the new folder had already, left as it was).

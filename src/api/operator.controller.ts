@@ -380,9 +380,9 @@ export class OperatorController {
   }
 
   @Get('workspace/file')
-  workspaceFile(@Query('path') path?: string): Promise<unknown> {
+  workspaceFile(@Query('path') path?: string, @Query('dir') dir?: string): Promise<unknown> {
     if (!path) throw new BadRequestException('path is required');
-    return this.ops.workspaceFile(path).catch(fail);
+    return this.ops.workspaceFile(path, dir || undefined).catch(fail);
   }
 
   /**
@@ -390,11 +390,11 @@ export class OperatorController {
    * is refused with 409, so the page can offer to read it again or to save over it (by sending no `base`).
    */
   @Put('workspace/file')
-  async saveWorkspaceFile(@Body() body: { path?: unknown; text?: unknown; base?: unknown } = {}): Promise<unknown> {
+  async saveWorkspaceFile(@Body() body: { path?: unknown; text?: unknown; base?: unknown; dir?: unknown } = {}): Promise<unknown> {
     if (typeof body?.path !== 'string' || !body.path) throw new BadRequestException('path is required');
     if (typeof body.text !== 'string') throw new BadRequestException('text is required');
     try {
-      return await this.ops.saveWorkspaceFile(body.path, body.text, typeof body.base === 'string' && body.base ? body.base : undefined);
+      return await this.ops.saveWorkspaceFile(body.path, body.text, typeof body.base === 'string' && body.base ? body.base : undefined, typeof body.dir === 'string' && body.dir ? body.dir : undefined);
     } catch (e) {
       if ((e as { code?: string }).code === CHANGED_ON_DISK) throw new ConflictException((e as Error).message);
       fail(e);
@@ -758,5 +758,12 @@ export class OperatorController {
   @Post('browse-folder')
   browseFolder(@Body() body: { start?: string }): Promise<unknown> {
     return this.ops.browseFolder(body?.start);
+  }
+
+  /** "Open a folder": the folder becomes the project, with its own name, level 2 and "for reference only" (2026-11-19). */
+  @Post('workspace/open')
+  openProjectFolder(@Body() body: { dir?: unknown } = {}): Promise<unknown> {
+    if (typeof body?.dir !== 'string' || !body.dir.trim()) throw new BadRequestException('dir is required');
+    return this.ops.openProjectFolder(body.dir).catch(fail);
   }
 }

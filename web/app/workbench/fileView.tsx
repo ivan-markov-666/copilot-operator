@@ -11,7 +11,8 @@
  * not opened.
  */
 import { MarkdownView } from './markdownView';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { dropDraft, keepDraft, readDraft } from '../../lib/drafts';
 import { api, type WorkspaceFile } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
@@ -25,7 +26,8 @@ export type GoTo = { line: number; from?: number; to?: number; n: number };
 type MdView = 'code' | 'split' | 'preview';
 const MD_VIEW_KEY = 'cop.md.view';
 
-export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; onDirty?: (path: string, dirty: boolean) => void; goTo?: GoTo; onOpenFile?: (path: string) => void }) {
+/** `dir`: the folder the file was opened in — its edit is kept in this browser for it, and saved only there. */
+export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string; path: string; onDirty?: (path: string, dirty: boolean) => void; goTo?: GoTo; onOpenFile?: (path: string) => void }) {
   const { t } = useT();
   const [file, setFile] = useState<WorkspaceFile | null>(null);
   const [text, setText] = useState('');
@@ -41,30 +43,73 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
   const dirty = !!file && file.text !== null && text !== file.text;
   useEffect(() => onDirty?.(path, dirty), [path, dirty, onDirty]);
 
-  /** The file as it is on disk now, over whatever the editor holds. */
-  const read = useCallback(async () => {
-    try {
-      const f = await api.workspaceFile(path);
-      setFile(f);
-      setText(f.text ?? '');
-      setReset((n) => n + 1);
-      setConflict(false);
-      setErr('');
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }, [path]);
+  /**
+   * The file as it is on disk now. Opened, an edit kept in this browser for it comes back over it, on the version it
+   * was made on (2026-11-19), so a file changed on disk since is said, as under any edit; read again, the edit goes.
+   */
+  const load = useCallback(
+    async (withDraft: boolean) => {
+      try {
+        const f = await api.workspaceFile(path, dir);
+        const draft = withDraft ? readDraft(dir, path) : null;
+        if (!withDraft) dropDraft(dir, path);
+        if (draft && f.text !== null && draft.text !== f.text) {
+          setFile({ ...f, version: draft.version ?? f.version });
+          setText(draft.text);
+        } else {
+          if (draft) dropDraft(dir, path);
+          setFile(f);
+          setText(f.text ?? '');
+        }
+        setReset((n) => n + 1);
+        setConflict(false);
+        setErr('');
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    },
+    [path, dir],
+  );
+  const read = useCallback(() => load(false), [load]);
   useEffect(() => {
     setFile(null);
     setSaid('');
     setConflict(false);
-    void read();
-  }, [read]);
+    void load(true);
+  }, [load]);
+  /*
+   * The edit kept as it is typed, a moment after the last key, and at once when the editor goes — its tab closed, the
+   * page left — so nothing typed is lost (2026-11-19).
+   */
+  const pending = useRef<{ text: string; version?: string } | null>(null);
+  const flush = useCallback(() => {
+    if (!pending.current) return;
+    keepDraft(dir, path, pending.current.text, pending.current.version);
+    pending.current = null;
+  }, [dir, path]);
+  useEffect(() => {
+    if (!file || file.text === null) return;
+    if (!dirty) {
+      pending.current = null;
+      dropDraft(dir, path);
+      return;
+    }
+    pending.current = { text, ...(file.version ? { version: file.version } : {}) };
+    const later = setTimeout(flush, 300);
+    return () => clearTimeout(later);
+  }, [dirty, text, file, dir, path, flush]);
+  useEffect(() => {
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, [flush]);
   // A change on disk — the chat's, another program's: with no edit the editor follows it, under one it says so.
   usePoll(
     async () => {
       if (!file?.version || busy) return;
-      const f = await api.workspaceFile(path).catch(() => null);
+      const f = await api.workspaceFile(path, dir).catch(() => null);
       if (!f?.version || f.version === file.version) return;
       if (dirty) setConflict(true);
       else {
@@ -106,7 +151,7 @@ export function FileView({ path, onDirty, goTo, onOpenFile }: { path: string; on
     setBusy(true);
     setSaid('');
     try {
-      const r = await api.saveWorkspaceFile(path, text, over ? undefined : file.version);
+      const r = await api.saveWorkspaceFile(path, text, over ? undefined : file.version, dir);
       setFile({ ...file, text, version: r.version, size: r.size });
       setConflict(false);
       setSaid(t('ed.saved'));

@@ -845,7 +845,20 @@ await section('the API survives a stray rejection, and fails loudly on a taken p
     const second = await run(process.execPath, ['--import', tsx, join(root, 'src', 'api', 'main.ts')], { cwd: dir, env: envFor('second'), timeoutMs: 45_000 });
     t.check('a second API on the same port exits with code 1', second.code, 1);
     t.truthy('saying the address is in use', /EADDRINUSE|address already in use/i.test(second.stderr), second.stderr.slice(0, 600));
+    // And in words, with where the one running is (2026-11-19).
+    t.truthy('and that, if it is copilot-operator, it is open at its address', second.stderr.includes(`Port ${port} is taken`) && second.stderr.includes(`http://127.0.0.1:${port}/`), second.stderr.slice(0, 900));
     t.check('and the first one is unaffected', (await fetch(health)).status, 200);
+
+    /*
+     * A second API on the same records, on a port of its own (second bug hunt, 2026-11-19): every npm install shares
+     * one home folder, and it put the first one's work to rest — its task marked stopped, its queue stopped — then the
+     * two wrote the same files. It does not start, saying where the one running is.
+     */
+    const otherPort = await freePort();
+    const sameRecords = await run(process.execPath, ['--import', tsx, join(root, 'src', 'api', 'main.ts')], { cwd: dir, env: { ...envFor('first'), COP_API_PORT: String(otherPort) }, timeoutMs: 45_000 });
+    t.check('a second API on the same records, another port: exits with code 1', sameRecords.code, 1);
+    t.truthy('saying one runs on them already, and where', sameRecords.stderr.includes('already running on these records') && sameRecords.stderr.includes(`http://127.0.0.1:${port}/`), sameRecords.stderr.slice(0, 900));
+    t.check('nothing answers on its port, and the first one is unaffected', [await portFree(otherPort), (await fetch(health)).status], [true, 200]);
   } finally {
     await stopChild(first);
     await waitFor('the port to be free', async () => await portFree(port), 15_000).catch(() => false);

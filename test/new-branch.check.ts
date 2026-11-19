@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { branchNameProblem, createNewBranch, planNewBranch } from '../src/vcs/newBranch.js';
+import { branchNameProblem, createNewBranch, planNewBranch, putBackAside } from '../src/vcs/newBranch.js';
 import { describeFetchFailure, operatorFetchEnv } from '../src/vcs/remoteAuth.js';
 import { reply } from './support/fakeChat.js';
 import { startHarness, Tally, waitFor, type Harness } from './support/harness.js';
@@ -203,6 +203,40 @@ try {
     commit(lone, 'x.txt', 'x\n', 'x');
     t.check('no remote: refused, said why', (await planNewBranch(lone, { fetch: true, askpass: null })).problem, 'The repository has no remote, so there is no remote main to make the branch from.');
     t.check('not a repository: said so', (await planNewBranch(base, { fetch: false })).problem?.endsWith('is not a git repository, so there is no main to make a branch from.'), true);
+  }
+
+  /*
+   * Found 2026-11-19 (second bug hunt): work put back that could not be laid on what the folder holds now left the folder
+   * half merged — `cherry-pick --no-commit` leaves no cherry-pick to abort, so "--abort" did nothing — with conflict
+   * markers in it, while the task was told it had been left as it was. It is left as it was: the clash taken back, an
+   * edit of the operator's elsewhere kept, the saved branch kept.
+   */
+  console.log('\n--- work put back that clashes with what the folder holds now: the folder left as it was ---');
+  {
+    const dir = join(base, 'clash');
+    mkdirSync(dir);
+    execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+    git(dir, 'config', 'core.autocrlf', 'false');
+    commit(dir, 'f.txt', 'one\n', 'first');
+    writeFileSync(join(dir, 'g.txt'), 'g\n');
+    git(dir, 'add', '-A');
+    git(dir, ...who, 'commit', '-q', '-m', 'g');
+    git(dir, 'checkout', '-q', '-b', 'cop/saved/clash');
+    writeFileSync(join(dir, 'f.txt'), 'saved\n');
+    writeFileSync(join(dir, 'new.txt'), 'new\n');
+    git(dir, 'add', '-A');
+    git(dir, ...who, 'commit', '-q', '-m', 'set aside');
+    git(dir, 'checkout', '-q', 'main');
+    commit(dir, 'f.txt', 'moved on\n', 'f moved on meanwhile');
+    writeFileSync(join(dir, 'g.txt'), 'g\nan edit of the operator\n');
+    const back = await putBackAside(dir, 'cop/saved/clash');
+    t.check('refused, saying it is kept on its branch; nothing half merged; the edit elsewhere kept; the branch kept', [
+      'problem' in back && back.problem.includes('they are kept on cop/saved/clash'),
+      git(dir, 'status', '--porcelain'),
+      readFileSync(join(dir, 'f.txt'), 'utf8'),
+      existsSync(join(dir, 'new.txt')),
+      tryGit(dir, 'rev-parse', '--verify', '--quiet', 'refs/heads/cop/saved/clash'),
+    ], [true, 'M g.txt', 'moved on\n', false, true]);
   }
 
   console.log('\n--- through the API: refused while a task works; made when it has ended ---');

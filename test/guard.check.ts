@@ -444,6 +444,8 @@ await scenario('no isolation: every entrance refuses an unattended run', { setti
     return list.length === 1 ? list[0] : undefined;
   });
   t.check('it waits on step 1', first.stepId, 1);
+  // Not offered on the card, saying why (2026-11-19: under the default Settings it was offered and refused at every press).
+  t.check('the card says "Run this and the rest" is off for the isolation', (first as Approval & { runAllOff?: string }).runAllOff, 'isolation');
 
   // Refused, saying why (2026-11-18: it ran the step as "Run" and said nothing); "Run" is there for the step.
   const all = await h.raw('POST', `/approvals/${first.id}`, { action: 'run-all' });
@@ -499,6 +501,7 @@ await scenario('isolation claimed but no allowlist: an unattended start is refus
       const confirm = await h.call<Refusal>('POST', `/sessions/${id}/start`, { mode: 'confirm' });
       t.check('a supervised start is allowed', confirm.started, true);
       const step = await waitFor('the step to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
+      t.check('the card says "Run this and the rest" is off for the lock', (step as Approval & { runAllOff?: string }).runAllOff, 'lock');
       // "Run this and the rest" is the one way left to turn a running conversation unattended: under the lock it is
       // refused, naming the lock (2026-11-18: it ran the step as "Run" and said nothing), and "Run" runs the step.
       const all = await h.raw('POST', `/approvals/${step.id}`, { action: 'run-all' });

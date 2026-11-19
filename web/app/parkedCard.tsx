@@ -37,7 +37,7 @@ export function ParkedCard({ parked, onAnswer }: { parked: Parked; onAnswer: (an
   if (parked.answer || sent) {
     return (
       <p className="small pk-answered" role="status">
-        {t(sent === 'stopped' || parked.answer?.kind === 'stopped' ? 'pk.stopped' : 'pk.answered')}
+        {t(parked.answer?.kind === 'released' ? 'pk.released' : sent === 'stopped' || parked.answer?.kind === 'stopped' ? 'pk.stopped' : 'pk.answered')}
       </p>
     );
   }

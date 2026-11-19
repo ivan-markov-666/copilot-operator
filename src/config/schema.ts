@@ -478,6 +478,21 @@ export const RunConfigSchema = z.object({
           }),
         )
         .default([]),
+      /**
+       * Folders that were the project before "Open a folder" put another in their place (2026-11-19), with their name,
+       * level 2 and "for reference only", given back when one is opened again. Only remembered: the chat works in none
+       * of them.
+       */
+      earlier: z
+        .array(
+          z.object({
+            rootDir: z.string().trim().min(1),
+            name: z.string().trim().default(''),
+            level2: z.string().default(''),
+            readOnly: z.boolean().default(false),
+          }),
+        )
+        .default([]),
     })
     .prefault({}),
 
