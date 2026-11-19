@@ -202,6 +202,8 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
    */
   const before = task.continuing ? task.attempts?.at(-1)?.kerrigan : undefined;
   const k: KerriganRecord = { rounds: [], sent: before?.sent ?? 0, maxSends: maxSends(), messages: 0, chats: [...(before?.chats ?? [])] };
+  /** The most she may send, as Settings have it now: saved during the message, it counts at once (bug hunt 2026-11-18). */
+  const budget = (): number => (k.maxSends = maxSends());
   const save = async (): Promise<void> => {
     const copy = JSON.parse(JSON.stringify(k)) as KerriganRecord;
     await setTask((t) => {
@@ -770,7 +772,7 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
       '---',
     ];
     if (attached) lines.push('', `Attached, \`${attached}\`: the whole exchange of this message, as JSON — every message the chat was sent, every reply of its, every command with all it printed. Read it where the summary above is not enough.`);
-    lines.push('', `Messages to chats left: ${Math.max(0, k.maxSends - k.sent)} of ${k.maxSends}.`, 'Reply in your format: the next message (send), your report (done), a question for the person (ask), or blocked.');
+    lines.push('', `Messages to chats left: ${Math.max(0, budget() - k.sent)} of ${budget()}.`, 'Reply in your format: the next message (send), your report (done), a question for the person (ask), or blocked.');
     return lines.join('\n');
   };
 
@@ -853,8 +855,8 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
 
       switch (r.status) {
         case 'send': {
-          if (k.sent >= k.maxSends) {
-            r = await askHer(`You have sent the ${k.maxSends} message(s) to chats you may for this task. Deliver what you have now — status "done" with your report, what is missing said plainly — or "blocked".`, async (x) => (x.status === 'send' ? 'No message to a chat is left: reply "done" or "blocked".' : await decides(x)));
+          if (k.sent >= budget()) {
+            r = await askHer(`You have sent the ${budget()} message(s) to chats you may for this task. Deliver what you have now — status "done" with your report, what is missing said plainly — or "blocked".`, async (x) => (x.status === 'send' ? 'No message to a chat is left: reply "done" or "blocked".' : await decides(x)));
             break;
           }
           const ran = await sendToChat(r, round);
@@ -878,7 +880,7 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
           sink.event('kerrigan-question-answered', {}, 'the operator answered Kerrigan');
           await actingNow('kerrigan');
           const said = got.chosen ? `The person answered your question, ${chosenSaid({ chosen: got.chosen, ...(got.written ? { written: got.written } : {}) })}` : `The person answers your question:\n\n${got.answer.trim()}`;
-          r = await askHer(`${said}\n\nGo on in your format. Messages to chats left: ${Math.max(0, k.maxSends - k.sent)} of ${k.maxSends}.`, decides);
+          r = await askHer(`${said}\n\nGo on in your format. Messages to chats left: ${Math.max(0, budget() - k.sent)} of ${budget()}.`, decides);
           break;
         }
         case 'done': {

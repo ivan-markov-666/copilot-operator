@@ -259,6 +259,29 @@ export async function setAsideUncommitted(folder: string, why: string, prefix = 
   return { saved, commit: kept.commit, files: changed.length + untracked.length };
 }
 
+/**
+ * What `setAsideUncommitted` kept on `saved`, put back into the folder, uncommitted again: its changes laid on what the
+ * folder holds now, the new files new again (bug hunt 2026-11-18: a queue's task on "the folder as it is", set aside
+ * with its work not committed, carried on without it — the next task on a branch of its own had put it aside). The
+ * branch stays: nothing is deleted. One that cannot be laid on what is there is not forced: the folder is left as it
+ * was, and said.
+ */
+export async function putBackAside(folder: string, saved: string): Promise<{ files: number } | { problem: string }> {
+  const top = await git(folder, ['rev-parse', '--show-toplevel']);
+  const repoDir = top.ok && top.stdout ? resolve(top.stdout) : folder;
+  const commit = (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${saved}^{commit}`])).stdout;
+  if (!commit) return { problem: `there is no branch ${saved} any more` };
+  const files = lines((await git(repoDir, ['diff', '--name-only', `${commit}^`, commit])).stdout).length;
+  const laid = await git(repoDir, [...BOT_AUTHOR, 'cherry-pick', '--no-commit', commit], 300_000);
+  if (!laid.ok) {
+    await git(repoDir, ['cherry-pick', '--abort']);
+    return { problem: `its changes could not be laid on what the folder holds now (${(laid.stderr || laid.stdout).split(/\r?\n/)[0]}); they are kept on ${saved}` };
+  }
+  // Not staged, as they were: the new files new again, the changed ones changed.
+  await git(repoDir, ['reset', '--quiet']);
+  return { files };
+}
+
 /** The bot's own name on a commit. */
 const BOT_AUTHOR = ['-c', 'user.name=copilot-operator', '-c', `user.email=${RUNNER_EMAIL}`];
 

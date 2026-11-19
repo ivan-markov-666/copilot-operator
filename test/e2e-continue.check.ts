@@ -213,6 +213,26 @@ await scenario('keep going: stopped at the message limit, carried on by itself i
   t.check('the contract was sent only once', h.chat.sent.filter((m) => m.contract === 'task').length, 1);
 });
 
+/*
+ * "Keep going after a limit" saved while the task works (bug hunt 2026-11-18): said to be in force at once, but the run
+ * read it once, when the message began.
+ */
+await scenario('keep going, raised in Settings while the task is carried on: counted at once', { limits: { maxIterations: 2, autoContinue: 1 } }, async (h) => {
+  const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'raised', [task('long-job', 'result.txt', 'finished')])] });
+  // The first attempt, to its limit; carried on once, as Settings allow when the message begins.
+  for (let i = 1; i <= 3; i++) h.chat.script(reply.steps(`Write-Output 'first ${i}'`));
+  // In the second: once more allowed, saved while it works.
+  h.chat.script(async () => {
+    const got = await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings');
+    await h.call('PUT', '/settings', { ...got.raw, limits: { ...(got.raw.limits ?? {}), autoContinue: 2 } });
+    return reply.steps("Write-Output 'second 1'");
+  });
+  for (let i = 2; i <= 3; i++) h.chat.script(reply.steps(`Write-Output 'second ${i}'`));
+  h.chat.script(() => write('result.txt', 'finished'), reply.done());
+  const after = (await h.run(s!.id)).tasks[0]!;
+  t.check('carried on a second time, by the number saved while it worked: done as attempt 3', [after.status, after.attempt, after.attempts?.map((a) => a.status)], ['done', 3, ['limit-reached', 'limit-reached']]);
+});
+
 await scenario('keep going is bounded: after limits.autoContinue times it waits for the operator', { limits: { maxIterations: 2, autoContinue: 1 } }, async (h) => {
   const [s] = await h.importPlan({ version: 1, sessions: [session(h, 'bounded', [task('endless-job', 'result.txt', 'finished')])] });
   // Two attempts of two messages each, every round doing something new, so only the limits end them.

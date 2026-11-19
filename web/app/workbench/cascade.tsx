@@ -721,7 +721,8 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
             ),
           )
         )}
-        {session && !running && !session.directedBy && stoppedEarly(session.tasks.at(-1)) && (
+        {/* In a chat Kerrigan directs, a message the operator wrote there is theirs to carry on; hers are in her conversation. */}
+        {session && !running && !(session.directedBy && session.tasks.at(-1)?.fromKerrigan) && stoppedEarly(session.tasks.at(-1)) && (
           <div className="cs-system cs-carry" role="group" aria-label={t('chat.carryOnLabel')}>
             <span className="grow">{t('chat.carryOnNote')}</span>
             <button type="button" className="primary small" disabled={busy} onClick={() => void carryOn(session.tasks.at(-1)!)}>
@@ -857,6 +858,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
           <NewBranchButton
             workspace={workspace}
             running={anyRunning}
+            queue={!!activity?.queue}
             onMade={(result) => {
               fresh();
               setSaid(`${result} ${t('nb.madeChat')}`);

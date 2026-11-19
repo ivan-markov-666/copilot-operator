@@ -11,6 +11,7 @@ import { InfoTip } from '../popover';
 import { confirmDialog } from '../dialog';
 import { QueueGraph } from './queueGraph';
 import { ParkedCard } from '../parkedCard';
+import { newItemId } from '../../lib/queueId';
 
 /**
  * The queue of tasks (operator, 2026-10-24: "an option to prepare several tasks that run in a queue"): written
@@ -81,11 +82,7 @@ const fromDraft = (d: Draft): Omit<Edit, 'id'> => ({
 });
 /** The skills a task of the open folder may carry: the ones for every project and the ones for it, as the chat offers them. */
 const folderKey = (d: string): string => d.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
-function newItemId(items: QueueItem[]): string {
-  let n = items.length + 1;
-  while (items.some((x) => x.id === `q${n}`)) n += 1;
-  return `q${n}`;
-}
+
 
 export default function QueuePage() {
   const { t } = useT();
@@ -382,6 +379,8 @@ export default function QueuePage() {
 
       <section className="panel" id="queue-add" aria-labelledby="queue-add-title">
         <h2 id="queue-add-title">{editing ? t('q.editTitle', { n: numberOf(editing) }) : t('q.addTitle')}</h2>
+        {/* One that carries on in its own chat: what an edit of it does (bug hunt 2026-11-18: the edit was never used). */}
+        {editing && items.find((x) => x.id === editing)?.resume && <p className="why warned-text queue-starts-over">{t('q.editStartsOver')}</p>}
         <div className="settings-field">
           <div className="field-label">
             <label htmlFor="queue-name">{t('q.name')}</label>

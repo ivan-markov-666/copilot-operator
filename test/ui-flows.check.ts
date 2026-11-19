@@ -1089,6 +1089,13 @@ try {
       h.git('symbolic-ref', '--short', 'HEAD'),
       readFileSync(join(h.repo, 'README.md'), 'utf8'),
     ], [true, true, 'main', 'mine, not committed\n']);
+    // Refused, the folder can be read again from here (bug hunt 2026-11-18: only Make was left), the name kept.
+    const readAgain = box.getByRole('button', { name: en['nb.tryAgain']!, exact: true });
+    t.check('"Try again" beside Make once making was refused', await readAgain.count(), 1);
+    await readAgain.click();
+    await box.locator('.err').waitFor({ state: 'detached', timeout: 30_000 });
+    await box.locator('#nb-name').waitFor({ timeout: 30_000 });
+    t.check('read again: the name kept, "Put them aside" still chosen', [await box.locator('#nb-name').inputValue(), await box.getByRole('radio', { name: new RegExp(en['nb.aside']!) }).isChecked()], ['task/login-test', true]);
     await box.getByRole('button', { name: en['nb.make']!, exact: true }).click();
     await box.waitFor({ state: 'detached', timeout: 30_000 });
     const saved = h.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/saved/');
@@ -3175,7 +3182,8 @@ try {
       t.check('closed with its ✕', await notice.count(), 0);
       await page.locator('#max-subtasks').fill('7');
       await notice.waitFor({ timeout: 8_000 });
-      t.check("the lead's subtasks: from the next message", await said(), en['live.next']);
+      // At once since 2026-11-18, as every limit is: the lead is told how many are left with each report.
+      t.check("the lead's subtasks: in force at once too", await said(), en['live.now']);
       await notice.getByRole('button', { name: en['live.close'] }).click();
       await page.locator('#reply-timeout').fill('700');
       await notice.waitFor({ timeout: 8_000 });
@@ -3622,7 +3630,7 @@ try {
     await waitFor('"New chat" to go off', async () => (await newChat.getAttribute('aria-disabled')) === 'true', 10_000).catch(() => undefined);
     t.check('while it works: "New chat" off', await newChat.getAttribute('aria-disabled'), 'true');
     await newChat.hover();
-    t.truthy('saying it comes on once it is stopped or its window closed', await appears(page.locator('#cs-new-tip').filter({ hasText: en['chat.newChatRunning']! }), 3_000), await page.locator('#cs-new-tip').textContent().catch(() => ''));
+    t.truthy('saying it comes on once it ends or is stopped', await appears(page.locator('#cs-new-tip').filter({ hasText: en['chat.newChatRunning']! }), 3_000), await page.locator('#cs-new-tip').textContent().catch(() => ''));
     await newChat.click({ force: true });
     t.check('pressed anyway, it does nothing: the conversation stays', await page.locator('#cs-thread').inputValue(), thread);
     const rows = await Promise.all([pause, page.getByRole('button', { name: en['chat.stop']!, exact: true }), page.getByRole('button', { name: en['chat.sendNote']!, exact: true })].map(async (b) => Math.round((await b.boundingBox())?.y ?? -1)));

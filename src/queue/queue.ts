@@ -68,6 +68,11 @@ export type QueueItem = {
   waitsFor?: { kind: ParkedKind; at: string; approval: PendingApproval };
   /** Answered after it was parked: it carries on from where it stopped, at the queue's next turn, before the others. */
   resume?: boolean;
+  /**
+   * A task on "the folder as it is" waiting to carry on: what it had not committed, put aside by a task after it that
+   * works on a branch of its own (`cop/saved/…`, 2026-11-18), put back when it carries on.
+   */
+  setAside?: string[];
   status: QueueStatus;
   /** Why it failed, was skipped or stopped, in a sentence. */
   why?: string;
@@ -183,6 +188,13 @@ export function mergeItems(current: QueueItem[], edited: Array<Omit<QueueItem, '
     if (again) return { ...given, status: 'waiting' };
     // A parked task keeps what it waits for; its answer is given on its card, not by an edit of the list.
     if (was.status === 'parked') return { ...was, ...given, status: 'parked' };
+    /*
+     * A task that carries on in its own chat (`resume`: the queue stopped or the bot closed under it, or answered after it
+     * was set aside) carries on as it was given there, so an edit of what it does was kept and never used (bug hunt
+     * 2026-11-18). Such an edit starts it over, as "Run again" does, with the edit; its name and what it depends on are
+     * the queue's own, and leave it carrying on.
+     */
+    if (was.resume && WHAT_IT_DOES.some((key) => asSaid(was[key]) !== asSaid(given[key]))) return { ...given, status: 'waiting' };
     // Where it works changed: the branch made for it no longer is its.
     if (was.branch !== given.branch) {
       const { branchName: _name, branchBase: _base, ...rest } = was;
@@ -198,6 +210,10 @@ export function mergeItems(current: QueueItem[], edited: Array<Omit<QueueItem, '
 
 /** What the operator gives a task, apart from what its runs give it. */
 const GIVEN = ['id', 'name', 'prompt', 'model', 'dependsOn', 'branch', 'review', 'reviewModel', 'lead', 'workerModel', 'skill', 'plan'] as const;
+/** Of what is given, what the task's chat is told: an edit of it starts over a task that carries on. */
+const WHAT_IT_DOES = ['prompt', 'model', 'branch', 'review', 'reviewModel', 'lead', 'workerModel', 'skill', 'plan'] as const;
+/** A field as an edit says it: off, empty or left out are the same. */
+const asSaid = (v: unknown): string => JSON.stringify(v === false || v === '' || v === null ? undefined : v) ?? '';
 function asGiven(x: Omit<QueueItem, 'status'> & { status?: QueueStatus }): Omit<QueueItem, 'status'> {
   const out: Record<string, unknown> = {};
   for (const key of GIVEN) if (x[key] !== undefined) out[key] = x[key];

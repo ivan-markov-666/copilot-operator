@@ -12,9 +12,13 @@
  *
  *   npm run check:queue
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkItems, itemTitle, mergeItems, nextStep, skippedBecause, statusOfTask, waitsByHand, type QueueItem } from '../src/queue/queue.js';
+import { madeFromRemote, refreshQueueBranch, remoteMainOf } from '../src/queue/queueBranch.js';
+import { newItemId } from '../web/lib/queueId.js';
 import { makeDirs, startHarness, waitFor, Tally, type Harness } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
@@ -71,6 +75,68 @@ t.check('"Run again" puts a task back to wait, with what it was given and nothin
 t.check('a running task is kept as it is, whatever the edit says', merged.items[1], ran[1]);
 t.check('a new one waits, whatever it says it is', merged.items[3]!.status, 'waiting');
 t.check('a running task is not taken out', (mergeItems(ran, [{ id: 'a', prompt: 'x', model: '', dependsOn: [], branch: 'folder', review: false }]) as { problem: string }).problem, '"task b" is running: stop the queue before taking it out.');
+/*
+ * A task that carries on in its own chat, edited (bug hunt 2026-11-18): the edit was kept and never used — it carried on
+ * as it was given. An edit of what it does starts it over, as "Run again"; its name or what it depends on keep it going.
+ */
+{
+  const carrying = item('a', { resume: true, sessionId: 's1', why: 'the queue was stopped while it ran', branch: 'main', branchName: 'queue/a', branchBase: 'abc' });
+  const asIs = { id: 'a', prompt: 'task a', model: '', dependsOn: [], branch: 'main' as const, review: false };
+  const renamed = (mergeItems([carrying], [{ ...asIs, name: 'Report' }]) as { items: QueueItem[] }).items[0]!;
+  const rewritten = (mergeItems([carrying], [{ ...asIs, prompt: 'task a, said better' }]) as { items: QueueItem[] }).items[0]!;
+  const remodelled = (mergeItems([carrying], [{ ...asIs, model: 'Think deeper' }]) as { items: QueueItem[] }).items[0]!;
+  t.check('a new name: it still carries on in its chat, on its branch', [renamed.name, renamed.resume, renamed.sessionId, renamed.branchName], ['Report', true, 's1', 'queue/a']);
+  t.check('what it does changed: started over with the edit, nothing of the chat it carried on in', [rewritten, remodelled.resume, remodelled.sessionId, remodelled.model], [{ id: 'a', prompt: 'task a, said better', model: '', dependsOn: [], branch: 'main', review: false, status: 'waiting' }, undefined, undefined, 'Think deeper']);
+  t.check('the same task sent back as it is (a move, another removed): it carries on', (mergeItems([carrying], [{ ...asIs, review: false }]) as { items: QueueItem[] }).items[0]!.resume, true);
+}
+
+/*
+ * A new task's id never one a task had before (bug hunt 2026-11-18): "q<n>" after the number of tasks gave a removed
+ * task's id to the next one added, and a card left in the removed one's chat answered for it.
+ */
+{
+  const two = [{ id: 'q1' }, { id: 'q2' }];
+  const removedThen = two.slice(0, 1);
+  const added = newItemId(removedThen, Date.UTC(2026, 10, 18, 12));
+  t.check("a task added after the last was removed: an id of its own, not the removed one's", [added === 'q2', added !== newItemId(removedThen, Date.UTC(2026, 10, 18, 13)), newItemId([{ id: added }], Date.UTC(2026, 10, 18, 12)) !== added], [false, true, true]);
+}
+
+/*
+ * A queue branch brought up to date at its start (bug hunt 2026-11-18): only `main` of `origin` was fetched, so in a
+ * repository whose remote is "upstream" and whose main is "master" it never was, and its chat was told it came from a
+ * local main. Brought up to the remote branch it was made from.
+ */
+{
+  const root = mkdtempSync(join(tmpdir(), 'cop-qbranch-'));
+  const run = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).trim();
+  const server = join(root, 'server.git');
+  const mine = join(root, 'mine');
+  const theirs = join(root, 'theirs');
+  run(root, 'init', '--bare', '--initial-branch=master', server);
+  for (const dir of [mine, theirs]) {
+    run(root, 'clone', '--quiet', '--origin', 'upstream', server, dir);
+    run(dir, 'config', 'user.email', 'check@example.invalid');
+    run(dir, 'config', 'user.name', 'check');
+  }
+  writeFileSync(join(mine, 'a.txt'), 'a');
+  run(mine, 'add', 'a.txt');
+  run(mine, 'commit', '--quiet', '-m', 'first');
+  run(mine, 'push', '--quiet', 'upstream', 'HEAD:master');
+  const first = run(mine, 'rev-parse', 'HEAD');
+  run(mine, 'fetch', '--quiet', 'upstream');
+  run(mine, 'branch', '--no-track', 'queue/q1-x', first);
+  run(theirs, 'pull', '--quiet', 'upstream', 'master');
+  writeFileSync(join(theirs, 'b.txt'), 'b');
+  run(theirs, 'add', 'b.txt');
+  run(theirs, 'commit', '--quiet', '-m', 'second');
+  run(theirs, 'push', '--quiet', 'upstream', 'HEAD:master');
+  const second = run(theirs, 'rev-parse', 'HEAD');
+  const fresh = await refreshQueueBranch(mine, 'queue/q1-x', first, 'upstream/master');
+  t.check('made from upstream/master: brought up to it at the start', [fresh.moved, fresh.base === second, fresh.from, run(mine, 'rev-parse', 'queue/q1-x') === second], [true, true, 'upstream/master', true]);
+  t.check('a branch made from a remote is said so; one from a local main is not', [await madeFromRemote(mine, 'upstream/master'), await madeFromRemote(mine, 'master'), await madeFromRemote(mine, 'origin/main')], [true, false, false]);
+  t.check('made from the local master: that main on the remote', await remoteMainOf(mine, 'master'), { remote: 'upstream', ref: 'master' });
+  rmSync(root, { recursive: true, force: true });
+}
 
 const chain = [
   item('1', { status: 'failed' }),
@@ -662,6 +728,65 @@ try {
   t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
 } finally {
   await h7?.stop();
+}
+
+/*
+ * Found 2026-11-18: a task on "the folder as it is", set aside at its question with its work not committed, carried on
+ * without it — the task after it, on a branch of its own, had put that work aside on cop/saved/…. It is put back, not
+ * committed, before it carries on.
+ */
+console.log('\n--- a task on the folder, set aside with its work not committed, gets it back when it carries on ---');
+let h8: Harness | null = null;
+try {
+  h8 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', questions: 'ask' }, copilot: { defaultModel: 'Auto' } } });
+  const write = (file: string, text: string): string => `Set-Content -Path ${file} -Value '${text}' -Encoding utf8`;
+  await h8.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h8.call('PUT', '/queue', { items: [
+    { id: 'a2', name: 'Folder, asks', prompt: 'Write w.txt holding w, then ask me which name to use for n.txt.', model: '', dependsOn: [], branch: 'folder', review: false },
+    { id: 'b2', name: 'On its branch', prompt: 'Write b.txt holding b.', model: '', dependsOn: [], branch: 'main', review: false },
+  ] });
+  h8.chat.script(
+    reply.steps(write('w.txt', 'w')),
+    reply.ask('Which name should n.txt hold?', ['north', 'south'], 'The task leaves it to you.'),
+    reply.steps(write('b.txt', 'b')),
+    reply.done('I wrote b.txt holding the word b and read it back.'),
+  );
+  await h8.call('POST', '/queue/run');
+  const first = await waitFor('the queue to go round once', async () => {
+    const q = await h8!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  const a2 = first.items[0] as QueueItem;
+  const saved = h8.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/cop/saved/');
+  t.check('set aside at its question, its w.txt put aside by the task on its own branch, and kept for it', [first.items.map((x) => x.status), existsSync(join(h8.repo, 'w.txt')), !!saved, a2.setAside], [['parked', 'done'], false, true, [saved]]);
+  await h8.call('POST', '/queue/items/a2/answer', { answer: 'north', sessionId: a2.sessionId });
+  let told = '';
+  h8.chat.script(
+    (m) => {
+      told = m.text;
+      return reply.steps(write('n.txt', 'north'));
+    },
+    reply.done('w.txt holds the word w, as before, and I wrote n.txt holding north, the name the operator chose.'),
+  );
+  await h8.call('POST', '/queue/run');
+  const second = await waitFor('the queue to end', async () => {
+    const q = await h8!.call<QueueView>('GET', '/queue');
+    return !q.running && !q.items.some((x) => x.status === 'running' || x.status === 'waiting') ? q : null;
+  }, 90_000);
+  t.check('carried on back on main with its w.txt back, not committed, and done', [
+    second.items[0]!.status,
+    h8.git('rev-parse', '--abbrev-ref', 'HEAD'),
+    existsSync(join(h8.repo, 'w.txt')) ? readFileSync(join(h8.repo, 'w.txt'), 'utf8').trim() : null,
+    h8.git('status', '--porcelain', '--', 'w.txt'),
+    (second.items[0] as QueueItem).setAside ?? [],
+  ], ['done', 'main', 'w', '?? w.txt', []]);
+  t.truthy('the answer went on to the chat', told.includes('north'), told.slice(0, 300));
+  const events = await h8.call<Array<{ type: string; message: string }>>('GET', `/sessions/${a2.sessionId}/events`);
+  t.truthy('said: put back, from where', events.some((e) => e.type === 'queue-put-back' && e.message.includes(saved) && /back in the folder/.test(e.message)), events.filter((e) => e.type.startsWith('queue-')).map((e) => e.message));
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h8?.stop();
 }
 
 t.finish();

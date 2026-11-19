@@ -16,15 +16,15 @@ import { api, type NewBranchCarry, type NewBranchPlan, type Workspace } from '..
 import { useFmtTime, useT } from '../../lib/i18n';
 import { useDots } from '../../lib/useDots';
 import { useModalFocus } from '../../lib/useModalFocus';
+import { newBranchOff } from '../../lib/newBranchOff';
 
 /** What the commit says when no message is written: the server's `COMMIT_BEFORE_NEW_BRANCH`. */
 const COMMIT_BEFORE_NEW_BRANCH = 'Work in progress, before a new branch from main';
 
-export function NewBranchButton({ workspace, running, onMade }: { workspace: Workspace | null; running: boolean; onMade: (result: string) => void }) {
+export function NewBranchButton({ workspace, running, queue = false, onMade }: { workspace: Workspace | null; running: boolean; queue?: boolean; onMade: (result: string) => void }) {
   const { t } = useT();
   const [open, setOpen] = useState(false);
-  // Off while a task works (its branch is not changed under it) and where there is no repository; why, on hover.
-  const off = running ? t('nb.offRunning') : !workspace?.ok ? t('nb.offNoFolder') : !workspace.isRepo ? t('nb.offNoRepo') : '';
+  const off = newBranchOff(t, { running, queue, workspace });
   return (
     <>
       <button type="button" className="button-link plain small cs-new-branch" aria-disabled={off ? true : undefined} onClick={() => !off && setOpen(true)} title={off || t('nb.buttonWhy')}>
@@ -55,6 +55,7 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
   const read = async (fetch: boolean) => {
     setReading(true);
     setProblem('');
+    setConflict(false);
     try {
       const p = await api.newBranchPreview(fetch);
       setPlan(p);
@@ -201,6 +202,15 @@ function NewBranchDialog({ onClose, onMade }: { onClose: () => void; onMade: (re
             {t('nb.cancel')}
           </button>
           {!reading && !plan?.ok && (
+            <button type="button" onClick={() => void read(true)}>
+              {t('nb.tryAgain')}
+            </button>
+          )}
+          {/*
+            Made, and refused — the folder changed since it was read, or committed and then no branch (bug hunt 2026-11-18):
+            only Make was left, refused again the same way. The folder read again, the name kept.
+          */}
+          {!reading && plan?.ok && problem && !making && (
             <button type="button" onClick={() => void read(true)}>
               {t('nb.tryAgain')}
             </button>

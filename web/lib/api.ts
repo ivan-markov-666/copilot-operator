@@ -205,6 +205,8 @@ export type QueueItem = {
   waitsFor?: Parked;
   /** Answered after it was parked: it carries on at the queue's next turn, before the others. */
   resume?: boolean;
+  /** What it had not committed, put aside by a task after it, put back when it carries on (2026-11-18). */
+  setAside?: string[];
   /** `parked`: set aside while it waited for the operator, until answered (2026-10-26). */
   status: 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'stopped' | 'parked';
   why?: string;
@@ -731,7 +733,7 @@ export type Activity = {
   /** The queue's turn is still going, between one of its tasks and the next (2026-11-03). */
   queue?: boolean;
   /** How the last message ended, while nothing runs (2026-10-23). */
-  last?: { status: string; at: string };
+  last?: { status: string; at: string; byOperator?: boolean };
 };
 
 export type RunMode = 'confirm' | 'unattended';

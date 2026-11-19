@@ -434,6 +434,36 @@ await scenario('limits and conversations: the subtasks run out, a fresh worker, 
   t.check('it ended done, with what it had', job.status, 'done');
 });
 
+/*
+ * "Most subtasks the lead may give" raised while the message works (bug hunt 2026-11-18): the lead kept the number it
+ * began with — "No subtask is left" — though Settings say every limit counts at once.
+ */
+await scenario('the subtasks raised in Settings while the worker works: counted at once, and the lead told so', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { maxSubtasks: 1 } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  let report = '';
+  h.chat.script(
+    reply.lead.delegate({ title: 'Survey the project' }, { understanding: 'A file result.txt holding hello.' }),
+    async () => {
+      const got = await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings');
+      await h.call('PUT', '/settings', { ...got.raw, limits: { ...(got.raw.limits ?? {}), maxSubtasks: 2 } });
+      return reply.steps('Get-ChildItem -Name');
+    },
+    reply.done('The project folder holds README.md at its root, and nothing else that the assignment names.'),
+    (m) => {
+      report = m.text;
+      return reply.lead.delegate({ title: 'Write result.txt', goal: 'Create result.txt holding exactly the word hello.', readOnly: false });
+    },
+    reply.steps(write('result.txt', 'hello')),
+    reply.done('I wrote result.txt with Set-Content; it holds hello, exactly as the subtask asked.'),
+    reply.lead.done(),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks[0]!;
+  t.truthy('the report says the number saved: one subtask left of 2', report.includes('Subtasks left: 1 of 2.'), report.slice(-500));
+  t.check('the second subtask was given and done', [job.status, job.lead?.subtasks, job.lead?.maxSubtasks, existsSync(join(h.repo, 'result.txt'))], ['done', 2, 2, true]);
+});
+
 await scenario('Stop while the worker works: the subtask and the message stop, nothing more is sent', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
   let release!: () => void;

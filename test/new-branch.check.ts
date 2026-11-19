@@ -14,8 +14,26 @@ import { branchNameProblem, createNewBranch, planNewBranch } from '../src/vcs/ne
 import { describeFetchFailure, operatorFetchEnv } from '../src/vcs/remoteAuth.js';
 import { reply } from './support/fakeChat.js';
 import { startHarness, Tally, waitFor, type Harness } from './support/harness.js';
+import { newBranchOff } from '../web/lib/newBranchOff.js';
+import { en } from '../web/lib/lang/en.js';
 
 const t = new Tally();
+
+/*
+ * The button's off reasons (bug hunt 2026-11-18): it looked usable while the queue ran between its tasks, and the server
+ * refused it ("The queue is running"). Off then, saying so.
+ */
+{
+  const say = (key: string): string => (en as Record<string, string>)[key] ?? key;
+  const repo = { ok: true, isRepo: true };
+  t.check('"New branch from main" off: a task at work, the queue running, no folder, no repository; else on', [
+    newBranchOff(say, { running: true, queue: true, workspace: repo }),
+    newBranchOff(say, { running: false, queue: true, workspace: repo }),
+    newBranchOff(say, { running: false, queue: false, workspace: null }),
+    newBranchOff(say, { running: false, queue: false, workspace: { ok: true, isRepo: false } }),
+    newBranchOff(say, { running: false, queue: false, workspace: repo }),
+  ], [en['nb.offRunning'], en['nb.offQueue'], en['nb.offNoFolder'], en['nb.offNoRepo'], '']);
+}
 const base = mkdtempSync(join(tmpdir(), 'cop-new-branch-'));
 const git = (dir: string, ...args: string[]): string => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const tryGit = (dir: string, ...args: string[]): boolean => {

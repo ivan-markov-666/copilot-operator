@@ -400,4 +400,81 @@ await scenario('"Stop" on a card of a chat she directs: the whole of her work st
   t.check('her message stopped too, nothing more sent to her or the chat, the file not written', [hers.status, h.chat.sent.length - before, existsSync(join(h.repo, 'result.txt'))], ['aborted', 0, false]);
 });
 
+/*
+ * Found 2026-11-18: "Most messages Kerrigan may send" saved while she worked was said to be in force at once, but her
+ * run kept the number it began with, and refused a message the new number allowed.
+ */
+await scenario('the most she may send, raised in Settings while her chat works: counted at once', { execution: { mode: 'unattended', isolation: 'none-accepted' }, limits: { maxKerriganSends: 1 } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  let result = '';
+  h.chat.script(
+    reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt' }),
+    async () => {
+      const got = await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings');
+      await h.call('PUT', '/settings', { ...got.raw, limits: { ...(got.raw.limits ?? {}), maxKerriganSends: 2 } });
+      return reply.steps(write('result.txt', 'hel'));
+    },
+    reply.done('I wrote result.txt with Set-Content; it holds hel.'),
+    (m) => {
+      result = m.text;
+      return reply.kerrigan.send('Make result.txt hold exactly hello, then read it back with Get-Content.', { chat: 'same', title: 'Fix result.txt' });
+    },
+    reply.steps(write('result.txt', 'hello')),
+    reply.done('result.txt holds hello, as Get-Content printed.'),
+    reply.kerrigan.done('Done: result.txt holds hello, as the chat read it back.', ['Get-Content result.txt printed hello']),
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const job = (await sessionOf(h, sent.threadId)).tasks.at(-1)!;
+  t.truthy('told how many are left by the number saved', result.includes('Messages to chats left: 1 of 2.'), result.slice(-400));
+  t.check('her second message went, and the work is done', [job.status, job.kerrigan?.sent, job.kerrigan?.maxSends, readFileSync(join(h.repo, 'result.txt'), 'utf8').trim()], ['done', 2, 2, 'hello']);
+});
+
+/*
+ * Found 2026-11-18: a message the person wrote straight into a chat she directs, while she was not at work, ran — and
+ * when it stopped nothing could carry it on: Continue was refused there and not shown. It is theirs, and carried on as in
+ * any chat; her own messages there are still carried on in her conversation.
+ */
+await scenario('a message the person writes into a chat she directs, stopped, is carried on there; hers is not', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: TASK, model: 'Think deeper', kerrigan: true, chatModel: 'Think deeper' });
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => (release = r));
+  h.chat.script(
+    reply.kerrigan.send(undefined, { understanding: 'Goal: result.txt holding hello.', title: 'Write result.txt' }),
+    async () => {
+      await gate;
+      return reply.steps(write('result.txt', 'hello'));
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  const chatId = await waitFor('her chat at work', async () => {
+    const k = (await sessionOf(h, sent.threadId)).tasks.at(-1)?.kerrigan;
+    return k?.chats.length === 1 && h.chat.sent.filter((m) => !m.contract).length >= 2 ? k.chats[0]! : null;
+  }, 30_000);
+  await h.call('POST', `/sessions/${sent.threadId}/stop`);
+  release();
+  await h.idle();
+  const hersThere = (await chatOf(h, chatId)).tasks.at(-1)!;
+  const refused = await h.raw('POST', `/chat/${chatId}/tasks/${hersThere.id}/continue`);
+  t.check('her message in the chat: carried on in her conversation, not here', [hersThere.status, !!hersThere.fromKerrigan, refused.status, JSON.stringify(refused.body).includes('Kerrigan sent this message')], ['aborted', true, 400, true]);
+
+  let let2: () => void = () => undefined;
+  const gate2 = new Promise<void>((r) => (let2 = r));
+  h.chat.script(async () => {
+    await gate2;
+    return reply.steps(write('mine.txt', 'mine'));
+  });
+  const mine = await h.call<Sent & { needsStart: boolean }>('POST', '/chat', { text: 'Also write mine.txt holding mine.', threadId: chatId });
+  await h.call('POST', `/sessions/${chatId}/start`, { mode: 'unattended' });
+  await waitFor('the person\'s message at work', async () => (await chatOf(h, chatId)).tasks.find((x) => x.id === mine.taskId)?.status === 'running', 30_000);
+  await h.call('POST', `/sessions/${chatId}/stop`);
+  let2();
+  await h.idle();
+  t.check('the person\'s message stopped, and is theirs', [(await chatOf(h, chatId)).tasks.at(-1)?.id === mine.taskId, (await chatOf(h, chatId)).tasks.at(-1)?.status, !!(await chatOf(h, chatId)).tasks.at(-1)?.fromKerrigan], [true, 'aborted', false]);
+  h.chat.script(reply.steps(write('mine.txt', 'mine')), reply.done('I wrote mine.txt with Set-Content; it holds the word mine, as the message asked.'));
+  const carried = await h.raw('POST', `/chat/${chatId}/tasks/${mine.taskId}/continue`);
+  await h.idle();
+  t.check('"Continue" carries it on there, to the end', [carried.status, (await chatOf(h, chatId)).tasks.at(-1)?.status, existsSync(join(h.repo, 'mine.txt'))], [201, 'done', true]);
+});
+
 t.finish();

@@ -597,7 +597,10 @@ export class OperatorController {
     if (!['run', 'skip', 'abort', 'run-all'].includes(body?.action)) {
       throw new BadRequestException('action must be run, run-all, skip or abort');
     }
-    return this.ops.decide(id, body.action);
+    // Refused as the other answers are (2026-11-18): an "ok: false" with 200 looked taken in the page.
+    const result = this.ops.decide(id, body.action);
+    if (!result.ok) throw new BadRequestException(result.problem);
+    return result;
   }
 
   /** A subtask that failed for a technical reason (two chats, 2026-10-25): one of its card's choices. */

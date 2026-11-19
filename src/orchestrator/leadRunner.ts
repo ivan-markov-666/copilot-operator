@@ -236,13 +236,15 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     });
     sink.event('acting', acting, `at work now: ${ACTOR_WORDS[actor]}${more.subtask ? ` (subtask ${more.subtask})` : ''}`);
   };
-  const max = Math.max(1, cfg.limits.maxSubtasks ?? 20);
+  /** "Most subtasks the lead may give", as Settings have it now: saved during the message, it counts at once (bug hunt 2026-11-18). */
+  const max = (): number => Math.max(1, cfg.limits.maxSubtasks ?? 20);
   /*
    * The most subtasks this attempt may have given in all: `max`, and as many again as the attempt before had given when a
-   * subtask is tried again after a Stop, its record carried on (2026-10-25).
+   * subtask is tried again after a Stop, its record carried on (2026-10-25), or when the message is carried on (2026-11-18).
    */
-  let limit = max;
-  const lead: LeadRecord = { rounds: [], subtasks: 0, maxSubtasks: max };
+  let givenBefore = 0;
+  const lead: LeadRecord = { rounds: [], subtasks: 0, maxSubtasks: max() };
+  const limit = (): number => (lead.maxSubtasks = givenBefore + max());
   const saveLead = async (): Promise<void> => {
     const copy = JSON.parse(JSON.stringify(lead)) as LeadRecord;
     await setTask((t) => {
@@ -258,7 +260,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     t.runId = runId;
     t.runGroup = deps.runGroup;
     t.startedAt = new Date().toISOString();
-    t.lead = { rounds: [], subtasks: 0, maxSubtasks: max };
+    t.lead = { rounds: [], subtasks: 0, maxSubtasks: max() };
   });
   await writeFile(taskLogPath, `TASK: ${task.title}\nSESSION: ${session.name} (${session.id})\nRUN: ${runId}\nSTARTED: ${new Date().toISOString()}\nMODE: lead and worker\n`, 'utf8');
   sink.event('task-started', { runId, title: task.title, lead: true }, `task "${task.title}" starting with a lead and a worker (run ${runId})`);
@@ -474,9 +476,9 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       files.length > 0 ? `Files it changed: ${files.join(', ')}.` : 'It changed no file.',
       ...((t?.deviations?.length ?? 0) > 0 ? ['', describeDeviations(t!.deviations!)] : []),
       '',
-      `Subtasks left: ${limit - lead.subtasks} of ${limit}.`,
+      `Subtasks left: ${limit() - lead.subtasks} of ${limit()}.`,
       // Its own list, as it sent it last, to send again with the next subtask (2026-10-21).
-      ...(lead.ledger ? ['', describeLedger(lead.ledger, lead.subtasks, limit)] : []),
+      ...(lead.ledger ? ['', describeLedger(lead.ledger, lead.subtasks, limit())] : []),
       'Reply in the lead\'s format: the next subtask, the plan, a question for the operator, or the result.',
     ].join('\n');
   };
@@ -749,7 +751,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
   try {
     const facts: AssignmentFacts = {
       workDir: chatDir,
-      maxSubtasks: max,
+      maxSubtasks: max(),
       maxIterations: cfg.limits.maxIterations,
       maxRunMinutes: cfg.limits.maxRunMinutes,
       planApproval: session.planMode === 'approve' && !!deps.approvePlan,
@@ -804,8 +806,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       lead.subtasks = before.subtasks;
       if (before.ledger) lead.ledger = before.ledger;
       if (before.workerSessionId) lead.workerSessionId = before.workerSessionId;
-      limit = before.subtasks + max;
-      lead.maxSubtasks = limit;
+      givenBefore = before.subtasks;
+      limit();
       const w = before.workerSessionId ? await store.getSession(before.workerSessionId) : null;
       const firstId = from.attempts?.[0]?.taskId ?? from.taskId;
       const firstTask = w?.tasks.find((x) => x.id === firstId);
@@ -827,8 +829,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     } else {
       if (prior) {
         lead.subtasks = prior.subtasks;
-        limit = prior.subtasks + max;
-        lead.maxSubtasks = limit;
+        givenBefore = prior.subtasks;
+        limit();
         await saveLead();
       }
       markdown = await tell(assignment);
@@ -885,7 +887,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
       };
       lead.rounds.push(round);
       // Its list of subtasks, as this reply sends it (2026-10-21); the subtask given now is the running one.
-      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < limit ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
+      const giving = r.status === 'delegate' && r.subtask && lead.subtasks < limit() ? { title: r.subtask.title, n: lead.subtasks + 1 } : undefined;
       const listed = nextLedger(lead.ledger, r.todo, round.at, giving);
       lead.ledger = listed.ledger;
       if (listed.change) {
@@ -904,8 +906,8 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
 
       switch (r.status) {
         case 'delegate': {
-          if (lead.subtasks >= limit) {
-            markdown = await tell(noSubtasksLeft(limit));
+          if (lead.subtasks >= limit()) {
+            markdown = await tell(noSubtasksLeft(limit()));
             break;
           }
           /*
@@ -950,7 +952,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             if (t.plan) t.plan.approved = approved;
           });
           planApproved = true;
-          markdown = await tell(leadPlanApproved(approved, limit - lead.subtasks));
+          markdown = await tell(leadPlanApproved(approved, limit() - lead.subtasks));
           break;
         }
         case 'ask': {
@@ -968,7 +970,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
             await saveLead();
             sink.event('question-agreed', { round: round.n, question: r.question, answer: agreed },
               `the lead asked: ${r.question} — answered as it recommends (Settings agree with what the bot proposes): ${agreed}`);
-            markdown = await tell(operatorAnswerMessage(agreed, limit - lead.subtasks));
+            markdown = await tell(operatorAnswerMessage(agreed, limit() - lead.subtasks));
             break;
           }
           if (!deps.askQuestion) {
@@ -984,7 +986,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
           round.question.at = new Date().toISOString();
           await saveLead();
           sink.event('lead-question-answered', { round: round.n, ...(got.by ? { by: got.by } : {}) }, got.by === 'kerrigan' ? 'Kerrigan answered the lead' : 'the operator answered the lead');
-          markdown = await tell(operatorAnswerMessage(got.answer, limit - lead.subtasks, got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined, got.by === 'kerrigan'));
+          markdown = await tell(operatorAnswerMessage(got.answer, limit() - lead.subtasks, got.chosen ? { chosen: got.chosen, ...(got.written ? { written: got.written } : {}) } : undefined, got.by === 'kerrigan'));
           break;
         }
         case 'done': {

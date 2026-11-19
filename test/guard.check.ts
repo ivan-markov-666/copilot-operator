@@ -445,7 +445,10 @@ await scenario('no isolation: every entrance refuses an unattended run', { setti
   });
   t.check('it waits on step 1', first.stepId, 1);
 
-  await h.call('POST', `/approvals/${first.id}`, { action: 'run-all' });
+  // Refused, saying why (2026-11-18: it ran the step as "Run" and said nothing); "Run" is there for the step.
+  const all = await h.raw('POST', `/approvals/${first.id}`, { action: 'run-all' });
+  t.truthy('"run this and the rest": refused, saying why, nothing run', all.status === 400 && /cannot be given here/.test(JSON.stringify(all.body)) && !existsSync(join(h.repo, 'one.txt')), all.body);
+  await h.call('POST', `/approvals/${first.id}`, { action: 'run' });
   const second = await waitFor('step 2 to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals')).find((a) => a.stepId === 2));
   t.check('"run this and the rest": step 1 ran', existsSync(join(h.repo, 'one.txt')), true);
   t.check('but step 2 is still asked about, and has not run', [second.sessionId, existsSync(join(h.repo, 'two.txt'))], [id, false]);
@@ -496,9 +499,11 @@ await scenario('isolation claimed but no allowlist: an unattended start is refus
       const confirm = await h.call<Refusal>('POST', `/sessions/${id}/start`, { mode: 'confirm' });
       t.check('a supervised start is allowed', confirm.started, true);
       const step = await waitFor('the step to wait for approval', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
-      // "Run this and the rest" is the one way left to turn a running conversation unattended: under the lock it runs
-      // this step and goes on asking.
-      await h.call('POST', `/approvals/${step.id}`, { action: 'run-all' });
+      // "Run this and the rest" is the one way left to turn a running conversation unattended: under the lock it is
+      // refused, naming the lock (2026-11-18: it ran the step as "Run" and said nothing), and "Run" runs the step.
+      const all = await h.raw('POST', `/approvals/${step.id}`, { action: 'run-all' });
+      t.truthy('"run this and the rest" refused, naming policy.lock.json', all.status === 400 && /policy\.lock\.json/.test(JSON.stringify(all.body)), all.body);
+      await h.call('POST', `/approvals/${step.id}`, { action: 'run' });
       await h.idle();
       t.check('the supervised run finishes', (await h.session(id)).tasks[0]!.status, 'done');
 

@@ -42,23 +42,50 @@ export async function makeQueueBranch(dir: string, id: string, title: string, st
   return { branch, base: start.commit };
 }
 
+/** The remotes of a repository, by name. */
+async function remotesOf(dir: string): Promise<string[]> {
+  return (await git(dir, ['remote'])).stdout.split(/\r?\n/).map((r) => r.trim()).filter(Boolean);
+}
+
+/**
+ * The remote's branch a queue branch is brought up to: the one it was made from (`origin/master`, `upstream/main`), or,
+ * made from a local main when the remote could not be read then, that main on the remote (`origin` first). Not `main`
+ * of `origin` whatever the repository has (bug hunt 2026-11-18): one whose remote's default is `master`, or whose remote
+ * is not `origin`, was never brought up to date, and its chat was told it was made from a local main.
+ */
+export async function remoteMainOf(dir: string, from: string | undefined): Promise<{ remote: string; ref: string } | null> {
+  const remotes = await remotesOf(dir);
+  const said = (from ?? '').trim();
+  const at = said.indexOf('/');
+  if (at > 0 && remotes.includes(said.slice(0, at))) return { remote: said.slice(0, at), ref: said.slice(at + 1) };
+  const remote = remotes.includes('origin') ? 'origin' : remotes[0];
+  return remote ? { remote, ref: said || 'main' } : null;
+}
+
+/** Whether a branch was made from a remote's branch (`origin/main`), not from a local one (`main`). */
+export async function madeFromRemote(dir: string, from: string): Promise<boolean> {
+  const at = from.indexOf('/');
+  return at > 0 && (await remotesOf(dir)).includes(from.slice(0, at));
+}
+
 /**
  * At the task's start: the branch brought up to the remote's main when nothing has been done on it yet — still at the
  * commit it was made at — and the remote can be read without asking anybody (nobody may be there). Forward only.
+ * `from`: what it was made from (`BranchStart.from`), which names the remote and its main.
  */
-export async function refreshQueueBranch(dir: string, branch: string, base: string): Promise<{ base: string; moved: boolean; detail?: string }> {
+export async function refreshQueueBranch(dir: string, branch: string, base: string, from?: string): Promise<{ base: string; moved: boolean; from?: string; detail?: string }> {
   const tip = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])).stdout;
   if (!tip) return { base, moved: false, detail: `there is no branch ${branch} any more` };
   if (tip !== base) return { base, moved: false, detail: 'work is on it already' };
-  const remotes = (await git(dir, ['remote'])).stdout.split(/\r?\n/).map((r) => r.trim()).filter(Boolean);
-  const remote = remotes.includes('origin') ? 'origin' : remotes[0];
-  if (!remote) return { base, moved: false, detail: 'no remote' };
-  const fetched = await fetchAsOperator(dir, remote, { askpass: null, refspecs: [`+refs/heads/main:refs/remotes/${remote}/main`] });
+  const main = await remoteMainOf(dir, from);
+  if (!main) return { base, moved: false, detail: 'no remote' };
+  const { remote, ref } = main;
+  const fetched = await fetchAsOperator(dir, remote, { askpass: null, refspecs: [`+refs/heads/${ref}:refs/remotes/${remote}/${ref}`] });
   if (!fetched.ok) return { base, moved: false, detail: fetched.detail };
-  const latest = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main^{commit}`])).stdout;
+  const latest = (await git(dir, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${ref}^{commit}`])).stdout;
   if (!latest || latest === base) return { base, moved: false };
-  if (!(await isAncestor(dir, base, latest))) return { base, moved: false, detail: `${remote}/main went another way` };
+  if (!(await isAncestor(dir, base, latest))) return { base, moved: false, detail: `${remote}/${ref} went another way` };
   const current = (await git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout;
-  const moved = current === branch ? await git(dir, ['merge', '--ff-only', '--quiet', latest]) : await git(dir, ['update-ref', '-m', `copilot-operator: ${branch} brought up to ${remote}/main`, `refs/heads/${branch}`, latest, base]);
-  return moved.ok ? { base: latest, moved: true } : { base, moved: false, detail: (moved.stderr || moved.stdout).split(/\r?\n/)[0] };
+  const moved = current === branch ? await git(dir, ['merge', '--ff-only', '--quiet', latest]) : await git(dir, ['update-ref', '-m', `copilot-operator: ${branch} brought up to ${remote}/${ref}`, `refs/heads/${branch}`, latest, base]);
+  return moved.ok ? { base: latest, moved: true, from: `${remote}/${ref}` } : { base, moved: false, detail: (moved.stderr || moved.stdout).split(/\r?\n/)[0] };
 }

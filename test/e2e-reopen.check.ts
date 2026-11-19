@@ -138,6 +138,29 @@ await scenario('closed while a message is at work: opened again on its conversat
   t.check('no "Continue" for a message done', (await h.raw('POST', `/chat/${sent.threadId}/tasks/${d.id}/continue`)).status, 400);
 });
 
+/*
+ * The times the window is opened again, saved while a message works (bug hunt 2026-11-18): said to be in force at once,
+ * but the number was copied when the message began.
+ */
+await scenario('opened again by the number saved while the message works', { limits: { reopenWindow: 0 } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: 'Write k.txt holding exactly k.', model: 'Think deeper' });
+  h.chat.script(
+    async (m) => {
+      const got = await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings');
+      await h.call('PUT', '/settings', { ...got.raw, limits: { ...(got.raw.limits ?? {}), reopenWindow: 1 } });
+      m.world.closeByHand();
+      return reply.steps(write('k.txt', 'k'));
+    },
+    (m) => {
+      t.check('opened again, the answer asked for', m.text, ASK_AGAIN);
+      return reply.steps(write('k.txt', 'k'));
+    },
+    reply.done(),
+  );
+  const k = (await h.run(sent.threadId)).tasks.at(-1)!;
+  t.check('done in the end, the window opened again once', [k.status, fileOf(h, 'k.txt'), h.chat.reopened.length], ['done', 'k', 1]);
+});
+
 await scenario('past the times Settings allow: the message stops, saying so, and "Continue" carries it on in its conversation', { limits: { reopenWindow: 1 } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: 'Write e.txt holding exactly e.', model: 'Think deeper' });
   h.chat.script(
@@ -205,6 +228,9 @@ await scenario('with 0, closing the window stops the message, as before; "Contin
   const sentBefore = h.chat.sent.length;
   const f1 = (await h.run(sent.threadId)).tasks.at(-1)!;
   t.check('closed while its command ran: stopped as before, said so, nothing more sent, not opened again', [f1.status, f1.reason, h.chat.reopened.length, h.chat.windows.length], ['aborted', CLOSED_NOT_REOPENED, 0, 0]);
+  // Not the operator's Stop (bug hunt 2026-11-18: "Done" said nothing for any stop): the end is said, "Finished: stopped".
+  const closedEnd = (await h.call<{ last?: { status: string; byOperator?: boolean } }>('GET', '/activity')).last;
+  t.check("a window closed is not a stop of the operator's: its ending is said", [closedEnd?.status, closedEnd?.byOperator], ['aborted', undefined]);
   t.check('what went out: the contract, the message, nothing after', h.chat.sent.length - sentBefore, 2);
   let told = '';
   h.chat.script(
@@ -271,6 +297,8 @@ await scenario('"Continue" after Stop; refused for a message the conversation ha
   await h.idle();
   const stopped = await lastOf(h, sent.threadId);
   t.check('stopped', stopped.status, 'aborted');
+  const stopEnd = (await h.call<{ last?: { status: string; byOperator?: boolean } }>('GET', '/activity')).last;
+  t.check('a Stop of the operator: theirs, and "Done" says nothing of it', [stopEnd?.status, stopEnd?.byOperator], ['aborted', true]);
   let told = '';
   h.chat.script(
     (m) => {

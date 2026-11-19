@@ -23,7 +23,7 @@ import { chooseHome, homeRefusal, movedFrom } from '../config/home.js';
 
 import { SessionStore, DEFAULT_VCS, DEFAULT_REVIEW, writeFileAtomically } from '../session/store.js';
 import { checkItems, emptyQueue, itemTitle, mergeItems, nextStep, parkAfterMs, parkedAnswerFrom, skippedBecause, statusOfTask, waitsByHand, MAX_PARK_AFTER_SEC, PARKED_WORDS, type Queue, type QueueBusy, type QueueItem, type QueueStatus } from '../queue/queue.js';
-import { branchStart, makeQueueBranch, refreshQueueBranch } from '../queue/queueBranch.js';
+import { branchStart, madeFromRemote, makeQueueBranch, refreshQueueBranch } from '../queue/queueBranch.js';
 import { EventBus } from '../session/events.js';
 import type {
   Session,
@@ -110,6 +110,11 @@ function sameFolder(a: string, b: string): boolean {
 /** Why a queue's task waits to carry on, in its own chat, at the queue's next run (2026-11-18). */
 const CARRIES_ON_AFTER = (what: string): string => `${what}; it carries on from where it stopped, in its own chat, when the queue is run again`;
 
+/** A card answered after it went: by Kerrigan, another tab, or its work having ended (2026-11-18). */
+export const CARD_GONE = 'That card is not waiting any more: it was answered, or its work ended.';
+/** "Run this and the rest" where the run may not go on unasked: said, and the card kept (2026-11-18). */
+export const RUN_ALL_REFUSED = (why: string): string => `"Run this and the rest" cannot be given here — ${why} Nothing was run: "Run" runs this step.`;
+
 /** Whether a folder is another, or inside it: Windows paths, as `sameFolder` reads them. */
 function folderInside(inner: string, outer: string): boolean {
   const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
@@ -141,7 +146,7 @@ import { sessionRoots } from '../exec/confinement.js';
 import { dirtyPolicy } from '../vcs/snapshot.js';
 import { runVcsPreflight, type RunVcsGroup } from '../vcs/runPreflight.js';
 import { inputSettings, normalisePatterns } from '../vcs/inputs.js';
-import { createNewBranch, planNewBranch, setAsideUncommitted, type NewBranchPlan, type NewBranchResult } from '../vcs/newBranch.js';
+import { createNewBranch, planNewBranch, putBackAside, setAsideUncommitted, type NewBranchPlan, type NewBranchResult } from '../vcs/newBranch.js';
 import { commitAsOperator, identityOf, pushAsOperator, setIdentity, stageFiles, TrustedHooks, type GitOp, type HookChoice } from '../vcs/operatorGit.js';
 import { askpassProgram, closePasswordWindows } from '../vcs/remoteAuth.js';
 import { planApprovedMessage, planReviseMessage } from '../orchestrator/planMode.js';
@@ -499,7 +504,13 @@ export class OperatorService {
    * How the last message ended (2026-10-23: the tab reads "Done", "Error" and the like when the work stops, for an
    * operator in another window): a worker's subtask is not the message.
    */
-  private lastOutcome: { status: string; at: string; sessionId: string } | null = null;
+  private lastOutcome: { status: string; at: string; sessionId: string; byOperator?: boolean } | null = null;
+  /**
+   * The runs the operator stopped: their Stop, "Stop the queue", Stop or "Abort task" on a card (bug hunt 2026-11-18).
+   * Only such a stop is theirs and says nothing at the end ("Done" is not shown); a window closed past the times it is
+   * opened again, a conversation lost, the program closed, are said.
+   */
+  private readonly stoppedByOperator = new Set<string>();
   /** Where Git asks the operator for a password now, in its own window (2026-10-26): the step waits for it. */
   private readonly passwordAsked = new Map<string, string>();
   private readonly followsActing = this.bus.subscribe('*', (e) => {
@@ -528,7 +539,10 @@ export class OperatorService {
       this.passwordAsked.delete(e.sessionId);
       for (const key of [`pw:${e.sessionId}`, `browser:sign-in-required:${e.sessionId}`, `browser:verification-required:${e.sessionId}`]) this.holdOf(e.sessionId)?.waited(key);
       const status = (e.data as { status?: unknown } | undefined)?.status;
-      if (typeof status === 'string' && !this.workerLeads.has(e.sessionId)) this.lastOutcome = { status, at: e.at, sessionId: e.sessionId };
+      if (typeof status === 'string' && !this.workerLeads.has(e.sessionId)) {
+        const byOperator = status === 'aborted' && this.stoppedByOperator.has(this.runKey(e.sessionId));
+        this.lastOutcome = { status, at: e.at, sessionId: e.sessionId, ...(byOperator ? { byOperator: true } : {}) };
+      }
     }
   });
   /**
@@ -1418,6 +1432,7 @@ export class OperatorService {
     const startedAt = new Date().toISOString();
     const hold = new Hold();
     this.running.set(sessionId, { controller, startedAt, mode, policy, hold, live });
+    this.stoppedByOperator.delete(sessionId);
     // Who was at work in a run of it that ended without saying so is not who is at work in this one.
     this.acting.delete(sessionId);
     {
@@ -1552,6 +1567,7 @@ export class OperatorService {
           if (s.status === 'stopping') s.status = 'idle';
         }).catch(() => undefined);
         this.running.delete(sessionId);
+        this.stoppedByOperator.delete(sessionId);
       });
 
     return { started: true, done };
@@ -1611,11 +1627,12 @@ export class OperatorService {
     return { paused: false };
   }
 
-  async stop(asked: string): Promise<{ stopping: boolean }> {
+  async stop(asked: string, by: 'operator' | 'bot' = 'operator'): Promise<{ stopping: boolean }> {
     // A chat Kerrigan directs is stopped with her run (2026-11-12): it is one run.
     const sessionId = this.runKey(asked);
     const r = this.running.get(sessionId);
     if (!r) return { stopping: false };
+    if (by === 'operator') this.stoppedByOperator.add(sessionId);
     r.controller.abort();
     for (const [id, w] of this.waiting) {
       if (this.runKey(w.approval.sessionId) === sessionId) {
@@ -1662,7 +1679,7 @@ export class OperatorService {
       // The queue still has its turn going, between one of its tasks and the next (2026-11-03): the work is not over.
       ...(this.queueLoop ? { queue: true } : {}),
       // How the last message ended, while nothing runs: what the tab says until the operator has looked.
-      ...(this.running.size === 0 && this.lastOutcome ? { last: { status: this.lastOutcome.status, at: this.lastOutcome.at } } : {}),
+      ...(this.running.size === 0 && this.lastOutcome ? { last: { status: this.lastOutcome.status, at: this.lastOutcome.at, ...(this.lastOutcome.byOperator ? { byOperator: true } : {}) } } : {}),
     };
   }
 
@@ -2142,6 +2159,27 @@ export class OperatorService {
     return done;
   }
 
+  /**
+   * Changes put aside before a task (2026-11-18): when they are the work of one task on "the folder as it is" that waits
+   * to carry on — set aside at a card, stopped with the queue — on the branch they were left on, that task gets them back
+   * when it carries on (`putBackAside`). Two such tasks there: whose is whose cannot be told, and they stay where they
+   * were put, as said.
+   */
+  private async leftoversOf(onBranch: string | null, except: string, saved: string): Promise<void> {
+    if (!onBranch) return;
+    const q = await this.readQueue();
+    const owners: string[] = [];
+    for (const x of q.items) {
+      if (x.id === except || x.branch !== 'folder' || !x.sessionId || !(x.status === 'parked' || (x.status === 'waiting' && x.resume))) continue;
+      const s = await this.store.getSession(x.sessionId);
+      const t = s?.tasks.find((k) => k.parked && !k.parked.answer) ?? s?.tasks.at(-1);
+      if (s && !s.vcs?.enabled && t?.checkpoint?.branch === onBranch) owners.push(x.id);
+    }
+    if (owners.length !== 1) return;
+    const owner = owners[0]!;
+    await this.changeQueue((x) => this.setQueueItem(x, owner, { setAside: [...(x.items.find((i) => i.id === owner)?.setAside ?? []), saved] }));
+  }
+
   private setQueueItem(q: Queue, id: string, patch: Partial<QueueItem>): void {
     const item = q.items.find((x) => x.id === id);
     if (!item) return;
@@ -2379,7 +2417,8 @@ export class OperatorService {
       const ask = await askpassProgram();
       if (ask) await closePasswordWindows(ask, new Date(Date.parse(approval.createdAt) - 5_000)).catch(() => 0);
     }
-    await this.stop(key).catch(() => undefined);
+    // Set aside by the queue, not stopped by the operator: its ending is said.
+    await this.stop(key, 'bot').catch(() => undefined);
   }
 
   /**
@@ -2505,7 +2544,19 @@ export class OperatorService {
           this.bus.publish({ sessionId: s0.id, type: 'queue-back-on-branch', level: 'info',
             message: `back on ${began}, where it began, before it carries on (the folder was on ${onNow ?? 'a detached HEAD'})${aside ? `; what was not committed there is kept on ${aside.saved}, not pushed` : ''}`,
             data: { branch: began, was: onNow, ...(aside ? { saved: aside.saved } : {}) } });
+          if (aside && 'saved' in aside) await this.leftoversOf(onNow, item.id, aside.saved);
         }
+      }
+      // Its own work, put aside by a task after it on a branch of its own (2026-11-18): put back before it carries on.
+      for (const saved of item.setAside ?? []) {
+        const back = ws.isRepo && !s0.vcs?.enabled ? await putBackAside(ws.dir, saved) : { problem: 'it no longer works on the folder as it is' };
+        await this.changeQueue((x) => this.setQueueItem(x, item.id, { setAside: (x.items.find((i) => i.id === item.id)?.setAside ?? []).filter((n) => n !== saved) }));
+        this.bus.publish({ sessionId: s0.id, type: 'queue-put-back', level: 'problem' in back ? 'warn' : 'info',
+          message: 'problem' in back
+            ? `what it had not committed, put aside on ${saved} by a task after it, could not be put back: ${back.problem}`
+            : `what it had not committed (${back.files} file(s)), put aside on ${saved} by a task after it, is back in the folder, not committed`,
+          data: { saved, ...('problem' in back ? { problem: back.problem } : { files: back.files }) } });
+        if ('problem' in back) await this.store.addTaskNote(s0.id, (answered ?? last).id, `What you had changed and not committed was put aside on the branch ${saved} while you waited, and could not be put back: ${back.problem}. Take back what you need from there (git restore --source ${saved} -- <path>).`).catch(() => undefined);
       }
       if (answered) {
         const carried = await this.resumeParked(item.sessionId, ws.dir);
@@ -2530,12 +2581,13 @@ export class OperatorService {
       if (branchName && item.branchBase) {
         if (!(await branchExists(ws.dir, branchName))) branchName = undefined;
         else {
-          const fresh = await refreshQueueBranch(ws.dir, branchName, item.branchBase);
-          if (fresh.moved) await this.changeQueue((x) => this.setQueueItem(x, item.id, { branchBase: fresh.base, branchFrom: 'origin/main' }));
+          const fresh = await refreshQueueBranch(ws.dir, branchName, item.branchBase, item.branchFrom);
+          if (fresh.moved) await this.changeQueue((x) => this.setQueueItem(x, item.id, { branchBase: fresh.base, ...(fresh.from ? { branchFrom: fresh.from } : {}) }));
         }
       }
       // Not made when it was added — no repository then, or no main to make it from: made now, asking nobody anything.
-      let branchFrom = item.branchFrom;
+      // As it is now: brought up to the remote's main just above, it was made from that.
+      let branchFrom = (await this.readQueue()).items.find((x) => x.id === item.id)?.branchFrom ?? item.branchFrom;
       if (item.branch === 'main' && ws.isRepo && !branchName) {
         const start = await branchStart(ws.dir, null);
         if ('problem' in start) return { status: 'failed', why: `no branch could be made for it: ${start.problem}` };
@@ -2569,7 +2621,7 @@ export class OperatorService {
         await this.store.addTaskNote(
           sessionId,
           taskId,
-          branchFrom && branchFrom !== 'origin/main'
+          branchFrom && !(await madeFromRemote(ws.dir, branchFrom))
             ? `This task works on its own branch ${branchName}, made from the local \`${branchFrom}\`: the server's main could not be fetched without asking for a password, and a run never types one. Do not try to fetch or pull it.`
             : `This task works on its own branch ${branchName}, made from the server's main (${branchFrom ?? 'origin/main'}). Do not switch to another branch.`,
         ).catch(() => undefined);
@@ -2591,6 +2643,7 @@ export class OperatorService {
         if (aside) {
           this.bus.publish({ sessionId, type: 'queue-set-aside', level: 'warn',
             message: `what was not committed in the folder (${aside.files} file(s), on ${onNow ?? 'a detached HEAD'}) was put aside on ${aside.saved}, not pushed, before this task started on its own branch` });
+          await this.leftoversOf(onNow, item.id, aside.saved);
         }
       }
     }
@@ -3016,10 +3069,15 @@ export class OperatorService {
     await this.init();
     const session = await this.store.getSession(threadId);
     if (!session || session.kind !== 'chat') throw new Error('That conversation is not there any more.');
-    if (session.directedBy) throw new Error('Kerrigan directs this chat: carry her conversation on instead.');
     if (this.running.has(this.runKey(threadId))) throw new Error('The conversation is working: stop it first, or let it finish.');
     const task = session.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error('That message is not in this conversation.');
+    /*
+     * A chat Kerrigan directs: her messages are carried on in her conversation. One the operator wrote there while she
+     * was not at work is theirs, and Continue carries it on as in any chat (bug hunt 2026-11-18: it ran, and when it
+     * stopped nothing could carry it on).
+     */
+    if (session.directedBy && task.fromKerrigan) throw new Error('Kerrigan sent this message: carry her conversation on instead.');
     if (session.tasks.at(-1)?.id !== taskId) throw new Error('Only the last message of a conversation is carried on: the conversation has gone on past this one.');
     /*
      * The browser first (2026-11-18): the message was put back on the queue and then refused the browser — another
@@ -3129,6 +3187,7 @@ export class OperatorService {
     if (action === 'revise' && !text) return { ok: false, problem: 'Say what to change in the plan, so the chat knows what the next one must do differently.' };
     if (text.length > MAX_INSTRUCTION_CHARS) return { ok: false, problem: `The note is ${text.length} characters; it can be at most ${MAX_INSTRUCTION_CHARS}.` };
     this.waiting.delete(approvalId);
+    if (action === 'stop' && !as) this.stoppedByOperator.add(this.runKey(w.approval.sessionId));
     w.resolvePlan({ decision: action, ...(text ? { note: text } : {}), ...(as ? { by: as.by } : {}) });
     this.bus.publish({ sessionId: w.approval.sessionId, taskId: w.approval.taskId, type: 'approval-decided', level: 'info',
       message: `plan: ${action}${text ? ' (with a note)' : ''}${as ? `, by Kerrigan${as.why ? ` — ${as.why}` : ''}` : ''}`, data: { approvalId, action, plan: true, ...(as ? { by: as.by } : {}) } });
@@ -3151,10 +3210,22 @@ export class OperatorService {
    * screen, and because the step in front of the operator is the one that earns their trust
    * in the rest. The deny list is untouched by it.
    */
-  decide(approvalId: string, action: 'run' | 'skip' | 'abort' | 'run-all'): { ok: boolean } {
+  decide(approvalId: string, action: 'run' | 'skip' | 'abort' | 'run-all'): { ok: boolean; problem?: string } {
     const w = this.waiting.get(approvalId);
-    if (!w) return { ok: false };
+    // Said (bug hunt 2026-11-18): answered "ok: false" with 200, the press looked taken, and the card went on waiting.
+    if (!w) return { ok: false, problem: CARD_GONE };
+    /*
+     * "Run this and the rest" where the run may not go on unasked (policy.lock.json, an empty allowlist, the isolation):
+     * it ran the step as "Run", the next was asked again, and nothing said why (bug hunt 2026-11-18). Refused before the
+     * card is answered, with the reason; "Run" is there for this step.
+     */
+    if (action === 'run-all') {
+      const run = this.running.get(this.runKey(w.approval.sessionId));
+      const blocked = run && run.mode !== 'unattended' ? unattendedPrecondition({ ...run.policy, mode: 'unattended' }) : null;
+      if (blocked) return { ok: false, problem: RUN_ALL_REFUSED(blocked) };
+    }
     this.waiting.delete(approvalId);
+    if (action === 'abort') this.stoppedByOperator.add(this.runKey(w.approval.sessionId));
 
     if (action === 'run-all') this.setRunMode(this.runKey(w.approval.sessionId), 'unattended');
 
@@ -3935,10 +4006,8 @@ export class OperatorService {
       await transport.open();
       let results: LocatorCheck[];
       try {
-        // A step of the operator's own that is not there stops the opening, as at work; it is said, and the check goes on.
-        await transport.ensureSignedIn().catch((e: unknown) => {
-          if (!(e instanceof LocatorMissing) || !isStepKey(e.key)) throw e;
-        });
+        // A step of the operator's own that is not there does not stop a check, which only reads: each is looked for below.
+        await transport.ensureSignedIn(undefined, { stepsLookOnly: true });
         results = await transport.checkLocators();
       } catch (e) {
         if (!(e instanceof LocatorMissing) || e.key !== 'composer') throw e;

@@ -991,12 +991,17 @@ export class CopilotTransport {
    * this". One that must be there and is not, within its seconds, stops the work like a locator that found nothing,
    * said by its name; one that need not be is passed over.
    */
-  private async runSteps(when: StepWhen, signal?: AbortSignal): Promise<void> {
+  private async runSteps(when: StepWhen, signal?: AbortSignal, lookOnly = false): Promise<void> {
     for (const problem of this.stepProblems.splice(0)) this.emit('chat-step-not-used', { problem });
     for (const step of this.steps) {
       if (step.when !== when) continue;
       if (signal?.aborted) throw new StoppedByOperator('stopped by the operator during a step on the way to the chat');
-      await this.runStep(step);
+      /*
+       * `lookOnly`: "Check the locators", which only reads (bug hunt 2026-11-18). A step that must be there and is not
+       * stopped the opening of the newest conversation, so what only a conversation holds was not looked for, and it was
+       * said as having stopped the work. Taken as one that need not be; the check looks for each step itself.
+       */
+      await this.runStep(lookOnly ? { ...step, must: false } : step);
     }
   }
 
@@ -1106,7 +1111,7 @@ export class CopilotTransport {
     const links = await look('conversationLink');
     const href = links > 0 ? await this.el('conversationLink').first().getAttribute('href').catch(() => null) : null;
     const chatId = href ? parseChatId(href) : null;
-    const opened = chatId ? await this.openConversation(chatId).catch(() => false) : false;
+    const opened = chatId ? await this.openConversation(chatId, { stepsLookOnly: true }).catch(() => false) : false;
     if (opened && chatId) {
       for (const key of ['turn', 'userMessage', 'answer', 'copy'] as const) await look(key);
       // Its "More" button: by the locator; at its default and finding nothing, by its name in the row, as the bot does.
@@ -1479,7 +1484,7 @@ Current URL: ${url}`);
    * Opens the chat and, if the tenant has signed us out, waits for the human. The bot never
    * types credentials; it only waits for the composer to appear.
    */
-  async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal } = {}): Promise<void> {
+  async ensureSignedIn(url = this.opts.chatUrl, opts: { signal?: AbortSignal; stepsLookOnly?: boolean } = {}): Promise<void> {
     // A box locator saved in Settings that cannot be used: said once, before the box is looked for with the default.
     for (const problem of this.chatLocatorProblems.splice(0)) this.emit('chat-locator-not-used', { problem });
     // Copilot's home page, where no conversation is expected until the run enters one.
@@ -1532,7 +1537,7 @@ Current URL: ${url}`);
       throw await this.notTheChat();
     }
     await this.assertWorkSurface();
-    await this.runSteps('open', opts.signal);
+    await this.runSteps('open', opts.signal, opts.stepsLookOnly);
   }
 
   async newChat(): Promise<void> {
@@ -1553,7 +1558,7 @@ Current URL: ${url}`);
   }
 
   /** Reopens a conversation by its id. Returns false when it no longer opens. */
-  async openConversation(chatId: string): Promise<boolean> {
+  async openConversation(chatId: string, opts: { stepsLookOnly?: boolean } = {}): Promise<boolean> {
     this.onChat = null;
     const path = Url.conversationPath(chatId);
     await this.p.goto(this.chatAddress(path), { waitUntil: 'domcontentloaded' });
@@ -1562,7 +1567,7 @@ Current URL: ${url}`);
     const there = parseChatId(this.p.url()) === chatId;
     if (there) {
       this.onChat = { id: chatId };
-      await this.runSteps('open');
+      await this.runSteps('open', undefined, opts.stepsLookOnly);
     }
     return there;
   }

@@ -76,8 +76,10 @@ export class KeptWindow implements ChatWindow {
   /** Whether a message is at work: only then is a window closed under it opened again. */
   private atWork = false;
   /** How many times it may still be opened again for the message at work, of how many. */
-  private left = 0;
-  private allowed = 0;
+  /** Times opened again for the message at work. */
+  private used = 0;
+  /** How many Settings allow, read each time: saved during the message, it counts at once (bug hunt 2026-11-18). */
+  private allowed: () => number = () => 0;
   private signal: AbortSignal | undefined;
   /** It is being opened again now. */
   private back: Promise<void> | null = null;
@@ -97,10 +99,10 @@ export class KeptWindow implements ChatWindow {
    * A message is at work: a window closed under it is opened again up to `times` times (`limits.reopenWindow`; 0 is
    * none, as before 2026-11-13), and its Stop ends a reopening under way. Called for each message the runner takes.
    */
-  holdWindow(times: number, signal?: AbortSignal): void {
+  holdWindow(times: number | (() => number), signal?: AbortSignal): void {
     this.atWork = true;
-    this.allowed = Math.max(0, Math.floor(times));
-    this.left = this.allowed;
+    this.allowed = () => Math.max(0, Math.floor(typeof times === 'function' ? times() : times));
+    this.used = 0;
     this.signal = signal;
     this.gaveUp = null;
   }
@@ -117,7 +119,7 @@ export class KeptWindow implements ChatWindow {
 
   /** How many times the window was opened again for the message at work. */
   reopenedTimes(): number {
-    return this.allowed - this.left;
+    return this.used;
   }
 
   /** Told by the window when it went (its `window-closed`): opened again at once while a message is at work. */
@@ -135,24 +137,25 @@ export class KeptWindow implements ChatWindow {
         this.gaveUp = new WindowClosed('the browser window was closed, and the work was stopped before it was opened again; nothing more was sent');
         return;
       }
-      if (this.left <= 0) {
+      const allowed = this.allowed();
+      if (this.used >= allowed) {
         this.gaveUp = new WindowClosed(
-          this.allowed === 0
+          this.used === 0
             ? CLOSED_NOT_REOPENED
-            : `the browser window was closed ${this.allowed + 1} times while this message was at work; it was opened again ${this.allowed} time(s), ` +
-                'as many as Settings allow for one message (limits.reopenWindow), so nothing more was sent',
+            : `the browser window was closed ${this.used + 1} times while this message was at work; it was opened again ${this.used} time(s), ` +
+                `${this.used === allowed ? 'as many as Settings allow' : `and Settings now allow ${allowed}`} for one message (limits.reopenWindow), so nothing more was sent`,
         );
-        this.speak('window-not-reopened', { reason: this.gaveUp.message, times: this.allowed });
+        this.speak('window-not-reopened', { reason: this.gaveUp.message, times: this.used });
         return;
       }
-      this.left -= 1;
-      const time = this.allowed - this.left;
+      this.used += 1;
+      const time = this.used;
       const gen = this.generation;
-      this.speak('window-reopening', { time, of: this.allowed });
+      this.speak('window-reopening', { time, of: allowed });
       try {
         const at: OnChat = await this.inner.reopen({ signal: this.signal });
         if (this.generation !== gen) continue;
-        this.speak('window-reopened', { time, of: this.allowed, ...('chatId' in at ? { chatId: at.chatId } : {}) });
+        this.speak('window-reopened', { time, of: allowed, ...('chatId' in at ? { chatId: at.chatId } : {}) });
         return;
       } catch (e) {
         // Closed again while it was being opened: another time, if there is one left.

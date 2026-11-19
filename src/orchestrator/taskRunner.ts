@@ -4264,7 +4264,8 @@ export async function runSession(
        * 2026-11-13: "if I close the browser by accident, carry the task on from where it got to"), up to the times
        * Settings allow for one message — its runs again in a fresh chat and on its own after a limit included.
        */
-      chat.holdWindow?.(cfg.limits.reopenWindow ?? 3, deps.signal);
+      // As Settings have it each time the window goes (bug hunt 2026-11-18: copied at the message's start).
+      chat.holdWindow?.(() => cfg.limits.reopenWindow ?? 3, deps.signal);
       /*
        * A task taken from the queue was started by the operator, never by the retry loop below, which
        * runs its own. A fresh-retry mark on it is left from a retry that was queued and never ran —
@@ -4339,10 +4340,11 @@ export async function runSession(
        * stopped, not one that blocked with nothing to do (that goes to a fresh chat below, then to a person),
        * and not when a pause or Stop was asked for.
        */
-      const autoAllowed = Math.max(0, cfg.limits.autoContinue ?? 0);
+      // As Settings have it each time (bug hunt 2026-11-18: copied once, though Settings say limits count at once).
+      const autoAllowed = (): number => Math.max(0, cfg.limits.autoContinue ?? 0);
       let autoContinued = 0;
       const carriedOnAtOnce = async (): Promise<boolean> => {
-        if (autoContinued >= autoAllowed || deps.signal?.aborted || deps.shouldPause?.()) return false;
+        if (autoContinued >= autoAllowed() || deps.signal?.aborted || deps.shouldPause?.()) return false;
         const now = (await store.getSession(sessionId))?.tasks.find((x) => x.id === task.id);
         if (!now || !now.limit || now.status === 'aborted' || !isContinuable(now)) return false;
         autoContinued += 1;
@@ -4351,8 +4353,8 @@ export async function runSession(
           taskId: task.id,
           type: 'task-auto-continue',
           level: 'warn',
-          message: `"${task.title}" stopped at ${now.limit.setting} (${now.limit.value}); carrying it on in its own chat, from where it got to (${autoContinued} of ${autoAllowed})`,
-          data: { setting: now.limit.setting, value: now.limit.value, time: autoContinued, of: autoAllowed, status: now.status },
+          message: `"${task.title}" stopped at ${now.limit.setting} (${now.limit.value}); carrying it on in its own chat, from where it got to (${autoContinued} of ${autoAllowed()})`,
+          data: { setting: now.limit.setting, value: now.limit.value, time: autoContinued, of: autoAllowed(), status: now.status },
         });
         await store.continueTask(sessionId, task.id);
         session = (await store.getSession(sessionId)) as Session;
@@ -4365,7 +4367,7 @@ export async function runSession(
       for (;;) {
         while (outcome.status === 'blocked' && retried < retriesAllowed && !deps.signal?.aborted && !(outcome.stopCode && NOT_THE_CHATS.includes(outcome.stopCode))
           // A task a limit stopped is carried on where it is, with its work, not started over in a fresh chat.
-          && !(autoContinued < autoAllowed && !!(await store.getSession(sessionId))?.tasks.find((x) => x.id === task.id)?.limit)) {
+          && !(autoContinued < autoAllowed() && !!(await store.getSession(sessionId))?.tasks.find((x) => x.id === task.id)?.limit)) {
           retried += 1;
           bus.publish({
             sessionId,
@@ -4419,8 +4421,8 @@ export async function runSession(
           level: outcome.status === 'done' ? 'info' : 'warn',
           message: outcome.status === 'done'
             ? `"${task.title}" done after being carried on ${autoContinued} time(s) on its own`
-            : `"${task.title}" ended ${outcome.status} after being carried on ${autoContinued} time(s) on its own${autoContinued >= autoAllowed ? ` — limits.autoContinue (${autoAllowed}) reached` : ''}`,
-          data: { times: autoContinued, of: autoAllowed, status: outcome.status },
+            : `"${task.title}" ended ${outcome.status} after being carried on ${autoContinued} time(s) on its own${autoContinued >= autoAllowed() ? ` — limits.autoContinue (${autoAllowed()}) reached` : ''}`,
+          data: { times: autoContinued, of: autoAllowed(), status: outcome.status },
         });
       }
       if (retried > 0) {

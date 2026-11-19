@@ -33,6 +33,8 @@ import { join } from 'node:path';
 import { kerriganPersona } from '../src/plan/kerrigan.js';
 import { SYSTEM_GUIDE, systemGuideSection } from '../src/plan/systemGuide.js';
 import { dict } from '../web/lib/strings.js';
+import { BASE_TITLE, OUTCOME_WORDS, tabTitle } from '../web/lib/actors.js';
+import type { Activity } from '../web/lib/api.js';
 
 const en = dict.en as Record<string, string | undefined>;
 const bg = dict.bg as Record<string, string | undefined>;
@@ -297,7 +299,65 @@ for (const lang of ['en', 'bg'] as const) {
   console.log(`${lang} Kerrigan                :`, persona.length, `chars; fails past ${PASTE_LIMIT}`);
 }
 
-const failures = gone + drifted + unrendered + orphaned + invented + uncovered.size + oversized;
+/*
+ * What the browser tab says (bug hunt 2026-11-18): the guide quoted "● Worker at work — copilot-operator" and "(n) waiting
+ * for you", which the tab never said — it says what `tabTitle` writes, in English (operator, 2026-10-23). Every phrase
+ * the guide quotes after the tab is named must be one the tab can show, and the words for how a message ended are all
+ * there.
+ */
+console.log('\n--- what the browser tab says ---');
+const activity = (a: Partial<Activity>): Activity => ({ running: false, sessions: 0, starting: false, ...a });
+const tabSays = new Set(
+  [
+    tabTitle(1, activity({}), 3, false),
+    tabTitle(0, activity({ password: true }), 3, false),
+    tabTitle(0, activity({ paused: true }), 3, false),
+    tabTitle(0, activity({ running: true }), 3, false),
+    tabTitle(0, activity({ starting: true }), 3, false),
+    ...Object.keys(OUTCOME_WORDS).map((status) => tabTitle(0, activity({ last: { status, at: '' } }), 3, true)),
+  ].map((title) => title.replace(` — ${BASE_TITLE}`, '')),
+);
+let tabWrong = 0;
+const TAB_NAMED = { en: /browser tab/i, bg: /(Табът|Разделът) на браузъра/ } as const;
+for (const screen of SYSTEM_GUIDE) {
+  for (const section of screen.sections) {
+    for (const c of section.controls) {
+      for (const lang of ['en', 'bg'] as const) {
+        const does = (lang === 'en' ? c.doesEn : c.doesBg) ?? '';
+        const at = does.search(TAB_NAMED[lang]);
+        if (at < 0) continue;
+        for (const m of does.slice(at).matchAll(/"([^"]+)"|„([^“]+)“/g)) {
+          const quoted = (m[1] ?? m[2]!).replace(` — ${BASE_TITLE}`, '').replace(/\(n\)/, '(1)');
+          if (tabSays.has(quoted)) continue;
+          tabWrong += 1;
+          console.log(`!! ${c.key} (${lang}): the tab never says "${quoted}"; it says ${[...tabSays].map((x) => `"${x}"`).join(', ')}`);
+        }
+        if (c.key === 'wb.live') {
+          for (const word of Object.values(OUTCOME_WORDS)) {
+            if (does.includes(word)) continue;
+            tabWrong += 1;
+            console.log(`!! wb.live (${lang}): the tab's "${word}" is not said`);
+          }
+        }
+      }
+    }
+  }
+}
+console.log('tab words the tab never says:', tabWrong, '(expect 0)');
+
+/*
+ * "New chat" while a task runs (bug hunt 2026-11-18): its note said to close the Copilot window to make it come on, but
+ * a window closed under the work is opened again (up to Settings' times), so closing it stops nothing. In every
+ * language the note names "Stop", as its button reads, and no window.
+ */
+for (const [lang, words] of Object.entries(dict) as Array<[string, Record<string, string | undefined>]>) {
+  const note = words['chat.newChatRunning'] ?? '';
+  if (note.includes(words['chat.stop'] ?? '\u0000') && !/Copilot/.test(note)) continue;
+  tabWrong += 1;
+  console.log(`!! chat.newChatRunning (${lang}): it should name "${words['chat.stop']}" and no window to close — "${note}"`);
+}
+
+const failures = gone + drifted + unrendered + orphaned + invented + uncovered.size + oversized + tabWrong;
 console.log('\nfailures:', failures, '(expect 0)');
 if (failures > 0) {
   console.log('The interface, the guide and Kerrigan disagree.');

@@ -10,8 +10,9 @@
  *     agreement with the bot — the time a command may take, the limits, the pauses, the reports and their redaction.
  *     Each is read where it is used, so the next step, the next reply or the next message goes by the new value;
  *   - from the next message (`next`): what a message is built on when it starts — the models, plan mode, the shell and
- *     folder a step runs in by default, the project and its folders, the skills, the contract's stop word, the mode a
- *     start takes, and the lead's number of subtasks, which its assignment states;
+ *     folder a step runs in by default, the project and its folders, the skills, the contract's stop word, and the mode a
+ *     start takes. Every limit is at once: the lead's number of subtasks too since 2026-11-18 — it is told how many are
+ *     left with each report — as are Kerrigan's messages, the times the window is opened again and the carrying on;
  *   - when the chat window opens again (`window`): the chat's address and its browser; it is kept open between
  *     messages. Its locators and the steps on the way to the chat are taken at once (2026-11-17), and its waits for a
  *     reply, a sign-in and a verification (2026-11-18): the window open is handed them (`takeSettings`).
@@ -35,10 +36,8 @@ const NOW: Record<string, readonly string[] | '*'> = {
   // its waits too (2026-11-18), which the window kept open between messages went on with for days.
   copilot: ['pickerLocators', 'chatLocators', 'pickerSteps', 'builtInSteps', 'extraSteps', 'replyTimeoutSec', 'signInTimeoutSec', 'humanWaitSec'],
 };
-/** Of a section taken whole, what a message is told when it starts: the lead's number of subtasks is its assignment's. */
-const NOT_NOW: Record<string, readonly string[]> = {
-  limits: ['maxSubtasks'],
-};
+/** Of a section taken whole, what a message is told only when it starts: none since 2026-11-18. */
+const NOT_NOW: Record<string, readonly string[]> = {};
 /** What the chat window was opened with. */
 const WINDOW: Record<string, readonly string[]> = {
   copilot: ['url', 'profileDir', 'channel', 'headless', 'keepFailurePage'],

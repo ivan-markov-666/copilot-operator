@@ -310,9 +310,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'Step {n} is waiting for you',
             bg: 'Стъпка {n} чака вашето решение',
             doesEn:
-              'A card for each step that waits for you, with the exact command. The browser tab shows "(n) waiting for you".',
+              'A card for each step that waits for you, with the exact command. The browser tab says "Waiting for you (n) — copilot-operator".',
             doesBg:
-              'Карта за всяка стъпка, която чака вас, с точната команда. Разделът на браузъра показва „(n) чака вас“.',
+              'Карта за всяка стъпка, която чака вас, с точната команда. Разделът на браузъра казва „Waiting for you (n) — copilot-operator“.',
           },
           {
             key: 'awaiting.title',
@@ -896,9 +896,9 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             en: 'LIVE',
             bg: 'LIVE',
             doesEn:
-              'Beside "Chat" while the bot works, red (amber while paused); on hover it says who is at work. The browser tab says it too: "● Worker at work — copilot-operator", or "(1) waiting for you" when something waits for the operator.',
+              'Beside "Chat" while the bot works, red (amber while paused); on hover it says who is at work. The browser tab says how it stands, in English whatever language the page is in: "Working... — copilot-operator", "Paused", "Waiting for you (1)" when something waits for the operator, "Waiting for your password"; then how the last message ended — "Done", "Error", "Stopped", "Blocked", "Limit reached".',
             doesBg:
-              'До „Чат“, докато ботът работи — червено (жълто на пауза); при посочване казва кой работи. Казва го и табът на браузъра: „● Работи: Изпълнител — copilot-operator“, или „(1) чака вас“, когато нещо чака оператора.',
+              'До „Чат“, докато ботът работи — червено (жълто на пауза); при посочване казва кой работи. Табът на браузъра казва как стоят нещата, на английски на всеки език на страницата: „Working... — copilot-operator“, „Paused“, „Waiting for you (1)“, когато нещо чака оператора, „Waiting for your password“; после как е свършило последното съобщение — „Done“, „Error“, „Stopped“, „Blocked“, „Limit reached“.',
           },
           {
             key: 'actor.asks',
@@ -995,8 +995,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Try again',
             bg: 'Опитай отново',
-            doesEn: 'When the remote could not be fetched — a password not given, a network down: fetches again, and Git asks for the password again if it must. Beside it, the branch can be made from what was last fetched here.',
-            doesBg: 'Когато remote-ът не е могъл да бъде взет — непоставена парола, липса на мрежа: взима отново, и Git пак пита за паролата, ако трябва. До него бранчът може да се направи от последно взетото тук.',
+            doesEn: 'When the remote could not be fetched — a password not given, a network down: fetches again, and Git asks for the password again if it must. Beside it, the branch can be made from what was last fetched here. Also when making the branch was refused (the folder changed since it was read): reads the folder again, the name kept.',
+            doesBg: 'Когато remote-ът не е могъл да бъде взет — непоставена парола, липса на мрежа: взима отново, и Git пак пита за паролата, ако трябва. До него бранчът може да се направи от последно взетото тук. Също когато създаването на бранча е отказано (папката се е променила, откакто е прочетена): прочита папката отново, името остава.',
           },
           {
             key: 'nb.making',
@@ -2098,8 +2098,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'button',
             en: 'Edit',
             bg: 'Редактирай',
-            doesEn: 'Opens a waiting task in the form below, to change it.',
-            doesBg: 'Отваря чакаща задача във формата отдолу, за да се промени.',
+            doesEn: 'Opens a waiting task in the form below, to change it. One that carries on in its own chat starts over in a new chat when what it does is changed; a new name or what it depends on keeps it carrying on.',
+            doesBg: 'Отваря чакаща задача във формата отдолу, за да се промени. Задача, която продължава в своя чат, започва отначало в нов чат, когато се промени това, което прави; ново име или зависимости я оставят да продължи.',
           },
           {
             key: 'q.up',
@@ -2322,8 +2322,8 @@ export const SYSTEM_GUIDE: readonly GuideScreen[] = [
             kind: 'note',
             en: 'While a message is at work, a change here takes effect at once where it can: the rules a step is judged by, the limits, the pauses and the reports. The models, plan mode, the project, the skills and the like apply from the next message; the chat window\'s own settings from the next time it opens.',
             bg: 'Докато работи съобщение, промяна тук влиза в сила веднага, където може: правилата, по които се преценява всяка стъпка, ограниченията, паузите и отчетите. Моделите, режимът с план, проектът, уменията и други такива важат от следващото съобщение, а настройките на самия прозорец на чата — от следващото му отваряне.',
-            doesEn: 'A setting saved while a message is at work: the rules a step is judged by (programs, scripts, downloads, deny patterns…), the limits, pauses and reports, the locators and the steps to the chat take effect at once, in the open Copilot window too; the models, plan mode, the folder, the project and the skills from the next message; the window\'s address, browser and waits when it opens again.',
-            doesBg: 'Настройка, записана докато работи съобщение: правилата за стъпките (програми, скриптове, изтегляния, забранени шаблони…), ограниченията, паузите и отчетите, локаторите и стъпките до чата важат веднага, и в отворения прозорец на Copilot; моделите, „Първо план“, папката, проектът и skill-овете — от следващото съобщение; адресът, браузърът и изчакванията на прозореца — когато се отвори отново.',
+            doesEn: 'A setting saved while a message is at work: the rules a step is judged by (programs, scripts, downloads, deny patterns…), every limit, the pauses and reports, the locators, the steps to the chat and the window\'s waits take effect at once, in the open Copilot window too; the models, plan mode, the folder, the project and the skills from the next message; the window\'s address and browser when it opens again.',
+            doesBg: 'Настройка, записана докато работи съобщение: правилата за стъпките (програми, скриптове, изтегляния, забранени шаблони…), всички ограничения, паузите и отчетите, локаторите, стъпките до чата и изчакванията на прозореца важат веднага, и в отворения прозорец на Copilot; моделите, „Първо план“, папката, проектът и skill-овете — от следващото съобщение; адресът и браузърът на прозореца — когато се отвори отново.',
           },
           {
             key: 'live.close',

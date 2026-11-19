@@ -40,7 +40,8 @@ export function DoneLabel() {
     watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-awaits'] });
     return () => watch.disconnect();
   }, []);
-  const end = activity && !activity.running && !activity.starting && !activity.queue && activity.last && activity.last.status !== 'aborted' ? activity.last : null;
+  // Only a stop of the operator's own says nothing (bug hunt 2026-11-18): every stop did, a window closed included.
+  const end = activity && !activity.running && !activity.starting && !activity.queue && activity.last && !activity.last.byOperator ? activity.last : null;
   const shown = end !== null && end.at !== seen && !waits;
   useEffect(() => {
     if (!shown || !end) return;

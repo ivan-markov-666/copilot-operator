@@ -40,18 +40,20 @@ console.log('--- what a save changes at once, and what it only names ---');
   };
   // The run's sections are the loaded settings' own objects too, as in a start: read the old value before the save.
   const iterationsAtStart = started.limits.maxIterations;
+  const subtasksAtStart = started.limits.maxSubtasks ?? 20;
   const [replyAtStart, headlessAtStart] = [started.copilot.replyTimeoutSec, started.copilot.headless];
   const saved = await load(asSaved);
   const change = live.take(saved);
   t.check(
     // The reply wait at once since 2026-11-18 (the window open is handed it); the browser shown or not with the window.
-    'named by kind: the allowlist, the limit and the reply wait at once; plan mode, the standing mode and the subtasks next; the browser with the window',
+    // The lead's subtasks at once too since 2026-11-18, as every limit is (it is told how many are left with each report).
+    'named by kind: the allowlist, the limits and the reply wait at once; plan mode and the standing mode next; the browser with the window',
     [change.now.sort(), change.next.sort(), change.window],
-    [['copilot.replyTimeoutSec', 'execution.allowedPrograms', 'limits.maxIterations'], ['execution.mode', 'execution.planMode', 'limits.maxSubtasks'], ['copilot.headless']],
+    [['copilot.replyTimeoutSec', 'execution.allowedPrograms', 'limits.maxIterations', 'limits.maxSubtasks'], ['execution.mode', 'execution.planMode'], ['copilot.headless']],
   );
-  t.check('taken in place: the run\'s own objects hold the new values', [runCfg.execution.allowedPrograms.includes('tzutil'), runCfg.limits.maxIterations, runCfg.limits === limitsBefore, runCfg.copilot.replyTimeoutSec], [true, iterationsAtStart + 7, true, replyAtStart + 60]);
-  t.check('only named: plan mode, the run\'s mode, the subtasks and the browser are as the run began', [runCfg.execution.planMode, runCfg.execution.mode, runCfg.limits.maxSubtasks, runCfg.copilot.headless], [started.execution.planMode, 'unattended', started.limits.maxSubtasks, headlessAtStart]);
-  t.check('those who listen heard it once, with what was taken', heard, [['copilot.replyTimeoutSec', 'execution.allowedPrograms', 'limits.maxIterations']]);
+  t.check('taken in place: the run\'s own objects hold the new values', [runCfg.execution.allowedPrograms.includes('tzutil'), runCfg.limits.maxIterations, runCfg.limits.maxSubtasks, runCfg.limits === limitsBefore, runCfg.copilot.replyTimeoutSec], [true, iterationsAtStart + 7, subtasksAtStart + 1, true, replyAtStart + 60]);
+  t.check('only named: plan mode, the run\'s mode and the browser are as the run began', [runCfg.execution.planMode, runCfg.execution.mode, runCfg.copilot.headless], [started.execution.planMode, 'unattended', headlessAtStart]);
+  t.check('those who listen heard it once, with what was taken', heard, [['copilot.replyTimeoutSec', 'execution.allowedPrograms', 'limits.maxIterations', 'limits.maxSubtasks']]);
   const paced = { ...asSaved, pacing: { settleMs: started.pacing.settleMs + 250 } };
   const again = live.take(await load(paced));
   t.check('a later save names its own change, not the ones before it', again, { now: ['pacing.settleMs'], next: [], window: [] });

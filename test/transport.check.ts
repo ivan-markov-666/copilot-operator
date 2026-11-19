@@ -1453,6 +1453,24 @@ try {
       'conversationLink:none', 'chatMore:not-here:noConversation', 'renameItem:not-here:noConversation',
     ]);
     state.conversations = true;
+
+    /*
+     * A step for when the chat opens that must be there and is not (bug hunt 2026-11-18): opening the newest
+     * conversation ran it, its failure was swallowed, and six locators were said "no conversation" instead of being
+     * looked for; it was also said as having stopped the work, in a check that only reads. Looked at, not stopping.
+     */
+    const d = await fixture('check-step', '<p>blank</p>', { signInTimeoutMs: 2_000, extraSteps: [{ id: 'mode', name: 'Chat mode', when: 'open', locator: '#no-such-mode', action: 'click', must: true, waitSec: 1 } as ChatStep] });
+    Object.assign(d.transport as unknown as { firstLookMs: number; settleMs: number }, { firstLookMs: 4_000, settleMs: 300 });
+    await d.page.route(/^https:\/\/m365\.cloud\.microsoft\//, async (route) => {
+      if (route.request().resourceType() !== 'document') return await route.fulfill({ status: 204, body: '' });
+      return await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8">${parseChatId(route.request().url()) ? conversation() : chat()}` });
+    });
+    await d.transport.ensureSignedIn(HOME, { stepsLookOnly: true });
+    const stepped = await d.transport.checkLocators();
+    t.check("a required step not there: the conversation's locators still looked for, and the step said as not found", table(stepped).filter((x) => /^(turn|userMessage|answer|copy|chatMore|renameItem|step:mode):/.test(x)), [
+      'userMessage:found:1', 'turn:found:2', 'answer:found:1', 'copy:found:1', 'chatMore:found:1', 'renameItem:found:1', 'step:mode:none',
+    ]);
+    t.check('said as a failure the work went on without, never as one that stopped it', named(d.events, 'locator-missing').map((e) => [e.detail?.key, e.detail?.stopped]), [['step:mode', false]]);
   });
 
   // -------------------------------------------------------------------------------------------

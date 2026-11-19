@@ -159,6 +159,31 @@ await scenario('a supervised run asks before every step, on the approvals route'
   t.check('nothing is left waiting', await h.call('GET', '/approvals'), []);
 });
 
+/*
+ * "Run this and the rest" where the run may not go on unasked, and a card answered after it went (bug hunt 2026-11-18):
+ * the first ran the step as "Run" and asked the next again, saying nothing; the second answered "ok: false" with 200, so
+ * the page took the press. Both refused now, with what to do; the card stays.
+ */
+await scenario('"Run this and the rest" that cannot be given is said, and a card gone is said', { execution: { allowedPrograms: [] } }, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'runall', [greeting]));
+  h.chat.script(reply.steps("Set-Content -Path hello.txt -Value 'hi' -Encoding utf8", "Set-Content -Path more.txt -Value 'more' -Encoding utf8"), reply.done());
+  await h.call('POST', `/sessions/${s!.id}/start`, { mode: 'confirm' });
+  type Approval = { id: string; stepId: number };
+  const first = await waitFor('the first step to wait', async () => (await h.call<Approval[]>('GET', '/approvals'))[0]);
+  const all = await h.raw('POST', `/approvals/${first.id}`, { action: 'run-all' });
+  const said = (all.body as { message?: string }).message ?? '';
+  t.check('"Run this and the rest" is refused', all.status, 400);
+  t.truthy('with why, and what to press instead', /Run this and the rest/.test(said) && /allowedPrograms/.test(said) && /"Run" runs this step/.test(said), said);
+  t.check('the card still waits, and nothing ran', [(await h.call<Approval[]>('GET', '/approvals')).some((a) => a.id === first.id), existsSync(join(h.repo, 'hello.txt'))], [true, false]);
+  await h.call('POST', `/approvals/${first.id}`, { action: 'run' });
+  const again = await h.raw('POST', `/approvals/${first.id}`, { action: 'run' });
+  t.check('a card answered already: refused, not "ok: false" with 200', [again.status, JSON.stringify(again.body).includes('not waiting any more')], [400, true]);
+  const second = await waitFor('the second step to be asked, as the run still asks', async () => (await h.call<Approval[]>('GET', '/approvals')).find((a) => a.stepId === 2));
+  await h.call('POST', `/approvals/${second.id}`, { action: 'run' });
+  await h.idle();
+  t.check('the task is done, both steps run', [(await h.session(s!.id)).tasks[0]!.status, h.git('show', 'cop/runall:more.txt')], ['done', 'more']);
+});
+
 await scenario('a reply that is not in the format is sent back, not guessed at', {}, async (h) => {
   const [s] = await h.importPlan(plan(h, 'format', [greeting]));
   h.chat.script(
