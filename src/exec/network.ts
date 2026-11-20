@@ -143,7 +143,18 @@ const FILE_EXTENSIONS = new Set([
   'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'css', 'map', 'ps1', 'psm1', 'cs', 'py', 'java', 'go', 'rs',
   'png', 'jpg', 'jpeg', 'gif', 'svg', 'ico', 'webp', 'pdf', 'out', 'tmp', 'bak', 'lock',
   'exe', 'cmd', 'bat', 'dll', 'tar', 'gz', 'tgz',
+  // A project's own files named in a local request (third hunt, 2026-11-20): `App.vue`, `page.aspx`, `site.scss`.
+  'vue', 'svelte', 'astro', 'aspx', 'ascx', 'cshtml', 'razor', 'scss', 'sass', 'less', 'sql', 'graphql', 'gql',
+  'woff', 'woff2', 'ttf', 'zip', 'env', 'sh', 'rb', 'php', 'kt', 'swift', 'mts', 'cts',
 ]);
+
+/**
+ * The text a request sends, as PowerShell's `-Body`/`-Form` and curl's `-d`/`--data…`/`--json`/`-F` give it: data for
+ * the address the URL names, not a place the request goes (third hunt, 2026-11-20 — `-Body '{"email":"user@test.com"}'`
+ * read `test.com` as a second host, and a local API test was held as a download). Only a quoted value that runs nothing:
+ * a double-quoted one with `$` in it can hold `$(…)`, which runs, and is read as before.
+ */
+const SENT_TEXT = /(\s(?:-Body|-Form|-d|--data(?:-raw|-binary|-urlencode|-ascii)?|--json|-F|--form)(?::|=|\s+))('(?:[^']|'')*'|"[^"$`]*")/gi;
 
 /**
  * The host a URL names, read from the text after its `://`, or null when it cannot be read for
@@ -225,7 +236,7 @@ export function onlyLoopbackTargets(command: string): boolean {
    * quote, `;`, `|`, `&`, a bracket or a comma — so that a second command glued on after a path
    * (`…/x;iwr('evil.example')`) is still read.
    */
-  const rest = command.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`;|&(){}<>,]*/gi, ' ');
+  const rest = command.replace(SENT_TEXT, '$1 ').replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`;|&(){}<>,]*/gi, ' ');
   for (const token of rest.split(/[\s'"`=,;|&(){}<>]+/)) {
     // A bracketed IPv6 address anywhere in the token: a proxy (`-x [2001:db8::1]:8080`) or an address given to curl.
     for (const v6 of token.matchAll(/\[([0-9a-f:.]*:[0-9a-f:.]*)\]/gi)) if (!isLoopback(v6[1]!)) return false;

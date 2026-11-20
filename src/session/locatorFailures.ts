@@ -4,7 +4,8 @@
  * each. Kept in the data folder, so a failure seen before a restart is still shown; read by the banner on every page
  * and by Settings, where the locator's field is in red, until the locator is changed there or the operator closes it.
  */
-import { readStoreJson, writeFileAtomically } from './store.js';
+import { rename } from 'node:fs/promises';
+import { readStoreJson, StoreFileUnusable, writeFileAtomically } from './store.js';
 import { CHAT_LOCATOR_KEYS, type ChatLocatorKey } from '../transport/locators.js';
 import { isStepKey } from '../transport/chatSteps.js';
 
@@ -51,6 +52,24 @@ export class LocatorFailures {
     return raw.filter((f): f is LocatorFailure => !!f && typeof f === 'object' && isKey((f as LocatorFailure).key) && typeof (f as LocatorFailure).locator === 'string' && typeof (f as LocatorFailure).at === 'string');
   }
 
+  /**
+   * As kept, or — the file there but not readable, after a power cut say — the file moved aside beside itself and the
+   * list begun again (third hunt, 2026-11-20): refused, every failure after it was dropped without a word, and the banner,
+   * the red field and the file for a chatbot were gone for good. These are notices, kept since; nothing of the operator's
+   * is lost, and where the old one went is said.
+   */
+  private async readOrPutAside(): Promise<LocatorFailure[]> {
+    try {
+      return await this.read();
+    } catch (e) {
+      if (!(e instanceof StoreFileUnusable)) throw e;
+      const aside = `${this.file}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      await rename(this.file, aside);
+      console.error(`[locators] ${this.file} could not be read; moved to ${aside}, and the list begun again`);
+      return [];
+    }
+  }
+
   async get(key: string): Promise<LocatorFailure | null> {
     return (await this.list()).find((f) => f.key === key) ?? null;
   }
@@ -78,7 +97,7 @@ export class LocatorFailures {
    */
   private async change(edit: (all: LocatorFailure[]) => LocatorFailure[]): Promise<void> {
     const run = async () => {
-      await writeFileAtomically(this.file, async () => JSON.stringify(edit(await this.read()), null, 2));
+      await writeFileAtomically(this.file, async () => JSON.stringify(edit(await this.readOrPutAside()), null, 2));
     };
     const done = this.queue.then(run, run);
     this.queue = done.catch(() => undefined);

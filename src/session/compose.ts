@@ -75,6 +75,8 @@ export type ComposeInput = {
   planNote?: string;
   /** The operator's notes about this task not sent yet (`Task.notes`), as `operatorNotesSection` writes them. */
   operatorNotes?: string;
+  /** Nothing is committed for the task: the operator's chat in their own folder. See `whyItStopped`. */
+  noCommits?: boolean;
 };
 
 /** The operator's notes about a task, as the chat is given them: with the opening, or with a report while it runs. */
@@ -172,22 +174,26 @@ const PARKED_FOR: Record<NonNullable<TaskContinuation['parkedFor']>, string> = {
   password: 'for a password Git asked for in its own window',
 };
 
-export function whyItStopped(c: TaskContinuation): string {
+/**
+ * `committed`: whether what the task had changed was committed for it — not in the operator's chat, where nothing is
+ * branched or committed (third hunt, 2026-11-20: "what had changed is committed on this branch" was said there, beside
+ * the note that nothing is).
+ */
+export function whyItStopped(c: TaskContinuation, committed = true): string {
+  const kept = committed ? ', and what had changed is committed on this branch.' : '.';
   if (c.how === 'failed') return describeEnding(c.fromAttempt, c.ended, c.stoppedBecause);
   if (c.how === 'interrupted') {
     const where = c.interruption ? `\n\n${describeInterruption(c.interruption)}\n\n` : ' ';
     return (
       'The runner stopped unexpectedly while this task was in progress — the program was closed, the machine went off or it ' +
-      'crashed; nothing you did failed — and it has now started again. The files are as your work left them, and what had ' +
-      `changed is committed on this branch.${where}`.trimEnd()
+      `crashed; nothing you did failed — and it has now started again. The files are as your work left them${kept}${where}`.trimEnd()
     );
   }
   if (c.how === 'parked') {
     const what = c.parkedFor ? PARKED_FOR[c.parkedFor] : 'for the operator';
     return (
       `It waited ${what}, and was set aside so that the queue's other tasks could run while nobody was there — not because ` +
-      'anything failed. The operator has answered now: the answer is below. The files are as you left them, and what had ' +
-      'changed is committed on this branch.'
+      `anything failed. The operator has answered now: the answer is below. The files are as you left them${kept}`
     );
   }
   if (c.how === 'stopped') {
@@ -264,7 +270,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
      */
     if (input.planNote) {
       const message =
-        `Continue task ${input.taskNumber}: ${title}, in this same conversation. ${whyItStopped(input.continuing)} ` +
+        `Continue task ${input.taskNumber}: ${title}, in this same conversation. ${whyItStopped(input.continuing, !input.noCommits)} ` +
         `Its plan was not approved yet, so the work does not go on from where it stopped: plan first, as below — look at ` +
         `what is there now, changing nothing — and send the plan for approval. Step numbering restarts at 1.\n\n` +
         // The plan-mode note once, with the runner's notes below (second bug hunt, 2026-11-19: it was sent twice).
@@ -279,7 +285,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     if (input.continuing.how === 'failed' && instruction) {
       const message =
         `Continue task ${input.taskNumber}: ${title}, in this same conversation, with a new instruction from the operator.\n\n` +
-        `${whyItStopped(input.continuing)}\n\n` +
+        `${whyItStopped(input.continuing, !input.noCommits)}\n\n` +
         `The files are as that attempt left them, and what it changed is in your working tree. Do not start over: look at ` +
         `what is there first, keep what is right, and do what the instruction below says. The assignment is the one you ` +
         `were given above, with the instruction added to it. Verify the result as for any task. Step numbering restarts at 1.\n\n` +
@@ -289,7 +295,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     }
     const message =
       `Continue task ${input.taskNumber}: ${title}, in this same conversation. ` +
-      `${whyItStopped(input.continuing)} ` +
+      `${whyItStopped(input.continuing, !input.noCommits)} ` +
       `Do not start over and do not repeat work that is done: start from ` +
       `your plan, say in \`notes\` which stages are done and which one you are on, and carry on. ` +
       (instruction
@@ -299,7 +305,7 @@ export function composeOpening(input: ComposeInput): { messages: string[]; first
     return { messages: [message], firstMessage: message };
   }
   const continuationLine = input.continuing
-    ? `\n\nThis continues an earlier attempt at this task. ${whyItStopped(input.continuing)}` +
+    ? `\n\nThis continues an earlier attempt at this task. ${whyItStopped(input.continuing, !input.noCommits)}` +
       (input.continuing.how === 'failed'
         ? `\n\nWhat that attempt changed is in your working tree. Look at it before changing anything, keep what is right, and do what the instruction below says.`
         : ` Look at what is already done before changing anything, and carry on from there.`) +

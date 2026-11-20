@@ -289,10 +289,11 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
    * (2026-11-12: "I copy the whole JSON, or the one message, and send it to Kerrigan"); one that cannot be attached, the
    * message goes without it, saying so.
    */
-  const tell = async (text: string, files: string[] = []): Promise<string> => {
+  const tell = async (text: string, files: string[] = [], withNotes = true): Promise<string> => {
     await pacer.throttleSend();
-    // The person's notes written while the work goes on ("Add to it") go to her with her next message.
-    const notes = await store.takeUnsentNotes(session.id, task.id).catch(() => []);
+    // The person's notes written while the work goes on ("Add to it") go to her with her next message — not with her
+    // contract, whose reply is not read (third hunt, 2026-11-20); her task, after it, carries them.
+    const notes = withNotes ? await store.takeUnsentNotes(session.id, task.id).catch(() => []) : [];
     const message = notes.length > 0 ? `${text}\n\n${operatorNotesSection(notes, true)}` : text;
     if (notes.length > 0) sink.event('operator-note-sent', { notes: notes.length, with: 'kerrigan' }, `${notes.length} note(s) from the operator go to Kerrigan`);
     let before: number;
@@ -821,7 +822,7 @@ export async function runKerriganTask(transport: ChatTransport, session: Session
       });
       if (signal?.aborted) return await finish('aborted', 'stopped before anything was sent to Kerrigan');
       // Her acknowledgement is not read: what she does begins with the task.
-      await tell(opening);
+      await tell(opening, [], false);
       session.contractSent = true;
       await store.updateSession(session.id, (s) => {
         s.contractSent = true;

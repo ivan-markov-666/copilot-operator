@@ -1124,4 +1124,81 @@ try {
   await h15?.stop();
 }
 
+/*
+ * Third hunt (2026-11-20): a stale copy of a card already answered on another page — its press overwrote the answer with
+ * "let go" — and a carry-on that failed before it carried on, which kept the chat with an answered card: "Continue" refused
+ * there as "the queue carries it on", which it would not, and no card left on the queue's page.
+ */
+console.log('\n--- a card answered elsewhere, pressed again; a carry-on that fails lets its chat go ---');
+let h16: Harness | null = null;
+try {
+  h16 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', questions: 'ask' }, copilot: { defaultModel: 'Auto' } } });
+  await h16.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h16.call('PUT', '/queue', { items: [{ id: 'b1', name: 'Asks', prompt: 'Ask me which name to use for b1.txt.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  h16.chat.script(reply.ask('Which name should b1.txt hold?', ['north', 'south'], 'The task leaves it to you.'));
+  await h16.call('POST', '/queue/run');
+  const q = await waitFor('the task set aside', async () => {
+    const v = await h16!.call<QueueView>('GET', '/queue');
+    return !v.running && v.items[0]?.status === 'parked' ? v : null;
+  }, 60_000);
+  const thread = q.items[0]!.sessionId!;
+  await h16.call('POST', '/queue/items/b1/answer', { answer: 'north' });
+  t.check('answered on the queue\'s page: it waits to carry on', (await h16.call<QueueView>('GET', '/queue')).items[0]?.status, 'waiting');
+  const stale = await h16.raw('POST', '/queue/items/b1/answer', { answer: 'south', sessionId: thread });
+  type Rec = { tasks: Array<{ id: string; parked?: { answer?: { kind: string; answer?: string } } }> };
+  const kept = (await h16.call<Rec>('GET', `/sessions/${thread}`)).tasks.at(-1)?.parked?.answer;
+  t.truthy('a stale copy of the card, pressed in the chat: refused, saying it was answered', stale.status === 400 && /answered already/.test(JSON.stringify(stale.body)), stale.body);
+  t.check('and the answer given stays', [kept?.kind, kept?.answer], ['question', 'north']);
+
+  // It cannot go back to the branch it began on: the branch is gone.
+  const began = h16.git('branch', '--show-current');
+  h16.git('switch', '-q', '-c', 'elsewhere');
+  h16.git('branch', '-q', '-D', began);
+  await h16.call('POST', '/queue/run');
+  const failed = await waitFor('the carry-on to fail', async () => {
+    const v = await h16!.call<QueueView>('GET', '/queue');
+    return !v.running && v.items[0]?.status === 'failed' ? v : null;
+  }, 60_000);
+  t.truthy('it failed, saying why', /could not be put back on/.test(failed.items[0]?.why ?? ''), failed.items[0]);
+  const after = (await h16.call<Rec>('GET', `/sessions/${thread}`)).tasks.at(-1);
+  t.check('its chat let go: the card closed', after?.parked?.answer?.kind, 'released');
+  h16.chat.script(reply.done('b1.txt now holds north, as the operator answered; written with Set-Content and read back.'));
+  const cont = await h16.raw('POST', `/chat/${thread}/tasks/${after!.id}/continue`);
+  t.truthy('and "Continue" carries it on in its chat', cont.status < 300, cont.body);
+  await h16.idle();
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h16?.stop();
+}
+
+/*
+ * Third hunt (2026-11-20): queue.json held by another program a few seconds while a task works — a backup, an indexer.
+ * The poll that asks whether the queue still runs threw, and the task was ended "failed" while its chat's run went on.
+ */
+console.log('\n--- queue.json held a few seconds while a task works: the task goes on to its end ---');
+let h17: Harness | null = null;
+try {
+  h17 = await startHarness({ settings: { limits: { retryBlockedInFreshChat: 0 }, execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Auto' } } });
+  await h17.call('PUT', '/queue', { items: [{ id: 'c1', name: 'Slow', prompt: 'Wait a few seconds, then write c1.txt.', model: '', dependsOn: [], branch: 'folder', review: false }] });
+  h17.chat.script(
+    reply.steps('Start-Sleep -Seconds 9', "Set-Content -Path c1.txt -Value 'c1' -Encoding utf8"),
+    reply.done('c1.txt holds c1: the step waited nine seconds as asked, then wrote it, and Get-Content read it back.'),
+  );
+  await h17.call('POST', '/queue/run');
+  await waitFor('the task at work', async () => ((await h17!.call<QueueView>('GET', '/queue')).items[0]?.status === 'running' ? true : null), 30_000);
+  await new Promise((r) => setTimeout(r, 1_500));
+  const file = join(h17.dataDir, 'queue.json').replace(/'/g, "''");
+  execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `$f = [IO.File]::Open('${file}', 'Open', 'ReadWrite', 'None'); Start-Sleep -Seconds 4; $f.Close()`], { windowsHide: true });
+  const ended = await waitFor('the queue to end', async () => {
+    const v = await h17!.call<QueueView>('GET', '/queue').catch(() => null);
+    return v && !v.running && v.items[0]?.status !== 'running' ? v : null;
+  }, 90_000);
+  t.check('held for a moment: the task went on to its end', [ended.items[0]?.status, ended.items[0]?.why ?? null], ['done', null]);
+} catch (e) {
+  t.truthy('ran without throwing', false, (e as Error).stack ?? String(e));
+} finally {
+  await h17?.stop();
+}
+
 t.finish();

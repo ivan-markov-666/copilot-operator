@@ -158,6 +158,27 @@ await scenario('the whole of it: understood, surveyed, planned, done by the work
   t.truthy('the second, the list as the plan changed it', report2.includes('Your list of subtasks (version 3): 1 done, 1 running, 2 planned') && report2.includes('2. [running] write result.txt — Work'), report2);
 });
 
+/*
+ * A note written before the lead's conversation began (third hunt, 2026-11-20): it went out with the lead's contract,
+ * whose reply is not read — with the rules of the conversation, not with the work. It goes with the assignment now.
+ */
+await scenario("a note written before the lead's first message goes with the assignment, not with the contract", { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
+  const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
+  await h.ops.addTaskNote(sent.threadId, sent.taskId, 'Write it in capitals: HELLO.');
+  let assignment = '';
+  h.chat.script(
+    (m) => {
+      assignment = m.text;
+      return reply.lead.done({ Title: 'nothing to do', Result: 'The assignment was read; nothing was needed for this check.' }, ['the assignment as read'], { understanding: 'Goal: result.txt holding hello, in capitals as the note says. Result: the fields Title and Result.' });
+    },
+  );
+  await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+  await h.idle();
+  const contract = h.chat.sent.find((m) => m.contract === 'lead');
+  t.check('the contract went without the note', contract?.text.includes('Write it in capitals: HELLO.'), false);
+  t.truthy('the assignment carries it', assignment.includes('Write it in capitals: HELLO.'), assignment.slice(-600));
+});
+
 await scenario('a subtask without the list of subtasks is sent back for it, and nothing of it runs', { execution: { mode: 'unattended', isolation: 'none-accepted' } }, async (h) => {
   const sent = await h.call<Sent>('POST', '/chat', { text: ASSIGNMENT, model: 'Think deeper', lead: true });
   let askedAgain = '';

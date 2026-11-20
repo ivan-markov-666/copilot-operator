@@ -172,7 +172,8 @@ try {
   // what it hears back has to be the way to do it now, not "invalid literal".
   const download = detailOf(block({ status: 'continue', steps: [{ id: 1, type: 'download', file: 'x.ps1', run: true }] }));
   t.truthy('a download step is told there are no file steps', download.includes('this runner has no file steps'), download);
-  t.truthy('and how to do it instead, with Set-Content', download.includes('Set-Content'), download);
+  // In the step itself, not a file written to be run (third hunt, 2026-11-20: the file was then refused).
+  t.truthy('and how to do it instead: in the command itself, several lines if need be', download.includes('put it in the command itself') && !download.includes('in the next'), download);
   const bash = parseReply(block({ status: 'continue', steps: [{ id: 1, type: 'command', shell: 'bash', cmd: 'ls' }] }), opts);
   t.check('shell bash is refused at steps.0.shell', bash.ok ? 'ACCEPTED' : (bash.paths ?? []).includes('steps.0.shell'), true);
   t.check('a fractional timeoutSec is refused', parseReply(block({ status: 'continue', steps: [{ id: 1, type: 'command', cmd: 'npm test', timeoutSec: 1.5 }] }), opts).ok, false);

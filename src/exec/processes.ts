@@ -62,7 +62,11 @@ export type Leftover = ProjectProcess & { ports: number[]; how?: StopHow };
  * `killed` and `failed` are the bot's own; `notOurs` is what appeared in the project folder during
  * the same time and could not be tied to a step the bot started, and so was left running.
  */
-export type ReapResult = { killed: Leftover[]; failed: Leftover[]; notOurs: Leftover[] };
+/**
+ * `unread`: why the machine's list of processes could not be read (third hunt, 2026-11-20) — then nothing is known to be
+ * left running, which is not the same as nothing left: a server the task started may still hold its port.
+ */
+export type ReapResult = { killed: Leftover[]; failed: Leftover[]; notOurs: Leftover[]; unread?: string };
 
 /** How long a process is given to close after the polite `taskkill`, before `/F`. */
 export const CLOSE_GRACE_MS = 5_000;
@@ -157,11 +161,29 @@ const SLACK_MS = 2_000;
  * older than the bot's work are never read at all.
  */
 export async function processTable(since: number): Promise<ProcessRow[]> {
+  return (await readProcessTable(since)) ?? [];
+}
+
+/** What reads the table: PowerShell, or what a check puts in its place. */
+type TableQuery = (script: string, timeoutMs: number) => Promise<string | null>;
+let tableQuery: TableQuery = powershell;
+/** For the checks: a table that cannot be read, without a machine under load. Undefined puts PowerShell back. */
+export function setProcessTableQueryForChecks(query?: TableQuery): void {
+  tableQuery = query ?? powershell;
+}
+
+/**
+ * The processes created since `since`, or null when the list could not be read — its query timed out or failed, twice
+ * (third hunt, 2026-11-20: read as an empty list, a server the task left running was never stopped nor named; a second
+ * try with more time is what a machine busy for a moment needs).
+ */
+export async function readProcessTable(since: number): Promise<ProcessRow[] | null> {
   const from = dmtfOf(since - SLACK_MS);
-  const text = await powershell(
+  const script =
     `Get-CimInstance Win32_Process -Filter "CreationDate >= '${from}'" | Select-Object ProcessId, ParentProcessId, Name, CommandLine, ` +
-      "@{n='Created';e={ if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 } }} | ConvertTo-Json -Compress",
-  );
+    "@{n='Created';e={ if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 } }} | ConvertTo-Json -Compress";
+  const text = (await tableQuery(script, 20_000)) ?? (await tableQuery(script, 45_000));
+  if (text === null) return null;
   return parseJsonList<{ ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null; Created: number }>(text)
     .map((p) => ({
       pid: p.ProcessId,
@@ -318,8 +340,10 @@ export async function findLeftovers(
   projectDir: string,
   before: ProcessSnapshot,
   tracker?: ProcessTracker,
-): Promise<{ ours: Leftover[]; notOurs: Leftover[] }> {
-  const now = await processTable(before.since);
+): Promise<{ ours: Leftover[]; notOurs: Leftover[]; unread?: string }> {
+  const read = await readProcessTable(before.since);
+  if (read === null) return { ours: [], notOurs: [], unread: 'the list of processes could not be read (Get-CimInstance Win32_Process timed out or failed, twice)' };
+  const now = read;
   // A process is "the same" only if its id *and* its creation time match: an id alone is reused.
   const known = new Set(before.processes.map((p) => `${p.pid}@${p.created}`));
   // The console host of a server's own window is its child in the table, and goes when the last
@@ -345,8 +369,8 @@ export async function findLeftovers(
 
 /** Stops what the bot left running since the snapshot, and says what it stopped and what it did not. */
 export async function reapLeftovers(projectDir: string, before: ProcessSnapshot, tracker?: ProcessTracker): Promise<ReapResult> {
-  const { ours, notOurs } = await findLeftovers(projectDir, before, tracker);
-  const result: ReapResult = { killed: [], failed: [], notOurs };
+  const { ours, notOurs, unread } = await findLeftovers(projectDir, before, tracker);
+  const result: ReapResult = { killed: [], failed: [], notOurs, ...(unread ? { unread } : {}) };
   if (ours.length === 0) return result;
   const how = await stopProcesses(ours.map((l) => l.pid));
   for (const l of ours) {

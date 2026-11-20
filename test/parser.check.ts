@@ -1,4 +1,5 @@
 import { parseReply, extractFencedBlocks, stripLineNumbers } from '../src/protocol/parser.js';
+import { parseKerriganReply } from '../src/protocol/kerriganSchema.js';
 import { mergeDeviations, describeDeviations, resolveDeviations, mergeDisputes, describeDisputes } from '../src/protocol/replySchema.js';
 
 const opts = { stopMarker: 'Край', defaultShell: 'pwsh' as const };
@@ -183,3 +184,15 @@ const withSteps = parseReply(block({ status: 'plan', plan: aPlan, steps: [{ id: 
 expectPlan('"plan" with steps is refused', withSteps.ok, false);
 console.log(`\nplan failures: ${planWrong} (expect 0)`);
 if (planWrong > 0) process.exitCode = 1;
+
+// Kerrigan's question offers its answers as she wrote them (third hunt, 2026-11-20): read as numbers, "Use Node 20" was 20.
+{
+  const asked = parseKerriganReply('```json\n' + JSON.stringify({ status: 'ask', question: 'Which Node should the build use?', options: ['Use Node 20', 'Option 1: keep v1', 'Node 22'] }) + '\n```');
+  const kept = asked.ok ? asked.reply.options : null;
+  const ok1 = JSON.stringify(kept) === JSON.stringify(['Use Node 20', 'Option 1: keep v1', 'Node 22']);
+  console.log(`${ok1 ? 'ok   ' : 'WRONG'} Kerrigan's question keeps its answers as written${ok1 ? '' : ` — got ${JSON.stringify(kept)}`}`);
+  const chosen = parseKerriganReply('```json\n' + JSON.stringify({ status: 'answer', options: [1, '3'] }) + '\n```');
+  const ok2 = chosen.ok && JSON.stringify(chosen.reply.options) === JSON.stringify([1, '3']);
+  console.log(`${ok2 ? 'ok   ' : 'WRONG'} her answer by numbers is read as she wrote it, for the card to number${ok2 ? '' : ` — got ${JSON.stringify(chosen.ok ? chosen.reply.options : chosen)}`}`);
+  if (!ok1 || !ok2) process.exitCode = 1;
+}

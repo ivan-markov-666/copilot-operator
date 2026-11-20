@@ -14,6 +14,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { gitSync } from '../vcs/git.js';
 import { scanCommandHeads } from './commandHeads.js';
+import { foldersAlong } from './locations.js';
 
 export type PackageScriptRun = {
   /** The package.json, as a full path. */
@@ -128,6 +129,37 @@ export function packageScriptsRun(command: string, cwd: string, shell?: string):
     }
   }
   return out;
+}
+
+/**
+ * What a line's npm or pnpm left out of package.json (third hunt, 2026-11-20): a step is started with scripts off
+ * (`npm_config_ignore_scripts`, `stepEnv.ts`), which keeps a package's install scripts from running — and also each
+ * script's `pre…` and `post…`. `npm test` ran without its `pretest` (a build first, say) and came back as an ordinary pass
+ * or fail, nothing said. The words for the step's output, or null when nothing was left out.
+ */
+export function npmHooksNote(command: string, cwd: string, shell?: string): string | null {
+  const left: string[] = [];
+  for (const seg of foldersAlong(command, cwd, shell)) {
+    for (const call of scanCommandHeads(seg.text, shell ?? 'pwsh').calls) {
+      const runner = call.head.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|ps1)$/i, '').toLowerCase();
+      if (runner !== 'npm' && runner !== 'pnpm') continue;
+      for (const run of packageScriptsRun(seg.text, seg.cwd, shell)) {
+        if (run.dynamic || run.command === null) continue;
+        const scripts = scriptsOnDisk(run.pkg);
+        for (const hook of [`pre${run.name}`, `post${run.name}`]) {
+          const cmd = scripts?.[hook];
+          if (cmd && !left.some((l) => l.startsWith(`"${hook}"`))) left.push(`"${hook}" (${cmd.length > 120 ? `${cmd.slice(0, 120)}…` : cmd})`);
+        }
+      }
+      break;
+    }
+  }
+  if (left.length === 0) return null;
+  return (
+    `npm left out package.json's ${left.join(' and ')} here: the runner starts npm with scripts off, which keeps packages' ` +
+    'install scripts from running and also skips a script\'s "pre" and "post" scripts. If the work needs one, run it as a step of its ' +
+    `own first (npm run ${left[0]!.slice(1, left[0]!.indexOf('"', 1))}).`
+  );
 }
 
 /** Whether a line writes package.json's scripts itself: `npm pkg set scripts.x=…`, `npm set-script`, or the file written. */

@@ -161,7 +161,8 @@ The statuses, and what each one requires:
 ## Rules that hold for everything
 
 - No passwords, tokens, keys or personal data in a message for a chat.
-- Nothing destructive, nothing that cannot be undone, nothing pushed to a remote, without the person's word.
+- Nothing destructive, nothing that cannot be undone, without the person's word — and never a push: pushing is the
+  person's, in the program's Git view, and the runner refuses it whoever asks.
 - Limits: you may send at most a set number of messages to chats for one task of the person's — the runner tells you
   how many are left with every result. It is a ceiling, not a target; when they run short, deliver what you have, with
   what is missing said.

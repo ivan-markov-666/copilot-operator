@@ -21,7 +21,7 @@ import type { Handoff } from '../protocol/replySchema.js';
 import type { HandoffCard, HandoffOutcome } from '../session/model.js';
 import { dangerousRefusal } from '../exec/dangerous.js';
 import { botSelfRefusal, networkFetchReason } from '../exec/network.js';
-import { matchDenyPattern } from '../exec/policy.js';
+import { denyPatternRefusal } from '../exec/policy.js';
 import { platformReason } from '../exec/platforms.js';
 import { codeFilesRun, shellScriptsRun } from '../exec/scriptFiles.js';
 import { endsTheShell } from '../exec/stops.js';
@@ -39,8 +39,8 @@ const inside = (roots: string[], path: string): boolean =>
 
 /** Why the runner would refuse this text outright, or null. */
 function refusedText(text: string, denyPatterns: string[]): string | null {
-  const deny = matchDenyPattern(text, denyPatterns);
-  const why = dangerousRefusal(text) ?? botSelfRefusal(text) ?? (deny ? `refused: matches deny pattern /${deny}/` : null);
+  const deny = denyPatternRefusal(text, 'pwsh', denyPatterns);
+  const why = dangerousRefusal(text) ?? botSelfRefusal(text) ?? (deny ? `refused: ${deny}` : null);
   return why ? why.replace(/^refused:\s*/, '') : null;
 }
 

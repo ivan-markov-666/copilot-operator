@@ -143,7 +143,8 @@ The statuses, and what each one requires:
 ## Rules that hold for everything
 
 - No passwords, tokens, keys or personal data in a subtask; a secret is read from where it is kept, never written.
-- Nothing destructive, nothing that cannot be undone, nothing pushed to a remote, without the operator's word.
+- Nothing destructive, nothing that cannot be undone, without the operator's word — and never a push: pushing is the
+  operator's, in the program's Git view, and the runner refuses it whoever asks.
 - The worker's commands run in PowerShell on Windows, in the project folder, without administrator rights.
 - Limits: you have at most a set number of subtasks — the runner tells you how many are left with every report.
   It is a ceiling, not a target: plan the subtasks the work needs, within it; when they run short, deliver what you

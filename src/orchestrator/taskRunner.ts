@@ -35,7 +35,7 @@ import { runChecks, failureMessage, failureRedactions, failureReport, environmen
 import { activeChecks, suspendDisputed, settleAfterReview, onlyDerivedFailing, isDerivedCheck, withAttemptIds } from './derivedChecks.js';
 import { workingDirFor, isWorkingDirProblem, workingDirNote } from '../exec/workDir.js';
 import { findRedactions, redactSecrets, type RedactionHit } from '../exec/redaction.js';
-import { snapshotProcesses, reapLeftovers, describeLeftovers, ProcessTracker, type ProcessSnapshot } from '../exec/processes.js';
+import { snapshotProcesses, reapLeftovers, describeLeftovers, ProcessTracker, type ProcessSnapshot, type ReapResult } from '../exec/processes.js';
 import { collectEnvironment, describeEnvironment } from '../exec/environment.js';
 import { describeCrash } from '../transport/edgeCrash.js';
 import { runReview, findingsMessage, deliverableFor, type ReviewOutcome } from './review.js';
@@ -43,6 +43,7 @@ import { allAboutTheTask, isRepeat, findingId, type ReviewFinding } from '../pro
 import { repoState, workingTreePaths } from '../vcs/git.js';
 import { describeStep, checkAccessRefusal, checkCommandRefusal, commandRefusal, staticCheck, type PolicyConfig } from '../exec/policy.js';
 import { networkFetchReason } from '../exec/network.js';
+import { npmHooksNote } from '../exec/npmScripts.js';
 import { handoffCard, handoffOutcomeOf, handoffResultMessage, HANDOFF_NOBODY, MAX_SHELL_ENDING_RETURNS, shellEndingLines, shellEndingMessage } from './handoff.js';
 import { chosenSaid } from './chosenAnswers.js';
 import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
@@ -55,7 +56,7 @@ import { stripAnsi, writeReport } from '../exec/reportFile.js';
 import { gapFrom, Pacer } from '../util/pacing.js';
 import { RunLog } from '../log/runLog.js';
 import { composeOpening, operatorNotesSection, readOnlyNote } from '../session/compose.js';
-import { describeChange, ReferenceGuard, referenceMessage, referenceNote, type ReferenceProject } from '../vcs/referenceGuard.js';
+import { describeChange, ReferenceGuard, referenceMessage, referenceNote, type ReferenceChange, type ReferenceProject } from '../vcs/referenceGuard.js';
 import { changedSince, takeAfter, takeCheckpoint } from '../session/checkpoint.js';
 import { MIN_TRIED_APPROACHES } from '../protocol/replySchema.js';
 import { enforceScope, scopeMessage, scopeNote } from '../vcs/scope.js';
@@ -1560,8 +1561,14 @@ export async function runTask(
   /** Stops what appeared since a snapshot, tied to the project, writes it on the task, and says what it was. */
   const reap = async (since: ProcessSnapshot | null, by: string): Promise<Array<{ name: string; ports: number[] }>> => {
     if (!since) return [];
-    const result = await reapLeftovers(work.cwd, since, tracker).catch(() => null);
-    if (!result) return [];
+    const result = await reapLeftovers(work.cwd, since, tracker).catch((e: unknown): ReapResult => ({ killed: [], failed: [], notOurs: [], unread: (e as Error).message }));
+    // Not read is not "nothing left" (third hunt, 2026-11-20): said, on the record and in the run.
+    if (result.unread) {
+      sink.event('processes-unread', { by, why: result.unread },
+        `what ${by} left running could not be looked at: ${result.unread}. A server it started may still be running and holding its port.`, 'warn');
+      await record(`LEFT RUNNING BY ${by.toUpperCase()}: NOT KNOWN`, `${result.unread}. Nothing was stopped; a server it started may still be running.`);
+      return [];
+    }
     if (result.notOurs.length > 0) {
       sink.event('processes-not-ours', { by, count: result.notOurs.length, pids: result.notOurs.map((l) => l.pid) },
         `${result.notOurs.length} new process(es) in the project folder were not started by the bot, so they were left running: ` +
@@ -1624,6 +1631,21 @@ export async function runTask(
 
     // The net under the plan's own checks: whatever the task left running is stopped and named.
     await reap(processesBefore, 'the task');
+    /*
+     * The projects for reference looked at once more, after what the task left running is stopped (third hunt,
+     * 2026-11-20): a step stopped by the operator ended the round before its look, and a server left running kept writing
+     * after the last one — what they changed stayed changed.
+     */
+    if (reference?.active) {
+      const touched = await reference.check().catch((): ReferenceChange[] => []);
+      if (touched.length > 0) {
+        const all = touched.every((c) => c.putBack);
+        sink.event('reference-put-back', { end: true, changes: touched },
+          `at the end of the task, a project for reference only had changed, ${all ? 'put back' : 'NOT all put back'}: ${touched.map((c) => `${c.name}: ${describeChange(c)}`).join('; ')}`,
+          all ? 'warn' : 'error');
+        await record('REFERENCE PUT BACK AT THE END', referenceMessage(touched));
+      }
+    }
     await reference?.close().catch(() => undefined);
     reference = null;
 
@@ -2289,6 +2311,8 @@ export async function runTask(
     const openingNotes = await store.takeUnsentNotes(session.id, task.id).catch(() => []);
     const opening = composeOpening({
       level1,
+      // Nothing is committed in the operator's chat: a carry-on there is not told its changes were (third hunt, 2026-11-20).
+      ...(session.vcs?.enabled ? {} : { noCommits: true }),
       level2: task.level2,
       prompt: task.prompt,
       taskTitle: task.title,
@@ -2503,6 +2527,15 @@ export async function runTask(
       runAfterCommit = (cs) => runChecks(cs, checkOptions);
       const ran: CheckOutcome[] = await runChecks(checks, checkOptions);
       for (const o of ran) lastGate.set(o.check.name, { passed: o.passed, detail: o.detail });
+      // What the checks changed in a project for reference is put back now, not blamed on the next step (third hunt, 2026-11-20).
+      const touchedByChecks = reference?.active ? await reference.check().catch((): ReferenceChange[] => []) : [];
+      if (touchedByChecks.length > 0) {
+        const all = touchedByChecks.every((c) => c.putBack);
+        sink.event('reference-put-back', { checks: true, changes: touchedByChecks },
+          `the checks changed a project for reference only, ${all ? 'put back' : 'NOT all put back'}: ${touchedByChecks.map((c) => `${c.name}: ${describeChange(c)}`).join('; ')}`,
+          all ? 'warn' : 'error');
+        runnerNotes.push(referenceMessage(touchedByChecks, 'checks'));
+      }
 
       /*
        * The operator stopped the run, which is not a verdict on the work. The check in flight was
@@ -2845,6 +2878,8 @@ export async function runTask(
           deliverable,
           deviations,
           disputes,
+          // The operator's notes the implementer was given, for the reviewer to judge the work by them too (third hunt, 2026-11-20).
+          notes: ((await store.getSession(session.id).catch(() => null))?.tasks.find((x) => x.id === task.id)?.notes ?? []).filter((n) => n.sentAt).map((n) => n.text),
           /*
            * The approved plan, for the review to hold the work to (plan mode, 2026-10-13): this attempt's, or —
            * carried on in its chat — the one the attempt it continues worked to.
@@ -3116,6 +3151,30 @@ export async function runTask(
      * recorded as skipped. Ended `aborted` "before the review", it named a review that did not
      * exist, and a batch that stops on a failure counted it as one and skipped the sessions after.
      */
+    /*
+     * The operator's notes not sent yet, sent before a "done" is accepted (third hunt, 2026-11-20): they went out only with
+     * the opening and with a round's report, so a note written while the chat wrote its "done", or during the checks or
+     * the review, was never sent once the review passed — and "where it and the task disagree, this wins". True when some
+     * went, with the chat's answer to them in `lastMarkdown` for the loop to read.
+     */
+    const sendLateNotes = async (): Promise<boolean> => {
+      const late = await store.takeUnsentNotes(session.id, task.id).catch(() => []);
+      if (late.length === 0) return false;
+      const message =
+        `${operatorNotesSection(late, true)}\n\n` +
+        'The operator wrote this before your "done" was accepted. If the work already does what it asks, say "done" again; if not, ' +
+        'carry on with status "continue".';
+      sink.event('operator-note-sent', { notes: late.length, with: 'before done', iteration: iterations }, `${late.length} note(s) from the operator go out before the "done" is accepted`);
+      await record('OPERATOR NOTES BEFORE DONE — MESSAGE SENT', message);
+      await pacer.throttleSend();
+      const before = await transport.sendAndConfirm(message);
+      const next = await transport.waitForReply(before);
+      await saveReply(`notes-before-done-${iterations}`, next);
+      lastMarkdown = next.markdown;
+      await pacer.settle();
+      return true;
+    };
+
     const settleDone = async (summary: string | undefined): Promise<TaskOutcome | null> => {
       const verdict = await gateOnChecks();
       if (verdict === 'stopped') return await finish('aborted', 'stopped by the operator while the checks ran', summary, lastMarkdown);
@@ -3135,7 +3194,11 @@ export async function runTask(
       if (reviewWanted && signal?.aborted) return await finish('aborted', 'stopped by the operator before the review', summary, lastMarkdown);
       const reviewed = await gateOnReview(summary);
       if (reviewed === 'stopped') return await finish('aborted', 'stopped by the operator during the review', summary, lastMarkdown);
-      if (reviewed === 'accept') return await finish('done', undefined, summary, lastMarkdown);
+      if (reviewed === 'accept') {
+        // A note written during the checks or the review goes out, and the work is judged again on the chat's answer.
+        if (await sendLateNotes()) return null;
+        return await finish('done', undefined, summary, lastMarkdown);
+      }
       if (reviewed === 'give-up') return await finish('blocked', reviewBlockedReason(), summary, lastMarkdown);
       return null;
     };
@@ -3608,6 +3671,7 @@ export async function runTask(
       }
 
       if (done && reply.steps.length === 0) {
+        if (await sendLateNotes()) continue;
         const ended = await settleDone(reply.summary);
         if (ended) return ended;
         continue;
@@ -3824,6 +3888,10 @@ export async function runTask(
             result.shellProblem.message, 'error');
           break;
         }
+
+        // npm's "pre" and "post" scripts, left out with scripts off: said with the step's output (third hunt, 2026-11-20).
+        const hooks = result.outcome === 'refused' ? null : npmHooksNote(step.cmd, work.cwd, effectiveShell(step.shell));
+        if (hooks) result.stderr = `${result.stderr}${result.stderr.endsWith('\n') || !result.stderr ? '' : '\n'}[runner] ${hooks}\n`;
 
         /*
          * A project for reference only changed: put back as it was, the chat told with the step's own output, and

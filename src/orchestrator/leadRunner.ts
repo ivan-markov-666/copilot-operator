@@ -100,10 +100,10 @@ export function assignmentMessage(task: Pick<Task, 'title' | 'prompt' | 'skill'>
  * conversation, told why it stopped, to carry on from where the work got to — the subtasks and their reports are above
  * it — rather than to start the assignment again.
  */
-export function continuationMessage(task: Pick<Task, 'title' | 'continuing'>, n: number, facts: AssignmentFacts, unreported?: { n: number; title: string }): string {
+export function continuationMessage(task: Pick<Task, 'title' | 'continuing'>, n: number, facts: AssignmentFacts, unreported?: { n: number; title: string }, committed = true): string {
   const instruction = task.continuing?.instruction?.trim();
   return [
-    `Continue assignment ${n}: ${task.title.trim() || 'untitled'}, in this same conversation. ${task.continuing ? whyItStopped(task.continuing) : ''}`.trim(),
+    `Continue assignment ${n}: ${task.title.trim() || 'untitled'}, in this same conversation. ${task.continuing ? whyItStopped(task.continuing, committed) : ''}`.trim(),
     '',
     'Do not start over: the subtasks so far and the worker\'s reports are above in this conversation. Say in "notes" where the work got to, and carry on from there in the lead\'s format.',
     ...(unreported
@@ -338,10 +338,14 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
   let sent = 0;
   let replies = 0;
   /** One message to the lead, and its reply. */
-  const tell = async (text: string): Promise<string> => {
+  /*
+   * `withNotes` false for the contract (third hunt, 2026-11-20): its reply is not read, and a note sent with it went with
+   * the rules of the conversation instead of with the work — the assignment, after it, carries them.
+   */
+  const tell = async (text: string, withNotes = true): Promise<string> => {
     await pacer.throttleSend();
     // The operator's notes written while the work goes on ("Add to it") go to the lead with its next message.
-    const notes = await store.takeUnsentNotes(session.id, task.id).catch(() => []);
+    const notes = withNotes ? await store.takeUnsentNotes(session.id, task.id).catch(() => []) : [];
     const message = notes.length > 0 ? `${text}\n\n${operatorNotesSection(notes, true)}` : text;
     if (notes.length > 0) sink.event('operator-note-sent', { notes: notes.length, with: 'lead' }, `${notes.length} note(s) from the operator go to the lead`);
     const before = await leadChat.sendAndConfirm(message);
@@ -783,7 +787,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     const lastGiven = prior ? [...prior.rounds].reverse().find((r) => r.subtask)?.subtask : undefined;
     // Not one tried again first, nor one the operator took as failed on its card (2026-11-19): the lead is told that.
     const unreported = lastGiven && !lastGiven.report && !task.continuing?.retrySubtask && task.continuing?.takenAsFailed?.n !== lastGiven.n ? { n: lastGiven.n, title: lastGiven.title } : undefined;
-    const assignment = carryingOn ? continuationMessage(task, n || 1, facts, unreported) : assignmentMessage(task, n || 1, facts, !!session.contractSent);
+    const assignment = carryingOn ? continuationMessage(task, n || 1, facts, unreported, !!session.vcs?.enabled) : assignmentMessage(task, n || 1, facts, !!session.contractSent);
     await setTask((t) => {
       t.firstMessage = session.contractSent ? assignment : `${contract}\n\n---\n\n${assignment}`;
     });
@@ -792,7 +796,7 @@ export async function runLeadTask(transport: ChatTransport, session: Session, ta
     if (signal?.aborted) return await finish('aborted', 'stopped before the assignment was sent');
     let markdown: string;
     if (!session.contractSent) {
-      await tell(contract);
+      await tell(contract, false);
       session.contractSent = true;
       await store.updateSession(session.id, (s) => {
         s.contractSent = true;

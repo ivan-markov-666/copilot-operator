@@ -12,7 +12,7 @@
  *   npm run check:locators
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startHarness, Tally, waitFor } from './support/harness.js';
@@ -221,24 +221,29 @@ console.log('\n--- the one file for a chatbot (2026-11-18): downloaded, all it n
 
 /*
  * Found 2026-11-19 (second bug hunt): a list of the bot's own read as empty when it could not be read, and the next
- * change wrote that over it. The failures' list there but broken: a new failure is refused, the file kept as it was.
+ * change wrote that over it. Then (third hunt, 2026-11-20) refused, every failure after it was dropped without a word —
+ * no banner, no red field, no file for a chatbot, for good. Now the broken one is moved aside, kept whole beside it, and
+ * the list begun again with the failure that came.
  */
-console.log('\n--- a list of failures there but not readable: never written over ---');
+console.log('\n--- a list of failures there but not readable: kept aside, never written over, and the list goes on ---');
 {
   const dir = mkdtempSync(join(tmpdir(), 'cop-failures-'));
   try {
     const file = join(dir, 'locator-failures.json');
-    writeFileSync(file, '[{"key": "send", "locator": "x", "at": "2026-11-19T00:00:00Z"', 'utf8');
+    const broken = '[{"key": "send", "locator": "x", "at": "2026-11-19T00:00:00Z"';
+    writeFileSync(file, broken, 'utf8');
     const kept = new LocatorFailures(file);
-    const refused = await kept.record({ key: 'composer', locator: 'y', at: '2026-11-19T00:00:01Z', where: 'test' } as never).then(() => '', (e: unknown) => (e as Error).message);
-    t.check('recorded over a broken list: refused, naming the file; the file as it was; listed as none', [
-      refused.includes(file) && /not valid JSON/.test(refused),
-      readFileSync(file, 'utf8'),
-      (await kept.list()).length,
-    ], [true, '[{"key": "send", "locator": "x", "at": "2026-11-19T00:00:00Z"', 0]);
+    const problem = await kept.record({ key: 'composer', locator: 'y', at: '2026-11-19T00:00:01Z', why: 'test', stopped: true }).then(() => '', (e: unknown) => (e as Error).message);
+    const aside = readdirSync(dir).filter((n) => n.startsWith('locator-failures.json.unreadable-'));
+    t.check('recorded over a broken list: the failure kept; the broken one beside it, as it was', [
+      problem,
+      (await kept.list()).map((f) => f.key),
+      aside.length,
+      aside[0] ? readFileSync(join(dir, aside[0]), 'utf8') : null,
+    ], ['', ['composer'], 1, broken]);
     writeFileSync(file, '', 'utf8');
-    await kept.record({ key: 'composer', locator: 'y', at: '2026-11-19T00:00:01Z', where: 'test' } as never);
-    t.check('an empty one is a list not begun: recorded', (await kept.list()).map((f) => f.key), ['composer']);
+    await kept.record({ key: 'send', locator: 'z', at: '2026-11-19T00:00:02Z', why: 'test', stopped: true });
+    t.check('an empty one is a list not begun: recorded', (await kept.list()).map((f) => f.key), ['send']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

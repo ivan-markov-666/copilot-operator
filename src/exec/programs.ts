@@ -212,6 +212,13 @@ export function inlineCodeRefusal(command: string): string | null {
   return null;
 }
 
+/** Ways of starting a program that no command head shows, so the allowlist cannot judge which program it is. */
+const PROGRAM_STARTED_UNSEEN: Array<{ what: string; pattern: RegExp }> = [
+  { what: 'through .NET (System.Diagnostics.Process)', pattern: /\[\s*(?:System\.)?Diagnostics\.Process(?:StartInfo)?\s*\]|\bNew-Object\b[^|;\n]*?\b(?:System\.)?Diagnostics\.Process(?:StartInfo)?\b/i },
+  { what: 'through WMI (Win32_Process Create)', pattern: /\bInvoke-(?:Cim|Wmi)Method\b[^|;\n]*\bCreate\b|\bWin32_Process\b[^|;\n]*\.Create\s*\(/i },
+  { what: 'through a COM object', pattern: /\bNew-Object\b[^|;\n]*\s-ComObject\b|\[\s*(?:System\.)?Activator\s*\]\s*::\s*CreateInstance/i },
+];
+
 /**
  * Why a command may not run under the allowlist, or null.
  *
@@ -241,6 +248,25 @@ export function programRefusal(command: string, allowedPrograms: string[], shell
         ? "PowerShell itself rejects it too: nothing may follow @' or @\" on its line — the text starts on the next line, and '@ or \"@ closes it at the very start of a line of its own."
         : 'Write it so every program is named literally — close each quote and bracket, and call a program by its ' +
           'name or a literal path rather than through a variable or an expression.')
+    );
+  }
+  /*
+   * A program started where no head is (third hunt, 2026-11-20): through .NET, WMI or a COM object, or by Start-Process
+   * given a name known only when it runs. `[Diagnostics.Process]::Start('nmap', …)` and `$p='nmap'; Start-Process $p`
+   * ran a program the list does not name.
+   */
+  const unseen = PROGRAM_STARTED_UNSEEN.find((u) => u.pattern.test(command));
+  if (unseen) {
+    return (
+      `refused: this starts a program ${unseen.what}, where the runner cannot tell which program it is, and only the programs in ` +
+      'execution.allowedPrograms may start. Call the program by its name, as a command of its own.'
+    );
+  }
+  const chosenLater = startProcessTargets(command).find((t) => /^[$@(]/.test(t) || t.includes('$'));
+  if (chosenLater) {
+    return (
+      `refused: Start-Process is given "${chosenLater}", a program known only when it runs, and only the programs in ` +
+      'execution.allowedPrograms may start. Name the program literally.'
     );
   }
   // What `Start-Process` is asked to start is a program this line starts, as much as a head is.

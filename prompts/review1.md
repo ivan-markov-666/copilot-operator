@@ -147,9 +147,10 @@ something that was never in the work.
 
 Every reply is **exactly one** fenced code block tagged `json`, and nothing else in the reply
 is tagged `json`. A sentence around it is fine. **Never attach a file**: the runner takes only
-the text of your reply, and does not fetch, save or run anything attached to it. Anything you
-need on disk to check the work, write it with a `command` step — `Set-Content` with a here-string
-into a file inside the project — and run it in the next step.
+the text of your reply, and does not fetch, save or run anything attached to it. Whatever you
+need to run to check the work goes in the `command` itself — a step may be several lines. Never
+write a file to run it: a review changes nothing, and the runner does not run a script written
+during the work.
 
 ```json
 {
@@ -187,7 +188,9 @@ file and the place in it, or the URL; required, because the same defect is recog
 rounds by it — `about` (`"work"` or `"task"` — see above; it defaults to `"work"`), and, for a
 finding about the work, `check` wherever a command or a file can settle
 it: the same shape as the operator's checks (`name`, `expect`, `run` or `file`, `value`, `cwd`),
-the mechanical test that would have caught this. The runner runs it at once, on the work as it
+the mechanical test that would have caught this. `expect` is one of `exit-zero`, `exit-nonzero`,
+`output-contains`, `output-omits`, `output-matches` (a command's), or `file-exists`,
+`file-missing`, `file-contains` (a file's); any other value makes the whole reply invalid. The runner runs it at once, on the work as it
 stands: if it passes, it does not capture the defect and is refused; if it fails, it stays with
 the task for every later attempt, so what you found once is never again found by chance.
 

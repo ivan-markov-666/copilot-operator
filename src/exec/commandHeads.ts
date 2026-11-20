@@ -474,7 +474,19 @@ class PowerShellScan {
   /** A bare word, with the quoted parts and escapes inside it resolved. */
   private readWord(i: number): Word {
     let literal = '';
+    /*
+     * `@name` where an argument starts is a splat (third hunt, 2026-11-20): PowerShell hands the program the words the
+     * variable holds, known only when it runs. Read as the word "@a", `$a=@('group','delete'); az @a list` was az's
+     * `list`, a read, and deleted the resource group; `git @a` got past every git rule. Only the name alone: `@types/node`
+     * is the text it reads as, which PowerShell hands over as written.
+     */
     let dynamic = false;
+    if (this.at(i) === '@' && isIdent(this.at(i + 1))) {
+      let k = i + 1;
+      while (isIdent(this.at(k))) k += 1;
+      const after = this.at(k);
+      dynamic = after === '' || isSpace(after) || WORD_BREAK.has(after);
+    }
     let j = i;
     while (j < this.s.length) {
       const c = this.at(j);
@@ -803,6 +815,17 @@ function scanCmd(src: string): HeadScan {
       else if (tokens[k]?.includes('==')) k += 1;
       else k += 3; // a EQU b
     } else if (word() === 'for') {
+      /*
+       * `for /f %i in ('nmap -sV host') do …` runs the command in its brackets (third hunt, 2026-11-20): only the one
+       * after `do` was read, so a program not on the list ran there unseen. With `usebackq` the command is in back-quotes.
+       */
+      const inner = /\bin\s*\(\s*(['`])([\s\S]*?)\1\s*\)/i.exec(segment);
+      if (inner && tokens.some((t) => t.toLowerCase() === '/f')) {
+        const sub = scanCmd(inner[2]!);
+        heads.push(...sub.heads);
+        calls.push(...sub.calls);
+        if (sub.uncertain) fail(sub.uncertain);
+      }
       const doAt = tokens.findIndex((t) => t.toLowerCase() === 'do');
       k = doAt < 0 ? tokens.length : doAt + 1;
     }

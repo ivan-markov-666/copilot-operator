@@ -182,26 +182,13 @@ const VcsInput = z
  * model of its own, so a check it cannot decide by running something and comparing is a check
  * it would have to take on trust — which is the thing the check exists to replace.
  */
+/** What a check expects, as a plan, a skill and a reviewer's finding write it. */
+export const CHECK_EXPECTS = ['exit-zero', 'exit-nonzero', 'output-contains', 'output-omits', 'output-matches', 'file-exists', 'file-missing', 'file-contains'] as const;
+
 export const CheckInput = z
   .object({
     name: z.string().trim().min(3, 'A check needs a name saying what it is checking.'),
-    expect: z.enum(
-      [
-        'exit-zero',
-        'exit-nonzero',
-        'output-contains',
-        'output-omits',
-        'output-matches',
-        'file-exists',
-        'file-missing',
-        'file-contains',
-      ],
-      {
-        error:
-          'expect must be one of: exit-zero, exit-nonzero, output-contains, output-omits, output-matches, ' +
-          'file-exists, file-missing, file-contains.',
-      },
-    ),
+    expect: z.enum(CHECK_EXPECTS, { error: `expect must be one of: ${CHECK_EXPECTS.join(', ')}.` }),
     run: z.string().trim().optional(),
     /**
      * The shell to run it in. Left out is the usual answer and the better one.

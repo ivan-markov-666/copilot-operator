@@ -132,12 +132,17 @@ export default function QueuePage() {
   const items = queue?.items ?? [];
   const numberOf = (id: string): number => items.findIndex((x) => x.id === id) + 1;
 
-  const save = async (next: Edit[]): Promise<boolean> => {
+  /*
+   * The task as it was when "Edit" was pressed (third hunt, 2026-11-20): the form is filled once, and the list it was sent
+   * with was the one of the last poll — another tab's change to the same task, read meanwhile, was taken as this one's.
+   */
+  const [editBase, setEditBase] = useState<Edit | null>(null);
+  const save = async (next: Edit[], seen: Edit[] = items.map(asEdit)): Promise<boolean> => {
     setBusy(true);
     setErr('');
     try {
       // With the list it was made on: a task added or taken out since, in another tab, stays so (2026-11-19).
-      setQueue(await api.setQueue(next, items.map(asEdit)));
+      setQueue(await api.setQueue(next, seen));
       return true;
     } catch (e) {
       setErr((e as Error).message);
@@ -155,17 +160,27 @@ export default function QueuePage() {
   const submit = async () => {
     const edits = items.map(asEdit);
     const at = editing ? edits.findIndex((x) => x.id === editing) : -1;
+    // The task taken out meanwhile, in another tab: said, the form kept — saved again, it is a new task.
+    if (editing && at < 0) {
+      setEditing(null);
+      setEditBase(null);
+      setErr(t('q.editGone'));
+      return;
+    }
     if (at >= 0) edits[at] = { id: edits[at]!.id, ...fromDraft(draft) };
     else edits.push({ id: newItemId(items), ...fromDraft(draft) });
+    const seen = items.map(asEdit).map((x) => (editing && editBase && x.id === editing ? editBase : x));
     const after = startsAfter;
-    if (await save(edits)) {
+    if (await save(edits, seen)) {
       setDraft(EMPTY);
       setEditing(null);
+      setEditBase(null);
       if (after) await act(api.runQueue);
     }
   };
   const edit = (x: QueueItem) => {
     setEditing(x.id);
+    setEditBase(asEdit(x));
     setDraft({
       name: x.name ?? '',
       prompt: x.prompt,

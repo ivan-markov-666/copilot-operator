@@ -806,4 +806,81 @@ console.log('\n--- a message longer than the limit: its beginning as text, the w
     await hl?.stop();
   }
 }
+
+/*
+ * A note written while the chat writes its "done" (third hunt, 2026-11-20): notes went out only with the opening and
+ * with a round's report, so this one was never sent — the message ended done with the operator's word unread, though a
+ * note "wins where it and the task disagree". It goes out before the "done" is accepted, and the chat answers it.
+ */
+console.log('\n--- a note written while the chat writes its "done" goes out before the done is accepted ---');
+{
+  let hn: Harness | undefined;
+  try {
+    hn = await startHarness({ settings: { execution: { mode: 'unattended', isolation: 'none-accepted' } } });
+    const h = hn;
+    const sent = await h.call<Sent>('POST', '/chat', { text: 'Write hi into note.txt.', model: 'Think deeper' });
+    h.chat.script(
+      reply.steps("Set-Content -Path note.txt -Value 'hi' -Encoding utf8"),
+      async () => {
+        // The operator adds to it while the chat answers the report: a note to the message at work.
+        const noted = await h.call<{ noted?: boolean }>('POST', '/chat', { text: 'Write it in capitals: HI.', threadId: sent.threadId });
+        t.check('the second message is taken as a note to the message at work', noted.noted, true);
+        return reply.done('note.txt holds hi, written with Set-Content and read back with Get-Content to confirm it.');
+      },
+      (m) => {
+        t.truthy('the note goes to the chat before its "done" is accepted', m.text.includes('Write it in capitals: HI.') && m.text.includes('before your "done" was accepted'), m.text.slice(0, 600));
+        return reply.steps("Set-Content -Path note.txt -Value 'HI' -Encoding utf8");
+      },
+      reply.done('note.txt now holds HI in capitals, as the operator asked in the note; read back with Get-Content.'),
+    );
+    await h.call('POST', `/sessions/${sent.threadId}/start`, { mode: 'unattended' });
+    await h.idle();
+    const task = (await h.call<{ tasks: Array<{ status: string; notes?: Array<{ sentAt?: string }> }> }>('GET', `/sessions/${sent.threadId}`)).tasks[0];
+    t.check('the message ended done', task?.status, 'done');
+    t.check('and the note is marked sent', task?.notes?.map((n) => !!n.sentAt), [true]);
+    t.check('the note was acted on', readFileSync(join(h.repo, 'note.txt'), 'utf8').trim(), 'HI');
+    t.check('every scripted reply was used', h.chat.pending, 0);
+    t.check('the chat was never asked for a reply it had no script for', h.chat.problems, []);
+  } catch (e) {
+    t.truthy('the late-note scenario ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await hn?.stop();
+  }
+}
+
+/*
+ * A run Stopped while its window waited for the sign-in (third hunt, 2026-11-20): it ended at its opening with no task
+ * finished, and the sign-in it had asked for stayed asked — every later run said "Waiting for you to sign in", with the
+ * chat darkened, until the program was restarted.
+ */
+console.log('\n--- a run stopped while it waited for the sign-in leaves no sign-in asked for after it ---');
+{
+  let hs: Harness | undefined;
+  try {
+    hs = await startHarness({ settings: { execution: { mode: 'unattended', isolation: 'none-accepted' } } });
+    const h = hs;
+    let fail!: (e: Error) => void;
+    h.chat.signInAtStart = new Promise<void>((_, reject) => (fail = reject));
+    const first = await h.call<Sent>('POST', '/chat', { text: 'Say what this folder holds.', model: 'Think deeper' });
+    await h.call('POST', `/sessions/${first.threadId}/start`, { mode: 'unattended' });
+    const asked = await waitFor('the sign-in to be asked for', async () => ((await h.call<{ signIn?: boolean }>('GET', '/activity')).signIn ? true : null), 15_000).catch(() => false);
+    t.check('the run asks for the sign-in', asked, true);
+    await h.call('POST', `/sessions/${first.threadId}/stop`);
+    fail(new Error('the sign-in was not completed'));
+    await h.idle();
+    // Another message, in another chat, while it works: no sign-in is asked for.
+    h.chat.script(reply.steps('Start-Sleep -Seconds 4'), reply.done('The folder holds a README; nothing needed changing, and the pause step ran as asked.'));
+    const second = await h.call<Sent>('POST', '/chat', { text: 'Wait four seconds, then say what this folder holds.', model: 'Think deeper' });
+    await h.call('POST', `/sessions/${second.threadId}/start`, { mode: 'unattended' });
+    await waitFor('the second run to be working', async () => ((await h.call<{ status: string }>('GET', `/sessions/${second.threadId}`)).status === 'running' ? true : null), 15_000).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 1500));
+    t.check('while the next run works: no sign-in said', (await h.call<{ signIn?: boolean }>('GET', '/activity')).signIn ?? false, false);
+    await h.idle();
+  } catch (e) {
+    t.truthy('the stale sign-in scenario ran without throwing', false, (e as Error).stack ?? String(e));
+  } finally {
+    await hs?.stop();
+  }
+}
+
 t.finish();

@@ -54,7 +54,41 @@ export function scriptPathsRun(command: string): string[] {
       if (p && /\.ps1$/i.test(p)) paths.add(p);
     }
   }
+  /*
+   * `pwsh .\tools\fix.ps1`, `powershell -NoProfile .\tools\fix.ps1` (third hunt, 2026-11-20): PowerShell takes its first
+   * word that is not a switch as the script to run — pwsh as -File, Windows PowerShell as a command that runs it. Only
+   * `-File` and a script at the start of a statement were read, so a script the bot wrote ran without being read.
+   */
+  for (const call of scanCommandHeads(command, 'pwsh').calls) {
+    const program = call.head.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
+    if (program !== 'pwsh' && program !== 'powershell') continue;
+    const file = shellFileArgument(call.args);
+    if (file && /\.ps1$/i.test(file)) paths.add(file);
+  }
   return [...paths];
+}
+
+/** PowerShell's switches that take the next word as their value. */
+const PWSH_VALUE = /^-(?:ExecutionPolicy|ex|ep|WorkingDirectory|wd|ConfigurationName|config|CustomPipeName|SettingsFile|settings|OutputFormat|o|of|InputFormat|inp|if|WindowStyle|w|Version|v|PSConsoleFile|ConfigurationFile)$/i;
+/** PowerShell's switches after which what follows is a command, not a file. */
+const PWSH_COMMAND = /^-(?:Command|c|CommandWithArgs|cwa|EncodedCommand|e|ec|enc)$/i;
+
+/** The script a PowerShell command line is given: after `-File`, or its first word that is not a switch. */
+function shellFileArgument(args: CallArg[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a.dynamic) return null;
+    const word = a.literal;
+    if (/^-(?:File|f)$/i.test(word)) return args[i + 1] && !args[i + 1]!.dynamic ? args[i + 1]!.literal : null;
+    if (/^-(?:File|f):/i.test(word)) return word.slice(word.indexOf(':') + 1);
+    if (PWSH_COMMAND.test(word.split(':')[0]!)) return null;
+    if (word.startsWith('-')) {
+      if (!word.includes(':') && PWSH_VALUE.test(word)) i++;
+      continue;
+    }
+    return word;
+  }
+  return null;
 }
 
 /** Whether the command also writes a PowerShell script — with a cmdlet or a redirection. */
@@ -88,8 +122,8 @@ export function scriptFileRefusal(command: string, cwd: string, screen: (text: s
   if (paths.length === 0) return null;
   if (writesScript(command)) {
     return (
-      'refused: this step writes a script and runs it in the same line. Write the file in one step and run it in the ' +
-      'next, so that what is in the file can be read before it runs.'
+      'refused: this step writes a script and runs it in the same line, so what is in it could not be read before it ran. ' +
+      'Put what it does in the step itself — a command may be several lines.'
     );
   }
   for (const file of scriptFilesRun(command, cwd)) {
@@ -284,10 +318,67 @@ function codeFilesRunIn(command: string, cwd: string, shell?: string): string[] 
       file = a;
       break;
     }
-    if (!file || file.dynamic || !CODE_FILE.test(file.literal)) continue;
-    add(file.literal);
+    if (!file || file.dynamic) continue;
+    if (CODE_FILE.test(file.literal)) {
+      add(file.literal);
+      continue;
+    }
+    /*
+     * `node tools\fix`, `node .`, `python tools\fix` (third hunt, 2026-11-20): a runtime finds the file it runs the way it
+     * finds a module — the name as given, with its extensions, the folder's package.json "main" or its index — and a file
+     * the bot wrote ran unread when only a name with its extension was taken as one.
+     */
+    const entry = entryRun(program, file.literal, cwd);
+    if (entry) files.add(entry);
   }
   return [...files];
+}
+
+const isFile = (p: string): boolean => {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+};
+const isFolder = (p: string): boolean => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+const NODE_RUNTIMES = new Set(['node', 'nodejs', 'tsx', 'ts-node', 'ts-node-esm']);
+const NODE_EXTENSIONS = ['.js', '.cjs', '.mjs', '.ts', '.tsx', '.mts', '.cts', '.jsx'];
+
+/** The file a runtime runs when given `name` without a code extension, as it would find it; null when there is none. */
+function entryRun(program: string, name: string, cwd: string): string | null {
+  // deno and bun take words of their own (`bun test`, `deno task`) where a file would be: only a file named in full is one.
+  if (program === 'deno' || program === 'bun') return null;
+  const full = isAbsolute(name) ? name : resolve(cwd, name);
+  if (isFile(full)) return full;
+  if (NODE_RUNTIMES.has(program)) {
+    for (const ext of NODE_EXTENSIONS) if (isFile(full + ext)) return full + ext;
+    if (isFolder(full)) {
+      try {
+        const main = (JSON.parse(readFileSync(resolve(full, 'package.json'), 'utf8')) as { main?: unknown }).main;
+        if (typeof main === 'string' && main.trim()) {
+          const m = resolve(full, main);
+          if (isFile(m)) return m;
+          for (const ext of NODE_EXTENSIONS) if (isFile(m + ext)) return m + ext;
+          for (const ext of NODE_EXTENSIONS) if (isFile(resolve(m, `index${ext}`))) return resolve(m, `index${ext}`);
+        }
+      } catch {
+        /* no package.json, or not one that names a main: the folder's index */
+      }
+      for (const ext of NODE_EXTENSIONS) if (isFile(resolve(full, `index${ext}`))) return resolve(full, `index${ext}`);
+    }
+    return null;
+  }
+  if ((program === 'python' || program === 'python3' || program === 'py' || program === 'pythonw') && isFolder(full) && isFile(resolve(full, '__main__.py'))) {
+    return resolve(full, '__main__.py');
+  }
+  return null;
 }
 
 /**
@@ -373,7 +464,8 @@ export function scriptsRun(command: string, cwd: string, since?: string, shell?:
   for (const file of codeFilesRun(command, cwd, shell)) {
     if (!first(file)) continue;
     const written = inScratch(file) ? `it is in ${SCRATCH}, the folder for scratch files` : writesFileNamed(command, file) ? SAME_LINE : writtenDuringTheWork(file, since);
-    out.push({ file, kind: kindOfFile(file), written });
+    // A file without an extension is of its runtime's kind: `node tools\fix` runs JavaScript.
+    out.push({ file, kind: kindOfFile(file) ?? kindOfRuntime(command), written });
   }
   const segments = foldersAlong(command, cwd, shell);
   for (const seg of segments) {
@@ -390,6 +482,17 @@ export function scriptsRun(command: string, cwd: string, since?: string, shell?:
     out.push({ file: run.pkg, kind: 'npm', written: written === 'this same line writes it into package.json' ? SAME_LINE : written, script: { name: run.name, command: run.command } });
   }
   return out;
+}
+
+/** The kind of the code a line's runtime runs, for a file named without its extension. */
+function kindOfRuntime(command: string): ScriptKind | null {
+  for (const call of scanCommandHeads(command, 'pwsh').calls) {
+    const program = programOf(call.head);
+    if (NODE_RUNTIMES.has(program)) return program === 'node' || program === 'nodejs' ? 'js' : 'ts';
+    if (/^(?:python3?|pythonw|py)$/.test(program)) return 'py';
+    if (/^(?:ruby|perl|php)$/.test(program)) return 'other';
+  }
+  return null;
 }
 
 /** No box decides it: the project's own may run, the work's may not. */
@@ -449,7 +552,11 @@ export function ownScriptRefusal(command: string, cwd: string, since?: string, s
       continue;
     }
     if (run.written === SAME_LINE) {
-      return `refused: ${name} is written and run in this same line, so nothing could read it before it ran. Write it in one step and run it in the next. ${instead}`;
+      /*
+       * "Write it in one step and run it in the next" only where the operator's box lets a script of the work run (third
+       * hunt, 2026-11-20): said under the default boxes, the next step was refused for the very thing it advised.
+       */
+      return `refused: ${name} is written and run in this same line, so nothing could read it before it ran.${run.kind && rule.written && !opts.reviewer ? ' Write it in one step and run it in the next.' : ''} ${instead}`;
     }
     if (!rule.written) {
       if (run.shell) {

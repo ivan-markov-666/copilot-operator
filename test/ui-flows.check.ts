@@ -1982,6 +1982,38 @@ try {
    * list, "Add" reads that it starts after it and starts the queue, the task waits as a task that waits, then runs, with
    * its skill, and the list says so.
    */
+  /*
+   * Third hunt (2026-11-20): the edit form was sent with the list of the last poll, not with the task as it was when
+   * "Edit" was pressed — another tab's change to the same task, read meanwhile, was undone by a save that changed only
+   * the model; and a task taken out in another tab came back as a new one.
+   */
+  await scenario('the queue: saving an edit keeps what another tab changed meanwhile, and a task taken out stays out', { copilot: { defaultModel: 'Auto' } }, async (h, page, url) => {
+    await h.call('PUT', '/queue', { items: [{ id: 'q1', prompt: 'Write the summary.', model: 'Auto', dependsOn: [] }, { id: 'q2', prompt: 'Write the slides.', model: 'Auto', dependsOn: [] }] });
+    await page.goto(url('/queue'));
+    await page.locator('.queue-item').nth(0).getByRole('button', { name: en['q.edit'] }).click();
+    // Another tab changes what task 1 does, and the page reads it before Save.
+    const now = (await h.call<{ items: Array<Record<string, unknown>> }>('GET', '/queue')).items;
+    await h.call('PUT', '/queue', { items: now.map((x) => (x.id === 'q1' ? { ...x, prompt: 'Write the summary, in Bulgarian.' } : x)), seen: now });
+    await page.waitForTimeout(7_000);
+    await page.locator('#queue-name').fill('Summary');
+    await page.getByRole('button', { name: en['q.save'], exact: true }).click();
+    await waitFor('the name saved', async () => ((await h.call<{ items: Array<{ id: string; name?: string }> }>('GET', '/queue')).items.find((x) => x.id === 'q1')?.name === 'Summary' ? true : null), 10_000).catch(() => undefined);
+    const after = (await h.call<{ items: Array<{ id: string; name?: string; prompt: string }> }>('GET', '/queue')).items.find((x) => x.id === 'q1');
+    t.check("the name saved, the other tab's words kept", [after?.name, after?.prompt], ['Summary', 'Write the summary, in Bulgarian.']);
+
+    // Task 2 taken out in another tab while its edit is open: said, not added back.
+    await page.locator('.queue-item').nth(1).getByRole('button', { name: en['q.edit'] }).click();
+    const list = (await h.call<{ items: Array<Record<string, unknown>> }>('GET', '/queue')).items;
+    await h.call('PUT', '/queue', { items: list.filter((x) => x.id !== 'q2'), seen: list });
+    await page.waitForTimeout(7_000);
+    await page.locator('#queue-name').fill('Slides');
+    await page.getByRole('button', { name: en['q.save'], exact: true }).click();
+    await page.waitForTimeout(1_000);
+    const ids = (await h.call<{ items: Array<{ id: string }> }>('GET', '/queue')).items.map((x) => x.id);
+    t.check('the task taken out is not added back', ids, ['q1']);
+    t.truthy('and the page says why', ((await page.locator('.err').allTextContents()).join(' ')).includes(en['q.editGone']!), await page.locator('.err').allTextContents());
+  });
+
   await scenario('the queue while the chat works: a task added starts after it, with its skill', { execution: { mode: 'unattended', isolation: 'none-accepted' }, copilot: { defaultModel: 'Auto' }, limits: { retryBlockedInFreshChat: 0 } }, async (h, page, url) => {
     await h.call('POST', '/models/refresh');
     await h.call('PUT', '/skills', { skills: [{ name: 'new-test', description: 'Adding an automated test', text: 'Tests live in tests/e2e, one file per page.', projectDir: '' }] });
@@ -2805,6 +2837,129 @@ try {
     await notice.getByRole('button', { name: en['ed.saveAgain']!, exact: true }).click();
     await notice.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
     t.check('saved there again, with the edit; the notice gone', [existsSync(join(h.repo, 'gone.ts')) ? readFileSync(join(h.repo, 'gone.ts'), 'utf8') : null, await notice.count()], ['export const g = 1;\n// mine', 0]);
+  });
+
+  /*
+   * Third hunt (2026-11-20): an edit kept for a file that is gone when the page comes back. Only the server's "no such
+   * file" was shown, the edit out of reach and "Save it here again" with it.
+   */
+  await scenario('the editor: a file gone when the page comes back brings its edit back, said, and saved there again', {}, async (h, page, url) => {
+    writeFileSync(join(h.repo, 'later.ts'), 'export const l = 1;\n');
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'later.ts' }).click();
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(pane);
+    await pane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('// kept');
+    await page.getByRole('tab', { name: /later\.ts/ }).locator('.wb-unsaved').waitFor();
+    await page.waitForTimeout(800);
+    // The page left, the file deleted meanwhile, the page back.
+    await page.goto(url('/settings'));
+    rmSync(join(h.repo, 'later.ts'));
+    await page.goto(url('/'));
+    const back = page.locator('.wb-file-pane:not([hidden])');
+    const notice = back.locator('.ed-gone');
+    await notice.waitFor({ timeout: 15_000 }).catch(() => undefined);
+    t.check('back with the file gone: said, the edit shown, not saved', [await notice.isVisible().catch(() => false), (await editorText(back).catch(() => '')).endsWith('// kept'), await page.getByRole('tab', { name: /later\.ts/ }).locator('.wb-unsaved').count()], [true, true, 1]);
+    await notice.getByRole('button', { name: en['ed.saveAgain']!, exact: true }).click().catch(() => undefined);
+    await notice.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => undefined);
+    t.check('saved there again, with the edit', existsSync(join(h.repo, 'later.ts')) ? readFileSync(join(h.repo, 'later.ts'), 'utf8') : null, 'export const l = 1;\n// kept');
+  });
+
+  // Third hunt (2026-11-20): a second browser tab, its editor clean, dropped the first tab's kept edit when the file changed.
+  await scenario("the editor: a second browser tab does not drop the first one's kept edit", {}, async (h, page, url, context) => {
+    writeFileSync(join(h.repo, 'both.ts'), 'export const b = 1;\n');
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'both.ts' }).click();
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(pane);
+    // The second tab opens with the folder's tabs, both.ts among them, clean.
+    const second = await context.newPage();
+    second.setDefaultTimeout(15_000);
+    await second.goto(url('/'));
+    await editorText(second.locator('.wb-file-pane:not([hidden])'));
+    await pane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('// first tab');
+    await page.getByRole('tab', { name: /both\.ts/ }).locator('.wb-unsaved').waitFor();
+    await page.waitForTimeout(800);
+    // The chat changes it on disk: the clean second tab follows it.
+    writeFileSync(join(h.repo, 'both.ts'), 'export const b = 2;\n');
+    await second.waitForFunction(() => document.querySelector('.wb-file-pane:not([hidden]) .ed-monaco')?.textContent?.includes('b = 2'), undefined, { timeout: 15_000 }).catch(() => undefined);
+    await page.waitForTimeout(500);
+    const kept = await page.evaluate(() => JSON.stringify(JSON.parse(localStorage.getItem('cop.drafts.v1') ?? '{}')));
+    t.truthy("the first tab's edit is still kept", kept.includes('// first tab'), kept.slice(0, 300));
+    await second.close();
+  });
+
+  // Third hunt (2026-11-20): with nothing kept by the browser, a link inside the app left the edit without a word.
+  await scenario('the editor: an edit the browser could not keep is asked about before a link inside the app', {}, async (h, page, url, context) => {
+    await context.addInitScript(() => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (this: Storage, key: string, value: string) {
+        if (key === 'cop.drafts.v1') throw new DOMException('full', 'QuotaExceededError');
+        return set.call(this, key, value);
+      };
+    });
+    writeFileSync(join(h.repo, 'unkept.ts'), 'export const u = 1;\n');
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'unkept.ts' }).click();
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(pane);
+    await pane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('// not kept');
+    await page.getByRole('tab', { name: /unkept\.ts/ }).locator('.wb-unsaved').waitFor();
+    await page.waitForTimeout(800);
+    await page.locator('.wb-menu').getByRole('link', { name: en['nav.defaults']!, exact: true }).click();
+    const asked = page.getByRole('alertdialog');
+    await asked.waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.truthy('asked first, saying the edit would be lost', (await asked.textContent().catch(() => '') ?? '').includes(en['ed.leaveUnkept']!), await asked.textContent().catch(() => 'no dialog'));
+    await asked.getByRole('button', { name: en['dialog.cancel']!, exact: true }).click().catch(() => undefined);
+    await page.waitForTimeout(500);
+    t.check('"Cancel": still here, the edit still there', [new URL(page.url()).pathname, (await editorText(page.locator('.wb-file-pane:not([hidden])'))).endsWith('// not kept')], ['/', true]);
+  });
+
+  // Third hunt (2026-11-20): why "Open a folder" did not open one was said only on the welcome page, behind an open file.
+  await scenario('the workbench: an "Open a folder" that fails is said over an open file', {}, async (h, page, url) => {
+    writeFileSync(join(h.repo, 'open.ts'), 'export const o = 1;\n');
+    await page.route('**/api/browse-folder', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: false, reason: 'A folder dialog is already open.' }) }));
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'open.ts' }).click();
+    await editorText(page.locator('.wb-file-pane:not([hidden])'));
+    await page.getByRole('button', { name: en['chat.openFolder']!, exact: true }).first().click();
+    const said = page.locator('.wb-problem');
+    await said.waitFor({ timeout: 5_000 }).catch(() => undefined);
+    t.truthy('said, over the open file', (await said.textContent().catch(() => '') ?? '').includes('A folder dialog is already open.'), await said.count());
+    await said.getByRole('button').click().catch(() => undefined);
+    t.check('and closed at a press', await said.count(), 0);
+  });
+
+  // Third hunt (2026-11-20): the same folder spelled another way — a slash at its end — lost its tabs and its edits.
+  await scenario('the editor: the same folder spelled another way keeps its tabs and edits', {}, async (h, page, url) => {
+    writeFileSync(join(h.repo, 'spelled.ts'), 'export const s = 1;\n');
+    const raw = (await h.call<{ raw: Record<string, Record<string, unknown> | undefined> }>('GET', '/settings')).raw;
+    await h.call('PUT', '/settings', { ...raw, project: { ...(raw.project ?? {}), rootDir: `${h.repo}\\`, others: [] } });
+    await page.goto(url('/'));
+    await page.getByRole('tree', { name: en['wb.files']! }).getByRole('button', { name: 'spelled.ts' }).click();
+    const pane = page.locator('.wb-file-pane:not([hidden])');
+    await editorText(pane);
+    await pane.locator('.ed-monaco .view-lines').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('// spelled');
+    await page.getByRole('tab', { name: /spelled\.ts/ }).locator('.wb-unsaved').waitFor();
+    await page.waitForTimeout(800);
+    // Another folder, then this one again, picked as the dialog spells it: without the slash.
+    const other = join(h.base, 'another-folder');
+    mkdirSync(other, { recursive: true });
+    await h.call('POST', '/workspace/open', { dir: other });
+    await h.call('POST', '/workspace/open', { dir: h.repo });
+    t.check('(the folder is now spelled without the slash)', (await h.call<{ dir: string }>('GET', '/workspace')).dir, h.repo);
+    await page.reload();
+    const tab = page.getByRole('tab', { name: /spelled\.ts/ });
+    await tab.locator('.wb-unsaved').waitFor({ timeout: 15_000 }).catch(() => undefined);
+    t.truthy('opened again without the slash: its tab and its edit back', (await tab.locator('.wb-unsaved').count()) === 1 && (await editorText(page.locator('.wb-file-pane:not([hidden])')).catch(() => '')).endsWith('// spelled'), await tab.count());
   });
 
   await scenario('the editor: an edit not saved survives Settings and a reload; each folder its own tabs; a file saved only where it was opened', {}, async (h, page, url) => {

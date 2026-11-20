@@ -12,6 +12,7 @@
  */
 import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { api, type Approval, type GitArea, type GitCounts, type Session, type Task, type Workspace } from '../../lib/api';
 import { useGitBase } from '../../lib/gitBase';
 import { usePoll } from '../../lib/usePoll';
@@ -81,6 +82,7 @@ export function Workbench() {
 
 function WorkbenchInner() {
   const { t } = useT();
+  const router = useRouter();
   const [sessions, setSessions] = useState<Array<Session & { running?: boolean }> | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string>('');
@@ -153,9 +155,30 @@ function WorkbenchInner() {
     window.addEventListener('beforeunload', ask);
     return () => window.removeEventListener('beforeunload', ask);
   }, []);
+  /*
+   * Left inside the app with an edit this browser could not keep (third hunt, 2026-11-20): the bar's links, a page of
+   * Ctrl+K, another folder — none of them a page unload, so `beforeunload` never asked and the edit was gone.
+   */
+  useEffect(() => {
+    const onClick = (e: MouseEvent): void => {
+      if (!hasUnkept() || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void confirmDialog(t('ed.leaveUnkept')).then((ok) => {
+        if (ok) router.push(`${url.pathname}${url.search}${url.hash}`);
+      });
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [router, t]);
   /** "Open a folder": the machine's folder dialog, and the folder kept as the project in Settings. */
   const openFolder = useCallback(async () => {
     try {
+      if (hasUnkept() && !(await confirmDialog(t('ed.leaveUnkept')))) return;
       const pick = await api.browseFolder(workspace?.dir || undefined);
       // Why the dialog did not open, said (2026-11-19): nothing happened, and nothing said why.
       if (!pick.ok) {
@@ -163,11 +186,12 @@ function WorkbenchInner() {
         return;
       }
       await api.openProjectFolder(pick.path);
+      setProblem('');
       await readWorkspace();
     } catch (e) {
       setProblem((e as Error).message);
     }
-  }, [workspace?.dir, readWorkspace]);
+  }, [workspace?.dir, readWorkspace, t]);
 
   useEffect(() => setLayout(readLayout()), []);
   useEffect(() => {
@@ -458,6 +482,13 @@ function WorkbenchInner() {
             })}
           </div>
           <div className="wb-editor" role="tabpanel">
+            {/* Why "Open a folder" did not open one, over the editor too (third hunt, 2026-11-20): said only on the welcome page. */}
+            {problem && activeTab && (
+              <div className="wb-problem err small" role="alert">
+                <span>{problem}</span>
+                <button type="button" className="quiet" onClick={() => setProblem('')}>{t('git.op.dismiss')}</button>
+              </div>
+            )}
             {!activeTab ? (
               <Welcome workspace={workspace} problem={problem} />
             ) : activeTab.kind === 'diff' ? (

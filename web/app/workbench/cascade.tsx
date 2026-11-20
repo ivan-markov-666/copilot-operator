@@ -714,7 +714,7 @@ export function Cascade({ workspace, composeAsk, showThread, onOpenFile, onChang
                 onOpenFile={onOpenFile}
                 onRewind={running || busy ? undefined : () => void rewind(task)}
                 // Not hidden while one is on its way (2026-10-26): its buttons stay, off, the one pressed marked; hidden, they came back on between the answer and the next read.
-                onRetrySubtask={running || task.status !== 'aborted' ? undefined : (k, freshWorker) => retrySubtask(task, k, freshWorker)}
+                onRetrySubtask={running || task.status !== 'aborted' || !parkedOver(task.parked) ? undefined : (k, freshWorker) => retrySubtask(task, k, freshWorker)}
               />
             ) : (
               <Turn key={task.id} n={i + 1} session={session} task={task} approvals={approvals.filter((a) => a.taskId === task.id)} onDecided={decided} onOpenFile={onOpenFile} onRewind={running || busy ? undefined : () => void rewind(task)} />

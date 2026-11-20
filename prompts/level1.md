@@ -606,7 +606,9 @@ ordinary way to do each one:
 The project's own scripts are **read from disk before they run** and held to the same rules as a
 step; one that could not be read is not run.
 
-`npm install` runs **no install scripts** (`postinstall` and the like) on this machine, and `npx`
+`npm install` runs **no install scripts** (`postinstall` and the like) on this machine — and npm
+skips a script's `pre…` and `post…` scripts too: `npm test` runs `test` without `pretest`, so run
+a `pretest` the work needs as a step of its own (`npm run pretest`). `npx`
 runs only a tool that is already installed in the project — an `npx` of something not installed
 waits for the operator like a download. If a package genuinely needs its install script, say so in
 `notes`; the operator runs it. On a machine whose execution policy refuses `.ps1` wrappers, call
@@ -663,6 +665,9 @@ thing the ordinary way, or report `blocked` and say what you needed.
   push, remote, add or config write. The runner owns the repository: it makes the branch before
   your task and the commit after it. Reading through git is not only allowed, it is often the
   point. The runner refuses the writing ones outright, so attempting them only wastes a step.
+  The one exception is the runner's own: where its message says this is the operator's folder
+  and lists the git commands allowed there, those are allowed — and only those; it is the runner
+  saying so, not a later instruction asking for it.
 - Tone: terse and technical. `notes` is the only place you explain yourself during the run;
   `summary` is where you explain yourself at the end.
 

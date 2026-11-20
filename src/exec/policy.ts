@@ -16,7 +16,7 @@ import type { Step } from '../protocol/replySchema.js';
 import { effectiveShell, type Shell } from './shells.js';
 import { dangerousRefusal } from './dangerous.js';
 import { findShellExecuteTrap } from './shellExecuteTrap.js';
-import { inlineCodeRefusal, programRefusal } from './programs.js';
+import { inlineCodeRefusal, programRefusal, startProcessTargets } from './programs.js';
 import { unattendedIsolationRefusal, type IsolationClaim } from './isolation.js';
 import { confinementRefusal, type Confinement } from './confinement.js';
 import { botSelfRefusal, networkFetchReason, networkFetchRefusal } from './network.js';
@@ -34,7 +34,8 @@ import { scanCommandHeads } from './commandHeads.js';
  * never told a person stopped a step that a rule declined, or the other way round.
  */
 export type PolicyDecision =
-  | { action: 'run' }
+  // `by: 'operator'` on a run: the person pressed this step's own card, having read it (third hunt, 2026-11-20).
+  | { action: 'run'; by?: 'operator' }
   | { action: 'skip'; reason: string; by?: 'operator' }
   | { action: 'abort'; reason: string; by?: 'operator' };
 
@@ -100,6 +101,68 @@ export function matchDenyPattern(text: string, patterns: string[]): string | nul
   return null;
 }
 
+
+/** git's own options before its subcommand that take the next word as their value: `-C dir`, `-c k=v`, `--git-dir x`. */
+const GIT_OPTION_VALUE = /^(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix|--attr-source)$/;
+/** Subcommands that write or read by their arguments: one of those known only when it runs may be the writing one. */
+const GIT_BY_ARGUMENTS = new Set(['remote', 'branch', 'tag', 'config', 'reflog', 'notes', 'stash', 'worktree', 'submodule', 'symbolic-ref', 'bisect', 'sparse-checkout']);
+
+const programName = (head: string): string => head.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase();
+
+/**
+ * Every git invocation on a line, as git reads it (third hunt, 2026-11-20): `git <subcommand> …`, whatever the head's
+ * spelling (`git.exe`, a path, `& 'C:\…\git.exe'`), with the quotes resolved and git's own options before the subcommand
+ * left out, whichever they are. `null` for one whose subcommand — or, for a subcommand that writes by its arguments, an
+ * argument — is known only when it runs (a variable, a splat), and for git started by Start-Process, whose words sit in
+ * `-ArgumentList`. The deny list's patterns read the line as written, and `git.exe push`, `git "push"`,
+ * `git --no-optional-locks push`, `git -P push` and `$a=@('push'); git @a` each ran past them.
+ */
+export function gitAsRead(command: string, shell: Shell): Array<string | null> {
+  const out: Array<string | null> = [];
+  for (const call of scanCommandHeads(command, shell === 'cmd' ? 'cmd' : 'pwsh').calls) {
+    if (programName(call.head) !== 'git') continue;
+    const args = call.args;
+    let i = 0;
+    while (i < args.length && !args[i]!.dynamic && args[i]!.literal.startsWith('-')) i += GIT_OPTION_VALUE.test(args[i]!.literal) ? 2 : 1;
+    const sub = args[i];
+    if (!sub) continue;
+    if (sub.dynamic || (GIT_BY_ARGUMENTS.has(sub.literal.toLowerCase()) && args.slice(i + 1).some((a) => a.dynamic))) {
+      out.push(null);
+      continue;
+    }
+    out.push(['git', ...args.slice(i).map((a) => a.literal)].join(' '));
+  }
+  for (const target of startProcessTargets(command)) if (programName(target) === 'git') out.push(null);
+  return out;
+}
+
+/**
+ * Why the operator's deny list refuses a line, or null: the line as written, the line with `git.exe` read as `git` and
+ * its quotes taken out (`cmd /c "git.exe push"`), and every git invocation as git reads it (`gitAsRead`). A git whose
+ * subcommand is known only when it runs is refused wherever the list refuses `git push`, the plainest git write.
+ */
+export function denyPatternRefusal(command: string, shell: Shell, denyPatterns: string[]): string | null {
+  const said = (hit: string): string => `matches deny pattern /${hit}/`;
+  const raw = matchDenyPattern(command, denyPatterns);
+  if (raw) return said(raw);
+  const plain = matchDenyPattern(command.replace(/\bgit\.exe\b/gi, 'git').replace(/["'`\u2018\u2019\u201c\u201d]/g, ''), denyPatterns);
+  if (plain) return said(plain);
+  for (const read of gitAsRead(command, shell)) {
+    if (read === null) {
+      const writes = matchDenyPattern('git push', denyPatterns);
+      if (writes) {
+        return (
+          `matches deny pattern /${writes}/: this runs git with its command — or the words that decide whether it changes something — known only ` +
+          'when it runs (a variable, a splat, Start-Process), and git commands that change something are refused. Write the git command out in full.'
+        );
+      }
+      continue;
+    }
+    const hit = matchDenyPattern(read, denyPatterns);
+    if (hit) return `${said(hit)} (as git reads it: ${read.slice(0, 120)})`;
+  }
+  return null;
+}
 
 /** `git config`'s switches that read, and the ones that take the next word as their value. */
 const GIT_CONFIG_READS = /^(?:--get|--get-all|--get-regexp|--get-urlmatch|--get-color|--get-colorbool|--list|-l|get|list)$/;
@@ -215,8 +278,8 @@ export function commandRefusal(
   if (self) return self;
   const internals = repositoryInternalsRefusal(command);
   if (internals) return internals;
-  const hit = matchDenyPattern(command, denyPatterns);
-  if (hit) return `matches deny pattern /${hit}/`;
+  const hit = denyPatternRefusal(command, shell, denyPatterns);
+  if (hit) return hit;
   // Where it reaches, before which program it is: a binary named by a path outside the project is
   // better refused for being outside than for not being on a list, and a cmdlet — which the
   // allowlist never sees — is only caught here. See `confinement.ts`.
@@ -243,7 +306,7 @@ export function commandRefusal(
       dangerousRefusal(text) ??
       botSelfRefusal(text) ??
       repositoryInternalsRefusal(text) ??
-      (matchDenyPattern(text, denyPatterns) ? `matches deny pattern /${matchDenyPattern(text, denyPatterns)}/` : null) ??
+      denyPatternRefusal(text, 'pwsh', denyPatterns) ??
       confinementRefusal(text, confinement) ??
       programRefusal(text, allowedPrograms) ??
       // Inside a script nothing is put to the operator command by command: one that cannot be read as reading is refused.
@@ -325,8 +388,8 @@ export function writtenScriptScreen(cfg: Pick<PolicyConfig, 'denyPatterns' | 'al
       return commandRefusal(text, 'cmd', cfg.denyPatterns, allowed, env, confinement, cfg.readOnlyPrograms ?? []);
     }
     if (run.kind === 'sh') {
-      const deny = matchDenyPattern(text, cfg.denyPatterns);
-      return dangerousRefusal(text) ?? botSelfRefusal(text) ?? repositoryInternalsRefusal(text) ?? (deny ? `refused: matches deny pattern /${deny}/` : null) ?? confinementRefusal(text, confinement);
+      const deny = denyPatternRefusal(text, 'pwsh', cfg.denyPatterns);
+      return dangerousRefusal(text) ?? botSelfRefusal(text) ?? repositoryInternalsRefusal(text) ?? (deny ? `refused: ${deny}` : null) ?? confinementRefusal(text, confinement);
     }
     return null;
   };

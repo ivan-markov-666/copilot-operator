@@ -299,13 +299,18 @@ export function referenceNote(projects: ReferenceProject[], workDir: string): st
   ].join('\n');
 }
 
-/** What the chat is told after a step changed a project for reference. */
-export function referenceMessage(changes: ReferenceChange[]): string {
+/**
+ * What the chat is told after a step changed a project for reference. `by`: what changed it, when not the last step — the
+ * task's checks (third hunt, 2026-11-20), which leave no rest of the round to skip.
+ */
+export function referenceMessage(changes: ReferenceChange[], by?: 'checks'): string {
+  const who = by === 'checks' ? 'The checks just run' : 'The last step';
+  const rest = by === 'checks' ? '' : ' and did not run the rest of the round';
   return changes
     .map((c) =>
       c.putBack
-        ? `The last step changed ${c.name} (${c.dir}), which is for reference only: ${describeChange(c)}. The runner put it back as it was and did not run the rest of the round. Change nothing there; if the work needs a change in it, say so in "notes".`
-        : `The last step changed ${c.name} (${c.dir}), which is for reference only: ${describeChange(c)}. The runner could not put all of it back (${c.problem ?? 'no reason given'}); the operator has been told. Change nothing there.`,
+        ? `${who} changed ${c.name} (${c.dir}), which is for reference only: ${describeChange(c)}. The runner put it back as it was${rest}. Change nothing there; if the work needs a change in it, say so in "notes".`
+        : `${who} changed ${c.name} (${c.dir}), which is for reference only: ${describeChange(c)}. The runner could not put all of it back (${c.problem ?? 'no reason given'}); the operator has been told. Change nothing there.`,
     )
     .join('\n\n');
 }

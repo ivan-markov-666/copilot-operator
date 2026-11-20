@@ -8,6 +8,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '../../lib/i18n';
+import { hasUnkept } from '../../lib/drafts';
+import { confirmDialog } from '../dialog';
 
 export type PaletteCommand = { id: string; label: string; hint?: string; run?: () => void; href?: string };
 
@@ -30,8 +32,12 @@ export function Palette({ commands, onClose }: { commands: PaletteCommand[]; onC
   const run = (c: PaletteCommand | undefined) => {
     if (!c) return;
     onClose();
-    if (c.href) router.push(c.href);
-    else c.run?.();
+    // A page of the app with an edit this browser could not keep: asked first (third hunt, 2026-11-20).
+    if (c.href) {
+      const href = c.href;
+      if (hasUnkept()) void confirmDialog(t('ed.leaveUnkept')).then((ok) => ok && router.push(href));
+      else router.push(href);
+    } else c.run?.();
   };
 
   return (

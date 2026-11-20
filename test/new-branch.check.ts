@@ -239,6 +239,39 @@ try {
     ], [true, 'M g.txt', 'moved on\n', false, true]);
   }
 
+  /*
+   * Something staged in the folder (third hunt, 2026-11-20): the clash was taken back with `reset --merge`, which sets a
+   * staged change back to the last commit, in the folder too — the operator's `git add`ed edit was gone. Nothing is laid
+   * on a folder with something staged, and the edit stays as it was, staged.
+   */
+  console.log('\n--- work put back on a folder with something staged: refused, the staged edit kept ---');
+  {
+    const dir = join(base, 'staged');
+    mkdirSync(dir);
+    execFileSync('git', ['init', '-q', '-b', 'main', dir]);
+    git(dir, 'config', 'core.autocrlf', 'false');
+    commit(dir, 'f.txt', 'one\n', 'first');
+    writeFileSync(join(dir, 'g.txt'), 'g\n');
+    git(dir, 'add', '-A');
+    git(dir, ...who, 'commit', '-q', '-m', 'g');
+    git(dir, 'checkout', '-q', '-b', 'cop/saved/staged');
+    writeFileSync(join(dir, 'f.txt'), 'saved\n');
+    git(dir, 'add', '-A');
+    git(dir, ...who, 'commit', '-q', '-m', 'set aside');
+    git(dir, 'checkout', '-q', 'main');
+    commit(dir, 'f.txt', 'moved on\n', 'f moved on meanwhile');
+    writeFileSync(join(dir, 'g.txt'), 'g\nstaged by the operator\n');
+    git(dir, 'add', 'g.txt');
+    const back = await putBackAside(dir, 'cop/saved/staged');
+    t.check('refused, saying why; the staged edit kept, still staged; the branch kept', [
+      'problem' in back && /staged/.test(back.problem) && back.problem.includes('cop/saved/staged'),
+      readFileSync(join(dir, 'g.txt'), 'utf8'),
+      git(dir, 'diff', '--cached', '--name-only'),
+      readFileSync(join(dir, 'f.txt'), 'utf8'),
+      tryGit(dir, 'rev-parse', '--verify', '--quiet', 'refs/heads/cop/saved/staged'),
+    ], [true, 'g\nstaged by the operator\n', 'g.txt', 'moved on\n', true]);
+  }
+
   console.log('\n--- through the API: refused while a task works; made when it has ended ---');
   let h: Harness | null = null;
   try {

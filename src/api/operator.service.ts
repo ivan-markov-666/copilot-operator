@@ -126,6 +126,8 @@ export const SIGN_IN_IN_THE_RUNS_WINDOW = 'The Copilot window the work opened is
 /** Said when a set-aside task's card is pressed after the queue let go of it (2026-11-19). */
 export const PARKED_RELEASED = 'Its card is closed now: "Continue" under its message carries it on in its own chat.';
 /** Said when "Continue" is pressed on a message answered on its card in the queue (2026-11-19). */
+export const PARKED_ALREADY_ANSWERED =
+  'This card was answered already, on another page: the queue carries the task on with that answer. To stop it, use Stop on the queue\'s page.';
 export const PARKED_ANSWERED = "This message was answered on its card, and the queue carries it on with that answer: at the queue's next turn, or when the queue is run.";
 export const RUN_ALL_REFUSED = (why: string): string => `"Run this and the rest" cannot be given here — ${why} Nothing was run: "Run" runs this step.`;
 
@@ -1274,7 +1276,7 @@ export class OperatorService {
         ...(url ? { url } : {}),
         ...(piece ? { piece, ...(around ? { around } : {}) } : {}),
       })
-      .catch(() => undefined);
+      .catch((e: unknown) => console.error(`[locators] the locator of "${key}" found nothing, and that could not be kept for the banner: ${(e as Error).message}`));
   }
 
   /**
@@ -1617,6 +1619,13 @@ export class OperatorService {
         await this.store.updateSession(sessionId, (s) => {
           if (s.status === 'stopping') s.status = 'idle';
         }).catch(() => undefined);
+        /*
+         * A sign-in or a password asked for by this run, never answered (third hunt, 2026-11-20): a run Stopped, or out of
+         * time, while its window waited for the sign-in ended with no task finished, and the entry stayed — every later run
+         * said "waiting for you to sign in", and "Sign in to Copilot" was refused, until the program was restarted.
+         */
+        for (const id of [...this.signInAsked.keys()]) if (id === sessionId || this.runKey(id) === sessionId) this.signInAsked.delete(id);
+        for (const id of [...this.passwordAsked.keys()]) if (id === sessionId || this.runKey(id) === sessionId) this.passwordAsked.delete(id);
         this.running.delete(sessionId);
         this.stoppedByOperator.delete(sessionId);
       });
@@ -2586,7 +2595,18 @@ export class OperatorService {
     const key = this.runKey(approval.sessionId);
     if (!this.queueAtWork.has(key)) return;
     const timerKey = kind === 'password' ? `pw:${approval.sessionId}` : approval.id;
-    void this.readQueue().then((q) => {
+    // Read again a few times when queue.json is busy (third hunt, 2026-11-20): one failed read set no timer, said nothing.
+    const readSoon = async (): Promise<Queue> => {
+      for (let i = 0; ; i++) {
+        try {
+          return await this.readQueue();
+        } catch (e) {
+          if (i >= 3) throw e;
+          await new Promise((r) => setTimeout(r, 1_000 * (i + 1)));
+        }
+      }
+    };
+    void readSoon().then((q) => {
       const ms = parkAfterMs(q);
       if (ms === null || this.parkTimers.has(timerKey)) return;
       const timer = setTimeout(() => {
@@ -2600,6 +2620,9 @@ export class OperatorService {
       }, ms);
       timer.unref?.();
       this.parkTimers.set(timerKey, timer);
+    }).catch((e: unknown) => {
+      this.bus.publish({ sessionId: approval.sessionId, taskId: approval.taskId, type: 'queue-park-unread', level: 'warn',
+        message: `the queue could not be read, so this card is not set aside when its time is up; it waits here: ${(e as Error).message}` });
     });
   }
 
@@ -2650,6 +2673,12 @@ export class OperatorService {
      * any press, and "Continue" carries its message on in its own chat. A Stop of it is simply taken.
      */
     const from = typeof input?.sessionId === 'string' ? input.sessionId : undefined;
+    /*
+     * Answered already, on another page, and waiting to carry on with that answer (third hunt, 2026-11-20): a copy of the
+     * card not yet refreshed was read as one the queue let go of, and its press overwrote the answer with "let go" — a
+     * plan approved was asked for again, a pasted output lost — and a Stop was said taken while the task went on.
+     */
+    if (item && item.status !== 'parked' && holdsChat(item) && (!from || from === item.sessionId)) throw new Error(PARKED_ALREADY_ANSWERED);
     if (!item || item.status !== 'parked' || !item.sessionId || (from && from !== item.sessionId)) {
       const of = from ?? (item?.status === 'parked' ? undefined : item?.sessionId);
       if (of) await this.releaseFromQueue(of, itemId);
@@ -2732,7 +2761,20 @@ export class OperatorService {
   /** One task of the queue, in a new chat — or, answered after it was parked, in its own — to its end. */
   private async runQueueItem(item: QueueItem): Promise<{ status: QueueStatus; why?: string; sessionId?: string; resume?: boolean }> {
     const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const stillRunning = async () => (await this.readQueue()).running;
+    /*
+     * Whether the queue still runs, as last read when queue.json is busy or unreadable for a moment (third hunt,
+     * 2026-11-20): a lock held a second longer than the reads wait made this poll — once a second for the whole task —
+     * throw, the task was ended "failed" while its chat's run went on, and its cards were never set aside.
+     */
+    let lastRunning = true;
+    const stillRunning = async (): Promise<boolean> => {
+      try {
+        lastRunning = (await this.readQueue()).running;
+      } catch {
+        /* as last read */
+      }
+      return lastRunning;
+    };
     // Read afresh each time: the browser is let go of by other work while this waits.
     const holder = (): BrowserHolder | null => this.browser;
     // The browser may be the chat's, or a reading of the models': the task waits its turn.
@@ -2755,6 +2797,17 @@ export class OperatorService {
       const last = s0?.tasks.at(-1);
       if (!s0 || !last) return { status: 'failed', why: 'its chat is not there any more; run it again' };
       /*
+       * A carry-on that fails before it carries on (third hunt, 2026-11-20): the chat was kept with an answered card — its
+       * "Continue" refused as "the queue carries it on", which it would not now, and no card on the queue's page — and its
+       * work put aside by a task after it was never named. The queue lets go of it, saying where that work is.
+       */
+      const failed = async (why: string): Promise<{ status: QueueStatus; why: string; sessionId: string }> => {
+        const left = (await this.readQueue()).items.find((x) => x.id === item.id)?.setAside ?? item.setAside;
+        await this.releaseFromQueue(s0.id, item.id, left);
+        await this.changeQueue((x) => this.setQueueItem(x, item.id, { setAside: undefined })).catch(() => undefined);
+        return { status: 'failed', why, sessionId: s0.id };
+      };
+      /*
        * Back on the branch it began on, a task on "the folder as it is" (bug hunt 2026-11-18): it carried on on whatever
        * branch the task after it left the folder on — one made for another task. What that left uncommitted is put
        * aside first, kept whole and not pushed, as before a task on a branch of its own.
@@ -2764,11 +2817,11 @@ export class OperatorService {
         const onNow = (await git(ws.dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => null))?.stdout || null;
         if (onNow !== began) {
           const aside = await setAsideUncommitted(ws.dir, `the queue's task "${itemTitle(item)}" carries on on ${began}, where it began, and the folder held changes left on ${onNow ?? 'a detached HEAD'}`);
-          if (aside && 'problem' in aside) return { status: 'failed', why: `what was not committed in the folder could not be put aside before it: ${aside.problem}`, sessionId: s0.id };
+          if (aside && 'problem' in aside) return await failed(`what was not committed in the folder could not be put aside before it: ${aside.problem}`);
           // Kept for whose it is first (2026-11-19): a switch that failed after it said nothing of where it went.
           if (aside && 'saved' in aside) await this.leftoversOf(onNow, item.id, aside.saved);
           const back = await git(ws.dir, ['switch', began]);
-          if (!back.ok) return { status: 'failed', why: `it could not be put back on ${began}, where it began: ${(back.stderr || back.stdout).trim().slice(0, 300)}${aside ? `; what was not committed in the folder is kept on ${aside.saved}, not pushed` : ''}`, sessionId: s0.id };
+          if (!back.ok) return await failed(`it could not be put back on ${began}, where it began: ${(back.stderr || back.stdout).trim().slice(0, 300)}${aside ? `; what was not committed in the folder is kept on ${aside.saved}, not pushed` : ''}`);
           this.bus.publish({ sessionId: s0.id, type: 'queue-back-on-branch', level: 'info',
             message: `back on ${began}, where it began, before it carries on (the folder was on ${onNow ?? 'a detached HEAD'})${aside ? `; what was not committed there is kept on ${aside.saved}, not pushed` : ''}`,
             data: { branch: began, was: onNow, ...(aside ? { saved: aside.saved } : {}) } });
@@ -2787,7 +2840,7 @@ export class OperatorService {
       }
       if (answered) {
         const carried = await this.resumeParked(item.sessionId, ws.dir);
-        if ('problem' in carried) return { status: 'failed', why: carried.problem, sessionId: item.sessionId };
+        if ('problem' in carried) return await failed(carried.problem);
         taskId = carried.taskId;
       } else {
         // Finished in its chat meanwhile, or ended there in a way "Continue" does not carry on: as it ended.
@@ -2994,7 +3047,7 @@ export class OperatorService {
           const first = [...(task.lead?.rounds ?? [])].reverse().find((x) => x.subtask?.n === r.n)?.subtask?.attempts?.[0]?.taskId ?? p.approval.taskId;
           const cp = worker?.tasks.find((t) => t.id === first)?.checkpoint;
           const back = cp ? await restoreCheckpoint(dir, cp) : { ok: false as const, problem: 'the subtask\'s start was not photographed' };
-          if (!back.ok) return { problem: `the folder could not be put back to the subtask's start (${back.problem}); answer it again with another choice` };
+          if (!back.ok) return { problem: `the folder could not be put back to the subtask's start (${back.problem}); carry the message on in its chat with "Continue", or run the task again` };
         }
         // Put back: the next attempt is told it starts over, not to carry on from what the last one left.
         continuing.retrySubtask = { n: r.n, ...(a.choice === 'fresh' ? { fresh: true } : {}), ...(a.choice === 'restore' ? { restored: true } : {}) };
@@ -3287,6 +3340,12 @@ export class OperatorService {
     if (!sub) throw new Error(`The message has no subtask ${n}.`);
     const last = sub.attempts?.at(-1);
     if (last?.status === 'done') throw new Error(`Subtask ${n} was done; it is not done again.`);
+    /*
+     * A queue task set aside, or answered on its card (third hunt, 2026-11-20): tried again here, its record moved into
+     * the attempts and the queue's card failed at every press but Stop, the task and those after it waiting for good.
+     */
+    if (task.parked && !task.parked.answer) throw new Error('This message waits for an answer on its card in the queue: answer it there, and the queue carries it on.');
+    if (!parkedOver(task.parked)) throw new Error(PARKED_ANSWERED);
     // The browser first, as for Continue (2026-11-18): nothing changes when it is not free.
     const busy = this.browserBusyFor(threadId);
     if (busy) throw new Error(busy);
@@ -3495,7 +3554,7 @@ export class OperatorService {
 
     const decision: PolicyDecision =
       action === 'run' || action === 'run-all'
-        ? { action: 'run' }
+        ? { action: 'run', by: 'operator' }
         : action === 'skip'
           ? { action: 'skip', reason: 'skipped by the operator', by: 'operator' }
           : { action: 'abort', reason: 'aborted by the operator', by: 'operator' };

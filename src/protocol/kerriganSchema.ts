@@ -75,7 +75,11 @@ export const KerriganReplySchema = z
 
     // answer
     option: number.optional(),
-    options: z.preprocess((v) => (v === undefined || v === null ? undefined : Array.isArray(v) ? v : [v]), z.array(z.union([number, z.string()])).optional()),
+    /*
+     * The numbers of the answers chosen (status "answer", read by number there), or the answers she offers the person
+     * (status "ask"): kept as written (third hunt, 2026-11-20). Read as numbers here, "Use Node 20" became 20 on the card.
+     */
+    options: z.preprocess((v) => (v === undefined || v === null ? undefined : Array.isArray(v) ? v : [v]), z.array(z.union([z.number(), z.string()])).optional()),
     text: prose,
     decision: z.preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() : v), z.enum(['approve', 'revise'], { message: 'decision is "approve" or "revise".' })).optional(),
     note: prose,

@@ -37,6 +37,7 @@
  * that is the operating system's to give — a separate Windows account whose file permissions reach
  * the project folders and nothing of the operator's — and the README says how.
  */
+import { existsSync } from 'node:fs';
 import { win32 } from 'node:path';
 
 export type Confinement = {
@@ -126,6 +127,10 @@ const TILDE = /(?:^|[\s"'=(,])~(?=[\\/]|$|[\s"'`;|&)])/;
 
 /** Changing to the root of the current drive, which needs no drive letter to leave the project. */
 const CD_TO_ROOT = /(?:^|[\s;|&({])(?:Set-Location|Push-Location|cd|chdir|sl|pushd)\s+["']?[\\/]["']?(?=$|[\s;|&)}])/i;
+
+/** A drive alone where a word starts, and a change of location to one, quoted or not. */
+const LONE_DRIVE = /(?:^|[\s;|&({])([A-Za-z]:)(?=$|[\s;|&)}])/g;
+const CD_TO_DRIVE = /(?:^|[\s;|&({])(?:Set-Location|Push-Location|cd|chdir|sl|pushd)\s+(?:-\w+\s+)?["']?([A-Za-z]:)["']?(?=$|[\s;|&)}])/i;
 
 /** A path segment that climbs: `..` on its own, or between separators. */
 const CLIMBS = /(?:^|[\\/])\.\.(?:$|[\\/])/;
@@ -312,14 +317,53 @@ export function confinementRefusal(command: string, c: Confinement): string | nu
   }
   if (UNC.test(line)) return outside('a network share is not the project', c);
   if (CD_TO_ROOT.test(line)) return outside('this changes to the root of the drive', c);
+  /*
+   * A drive alone — `cd D:`, `Set-Location "D:"`, `D:` as a statement, `Get-ChildItem D:` — is that drive's current folder
+   * (third hunt, 2026-11-20). Read outside quotes, or after a change of location: `{ c: 1, d: 2 }` in code is not one.
+   */
+  const lone = [...line.replace(QUOTED, ' ').matchAll(LONE_DRIVE)].map((m) => m[1]!);
+  const cdDrive = CD_TO_DRIVE.exec(line);
+  if (cdDrive) lone.push(cdDrive[1]!);
+  for (const d of lone) {
+    const where = win32.resolve(c.cwd, d);
+    if (!isWithin(where, c.roots)) return outside(`\`${d}\` is ${where}, outside the project`, c);
+  }
 
   for (const p of drivePaths(line)) {
     if (!isWithin(p, c.roots)) return outside(`\`${p}\` is outside the project`, c);
   }
   for (const t of tokens(line)) {
-    if (!CLIMBS.test(t)) continue;
-    const resolved = win32.resolve(c.cwd, t);
-    if (!isWithin(resolved, c.roots)) return outside(`\`${t}\` climbs out of the project to ${resolved}`, c);
+    if (CLIMBS.test(t)) {
+      const resolved = win32.resolve(c.cwd, t);
+      if (!isWithin(resolved, c.roots)) return outside(`\`${t}\` climbs out of the project to ${resolved}`, c);
+      continue;
+    }
+    const fromRoot = rootRelative(t, c.cwd);
+    if (fromRoot && !isWithin(fromRoot, c.roots)) return outside(`\`${t}\` is ${fromRoot}, outside the project`, c);
   }
   return null;
+}
+
+/**
+ * Where a path written without its drive's letter leads, or null when the word is not one (third hunt, 2026-11-20):
+ * `\Users\x\.ssh\id_rsa` and `/Users/x` from the root of the folder's drive, `D:x.txt` and `D:` on another drive's
+ * current folder. Only `X:\` paths, shares and `..` were read, so `Get-Content \Users\<name>\.ssh\id_rsa` sent the key
+ * to the chat. A word led by a separator is a path only when its first part is there at the drive's root — `\d+` in a
+ * pattern, `/p:Configuration=Release`, `/s` and `/api/users` are not — and a separator alone is not read here
+ * (`.Replace('\', '/')`; a change to the root is `CD_TO_ROOT`'s).
+ */
+function rootRelative(t: string, cwd: string): string | null {
+  /*
+   * `D:` alone, or with what reads as a path after it (`D:x.txt`, `D:dir\x`), or a name there on that drive: not the
+   * `{d:1}` of an object written inline. On the folder's own drive it resolves into the folder, as PowerShell does.
+   */
+  const drive = /^[A-Za-z]:(?![\\/])(.*)$/.exec(t);
+  if (drive) {
+    const where = win32.resolve(cwd, t);
+    return drive[1] && (/[.\\/]/.test(drive[1]) || existsSync(where)) ? where : null;
+  }
+  if (!/^[\\/](?![\\/])/.test(t)) return null;
+  const first = t.slice(1).split(/[\\/]/)[0] ?? '';
+  if (!first || /[*?<>|":]/.test(first)) return null;
+  return existsSync(win32.resolve(cwd, `\\${first}`)) ? win32.resolve(cwd, t) : null;
 }

@@ -24,8 +24,8 @@ const CommandStep = z.object({
   type: z.literal('command', {
     error:
       'this runner has no file steps: it never fetches or runs a file the chat provides. Every step is ' +
-      'a `command`. For something too long for one line, write the file with Set-Content in one command ' +
-      'step and run it with its interpreter in the next.',
+      'a `command`. For something too long for one line, put it in the command itself: a command may be ' +
+      'several lines. Never write a script only to run it.',
   }),
   shell: ShellSchema.optional(),
   cmd: z.string().min(1),

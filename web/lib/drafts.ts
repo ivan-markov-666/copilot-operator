@@ -24,7 +24,26 @@ type Tabs = Record<string, { tabs: KeptTab[]; active: string }>;
 const unkept = new Set<string>();
 /** Edits thrown away on closing their tab: a late keep of the closing editor does not bring them back. */
 const discarded = new Set<string>();
-const at = (dir: string, path: string): string => `${dir}\n${path}`;
+const at = (dir: string, path: string): string => `${folderKey(dir)}\n${path}`;
+
+/**
+ * A folder as the server compares folders (third hunt, 2026-11-20): `C:\Projects\app\`, `c:/projects/app` and
+ * `C:\Projects\app` are one. Kept by the raw spelling, a folder typed one way in Settings and picked again with "Open a
+ * folder" came back without its tabs and its edits.
+ */
+export function folderKey(dir: string): string {
+  return dir.trim().replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+}
+
+/** A store of things kept by folder, its folders read by `folderKey` — one kept under an older spelling included. */
+function readByFolder<T>(key: string): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(readAll<Record<string, T>>(key))) {
+    const f = folderKey(k);
+    out[f] = f in out && v && typeof v === 'object' ? ({ ...(out[f] as object), ...(v as object) } as T) : v;
+  }
+  return out;
+}
 
 function readAll<T>(key: string): T {
   try {
@@ -48,15 +67,16 @@ function writeAll(key: string, value: unknown): boolean {
 /** The edit kept for a file of a folder, if there is one. */
 export function readDraft(dir: string, path: string): Draft | null {
   discarded.delete(at(dir, path));
-  const d = readAll<Drafts>(DRAFTS_KEY)[dir]?.[path];
+  const d = readByFolder<Drafts[string]>(DRAFTS_KEY)[folderKey(dir)]?.[path];
   return d && typeof d.text === 'string' ? d : null;
 }
 
 /** Keeps an edit; false when this browser could not keep it (then the page asks before it is left). */
 export function keepDraft(dir: string, path: string, text: string, version?: string): boolean {
   if (discarded.has(at(dir, path))) return true;
-  const all = readAll<Drafts>(DRAFTS_KEY);
-  all[dir] = { ...(all[dir] ?? {}), [path]: { text, ...(version ? { version } : {}), at: new Date().toISOString() } };
+  const all = readByFolder<Drafts[string]>(DRAFTS_KEY);
+  const f = folderKey(dir);
+  all[f] = { ...(all[f] ?? {}), [path]: { text, ...(version ? { version } : {}), at: new Date().toISOString() } };
   const kept = writeAll(DRAFTS_KEY, all);
   if (kept) unkept.delete(at(dir, path));
   else unkept.add(at(dir, path));
@@ -66,11 +86,22 @@ export function keepDraft(dir: string, path: string, text: string, version?: str
 /** The edit saved, put back, or read over from disk: nothing kept for it any more. */
 export function dropDraft(dir: string, path: string): void {
   unkept.delete(at(dir, path));
-  const all = readAll<Drafts>(DRAFTS_KEY);
-  if (!all[dir]?.[path]) return;
-  delete all[dir]![path];
-  if (Object.keys(all[dir]!).length === 0) delete all[dir];
+  const all = readByFolder<Drafts[string]>(DRAFTS_KEY);
+  const f = folderKey(dir);
+  if (!all[f]?.[path]) return;
+  delete all[f]![path];
+  if (Object.keys(all[f]!).length === 0) delete all[f];
   writeAll(DRAFTS_KEY, all);
+}
+
+/**
+ * Drops the edit kept for a file only when it is the one `mine` says this editor kept (third hunt, 2026-11-20): a second
+ * browser tab on the same folder, its editor clean, dropped the first tab's edit when the file changed on disk.
+ */
+export function dropOwnDraft(dir: string, path: string, mine: string | null): void {
+  if (mine === null) return;
+  const kept = readDraft(dir, path);
+  if (kept && kept.text === mine) dropDraft(dir, path);
 }
 
 /** The edit thrown away as its tab closes, after the operator said so. */
@@ -86,15 +117,15 @@ export function hasUnkept(): boolean {
 
 /** The tabs of a folder as they were left, and which was in front. */
 export function readTabs(dir: string): { tabs: KeptTab[]; active: string } {
-  const kept = readAll<Tabs>(TABS_KEY)[dir];
+  const kept = readByFolder<Tabs[string]>(TABS_KEY)[folderKey(dir)];
   const tabs = Array.isArray(kept?.tabs) ? kept.tabs.filter((x) => x && x.kind === 'file' && typeof x.path === 'string') : [];
   return { tabs, active: typeof kept?.active === 'string' ? kept.active : '' };
 }
 
 /** The tabs of a folder, kept as they are now. */
 export function keepTabs(dir: string, tabs: KeptTab[], active: string): void {
-  const all = readAll<Tabs>(TABS_KEY);
-  if (tabs.length === 0) delete all[dir];
-  else all[dir] = { tabs, active };
+  const all = readByFolder<Tabs[string]>(TABS_KEY);
+  if (tabs.length === 0) delete all[folderKey(dir)];
+  else all[folderKey(dir)] = { tabs, active };
   writeAll(TABS_KEY, all);
 }

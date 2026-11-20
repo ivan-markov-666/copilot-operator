@@ -2031,3 +2031,17 @@ a[href], button:not(:disabled), summary, label[for], select:not(:disabled), inpu
 .cs-kz-on-card { margin: 0 0 6px; }
 .cs-kz-suggests { font-weight: 600; }
 .cs-directed { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+/* Why "Open a folder" did not open one, over an open file (third hunt, 2026-11-20). */
+.wb-problem {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.wb-problem > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

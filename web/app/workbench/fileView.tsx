@@ -13,7 +13,7 @@
 import { MarkdownView } from './markdownView';
 import { ErrorBoundary } from '../errorBoundary';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { dropDraft, keepDraft, readDraft } from '../../lib/drafts';
+import { dropDraft, dropOwnDraft, keepDraft, readDraft } from '../../lib/drafts';
 import { api, type WorkspaceFile } from '../../lib/api';
 import { useT } from '../../lib/i18n';
 import { usePoll } from '../../lib/usePoll';
@@ -56,7 +56,16 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
   const load = useCallback(
     async (withDraft: boolean) => {
       try {
-        const f = await api.workspaceFile(path, dir);
+        const f = await api.workspaceFile(path, dir).catch((e: unknown) => {
+          /*
+           * Gone from disk, with an edit kept for it (third hunt, 2026-11-20): the edit comes back, said to be of a file no
+           * longer there, with "Save it here again". Only the server's "no such file" was shown, the edit out of reach.
+           */
+          const kept = withDraft && (e as { status?: number }).status === 404 ? readDraft(dir, path) : null;
+          if (!kept) throw e;
+          setGone(true);
+          return { path, text: '', binary: false, tooLarge: false, size: 0, ...(kept.version ? { version: kept.version } : {}) } as WorkspaceFile;
+        });
         const draft = withDraft ? readDraft(dir, path) : null;
         if (!withDraft) dropDraft(dir, path);
         if (draft && f.text !== null && draft.text !== f.text) {
@@ -88,16 +97,20 @@ export function FileView({ dir, path, onDirty, goTo, onOpenFile }: { dir: string
    * page left — so nothing typed is lost (2026-11-19).
    */
   const pending = useRef<{ text: string; version?: string } | null>(null);
+  /** The text this editor last kept: only that is dropped when it is clean again, never another browser tab's edit. */
+  const kept = useRef<string | null>(null);
   const flush = useCallback(() => {
     if (!pending.current) return;
     keepDraft(dir, path, pending.current.text, pending.current.version);
+    kept.current = pending.current.text;
     pending.current = null;
   }, [dir, path]);
   useEffect(() => {
     if (!file || file.text === null) return;
     if (!dirty) {
       pending.current = null;
-      dropDraft(dir, path);
+      dropOwnDraft(dir, path, kept.current);
+      kept.current = null;
       return;
     }
     pending.current = { text, ...(file.version ? { version: file.version } : {}) };

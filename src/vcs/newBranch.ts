@@ -272,15 +272,31 @@ export async function putBackAside(folder: string, saved: string): Promise<{ fil
   const commit = (await git(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${saved}^{commit}`])).stdout;
   if (!commit) return { problem: `there is no branch ${saved} any more` };
   const files = lines((await git(repoDir, ['diff', '--name-only', `${commit}^`, commit])).stdout).length;
+  /*
+   * Something staged in the folder (third hunt, 2026-11-20): a pick that clashed was taken back with `reset --merge`,
+   * which sets a staged change back to the last commit — the operator's `git add` lost — or, with the same file changed
+   * after it was staged, refuses, and the conflict markers stayed while the task was told the folder was as it was.
+   * Nothing is laid on a folder with something staged; said, with the work kept on its branch.
+   */
+  const staged = await git(repoDir, ['diff', '--cached', '--quiet']);
+  if (staged.code === 1) {
+    return { problem: `the folder has changes staged in it (git add), which laying the work on could not keep apart, so nothing was put back; commit or unstage them and it can be. The work is kept on ${saved}` };
+  }
+  if (!staged.ok) return { problem: `git could not tell whether anything is staged in the folder (${staged.stderr.split(/\r?\n/)[0]}); nothing was put back. The work is kept on ${saved}` };
   const laid = await git(repoDir, [...BOT_AUTHOR, 'cherry-pick', '--no-commit', commit], 300_000);
   if (!laid.ok) {
     /*
      * Taken back as a merge is (2026-11-19): a pick with --no-commit leaves no cherry-pick for "--abort" to end, and the
      * folder was left half merged, conflict markers in it. `reset --merge` takes back what the pick laid — the clash, the
-     * new files — and keeps an edit of the folder's own elsewhere, which a pick never touches (it refuses first).
+     * new files — and keeps an edit of the folder's own elsewhere, which a pick never touches (it refuses first). Its own
+     * result is said when it fails (third hunt, 2026-11-20): the folder is then not as it was.
      */
-    await git(repoDir, ['reset', '--merge']);
-    return { problem: `its changes could not be laid on what the folder holds now (${(laid.stderr || laid.stdout).split(/\r?\n/)[0]}); they are kept on ${saved}` };
+    const undone = await git(repoDir, ['reset', '--merge']);
+    const why = (laid.stderr || laid.stdout).split(/\r?\n/)[0];
+    if (!undone.ok) {
+      return { problem: `its changes could not be laid on what the folder holds now (${why}), and taking them back out failed too (${undone.stderr.split(/\r?\n/)[0]}): the folder may hold conflict markers — look at it in the Git view. The work is kept on ${saved}` };
+    }
+    return { problem: `its changes could not be laid on what the folder holds now (${why}); they are kept on ${saved}` };
   }
   // Not staged, as they were: the new files new again, the changed ones changed.
   await git(repoDir, ['reset', '--quiet']);

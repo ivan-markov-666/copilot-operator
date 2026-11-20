@@ -92,9 +92,14 @@ export function makeAuthorizer(cfg: PolicyConfig, askPerson: Ask, signal?: Abort
        * Asked, and the run gone over to running without asking meanwhile ("run the rest without asking"): the rules of a
        * run nobody watches are put to the step before it runs (audit, 2026-10-27) — it was checked as a watched one.
        */
+      /*
+       * Not the step whose own card the operator answered (third hunt, 2026-11-20): "Run this and the rest" turns the run
+       * unattended before its step is answered, and that step, read and pressed by a person, was then refused as one nobody
+       * read (`node -e`, a nested shell) and the rest of the round skipped.
+       */
       const ask = async (s: Step, c: AuthorizeContext, held?: HeldFor): Promise<PolicyDecision> => {
         const decided = await askPerson(s, c, held);
-        return decided.action === 'run' && cfg.mode === 'unattended' ? (staticCheck(s, cfg, undefined, c.confinement, c.actor) ?? decided) : decided;
+        return decided.action === 'run' && decided.by !== 'operator' && cfg.mode === 'unattended' ? (staticCheck(s, cfg, undefined, c.confinement, c.actor) ?? decided) : decided;
       };
       const cwd = ctx.confinement?.cwd;
       // Scripts the bot wrote that the operator's boxes let run (2026-10-27): what is in them goes on the card.
@@ -129,14 +134,16 @@ export function makeAuthorizer(cfg: PolicyConfig, askPerson: Ask, signal?: Abort
         ...(unclear ? { readOnly: unclear.why, readOnlyProgram: unclear.program } : {}),
         ...(scripts.length ? { scripts } : {}),
       };
+      // The bot's scripts go on a card with their text, unless Settings run them without asking (2026-10-27).
+      const scriptsAsked = scripts.length > 0 && !(cfg.mode === 'unattended' && cfg.writtenScripts === 'run');
       if (network) {
         if (cfg.mode === 'unattended' && cfg.networkFetch === 'refuse') return { action: 'skip', reason: networkFetchRefusal(network) };
-        if (!platform && cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
+        // A download Settings run without asking still waits for the card of a script the bot wrote (third hunt, 2026-11-20).
+        if (!platform && !scriptsAsked && cfg.mode === 'unattended' && cfg.networkFetch === 'run') return { action: 'run' };
         return await ask(step, ctx, { network, ...held });
       }
       if (platform) return await ask(step, ctx, held);
-      // The bot's scripts: on a card with their text, unless Settings run them without asking (2026-10-27).
-      if (scripts.length && !(cfg.mode === 'unattended' && cfg.writtenScripts === 'run')) return await ask(step, ctx, held);
+      if (scriptsAsked) return await ask(step, ctx, held);
       if (cfg.mode === 'unattended' || ctx.chosen) return { action: 'run' };
       return await ask(step, ctx);
     },

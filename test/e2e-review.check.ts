@@ -307,6 +307,81 @@ await scenario('a reviewer that will not keep its format: accepted, recorded as 
   t.truthy('because the reviewer would not keep its contract', /would not keep its output contract/.test(task.review?.problem ?? ''), task.review);
 });
 
+/*
+ * A reviewer's reply out of its format is answered in the review's own words (third hunt, 2026-11-20): it was sent the
+ * implementer's message, whose example ends "done", "blocked" or "ask" — none of them a review's — and when the retries
+ * ran out the work was accepted unreviewed.
+ */
+await scenario("a reviewer's broken reply is answered with the review's own format", {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'review-format', [greeting]));
+  h.chat.script(
+    write('hi'),
+    reply.done(),
+    look(),
+    fenced({ status: 'done', summary: 'I ran Get-Content on hello.txt and it holds exactly hi, as the task asks.' }),
+    (m) => {
+      t.truthy('it is told a review ends "pass" or "fail", not "done"', m.text.includes('"pass"') && m.text.includes('"fail"') && m.text.includes('never "done"'), m.text.slice(0, 900));
+      t.truthy("and the values a check's expect may take", m.text.includes('output-contains') && m.text.includes('file-exists'), m.text.slice(0, 900));
+      t.truthy("and not the implementer's example", !m.text.includes('to end: {"status": "done"'), m.text.slice(0, 900));
+      return reply.pass();
+    },
+  );
+  const task = full((await h.run(s!.id)).tasks[0]!);
+  t.check('the task is done', task.status, 'done');
+  t.check('and it was reviewed: pass', task.review?.verdict, 'pass');
+  const contract = readFileSync(join(import.meta.dirname, '..', 'prompts', 'review1.md'), 'utf8');
+  t.truthy("the reviewer's contract lists the values of a check's expect", ['exit-zero', 'output-matches', 'file-missing', 'file-contains'].every((v) => contract.includes(`\`${v}\``)), '');
+});
+
+/*
+ * What a finding may rest on (third hunt, 2026-11-20): the approved plan and what the operator added to it, the skill the
+ * task was sent with, and the operator's notes. The reviewer is told a stage left out of the plan is a finding, and such a
+ * finding was dropped as "invented"; the notes and the skill were never in the brief at all.
+ */
+await scenario('findings resting on the plan, its note, the skill and the notes are kept', {}, async (h) => {
+  const [s] = await h.importPlan(plan(h, 'basis', [greeting]));
+  const session = await h.call<Session>('GET', `/sessions/${s!.id}`);
+  const cfg = await loadConfigObject(JSON.parse(readFileSync(join(h.dataDir, 'settings.json'), 'utf8')), h.base);
+  const chat = h.chat.factory()({} as never);
+  await chat.open();
+  await chat.newChat();
+  const task = { ...session.tasks[0]!, skill: { name: 'greeter', description: 'greeting files', text: 'Greetings are written in lower case only.' } };
+  const approvedPlan = {
+    existing: 'Nothing yet.', approach: 'Write the file.', steps: ['Write hello.txt with Set-Content'], files: ['hello.txt'], verification: 'Get-Content hello.txt',
+    version: 1, at: new Date().toISOString(), approved: { by: 'operator' as const, at: new Date().toISOString(), note: 'Also end the file with one empty line.' },
+  };
+  const found = (basis: string, where: string) => finding({ what: `the file does not follow: ${basis}`, where, basis });
+  h.chat.script(
+    (m) => {
+      t.truthy('the brief carries the skill', m.text.includes('## The skill the task was sent with: greeter') && m.text.includes('Greetings are written in lower case only.'), m.text.slice(0, 1500));
+      t.truthy("and the operator's notes", m.text.includes("## The operator's notes about this task") && m.text.includes('Use UTF-8 without a BOM.'), m.text.slice(0, 1500));
+      return look();
+    },
+    fail([found('Also end the file with one empty line.', 'hello.txt, its end'), found('Use UTF-8 without a BOM.', 'hello.txt, its encoding'), found('Greetings are written in lower case only.', 'hello.txt, its text'), found('Write hello.txt with Set-Content', 'hello.txt, how it was written')]),
+  );
+  try {
+    const outcome = await runReview(chat, session, task, {
+      cfg,
+      authorizer: { authorize: async () => ({ action: 'run' }) },
+      pacer: new Pacer({ enabled: false, settleMs: 0, maxMessagesPerHour: 10_000 }),
+      dir: join(h.base, 'review-basis'),
+      round: 1,
+      cwd: h.repo,
+      roots: [h.repo],
+      changedFiles: [],
+      deviations: [],
+      disputes: [],
+      plan: approvedPlan,
+      notes: ['Use UTF-8 without a BOM.'],
+      event: () => undefined,
+      record: async () => undefined,
+    });
+    t.check('the review fails on all four, none dropped as invented', [outcome.verdict, outcome.findings.length], ['fail', 4]);
+  } finally {
+    await chat.close();
+  }
+});
+
 await scenario('a reviewer that never reaches a verdict: accepted, recorded as an error', { limits: { maxReviewIterations: 1 } }, async (h) => {
   const [s] = await h.importPlan(plan(h, 'iterations', [greeting]));
   // The second "continue" is read at the top of the loop, where the budget is already spent: it never runs.

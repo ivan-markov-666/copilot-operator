@@ -229,17 +229,21 @@ setTimeout(() => process.exit(0), 45_000);
   });
 
   /*
-   * What is held in memory, and echoed into the report, is capped; the log on disk is not. A report
-   * that cut the output has to say so and point at the full stream, or the chat reasons about half of it.
+   * What is held in memory, and echoed into the report, is capped; the log on disk is not. Past the cap the start and the
+   * end are kept (third hunt, 2026-11-20): only the start was, and a test run's summary and failures, printed last, never
+   * reached the chat — pointed at a log in the bot's own folder, which a step may not read.
    */
-  await scenario('output beyond the cap is cut in memory, kept on disk, and said in the report', async () => {
-    const big = await step('powershell', "'x'*250000", { hardTimeoutMs: 60_000 });
+  await scenario('output beyond the cap: its start and its end kept, kept whole on disk, and said in the report', async () => {
+    const big = await step('powershell', "1..30000 | ForEach-Object { 'line ' + $_ + ' of the long test run' }; 'SUMMARY: 3 failed, 41 passed'", { hardTimeoutMs: 120_000 });
     t.check('the step completed', big.outcome, 'completed');
     t.check('it is marked truncated', big.truncated, true);
-    t.check('stdout holds exactly the cap', big.stdout.length, 200_000);
+    t.truthy(`stdout is held to the cap (${big.stdout.length})`, big.stdout.length <= 200_000 + 200);
+    t.truthy('its start is there', big.stdout.startsWith('line 1 of the long test run'), big.stdout.slice(0, 80));
+    t.truthy('and its end, the summary printed last', big.stdout.trimEnd().endsWith('SUMMARY: 3 failed, 41 passed'), big.stdout.slice(-120));
+    t.truthy('with what was left out between them said', /characters of this output left out here/.test(big.stdout), '');
     await settledLog(big.logPath);
     const size = (await stat(big.logPath)).size;
-    t.truthy(`the log on disk holds all of it (${size} bytes)`, size > 250_000);
+    t.truthy(`the log on disk holds all of it (${size} bytes)`, size > 900_000);
     const written = await writeReport([big], {
       runId: 'exec-check',
       iteration: 1,
@@ -250,8 +254,9 @@ setTimeout(() => process.exit(0), 45_000);
       redactPatterns: [],
     });
     const report = await readFile(written.paths[0]!, 'utf8');
-    t.truthy('the report says the output was truncated', report.includes('output was truncated'), report.slice(0, 300));
-    t.truthy('and names the log with the full stream', report.includes(big.logPath));
+    t.truthy('the report has the summary', report.includes('SUMMARY: 3 failed, 41 passed'), report.slice(-400));
+    t.truthy('and says the middle was left out', report.includes('its start and its end are shown'), report.slice(0, 300));
+    t.truthy('without pointing at a log the chat cannot read', !report.includes(big.logPath));
   });
 
   /*

@@ -23,7 +23,8 @@ import { join } from 'node:path';
 import { installLayout } from '../config/layout.js';
 import type { ResolvedConfig } from '../config/schema.js';
 import { ChatLost, WindowClosed, type ChatTransport } from '../transport/chatTransport.js';
-import { parseReview, formatErrorMessage, findLikelyDamage, damageGuidance } from '../protocol/parser.js';
+import { parseReview, findLikelyDamage, damageGuidance, type ParseFail } from '../protocol/parser.js';
+import { CHECK_EXPECTS } from '../plan/schema.js';
 import { describeFindings, findingId, isGrounded, type ReviewFinding } from '../protocol/reviewSchema.js';
 import type { Deviation, Dispute } from '../protocol/replySchema.js';
 import { runStep, type RunResult } from '../exec/runner.js';
@@ -38,7 +39,7 @@ import { trackedRepoOf } from '../vcs/taskVcs.js';
 import { buildCoveringMessage, assertSendable } from '../protocol/reporter.js';
 import { Pacer } from '../util/pacing.js';
 import type { Session, Task, TaskCheck, TaskPlan } from '../session/model.js';
-import { planForReviewer } from './planMode.js';
+import { describePlan, planForReviewer } from './planMode.js';
 import { inScope } from '../vcs/scope.js';
 import { gitConfigMessage, watchGitConfig } from '../vcs/gitConfigGuard.js';
 
@@ -56,6 +57,40 @@ export type ReviewOutcome = {
   /** Checks the reviewer gave with its findings and that fail on the work as it stands. */
   derivedChecks?: Array<{ findingId: string; check: TaskCheck; what: string; where?: string }>;
 };
+
+/**
+ * What a reviewer is told when its reply did not match its contract (third hunt, 2026-11-20): its own statuses and its own
+ * example. It was given the implementer's message, whose example ends with "done", "blocked" or "ask" — none of them a
+ * review's — and a check with a guessed `expect` made the whole verdict invalid; when the retries ran out the work was
+ * accepted unreviewed.
+ */
+export function reviewFormatErrorMessage(fail: ParseFail, attempt: number, maxAttempts: number): string {
+  return [
+    `Your last reply did not match the review's format (format retry ${attempt} of ${maxAttempts}).`,
+    fail.reason === 'no-json-block' ? 'There was no fenced json code block in it.' : `The json block did not validate: ${fail.detail}`,
+    'A review\'s "status" is "continue" (with the steps to run), "pass" or "fail" (each with its "summary"; "fail" with its "findings") — ' +
+      'never "done", "blocked" or "ask", which are the implementer\'s. A finding\'s "check", when it has one, has "expect" set to one of: ' +
+      `${CHECK_EXPECTS.join(', ')}.`,
+    'Only the format is wrong. Nothing from that reply was run. Send the same answer again, reformatted, as exactly one fenced code block ' +
+      'tagged json — do not start over and do not change what it says. For example:',
+    '```json',
+    '{"status": "continue", "notes": "what this round looks at", "steps": [{"id": 1, "type": "command", "cmd": "npm test"}], "summary": "", "findings": []}',
+    '```',
+    'or {"status": "pass", "steps": [], "summary": "several sentences: what you ran and what came back", "findings": []}',
+    'or {"status": "fail", "steps": [], "summary": "…", "findings": [{"what": "…", "evidence": "…", "basis": "the sentence of the task it rests on", "where": "file and place", "about": "work", "check": {"name": "…", "expect": "exit-zero", "run": "npm test"}}]}',
+  ].join('\n');
+}
+
+/**
+ * A refusal as the reviewer is told it (third hunt, 2026-11-20): the gate's words are the implementer's, and told to "end
+ * blocked" — a status a review has not got — a reviewer that did so spent a format retry on it. Its own words instead.
+ */
+export function forTheReviewer(reason: string): string {
+  return reason
+    .replace(/\bend `?blocked`? and say in (?:`|")?(?:needed|notes)(?:`|")?/gi, 'say in a finding')
+    .replace(/\s+and end `?blocked`?/gi, '')
+    .replace(/\bin `notes`/g, 'in a finding');
+}
 
 export type ReviewDeps = {
   cfg: ResolvedConfig;
@@ -89,6 +124,12 @@ export type ReviewDeps = {
   deliverable?: Deliverable;
   /** The approved plan the work was to follow, in plan mode: the review checks the work against it. */
   plan?: TaskPlan;
+  /**
+   * What the operator wrote about the task while it worked ("Add to it"), as the implementer was told it — where a note
+   * and the task disagree, the note wins (third hunt, 2026-11-20: the reviewer never saw them, and could fail work for
+   * following one).
+   */
+  notes?: string[];
   /** Instructions the implementer says it could not follow as written. Claims, not facts. */
   deviations: Deviation[];
   /** Findings from earlier rounds the implementer says are wrong, by id. Claims, not facts. */
@@ -207,6 +248,8 @@ export function reviewBrief(
   deliverable?: Deliverable,
   /** The approved plan, in plan mode: see `planForReviewer`. */
   plan?: TaskPlan,
+  /** The operator's notes the implementer was given (`ReviewDeps.notes`). */
+  notes: string[] = [],
 ): string {
   // The same repository the runner branched and read the changed files from, however it is named.
   const repo = trackedRepoOf(session);
@@ -232,6 +275,16 @@ export function reviewBrief(
     '## The project instructions that applied',
     '',
     task.level2.trim() || '(none)',
+    /*
+     * The skill the task was sent with, and the operator's notes about it (third hunt, 2026-11-20): the implementer
+     * worked to them, and a reviewer without them judged the work against the prompt alone.
+     */
+    ...(task.skill?.text.trim()
+      ? ['', `## The skill the task was sent with: ${task.skill.name}`, '', ...(task.skill.description.trim() ? [`For: ${task.skill.description.trim()}`, ''] : []), task.skill.text.trim()]
+      : []),
+    ...(notes.length > 0
+      ? ['', "## The operator's notes about this task", '', 'Sent to the implementer while it worked; where a note and the task disagree, the note wins.', '', ...notes.map((n) => `- ${n.trim().replace(/\n/g, '\n  ')}`)]
+      : []),
     ...(plan ? ['', planForReviewer(plan)] : []),
     ...(earlier.length > 0
       ? [
@@ -411,8 +464,19 @@ export async function runReview(
   let derivedRetried = false;
   /** A finding whose basis is not in the task is sent back once; after that it is dropped. */
   let groundingRetried = false;
-  /** What a finding may quote: this task, its instructions, and the earlier tasks it was shown. */
-  const groundingSources = [task.prompt, task.level2, ...(deps.earlier ?? []).map((e) => e.prompt)];
+  /**
+   * What a finding may quote: this task, its instructions, the earlier tasks it was shown — and, since the third hunt
+   * (2026-11-20), the skill, the operator's notes, and the approved plan with what the operator added to it. The reviewer
+   * is told a stage left out of the plan is a finding, and such a finding was dropped as "invented".
+   */
+  const groundingSources = [
+    task.prompt,
+    task.level2,
+    ...(deps.earlier ?? []).map((e) => e.prompt),
+    task.skill?.text ?? '',
+    ...(deps.notes ?? []),
+    ...(deps.plan ? [describePlan(deps.plan), deps.plan.approved?.note ?? ''] : []),
+  ].filter((x) => x.trim());
 
   const saveReply = async (label: string, markdown: string): Promise<void> => {
     await writeFile(join(dir, `${label}.md`), markdown, 'utf8').catch(() => undefined);
@@ -433,7 +497,7 @@ ${machineNote}` : contract);
     await pacer.throttleSend();
     // The brief is saved as sent. Until it was, whether a later round had been told what the
     // earlier one found could not be checked from the run folder at all.
-    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier, deps.deliverable, deps.plan);
+    const brief = reviewBrief(session, task, deps.changedFiles, deps.cwd, deps.deviations, deps.previous, deps.disputes, deps.derivedFailing, deps.earlier, deps.deliverable, deps.plan, deps.notes ?? []);
     await saveReply('00-brief', brief);
     await deps.record(`REVIEW ${round} BRIEF`, brief);
     before = await transport.sendAndConfirm(brief);
@@ -461,7 +525,7 @@ ${machineNote}` : contract);
           return { verdict: 'error', findings: [], stepsRun, iterations, problem: `the reviewer would not keep its output contract: ${parsed.detail}` };
         }
         await pacer.throttleSend();
-        const b = await transport.sendAndConfirm(formatErrorMessage(parsed, formatRetries, cfg.limits.maxFormatRetries));
+        const b = await transport.sendAndConfirm(reviewFormatErrorMessage(parsed, formatRetries, cfg.limits.maxFormatRetries));
         markdown = (await transport.waitForReply(b)).markdown;
         continue;
       }
@@ -674,7 +738,7 @@ ${machineNote}` : contract);
           confinement: { roots: deps.roots, cwd: deps.cwd, workStartedAt: deps.workStartedAt },
         });
         if (decision.action !== 'run') {
-          results.push(refused(step.id, decision.reason, step.cmd, step.shell, decision.by === 'operator' ? 'operator' : 'runner'));
+          results.push(refused(step.id, forTheReviewer(decision.reason), step.cmd, step.shell, decision.by === 'operator' ? 'operator' : 'runner'));
           if (decision.action === 'abort') break;
           continue;
         }

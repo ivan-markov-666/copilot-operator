@@ -124,10 +124,23 @@ const HEARTBEAT_EVERY_MS = 30_000;
  */
 export const MAX_CAPTURE_CHARS = 200_000;
 /**
+ * Of those, how much is the end of the stream (third hunt, 2026-11-20): past the cap the start was kept and the rest
+ * dropped, and a test run's summary and its failures, which test runners print last, never reached the chat — pointed
+ * at a log in the bot's own folder, which a step may not read. Past the cap now, the start and the end are kept.
+ */
+export const KEPT_END_CHARS = 60_000;
+/**
  * How much of a line that has not ended yet is carried over to the next chunk, so the last line a
  * heartbeat shows is a whole line. Bounded, because a program can print a megabyte with no newline.
  */
 const LINE_CARRIED_CHARS = 2_000;
+/** A stream as kept: its start, and past the cap its end, with what was left out between them said. */
+function withEnd(start: string, end: string, omitted: number): string {
+  if (!end) return start;
+  if (omitted === 0) return start + end;
+  return `${start}\n[runner] … ${omitted} characters of this output left out here; its end follows …\n${end}`;
+}
+
 /** The longest delay a Node timer can hold: 2^31-1 ms, about 24.8 days. */
 const LONGEST_TIMER_MS = 2_147_483_647;
 
@@ -289,6 +302,9 @@ export async function runStep(
   return await new Promise<RunResult>((resolve) => {
     let stdout = '';
     let stderr = '';
+    /** Past the cap: the end of each stream, kept as it goes, and how much was left out between the start and it. */
+    const ends = { out: '', err: '' };
+    const omitted = { out: 0, err: 0 };
     let bytesOut = 0;
     let truncated = false;
     let lastLine = '';
@@ -343,8 +359,8 @@ export async function runStep(
         exitCode,
         outcome,
         durationMs: Date.now() - startedAt,
-        stdout,
-        stderr,
+        stdout: withEnd(stdout, ends.out, omitted.out),
+        stderr: withEnd(stderr, ends.err, omitted.err),
         truncated,
         logPath: req.logPath,
         lastOutputAgoMs: Date.now() - lastOutputAt,
@@ -393,15 +409,21 @@ export async function runStep(
       if (trimmed) lastLine = nl >= 0 ? trimmed.slice(nl + 1) : trimmed;
 
       const target = stream === 'out' ? stdout : stderr;
-      if (target.length >= MAX_CAPTURE_CHARS) {
-        truncated = true;
-        return;
-      }
-      const room = MAX_CAPTURE_CHARS - target.length;
+      const startCap = MAX_CAPTURE_CHARS - KEPT_END_CHARS;
+      const room = Math.max(0, startCap - target.length);
       const slice = text.length > room ? text.slice(0, room) : text;
-      if (slice.length < text.length) truncated = true;
       if (stream === 'out') stdout += slice;
       else stderr += slice;
+      // Past the start that is kept: the end of the stream, as it goes.
+      const rest = text.slice(slice.length);
+      if (rest) {
+        const end = ends[stream] + rest;
+        if (end.length > KEPT_END_CHARS) {
+          omitted[stream] += end.length - KEPT_END_CHARS;
+          truncated = true;
+        }
+        ends[stream] = end.slice(-KEPT_END_CHARS);
+      }
     };
 
     child.stdout.on('data', (c: Buffer) => capture(c, 'out'));

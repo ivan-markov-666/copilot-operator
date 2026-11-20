@@ -490,4 +490,40 @@ await scenario('a card the queue kept, answered later with "Take it as failed": 
   t.truthy('told it is taken as failed, to decide without it, and not to give it again', told.includes('is taken as failed, at the operator\'s word') && !told.includes('was cut off when the work stopped'), told.slice(-1500));
 }, { commandTimeoutSec: 2, idleTimeoutSec: 2 });
 
+/*
+ * Third hunt (2026-11-20): "Try again" under a subtask of a queue task set aside had none of Continue's guards — the
+ * record moved into the attempts, the lead carried on in the chat, and the queue's card failed at every press but Stop.
+ */
+await scenario('"Try again" under a subtask of a queue task set aside: refused, the card kept', { subtaskRetryMode: 'same' }, async (h) => {
+  type QueueView = { running: boolean; items: Array<{ id: string; status: string; sessionId?: string }> };
+  await h.call('PUT', '/queue/settings', { parkAfterSec: 2 });
+  await h.call('PUT', '/queue', { items: [{ id: 'r3', prompt: ASSIGNMENT, model: 'Think deeper', dependsOn: [], branch: 'folder', review: false, lead: true }] });
+  h.chat.script(
+    reply.lead.delegate({ title: 'Write result.txt', readOnly: false, goal: 'Create result.txt holding exactly the word hello.' }, understood),
+    reply.steps({ cmd: "Set-Content -Path two.txt -Value 'two'; Start-Sleep -Seconds 30", expect: 'fast' }),
+    cutOff,
+    cutOff,
+  );
+  await h.call('POST', '/queue/run');
+  const q = await waitFor('the card to be set aside', async () => {
+    const v = await h.call<QueueView>('GET', '/queue');
+    return !v.running && v.items[0]!.status === 'parked' ? v : null;
+  }, 90_000);
+  const thread = q.items[0]!.sessionId!;
+  const task = await leadTask(h, thread);
+  const early = await h.raw('POST', `/chat/${thread}/tasks/${task.id}/retry-subtask`, { n: 1 });
+  t.truthy('set aside: refused, saying to answer on the queue', early.status === 400 && /waits for an answer on its card in the queue/.test(JSON.stringify(early.body)), early.body);
+  t.check('the card is still the queue\'s', (await h.call<QueueView>('GET', '/queue')).items[0]!.status, 'parked');
+  await h.call('POST', '/queue/items/r3/answer', { choice: 'accept' });
+  const late = await h.raw('POST', `/chat/${thread}/tasks/${task.id}/retry-subtask`, { n: 1 });
+  t.truthy('answered there: refused, the queue carries it on with the answer', late.status === 400 && /the queue carries it on/.test(JSON.stringify(late.body)), late.body);
+  h.chat.script(reply.lead.done(LEAD_DONE));
+  await h.call('POST', '/queue/run');
+  const done = await waitFor('the queue to end', async () => {
+    const v = await h.call<QueueView>('GET', '/queue');
+    return !v.running && !v.items.some((x) => x.status === 'running' || x.status === 'waiting') ? v : null;
+  }, 90_000);
+  t.check('and it carries on there, to its end', done.items[0]!.status, 'done');
+}, { commandTimeoutSec: 2, idleTimeoutSec: 2 });
+
 t.finish();
